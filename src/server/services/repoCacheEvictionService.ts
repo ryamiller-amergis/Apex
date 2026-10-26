@@ -2,17 +2,24 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { RunGrounding } from '../../shared/types/runGrounding';
 import { resolveDataRoot } from '../utils/dataDir';
-import { withRepoCacheLease } from './repoCacheLeaseService';
+import {
+  withRepoCacheLease,
+  type RepoCacheLeaseContext,
+} from './repoCacheLeaseService';
 import {
   COLD_CACHE_TIMEOUT_MS,
   REPO_CACHE_MIN_FREE_BYTES,
+  compactRepoCache,
   getRepoCacheDir,
   getRepoCacheLeaseKey,
   readRepoCacheFreeBytes,
   readRepoCacheIdentity,
   readRepoCacheLastUsed,
+  readRepoCachePackStats,
+  type RepoCacheCompactionResult,
   type RepoCacheIdentity,
   type RepoCacheOptions,
+  type RepoCachePackStats,
 } from './repoCacheService';
 import { runGroundingRepository } from './runGroundingRepository';
 import { trackEvent } from './telemetry';
@@ -40,10 +47,32 @@ export const DEFAULT_REPO_CACHE_MAX_BYTES = 6.5 * 1024 * 1024 * 1024;
 /** A cold clone writes into `<mirror>.tmp-<uuid>`; one killed mid-clone is never renamed or removed. */
 const ABANDONED_CLONE_RE = /\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Git's own `gc.autoPackLimit` default: past this many packs `git gc --auto` would repack. */
+export const REPO_CACHE_COMPACT_MAX_PACKS = 50;
+
+/**
+ * Compact once total pack bytes exceed this multiple of the largest pack. Each
+ * `fetch --refetch` writes a complete copy, so a mirror at 2x holds one full
+ * duplicate and anything above it holds more. A mirror fed by incremental
+ * fetches stays close to 1x. The production MatterWorx mirror measured about
+ * 54 GB against a largest pack near 550 MB, roughly 100x.
+ */
+export const REPO_CACHE_COMPACT_BYTES_FACTOR = 2;
+
+export function mirrorNeedsCompaction(stats: RepoCachePackStats): boolean {
+  if (stats.packCount < 2) return false;
+  return (
+    stats.packCount > REPO_CACHE_COMPACT_MAX_PACKS
+    || stats.packBytes > stats.largestPackBytes * REPO_CACHE_COMPACT_BYTES_FACTOR
+  );
+}
+
 export interface RepoCacheEvictionResult {
   scanned: number;
   evicted: number;
   protected: number;
+  compacted: number;
+  compactionBytesReclaimed: number;
   abandonedClonesRemoved: number;
   bytesBefore: number;
   bytesAfter: number;
@@ -63,6 +92,11 @@ export interface RepoCacheEvictionDependencies {
   listActiveGroundings?: () => Promise<RunGrounding[]>;
   withLease?: typeof withRepoCacheLease;
   telemetry?: typeof trackEvent;
+  readPackStats?: (cacheDir: string) => RepoCachePackStats;
+  compactMirror?: (
+    cacheDir: string,
+    lease: RepoCacheLeaseContext,
+  ) => Promise<RepoCacheCompactionResult>;
 }
 
 interface MirrorCandidate {
@@ -71,6 +105,17 @@ interface MirrorCandidate {
   bytes: number;
   lastUsedMs: number;
   identity: RepoCacheIdentity | null;
+}
+
+interface ScannedMirror extends MirrorCandidate {
+  evictable: boolean;
+}
+
+function isLeaseBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith('Timed out waiting for repository cache lease:')
+  );
 }
 
 function resolveMaxBytes(explicit?: number): number {
@@ -125,7 +170,72 @@ export function createRepoCacheEvictionService(
   const withLease = dependencies.withLease ?? withRepoCacheLease;
   const telemetry = dependencies.telemetry ?? trackEvent;
   const readFreeBytes = dependencies.readFreeBytes ?? readRepoCacheFreeBytes;
+  const readPackStats = dependencies.readPackStats ?? readRepoCachePackStats;
+  const compactMirror =
+    dependencies.compactMirror ??
+    ((cacheDir: string, lease: RepoCacheLeaseContext) =>
+      compactRepoCache(cacheDir, {
+        abortSignal: lease.signal,
+        assertOwned: lease.assertOwned,
+        reason: 'oversized',
+      }));
   const cacheRoot = path.join(dataRoot, 'repo-cache');
+
+  /**
+   * Repacking keeps every ref and reachable object, so unlike deletion it is
+   * safe for mirrors that were just used or back an active grounding. It still
+   * takes the mirror's lease so it never races a fetch into the same pack dir.
+   */
+  async function compactOversized(
+    mirror: ScannedMirror,
+    result: RepoCacheEvictionResult,
+  ): Promise<void> {
+    if (!mirror.identity) return;
+    const stats = readPackStats(mirror.dir);
+    if (!mirrorNeedsCompaction(stats)) return;
+    let outcome: RepoCacheCompactionResult | null = null;
+    try {
+      outcome = await withLease(
+        getRepoCacheLeaseKey(mirror.identity),
+        (lease) => compactMirror(mirror.dir, lease),
+        { waitMs: 0 },
+      );
+    } catch (error) {
+      if (isLeaseBusy(error)) {
+        console.log(
+          `[repo-cache] phase=compact-deferred reason=oversized mirror=${mirror.name} lease-busy ` +
+            `packs=${stats.packCount} packBytes=${stats.packBytes}`,
+        );
+        return;
+      }
+      // One mirror failing to repack must not stop the sweep freeing others.
+      console.warn(
+        `[repo-cache] phase=compact-failed reason=oversized mirror=${mirror.name}: ` +
+          (error instanceof Error ? error.message : String(error)).slice(0, 300),
+      );
+      return;
+    }
+    const reclaimed = Math.max(0, outcome.before.packBytes - outcome.after.packBytes);
+    telemetry(
+      'repo-cache.compaction',
+      {
+        mirror: mirror.name,
+        reason: 'oversized',
+        outcome: outcome.compacted ? 'compacted' : (outcome.skippedReason ?? 'skipped'),
+      },
+      {
+        packsBefore: outcome.before.packCount,
+        packsAfter: outcome.after.packCount,
+        bytesBefore: outcome.before.packBytes,
+        bytesAfter: outcome.after.packBytes,
+        durationMs: outcome.durationMs,
+      },
+    );
+    if (!outcome.compacted) return;
+    mirror.bytes = Math.max(0, mirror.bytes - reclaimed);
+    result.compacted += 1;
+    result.compactionBytesReclaimed += reclaimed;
+  }
 
   async function finish(result: RepoCacheEvictionResult): Promise<RepoCacheEvictionResult> {
     result.freeBytes = await readFreeBytes(cacheRoot).catch(() => null);
@@ -141,6 +251,8 @@ export function createRepoCacheEvictionService(
         scanned: result.scanned,
         evicted: result.evicted,
         protected: result.protected,
+        compacted: result.compacted,
+        compactionBytesReclaimed: result.compactionBytesReclaimed,
         abandonedClonesRemoved: result.abandonedClonesRemoved,
         bytesBefore: result.bytesBefore,
         bytesAfter: result.bytesAfter,
@@ -158,6 +270,8 @@ export function createRepoCacheEvictionService(
         scanned: 0,
         evicted: 0,
         protected: 0,
+        compacted: 0,
+        compactionBytesReclaimed: 0,
         abandonedClonesRemoved: 0,
         bytesBefore: 0,
         bytesAfter: 0,
@@ -192,7 +306,7 @@ export function createRepoCacheEvictionService(
         ),
       );
 
-      const candidates: MirrorCandidate[] = [];
+      const mirrors: ScannedMirror[] = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         result.scanned += 1;
@@ -222,16 +336,23 @@ export function createRepoCacheEvictionService(
         const idleMs = now() - lastUsedMs;
         const identity = readRepoCacheIdentity(dir);
         // No sidecar means no lease key. Leave the mirror until a fetch writes
-        // identity; unguarded delete can remove a cache a live fetch still owns.
-        if (!identity || protectedDirs.has(dir) || idleMs <= REPO_CACHE_MIN_IDLE_MS) {
-          result.protected += 1;
-          continue;
-        }
-        candidates.push({ name: entry.name, dir, bytes, lastUsedMs, identity });
+        // identity; an unguarded delete or repack can race a live fetch.
+        const evictable =
+          identity !== null && !protectedDirs.has(dir) && idleMs > REPO_CACHE_MIN_IDLE_MS;
+        if (!evictable) result.protected += 1;
+        mirrors.push({ name: entry.name, dir, bytes, lastUsedMs, identity, evictable });
       }
 
-      result.bytesAfter = result.bytesBefore;
+      // Compact before the budget check: shrinking a bloated mirror in place
+      // can bring the cache under budget without deleting any mirror.
+      for (const mirror of mirrors) {
+        await compactOversized(mirror, result);
+      }
+
+      result.bytesAfter = mirrors.reduce((total, mirror) => total + mirror.bytes, 0);
       if (result.bytesAfter <= maxBytes) return finish(result);
+
+      const candidates: MirrorCandidate[] = mirrors.filter((mirror) => mirror.evictable);
 
       // Least recently used first: the mirror nobody has touched in the
       // longest goes before one that is merely large.
@@ -276,12 +397,7 @@ async function removeMirror(
   } catch (error) {
     // Someone is fetching into this mirror right now. Leave it for the next
     // sweep rather than deleting objects a running clone depends on.
-    if (
-      error instanceof Error &&
-      error.message.startsWith('Timed out waiting for repository cache lease:')
-    ) {
-      return false;
-    }
+    if (isLeaseBusy(error)) return false;
     throw error;
   }
 }
