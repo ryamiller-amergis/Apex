@@ -101,6 +101,7 @@ function assertRefQuery(url: URL): void {
 
 const BUILD_RESOURCE = /^\/MaxView\/_apis\/build\/builds\/(\d+)(\/(?:workitems|logs(?:\/\d+)?))?$/;
 const PROD_CD_BRANCH = new RegExp(String.raw`^refs/heads/(?:${RELEASE_BRANCH}|development)$`);
+const SNOW_DEFINITION_IDS = new Set([670, 595]);
 
 function buildResource(relativePath: string): { id: string; child: boolean } | null {
   const match = relativePath.match(BUILD_RESOURCE);
@@ -108,11 +109,19 @@ function buildResource(relativePath: string): { id: string; child: boolean } | n
   return { id: match[1], child: Boolean(match[2]) };
 }
 
-function assertProdCdBuild(body: unknown): void {
-  const record = body as { sourceBranch?: unknown; definition?: { name?: unknown } };
-  if (!record || typeof record !== 'object' || record.definition?.name !== 'mv-prod-cd') {
+function assertCabBuild(body: unknown): void {
+  const record = body as { sourceBranch?: unknown; definition?: { id?: unknown; name?: unknown } };
+  if (!record || typeof record !== 'object') {
     throw new CabReleaseBrokerError(
-      'Build reads are limited to mv-prod-cd',
+      'Build reads are limited to mv-prod-cd and snow pipelines 670 and 595',
+      403,
+      'CAB_BROKER_FORBIDDEN',
+    );
+  }
+  if (SNOW_DEFINITION_IDS.has(Number(record.definition?.id))) return;
+  if (record.definition?.name !== 'mv-prod-cd') {
+    throw new CabReleaseBrokerError(
+      'Build reads are limited to mv-prod-cd and snow pipelines 670 and 595',
       403,
       'CAB_BROKER_FORBIDDEN',
     );
@@ -312,7 +321,7 @@ export async function forwardCabAdoRequest(
         etag: lookedUp.headers.get('etag') ?? '',
       };
     }
-    assertProdCdBuild(lookedUpBody);
+    assertCabBuild(lookedUpBody);
     if (!build.child) {
       return {
         status: lookedUp.status,

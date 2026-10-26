@@ -164,6 +164,39 @@ describe('cabReleaseBrokerService', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('forwards a snow pipeline build and its log on the payload branch', async () => {
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (String(url).includes('/builds/129216?')) {
+        return new Response(JSON.stringify({
+          id: 129216,
+          status: 'inProgress',
+          sourceBranch: 'refs/heads/development',
+          definition: { id: 670, name: 'SNOW - Create CAB Request - Test' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('Created ServiceNow Change: CHG0033999', {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      });
+    });
+
+    const status = await forwardCabAdoRequest(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/build/builds/129216'),
+      env,
+      fetchImpl as unknown as typeof fetch,
+    );
+    const log = await forwardCabAdoRequest(
+      request('https://dev.azure.com/Amergis/MaxView/_apis/build/builds/129216/logs/4'),
+      env,
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({ definition: { id: 670 } });
+    expect(log.body).toContain('CHG0033999');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
   it('fails when the server has no PAT', async () => {
     await expect(forwardCabAdoRequest(
       request('https://dev.azure.com/Amergis/MaxView/_apis/git/repositories/MaxView/refs?filter=heads/development'),
