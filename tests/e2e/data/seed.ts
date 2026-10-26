@@ -402,7 +402,7 @@ export const SeedApi = {
    * Override project menu visibility for the E2E test project.
    * Use in access-control tests to hide or show specific nav items.
    */
-  async seedIntegrationsAccess(
+  async seedMcpServersAccess(
     request: APIRequestContext,
     opts: {
       enabled: boolean;
@@ -410,11 +410,11 @@ export const SeedApi = {
       grants: Array<{ userId: string; project: string; permissions: string[] }>;
     },
   ): Promise<void> {
-    await post(request, '/seed/integrations-access', opts);
+    await post(request, '/seed/mcp-servers-access', opts);
   },
 
-  async seedIntegrationProviderStub(request: APIRequestContext): Promise<void> {
-    await post(request, '/seed/integration-provider-stub');
+  async seedMcpServerProviderStub(request: APIRequestContext): Promise<void> {
+    await post(request, '/seed/mcp-servers-provider-stub');
   },
 
   async setMenuSettings(

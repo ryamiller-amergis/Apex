@@ -31,7 +31,7 @@ describe('menuSettings shared types', () => {
       'diagrams',
       'work-board',
       'playbooks',
-      'integrations',
+      'mcp-servers',
     ]);
   });
 
@@ -53,7 +53,7 @@ describe('menuSettings shared types', () => {
       'Diagrams',
       'Work Board',
       'Playbooks',
-      'Integrations',
+      'MCP Servers',
     ]);
   });
 
@@ -68,12 +68,12 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('feature-requests');
     expect(keys).toContain('load-tests');
     expect(keys).toContain('diagrams');
-    expect(keys).toContain('integrations');
+    expect(keys).toContain('mcp-servers');
   });
 
   it('SC-1: integrations is configurable but omitted from DEFAULT_ENABLED_MENU_VIEWS', () => {
-    expect(ALL_MENU_VIEWS).toContain('integrations');
-    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('integrations');
+    expect(ALL_MENU_VIEWS).toContain('mcp-servers');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('mcp-servers');
     expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
     expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 2);
   });

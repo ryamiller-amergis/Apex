@@ -247,12 +247,12 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
-  integrations: {
+  'mcp-servers': {
     pageEntries: [
       {
-        component: 'src/client/components/IntegrationsView.tsx',
-        routePattern: '/integrations',
-        suggestedRoute: '/integrations',
+        component: 'src/client/components/McpServersView.tsx',
+        routePattern: '/mcp-servers',
+        suggestedRoute: '/mcp-servers',
       },
     ],
   },

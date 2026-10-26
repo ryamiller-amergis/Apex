@@ -1,25 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatMessage, ChatThread } from '../../shared/types/chat';
-import type { IntegrationProvider } from '../../shared/types/integrations';
+import type { McpServerProvider } from '../../shared/types/mcpServers';
 import { insertMessage, upsertThread } from './chatThreadRepository';
-import { IntegrationConnectionError } from './integrationErrors';
+import { McpServerError } from './mcpServerErrors';
 import {
-  defaultIntegrationFetch,
-  type IntegrationFetch,
-} from './integrationConnectionService';
-import { executeIntegrationRead } from './integrationReadService';
+  defaultMcpServerFetch,
+  type McpServerFetch,
+} from './mcpServerConnectionService';
+import { executeMcpServerRead } from './mcpServerReadService';
 
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 
-export interface AskIntegrationInput {
+export interface AskMcpServerInput {
   project: string;
   connectionId: string;
   userId: string;
   question: string;
-  fetchImpl?: IntegrationFetch;
+  fetchImpl?: McpServerFetch;
 }
 
-export interface AskIntegrationResult {
+export interface AskMcpServerResult {
   threadId: string;
   connectionId: string;
   operationId: string;
@@ -31,10 +31,10 @@ interface SelectedRead {
   params: Record<string, string>;
 }
 
-export function selectIntegrationRead(provider: IntegrationProvider, question: string): SelectedRead {
+export function selectMcpServerRead(provider: McpServerProvider, question: string): SelectedRead {
   const email = question.match(EMAIL)?.[0];
   if (!email) {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'Ask about a person using an email address from the ticket',
       'QUESTION_UNSUPPORTED',
@@ -49,34 +49,34 @@ export function selectIntegrationRead(provider: IntegrationProvider, question: s
   if (provider === 'sendgrid') {
     return { operationId: 'getBounces', params: { email } };
   }
-  throw new IntegrationConnectionError(
+  throw new McpServerError(
     400,
     'This connector has no question mapping',
     'QUESTION_UNSUPPORTED',
   );
 }
 
-export async function askIntegration(input: AskIntegrationInput): Promise<AskIntegrationResult> {
+export async function askMcpServer(input: AskMcpServerInput): Promise<AskMcpServerResult> {
   const question = input.question?.trim() ?? '';
   if (!input.connectionId || !question) {
-    throw new IntegrationConnectionError(400, 'A connection and a question are required', 'QUESTION_REQUIRED');
+    throw new McpServerError(400, 'A connection and a question are required', 'QUESTION_REQUIRED');
   }
 
-  const { listIntegrationConnections } = await import('./integrationConnectionService');
-  const connections = await listIntegrationConnections(input.project);
+  const { listMcpServers } = await import('./mcpServerConnectionService');
+  const connections = await listMcpServers(input.project);
   const connection = connections.find((item) => item.id === input.connectionId);
   if (!connection) {
-    throw new IntegrationConnectionError(404, 'Connection not found', 'NOT_FOUND');
+    throw new McpServerError(404, 'Connection not found', 'NOT_FOUND');
   }
 
-  const selected = selectIntegrationRead(connection.provider, question);
-  const read = await executeIntegrationRead({
+  const selected = selectMcpServerRead(connection.provider, question);
+  const read = await executeMcpServerRead({
     project: input.project,
     connectionId: connection.id,
     userId: input.userId,
     operationId: selected.operationId,
     params: selected.params,
-    fetchImpl: input.fetchImpl ?? defaultIntegrationFetch,
+    fetchImpl: input.fetchImpl ?? defaultMcpServerFetch,
   });
 
   const now = new Date().toISOString();
@@ -88,8 +88,8 @@ export async function askIntegration(input: AskIntegrationInput): Promise<AskInt
     kickoff: {
       project: input.project,
       repo: input.project,
-      assistantType: 'integration',
-      integrationConnectionId: connection.id,
+      assistantType: 'mcp-server',
+      mcpServerId: connection.id,
       pillLabel: connection.name,
     },
     messages: [],

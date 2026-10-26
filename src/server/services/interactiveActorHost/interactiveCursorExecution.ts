@@ -129,12 +129,17 @@ export async function acquireInteractiveCursorAgent(
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
 
   const resumeAgentId = options.resumeAgentId?.trim() || undefined;
+  const mcpOnly =
+    Object.keys(options.mcpServers).length === 1
+    && Object.prototype.hasOwnProperty.call(options.mcpServers, 'mcp-server');
   // The workspace can be a real checkout whose committed `.cursor` config
   // (hooks, MCP servers) must not run inside a chat turn.
   const local = {
     cwd: input.workspaceRef,
     settingSources: [],
-    ...(input.interviewPhase
+    ...(mcpOnly
+      ? {}
+      : input.interviewPhase
       ? {
           customTools: guidedInterviewRepositoryTools(input.interviewPhase, checkout),
           sandboxOptions: { enabled: false },
@@ -150,6 +155,8 @@ export async function acquireInteractiveCursorAgent(
     local,
     mcpServers: { ...options.mcpServers },
     disallowedTools,
+    // A connection chat gets the connected MCP only: no shell, files, web, or tasks.
+    ...(mcpOnly ? { tools: ['mcp' as ToolName] } : {}),
   };
 
   if (resumeAgentId) {

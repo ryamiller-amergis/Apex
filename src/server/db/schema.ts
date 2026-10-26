@@ -27,7 +27,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
-import type { IntegrationOperation } from '../../shared/types/integrations';
+import type { McpServerOperation } from '../../shared/types/mcpServers';
 import type {
   AgentRunCancelState,
   AgentRunExecutionSnapshot,
@@ -3481,7 +3481,7 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
   }),
 }));
 
-export const integrationConnections = pgTable('integration_connections', {
+export const mcpServers = pgTable('mcp_servers', {
   id: uuid('id').primaryKey().defaultRandom(),
   project: text('project').notNull(),
   name: text('name').notNull(),
@@ -3492,14 +3492,14 @@ export const integrationConnections = pgTable('integration_connections', {
   credentialAuthTag: text('credential_auth_tag').notNull(),
   credentialHint: text('credential_hint').notNull(),
   baseUrl: text('base_url'),
-  operations: jsonb('operations').$type<IntegrationOperation[]>().notNull().default([]),
+  operations: jsonb('operations').$type<McpServerOperation[]>().notNull().default([]),
   allowedUserIds: jsonb('allowed_user_ids').$type<string[]>().notNull().default([]),
   createdBy: text('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   lastTestedAt: timestamp('last_tested_at', { withTimezone: true, mode: 'string' }),
 }, (t) => ({
-  projectIdx: index('idx_integration_connections_project').on(t.project),
+  projectIdx: index('idx_mcp_servers_project').on(t.project),
 }));
 
 export const workflowEvaluationDefinitions = pgTable('workflow_evaluation_definitions', {

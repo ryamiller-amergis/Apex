@@ -33,7 +33,7 @@ jest.mock('drizzle-orm', () => ({
 }));
 
 jest.mock('../db/schema', () => ({
-  integrationConnections: new Proxy(
+  mcpServers: new Proxy(
     {},
     { get: (_target, prop) => ({ field: String(prop) }) }
   ),
@@ -72,10 +72,10 @@ jest.mock('../db/drizzle', () => ({
 }));
 
 import {
-  createIntegrationConnection,
-  testIntegrationConnection,
-} from '../services/integrationConnectionService';
-import { importOpenApiOperations } from '../services/integrationOpenApi';
+  createMcpServer,
+  testMcpServer,
+} from '../services/mcpServerConnectionService';
+import { importOpenApiOperations } from '../services/mcpServerOpenApi';
 
 const SECRET = 'integration-custom-test-secret';
 
@@ -87,7 +87,7 @@ describe('custom integration connectors', () => {
 
   it('SC-7 rejects a custom connector saved from only a base URL and key', async () => {
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Tickets',
         provider: 'custom',
@@ -102,7 +102,7 @@ describe('custom integration connectors', () => {
 
   it('SC-7 requires read-only https operations and stores a tested manual definition', async () => {
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Tickets',
         provider: 'custom',
@@ -123,7 +123,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Tickets',
         provider: 'custom',
@@ -144,7 +144,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Local',
         provider: 'custom',
@@ -165,7 +165,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Writes',
         provider: 'custom',
@@ -186,7 +186,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'READ_ONLY_REQUIRED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Writes',
         provider: 'custom',
@@ -206,7 +206,7 @@ describe('custom integration connectors', () => {
       })
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
-    const created = await createIntegrationConnection({
+    const created = await createMcpServer({
       project: 'MaxView',
       name: 'Tickets',
       provider: 'custom',
@@ -241,7 +241,7 @@ describe('custom integration connectors', () => {
       status: 200,
       body: '{"id":"sample"}',
     }));
-    const tested = await testIntegrationConnection(
+    const tested = await testMcpServer(
       'MaxView',
       created.id,
       fetchImpl
@@ -257,7 +257,7 @@ describe('custom integration connectors', () => {
   });
 
   it('keeps a versioned base path when testing a custom connector', async () => {
-    const created = await createIntegrationConnection({
+    const created = await createMcpServer({
       project: 'MaxView',
       name: 'Tickets v1',
       provider: 'custom',
@@ -280,7 +280,7 @@ describe('custom integration connectors', () => {
       status: 200,
       body: '{"id":"sample"}',
     }));
-    await testIntegrationConnection('MaxView', created.id, fetchImpl);
+    await testMcpServer('MaxView', created.id, fetchImpl);
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://api.example.com/v1/tickets/sample',
       {
@@ -292,7 +292,7 @@ describe('custom integration connectors', () => {
 
   it('rejects protocol-relative custom operation paths', async () => {
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Escape',
         provider: 'custom',
@@ -315,7 +315,7 @@ describe('custom integration connectors', () => {
 
   it('rejects IPv6 unique-local and link-local custom hosts', async () => {
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'ULA',
         provider: 'custom',
@@ -336,7 +336,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Link local',
         provider: 'custom',
@@ -357,7 +357,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Mapped loopback',
         provider: 'custom',
@@ -378,7 +378,7 @@ describe('custom integration connectors', () => {
     ).rejects.toMatchObject({ code: 'URL_RESTRICTED' });
 
     await expect(
-      createIntegrationConnection({
+      createMcpServer({
         project: 'MaxView',
         name: 'Internal DNS',
         provider: 'custom',

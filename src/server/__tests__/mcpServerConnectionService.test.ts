@@ -33,11 +33,20 @@ jest.mock('drizzle-orm', () => ({
 }));
 
 jest.mock('../db/schema', () => ({
-  integrationConnections: new Proxy(
+  mcpServers: new Proxy(
     {},
     { get: (_target, prop) => ({ field: String(prop) }) }
   ),
 }));
+
+jest.mock('../services/mcpServerDiscovery', () => {
+  const actual = jest.requireActual('../services/mcpServerDiscovery');
+  return {
+    ...actual,
+    discoverMcpServerTools: jest.fn(),
+    discoverRemoteMcpTools: jest.fn(),
+  };
+});
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -78,11 +87,13 @@ jest.mock('../db/drizzle', () => ({
 
 import dns from 'node:dns';
 import {
-  createIntegrationConnection,
-  defaultIntegrationFetch,
-  listIntegrationConnections,
-  testIntegrationConnection,
-} from '../services/integrationConnectionService';
+  createMcpServer,
+  defaultMcpServerFetch,
+  listMcpServers,
+  testMcpServer,
+} from '../services/mcpServerConnectionService';
+import { selectEnabledMcpOperations } from '../../shared/types/mcpServers';
+import { discoverMcpServerTools, discoverRemoteMcpTools } from '../services/mcpServerDiscovery';
 
 const SECRET = 'integration-service-test-secret';
 
@@ -93,7 +104,7 @@ describe('integration connection service', () => {
   });
 
   it('SC-3 stores a Clerk credential encrypted and returns only a masked hint', async () => {
-    const created = await createIntegrationConnection({
+    const created = await createMcpServer({
       project: 'MaxView',
       name: 'MaxView Clerk',
       provider: 'clerk',
@@ -110,7 +121,7 @@ describe('integration connection service', () => {
   });
 
   it('SC-3 marks the connection usable after a stubbed successful test call', async () => {
-    const created = await createIntegrationConnection({
+    const created = await createMcpServer({
       project: 'MaxView',
       name: 'MaxView Clerk',
       provider: 'clerk',
@@ -123,7 +134,7 @@ describe('integration connection service', () => {
       status: 200,
       body: '{"ok":true}',
     }));
-    const tested = await testIntegrationConnection(
+    const tested = await testMcpServer(
       'MaxView',
       created.id,
       fetchImpl
@@ -135,8 +146,75 @@ describe('integration connection service', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('stores only the prebuilt tools the installer enabled', async () => {
+    const created = await createMcpServer({
+      project: 'MaxView',
+      name: 'MaxView Pendo',
+      provider: 'pendo',
+      credential: 'pendo-integration-key',
+      allowedUserIds: ['user-1'],
+      createdBy: 'user-1',
+      operations: [
+        {
+          id: 'getVisitor',
+          method: 'GET',
+          path: '/ignored',
+          summary: 'Ignored',
+          readOnly: true,
+        },
+        {
+          id: 'deleteVisitor',
+          method: 'GET',
+          path: '/nope',
+          summary: 'Not in the catalog',
+          readOnly: true,
+        },
+      ],
+    });
+
+    expect(created.operations).toEqual([
+      expect.objectContaining({
+        id: 'getVisitor',
+        path: '/api/v1/visitor/{visitorId}',
+      }),
+    ]);
+  });
+
+  it('saves only the official MCP tools the installer enabled', async () => {
+    (discoverMcpServerTools as jest.Mock).mockResolvedValue([
+      {
+        name: 'entityUsage',
+        description: 'Retrieve usage metrics',
+        readOnly: true,
+        inputSchema: { type: 'object' },
+      },
+      { name: 'appUsage', description: 'Retrieve app usage', readOnly: true },
+    ]);
+
+    const created = await createMcpServer({
+      project: 'MaxView',
+      name: 'MaxView Pendo',
+      provider: 'pendo',
+      credential: 'pendo-client-secret',
+      clientId: 'pendo-client',
+      toolNames: ['entityUsage', 'not-on-the-server'],
+      allowedUserIds: ['user-1'],
+      createdBy: 'user-1',
+    });
+
+    expect(created.operations).toEqual([
+      expect.objectContaining({
+        id: 'entityUsage',
+        source: 'mcp',
+        summary: 'Retrieve usage metrics',
+      }),
+    ]);
+    expect(created.operations[0]).not.toHaveProperty('inputSchema');
+    expect(JSON.stringify(created)).not.toContain('pendo-client-secret');
+  });
+
   it('SC-4 hides Project A connections from Project B', async () => {
-    await createIntegrationConnection({
+    await createMcpServer({
       project: 'MaxView',
       name: 'MaxView Clerk',
       provider: 'clerk',
@@ -145,8 +223,8 @@ describe('integration connection service', () => {
       createdBy: 'user-1',
     });
 
-    const projectB = await listIntegrationConnections('MatterWorx');
-    const projectA = await listIntegrationConnections('MaxView');
+    const projectB = await listMcpServers('MatterWorx');
+    const projectA = await listMcpServers('MaxView');
 
     expect(projectB).toEqual([]);
     expect(projectA).toHaveLength(1);
@@ -165,7 +243,7 @@ describe('integration connection service', () => {
     } as Response);
 
     try {
-      await defaultIntegrationFetch('https://api.example.com/v1/tickets', {
+      await defaultMcpServerFetch('https://api.example.com/v1/tickets', {
         method: 'GET',
         headers: { Authorization: 'Bearer custom-key' },
       });
@@ -180,6 +258,39 @@ describe('integration connection service', () => {
     }
   });
 
+  it('stores a remote MCP server without the secret and loads read-only tools on test', async () => {
+    (discoverRemoteMcpTools as jest.Mock).mockResolvedValue([
+      { name: 'search', description: 'Search docs', readOnly: true },
+      { name: 'writeDoc', description: 'Write a doc', readOnly: true },
+    ]);
+    const created = await createMcpServer({
+      project: 'MaxView',
+      name: 'Docs',
+      provider: 'custom',
+      credential: '',
+      mcpUrl: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer ${TOKEN}' },
+      secrets: [{ name: 'TOKEN', value: 'super-secret-value' }],
+      toolNames: ['search'],
+      allowedUserIds: [],
+      createdBy: 'user-1',
+    });
+
+    expect(created.baseUrl).toBe('https://example.com/mcp');
+    expect(created.operations).toEqual([]);
+    expect(JSON.stringify(created)).not.toContain('super-secret-value');
+
+    const tested = await testMcpServer('MaxView', created.id);
+    expect(tested.status).toBe('usable');
+    expect(tested.operations.map((operation) => operation.id)).toEqual(['search', 'writeDoc']);
+    expect(tested.toolNames).toEqual(['search']);
+    expect(selectEnabledMcpOperations(tested.operations, tested.toolNames).map((operation) => operation.id)).toEqual(['search']);
+    expect(discoverRemoteMcpTools).toHaveBeenCalledWith({
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer super-secret-value' },
+    });
+  });
+
   it('refuses a hostname that resolves to a private address', async () => {
     const previousE2e = process.env.E2E_MODE;
     process.env.E2E_MODE = 'false';
@@ -190,7 +301,7 @@ describe('integration connection service', () => {
 
     try {
       await expect(
-        defaultIntegrationFetch('https://metadata.attacker.example/latest', {
+        defaultMcpServerFetch('https://metadata.attacker.example/latest', {
           method: 'GET',
           headers: { Authorization: 'Bearer custom-key' },
         })

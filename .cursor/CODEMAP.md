@@ -37,7 +37,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `src/server/middleware/`: `src/server/middleware/auth.ts`, `src/server/middleware/rbac.ts`, `src/server/middleware/publicApiKeyAuth.ts`,
   `src/server/middleware/aiRunnerAuth.ts`, `src/server/middleware/loadTestRunnerAuth.ts`, observability capture.
 - `src/server/mcp/`: MCP servers Apex exposes: `src/server/mcp/ado/`, `src/server/mcp/github/`, `src/server/mcp/maxview/`,
-  `src/server/mcp/calendarAssistant/`, `src/server/mcp/integrations/`, `src/server/mcp/board/`.
+  `src/server/mcp/calendarAssistant/`, `src/server/mcp/mcpServers/`, `src/server/mcp/board/`.
 - `src/server/utils/` (`src/server/utils/dataDir.ts` = persistent data root), `src/server/skills/`, `src/server/assets/`, `src/server/types/`.
 - `src/server/playbookTemplates/`: shipped Playbook templates (`src/server/playbookTemplates/interview.json`).
 - `src/server/__tests__/`: all server unit tests, one flat folder.

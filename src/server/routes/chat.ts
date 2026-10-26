@@ -70,10 +70,10 @@ import {
   DurableInteractiveTurnError,
 } from '../services/durableInteractiveTurnService';
 import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
-import { INTEGRATIONS_FLAG } from '../../shared/types/integrations';
+import { MCP_SERVERS_FLAG } from '../../shared/types/mcpServers';
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
-import { IntegrationConnectionError } from '../services/integrationErrors';
-import { assertCallerCanUseIntegrationConnection } from '../services/integrationReadService';
+import { McpServerError } from '../services/mcpServerErrors';
+import { assertCallerCanUseMcpServer } from '../services/mcpServerReadService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { getUserPermissions } from '../services/rbacService';
 
@@ -418,40 +418,40 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     const agentModule = deriveAgentModule(clientKickoff, skillConfig);
 
-    if (clientKickoff.assistantType === 'integration') {
-      const connectionId = clientKickoff.integrationConnectionId;
+    if (clientKickoff.assistantType === 'mcp-server') {
+      const connectionId = clientKickoff.mcpServerId;
       if (!connectionId) {
-        return res.status(400).json({ error: 'integrationConnectionId is required' });
+        return res.status(400).json({ error: 'mcpServerId is required' });
       }
-      const enabled = await isFeatureEnabled(INTEGRATIONS_FLAG, {
+      const enabled = await isFeatureEnabled(MCP_SERVERS_FLAG, {
         userId,
         project: clientKickoff.project,
       });
-      // @feature-flag:integrations start winner=enabled
+      // @feature-flag:mcp-servers start winner=enabled
       if (!enabled) {
-        // @feature-flag:integrations disabled-start
+        // @feature-flag:mcp-servers disabled-start
         return res.status(404).json({ error: 'Not found' });
-        // @feature-flag:integrations disabled-end
+        // @feature-flag:mcp-servers disabled-end
       }
-      // @feature-flag:integrations enabled-start
+      // @feature-flag:mcp-servers enabled-start
       const menu = await getMenuConfig(clientKickoff.project);
       const views = menu?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS;
-      if (!views.includes('integrations')) {
+      if (!views.includes('mcp-servers')) {
         return res.status(404).json({ error: 'Not found' });
       }
       if (!isSuperAdminRequest(req)) {
         const permissions = await getUserPermissions(userId, clientKickoff.project);
-        if (!permissions.has('integrations:view')) {
-          return res.status(403).json({ error: 'Forbidden', missing: ['integrations:view'] });
+        if (!permissions.has('mcp-servers:view')) {
+          return res.status(403).json({ error: 'Forbidden', missing: ['mcp-servers:view'] });
         }
       }
-      await assertCallerCanUseIntegrationConnection({
+      await assertCallerCanUseMcpServer({
         project: clientKickoff.project,
         connectionId,
         userId,
       });
-      // @feature-flag:integrations enabled-end
-      // @feature-flag:integrations end
+      // @feature-flag:mcp-servers enabled-end
+      // @feature-flag:mcp-servers end
     }
 
     // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
@@ -493,7 +493,7 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     res.status(201).json({ threadId: thread.id });
   } catch (err: unknown) {
-    if (err instanceof IntegrationConnectionError) {
+    if (err instanceof McpServerError) {
       return res.status(err.status).json({ error: err.message, code: err.code });
     }
     console.error('[chat] createThread error:', errorMessage(err));

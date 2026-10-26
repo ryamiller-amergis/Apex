@@ -1,8 +1,8 @@
 import request from 'supertest';
 import express from 'express';
-import integrationsRouter from '../routes/integrations';
-import * as askService from '../services/integrationAskService';
-import * as connectionService from '../services/integrationConnectionService';
+import mcpServersRouter from '../routes/mcpServers';
+import * as askService from '../services/mcpServerAskService';
+import * as connectionService from '../services/mcpServerConnectionService';
 import * as featureFlagService from '../services/featureFlagService';
 import * as menuSettingsService from '../services/menuSettingsService';
 
@@ -23,16 +23,16 @@ jest.mock('../middleware/rbac', () => ({
   },
 }));
 
-jest.mock('../services/integrationAskService', () => ({
-  askIntegration: jest.fn(),
+jest.mock('../services/mcpServerAskService', () => ({
+  askMcpServer: jest.fn(),
 }));
 
-jest.mock('../services/integrationConnectionService', () => ({
-  createIntegrationConnection: jest.fn(),
-  listIntegrationConnections: jest.fn(),
-  updateIntegrationConnection: jest.fn(),
-  deleteIntegrationConnection: jest.fn(),
-  testIntegrationConnection: jest.fn(),
+jest.mock('../services/mcpServerConnectionService', () => ({
+  createMcpServer: jest.fn(),
+  listMcpServers: jest.fn(),
+  updateMcpServer: jest.fn(),
+  deleteMcpServer: jest.fn(),
+  testMcpServer: jest.fn(),
 }));
 
 jest.mock('../services/featureFlagService', () => ({
@@ -55,30 +55,30 @@ function buildApp() {
     req.user = { profile: { oid: 'user-1' } };
     next();
   });
-  app.use('/api/projects/:projectId/integrations', integrationsRouter);
+  app.use('/api/projects/:projectId/mcp-servers', mcpServersRouter);
   return app;
 }
 
 describe('integration routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    permissions = new Set(['integrations:view', 'integrations:manage']);
+    permissions = new Set(['mcp-servers:view', 'mcp-servers:manage']);
     flags.isFeatureEnabled.mockResolvedValue(true);
     menus.getMenuConfig.mockResolvedValue({
       project: 'MaxView',
-      enabledViews: ['integrations'],
+      enabledViews: ['mcp-servers'],
       updatedBy: null,
     });
-    connections.listIntegrationConnections.mockResolvedValue([]);
+    connections.listMcpServers.mockResolvedValue([]);
   });
 
   it('SC-1 returns 404 when the integrations flag is off', async () => {
     flags.isFeatureEnabled.mockResolvedValue(false);
 
-    const res = await request(buildApp()).get('/api/projects/MaxView/integrations');
+    const res = await request(buildApp()).get('/api/projects/MaxView/mcp-servers');
 
     expect(res.status).toBe(404);
-    expect(connections.listIntegrationConnections).not.toHaveBeenCalled();
+    expect(connections.listMcpServers).not.toHaveBeenCalled();
   });
 
   it('SC-1 returns 404 when the project menu omits integrations', async () => {
@@ -88,7 +88,7 @@ describe('integration routes', () => {
       updatedBy: null,
     });
 
-    const res = await request(buildApp()).post('/api/projects/MaxView/integrations').send({
+    const res = await request(buildApp()).post('/api/projects/MaxView/mcp-servers').send({
       name: 'Clerk',
       provider: 'clerk',
       credential: 'sk_live_supersecret',
@@ -96,30 +96,30 @@ describe('integration routes', () => {
     });
 
     expect(res.status).toBe(404);
-    expect(connections.createIntegrationConnection).not.toHaveBeenCalled();
+    expect(connections.createMcpServer).not.toHaveBeenCalled();
   });
 
-  it('SC-2 forbids create and edit without integrations:manage', async () => {
-    permissions = new Set(['integrations:view']);
+  it('SC-2 forbids create and edit without mcp-servers:manage', async () => {
+    permissions = new Set(['mcp-servers:view']);
 
-    const create = await request(buildApp()).post('/api/projects/MaxView/integrations').send({
+    const create = await request(buildApp()).post('/api/projects/MaxView/mcp-servers').send({
       name: 'Clerk',
       provider: 'clerk',
       credential: 'sk_live_supersecret',
       allowedUserIds: ['user-1'],
     });
     const edit = await request(buildApp())
-      .patch('/api/projects/MaxView/integrations/conn-1')
+      .patch('/api/projects/MaxView/mcp-servers/conn-1')
       .send({ allowedUserIds: ['user-2'] });
 
     expect(create.status).toBe(403);
     expect(edit.status).toBe(403);
-    expect(connections.createIntegrationConnection).not.toHaveBeenCalled();
-    expect(connections.updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(connections.createMcpServer).not.toHaveBeenCalled();
+    expect(connections.updateMcpServer).not.toHaveBeenCalled();
   });
 
   it('SC-3 lets a manager create a connection and receives no secret', async () => {
-    connections.createIntegrationConnection.mockResolvedValue({
+    connections.createMcpServer.mockResolvedValue({
       id: 'conn-1',
       project: 'MaxView',
       name: 'MaxView Clerk',
@@ -129,13 +129,19 @@ describe('integration routes', () => {
       baseUrl: 'https://api.clerk.com',
       operations: [],
       allowedUserIds: ['user-1'],
+      secretNames: [],
+      missingSecretNames: [],
+      headers: {},
+      toolNames: [],
+      authMode: 'none',
+      oauthConnected: false,
       createdBy: 'user-1',
       createdAt: '2026-10-21T00:00:00.000Z',
       updatedAt: '2026-10-21T00:00:00.000Z',
       lastTestedAt: null,
     });
 
-    const res = await request(buildApp()).post('/api/projects/MaxView/integrations').send({
+    const res = await request(buildApp()).post('/api/projects/MaxView/mcp-servers').send({
       name: 'MaxView Clerk',
       provider: 'clerk',
       credential: 'sk_live_supersecret',
@@ -148,8 +154,8 @@ describe('integration routes', () => {
   });
 
   it('SC-5 asks through the selected connection for a viewer', async () => {
-    permissions = new Set(['integrations:view']);
-    asks.askIntegration.mockResolvedValue({
+    permissions = new Set(['mcp-servers:view']);
+    asks.askMcpServer.mockResolvedValue({
       threadId: 'thread-1',
       connectionId: 'conn-clerk',
       operationId: 'listUsers',
@@ -157,7 +163,7 @@ describe('integration routes', () => {
     });
 
     const res = await request(buildApp())
-      .post('/api/projects/MaxView/integrations/ask')
+      .post('/api/projects/MaxView/mcp-servers/ask')
       .send({
         connectionId: 'conn-clerk',
         question: 'What do we know about user jane@example.com from ticket 4421?',

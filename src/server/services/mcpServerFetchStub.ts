@@ -1,25 +1,25 @@
-export interface IntegrationFetchStubResult {
+export interface McpServerFetchStubResult {
   status: number;
   body: string;
 }
 
-export type IntegrationFetchStub = (
+export type McpServerFetchStub = (
   url: string,
   init: { method: string; headers: Record<string, string> },
-) => Promise<IntegrationFetchStubResult>;
+) => Promise<McpServerFetchStubResult>;
 
-let current: IntegrationFetchStub | null = null;
+let current: McpServerFetchStub | null = null;
 
-export function setIntegrationFetchStub(stub: IntegrationFetchStub | null): void {
+export function setMcpServerFetchStub(stub: McpServerFetchStub | null): void {
   current = stub;
 }
 
-export function getIntegrationFetchStub(): IntegrationFetchStub | null {
+export function getMcpServerFetchStub(): McpServerFetchStub | null {
   return current;
 }
 
 /** Canned Clerk reads for the integrations e2e journey. Never calls the network. */
-export async function clerkTicketFetchStub(url: string): Promise<IntegrationFetchStubResult> {
+export async function clerkTicketFetchStub(url: string): Promise<McpServerFetchStubResult> {
   if (url.startsWith('https://api.clerk.com/v1/users?limit=1')) {
     return { status: 200, body: '{"data":[]}' };
   }

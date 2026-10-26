@@ -1,14 +1,14 @@
 import {
-  decryptIntegrationCredential,
-  encryptIntegrationCredential,
-  maskIntegrationCredential,
-} from '../services/integrationCredentialCrypto';
+  decryptMcpServerCredential,
+  encryptMcpServerCredential,
+  maskMcpServerCredential,
+} from '../services/mcpServerCredentialCrypto';
 
 const SECRET = 'integration-test-secret';
 
 describe('integration credential crypto (SC-3)', () => {
   it('SC-3 encrypts with AES-256-GCM and decrypts only for the same binding', () => {
-    const encrypted = encryptIntegrationCredential(
+    const encrypted = encryptMcpServerCredential(
       'sk_live_supersecret',
       { project: 'MaxView', connectionId: 'conn-1' },
       { secret: SECRET },
@@ -19,11 +19,11 @@ describe('integration credential crypto (SC-3)', () => {
     expect(encrypted.iv).not.toBe(encrypted.ciphertext);
 
     expect(
-      decryptIntegrationCredential(encrypted, { project: 'MaxView', connectionId: 'conn-1' }, { secret: SECRET }),
+      decryptMcpServerCredential(encrypted, { project: 'MaxView', connectionId: 'conn-1' }, { secret: SECRET }),
     ).toBe('sk_live_supersecret');
 
     expect(() =>
-      decryptIntegrationCredential(
+      decryptMcpServerCredential(
         encrypted,
         { project: 'MatterWorx', connectionId: 'conn-1' },
         { secret: SECRET },
@@ -32,9 +32,9 @@ describe('integration credential crypto (SC-3)', () => {
   });
 
   it('SC-3 masks the credential and does not reveal the secret', () => {
-    const hint = maskIntegrationCredential('sk_live_supersecret');
+    const hint = maskMcpServerCredential('sk_live_supersecret');
     expect(hint).toBe('••••cret');
     expect(hint).not.toContain('sk_live');
-    expect(maskIntegrationCredential('ab')).toBe('••••');
+    expect(maskMcpServerCredential('ab')).toBe('••••');
   });
 });

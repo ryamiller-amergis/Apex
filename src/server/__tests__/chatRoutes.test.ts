@@ -114,13 +114,13 @@ jest.mock('../services/menuSettingsService', () => ({
   getMenuConfig: (...args: unknown[]) => mockGetMenuConfig(...args),
 }));
 
-const mockAssertCallerCanUseIntegrationConnection = jest.fn();
-jest.mock('../services/integrationReadService', () => ({
-  assertCallerCanUseIntegrationConnection: (...args: unknown[]) =>
-    mockAssertCallerCanUseIntegrationConnection(...args),
+const mockAssertCallerCanUseMcpServer = jest.fn();
+jest.mock('../services/mcpServerReadService', () => ({
+  assertCallerCanUseMcpServer: (...args: unknown[]) =>
+    mockAssertCallerCanUseMcpServer(...args),
 }));
 
-const mockGetUserPermissions = jest.fn().mockResolvedValue(new Set(['integrations:view']));
+const mockGetUserPermissions = jest.fn().mockResolvedValue(new Set(['mcp-servers:view']));
 jest.mock('../services/rbacService', () => ({
   getUserPermissions: (...args: unknown[]) => mockGetUserPermissions(...args),
 }));
@@ -192,7 +192,7 @@ import chatRouter, {
 } from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
 import { isFeatureEnabled } from '../services/featureFlagService';
-import { IntegrationConnectionError } from '../services/integrationErrors';
+import { McpServerError } from '../services/mcpServerErrors';
 import type {
   AgentRunEventEnvelope,
   ChatThread,
@@ -961,11 +961,11 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
     (isFeatureEnabled as jest.Mock).mockResolvedValue(true);
     mockGetMenuConfig.mockResolvedValue({
       project: 'MaxView',
-      enabledViews: ['integrations'],
+      enabledViews: ['mcp-servers'],
       updatedBy: null,
     });
-    mockAssertCallerCanUseIntegrationConnection.mockResolvedValue(undefined);
-    mockGetUserPermissions.mockResolvedValue(new Set(['integrations:view']));
+    mockAssertCallerCanUseMcpServer.mockResolvedValue(undefined);
+    mockGetUserPermissions.mockResolvedValue(new Set(['mcp-servers:view']));
   });
 
   afterEach(() => {
@@ -975,13 +975,13 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
   });
 
   it('refuses an integration kickoff when the caller is not on the connection allow-list', async () => {
-    mockAssertCallerCanUseIntegrationConnection.mockRejectedValue(
-      new IntegrationConnectionError(403, 'You cannot use this connection', 'NOT_ALLOWED'),
+    mockAssertCallerCanUseMcpServer.mockRejectedValue(
+      new McpServerError(403, 'You cannot use this connection', 'NOT_ALLOWED'),
     );
 
     const res = await post({
-      assistantType: 'integration',
-      integrationConnectionId: 'conn-clerk',
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
     });
 
     expect(res.status).toBe(403);
@@ -991,13 +991,13 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
 
   it('creates an integration thread when the caller is allowed on that connection', async () => {
     const res = await post({
-      assistantType: 'integration',
-      integrationConnectionId: 'conn-clerk',
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
     });
 
     expect(res.status).toBe(201);
     expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'MaxView');
-    expect(mockAssertCallerCanUseIntegrationConnection).toHaveBeenCalledWith({
+    expect(mockAssertCallerCanUseMcpServer).toHaveBeenCalledWith({
       project: 'MaxView',
       connectionId: 'conn-clerk',
       userId: 'user-1',
@@ -1005,17 +1005,17 @@ describe('POST /api/chat/threads — integration connection kickoff', () => {
     expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses an integration kickoff without integrations:view', async () => {
+  it('refuses an integration kickoff without mcp-servers:view', async () => {
     mockGetUserPermissions.mockResolvedValue(new Set(['chat:view']));
 
     const res = await post({
-      assistantType: 'integration',
-      integrationConnectionId: 'conn-clerk',
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
     });
 
     expect(res.status).toBe(403);
-    expect(res.body.missing).toEqual(['integrations:view']);
-    expect(mockAssertCallerCanUseIntegrationConnection).not.toHaveBeenCalled();
+    expect(res.body.missing).toEqual(['mcp-servers:view']);
+    expect(mockAssertCallerCanUseMcpServer).not.toHaveBeenCalled();
     expect(mockChatService.createThread).not.toHaveBeenCalled();
   });
 });

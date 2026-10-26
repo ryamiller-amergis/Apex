@@ -91,6 +91,10 @@ export function friendlyChatProgressLabel(
   if (tool) return REPO_READ_RUNNING[tool];
   if (text && RAW_TO_FRIENDLY[text]) return RAW_TO_FRIENDLY[text];
   if (text.toLowerCase().startsWith('retrying')) return 'Retrying…';
+  const toolStatus = text.match(/^((?:[\w-]+):)?([a-z0-9_:-]+)\s+(?:running|completed|error|failed)$/i);
+  if (toolStatus) {
+    return friendlyToolActivityLabel(`${toolStatus[1] ?? ''}${toolStatus[2]}`);
+  }
   if (text) return text;
   if (phase) return copyForPhase(phase);
   return 'Thinking…';
@@ -122,18 +126,61 @@ const TOOL_ACTIVITY: Record<string, string> = {
  * their keys, so the label names the kind of work, not the file or query. MCP
  * calls carry the underlying tool name in `args.toolName`.
  */
-export function friendlyToolActivityLabel(toolName: string, args?: unknown): string {
-  const name = toolName.trim().toLowerCase();
-  if (name === 'mcp') {
+function humanizeConnectedTool(name: string): string {
+  const lower = name.trim().toLowerCase();
+  const known = TOOL_ACTIVITY[lower];
+  if (known) return known;
+  if (lower === 'whoami') return 'Checking account';
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/[_:-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!words) return 'Using a connected tool';
+  if (words.startsWith('list all ')) return `Listing ${words.slice(9)}`;
+  if (words.startsWith('list ')) return `Listing ${words.slice(5)}`;
+  if (words.startsWith('get ')) return `Reading ${words.slice(4)}`;
+  if (words.startsWith('read ')) return `Reading ${words.slice(5)}`;
+  if (words.startsWith('view ')) return `Reading ${words.slice(5)}`;
+  if (words.startsWith('fetch ')) return `Reading ${words.slice(6)}`;
+  if (words.startsWith('search ')) return `Searching ${words.slice(7)}`;
+  if (words.startsWith('find ')) return `Searching ${words.slice(5)}`;
+  if (words.startsWith('query ')) return `Querying ${words.slice(6)}`;
+  if (words.startsWith('aggregate ')) return `Aggregating ${words.slice(10)}`;
+  if (words.startsWith('resolve ')) return `Resolving ${words.slice(8)}`;
+  if (words.startsWith('build ')) return `Building ${words.slice(6)}`;
+  if (
+    /\b(?:usage|metrics|curve|trend|analysis|schema|breakdown|score|responses|activity|series|count|snippets?)$/.test(
+      words,
+    )
+  ) {
+    return `Querying ${words}`;
+  }
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function connectedToolName(toolName: string, args?: unknown): string | null {
+  const trimmed = toolName.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'mcp') {
     const inner =
       args && typeof args === 'object'
         ? (args as { toolName?: unknown }).toolName
         : undefined;
-    const innerLabel =
-      typeof inner === 'string' ? TOOL_ACTIVITY[inner.trim().toLowerCase()] : undefined;
-    return innerLabel ?? 'Using a connected tool';
+    return typeof inner === 'string' && inner.trim() ? inner.trim() : '';
   }
-  return TOOL_ACTIVITY[name] ?? 'Working…';
+  if (lower.startsWith('mcp:')) return trimmed.slice(4);
+  return null;
+}
+
+export function friendlyToolActivityLabel(toolName: string, args?: unknown): string {
+  const connected = connectedToolName(toolName, args);
+  if (connected !== null) {
+    return connected ? humanizeConnectedTool(connected) : 'Using a connected tool';
+  }
+  return TOOL_ACTIVITY[toolName.trim().toLowerCase()] ?? 'Working…';
 }
 
 const CHAT_ERROR_BY_CODE: Record<string, string> = {

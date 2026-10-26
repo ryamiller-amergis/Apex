@@ -7,7 +7,7 @@ function read(relativePath: string): string {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-describe('integration registry migrations', () => {
+describe('mcp server registry migrations', () => {
   it('SC-2 adds view and manage permissions and grants neither to a default role', () => {
     const sql = read('migrations/20261021150000_integrations-permissions.sql');
     const up = sql.split('-- Down Migration')[0];
@@ -23,6 +23,15 @@ describe('integration registry migrations', () => {
     expect(up).toContain("'integrations'");
     expect(up).toMatch(/false/);
     expect(up).not.toMatch(/type,\s*'project'/);
+  });
+
+  it('renames the module, permissions, flag, and table to mcp-servers', () => {
+    const sql = read('migrations/20261022010000_rename-integrations-to-mcp-servers.sql');
+    const up = sql.split('-- Down Migration')[0];
+    expect(up).toContain("'mcp-servers:view'");
+    expect(up).toContain("'mcp-servers:manage'");
+    expect(up).toContain("RENAME TO mcp_servers");
+    expect(up).toContain("'mcp-servers'");
   });
 
   it('SC-3 stores ciphertext columns and no plaintext credential column', () => {

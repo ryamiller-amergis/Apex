@@ -36,6 +36,11 @@ import type {
   ChatMessage,
   SseEvent,
 } from '../../../shared/types/chat';
+import {
+  mcpServerNoToolFallback,
+  mcpServerToolRetryPrompt,
+  mcpServerTurnRequiresToolUse,
+} from '../../../shared/types/mcpServers';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { InteractiveStageName } from '../../../shared/types/workerTierOperations';
 import {
@@ -1286,6 +1291,14 @@ export function createInteractiveSessionActor(
         acquisitionMode === 'recreated'
           ? specification.recreationPrompt
           : specification.currentPrompt;
+      const mcpServerChat =
+        specification.mcpServers.length === 1 &&
+        specification.mcpServers[0]?.kind === 'internal-proxy' &&
+        specification.mcpServers[0].serverName === 'mcp-server';
+      const mcpToolRequired =
+        mcpServerChat &&
+        mcpServerTurnRequiresToolUse(specification.currentMessage.text);
+      let mcpToolUsedThisAttempt = false;
 
       const liveBatcher = createIncrementalTokenBatcher({
         maxBytes: batchMaxBytes,
@@ -1380,7 +1393,7 @@ export function createInteractiveSessionActor(
       };
 
       try {
-        const turnEndMonitor = createCursorTurnEndMonitor();
+        let turnEndMonitor = createCursorTurnEndMonitor();
         const sendTurn = (handle: InteractiveCursorAgentHandle) =>
           untilAborted(
             handle.send(prompt, {
@@ -1441,7 +1454,7 @@ export function createInteractiveSessionActor(
           activeRunRef = await sendTurn(agentHandle);
         }
 
-        const result = await untilAborted(executeCursorExecutionCore({
+        const executeActiveRun = () => untilAborted(executeCursorExecutionCore({
           snapshot: {
             prompt,
             model: specification.model,
@@ -1452,7 +1465,7 @@ export function createInteractiveSessionActor(
             projectId: specification.projectId,
             threadId: specification.threadId,
           },
-          run: activeRunRef,
+          run: activeRunRef!,
           context: { runId, sourceInstance },
           sink: {
             publish: async (event: SseEvent) => {
@@ -1469,8 +1482,10 @@ export function createInteractiveSessionActor(
               }
               observeEvent();
               if (event.type === 'tool_call') {
+                if (mcpServerChat) mcpToolUsedThisAttempt = true;
                 armToolTimer();
               } else if (event.type === 'tool_status') {
+                if (mcpServerChat) mcpToolUsedThisAttempt = true;
                 if (event.status === 'running') {
                   armToolTimer();
                 } else {
@@ -1478,6 +1493,7 @@ export function createInteractiveSessionActor(
                 }
               }
               if (event.type === 'token') {
+                if (mcpToolRequired && !mcpToolUsedThisAttempt) return;
                 firstTokenAt ??= now();
                 await publishLiveTokenBatches(
                   liveBatcher.push(event.text, now()),
@@ -1507,6 +1523,23 @@ export function createInteractiveSessionActor(
           turnEnd: turnEndMonitor.completion,
           failIfStreamEndsBeforeTurnEnd: true,
         }), absoluteAbort.signal);
+        let result = await executeActiveRun();
+
+        if (mcpToolRequired && !mcpToolUsedThisAttempt) {
+          await publishLiveEnvelope({
+            type: 'retrying',
+            attempt: 1,
+            maxAttempts: 2,
+          });
+          prompt = mcpServerToolRetryPrompt(
+            'MCP server',
+            specification.currentMessage.text,
+          );
+          mcpToolUsedThisAttempt = false;
+          turnEndMonitor = createCursorTurnEndMonitor();
+          activeRunRef = await sendTurn(agentHandle);
+          result = await executeActiveRun();
+        }
         clearEventTimers();
 
         const liveTail = liveBatcher.flush();
@@ -1546,7 +1579,10 @@ export function createInteractiveSessionActor(
           throw new Error(unsuccessfulWaitDetail(result));
         }
 
-        const finalText = result.text;
+        const finalText =
+          mcpToolRequired && !mcpToolUsedThisAttempt
+            ? mcpServerNoToolFallback('the connected MCP server')
+            : result.text;
         if (finalText && finalText.trim().length > 0) {
           const finalMessage: ChatMessage = {
             id: randomUUID(),

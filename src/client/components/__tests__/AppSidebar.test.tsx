@@ -433,52 +433,52 @@ describe('AppSidebar — integrations nav (SC-1)', () => {
     render(
       <AppSidebar
         {...baseProps}
-        can={(key) => key === 'integrations:view'}
-        menuEnabledViews={['integrations']}
-        integrationsEnabled={false}
-        onNavigateIntegrations={jest.fn()}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled={false}
+        onNavigateMcpServers={jest.fn()}
       />,
     );
-    expect(screen.queryByTestId('nav-item-integrations')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
   });
 
   it('SC-1 hides Integrations when the project menu omits it', () => {
     render(
       <AppSidebar
         {...baseProps}
-        can={(key) => key === 'integrations:view'}
+        can={(key) => key === 'mcp-servers:view'}
         menuEnabledViews={['calendar']}
-        integrationsEnabled
-        onNavigateIntegrations={jest.fn()}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
       />,
     );
-    expect(screen.queryByTestId('nav-item-integrations')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
   });
 
-  it('SC-1 hides Integrations without integrations:view', () => {
+  it('SC-1 hides Integrations without mcp-servers:view', () => {
     render(
       <AppSidebar
         {...baseProps}
         can={() => false}
-        menuEnabledViews={['integrations']}
-        integrationsEnabled
-        onNavigateIntegrations={jest.fn()}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
       />,
     );
-    expect(screen.queryByTestId('nav-item-integrations')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
   });
 
   it('SC-1 shows Integrations when the flag, menu, and view permission are on', () => {
     render(
       <AppSidebar
         {...baseProps}
-        can={(key) => key === 'integrations:view'}
-        menuEnabledViews={['integrations']}
-        integrationsEnabled
-        onNavigateIntegrations={jest.fn()}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
       />,
     );
-    expect(screen.getByTestId('nav-item-integrations')).toBeInTheDocument();
+    expect(screen.getByTestId('nav-item-mcp-servers')).toBeInTheDocument();
   });
 });
 

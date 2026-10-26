@@ -35,7 +35,7 @@ jest.mock('drizzle-orm', () => ({
 }));
 
 jest.mock('../db/schema', () => ({
-  integrationConnections: new Proxy(
+  mcpServers: new Proxy(
     {},
     { get: (_target, prop) => ({ field: String(prop) }) }
   ),
@@ -84,16 +84,24 @@ jest.mock('../services/chatThreadRepository', () => ({
 }));
 
 import {
-  createIntegrationConnection,
-  testIntegrationConnection,
-} from '../services/integrationConnectionService';
+  createMcpServer,
+  testMcpServer,
+} from '../services/mcpServerConnectionService';
 import {
-  buildIntegrationReadUrl,
-  executeIntegrationRead,
-  executeMountedIntegrationRead,
-} from '../services/integrationReadService';
-import { askIntegration } from '../services/integrationAskService';
-import { IntegrationConnectionError } from '../services/integrationErrors';
+  buildMcpServerReadUrl,
+  executeMcpServerRead,
+  executeMountedMcpServerRead,
+  executeMountedMcpTool,
+  supportsTimestampBoundarySearch,
+} from '../services/mcpServerReadService';
+import {
+  buildMcpToolZodInputSchema,
+  createMcpServerRuntime,
+  resetMcpTurnCallBudget,
+} from '../mcp/mcpServers/server';
+import { askMcpServer } from '../services/mcpServerAskService';
+import { McpServerError } from '../services/mcpServerErrors';
+import * as mcpServerDiscovery from '../services/mcpServerDiscovery';
 
 const SECRET = 'integration-read-test-secret';
 const QUESTION =
@@ -103,7 +111,7 @@ async function usableConnection(
   provider: 'clerk' | 'pendo' | 'sendgrid',
   name: string
 ) {
-  const created = await createIntegrationConnection({
+  const created = await createMcpServer({
     project: 'MaxView',
     name,
     provider,
@@ -112,7 +120,7 @@ async function usableConnection(
     allowedUserIds: ['user-1'],
     createdBy: 'user-1',
   });
-  return testIntegrationConnection('MaxView', created.id, async () => ({
+  return testMcpServer('MaxView', created.id, async () => ({
     status: 200,
     body: '{"ok":true}',
   }));
@@ -127,7 +135,7 @@ describe('integration reads', () => {
   });
 
   it('SC-3 tests Clerk, Pendo, and SendGrid against their catalog URLs', async () => {
-    const clerk = await createIntegrationConnection({
+    const clerk = await createMcpServer({
       project: 'MaxView',
       name: 'Clerk',
       provider: 'clerk',
@@ -135,7 +143,7 @@ describe('integration reads', () => {
       allowedUserIds: ['user-1'],
       createdBy: 'user-1',
     });
-    const pendo = await createIntegrationConnection({
+    const pendo = await createMcpServer({
       project: 'MaxView',
       name: 'Pendo',
       provider: 'pendo',
@@ -143,7 +151,7 @@ describe('integration reads', () => {
       allowedUserIds: ['user-1'],
       createdBy: 'user-1',
     });
-    const sendgrid = await createIntegrationConnection({
+    const sendgrid = await createMcpServer({
       project: 'MaxView',
       name: 'SendGrid',
       provider: 'sendgrid',
@@ -156,9 +164,9 @@ describe('integration reads', () => {
     const pendoFetch = jest.fn(async () => ({ status: 200, body: '{}' }));
     const sendgridFetch = jest.fn(async () => ({ status: 200, body: '{}' }));
 
-    await testIntegrationConnection('MaxView', clerk.id, clerkFetch);
-    await testIntegrationConnection('MaxView', pendo.id, pendoFetch);
-    await testIntegrationConnection('MaxView', sendgrid.id, sendgridFetch);
+    await testMcpServer('MaxView', clerk.id, clerkFetch);
+    await testMcpServer('MaxView', pendo.id, pendoFetch);
+    await testMcpServer('MaxView', sendgrid.id, sendgridFetch);
 
     expect(clerkFetch).toHaveBeenCalledWith(
       'https://api.clerk.com/v1/users?limit=1',
@@ -190,7 +198,7 @@ describe('integration reads', () => {
       body: '{"id":"user_1"}',
     }));
 
-    const result = await executeIntegrationRead({
+    const result = await executeMcpServerRead({
       project: 'MaxView',
       connectionId: clerk.id,
       userId: 'user-1',
@@ -210,7 +218,7 @@ describe('integration reads', () => {
 
     fetchImpl.mockClear();
     await expect(
-      executeIntegrationRead({
+      executeMcpServerRead({
         project: 'MaxView',
         connectionId: clerk.id,
         userId: 'user-1',
@@ -229,7 +237,7 @@ describe('integration reads', () => {
       body: '[{"id":"user_9","email":"jane@example.com","name":"Jane Ticket"}]',
     }));
 
-    const answer = await askIntegration({
+    const answer = await askMcpServer({
       project: 'MaxView',
       connectionId: clerk.id,
       userId: 'user-1',
@@ -252,8 +260,8 @@ describe('integration reads', () => {
       expect.objectContaining({
         userId: 'user-1',
         kickoff: expect.objectContaining({
-          assistantType: 'integration',
-          integrationConnectionId: clerk.id,
+          assistantType: 'mcp-server',
+          mcpServerId: clerk.id,
           project: 'MaxView',
           pillLabel: 'MaxView Clerk',
         }),
@@ -276,14 +284,14 @@ describe('integration reads', () => {
     }));
 
     await expect(
-      askIntegration({
+      askMcpServer({
         project: 'MatterWorx',
         connectionId: clerk.id,
         userId: 'user-1',
         question: QUESTION,
         fetchImpl,
       })
-    ).rejects.toBeInstanceOf(IntegrationConnectionError);
+    ).rejects.toBeInstanceOf(McpServerError);
 
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -298,14 +306,14 @@ describe('integration reads', () => {
         : '{"email":"jane@example.com"}',
     }));
 
-    const pendoAnswer = await askIntegration({
+    const pendoAnswer = await askMcpServer({
       project: 'MaxView',
       connectionId: pendo.id,
       userId: 'user-1',
       question: QUESTION,
       fetchImpl,
     });
-    const sendgridAnswer = await askIntegration({
+    const sendgridAnswer = await askMcpServer({
       project: 'MaxView',
       connectionId: sendgrid.id,
       userId: 'user-1',
@@ -330,7 +338,7 @@ describe('integration reads', () => {
       })
     );
     await expect(
-      executeIntegrationRead({
+      executeMcpServerRead({
         project: 'MaxView',
         connectionId: pendo.id,
         userId: 'user-1',
@@ -343,7 +351,7 @@ describe('integration reads', () => {
 
   it('keeps the connection base path when joining an absolute operation path', () => {
     expect(
-      buildIntegrationReadUrl('https://api.example.com/v1', '/tickets/{id}', {
+      buildMcpServerReadUrl('https://api.example.com/v1', '/tickets/{id}', {
         id: '4421',
       })
     ).toBe('https://api.example.com/v1/tickets/4421');
@@ -351,7 +359,7 @@ describe('integration reads', () => {
 
   it('rejects protocol-relative operation paths', () => {
     expect(() =>
-      buildIntegrationReadUrl(
+      buildMcpServerReadUrl(
         'https://api.example.com',
         '//attacker.example/x',
         {}
@@ -359,7 +367,7 @@ describe('integration reads', () => {
     ).toThrow(expect.objectContaining({ code: 'OPERATION_NOT_ALLOWED' }));
   });
 
-  it('refuses a mounted read when the caller is not on the connection allow-list', async () => {
+  it('lets any signed-in project user read a connection', async () => {
     const clerk = await usableConnection('clerk', 'MaxView Clerk');
     const fetchImpl = jest.fn(async () => ({
       status: 200,
@@ -367,9 +375,9 @@ describe('integration reads', () => {
     }));
 
     await expect(
-      executeMountedIntegrationRead(
+      executeMountedMcpServerRead(
         clerk.id,
-        'user-2',
+        '',
         'getUser',
         { userId: 'user_1' },
         fetchImpl
@@ -377,14 +385,147 @@ describe('integration reads', () => {
     ).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
     expect(fetchImpl).not.toHaveBeenCalled();
 
-    const result = await executeMountedIntegrationRead(
+    const result = await executeMountedMcpServerRead(
       clerk.id,
-      'user-1',
+      'user-2',
       'getUser',
       { userId: 'user_1' },
       fetchImpl
     );
     expect(result.body).toContain('user_1');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes the full tool inputSchema and timestamp boundary parameters for sortable paginated MCP tools', () => {
+    const listUsersOp = {
+      id: 'list_users',
+      method: 'GET' as const,
+      path: '/mcp-tool',
+      summary: 'List users',
+      readOnly: true as const,
+      source: 'mcp' as const,
+      inputSchema: {
+        type: 'object',
+        required: ['application_id', 'instance', 'context'],
+        properties: {
+          application_id: { type: 'string', description: 'Clerk application ID' },
+          instance: { type: 'string', description: 'Environment instance' },
+          limit: { type: 'integer', minimum: 1, maximum: 250 },
+          offset: { type: 'integer', minimum: 0 },
+          order_by: { type: 'string', description: 'Sort order, e.g. -last_sign_in_at' },
+          context: { type: 'string', description: 'Analytics context' },
+        },
+      },
+    };
+
+    expect(supportsTimestampBoundarySearch(listUsersOp)).toBe(true);
+    const zodSchema = buildMcpToolZodInputSchema(listUsersOp);
+    const parsed = zodSchema.parse({
+      application_id: 'app_123',
+      instance: 'production',
+      since_timestamp_ms: 1792728000000,
+    });
+    expect(parsed).toEqual({
+      application_id: 'app_123',
+      instance: 'production',
+      context: 'Answer user question in Apex',
+      since_timestamp_ms: 1792728000000,
+    });
+  });
+
+  it('counts records across pages in one tool call when since_timestamp_ms is provided', async () => {
+    const cutoffMs = Date.parse('2026-10-23T04:00:00.000Z');
+    const totalUsers = 1000;
+    const matchingUsers = 420;
+
+    const callRemoteSpy = jest
+      .spyOn(mcpServerDiscovery, 'callRemoteMcpTool')
+      .mockImplementation(async ({ args }) => {
+        const offset = typeof args.offset === 'number' ? args.offset : 0;
+        const limit = typeof args.limit === 'number' ? args.limit : 50;
+        const data = [];
+        for (let idx = offset; idx < Math.min(totalUsers, offset + limit); idx += 1) {
+          const ts =
+            idx < matchingUsers
+              ? cutoffMs + (matchingUsers - idx) * 1000
+              : cutoffMs - (idx - matchingUsers + 1) * 1000;
+          data.push({
+            id: `user_${idx}`,
+            last_sign_in_at: ts,
+            image_url: 'https://img.clerk.com/avatar',
+            phone_numbers: [],
+          });
+        }
+        return JSON.stringify({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ data, total_count: totalUsers }),
+            },
+            {
+              type: 'text',
+              text: JSON.stringify({ conversation_id: 'conv_test_1' }),
+            },
+          ],
+        });
+      });
+
+    try {
+      const created = await createMcpServer({
+        project: 'MaxView',
+        name: 'Clerk MCP',
+        provider: 'custom',
+        credential: '',
+        mcpUrl: 'https://mcp.clerk.com/mcp',
+        headers: { Authorization: 'Bearer ${TOKEN}' },
+        secrets: [{ name: 'TOKEN', value: 'sk_test_123' }],
+        toolNames: ['list_users'],
+        allowedUserIds: ['user-1'],
+        createdBy: 'user-1',
+      });
+      memory[0].operations = [
+        {
+          id: 'list_users',
+          method: 'GET',
+          path: '/mcp-tool',
+          summary: 'List users',
+          readOnly: true,
+          source: 'mcp',
+          inputSchema: {
+            type: 'object',
+            required: ['application_id', 'instance', 'context'],
+            properties: {
+              application_id: { type: 'string' },
+              instance: { type: 'string' },
+              limit: { type: 'integer' },
+              offset: { type: 'integer' },
+              order_by: { type: 'string' },
+              context: { type: 'string' },
+            },
+          },
+        },
+      ];
+
+      resetMcpTurnCallBudget(created.id, 'user-1');
+      const raw = await executeMountedMcpTool(created.id, 'user-1', 'list_users', {
+        application_id: 'app_1',
+        instance: 'production',
+        order_by: '-last_sign_in_at',
+        since_timestamp_ms: cutoffMs,
+      });
+
+      const outer = JSON.parse(raw);
+      const summary = JSON.parse(outer.content[0].text);
+      expect(summary.matching_count).toBe(matchingUsers);
+      expect(summary.total_count).toBe(totalUsers);
+      expect(summary.timestamp_field).toBe('last_sign_in_at');
+      expect(summary.sample_records).toHaveLength(5);
+      expect(summary.sample_records[0]).not.toHaveProperty('image_url');
+
+      const runtime = await createMcpServerRuntime(created.id, 'user-1');
+      expect(runtime).toBeDefined();
+    } finally {
+      callRemoteSpy.mockRestore();
+    }
   });
 });

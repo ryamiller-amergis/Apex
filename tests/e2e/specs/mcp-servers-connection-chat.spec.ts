@@ -6,7 +6,7 @@ import { test, expect, SeedApi, E2E_PROJECT, PERSONA_OIDS } from '../support/fix
 import { stubAdoProjects } from '../support/api-stubs';
 import { SidebarPage } from '../pages/sidebar.page';
 import { ProjectSelectorPage } from '../pages/project-selector.page';
-import { IntegrationsPage } from '../pages/integrations.page';
+import { McpServersPage } from '../pages/mcp-servers.page';
 
 const OTHER_PROJECT = 'MatterWorx';
 const CONNECTION_NAME = '[E2E] MaxView Clerk';
@@ -17,7 +17,7 @@ test.use({ video: 'on' });
 
 test.describe('project integrations', () => {
   test.afterEach(async ({ e2eApi }) => {
-    await SeedApi.seedIntegrationsAccess(e2eApi, {
+    await SeedApi.seedMcpServersAccess(e2eApi, {
       enabled: false,
       projects: [E2E_PROJECT, OTHER_PROJECT],
       grants: [],
@@ -35,7 +35,7 @@ test.describe('project integrations', () => {
 
     const selector = new ProjectSelectorPage(page);
     const sidebar = new SidebarPage(page);
-    const integrations = new IntegrationsPage(page);
+    const mcpServers = new McpServersPage(page);
 
     await selector.goto();
     if (!page.url().includes('/home')) {
@@ -43,40 +43,40 @@ test.describe('project integrations', () => {
     }
     await sidebar.waitForReady();
 
-    await expect(integrations.navItem()).toHaveCount(0);
-    const hidden = await page.request.get(`/api/projects/${encodeURIComponent(E2E_PROJECT)}/integrations`);
+    await expect(mcpServers.navItem()).toHaveCount(0);
+    const hidden = await page.request.get(`/api/projects/${encodeURIComponent(E2E_PROJECT)}/mcp-servers`);
     expect(hidden.status()).toBe(404);
 
-    await SeedApi.seedIntegrationProviderStub(e2eApi);
-    await SeedApi.seedIntegrationsAccess(e2eApi, {
+    await SeedApi.seedMcpServerProviderStub(e2eApi);
+    await SeedApi.seedMcpServersAccess(e2eApi, {
       enabled: true,
       projects: [E2E_PROJECT, OTHER_PROJECT],
       grants: [
         {
           userId: PERSONA_OIDS.developer,
           project: E2E_PROJECT,
-          permissions: ['integrations:view'],
+          permissions: ['mcp-servers:view'],
         },
         {
           userId: PERSONA_OIDS.manager,
           project: E2E_PROJECT,
-          permissions: ['integrations:view', 'integrations:manage'],
+          permissions: ['mcp-servers:view', 'mcp-servers:manage'],
         },
         {
           userId: PERSONA_OIDS.manager,
           project: OTHER_PROJECT,
-          permissions: ['integrations:view', 'integrations:manage'],
+          permissions: ['mcp-servers:view', 'mcp-servers:manage'],
         },
       ],
     });
 
     await page.reload();
     await sidebar.waitForReady();
-    await expect(integrations.navItem()).toBeVisible();
-    await integrations.open();
-    await expect(page.getByTestId('integrations-create-form')).toHaveCount(0);
+    await expect(mcpServers.navItem()).toBeVisible();
+    await mcpServers.open();
+    await expect(page.getByTestId('mcp-servers-create-form')).toHaveCount(0);
 
-    const denied = await page.request.post(`/api/projects/${encodeURIComponent(E2E_PROJECT)}/integrations`, {
+    const denied = await page.request.post(`/api/projects/${encodeURIComponent(E2E_PROJECT)}/mcp-servers`, {
       data: {
         name: CONNECTION_NAME,
         provider: 'clerk',
@@ -92,12 +92,12 @@ test.describe('project integrations', () => {
       await selector.selectProject(E2E_PROJECT);
     }
     await sidebar.waitForReady();
-    await integrations.open();
-    await integrations.createClerk(CONNECTION_NAME, CREDENTIAL, PERSONA_OIDS.manager);
+    await mcpServers.open();
+    await mcpServers.createClerk(CONNECTION_NAME, CREDENTIAL, PERSONA_OIDS.manager);
 
-    const row = integrations.connectionRow(CONNECTION_NAME);
+    const row = mcpServers.connectionRow(CONNECTION_NAME);
     await expect(row).toContainText('••••t_99');
-    await expect(page.getByTestId('integrations-credential-input')).toHaveValue('');
+    await expect(page.getByTestId('mcp-servers-credential-input')).toHaveValue('');
     await expect(page.locator('body')).not.toContainText(CREDENTIAL);
 
     await row.getByRole('button', { name: 'Test' }).click();
@@ -107,17 +107,17 @@ test.describe('project integrations', () => {
     await selector.waitForReady();
     await selector.selectProject(OTHER_PROJECT);
     await sidebar.waitForReady();
-    await integrations.open();
+    await mcpServers.open();
     await expect(page.getByText(CONNECTION_NAME)).toHaveCount(0);
-    await expect(page.getByTestId('integrations-empty')).toBeVisible();
+    await expect(page.getByTestId('mcp-servers-empty')).toBeVisible();
 
     await page.getByTestId('app-header-brand').click();
     await selector.waitForReady();
     await selector.selectProject(E2E_PROJECT);
     await sidebar.waitForReady();
-    await integrations.open();
-    await integrations.ask(CONNECTION_NAME, QUESTION);
-    await expect(page.getByTestId('integrations-answer')).toContainText('Jane Ticket');
+    await mcpServers.open();
+    await mcpServers.ask(CONNECTION_NAME, QUESTION);
+    await expect(page.getByTestId('mcp-servers-answer')).toContainText('Jane Ticket');
     await expect(page.locator('body')).not.toContainText(CREDENTIAL);
   });
 });

@@ -1,16 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
-  CreateIntegrationConnectionRequest,
-  IntegrationConnectionPublic,
-  UpdateIntegrationConnectionRequest,
-} from '../../shared/types/integrations';
+  CreateMcpServerRequest,
+  DiscoveredMcpTool,
+  McpServerConnectionPublic,
+  UpdateMcpServerRequest,
+} from '../../shared/types/mcpServers';
 
 interface ConnectionListResponse {
-  connections: IntegrationConnectionPublic[];
+  connections: McpServerConnectionPublic[];
 }
 
 interface ConnectionResponse {
-  connection: IntegrationConnectionPublic;
+  connection: McpServerConnectionPublic;
 }
 
 interface AskResponse {
@@ -25,14 +26,14 @@ async function readError(res: Response): Promise<string> {
   return body.error ?? `HTTP ${res.status}`;
 }
 
-export function useIntegrations(project: string) {
+export function useMcpServers(project: string) {
   const queryClient = useQueryClient();
-  const queryKey = ['integrations', project] as const;
+  const queryKey = ['mcp-servers', project] as const;
 
   const list = useQuery<ConnectionListResponse>({
     queryKey,
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/integrations`, {
+      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/mcp-servers`, {
         credentials: 'include',
       });
       if (!res.ok) throw new Error(await readError(res));
@@ -44,8 +45,8 @@ export function useIntegrations(project: string) {
   const invalidate = () => queryClient.invalidateQueries({ queryKey });
 
   const create = useMutation({
-    mutationFn: async (input: CreateIntegrationConnectionRequest) => {
-      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/integrations`, {
+    mutationFn: async (input: CreateMcpServerRequest) => {
+      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/mcp-servers`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -58,9 +59,9 @@ export function useIntegrations(project: string) {
   });
 
   const update = useMutation({
-    mutationFn: async ({ id, patch }: { id: string; patch: UpdateIntegrationConnectionRequest }) => {
+    mutationFn: async ({ id, patch }: { id: string; patch: UpdateMcpServerRequest }) => {
       const res = await fetch(
-        `/api/projects/${encodeURIComponent(project)}/integrations/${encodeURIComponent(id)}`,
+        `/api/projects/${encodeURIComponent(project)}/mcp-servers/${encodeURIComponent(id)}`,
         {
           method: 'PATCH',
           credentials: 'include',
@@ -77,7 +78,7 @@ export function useIntegrations(project: string) {
   const remove = useMutation({
     mutationFn: async (id: string) => {
       const res = await fetch(
-        `/api/projects/${encodeURIComponent(project)}/integrations/${encodeURIComponent(id)}`,
+        `/api/projects/${encodeURIComponent(project)}/mcp-servers/${encodeURIComponent(id)}`,
         { method: 'DELETE', credentials: 'include' },
       );
       if (!res.ok) throw new Error(await readError(res));
@@ -87,7 +88,7 @@ export function useIntegrations(project: string) {
 
   const ask = useMutation({
     mutationFn: async (input: { connectionId: string; question: string }) => {
-      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/integrations/ask`, {
+      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/mcp-servers/ask`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -98,10 +99,23 @@ export function useIntegrations(project: string) {
     },
   });
 
+  const discover = useMutation({
+    mutationFn: async (input: { provider: string; clientId?: string; clientSecret: string }) => {
+      const res = await fetch(`/api/projects/${encodeURIComponent(project)}/mcp-servers/discover-tools`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      return res.json() as Promise<{ tools: DiscoveredMcpTool[] }>;
+    },
+  });
+
   const test = useMutation({
     mutationFn: async (id: string) => {
       const res = await fetch(
-        `/api/projects/${encodeURIComponent(project)}/integrations/${encodeURIComponent(id)}/test`,
+        `/api/projects/${encodeURIComponent(project)}/mcp-servers/${encodeURIComponent(id)}/test`,
         { method: 'POST', credentials: 'include' },
       );
       if (!res.ok) throw new Error(await readError(res));
@@ -115,9 +129,19 @@ export function useIntegrations(project: string) {
     isLoading: list.isLoading,
     error: list.error instanceof Error ? list.error.message : null,
     createConnection: create.mutateAsync,
-    updateAccess: (id: string, patch: UpdateIntegrationConnectionRequest) => update.mutateAsync({ id, patch }),
+    discoverTools: discover.mutateAsync,
+    updateAccess: (id: string, patch: UpdateMcpServerRequest) => update.mutateAsync({ id, patch }),
     deleteConnection: remove.mutateAsync,
     testConnection: test.mutateAsync,
+    startOAuth: async (id: string) => {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(project)}/mcp-servers/${encodeURIComponent(id)}/oauth/start`,
+        { method: 'POST', credentials: 'include' },
+      );
+      if (!res.ok) throw new Error(await readError(res));
+      const body = await res.json() as { authorizationUrl: string };
+      return body.authorizationUrl;
+    },
     ask: ask.mutateAsync,
     answer: ask.data?.answer ?? null,
   };

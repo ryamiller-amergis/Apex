@@ -1,4 +1,4 @@
-import { PREBUILT_CONNECTORS, PREBUILT_PROVIDER_IDS } from '../../shared/types/integrations';
+import { PREBUILT_CONNECTORS, PREBUILT_PROVIDER_IDS } from '../../shared/types/mcpServers';
 
 describe('integration catalog (SC-3)', () => {
   it('SC-3 ships Clerk, Pendo, and SendGrid as fixed read-only catalogs', () => {

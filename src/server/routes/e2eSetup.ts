@@ -20,7 +20,7 @@ import {
   chatThreads,
   featureFlagRules,
   featureFlags,
-  integrationConnections,
+  mcpServers,
   designDocs,
   designPrototypes,
   documentApproverAssignments,
@@ -37,7 +37,7 @@ import {
   testCases,
 } from '../db/schema';
 import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
-import { clerkTicketFetchStub, setIntegrationFetchStub } from '../services/integrationFetchStub';
+import { clerkTicketFetchStub, setMcpServerFetchStub } from '../services/mcpServerFetchStub';
 import type { ValidationScorecard } from '../../shared/types/interview';
 
 const router = express.Router();
@@ -93,9 +93,9 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
 router.post('/reset', async (_req, res) => {
   try {
     await db.delete(playbookDefinitions).where(like(playbookDefinitions.name, `${E2E_PREFIX}%`));
-    await db.delete(integrationConnections).where(like(integrationConnections.name, `${E2E_PREFIX}%`));
+    await db.delete(mcpServers).where(like(mcpServers.name, `${E2E_PREFIX}%`));
     await db.delete(appRoles).where(like(appRoles.name, `${E2E_PREFIX}%`));
-    setIntegrationFetchStub(null);
+    setMcpServerFetchStub(null);
 
     await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
     await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
@@ -1115,21 +1115,21 @@ router.post('/seed/menu-settings', async (req, res) => {
   }
 });
 
-router.post('/seed/integration-provider-stub', (_req, res) => {
-  setIntegrationFetchStub(clerkTicketFetchStub);
+router.post('/seed/mcp-servers-provider-stub', (_req, res) => {
+  setMcpServerFetchStub(clerkTicketFetchStub);
   res.json({ ok: true });
 });
 
-router.post('/seed/integrations-access', async (req, res) => {
+router.post('/seed/mcp-servers-access', async (req, res) => {
   try {
     const { enabled, projects, grants } = req.body as {
       enabled: boolean;
       projects: string[];
       grants: Array<{ userId: string; project: string; permissions: string[] }>;
     };
-    const [flag] = await db.select().from(featureFlags).where(eq(featureFlags.key, 'integrations'));
+    const [flag] = await db.select().from(featureFlags).where(eq(featureFlags.key, 'mcp-servers'));
     if (!flag) {
-      res.status(500).json({ error: 'integrations feature flag is not seeded' });
+      res.status(500).json({ error: 'mcp-servers feature flag is not seeded' });
       return;
     }
     await db.update(featureFlags).set({ enabled, updatedAt: new Date().toISOString() }).where(eq(featureFlags.id, flag.id));
@@ -1138,7 +1138,7 @@ router.post('/seed/integrations-access', async (req, res) => {
       if (projects?.length) {
         await db.delete(projectMenuSettings).where(inArray(projectMenuSettings.project, projects));
       }
-      setIntegrationFetchStub(null);
+      setMcpServerFetchStub(null);
       res.json({ ok: true });
       return;
     }
@@ -1149,7 +1149,7 @@ router.post('/seed/integrations-access', async (req, res) => {
         value: project,
         createdBy: 'e2e',
       });
-      const enabledViews: MenuItemKey[] = [...DEFAULT_ENABLED_MENU_VIEWS, 'integrations'];
+      const enabledViews: MenuItemKey[] = [...DEFAULT_ENABLED_MENU_VIEWS, 'mcp-servers'];
       await db
         .insert(projectMenuSettings)
         .values({ project, enabledViews })
@@ -1176,10 +1176,10 @@ router.post('/seed/integrations-access', async (req, res) => {
         res.status(500).json({ error: `missing permissions: ${grant.permissions.join(', ')}` });
         return;
       }
-      const roleName = `${E2E_PREFIX} integrations ${grant.project} ${grant.permissions.join('+')} ${grant.userId.slice(-8)}`;
+      const roleName = `${E2E_PREFIX} mcp-servers ${grant.project} ${grant.permissions.join('+')} ${grant.userId.slice(-8)}`;
       const [role] = await db.insert(appRoles).values({
         name: roleName,
-        description: 'E2E project integrations access',
+        description: 'E2E project MCP Servers access',
         isDefault: false,
       }).returning();
       const permissionIds = new Set([
@@ -1199,7 +1199,7 @@ router.post('/seed/integrations-access', async (req, res) => {
     res.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/integrations-access failed: ${message}` });
+    res.status(500).json({ error: `E2E seed/mcp-servers-access failed: ${message}` });
   }
 });
 

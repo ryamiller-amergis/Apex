@@ -444,7 +444,7 @@ describe('getters + listAnchors', () => {
         expect.objectContaining({ key: 'planning', anchorCount: 0 }),
         expect.objectContaining({ key: 'ai-cost', anchorCount: 0 }),
         expect.objectContaining({ key: 'playbooks', anchorCount: 0 }),
-        expect.objectContaining({ key: 'integrations', anchorCount: 0 }),
+        expect.objectContaining({ key: 'mcp-servers', anchorCount: 0 }),
       ]),
     );
   });

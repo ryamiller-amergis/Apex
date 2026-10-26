@@ -1,7 +1,7 @@
 import dns from 'node:dns';
 import { BlockList, isIP } from 'node:net';
-import type { IntegrationOperation } from '../../shared/types/integrations';
-import { IntegrationConnectionError } from './integrationErrors';
+import type { McpServerOperation } from '../../shared/types/mcpServers';
+import { McpServerError } from './mcpServerErrors';
 
 interface OpenApiDocument {
   servers?: Array<{ url?: string }>;
@@ -42,7 +42,7 @@ function isPrivateHost(hostname: string): boolean {
 }
 
 function throwUrlRestricted(): never {
-  throw new IntegrationConnectionError(
+  throw new McpServerError(
     400,
     'Base URL must be a public https host',
     'URL_RESTRICTED'
@@ -54,7 +54,7 @@ export function assertPublicHttpsUrl(value: string): URL {
   try {
     url = new URL(value);
   } catch {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'Base URL is invalid',
       'URL_RESTRICTED'
@@ -91,14 +91,14 @@ export async function assertResolvedPublicHttpsUrl(
   return url;
 }
 
-export function joinIntegrationUrl(baseUrl: string, path: string): URL {
+export function joinMcpServerUrl(baseUrl: string, path: string): URL {
   if (
     !path.startsWith('/') ||
     path.startsWith('//') ||
     path.includes('..') ||
     path.includes('://')
   ) {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'Invalid operation path',
       'OPERATION_NOT_ALLOWED'
@@ -108,7 +108,7 @@ export function joinIntegrationUrl(baseUrl: string, path: string): URL {
   try {
     base = new URL(baseUrl);
   } catch {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'Connection URL is invalid',
       'OPERATION_NOT_ALLOWED'
@@ -117,7 +117,7 @@ export function joinIntegrationUrl(baseUrl: string, path: string): URL {
   const url = new URL(base.toString());
   url.pathname = `${url.pathname.replace(/\/$/, '')}${path}`;
   if (url.origin !== base.origin || url.protocol !== 'https:') {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'Operation URL is outside the connection host',
       'OPERATION_NOT_ALLOWED'
@@ -126,17 +126,17 @@ export function joinIntegrationUrl(baseUrl: string, path: string): URL {
   return url;
 }
 
-export function assertIntegrationBaseUrl(baseUrl: string): string {
+export function assertMcpServerBaseUrl(baseUrl: string): string {
   const url = assertPublicHttpsUrl(baseUrl);
   const path = url.pathname.replace(/\/$/, '');
   return `${url.origin}${path}`;
 }
 
 export function assertReadOnlyOperations(
-  operations: IntegrationOperation[] | undefined
-): IntegrationOperation[] {
+  operations: McpServerOperation[] | undefined
+): McpServerOperation[] {
   if (!operations || operations.length === 0) {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'A custom connector needs an operation definition',
       'OPERATIONS_REQUIRED'
@@ -145,7 +145,7 @@ export function assertReadOnlyOperations(
   const ids = new Set<string>();
   return operations.map((operation) => {
     if (operation.method !== 'GET' || operation.readOnly !== true) {
-      throw new IntegrationConnectionError(
+      throw new McpServerError(
         400,
         'Each operation must be a read-only GET',
         'READ_ONLY_REQUIRED'
@@ -153,7 +153,7 @@ export function assertReadOnlyOperations(
     }
     const id = operation.id?.trim();
     if (!id || ids.has(id)) {
-      throw new IntegrationConnectionError(
+      throw new McpServerError(
         400,
         'Each operation needs a unique id',
         'OPERATIONS_REQUIRED'
@@ -166,7 +166,7 @@ export function assertReadOnlyOperations(
       operation.path.includes('..') ||
       operation.path.includes('://')
     ) {
-      throw new IntegrationConnectionError(
+      throw new McpServerError(
         400,
         'Operation path is not allowed',
         'URL_RESTRICTED'
@@ -185,9 +185,9 @@ export function assertReadOnlyOperations(
 export function importOpenApiOperations(
   document: unknown,
   baseUrl: string
-): IntegrationOperation[] {
+): McpServerOperation[] {
   if (!document || typeof document !== 'object') {
-    throw new IntegrationConnectionError(
+    throw new McpServerError(
       400,
       'OpenAPI document is required',
       'OPERATIONS_REQUIRED'
@@ -200,7 +200,7 @@ export function importOpenApiOperations(
     try {
       server = new URL(declared, baseUrl);
     } catch {
-      throw new IntegrationConnectionError(
+      throw new McpServerError(
         400,
         'OpenAPI server URL does not match the connection URL',
         'URL_RESTRICTED'
@@ -208,14 +208,14 @@ export function importOpenApiOperations(
     }
     const base = new URL(baseUrl);
     if (server.origin !== base.origin) {
-      throw new IntegrationConnectionError(
+      throw new McpServerError(
         400,
         'OpenAPI server URL does not match the connection URL',
         'URL_RESTRICTED'
       );
     }
   }
-  const operations: IntegrationOperation[] = [];
+  const operations: McpServerOperation[] = [];
   for (const [path, methods] of Object.entries(doc.paths ?? {})) {
     const get = methods?.get;
     if (!get) continue;

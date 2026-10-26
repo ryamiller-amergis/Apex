@@ -11,14 +11,14 @@ export class IntegrationCredentialError extends Error {
   }
 }
 
-export interface EncryptedIntegrationCredential {
+export interface EncryptedMcpServerCredential {
   algorithm: 'aes-256-gcm';
   iv: string;
   ciphertext: string;
   authTag: string;
 }
 
-export interface IntegrationCredentialBinding {
+export interface McpServerCredentialBinding {
   project: string;
   connectionId: string;
 }
@@ -47,24 +47,24 @@ function deriveKey(secret: string): Buffer {
   );
 }
 
-function bindingAad(binding: IntegrationCredentialBinding): Buffer {
+function bindingAad(binding: McpServerCredentialBinding): Buffer {
   return Buffer.from(JSON.stringify({
     project: binding.project,
     connectionId: binding.connectionId,
   }), 'utf8');
 }
 
-export function maskIntegrationCredential(plaintext: string): string {
+export function maskMcpServerCredential(plaintext: string): string {
   const trimmed = plaintext.trim();
   if (trimmed.length <= 4) return '••••';
   return `••••${trimmed.slice(-4)}`;
 }
 
-export function encryptIntegrationCredential(
+export function encryptMcpServerCredential(
   plaintext: string,
-  binding: IntegrationCredentialBinding,
+  binding: McpServerCredentialBinding,
   options?: SecretOptions,
-): EncryptedIntegrationCredential {
+): EncryptedMcpServerCredential {
   const key = deriveKey(resolveSecret(options));
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
@@ -81,9 +81,9 @@ export function encryptIntegrationCredential(
   };
 }
 
-export function decryptIntegrationCredential(
-  encrypted: EncryptedIntegrationCredential,
-  binding: IntegrationCredentialBinding,
+export function decryptMcpServerCredential(
+  encrypted: EncryptedMcpServerCredential,
+  binding: McpServerCredentialBinding,
   options?: SecretOptions,
 ): string {
   const key = deriveKey(resolveSecret(options));

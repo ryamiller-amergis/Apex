@@ -23,7 +23,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'integrations';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'mcp-servers';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -63,8 +63,8 @@ interface AppHeaderProps {
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   playbooksEnabled?: boolean;
-  onNavigateIntegrations?: () => void;
-  integrationsEnabled?: boolean;
+  onNavigateMcpServers?: () => void;
+  mcpServersEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -107,8 +107,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   workBoardEnabled = true,
   onNavigatePlaybooks,
   playbooksEnabled = false,
-  onNavigateIntegrations,
-  integrationsEnabled = false,
+  onNavigateMcpServers,
+  mcpServersEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -153,7 +153,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
     { label: 'Playbooks', view: 'playbooks', permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
-    { label: 'Integrations', view: 'integrations', permission: 'integrations:view', onNavigate: onNavigateIntegrations ?? (() => {}) },
+    { label: 'MCP Servers', view: 'mcp-servers', permission: 'mcp-servers:view', onNavigate: onNavigateMcpServers ?? (() => {}) },
     { label: 'Work Board', view: 'work-board', permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
@@ -184,10 +184,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
       return isSuperAdmin || can('playbooks:view');
     }
-    if (item.view === 'integrations') {
-      if (!integrationsEnabled) return false;
-      if (!menuEnabledViews.includes('integrations')) return false;
-      return isSuperAdmin || can('integrations:view');
+    if (item.view === 'mcp-servers') {
+      if (!mcpServersEnabled) return false;
+      if (!menuEnabledViews.includes('mcp-servers')) return false;
+      return isSuperAdmin || can('mcp-servers:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
