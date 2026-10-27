@@ -29,17 +29,17 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 ## src/server (Express)
 
 - `src/server/index.ts`: entry point, mounts routes. Ask before editing.
-- `src/server/routes/`: one router per area, e.g. `src/server/routes/featureRequests.ts`, `src/server/routes/interviews.ts`,
+- `src/server/routes/`: one router per area, e.g. `src/server/routes/builds.ts`, `src/server/routes/featureRequests.ts`, `src/server/routes/interviews.ts`,
   `src/server/routes/notifications.ts`, `src/server/routes/platformAdmin.ts`, `src/server/routes/walkthroughs.ts`.
   `src/server/routes/auth.ts` needs permission to edit.
-- `src/server/services/`: business logic, `<area>Service.ts`. `src/server/services/buildPreflight/` = build preflight checks (`runPreflight`).
+- `src/server/services/`: business logic, `<area>Service.ts`. `src/server/services/buildPreflight/` = build preflight checks (`runPreflight`). `src/server/services/buildOrchestrator/` = start, queue admission, and the build Playbook seam.
 - `src/server/db/drizzle.ts`, `src/server/db/schema.ts` (large; search it, don't read it whole).
 - `src/server/middleware/`: `src/server/middleware/auth.ts`, `src/server/middleware/rbac.ts`, `src/server/middleware/publicApiKeyAuth.ts`,
   `src/server/middleware/aiRunnerAuth.ts`, `src/server/middleware/loadTestRunnerAuth.ts`, observability capture.
 - `src/server/mcp/`: MCP servers Apex exposes: `src/server/mcp/ado/`, `src/server/mcp/github/`, `src/server/mcp/maxview/`,
   `src/server/mcp/calendarAssistant/`, `src/server/mcp/mcpServers/`, `src/server/mcp/board/`.
 - `src/server/utils/` (`src/server/utils/dataDir.ts` = persistent data root), `src/server/skills/`, `src/server/assets/`, `src/server/types/`.
-- `src/server/playbookTemplates/`: shipped Playbook templates (`src/server/playbookTemplates/interview.json`).
+- `src/server/playbookTemplates/`: shipped Playbook templates (`src/server/playbookTemplates/interview.json`, `src/server/playbookTemplates/build-from-prompt.json`).
 - `src/server/__tests__/`: all server unit tests, one flat folder.
 
 ## src/client (React)

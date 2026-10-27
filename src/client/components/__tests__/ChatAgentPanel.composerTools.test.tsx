@@ -2,6 +2,12 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ChatAttachment, ChatThread } from '../../../shared/types/chat';
 import { ChatAgentPanel } from '../ChatAgentPanel';
 
+jest.mock('../BuildAgentHomePill', () => ({
+  BuildAgentHomePill: () => (
+    <button type="button" {...{ 'data-testid': 'agent-home-build-pill' }}>Build</button>
+  ),
+}));
+
 const mockSend = jest.fn();
 const mockAddFiles = jest.fn();
 const mockRemoveAttachment = jest.fn();
@@ -163,6 +169,21 @@ describe('ChatAgentPanel composer tools', () => {
       attachments: [attachment],
     }));
     expect(mockClearAttachments).toHaveBeenCalled();
+  });
+
+  it('VT-26 keeps the Home composer working while the Build pill is shown', () => {
+    const onNewChat = renderHomeCompose();
+
+    expect(screen.getByTestId('agent-home-build-pill')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-attach')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('agent-home-build-pill'));
+    expect(onNewChat).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Plan the sprint' },
+    });
+    fireEvent.click(screen.getByTestId('chat-agent-send-btn'));
+    expect(onNewChat).toHaveBeenCalledWith(expect.objectContaining({ initialMessage: 'Plan the sprint' }));
   });
 
   it('starts a Home thread from attachments alone', () => {
