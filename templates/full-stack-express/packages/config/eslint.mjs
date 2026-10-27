@@ -3,6 +3,7 @@ import jsxA11y from 'eslint-plugin-jsx-a11y';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+import noHardcodedColor from './eslint/no-hardcoded-color.mjs';
 
 const reactHooksConfig =
   reactHooks.configs?.flat?.recommended ??
@@ -163,6 +164,21 @@ export default tseslint.config(
     files: ['apps/web/src/config/env.ts'],
     rules: {
       'no-restricted-syntax': 'off',
+    },
+  },
+  {
+    files: ['apps/web/src/**/*.{ts,tsx}', 'packages/ui/src/**/*.{ts,tsx}'],
+    ignores: [
+      'packages/ui/src/tokens/**',
+      'apps/web/src/theme/**',
+      '**/*.test.ts',
+      '**/*.test.tsx',
+    ],
+    plugins: {
+      'design-tokens': { rules: { 'no-hardcoded-color': noHardcodedColor } },
+    },
+    rules: {
+      'design-tokens/no-hardcoded-color': 'error',
     },
   }
 );

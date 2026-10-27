@@ -19,17 +19,17 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | vitest                                     | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
 | vite                                       | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
 | @vitejs/plugin-react                       | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
-| react                                      | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
-| react-dom                                  | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
-| @types/react                               | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/react-dom                           | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/node                                | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
+| react                                      | 19.3.1         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| react-dom                                  | 19.3.1         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @types/react                               | 19.3.0         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @types/react-dom                           | 19.3.0         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @types/node                                | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web, packages/contracts, packages/ui                  |
 | express                                    | 5.3.0          | implementation-date latest stable                 | apps/api                                                             |
-| @mui/material                              | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
+| @mui/material                              | 9.5.0          | implementation-date latest stable                 | apps/web, packages/ui                                                |
 | drizzle-orm                                | 0.45.4         | implementation-date latest stable                 | apps/api                                                             |
 | drizzle-kit                                | 0.31.11        | implementation-date latest stable                 | apps/api                                                             |
 | @playwright/test                           | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
-| @testing-library/react                     | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
+| @testing-library/react                     | 16.3.3         | implementation-date latest stable                 | packages/ui                                                          |
 | testcontainers                             | 12.2.1         | implementation-date latest stable                 | apps/api                                                             |
 | yaml                                       | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
 | zod                                        | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
@@ -54,6 +54,14 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | @types/pg                                  | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
 | @readme/openapi-parser                     | 10.0.0         | implementation-date latest stable                 | packages/contracts                                                   |
 | diff                                       | 9.0.0          | implementation-date latest stable                 | packages/contracts                                                   |
+| @emotion/react                             | 11.14.0        | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @emotion/styled                            | 11.14.1        | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| react-router                               | 8.5.0          | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| react-error-boundary                       | 6.1.6          | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/dom                       | 10.4.2         | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/jest-dom                  | 7.0.1          | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/user-event                | 14.6.8         | implementation-date latest stable                 | packages/ui                                                          |
+| jsdom                                      | 30.1.3         | implementation-date latest stable                 | packages/ui                                                          |
 
 ## Selection notes
 
@@ -76,6 +84,8 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - OpenTelemetry JS 3.0 renamed the trace SDK to `@opentelemetry/sdk-trace`. The OTLP exporters `0.300.0` depend on that package, so this workspace pins the 3.0 line and not `@opentelemetry/sdk-trace-node` `2.12.0`. Every 3.0 package requires `@opentelemetry/api` `>=1.10.0 <1.11.0`.
 - The OTLP exporters are the `-otlp-proto` packages because `OTEL_EXPORTER_OTLP_PROTOCOL` accepts only `http/protobuf`. The `-otlp-http` packages send JSON.
 - `@opentelemetry/instrumentation-pg` `0.77.0` records the `db.client.operation.duration` histogram, so the data-access module needs no metrics code of its own.
+- `@emotion/react` and `@emotion/styled` are the styling peers of `@mui/material` `9.5.0`. `packages/ui` lists them, `react`, `react-dom`, `@mui/material`, and `react-router` as peer dependencies, and `apps/web` installs them.
+- `jsdom` `30.1.3` supports Node `^24.15.0`. It is the DOM for `packages/ui` component tests, together with `@testing-library/dom`, `@testing-library/jest-dom`, and `@testing-library/user-event`.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry

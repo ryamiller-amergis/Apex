@@ -10,10 +10,14 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@emotion/react": "catalog:",
+    "@emotion/styled": "catalog:",
+    "@mui/material": "catalog:",
     "@project-scope/contracts": "workspace:*",
     "@project-scope/ui": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "react-router": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
