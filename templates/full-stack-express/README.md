@@ -89,7 +89,13 @@ On Windows PowerShell, copy the file with `Copy-Item .env.example .env`.
 
 `pnpm db:up` starts PostgreSQL and waits until it accepts connections. `pnpm db:down` stops it. The data volume stays. `pnpm dev` runs the API and the web client. The API reads `.env` when that file exists. A missing or invalid value stops the API before it listens and names every bad variable. The message never prints a value.
 
-`pnpm migrate` and `pnpm seed` are the names Platform Engineering's pipeline calls. Starter Persistence replaces their bodies. Until then each command prints `Provided by the Starter Persistence feature` and exits 1.
+After `pnpm db:up`, run `pnpm migrate` to create the tables and `pnpm seed` to load synthetic rows. Both read `NODE_ENV` and `DATABASE_URL` from `.env`. `pnpm migrate` is also the command Platform Engineering runs before traffic switches. The API never changes the schema when it starts.
+
+## Database and migrations
+
+The starter's one table is `app_users`, defined in `apps/api/src/persistence/schema.ts`. Only `apps/api/src/persistence/` may import Drizzle or the `pg` driver; ESLint enforces that. Change the schema, run `pnpm db:generate -- --name <slug>`, check with `pnpm migrate:validate`, and commit the schema and the generated SQL together. Ownership, exit codes, and the forward-only rollback policy are in [docs/runbooks/migrations.md](docs/runbooks/migrations.md).
+
+Tests that need PostgreSQL start it with Testcontainers. They skip, and say so in the test name, when Docker is not available.
 
 ## Change the PostgreSQL port
 
@@ -102,25 +108,62 @@ Docker Compose reports the failure when the host port is already in use. Node's 
 
 To format files, run `pnpm format` from `templates/full-stack-express/`.
 
+## Feature flags
+
+The API gates new behavior through `FlagEvaluator` in `apps/api/src/feature-flags/`. The local adapter reads one optional variable.
+
+| Variable        | Required | Format                                                       |
+| --------------- | -------- | ------------------------------------------------------------ |
+| `FEATURE_FLAGS` | No       | JSON object of kebab-case flag names to booleans, e.g. `{}`. |
+
+In `.env`, wrap a non-empty value in single quotes: `FEATURE_FLAGS='{"checkout-v2":true}'`. The API reads the value once at start-up, so a change needs a restart. An unset or empty value defines no flags. An invalid value is ignored as a whole: the API still starts, logs one `feature_flags.config_invalid` warning that never includes the value, and every flag returns its default. Check the JSON locally when that warning appears.
+
+Read a flag once at the top of a handler or service entry point, declare the default there, and branch once. Keep the name and default in one constant when more than one place reads the flag.
+
+```ts
+const CHECKOUT_V2 = { name: 'checkout-v2', defaultValue: false } as const;
+
+if (flags.isEnabled(CHECKOUT_V2.name, CHECKOUT_V2.defaultValue)) {
+  // new behavior
+} else {
+  // existing behavior
+}
+```
+
+`isEnabled` is synchronous, never throws, and never reads request input. Do not gate authentication, authorization, or the development identity guard behind a flag. Flags switch new product behavior only.
+
+The flag provider is an open decision. The extension point is the `createLocalFlagEvaluator` call in the API entry point. To adopt a provider, write an adapter that implements `FlagEvaluator` from an in-memory cache and replace that one call. Call sites do not change.
+
 ## Scripts
 
-| Script            | What it does                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| `preinstall`      | Runs the toolchain guard before any dependency is fetched                                         |
-| `setup`           | Installs from the lockfile. This is the install step                                              |
-| `build`           | Builds members in dependency order through Corepack. The config package has no build              |
-| `check`           | Runs typecheck, lint, and format:check                                                            |
-| `typecheck`       | Type-checks every member that defines the script                                                  |
-| `lint`            | Lints the whole workspace once                                                                    |
-| `format`          | Rewrites files with Prettier                                                                      |
-| `format:check`    | Fails when a file disagrees with Prettier                                                         |
-| `test`            | Runs member tests, then the toolchain guard tests                                                 |
-| `dev`             | Runs the API and the web client with file watching. This is the local run step                    |
-| `migrate`         | Applies migrations. Starter Persistence replaces the body; until then the command exits 1         |
-| `seed`            | Loads synthetic local data. Starter Persistence replaces the body; until then the command exits 1 |
-| `db:up`           | Starts local PostgreSQL and waits until it is healthy                                             |
-| `db:down`         | Stops local PostgreSQL. The data volume stays                                                     |
-| `toolchain:check` | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends             |
+| Script             | What it does                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `preinstall`       | Runs the toolchain guard before any dependency is fetched                                           |
+| `setup`            | Installs from the lockfile. This is the install step                                                |
+| `build`            | Builds members in dependency order through Corepack. The config package has no build                |
+| `check`            | Runs typecheck, lint, format:check, and openapi:check                                               |
+| `typecheck`        | Type-checks every member that defines the script                                                    |
+| `lint`             | Lints the whole workspace once                                                                      |
+| `format`           | Rewrites files with Prettier                                                                        |
+| `format:check`     | Fails when a file disagrees with Prettier                                                           |
+| `test`             | Runs member tests, then the toolchain guard tests                                                   |
+| `dev`              | Runs the API and the web client with file watching. This is the local run step                      |
+| `migrate`          | Applies pending SQL migrations. Exits 0 on success, 1 on a failed migration, 2 on bad configuration |
+| `seed`             | Inserts synthetic `app_users` rows into a local database. Refuses when `NODE_ENV` is production     |
+| `db:generate`      | Generates a SQL migration from the Drizzle schema. Pass `-- --name <slug>`                          |
+| `migrate:validate` | Fails when the Drizzle schema and the committed migrations disagree. Needs no database              |
+| `db:up`            | Starts local PostgreSQL and waits until it is healthy                                               |
+| `db:down`          | Stops local PostgreSQL. The data volume stays                                                       |
+| `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends               |
+
+## API contract
+
+Routes are defined once in Zod in `packages/contracts`. The committed `packages/contracts/openapi/openapi.json` is generated from them. The conventions for a new endpoint are in `packages/contracts/README.md`.
+
+- `pnpm openapi:generate` rewrites the committed OpenAPI document from the route definitions.
+- `pnpm openapi:check` exits 1 with a unified diff when the committed document is stale, and exits 1 when it is not valid OpenAPI 3.1. `pnpm check` runs it.
+
+After replacing `project-name`, run `pnpm openapi:generate`, because the token appears in the document title.
 
 The web and API builds do not read each other's output.
 
@@ -140,6 +183,32 @@ pnpm --filter @project-scope/web... build
 
 The first command writes `apps/api/dist` and `packages/contracts/dist`. The second writes `apps/web/dist`, `packages/ui/dist`, and `packages/contracts/dist`.
 
+## Logs, traces, and shutdown
+
+The API writes one JSON log line per event to stdout. Each line inside a request carries `requestId`, `correlationId`, and, when tracing is on, `trace_id` and `span_id`. Credentials, tokens, cookies, and identity fields log as `[Redacted]`.
+
+Start the API with the instrumentation entry loaded first, or Express and PostgreSQL spans are lost:
+
+```sh
+node --import ./dist/instrument.js dist/index.js
+```
+
+In a container, run `node` as the entry command. Do not start it through `pnpm` or a shell, because they do not pass `SIGTERM` to Node.
+
+Mount the middleware in this order: `requestId()`, `requestLogging(logger)`, `inFlight.middleware`, the routes, `errorLogging(logger)`, then the Problem Details handler. Wire `createShutdown` with the server, the in-flight registry, the database as a closable resource, `telemetry`, and `logger`, then call `registerSignalHandlers`. The readiness route returns 503 while `lifecycle.isShuttingDown()` is true.
+
+On `SIGTERM` or `SIGINT` the API stops accepting connections and lets running requests finish. Within `SHUTDOWN_TIMEOUT_MS` it closes the database, flushes telemetry and logs, and exits 0. It exits 1 when requests were still running at the deadline, a cleanup step failed, or a second signal arrived.
+
+| Variable                      | Meaning                                                              |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `LOG_LEVEL`                   | Lowest level written                                                 |
+| `SHUTDOWN_TIMEOUT_MS`         | Total shutdown budget. Keep it below the platform's grace period     |
+| `OTEL_SDK_DISABLED`           | `true` turns tracing and metrics off                                 |
+| `OTEL_SERVICE_NAME`           | `service.name` on every span and metric                              |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL. Empty means nothing is exported                  |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | `key=value` pairs sent to the collector. Treated as a secret         |
+| `OTEL_TRACES_EXPORTER`        | `otlp`, `console`, or `none`. `OTEL_METRICS_EXPORTER` works the same |
+
 ## Package source
 
 Packages download from the public npm registry. That registry is not the git remote where a new product repository will live. `.npmrc` has no registry URL and no token. A product that uses a private feed adds the feed URL locally and reads the token from the environment. Do not commit the token.
@@ -150,10 +219,10 @@ Search for each token and replace it by hand. There is no generator. The workspa
 
 | Token             | Meaning                              | Occurs in                                                                                  |
 | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `project-name`    | Human-readable name                  | Root `package.json` description, README                                                    |
+| `project-name`    | Human-readable name                  | Root `package.json` description, README, OpenAPI `info.title`                              |
 | `@project-scope`  | npm scope of every workspace package | All `package.json` names, `workspace:*` dependencies, TypeScript `extends`, source imports |
 | `project-service` | Service name                         | README. Later environment and observability settings                                       |
-| `project_db`      | Database name                        | README, `compose.yaml`, `.env.example`. Later migrations                                   |
+| `project_db`      | Database name                        | README, `compose.yaml`, `.env.example`                                                     |
 
 ## When a command fails
 

@@ -27,6 +27,8 @@ catalog:
   react-error-boundary: 6.1.6
   drizzle-orm: 0.45.4
   drizzle-kit: 0.31.11
+  pg: 8.23.1
+  '@types/pg': 8.23.1
   '@playwright/test': 1.64.1
   '@testing-library/react': 16.3.3
   '@testing-library/dom': 10.4.2
@@ -36,5 +38,24 @@ catalog:
   testcontainers: 12.2.1
   zod: 4.6.7
   yaml: 2.9.1
+  '@readme/openapi-parser': 10.0.0
+  diff: 9.0.0
+  pino: 10.4.0
+  pino-http: 11.0.0
+  '@opentelemetry/api': 1.10.0
+  '@opentelemetry/core': 3.0.0
+  '@opentelemetry/resources': 3.0.0
+  '@opentelemetry/sdk-trace': 3.0.0
+  '@opentelemetry/sdk-metrics': 3.0.0
+  '@opentelemetry/context-async-hooks': 3.0.0
+  '@opentelemetry/instrumentation': 0.300.0
+  '@opentelemetry/instrumentation-http': 0.300.0
+  '@opentelemetry/instrumentation-express': 0.72.0
+  '@opentelemetry/instrumentation-pg': 0.77.0
+  '@opentelemetry/exporter-trace-otlp-proto': 0.300.0
+  '@opentelemetry/exporter-metrics-otlp-proto': 0.300.0
+  '@types/express': 5.0.6
+  supertest: 7.3.1
+  '@types/supertest': 7.2.1
 
 onlyBuiltDependencies: []
