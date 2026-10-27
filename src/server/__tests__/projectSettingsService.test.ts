@@ -59,6 +59,7 @@ import {
   getSkillConfig,
   getSkillConfigById,
   listSkillConfigsForProject,
+  listSkillConfigs,
   resolveSkillConfig,
   upsertSkillConfig,
   deleteSkillConfig,
@@ -82,6 +83,7 @@ import type {
   QuickMcpPill,
   QuickSkillPill,
 } from '../../shared/types/projectSettings';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { readFileSync } from 'fs';
 import path from 'path';
 
@@ -1532,5 +1534,228 @@ describe('quick pill allow-lists', () => {
 
     expect(config?.quickSkillPills).toEqual([legacySkillPill]);
     expect(config?.quickMcpPills).toEqual([legacyMcpPill]);
+  });
+});
+
+// ── Workflow settings read mapping (normalization rollout step 2) ─────────────────
+
+/** A stored `project_skill_workflow_settings` row as the read subquery returns it. */
+function workflowRow(workflow: string, overrides: Record<string, unknown> = {}) {
+  return {
+    workflow,
+    skillPath: null,
+    model: null,
+    effort: null,
+    bedrockModelId: null,
+    bedrockMaxTokens: null,
+    bedrockTimeoutMs: null,
+    bedrockTemperature: null,
+    regenBedrockModelId: null,
+    regenBedrockMaxTokens: null,
+    scoreThreshold: null,
+    ...overrides,
+  };
+}
+
+const legacyWorkflowRow = {
+  ...defaultRow,
+  interviewSkillPath: '.cursor/skills/legacy-interview/SKILL.md',
+  interviewModel: 'legacy-interview-model',
+  interviewEffort: 'low',
+  adrModel: 'legacy-adr-model',
+  adrEffort: 'medium',
+  uiLabBedrockTemperature: 0.2,
+  standupSkillPath: '.cursor/skills/daily-standup/SKILL.md',
+  defaultModel: 'project-default-model',
+  defaultEffort: 'medium',
+};
+
+describe('workflow settings read mapping', () => {
+  beforeEach(() => resetDbMocks());
+
+  it('prefers a child row value over the legacy column', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [
+              workflowRow('interview', {
+                skillPath: '.cursor/skills/child-interview/SKILL.md',
+                model: 'child-interview-model',
+                effort: 'high',
+              }),
+              workflowRow('ui_lab', { bedrockTemperature: 0.7, bedrockMaxTokens: 12000 }),
+            ],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).toMatchObject({
+      interviewSkillPath: '.cursor/skills/child-interview/SKILL.md',
+      interviewModel: 'child-interview-model',
+      interviewEffort: 'high',
+      uiLabBedrockTemperature: 0.7,
+      uiLabBedrockMaxTokens: 12000,
+    });
+  });
+
+  it('falls back to the legacy column when no child row exists', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving([{ ...legacyWorkflowRow, workflowSettings: null }], 'limit')
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).toMatchObject({
+      interviewSkillPath: '.cursor/skills/legacy-interview/SKILL.md',
+      interviewModel: 'legacy-interview-model',
+      interviewEffort: 'low',
+      adrModel: 'legacy-adr-model',
+      adrEffort: 'medium',
+      uiLabBedrockTemperature: 0.2,
+      standupSkillPath: '.cursor/skills/daily-standup/SKILL.md',
+    });
+  });
+
+  it('falls back per workflow, keeping legacy values for workflows without a child row', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [workflowRow('interview', { model: 'child-interview-model' })],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.interviewModel).toBe('child-interview-model');
+    expect(config?.standupSkillPath).toBe('.cursor/skills/daily-standup/SKILL.md');
+    expect(config?.adrModel).toBe('legacy-adr-model');
+  });
+
+  it('treats a child row as authoritative for every field it maps, including nulls', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [workflowRow('interview', { model: 'child-interview-model' })],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.interviewSkillPath).toBeNull();
+    expect(config?.interviewEffort).toBeNull();
+  });
+
+  it('reads the shared ADR model and effort from the ADR workflow rows', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [
+              workflowRow('adr_finalize', {
+                skillPath: '.cursor/skills/adr-finalize/SKILL.md',
+                model: 'child-adr-model',
+                effort: 'high',
+              }),
+              workflowRow('adr_assistant', { model: 'child-adr-model', effort: 'high' }),
+            ],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).toMatchObject({
+      adrModel: 'child-adr-model',
+      adrEffort: 'high',
+      adrFinalizeSkillPath: '.cursor/skills/adr-finalize/SKILL.md',
+    });
+  });
+
+  it('leaves a workflow with no override empty so callers use default_model and default_effort', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [{ ...defaultRow, defaultModel: 'project-default-model', defaultEffort: 'medium', workflowSettings: [] }],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.prdModel ?? null).toBeNull();
+    expect(config?.prdEffort ?? null).toBeNull();
+    expect(config?.defaultModel).toBe('project-default-model');
+    expect(config?.defaultEffort).toBe('medium');
+  });
+
+  it('returns the flat ProjectSkillConfig shape without the internal workflow rows', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [{ ...defaultRow, workflowSettings: [workflowRow('prd', { model: 'child-prd-model' })] }],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).not.toHaveProperty('workflowSettings');
+    expect(config?.prdModel).toBe('child-prd-model');
+  });
+
+  it('maps child rows for every reader: default, by project, and all projects', async () => {
+    const rows = [
+      { ...defaultRow, workflowSettings: [workflowRow('prd', { model: 'child-prd-model' })] },
+      { ...secondRow, prdModel: 'legacy-prd-model', workflowSettings: null },
+    ];
+
+    mockDb.select.mockReturnValue(selectResolving(rows.slice(0, 1), 'limit'));
+    expect((await getSkillConfig('proj-alpha'))?.prdModel).toBe('child-prd-model');
+
+    mockDb.select.mockReturnValue(selectResolving(rows, 'orderBy'));
+    expect((await listSkillConfigsForProject('proj-alpha')).map((c) => c.prdModel)).toEqual([
+      'child-prd-model',
+      'legacy-prd-model',
+    ]);
+
+    mockDb.select.mockReturnValue(selectResolving(rows, 'orderBy'));
+    expect((await listSkillConfigs()).map((c) => c.prdModel)).toEqual([
+      'child-prd-model',
+      'legacy-prd-model',
+    ]);
+  });
+
+  it('loads child rows in the same query and ignores rows older than the parent row', async () => {
+    mockDb.select.mockReturnValue(selectResolving([defaultRow], 'limit'));
+
+    await getSkillConfigById('cfg-default');
+
+    const selection = mockDb.select.mock.calls[0][0];
+    expect(selection).toEqual(expect.objectContaining({ id: projectSkillSettings.id }));
+    const { sql: text } = new PgDialect().sqlToQuery(selection.workflowSettings);
+    expect(text).toContain('from "project_skill_workflow_settings"');
+    expect(text).toContain(
+      '"project_skill_workflow_settings"."settings_id" = "project_skill_settings"."id"'
+    );
+    expect(text).toContain(
+      '"project_skill_workflow_settings"."updated_at" >= "project_skill_settings"."updated_at"'
+    );
   });
 });
