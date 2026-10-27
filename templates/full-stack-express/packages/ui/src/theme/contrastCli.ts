@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { TokenOverrides } from '../tokens/index.js';
