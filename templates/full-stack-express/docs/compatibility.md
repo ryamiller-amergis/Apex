@@ -49,6 +49,9 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - `.npmrc` does not set `package-lock=false`. pnpm treats that key as "do not use a lockfile" and then refuses a frozen install. npm still writes `package-lock.json` before `preinstall` returns, so the guard deletes that file when the package manager is not pnpm.
 - zod `4.6.7` is the newest Zod 4 release on 2026-10-26. Apex allows `zod ^4.3.6`. This workspace pins the exact release. Schema messages are static strings, so a later Zod 4 release cannot start printing received values.
 - yaml `2.9.1` parses `compose.yaml` in the configuration tests.
+- pg `8.23.1` is the driver behind `drizzle-orm/node-postgres`; `@types/pg` `8.23.1` matches it. Only `apps/api/src/persistence/` imports either.
+- testcontainers `12.2.1` starts `postgres:16` for the API integration tests. Those tests skip when Docker is not available.
+- pnpm reports ignored build scripts for `esbuild` (used by drizzle-kit), and for `ssh2`, `cpu-features`, and `protobufjs` (used by testcontainers). None is needed: esbuild ships its binary as an optional dependency, and the native SSH helpers are optional. `onlyBuiltDependencies` stays empty.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry
