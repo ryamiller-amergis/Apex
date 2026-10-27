@@ -41,6 +41,8 @@ Staging and production share one database, so the old columns stay until both sl
 4. **Read the new table only.** Compare copied values in staging, then stop writing the old columns.
 5. **Contract.** After a full production release, a later migration drops the old columns.
 
+**Status.** Steps 1-3 are delivered together: `migrations/20261027180000_c4d2_project-skill-workflow-settings.sql` adds `project_skill_workflow_settings` and backfills it, `src/shared/constants/projectSkillWorkflows.ts` lists the workflows that the backfill, the read mapping and the dual write share, and `src/server/services/projectSkillWorkflowSettings.ts` holds the mapping. Reads use a child row only when its `updated_at` is not older than the parent row's, so a slot that writes only the old columns is never shadowed by stale child rows. Steps 4 and 5 are not started.
+
 ## Immediate follow-up, separate from this redesign
 
 `standupService.ts` should select only `standupSkillPath`, `skillRepo`, and `skillBranch` instead of `skillSettings: true`. That makes the failing query legal without waiting for the table split. It is a small change and can ship on its own. This plan does not include that edit.
