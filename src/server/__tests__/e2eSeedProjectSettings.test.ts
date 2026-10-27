@@ -293,3 +293,35 @@ describe('E2E seed/admin-role', () => {
     expect(inserts).toHaveLength(0);
   });
 });
+
+describe('E2E inspect/project-skill-workflow-settings', () => {
+  beforeEach(() => {
+    inserts.length = 0;
+    mockState.selectQueue = [];
+  });
+
+  it('returns the child rows for one settings row, sorted by workflow', async () => {
+    mockState.selectQueue = [
+      [
+        { settingsId: 'settings-1', workflow: 'prd', model: 'm-prd' },
+        { settingsId: 'settings-1', workflow: 'adr_finalize', model: 'm-adr' },
+      ],
+    ];
+
+    const response = await request(buildApp())
+      .get('/inspect/project-skill-workflow-settings')
+      .query({ settingsId: 'settings-1' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.rows.map((row: { workflow: string }) => row.workflow)).toEqual([
+      'adr_finalize',
+      'prd',
+    ]);
+  });
+
+  it('requires settingsId', async () => {
+    const response = await request(buildApp()).get('/inspect/project-skill-workflow-settings');
+
+    expect(response.status).toBe(400);
+  });
+});
