@@ -1,0 +1,24 @@
+{
+  "name": "@project-scope/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "node --watch --env-file-if-exists=../../.env src/index.ts",
+    "db:migrate": "node scripts/persistence-placeholder.mjs",
+    "db:seed": "node scripts/persistence-placeholder.mjs"
+  },
+  "dependencies": {
+    "@project-scope/contracts": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@project-scope/config": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

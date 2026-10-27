@@ -1,0 +1,32 @@
+{
+  "name": "@project-scope/project-name",
+  "version": "0.0.0",
+  "private": true,
+  "description": "project-name full-stack starter workspace",
+  "packageManager": "pnpm@10.34.9+sha512.f49b5a8ea0fdedb44bb3c0c1d6575092a53c2950d95b7ad15df11f17974877a2de3a01c07e934e9b28ce716e51c09a94962c7306d09be2e1e4b18a8c8762fd32",
+  "engines": {
+    "node": ">=24.0.0 <25.0.0",
+    "pnpm": "10.34.9"
+  },
+  "scripts": {
+    "preinstall": "node scripts/check-toolchain.mjs --preinstall",
+    "setup": "corepack pnpm install --frozen-lockfile",
+    "build": "corepack pnpm -r run build",
+    "typecheck": "corepack pnpm -r run typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check",
+    "test": "corepack pnpm -r run test && node --test \"scripts/__tests__/**/*.test.mjs\"",
+    "dev": "corepack pnpm --parallel --filter \"./apps/*\" dev",
+    "migrate": "corepack pnpm --filter ./apps/api run db:migrate",
+    "seed": "corepack pnpm --filter ./apps/api run db:seed",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "toolchain:check": "node scripts/check-toolchain.mjs"
+  },
+  "devDependencies": {
+    "eslint": "catalog:",
+    "prettier": "catalog:"
+  }
+}
