@@ -31,10 +31,16 @@ describe('profile route definitions (TBI-009 DoD-0)', () => {
     expect(getMe.path).toBe('/api/v1/me');
     expect(getMe.auth).toBe('principal');
     expect(getMe.responses[200].body).toBe(profileSchema);
-    for (const status of [401, 429, 500] as const) {
+    for (const status of [401, 429, 500, 503] as const) {
       expect(getMe.responses[status].body).toBe(problemDetailsSchema);
     }
-    expect(Object.keys(getMe.responses)).toEqual(['200', '401', '429', '500']);
+    expect(Object.keys(getMe.responses)).toEqual([
+      '200',
+      '401',
+      '429',
+      '500',
+      '503',
+    ]);
   });
 
   it('TBI-009 DoD-0 putMe declares PUT /api/v1/me with a body, a profile response, and Problem errors', () => {
@@ -46,10 +52,59 @@ describe('profile route definitions (TBI-009 DoD-0)', () => {
       '200',
       '400',
       '401',
+      '413',
       '429',
       '500',
+      '503',
     ]);
+    for (const status of [413, 503] as const) {
+      expect(putMe.responses[status].body).toBe(problemDetailsSchema);
+    }
     expect(requestIdHeader).toBe('X-Request-Id');
+  });
+});
+
+describe('profile limits and normalization (FEAT-006 VT-11, VT-12)', () => {
+  const emoji = '\u{1F600}';
+
+  it('PBI-011 AC-2 counts displayName in code points, so 100 with an emoji passes and 101 fails', () => {
+    const atLimit = `${'a'.repeat(99)}${emoji}`;
+    expect(atLimit).toHaveLength(101);
+    expect(
+      updateProfileBodySchema.safeParse({ displayName: atLimit }).success
+    ).toBe(true);
+    const overLimit = `${'a'.repeat(100)}${emoji}`;
+    const result = updateProfileBodySchema.safeParse({
+      displayName: overLimit,
+    });
+    expect(result.success).toBe(false);
+    expect(zodIssuesToProblemErrors(result.error!.issues)).toEqual([
+      expect.objectContaining({ pointer: '/displayName', code: 'too_big' }),
+    ]);
+  });
+
+  it('PBI-011 AC-2 stores a blank email as null and trims a real one', () => {
+    for (const email of ['', '   ', null, undefined]) {
+      const parsed = updateProfileBodySchema.parse({
+        displayName: 'Ada',
+        email,
+      });
+      expect(parsed.email ?? null, JSON.stringify(email)).toBeNull();
+    }
+    expect(
+      updateProfileBodySchema.parse({
+        displayName: 'Ada',
+        email: '  ada@example.test ',
+      }).email
+    ).toBe('ada@example.test');
+  });
+
+  it('PBI-011 AC-2 rejects a 255-character email even after trimming', () => {
+    const result = updateProfileBodySchema.safeParse({
+      displayName: 'Ada',
+      email: ` ${emailOfLength(255)} `,
+    });
+    expect(result.success).toBe(false);
   });
 });
 

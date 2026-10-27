@@ -81,6 +81,21 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "The database is unavailable. Nothing was changed.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           }
         }
       },
@@ -158,6 +173,21 @@
               }
             }
           },
+          "413": {
+            "description": "The request body is larger than 16 KB",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests",
             "headers": {
@@ -175,6 +205,21 @@
           },
           "500": {
             "description": "Unexpected server error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable. Nothing was changed.",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/X-Request-Id"
@@ -339,7 +384,9 @@
               "urn:problem-type:not-found",
               "urn:problem-type:rate-limited",
               "urn:problem-type:not-ready",
-              "urn:problem-type:internal-error"
+              "urn:problem-type:internal-error",
+              "urn:problem-type:service-unavailable",
+              "urn:problem-type:payload-too-large"
             ]
           },
           "title": {
@@ -443,7 +490,7 @@
         },
         "required": ["displayName"],
         "additionalProperties": false,
-        "description": "Replaces both editable fields. An omitted or null email clears it."
+        "description": "Replaces both editable fields. Both are trimmed. An omitted, null, or blank email clears it."
       }
     },
     "securitySchemes": {
