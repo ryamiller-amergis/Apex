@@ -107,7 +107,10 @@ export async function executeInterviewStep(
   // @feature-flag:playbook-interview-step end
 
   // Read the project's skill settings before inserting anything. A bad key must leave no thread.
-  const skillConfig = await resolveSkillConfig({ project: context.project });
+  const skillConfig = await resolveSkillConfig({
+    project: context.project,
+    ...(config.skillSettingsId ? { settingsId: config.skillSettingsId } : {}),
+  });
   const option = enabledProfile(skillConfig?.interviewSkillOptions, config.profileKey);
   if (!skillConfig || !option?.key?.trim()) {
     throw new PlaybookInterviewProfileError(context.project, config.profileKey.trim());
@@ -158,7 +161,8 @@ export async function executeInterviewStep(
     expiresAt,
     resumeToken: interview.interviewId,
   });
-  void sendMessage(thread.id, 'Begin.').catch((error: unknown) => {
+  const opening = config.openingMessage?.trim() || 'Begin.';
+  void sendMessage(thread.id, opening).catch((error: unknown) => {
     console.error(
       `[playbook-interview] Failed to start interview ${interview.interviewId}:`,
       error,

@@ -39,6 +39,11 @@ jest.mock('../services/rbacService', () => ({
   getUserPermissions: (...args: unknown[]) => getUserPermissions(...args),
 }));
 
+const isSuperAdminUserId = jest.fn();
+jest.mock('../utils/superAdminUser', () => ({
+  isSuperAdminUserId: (...args: unknown[]) => isSuperAdminUserId(...args),
+}));
+
 import { executeStep, adapterStepTypes, listStepTypeDescriptors } from '../services/playbookSteps';
 import { executeInterviewStep } from '../services/playbookSteps/interviewAdapter';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
@@ -99,6 +104,7 @@ beforeEach(() => {
   createInterview.mockResolvedValue({ interviewId: 'interview-1', threadId: 'thread-1' });
   suspendStepRun.mockResolvedValue(undefined);
   getUserPermissions.mockResolvedValue(new Set(['playbooks:run']));
+  isSuperAdminUserId.mockResolvedValue(false);
 });
 
 it('refuses execution before profile resolution when the project flag is disabled', async () => {
@@ -342,5 +348,44 @@ describe('VT-STEP-6 — dispatch includes the interview adapter', () => {
     expect(suspendStepRun).toHaveBeenCalledWith(
       expect.objectContaining({ resumeToken: 'interview-1' })
     );
+  });
+});
+
+describe('VT-37 — a super admin initiator runs without holding the step permission', () => {
+  it('runs the step for a super admin with no permissions', async () => {
+    isSuperAdminUserId.mockResolvedValue(true);
+    getUserPermissions.mockResolvedValue(new Set());
+
+    await executeStep(context(validConfig));
+
+    expect(getUserPermissions).not.toHaveBeenCalled();
+    expect(createInterview).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses an ordinary initiator with no permissions', async () => {
+    getUserPermissions.mockResolvedValue(new Set());
+
+    await expect(executeStep(context(validConfig))).rejects.toThrow();
+    expect(createInterview).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-39 — optional intake message and repository', () => {
+  it('sends the opening message and resolves the chosen skill settings', async () => {
+    await executeInterviewStep(context({
+      ...validConfig,
+      openingMessage: 'Build a reports page',
+      skillSettingsId: 'settings-9',
+    }));
+
+    expect(resolveSkillConfig).toHaveBeenCalledWith({ project: 'Apex', settingsId: 'settings-9' });
+    expect(sendMessage).toHaveBeenCalledWith('thread-1', 'Build a reports page');
+  });
+
+  it('keeps Begin. and the project default when both inputs are absent', async () => {
+    await executeInterviewStep(context(validConfig));
+
+    expect(resolveSkillConfig).toHaveBeenCalledWith({ project: 'Apex' });
+    expect(sendMessage).toHaveBeenCalledWith('thread-1', 'Begin.');
   });
 });

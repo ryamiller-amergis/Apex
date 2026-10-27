@@ -90,6 +90,8 @@ import { apiKeyExpiryNotificationScheduler } from './services/apiKeyExpiryNotifi
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { workBoardScheduler } from './services/workBoardScheduler';
+import buildsRoutes from './routes/builds';
+import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import {
   isInteractiveGatewayEnabled,
@@ -249,6 +251,7 @@ app.use('/api', (req, res, next) => {
 
   ensureAuthenticated(req, res, next);
 }, apiRoutes);
+app.use('/api/builds', ensureAuthenticated, buildsRoutes);
 app.use('/api/azure', ensureAuthenticated, azureCostRoutes);
 app.use('/api/ai-cost', ensureAuthenticated, aiCostRoutes);
 app.use('/api/skills', ensureAuthenticated, skillsRoutes);
@@ -452,6 +455,10 @@ const server = app.listen(PORT, () => {
 
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
+
+  startBuildQueueScheduler();
+  server.once('close', stopBuildQueueScheduler);
+  console.log('Build queue scheduler started');
 
   bootstrapAdmin();
 

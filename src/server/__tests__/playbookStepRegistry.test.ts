@@ -125,6 +125,7 @@ describe('TBI-016 VT-02 — the three production step types', () => {
     expect(listStepTypeDescriptors().map((d) => d.stepType).sort()).toEqual([
       'approval-gate',
       'branch',
+      'build',
       'cursor-agent',
       'ingest-artifact',
       'interview',

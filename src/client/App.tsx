@@ -127,6 +127,7 @@ const BuildsRouteGuard = lazy(() =>
   import('./components/BuildsRouteGuard').then((m) => ({ default: m.BuildsRouteGuard })),
 );
 const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
+const NewBuildForm = lazy(() => import('./components/NewBuildForm').then((m) => ({ default: m.NewBuildForm })));
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -1542,7 +1543,12 @@ function App() {
                     isInAnyGroup,
                   })}
                 >
-                  <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
+                  {location.pathname === '/builds/new' ? (
+                    // data-testid-exempt — NewBuildForm owns its new-build-form root id; no data-testid prop
+                    <NewBuildForm project={selectedProject} />
+                  ) : (
+                    <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
+                  )}
                 </BuildsRouteGuard>
               </Suspense>
             </ErrorBoundary>
