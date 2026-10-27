@@ -1,10 +1,14 @@
-import { getTableName, sql, type AnyColumn, type SQL } from 'drizzle-orm';
+import { and, eq, getTableName, inArray, sql, type AnyColumn, type SQL } from 'drizzle-orm';
+import type { db } from '../db/drizzle';
 import { projectSkillSettings, projectSkillWorkflowSettings } from '../db/schema';
 import {
   PROJECT_SKILL_WORKFLOWS,
   PROJECT_SKILL_WORKFLOW_FIELDS,
+  isEmptyWorkflowSettings,
+  workflowSettingsFromLegacy,
   type ProjectSkillWorkflowSettings,
 } from '../../shared/constants/projectSkillWorkflows';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 
 /** A child row as returned by {@link workflowSettingsSubquery}. */
 export type StoredWorkflowSettings = ProjectSkillWorkflowSettings & { workflow: string };
@@ -38,6 +42,57 @@ export function workflowSettingsSubquery(): SQL<StoredWorkflowSettings[] | null>
     where ${child(projectSkillWorkflowSettings.settingsId)} = ${parent(projectSkillSettings.id)}
       and ${child(projectSkillWorkflowSettings.updatedAt)} >= ${parent(projectSkillSettings.updatedAt)}
   )`;
+}
+
+type WorkflowWriter = Pick<typeof db, 'insert' | 'delete'>;
+
+/**
+ * Mirrors a just-written settings row into its child rows. Runs inside the
+ * caller's transaction and reads from the saved row, so columns the caller
+ * did not set (for example the standup path) are mirrored too. `updatedAt`
+ * must equal the parent row's so readers treat the rows as current.
+ */
+export async function writeWorkflowSettings(
+  tx: WorkflowWriter,
+  row: { id: string } & Partial<Record<keyof ProjectSkillConfig, unknown>>,
+  updatedAt: string,
+): Promise<void> {
+  const filled: Array<typeof projectSkillWorkflowSettings.$inferInsert> = [];
+  const emptyWorkflows: string[] = [];
+  for (const workflow of PROJECT_SKILL_WORKFLOWS) {
+    const settings = workflowSettingsFromLegacy(workflow, row);
+    if (isEmptyWorkflowSettings(settings)) {
+      emptyWorkflows.push(workflow.key);
+    } else {
+      filled.push({ settingsId: row.id, workflow: workflow.key, ...settings, updatedAt });
+    }
+  }
+
+  if (emptyWorkflows.length > 0) {
+    await tx
+      .delete(projectSkillWorkflowSettings)
+      .where(
+        and(
+          eq(projectSkillWorkflowSettings.settingsId, row.id),
+          inArray(projectSkillWorkflowSettings.workflow, emptyWorkflows),
+        ),
+      );
+  }
+  if (filled.length > 0) {
+    const excluded = Object.fromEntries(
+      [...PROJECT_SKILL_WORKFLOW_FIELDS, 'updatedAt' as const].map((field) => [
+        field,
+        sql.raw(`excluded.${projectSkillWorkflowSettings[field].name}`),
+      ]),
+    );
+    await tx
+      .insert(projectSkillWorkflowSettings)
+      .values(filled)
+      .onConflictDoUpdate({
+        target: [projectSkillWorkflowSettings.settingsId, projectSkillWorkflowSettings.workflow],
+        set: excluded,
+      });
+  }
 }
 
 /**

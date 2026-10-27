@@ -33,6 +33,7 @@ import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagServic
 import {
   workflowSettingsSubquery,
   withWorkflowSettings,
+  writeWorkflowSettings,
   type StoredWorkflowSettings,
 } from './projectSkillWorkflowSettings';
 
@@ -390,6 +391,7 @@ export async function upsertSkillConfig(
         .where(eq(projectSkillSettings.id, opts.id))
         .returning();
       const row = rows[0];
+      await writeWorkflowSettings(tx, row, now);
       await writeApprovalModeRows(
         tx,
         row.id,
@@ -416,6 +418,7 @@ export async function upsertSkillConfig(
       .values({ ...values, ...CHECKOUT_RESET })
       .returning();
     const row = rows[0];
+    await writeWorkflowSettings(tx, row, now);
     const initialModes: ModuleApprovalModes = {
       prd: approvalModeValue,
       design_doc: approvalModeValue,

@@ -152,6 +152,11 @@ function selectResolving(
   return chain;
 }
 
+/** A tx.delete stub for transactions that also prune workflow rows. */
+function noopDelete() {
+  return jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+}
+
 // ── getSkillConfigById ──────────────────────────────────────────────────────────
 
 describe('getSkillConfigById', () => {
@@ -339,6 +344,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         // existing-config lookup → none for this project
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
@@ -386,6 +392,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -432,6 +439,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -464,6 +472,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -505,6 +514,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) =>
       fn({
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -546,6 +556,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) =>
       fn({
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -618,6 +629,7 @@ describe('upsertSkillConfig effort levels', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) =>
       fn({
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -1408,6 +1420,7 @@ function mockPillInsertPath() {
 
   mockDb.transaction.mockImplementation(async (fn: any) =>
     fn({
+      delete: noopDelete(),
       select: jest.fn().mockReturnValue({
         from: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
