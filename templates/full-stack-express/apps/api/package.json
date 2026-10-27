@@ -17,7 +17,11 @@
   },
   "devDependencies": {
     "@project-scope/config": "workspace:*",
+    "@types/express": "catalog:",
     "@types/node": "catalog:",
+    "@types/supertest": "catalog:",
+    "express": "catalog:",
+    "supertest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
