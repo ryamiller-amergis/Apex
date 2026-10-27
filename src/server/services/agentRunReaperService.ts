@@ -1493,11 +1493,6 @@ export function startReaper(): void {
     .catch((err) => {
       console.error('[cloud-agent] queue scheduler failed to start:', err instanceof Error ? err.message : err);
     });
-  void import('./playbookScheduleScheduler')
-    .then((scheduler) => scheduler.startPlaybookScheduleScheduler())
-    .catch((err) => {
-      console.error('[playbook-schedule] scheduler failed to start:', err instanceof Error ? err.message : err);
-    });
 
   void runReaperCycle('[reaper] Initial reap failed:');
   reaperTimer = setInterval(() => {
@@ -1516,8 +1511,5 @@ export function stopReaper(): void {
   }
   void import('./cloudAgentQueueScheduler')
     .then((scheduler) => scheduler.stopCloudAgentQueueScheduler())
-    .catch(() => undefined);
-  void import('./playbookScheduleScheduler')
-    .then((scheduler) => scheduler.stopPlaybookScheduleScheduler())
     .catch(() => undefined);
 }

@@ -226,16 +226,6 @@ export interface PlaybookDefinition {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
-  /**
-   * `manual` starts only when someone presses Run now.
-   * `daily` also starts once inside a 15-minute window after the UTC hour and minute.
-   */
-  scheduleKind: 'manual' | 'daily';
-  scheduleHour: number | null;
-  scheduleMinute: number;
-  lastScheduledAt: string | null;
-  /** User the daily trigger runs as. Null when the trigger is run-now only. */
-  scheduleSetBy: string | null;
 }
 
 export interface PlaybookDefinitionVersion {

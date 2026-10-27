@@ -9,10 +9,6 @@ const mockWorkerReaperAction = jest.fn();
 const mockWithRepoCacheLease = jest.fn();
 const mockIsDocumentHarvestPending = jest.fn().mockResolvedValue(false);
 
-jest.mock('../services/playbookScheduleScheduler', () => ({
-  startPlaybookScheduleScheduler: jest.fn(),
-  stopPlaybookScheduleScheduler: jest.fn(),
-}));
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {

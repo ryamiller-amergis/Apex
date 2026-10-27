@@ -12,7 +12,6 @@ import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
-import { PlaybookScheduleCard } from './PlaybookScheduleCard';
 import { PlaybookRunList } from './PlaybookRunList';
 import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
 import {
@@ -275,15 +274,6 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         </div>
       </header>
       {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
-
-      <PlaybookScheduleCard
-        project={project}
-        definitionId={definitionId}
-        definition={data.definition}
-        canAuthor={canAuthor}
-        published={Boolean(publishedVersionId)}
-        {...{ 'data-testid': 'playbook-schedule' }}
-      />
 
       <dl className={styles.tiles} {...{ 'data-testid': 'playbook-dashboard-stats' }}>
         {tiles.map((tile) => (

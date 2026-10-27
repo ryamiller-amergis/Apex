@@ -316,11 +316,6 @@ function toDefinition(row: DefinitionRow): PlaybookDefinition {
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    scheduleKind: row.scheduleKind === 'daily' ? 'daily' : 'manual',
-    scheduleHour: row.scheduleHour ?? null,
-    scheduleMinute: row.scheduleMinute ?? 0,
-    lastScheduledAt: row.lastScheduledAt ?? null,
-    scheduleSetBy: row.scheduleSetBy ?? null,
   };
 }
 

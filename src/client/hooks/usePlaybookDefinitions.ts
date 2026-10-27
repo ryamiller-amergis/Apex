@@ -7,8 +7,6 @@ import type {
   PlaybookGraph,
   PlaybookPublishResponse,
 } from '../../shared/types/playbook';
-import type { PlaybookScheduleDraft } from '../../shared/utils/playbookSchedule';
-
 export class PlaybookApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -142,18 +140,6 @@ export function useDeprecatePlaybookVersion(project: string, definitionId: strin
       apiRequest(
         `/api/playbooks/definitions/${encodeURIComponent(definitionId)}/versions/${encodeURIComponent(versionId)}/deprecate`,
         jsonRequest('POST', { project }),
-      ),
-    onSuccess: invalidate,
-  });
-}
-
-export function useSavePlaybookSchedule(project: string, definitionId: string) {
-  const invalidate = useInvalidateDefinitions(project, definitionId);
-  return useMutation<PlaybookDefinitionDetail, PlaybookApiError, PlaybookScheduleDraft>({
-    mutationFn: (schedule) =>
-      apiRequest(
-        `/api/playbooks/definitions/${encodeURIComponent(definitionId)}/schedule`,
-        jsonRequest('PUT', { project, ...schedule }),
       ),
     onSuccess: invalidate,
   });

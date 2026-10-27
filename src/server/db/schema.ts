@@ -3305,13 +3305,6 @@ export const playbookDefinitions = pgTable('playbook_definitions', {
   createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
-  /** `manual` starts only from Run now. `daily` also starts in a 15-minute UTC window. */
-  scheduleKind: text('schedule_kind').$type<'manual' | 'daily'>().notNull().default('manual'),
-  scheduleHour: integer('schedule_hour'),
-  scheduleMinute: integer('schedule_minute').notNull().default(0),
-  lastScheduledAt: timestamp('last_scheduled_at', { withTimezone: true, mode: 'string' }),
-  /** The user a daily trigger runs as. Null when the trigger is run-now only. */
-  scheduleSetBy: text('schedule_set_by').references(() => appUsers.oid, { onDelete: 'restrict' }),
 }, (t) => ({
   projectCreatedIdx: index('idx_playbook_definitions_project_created').on(t.project, t.createdAt),
   projectNameUq: uniqueIndex('uq_playbook_definitions_project_name')
@@ -3335,28 +3328,6 @@ export const playbookDefinitions = pgTable('playbook_definitions', {
   templateKeyUq: uniqueIndex('uq_playbook_definitions_project_template')
     .on(t.project, t.templateKey)
     .where(sql`${t.templateKey} IS NOT NULL`),
-  scheduleKindCheck: check(
-    'playbook_definitions_schedule_kind_check',
-    sql`${t.scheduleKind} IN ('manual', 'daily')`,
-  ),
-  scheduleMinuteCheck: check(
-    'playbook_definitions_schedule_minute_check',
-    sql`${t.scheduleMinute} BETWEEN 0 AND 59`,
-  ),
-  scheduleShapeCheck: check(
-    'playbook_definitions_schedule_shape_check',
-    sql`(
-      (${t.scheduleKind} = 'manual' AND ${t.scheduleHour} IS NULL AND ${t.scheduleSetBy} IS NULL)
-      OR (
-        ${t.scheduleKind} = 'daily'
-        AND ${t.scheduleHour} BETWEEN 0 AND 23
-        AND ${t.scheduleSetBy} IS NOT NULL
-      )
-    )`,
-  ),
-  dailyScheduleIdx: index('idx_playbook_definitions_daily_schedule')
-    .on(t.scheduleHour, t.scheduleMinute)
-    .where(sql`${t.scheduleKind} = 'daily'`),
 }));
 
 export const playbookDefinitionVersions = pgTable('playbook_definition_versions', {

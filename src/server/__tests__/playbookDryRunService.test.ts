@@ -32,11 +32,6 @@ describe('dryRunPlaybookDraft', () => {
         createdBy: 'u1',
         createdAt: '',
         updatedAt: '',
-        scheduleKind: 'manual',
-        scheduleHour: null,
-        scheduleMinute: 0,
-        lastScheduledAt: null,
-        scheduleSetBy: null,
       },
       draft: {
         id: 'draft-1',
@@ -86,11 +81,6 @@ describe('dryRunPlaybookDraft', () => {
         createdBy: 'u1',
         createdAt: '',
         updatedAt: '',
-        scheduleKind: 'manual',
-        scheduleHour: null,
-        scheduleMinute: 0,
-        lastScheduledAt: null,
-        scheduleSetBy: null,
       },
       draft: {
         id: 'draft-1',
