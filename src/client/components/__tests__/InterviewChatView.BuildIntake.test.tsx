@@ -345,6 +345,20 @@ describe('FEAT-005 VT-21 BuildIntakeChatRoute', () => {
     expect(screen.getByTestId('build-intake-paused-notice')).toHaveTextContent(BUILD_INTAKE_PAUSED_MESSAGE);
     expect(screen.queryByTestId('interview-message-input')).not.toBeInTheDocument();
     expect(screen.getByText('You want a status page for the payments service.')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-submit-answers')).not.toBeInTheDocument();
+  });
+
+  it('keeps the confirm submit control while the flag is on', () => {
+    (useBuildIntake as jest.Mock).mockReturnValue({
+      data: { interviewId: 'iv-1', threadId: 'thread-iv-1' },
+      isLoading: false,
+      isError: false,
+      refetch: jest.fn(),
+    });
+    render(wrap(<BuildIntakeChatRoute buildId="build-1" />));
+
+    expect(screen.queryByTestId('build-intake-paused-notice')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('interview-submit-answers').length).toBeGreaterThan(0);
   });
 
   it('shows the not-started message before the interview exists', () => {

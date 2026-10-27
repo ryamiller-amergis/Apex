@@ -1428,7 +1428,6 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const isReadOnlyViewer = !isAuthor && !isInterviewParticipant && !isInterviewAdmin;
   const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
-  const isChatLocked = isReadOnlyViewer || isStatusLocked;
   const visibleStreamingText = streamingText
     ? stripBuildIntakeMarkers(stripInterviewPhaseMarkers(streamingText))
     : '';
@@ -1443,6 +1442,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   // Enabled projects keep the intake composer open.
   // @feature-flag:build-from-prompt enabled-end
   // @feature-flag:build-from-prompt end
+  const isChatLocked = isReadOnlyViewer || isStatusLocked || buildIntakePaused;
   const isGuidedInterview = usesGuidedInterviewPhases(
     chatThread?.kickoff.skillPath,
   );
