@@ -376,6 +376,18 @@ export const SeedApi = {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
   },
 
+  /** Per-workflow child rows (project_skill_workflow_settings) for one settings row. */
+  async inspectWorkflowSettings(
+    request: APIRequestContext,
+    settingsId: string,
+  ): Promise<Array<Record<string, unknown> & { workflow: string }>> {
+    const res = await request.get(
+      `${E2E_API}/inspect/project-skill-workflow-settings?settingsId=${encodeURIComponent(settingsId)}`,
+    );
+    if (!res.ok()) throw new Error(`inspectWorkflowSettings failed: ${res.status()} ${await res.text()}`);
+    return ((await res.json()) as { rows: Array<Record<string, unknown> & { workflow: string }> }).rows;
+  },
+
   /** Grant a persona a global copy of the admin role (admin:roles etc.); removed by reset(). */
   async seedAdminRole(request: APIRequestContext, opts: { userId: string }): Promise<void> {
     await post(request, '/seed/admin-role', opts);

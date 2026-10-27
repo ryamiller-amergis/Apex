@@ -34,6 +34,7 @@ import {
   projectApprovers,
   projectMenuSettings,
   projectSkillSettings,
+  projectSkillWorkflowSettings,
   reviewComments,
   testCases,
 } from '../db/schema';
@@ -1086,6 +1087,27 @@ router.post('/seed/project-settings', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/project-settings failed: ${message}` });
+  }
+});
+
+// Read the per-workflow child rows for one settings row, so specs can check the
+// dual write without a database client.
+router.get('/inspect/project-skill-workflow-settings', async (req, res) => {
+  try {
+    const settingsId = typeof req.query.settingsId === 'string' ? req.query.settingsId : '';
+    if (!settingsId) {
+      res.status(400).json({ error: 'settingsId is required' });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(projectSkillWorkflowSettings)
+      .where(eq(projectSkillWorkflowSettings.settingsId, settingsId));
+    rows.sort((a, b) => a.workflow.localeCompare(b.workflow));
+    res.json({ rows });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E inspect failed: ${message}` });
   }
 });
 
