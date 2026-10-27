@@ -233,32 +233,6 @@ describe('repoCacheService', () => {
     );
   });
 
-  it('repairs a warm cache when the incremental fetch hits a corrupt object', async () => {
-    mockFs.existsSync.mockReturnValue(true);
-    mockGit.mockImplementation(async (args: string[]) => {
-      if (args.includes('fetch') && !args.includes('--refetch')) {
-        throw new Error(
-          'fatal: bad object f364d692f6ec71fda613844e0d20bab7f0a80406\n' +
-          'error: did not send all necessary objects',
-        );
-      }
-      if (args.includes('rev-parse')) return 'head123\n';
-      return '';
-    });
-
-    await expect(ensureRepoCache({
-      provider: 'ado',
-      project: 'MaxView',
-      repo: 'MaxView',
-      branch: 'development',
-    })).resolves.toEqual(expect.objectContaining({ baseSha: 'head123', stale: false }));
-
-    expect(mockGit).toHaveBeenCalledWith(
-      expect.arrayContaining(['fetch', '--refetch', '--prune']),
-      expect.any(Object),
-    );
-  });
-
   it('does not replace an incomplete cache that active workspaces may reference', async () => {
     mockFs.existsSync.mockImplementation((target) =>
       String(target).endsWith('.git'),

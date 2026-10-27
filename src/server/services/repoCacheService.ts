@@ -583,18 +583,6 @@ export async function compactRepoCache(
   return { compacted: true, before, after, freeBytes, requiredFreeBytes, durationMs };
 }
 
-function isCorruptRepoCacheError(error: unknown): boolean {
-  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return [
-    'bad object',
-    'did not send all necessary objects',
-    'pack has bad object',
-    'object corrupt',
-    'object file is empty',
-    'inflate returned',
-  ].some((fragment) => message.includes(fragment));
-}
-
 function isTransientGitError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return [
@@ -778,30 +766,17 @@ async function refreshWarmMirrorUnderLease(
         message.replace(/\/\/[^/@\s]+@/g, '//***@').slice(0, 300),
     );
     if (abortSignal.aborted) throw refreshError;
-    if (isCorruptRepoCacheError(refreshError)) {
-      console.warn(`[repo-cache] phase=warm-repair-start repo=${repoLabel} reason=corrupt-object`);
-      baseSha = await refetchAndVerifyCache(
-        cacheDir,
-        options,
-        remote,
-        abortSignal,
-        assertOwned,
+    if (!isTransientGitError(refreshError)) throw refreshError;
+    try {
+      baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
+      stale = true;
+      console.warn(
+        `[repo-cache] refresh unavailable; using verified cached ${options.provider}/${options.repo}@${options.branch}:`,
+        (refreshError as Error).message,
       );
-      console.log(`[repo-cache] phase=warm-repair-complete repo=${repoLabel}`);
-    } else if (!isTransientGitError(refreshError)) {
-      throw refreshError;
-    } else {
-      try {
-        baseSha = await verifyCacheConnectivity(cacheDir, options.branch, abortSignal);
-        stale = true;
-        console.warn(
-          `[repo-cache] refresh unavailable; using verified cached ${options.provider}/${options.repo}@${options.branch}:`,
-          (refreshError as Error).message,
-        );
-      } catch (verificationError) {
-        if (abortSignal.aborted) throw verificationError;
-        throw verificationError;
-      }
+    } catch (verificationError) {
+      if (abortSignal.aborted) throw verificationError;
+      throw verificationError;
     }
   }
 
