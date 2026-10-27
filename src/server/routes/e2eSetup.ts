@@ -17,6 +17,7 @@ import {
   appRolePermissions,
   appRoles,
   appUserProjectRoles,
+  appUserRoles,
   chatThreads,
   featureFlagRules,
   featureFlags,
@@ -1088,11 +1089,12 @@ router.post('/seed/project-settings', async (req, res) => {
   }
 });
 
-// Grant a user a project-scoped copy of the built-in admin role (admin:roles and
-// the rest), so specs can open Admin pages. Reset removes it by its [E2E] name.
-router.post('/seed/project-admin', async (req, res) => {
+// Grant a user a global copy of the built-in admin role. Admin > Project Settings
+// fetches without X-Apex-Project, so a project-scoped role would not apply.
+// Reset removes the copy by its [E2E] name, cascading the grant.
+router.post('/seed/admin-role', async (req, res) => {
   try {
-    const { userId, project } = req.body as { userId: string; project: string };
+    const { userId } = req.body as { userId: string };
     const [admin] = await db.select().from(appRoles).where(eq(appRoles.name, 'admin')).limit(1);
     if (!admin) {
       res.status(500).json({ error: 'admin role is missing' });
@@ -1105,8 +1107,8 @@ router.post('/seed/project-admin', async (req, res) => {
     const [role] = await db
       .insert(appRoles)
       .values({
-        name: `${E2E_PREFIX} project-admin ${project} ${userId.slice(-8)}`,
-        description: 'E2E project-scoped admin',
+        name: `${E2E_PREFIX} admin ${userId.slice(-8)}`,
+        description: 'E2E copy of the admin role',
         isDefault: false,
       })
       .returning();
@@ -1115,16 +1117,11 @@ router.post('/seed/project-admin', async (req, res) => {
         adminLinks.map((link) => ({ roleId: role.id, permissionId: link.permissionId })),
       );
     }
-    await db.insert(appUserProjectRoles).values({
-      userId,
-      project,
-      roleId: role.id,
-      assignedBy: 'e2e',
-    });
+    await db.insert(appUserRoles).values({ userId, roleId: role.id, assignedBy: 'e2e' });
     res.json({ ok: true, roleId: role.id });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: `E2E seed/project-admin failed: ${message}` });
+    res.status(500).json({ error: `E2E seed/admin-role failed: ${message}` });
   }
 });
 

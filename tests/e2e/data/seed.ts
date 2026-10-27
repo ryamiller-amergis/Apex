@@ -376,12 +376,9 @@ export const SeedApi = {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
   },
 
-  /** Grant a persona a project-scoped admin role (admin:roles etc.); removed by reset(). */
-  async seedProjectAdmin(
-    request: APIRequestContext,
-    opts: { userId: string; project: string },
-  ): Promise<void> {
-    await post(request, '/seed/project-admin', opts);
+  /** Grant a persona a global copy of the admin role (admin:roles etc.); removed by reset(). */
+  async seedAdminRole(request: APIRequestContext, opts: { userId: string }): Promise<void> {
+    await post(request, '/seed/admin-role', opts);
   },
 
   async seedPlaybookLifecycle(
