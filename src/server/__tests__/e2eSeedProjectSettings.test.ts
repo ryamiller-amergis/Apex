@@ -100,7 +100,7 @@ import e2eRouter from '../routes/e2eSetup';
 import {
   appRolePermissions,
   appRoles,
-  appUserProjectRoles,
+  appUserRoles,
   projectApprovalModes,
   projectSkillSettings,
   projectSkillWorkflowSettings,
@@ -250,7 +250,7 @@ describe('E2E seed/project-settings legacy workflow columns', () => {
   });
 });
 
-describe('E2E seed/project-admin', () => {
+describe('E2E seed/admin-role', () => {
   beforeEach(() => {
     inserts.length = 0;
     updates.length = 0;
@@ -258,26 +258,27 @@ describe('E2E seed/project-admin', () => {
     mockState.insertedSettingsRow = { id: 'role-e2e' };
   });
 
-  it('grants a project-scoped copy of the admin role that reset removes by its [E2E] name', async () => {
+  // Admin > Project Settings loads through fetch calls that send no project, so
+  // only a global role grant reaches requirePermission('admin:roles').
+  it('grants a global copy of the admin role that reset removes by its [E2E] name', async () => {
     mockState.selectQueue = [
       [{ id: 'role-admin', name: 'admin' }],
       [{ permissionId: 'perm-admin-roles' }, { permissionId: 'perm-skills-manage' }],
     ];
 
     const response = await request(buildApp())
-      .post('/seed/project-admin')
-      .send({ userId: 'dev-mock-oid-00000000-0000-0000-0000-000000000002', project: 'MaxView' });
+      .post('/seed/admin-role')
+      .send({ userId: 'dev-mock-oid-00000000-0000-0000-0000-000000000002' });
 
     expect(response.status).toBe(200);
     const roleInsert = inserts.find((record) => record.table === appRoles);
-    expect((roleInsert?.values as { name: string }).name).toMatch(/^\[E2E\] project-admin MaxView /);
+    expect((roleInsert?.values as { name: string }).name).toBe('[E2E] admin 00000002');
     expect(inserts.find((record) => record.table === appRolePermissions)?.values).toEqual([
       { roleId: 'role-e2e', permissionId: 'perm-admin-roles' },
       { roleId: 'role-e2e', permissionId: 'perm-skills-manage' },
     ]);
-    expect(inserts.find((record) => record.table === appUserProjectRoles)?.values).toEqual({
+    expect(inserts.find((record) => record.table === appUserRoles)?.values).toEqual({
       userId: 'dev-mock-oid-00000000-0000-0000-0000-000000000002',
-      project: 'MaxView',
       roleId: 'role-e2e',
       assignedBy: 'e2e',
     });
@@ -286,9 +287,7 @@ describe('E2E seed/project-admin', () => {
   it('fails when the built-in admin role is missing', async () => {
     mockState.selectQueue = [[]];
 
-    const response = await request(buildApp())
-      .post('/seed/project-admin')
-      .send({ userId: 'u', project: 'MaxView' });
+    const response = await request(buildApp()).post('/seed/admin-role').send({ userId: 'u' });
 
     expect(response.status).toBe(500);
     expect(inserts).toHaveLength(0);
