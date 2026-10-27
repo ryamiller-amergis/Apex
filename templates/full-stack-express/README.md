@@ -108,6 +108,17 @@ Docker Compose reports the failure when the host port is already in use. Node's 
 
 To format files, run `pnpm format` from `templates/full-stack-express/`.
 
+## Identity
+
+Every route under `/api/v1` requires an authenticated principal. `AUTH_MODE` picks the identity adapter and has no default.
+
+| `AUTH_MODE`   | Adapter                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| `development` | Every request runs as one synthetic principal. Startup stops if `NODE_ENV` is `production`  |
+| `external`    | The adapter registered in `apps/api/src/identity/registry.ts`. None ships with the template |
+
+A request the adapter does not authenticate gets a `401` Problem Details response. The template defines no roles or permissions. The contract, the steps to add a production identity provider, and where RBAC would attach are in [apps/api/src/identity/README.md](apps/api/src/identity/README.md).
+
 ## Feature flags
 
 The API gates new behavior through `FlagEvaluator` in `apps/api/src/feature-flags/`. The local adapter reads one optional variable.
