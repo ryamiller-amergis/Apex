@@ -8,8 +8,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "node --watch --env-file-if-exists=../../.env src/index.ts",
-    "db:migrate": "node scripts/persistence-placeholder.mjs",
-    "db:seed": "node scripts/persistence-placeholder.mjs"
+    "db:generate": "node scripts/generateMigration.ts",
+    "db:migrate": "node --env-file-if-exists=../../.env src/cli/migrate.ts",
+    "db:seed": "node --env-file-if-exists=../../.env src/cli/seed.ts",
+    "migrate:validate": "node scripts/validateMigrations.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "catalog:",
@@ -25,7 +27,9 @@
     "@opentelemetry/sdk-metrics": "catalog:",
     "@opentelemetry/sdk-trace": "catalog:",
     "@project-scope/contracts": "workspace:*",
+    "drizzle-orm": "catalog:",
     "express": "catalog:",
+    "pg": "catalog:",
     "pino": "catalog:",
     "pino-http": "catalog:",
     "zod": "catalog:"
@@ -34,8 +38,12 @@
     "@project-scope/config": "workspace:*",
     "@types/express": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "@types/supertest": "catalog:",
+    "drizzle-kit": "catalog:",
+    "prettier": "catalog:",
     "supertest": "catalog:",
+    "testcontainers": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

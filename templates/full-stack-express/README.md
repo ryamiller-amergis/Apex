@@ -89,7 +89,13 @@ On Windows PowerShell, copy the file with `Copy-Item .env.example .env`.
 
 `pnpm db:up` starts PostgreSQL and waits until it accepts connections. `pnpm db:down` stops it. The data volume stays. `pnpm dev` runs the API and the web client. The API reads `.env` when that file exists. A missing or invalid value stops the API before it listens and names every bad variable. The message never prints a value.
 
-`pnpm migrate` and `pnpm seed` are the names Platform Engineering's pipeline calls. Starter Persistence replaces their bodies. Until then each command prints `Provided by the Starter Persistence feature` and exits 1.
+After `pnpm db:up`, run `pnpm migrate` to create the tables and `pnpm seed` to load synthetic rows. Both read `NODE_ENV` and `DATABASE_URL` from `.env`. `pnpm migrate` is also the command Platform Engineering runs before traffic switches. The API never changes the schema when it starts.
+
+## Database and migrations
+
+The starter's one table is `app_users`, defined in `apps/api/src/persistence/schema.ts`. Only `apps/api/src/persistence/` may import Drizzle or the `pg` driver; ESLint enforces that. Change the schema, run `pnpm db:generate -- --name <slug>`, check with `pnpm migrate:validate`, and commit the schema and the generated SQL together. Ownership, exit codes, and the forward-only rollback policy are in [docs/runbooks/migrations.md](docs/runbooks/migrations.md).
+
+Tests that need PostgreSQL start it with Testcontainers. They skip, and say so in the test name, when Docker is not available.
 
 ## Change the PostgreSQL port
 
@@ -104,23 +110,34 @@ To format files, run `pnpm format` from `templates/full-stack-express/`.
 
 ## Scripts
 
-| Script            | What it does                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| `preinstall`      | Runs the toolchain guard before any dependency is fetched                                         |
-| `setup`           | Installs from the lockfile. This is the install step                                              |
-| `build`           | Builds members in dependency order through Corepack. The config package has no build              |
-| `check`           | Runs typecheck, lint, and format:check                                                            |
-| `typecheck`       | Type-checks every member that defines the script                                                  |
-| `lint`            | Lints the whole workspace once                                                                    |
-| `format`          | Rewrites files with Prettier                                                                      |
-| `format:check`    | Fails when a file disagrees with Prettier                                                         |
-| `test`            | Runs member tests, then the toolchain guard tests                                                 |
-| `dev`             | Runs the API and the web client with file watching. This is the local run step                    |
-| `migrate`         | Applies migrations. Starter Persistence replaces the body; until then the command exits 1         |
-| `seed`            | Loads synthetic local data. Starter Persistence replaces the body; until then the command exits 1 |
-| `db:up`           | Starts local PostgreSQL and waits until it is healthy                                             |
-| `db:down`         | Stops local PostgreSQL. The data volume stays                                                     |
-| `toolchain:check` | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends             |
+| Script             | What it does                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `preinstall`       | Runs the toolchain guard before any dependency is fetched                                           |
+| `setup`            | Installs from the lockfile. This is the install step                                                |
+| `build`            | Builds members in dependency order through Corepack. The config package has no build                |
+| `check`            | Runs typecheck, lint, format:check, and openapi:check                                               |
+| `typecheck`        | Type-checks every member that defines the script                                                    |
+| `lint`             | Lints the whole workspace once                                                                      |
+| `format`           | Rewrites files with Prettier                                                                        |
+| `format:check`     | Fails when a file disagrees with Prettier                                                           |
+| `test`             | Runs member tests, then the toolchain guard tests                                                   |
+| `dev`              | Runs the API and the web client with file watching. This is the local run step                      |
+| `migrate`          | Applies pending SQL migrations. Exits 0 on success, 1 on a failed migration, 2 on bad configuration |
+| `seed`             | Inserts synthetic `app_users` rows into a local database. Refuses when `NODE_ENV` is production     |
+| `db:generate`      | Generates a SQL migration from the Drizzle schema. Pass `-- --name <slug>`                          |
+| `migrate:validate` | Fails when the Drizzle schema and the committed migrations disagree. Needs no database              |
+| `db:up`            | Starts local PostgreSQL and waits until it is healthy                                               |
+| `db:down`          | Stops local PostgreSQL. The data volume stays                                                       |
+| `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends               |
+
+## API contract
+
+Routes are defined once in Zod in `packages/contracts`. The committed `packages/contracts/openapi/openapi.json` is generated from them. The conventions for a new endpoint are in `packages/contracts/README.md`.
+
+- `pnpm openapi:generate` rewrites the committed OpenAPI document from the route definitions.
+- `pnpm openapi:check` exits 1 with a unified diff when the committed document is stale, and exits 1 when it is not valid OpenAPI 3.1. `pnpm check` runs it.
+
+After replacing `project-name`, run `pnpm openapi:generate`, because the token appears in the document title.
 
 The web and API builds do not read each other's output.
 
@@ -176,10 +193,10 @@ Search for each token and replace it by hand. There is no generator. The workspa
 
 | Token             | Meaning                              | Occurs in                                                                                  |
 | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `project-name`    | Human-readable name                  | Root `package.json` description, README                                                    |
+| `project-name`    | Human-readable name                  | Root `package.json` description, README, OpenAPI `info.title`                              |
 | `@project-scope`  | npm scope of every workspace package | All `package.json` names, `workspace:*` dependencies, TypeScript `extends`, source imports |
 | `project-service` | Service name                         | README. Later environment and observability settings                                       |
-| `project_db`      | Database name                        | README, `compose.yaml`, `.env.example`. Later migrations                                   |
+| `project_db`      | Database name                        | README, `compose.yaml`, `.env.example`                                                     |
 
 ## When a command fails
 

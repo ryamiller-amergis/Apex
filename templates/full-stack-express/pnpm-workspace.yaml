@@ -23,11 +23,15 @@ catalog:
   '@mui/material': 9.5.0
   drizzle-orm: 0.45.4
   drizzle-kit: 0.31.11
+  pg: 8.23.1
+  '@types/pg': 8.23.1
   '@playwright/test': 1.64.1
   '@testing-library/react': 16.3.3
   testcontainers: 12.2.1
   zod: 4.6.7
   yaml: 2.9.1
+  '@readme/openapi-parser': 10.0.0
+  diff: 9.0.0
   pino: 10.4.0
   pino-http: 11.0.0
   '@opentelemetry/api': 1.10.0
