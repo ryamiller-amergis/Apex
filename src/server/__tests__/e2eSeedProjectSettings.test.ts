@@ -70,7 +70,12 @@ jest.mock('../db/drizzle', () => {
     const chain = {
       from: () => chain,
       innerJoin: () => chain,
-      where: () => Object.assign(nextSelect(), chain),
+      // Thenable so only an awaited where() (no .limit()) takes a queued result.
+      where: () => ({
+        ...chain,
+        then: (resolve: (rows: unknown) => unknown, reject: (err: unknown) => unknown) =>
+          nextSelect().then(resolve, reject),
+      }),
       limit: () => nextSelect(),
     };
     return chain;
