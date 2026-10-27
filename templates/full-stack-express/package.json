@@ -21,6 +21,8 @@
     "dev": "corepack pnpm --parallel --filter \"./apps/*\" dev",
     "migrate": "corepack pnpm --filter ./apps/api run db:migrate",
     "seed": "corepack pnpm --filter ./apps/api run db:seed",
+    "db:generate": "corepack pnpm --filter ./apps/api run db:generate",
+    "migrate:validate": "corepack pnpm --filter ./apps/api run migrate:validate",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "toolchain:check": "node scripts/check-toolchain.mjs",

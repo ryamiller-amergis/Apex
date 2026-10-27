@@ -4,6 +4,7 @@ import {
   databaseEnvSchema,
   EnvValidationError,
   parseEnv,
+  readDatabaseEnv,
 } from './env.ts';
 
 const DATABASE_URL =
@@ -170,5 +171,48 @@ describe('parseEnv', () => {
       'NODE_ENV',
       'PORT',
     ]);
+  });
+});
+
+describe('readDatabaseEnv', () => {
+  it('returns NODE_ENV and DATABASE_URL and ignores the other variables', () => {
+    expect(readDatabaseEnv({ NODE_ENV: 'test', DATABASE_URL })).toEqual({
+      ok: true,
+      env: { NODE_ENV: 'test', DATABASE_URL },
+    });
+  });
+
+  it('VT-13 PBI-004 AC-3 reports DATABASE_URL as missing when unset or blank', () => {
+    for (const value of [undefined, '']) {
+      expect(
+        readDatabaseEnv({ NODE_ENV: 'production', DATABASE_URL: value })
+      ).toEqual({
+        ok: false,
+        problems: [{ name: 'DATABASE_URL', reason: 'missing' }],
+      });
+    }
+  });
+
+  it('VT-14 PBI-004 AC-3 reports a malformed DATABASE_URL without its value', () => {
+    const sentinel = 'sentinel-password-123';
+    const result = readDatabaseEnv({
+      NODE_ENV: 'production',
+      DATABASE_URL: `mysql://user:${sentinel}@host/db`,
+    });
+    expect(result).toEqual({
+      ok: false,
+      problems: [{ name: 'DATABASE_URL', reason: 'invalid' }],
+    });
+    expect(JSON.stringify(result)).not.toContain(sentinel);
+  });
+
+  it('reports both variables in name order', () => {
+    expect(readDatabaseEnv({ NODE_ENV: 'staging' })).toEqual({
+      ok: false,
+      problems: [
+        { name: 'DATABASE_URL', reason: 'missing' },
+        { name: 'NODE_ENV', reason: 'invalid' },
+      ],
+    });
   });
 });

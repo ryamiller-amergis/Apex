@@ -100,6 +100,45 @@ export function parseEnv(source: object): Env {
   return result.data;
 }
 
+export interface DatabaseEnvProblem {
+  name: keyof DatabaseEnv;
+  reason: 'missing' | 'invalid';
+}
+
+export type DatabaseEnvResult =
+  | { ok: true; env: DatabaseEnv }
+  | { ok: false; problems: DatabaseEnvProblem[] };
+
+function isSet(source: object, key: string): boolean {
+  const value: unknown = (source as Record<string, unknown>)[key];
+  return value !== undefined && value !== '';
+}
+
+// The migrate and seed commands read only these two variables. Problems carry
+// a name and a reason, never the received value.
+export function readDatabaseEnv(
+  source: object = process.env
+): DatabaseEnvResult {
+  const result = databaseEnvSchema.safeParse(source);
+  if (result.success) {
+    return { ok: true, env: result.data };
+  }
+  const names = new Set<keyof DatabaseEnv>();
+  for (const issue of result.error.issues) {
+    const head = issue.path[0];
+    if (head === 'NODE_ENV' || head === 'DATABASE_URL') {
+      names.add(head);
+    }
+  }
+  return {
+    ok: false,
+    problems: [...names].sort().map((name) => ({
+      name,
+      reason: isSet(source, name) ? 'invalid' : 'missing',
+    })),
+  };
+}
+
 export function loadEnv(source: object = process.env): Env {
   try {
     return parseEnv(source);
