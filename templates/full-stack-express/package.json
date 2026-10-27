@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm openapi:check",
+    "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm openapi:check && corepack pnpm routes:check",
     "test": "corepack pnpm -r run test && node --test \"scripts/__tests__/**/*.test.mjs\"",
     "dev": "corepack pnpm --parallel --filter \"./apps/*\" dev",
     "migrate": "corepack pnpm --filter ./apps/api run db:migrate",
@@ -27,7 +27,8 @@
     "db:down": "docker compose down",
     "toolchain:check": "node scripts/check-toolchain.mjs",
     "openapi:generate": "corepack pnpm --filter @project-scope/contracts run openapi:generate",
-    "openapi:check": "corepack pnpm --filter @project-scope/contracts run openapi:check"
+    "openapi:check": "corepack pnpm --filter @project-scope/contracts run openapi:check",
+    "routes:check": "corepack pnpm --filter @project-scope/api run routes:check"
   },
   "devDependencies": {
     "eslint": "catalog:",

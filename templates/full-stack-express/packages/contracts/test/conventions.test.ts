@@ -25,6 +25,8 @@ describe('Problem Details (VT-09, TBI-011 DoD-0)', () => {
     [problemTypes.notFound, 404, 'Not found'],
     [problemTypes.internalError, 500, 'Unexpected server error'],
     [problemTypes.notReady, 503, 'Not ready'],
+    [problemTypes.serviceUnavailable, 503, 'Service unavailable'],
+    [problemTypes.payloadTooLarge, 413, 'The request body is too large'],
   ])('TBI-011 DoD-0 parses a %s body', (type, status, title) => {
     expect(
       problemDetailsSchema.safeParse(sample(type, status, title)).success
@@ -40,6 +42,8 @@ describe('Problem Details (VT-09, TBI-011 DoD-0)', () => {
       'urn:problem-type:rate-limited',
       'urn:problem-type:not-ready',
       'urn:problem-type:internal-error',
+      'urn:problem-type:service-unavailable',
+      'urn:problem-type:payload-too-large',
     ]);
   });
 

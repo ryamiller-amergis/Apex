@@ -1,44 +1,14 @@
-import { spawn } from 'node:child_process';
-import { connect, createServer } from 'node:net';
-import { fileURLToPath } from 'node:url';
+import { connect } from 'node:net';
 import { describe, expect, it } from 'vitest';
-
-const apiRoot = fileURLToPath(new URL('../..', import.meta.url));
+import {
+  baseEnv,
+  freePort,
+  gracefulExitCode,
+  runApi,
+} from '../../test/support/apiProcess.ts';
 
 const DATABASE_URL =
   'postgresql://app_user:local-dev-only-password@localhost:5432/project_db';
-
-function baseEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of [
-    'PATH',
-    'Path',
-    'SystemRoot',
-    'PATHEXT',
-    'COMSPEC',
-    'TEMP',
-    'TMP',
-    'USERPROFILE',
-  ]) {
-    const value = process.env[key];
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-  return env;
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 function portRefuses(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -48,38 +18,6 @@ function portRefuses(port: number): Promise<boolean> {
       resolve(false);
     });
     socket.once('error', () => resolve(true));
-  });
-}
-
-function runApi(
-  env: NodeJS.ProcessEnv
-): Promise<{ status: number | null; output: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['src/index.ts'], {
-      cwd: apiRoot,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    let output = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`API process timed out\n${output}`));
-    }, 15000);
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on('close', (status) => {
-      clearTimeout(timer);
-      resolve({ status, output });
-    });
   });
 }
 
@@ -139,7 +77,8 @@ describe('identity startup guard (VT-09, VT-12)', () => {
       AUTH_MODE: 'development',
       DATABASE_URL,
     });
-    expect(result.status).toBe(0);
+    expect(result.listened).toBe(true);
+    expect(result.status).toBe(gracefulExitCode);
     expect(result.output).toContain('auth.development_adapter_active');
     expect(result.output).not.toContain('synthetic-dev-subject');
   }, 20000);

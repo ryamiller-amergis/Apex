@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { problemDetailsSchema } from '../conventions/problem-details.ts';
 import { defineRoute } from '../define-route.ts';
 import { contractSchemas } from '../schema-registry.ts';
 
@@ -7,6 +8,7 @@ import { contractSchemas } from '../schema-registry.ts';
 export const profileStatusValues = ['active', 'disabled'] as const;
 export const profileStatusSchema = z.enum(profileStatusValues);
 
+// Zod counts string length in Unicode code points, as PostgreSQL varchar does.
 export const displayNameMaxLength = 100;
 export const emailMaxLength = 254;
 
@@ -16,6 +18,15 @@ export const displayNameSchema = z
   .min(1)
   .max(displayNameMaxLength);
 export const emailSchema = z.email().max(emailMaxLength);
+
+// A request email is trimmed, and a blank string means "no email".
+const requestEmailSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}, emailSchema.nullable());
 
 export const profileSchema = z
   .strictObject({
@@ -31,12 +42,12 @@ export const profileSchema = z
 export const updateProfileBodySchema = z
   .strictObject({
     displayName: displayNameSchema,
-    email: emailSchema.nullable().optional(),
+    email: requestEmailSchema.optional(),
   })
   .register(contractSchemas, {
     id: 'UpdateProfileBody',
     description:
-      'Replaces both editable fields. An omitted or null email clears it.',
+      'Replaces both editable fields. Both are trimmed. An omitted, null, or blank email clears it.',
   });
 
 export type ProfileStatus = z.infer<typeof profileStatusSchema>;
@@ -48,6 +59,11 @@ const exampleProfile = {
   email: 'ada@example.test',
   status: 'active',
 } as const;
+
+const serviceUnavailableResponse = {
+  description: 'The database is unavailable. Nothing was changed.',
+  body: problemDetailsSchema,
+};
 
 export const getMe = defineRoute({
   id: 'getMe',
@@ -63,6 +79,7 @@ export const getMe = defineRoute({
       body: profileSchema,
       example: exampleProfile,
     },
+    503: serviceUnavailableResponse,
   },
 });
 
@@ -87,5 +104,10 @@ export const putMe = defineRoute({
       body: profileSchema,
       example: exampleProfile,
     },
+    413: {
+      description: 'The request body is larger than 16 KB',
+      body: problemDetailsSchema,
+    },
+    503: serviceUnavailableResponse,
   },
 });

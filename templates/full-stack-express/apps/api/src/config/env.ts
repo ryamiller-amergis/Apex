@@ -19,6 +19,10 @@ const OTLP_PROTOCOL_MESSAGE = 'expected http/protobuf';
 const OTLP_HEADERS_MESSAGE = 'expected comma-separated key=value pairs';
 const OTEL_EXPORTER_MESSAGE = 'expected otlp, console, or none';
 const POSITIVE_MS_MESSAGE = 'expected a positive integer of milliseconds';
+const READINESS_TIMEOUT_MESSAGE = 'expected an integer from 100 to 10000';
+const RATE_LIMIT_MAX_MESSAGE = 'expected a positive integer';
+const RATE_LIMIT_WINDOW_MESSAGE = 'expected an integer from 1000 to 3600000';
+const CLIENT_DIST_DIR_MESSAGE = 'expected a directory path';
 
 // Endpoints can carry user information and headers carry collector credentials.
 const SECRET_NAMES = new Set([
@@ -171,6 +175,40 @@ const envObject = z.object({
       .min(1000, { error: SHUTDOWN_TIMEOUT_MESSAGE })
       .max(120000, { error: SHUTDOWN_TIMEOUT_MESSAGE })
       .default(25000)
+  ),
+  // The orchestrator's probe timeout must be longer than this.
+  READINESS_TIMEOUT_MS: z.preprocess(
+    unsetBlank,
+    z.coerce
+      .number({ error: READINESS_TIMEOUT_MESSAGE })
+      .int({ error: READINESS_TIMEOUT_MESSAGE })
+      .min(100, { error: READINESS_TIMEOUT_MESSAGE })
+      .max(10000, { error: READINESS_TIMEOUT_MESSAGE })
+      .default(2000)
+  ),
+  // Unset means no limit. Health probes are never limited.
+  RATE_LIMIT_MAX: z.preprocess(
+    unsetBlank,
+    z.coerce
+      .number({ error: RATE_LIMIT_MAX_MESSAGE })
+      .int({ error: RATE_LIMIT_MAX_MESSAGE })
+      .min(1, { error: RATE_LIMIT_MAX_MESSAGE })
+      .optional()
+  ),
+  RATE_LIMIT_WINDOW_MS: z.preprocess(
+    unsetBlank,
+    z.coerce
+      .number({ error: RATE_LIMIT_WINDOW_MESSAGE })
+      .int({ error: RATE_LIMIT_WINDOW_MESSAGE })
+      .min(1000, { error: RATE_LIMIT_WINDOW_MESSAGE })
+      .max(3600000, { error: RATE_LIMIT_WINDOW_MESSAGE })
+      .default(60000)
+  ),
+  // The built web client. Unset, or a directory without index.html, means
+  // the API serves no static files.
+  CLIENT_DIST_DIR: z.preprocess(
+    unsetBlank,
+    z.string({ error: CLIENT_DIST_DIR_MESSAGE }).optional()
   ),
   ...telemetryEnvObject.shape,
 });

@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  baseEnv,
+  gracefulExitCode,
+  runApi,
+} from '../../test/support/apiProcess.ts';
+import {
   DOCKER_SKIP_NOTE,
   isDockerAvailable,
   startTestDatabaseServer,
@@ -54,8 +59,25 @@ describe.skipIf(!docker)(
       }
     }, 60000);
 
-    it.todo(
-      'VT-18 PBI-003 AC-3 booting the API composition root leaves the schema alone (activates with FEAT-006 TBI-014)'
-    );
+    it('VT-18 PBI-003 AC-3 TBI-014 booting the API composition root leaves the schema alone', async () => {
+      const database = await server.createDatabase();
+      try {
+        const result = await runApi({
+          ...baseEnv(),
+          NODE_ENV: 'test',
+          DATABASE_URL: database.url,
+          AUTH_MODE: 'development',
+        });
+        expect(result.listened).toBe(true);
+        expect(result.status).toBe(gracefulExitCode);
+        expect(
+          await database.query(
+            "select table_schema, table_name from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema')"
+          )
+        ).toEqual([]);
+      } finally {
+        await database.drop();
+      }
+    }, 60000);
   }
 );

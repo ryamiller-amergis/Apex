@@ -12,6 +12,8 @@ export const problemTypes = {
   rateLimited: 'urn:problem-type:rate-limited',
   notReady: 'urn:problem-type:not-ready',
   internalError: 'urn:problem-type:internal-error',
+  serviceUnavailable: 'urn:problem-type:service-unavailable',
+  payloadTooLarge: 'urn:problem-type:payload-too-large',
 } as const;
 
 export type ProblemType = (typeof problemTypes)[keyof typeof problemTypes];

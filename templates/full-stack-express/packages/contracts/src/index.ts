@@ -73,6 +73,5 @@ export {
   type UpdateProfileBody,
 } from './routes/me.ts';
 
-// Read by apps/api/src/index.ts and apps/web/src/main.tsx until FEAT-006 and
-// FEAT-010 replace those entry points.
+// Read by apps/web/src/main.tsx until FEAT-010 replaces that entry point.
 export const CONTRACTS_STUB = 'contracts-stub';

@@ -61,7 +61,7 @@ describe('derived types (VT-13, TBI-009 DoD-1)', () => {
 
   it('TBI-009 DoD-1 standard responses follow auth and input', () => {
     expectTypeOf<keyof typeof getMe.responses>().toEqualTypeOf<
-      200 | 401 | 429 | 500
+      200 | 401 | 429 | 500 | 503
     >();
     expectTypeOf<keyof typeof getThing.responses>().toEqualTypeOf<
       200 | 400 | 500

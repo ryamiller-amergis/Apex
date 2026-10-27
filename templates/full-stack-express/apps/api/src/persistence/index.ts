@@ -28,8 +28,16 @@ export interface Persistence {
 
 export function createPersistence(options: {
   databaseUrl: string;
+  /**
+   * How long a query waits for a pool connection. Keep it at or below the
+   * readiness timeout, so an abandoned readiness ping frees its slot.
+   */
+  connectionTimeoutMs?: number;
 }): Persistence {
-  const client = createDatabaseClient(options.databaseUrl);
+  const client = createDatabaseClient(
+    options.databaseUrl,
+    options.connectionTimeoutMs
+  );
   return {
     users: createAppUserStore(client.db),
     async ping() {

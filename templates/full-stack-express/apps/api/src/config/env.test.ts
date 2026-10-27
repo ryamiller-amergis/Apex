@@ -168,6 +168,7 @@ describe('parseEnv', () => {
     expect(parsed).toEqual({ NODE_ENV: 'test', DATABASE_URL });
     expect(API_ENV_KEYS).toEqual([
       'AUTH_MODE',
+      'CLIENT_DIST_DIR',
       'DATABASE_URL',
       'FEATURE_FLAGS',
       'LOG_LEVEL',
@@ -185,8 +186,75 @@ describe('parseEnv', () => {
       'OTEL_SERVICE_NAME',
       'OTEL_TRACES_EXPORTER',
       'PORT',
+      'RATE_LIMIT_MAX',
+      'RATE_LIMIT_WINDOW_MS',
+      'READINESS_TIMEOUT_MS',
       'SHUTDOWN_TIMEOUT_MS',
     ]);
+  });
+});
+
+describe('HTTP composition settings (FEAT-006)', () => {
+  it('TBI-014 DoD-2 leaves rate limiting and client serving off by default', () => {
+    const env = parseEnv({
+      ...valid,
+      RATE_LIMIT_MAX: '',
+      RATE_LIMIT_WINDOW_MS: '',
+      CLIENT_DIST_DIR: '',
+      READINESS_TIMEOUT_MS: '',
+    });
+    expect(env.RATE_LIMIT_MAX).toBeUndefined();
+    expect(env.RATE_LIMIT_WINDOW_MS).toBe(60000);
+    expect(env.CLIENT_DIST_DIR).toBeUndefined();
+    expect(env.READINESS_TIMEOUT_MS).toBe(2000);
+  });
+
+  it('TBI-014 DoD-2 PBI-012 AC-2 parses explicit values at their bounds', () => {
+    expect(
+      parseEnv({
+        ...valid,
+        RATE_LIMIT_MAX: '1',
+        RATE_LIMIT_WINDOW_MS: '1000',
+        READINESS_TIMEOUT_MS: '100',
+        CLIENT_DIST_DIR: '../web/dist',
+      })
+    ).toMatchObject({
+      RATE_LIMIT_MAX: 1,
+      RATE_LIMIT_WINDOW_MS: 1000,
+      READINESS_TIMEOUT_MS: 100,
+      CLIENT_DIST_DIR: '../web/dist',
+    });
+    expect(
+      parseEnv({
+        ...valid,
+        RATE_LIMIT_WINDOW_MS: '3600000',
+        READINESS_TIMEOUT_MS: '10000',
+      })
+    ).toMatchObject({
+      RATE_LIMIT_WINDOW_MS: 3600000,
+      READINESS_TIMEOUT_MS: 10000,
+    });
+  });
+
+  it('TBI-014 DoD-2 names each malformed setting', () => {
+    const message = messageOf({
+      ...valid,
+      RATE_LIMIT_MAX: '0',
+      RATE_LIMIT_WINDOW_MS: '999',
+      READINESS_TIMEOUT_MS: '10001',
+    });
+    expect(message).toContain(
+      'RATE_LIMIT_MAX: set but invalid (expected a positive integer)'
+    );
+    expect(message).toContain(
+      'RATE_LIMIT_WINDOW_MS: set but invalid (expected an integer from 1000 to 3600000)'
+    );
+    expect(message).toContain(
+      'READINESS_TIMEOUT_MS: set but invalid (expected an integer from 100 to 10000)'
+    );
+    expect(messageOf({ ...valid, READINESS_TIMEOUT_MS: '99' })).toContain(
+      'READINESS_TIMEOUT_MS: set but invalid'
+    );
   });
 });
 

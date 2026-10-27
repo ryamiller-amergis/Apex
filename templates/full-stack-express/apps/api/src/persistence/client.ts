@@ -11,10 +11,13 @@ export interface DatabaseClient {
   end(): Promise<void>;
 }
 
-export function createDatabaseClient(databaseUrl: string): DatabaseClient {
+export function createDatabaseClient(
+  databaseUrl: string,
+  connectionTimeoutMs: number = CONNECTION_TIMEOUT_MS
+): DatabaseClient {
   const pool = new pg.Pool({
     connectionString: databaseUrl,
-    connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+    connectionTimeoutMillis: connectionTimeoutMs,
   });
   // An idle client error would otherwise crash the process. The next query
   // reports the failure through mapDatabaseError.
