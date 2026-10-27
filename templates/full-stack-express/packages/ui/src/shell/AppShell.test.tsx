@@ -10,6 +10,7 @@ import { setViewport } from '../testing/setViewport.js';
 import { TEST_ID_PATTERN } from '../testing/testId.js';
 import { AppThemeProvider } from '../theme/AppThemeProvider.js';
 import { AppShell, type AppShellProps, type NavItem } from './AppShell.js';
+import { DRAWER_ID } from './NavDrawer.js';
 
 const navItems: NavItem[] = [
   { id: 'home', label: 'Home', to: '/' },
@@ -104,11 +105,15 @@ describe('AppShell phone layout', () => {
     const menu = screen.getByRole('button', { name: 'Open navigation' });
     expect(menu).toHaveAttribute('data-testid', 'app-shell-menu-button');
     expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(menu).not.toHaveAttribute('aria-controls');
+    expect(document.getElementById(DRAWER_ID)).toBeNull();
     expect(screen.queryByRole('navigation')).toBeNull();
 
     await userEvent.click(menu);
 
     expect(menu).toHaveAttribute('aria-expanded', 'true');
+    expect(menu).toHaveAttribute('aria-controls', DRAWER_ID);
+    expect(document.getElementById(DRAWER_ID)).not.toBeNull();
     const nav = await screen.findByRole('navigation', { name: 'Primary' });
     expect(within(nav).getByRole('link', { name: 'Home' })).toHaveFocus();
 
@@ -117,6 +122,7 @@ describe('AppShell phone layout', () => {
     await waitFor(() => expect(screen.queryByRole('navigation')).toBeNull());
     expect(menu).toHaveFocus();
     expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(menu).not.toHaveAttribute('aria-controls');
   });
 
   it('VT-11 closes the drawer on link activation and returns focus to the menu button', async () => {

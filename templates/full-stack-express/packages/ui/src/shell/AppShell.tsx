@@ -126,7 +126,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                 edge="start"
                 aria-label="Open navigation"
                 aria-expanded={drawerOpen}
-                aria-controls={DRAWER_ID}
+                aria-controls={drawerOpen ? DRAWER_ID : undefined}
                 onClick={() => setDrawerOpen(true)}
                 data-testid="app-shell-menu-button"
               >
