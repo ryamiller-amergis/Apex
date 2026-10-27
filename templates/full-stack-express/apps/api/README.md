@@ -25,7 +25,7 @@ A profile is:
 
 `email` is a string or `null`. `status` is `active` or `disabled`. The body never contains the subject, the row ID, or timestamps.
 
-The first authenticated request for a subject creates its row, whether that request is a `GET` or a `PUT`. The new row takes the display name the identity provider sent, trimmed and cut to 100 characters, or `New user` when the provider sent none. It never uses the subject as a name.
+The first authenticated request for a subject creates its row, whether that request is a `GET` or a `PUT`. The new row takes the display name the identity provider sent, trimmed and cut to 100 characters, or `New user` when the provider sent none. It never uses the subject as a name. The email starts as `null` until the person saves one.
 
 `PUT /api/v1/me` replaces both editable fields:
 

@@ -62,7 +62,7 @@ describe.skipIf(!docker)(
       const first = await request(app).get('/api/v1/me').expect(200);
       expect(first.body).toEqual({
         displayName: PRINCIPAL_A.displayName,
-        email: PRINCIPAL_A.email,
+        email: null,
         status: 'active',
       });
       const second = await request(app).get('/api/v1/me').expect(200);
@@ -71,7 +71,7 @@ describe.skipIf(!docker)(
         {
           external_subject: PRINCIPAL_A.subject,
           display_name: PRINCIPAL_A.displayName,
-          email: PRINCIPAL_A.email,
+          email: null,
           status: 'active',
         },
       ]);
@@ -101,7 +101,7 @@ describe.skipIf(!docker)(
         {
           external_subject: PRINCIPAL_A.subject,
           display_name: PRINCIPAL_A.displayName,
-          email: PRINCIPAL_A.email,
+          email: null,
           status: 'active',
         },
         {
@@ -134,7 +134,7 @@ describe.skipIf(!docker)(
     it('VT-12 PBI-011 AC-2 stores values at the limit, including multi-byte characters', async () => {
       const app = await freshApp();
       const displayName = '\u{1F600}'.repeat(100);
-      const email = `${'a'.repeat(64)}@${'b'.repeat(185)}.test`;
+      const email = `${'a'.repeat(64)}@${'b'.repeat(184)}.test`;
       expect(email).toHaveLength(254);
       await request(app)
         .put('/api/v1/me')
