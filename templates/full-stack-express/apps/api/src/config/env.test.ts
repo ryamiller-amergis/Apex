@@ -166,6 +166,7 @@ describe('parseEnv', () => {
     expect(API_ENV_KEYS).toEqual([
       'AUTH_MODE',
       'DATABASE_URL',
+      'FEATURE_FLAGS',
       'LOG_LEVEL',
       'NODE_ENV',
       'PORT',
