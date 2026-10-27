@@ -11,7 +11,8 @@
     "db:generate": "node scripts/generateMigration.ts",
     "db:migrate": "node --env-file-if-exists=../../.env src/cli/migrate.ts",
     "db:seed": "node --env-file-if-exists=../../.env src/cli/seed.ts",
-    "migrate:validate": "node scripts/validateMigrations.ts"
+    "migrate:validate": "node scripts/validateMigrations.ts",
+    "routes:check": "node scripts/checkRoutes.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "catalog:",

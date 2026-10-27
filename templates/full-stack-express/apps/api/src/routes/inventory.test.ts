@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   compareRouteInventory,
   routeKey,
@@ -23,10 +26,14 @@ describe('route inventory (VT-28)', () => {
   });
 
   it('VT-28 the built client fallback is not reported as an API route', () => {
-    const { app } = buildTestApp({
-      deps: { clientDistDir: process.cwd() },
-    });
-    expect(compareRouteInventory(listRegisteredRoutes(app)).ok).toBe(true);
+    const dir = mkdtempSync(path.join(tmpdir(), 'client-dist-'));
+    try {
+      writeFileSync(path.join(dir, 'index.html'), '<!doctype html>');
+      const { app } = buildTestApp({ deps: { clientDistDir: dir } });
+      expect(compareRouteInventory(listRegisteredRoutes(app)).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('VT-28 an extra route shows up as undocumented', () => {
