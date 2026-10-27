@@ -27,7 +27,12 @@ let dockerCheck: Promise<boolean> | undefined;
 export function isDockerAvailable(): Promise<boolean> {
   dockerCheck ??= getContainerRuntimeClient().then(
     () => true,
-    () => false
+    () => {
+      console.warn(
+        'Docker is not available. PostgreSQL integration tests in this file are skipped.'
+      );
+      return false;
+    }
   );
   return dockerCheck;
 }
