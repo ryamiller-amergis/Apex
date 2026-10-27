@@ -15,7 +15,7 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | eslint-plugin-react-hooks | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
 | eslint-plugin-jsx-a11y    | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
 | globals                   | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
-| prettier                  | 3.9.10         | implementation-date latest stable                 | package root                                                         |
+| prettier                  | 3.9.10         | implementation-date latest stable                 | package root, apps/api                                               |
 | vitest                    | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
 | vite                      | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
 | @vitejs/plugin-react      | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
@@ -26,11 +26,13 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | @types/node               | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web                                                   |
 | express                   | 5.3.0          | implementation-date latest stable                 | reserved                                                             |
 | @mui/material             | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
-| drizzle-orm               | 0.45.4         | implementation-date latest stable                 | reserved                                                             |
-| drizzle-kit               | 0.31.11        | implementation-date latest stable                 | reserved                                                             |
+| drizzle-orm               | 0.45.4         | implementation-date latest stable                 | apps/api                                                             |
+| drizzle-kit               | 0.31.11        | implementation-date latest stable                 | apps/api                                                             |
+| pg                        | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
+| @types/pg                 | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
 | @playwright/test          | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
 | @testing-library/react    | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
-| testcontainers            | 12.2.1         | implementation-date latest stable                 | reserved                                                             |
+| testcontainers            | 12.2.1         | implementation-date latest stable                 | apps/api                                                             |
 | yaml                      | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
 | zod                       | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web                                                   |
 

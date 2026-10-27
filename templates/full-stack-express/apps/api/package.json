@@ -8,16 +8,24 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "node --watch --env-file-if-exists=../../.env src/index.ts",
-    "db:migrate": "node scripts/persistence-placeholder.mjs",
-    "db:seed": "node scripts/persistence-placeholder.mjs"
+    "db:generate": "node scripts/generateMigration.ts",
+    "db:migrate": "node --env-file-if-exists=../../.env src/cli/migrate.ts",
+    "db:seed": "node --env-file-if-exists=../../.env src/cli/seed.ts",
+    "migrate:validate": "node scripts/validateMigrations.ts"
   },
   "dependencies": {
     "@project-scope/contracts": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "pg": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@project-scope/config": "workspace:*",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "drizzle-kit": "catalog:",
+    "prettier": "catalog:",
+    "testcontainers": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
