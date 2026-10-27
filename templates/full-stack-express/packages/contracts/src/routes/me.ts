@@ -25,7 +25,7 @@ export const profileSchema = z
   })
   .register(contractSchemas, {
     id: 'Profile',
-    description: 'The caller’s own profile. Never includes the subject.',
+    description: 'The profile of the caller. Never includes the subject.',
   });
 
 export const updateProfileBodySchema = z
@@ -59,7 +59,7 @@ export const getMe = defineRoute({
     'Returns the profile of the authenticated principal. The first call for a new principal creates the profile and still returns 200.',
   responses: {
     200: {
-      description: 'The caller’s profile',
+      description: 'The profile of the caller',
       body: profileSchema,
       example: exampleProfile,
     },
