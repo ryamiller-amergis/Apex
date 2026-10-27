@@ -119,7 +119,7 @@ function assertCabBuild(body: unknown): void {
     );
   }
   assertPattern(
-    String(record.sourceBranch ?? ''),
+    String(record?.sourceBranch ?? ''),
     PROD_CD_BRANCH,
     'Build reads are limited to Release/{version} and development',
   );
