@@ -83,7 +83,7 @@ import type {
   QuickMcpPill,
   QuickSkillPill,
 } from '../../shared/types/projectSettings';
-import { PgDialect } from 'drizzle-orm/pg-core';
+import { QueryBuilder } from 'drizzle-orm/pg-core';
 import { readFileSync } from 'fs';
 import path from 'path';
 
@@ -1749,13 +1749,15 @@ describe('workflow settings read mapping', () => {
 
     const selection = mockDb.select.mock.calls[0][0];
     expect(selection).toEqual(expect.objectContaining({ id: projectSkillSettings.id }));
-    const { sql: text } = new PgDialect().sqlToQuery(selection.workflowSettings);
-    expect(text).toContain('from "project_skill_workflow_settings"');
-    expect(text).toContain(
-      '"project_skill_workflow_settings"."settings_id" = "project_skill_settings"."id"'
-    );
-    expect(text).toContain(
-      '"project_skill_workflow_settings"."updated_at" >= "project_skill_settings"."updated_at"'
-    );
+    // Render the parent select the way the service builds it: Drizzle drops
+    // table qualifiers inside a single-table select, so a correlated column
+    // must be qualified explicitly to reach the outer row.
+    const { sql: text } = new QueryBuilder()
+      .select(selection)
+      .from(projectSkillSettings)
+      .toSQL();
+    expect(text).toMatch(/from "project_skill_workflow_settings" "w"/);
+    expect(text).toContain('"w"."settings_id" = "project_skill_settings"."id"');
+    expect(text).toContain('"w"."updated_at" >= "project_skill_settings"."updated_at"');
   });
 });
