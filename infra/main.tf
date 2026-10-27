@@ -192,6 +192,10 @@ resource "azurerm_linux_web_app" "main" {
       # clones production's repositories onto staging's disk. Staging holds
       # "cleanup-only" and production "full"; a swap must not trade them.
       "GROUNDING_MAINTENANCE_MODE",
+      # Staging shares production's database, so its background sweeps would
+      # claim production's work. Staging holds "off" and production "full"; a
+      # swap must not trade them.
+      "BACKGROUND_JOBS_MODE",
     ])
   }
 
