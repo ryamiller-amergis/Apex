@@ -109,7 +109,7 @@ To format files, run `pnpm format` from `templates/full-stack-express/`.
 | `preinstall`      | Runs the toolchain guard before any dependency is fetched                                         |
 | `setup`           | Installs from the lockfile. This is the install step                                              |
 | `build`           | Builds members in dependency order through Corepack. The config package has no build              |
-| `check`           | Runs typecheck, lint, and format:check                                                            |
+| `check`           | Runs typecheck, lint, format:check, and openapi:check                                             |
 | `typecheck`       | Type-checks every member that defines the script                                                  |
 | `lint`            | Lints the whole workspace once                                                                    |
 | `format`          | Rewrites files with Prettier                                                                      |
@@ -121,6 +121,15 @@ To format files, run `pnpm format` from `templates/full-stack-express/`.
 | `db:up`           | Starts local PostgreSQL and waits until it is healthy                                             |
 | `db:down`         | Stops local PostgreSQL. The data volume stays                                                     |
 | `toolchain:check` | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends             |
+
+## API contract
+
+Routes are defined once in Zod in `packages/contracts`. The committed `packages/contracts/openapi/openapi.json` is generated from them. The conventions for a new endpoint are in `packages/contracts/README.md`.
+
+- `pnpm openapi:generate` rewrites the committed OpenAPI document from the route definitions.
+- `pnpm openapi:check` exits 1 with a unified diff when the committed document is stale, and exits 1 when it is not valid OpenAPI 3.1. `pnpm check` runs it.
+
+After replacing `project-name`, run `pnpm openapi:generate`, because the token appears in the document title.
 
 The web and API builds do not read each other's output.
 
@@ -150,7 +159,7 @@ Search for each token and replace it by hand. There is no generator. The workspa
 
 | Token             | Meaning                              | Occurs in                                                                                  |
 | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `project-name`    | Human-readable name                  | Root `package.json` description, README                                                    |
+| `project-name`    | Human-readable name                  | Root `package.json` description, README, OpenAPI `info.title`                              |
 | `@project-scope`  | npm scope of every workspace package | All `package.json` names, `workspace:*` dependencies, TypeScript `extends`, source imports |
 | `project-service` | Service name                         | README. Later environment and observability settings                                       |
 | `project_db`      | Database name                        | README, `compose.yaml`, `.env.example`. Later migrations                                   |

@@ -41,6 +41,9 @@ export const getHealthReady = defineRoute({
       body: healthReadySchema,
       example: { status: 'ready' },
     },
-    503: { description: 'The service is not ready', body: problemDetailsSchema },
+    503: {
+      description: 'The service is not ready',
+      body: problemDetailsSchema,
+    },
   },
 });

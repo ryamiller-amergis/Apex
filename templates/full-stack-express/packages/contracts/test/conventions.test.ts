@@ -125,9 +125,9 @@ describe('pagination (VT-10, TBI-011 DoD-2)', () => {
       responses: { 200: { description: 'A page', body: page } },
     });
     const body = listThings.responses[200].body;
-    expect(body.safeParse({ items: [{ id: '1' }], nextCursor: null }).success).toBe(
-      true
-    );
+    expect(
+      body.safeParse({ items: [{ id: '1' }], nextCursor: null }).success
+    ).toBe(true);
     expect(body.safeParse({ items: [], nextCursor: 'abc' }).success).toBe(true);
     expect(body.safeParse({ items: [] }).success).toBe(false);
   });
@@ -168,7 +168,10 @@ describe('definition guards (VT-11)', () => {
         ...ok,
         responses: {
           200: { description: 'OK' },
-          400: { description: 'Bad', body: z.strictObject({ msg: z.string() }) },
+          400: {
+            description: 'Bad',
+            body: z.strictObject({ msg: z.string() }),
+          },
         },
       })
     ).toThrow(/Problem Details convention/);

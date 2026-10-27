@@ -139,8 +139,7 @@ function fieldNames(schema: z.core.$ZodType): string[] {
   if (schema instanceof z.ZodArray) {
     return fieldNames(schema.element as z.core.$ZodType);
   }
-  const inner = (schema._zod.def as { innerType?: z.core.$ZodType })
-    .innerType;
+  const inner = (schema._zod.def as { innerType?: z.core.$ZodType }).innerType;
   return inner ? fieldNames(inner) : [];
 }
 
@@ -153,7 +152,14 @@ export function defineRoute<
   const Req extends RouteRequest = NoEntries,
 >(
   input: RouteInput<Id, M, P, A, Req, Res>
-): RouteDefinition<Id, M, P, A, Req, Simplify<Res & StandardResponses<A, Req>>> {
+): RouteDefinition<
+  Id,
+  M,
+  P,
+  A,
+  Req,
+  Simplify<Res & StandardResponses<A, Req>>
+> {
   const fail = (rule: string, message: string): never => {
     throw new Error(`defineRoute ${input.id}: ${message} (${rule})`);
   };

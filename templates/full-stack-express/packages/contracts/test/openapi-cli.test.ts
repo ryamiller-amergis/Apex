@@ -111,9 +111,8 @@ describe('openapi:check and openapi:generate (VT-03, VT-07)', () => {
   it('TBI-010 DoD-3 fails with validator messages when the committed file is not valid OpenAPI 3.1', async () => {
     const documentPath = path.join(workDir, 'openapi', 'openapi.json');
     const original = await readFile(documentPath, 'utf8');
-    const { validateOpenApiDocument } = await import(
-      '../scripts/openapi-document.ts'
-    );
+    const { validateOpenApiDocument } =
+      await import('../scripts/openapi-document.ts');
     const broken = JSON.parse(original) as { openapi: string; info: object };
     broken.info = {};
     expect(

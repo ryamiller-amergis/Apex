@@ -1,9 +1,6 @@
 import { z } from 'zod';
 import { problemContentType } from '../conventions/problem-details.ts';
-import {
-  requestIdHeader,
-  requestIdSchema,
-} from '../conventions/request-id.ts';
+import { requestIdHeader, requestIdSchema } from '../conventions/request-id.ts';
 import { toOpenApiPath } from '../conventions/versioning.ts';
 import { httpMethods, type AnyRoute } from '../define-route.ts';
 import { routeKey } from '../registry.ts';
@@ -108,10 +105,7 @@ class SchemaConverter {
   }
 }
 
-function parameters(
-  route: AnyRoute,
-  converter: SchemaConverter
-): JsonObject[] {
+function parameters(route: AnyRoute, converter: SchemaConverter): JsonObject[] {
   const parts = [
     ['path', route.request.params],
     ['query', route.request.query],

@@ -18,12 +18,7 @@ export {
   type RouteResponses,
   type StandardResponses,
 } from './define-route.ts';
-export {
-  routeKey,
-  routeList,
-  routes,
-  type RouteLocation,
-} from './registry.ts';
+export { routeKey, routeList, routes, type RouteLocation } from './registry.ts';
 export {
   compareRouteInventory,
   type RouteInventoryResult,

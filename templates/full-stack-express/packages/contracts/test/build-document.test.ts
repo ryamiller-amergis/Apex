@@ -82,7 +82,13 @@ describe('buildOpenApiDocument (VT-01, PBI-006 AC-0)', () => {
   });
 
   it('PBI-006 AC-0 includes the success schema and every standard error', () => {
-    expect(Object.keys(op.responses)).toEqual(['200', '400', '401', '429', '500']);
+    expect(Object.keys(op.responses)).toEqual([
+      '200',
+      '400',
+      '401',
+      '429',
+      '500',
+    ]);
     expect(op.responses['200']!.content!['application/json']!.schema).toEqual({
       type: 'object',
       properties: { names: { type: 'array', items: { type: 'string' } } },
@@ -136,7 +142,12 @@ describe('buildOpenApiDocument (VT-01, PBI-006 AC-0)', () => {
       'put'
     );
     expect(put.parameters).toEqual([
-      { name: 'thingId', in: 'path', required: true, schema: { type: 'string' } },
+      {
+        name: 'thingId',
+        in: 'path',
+        required: true,
+        schema: { type: 'string' },
+      },
     ]);
     expect(put.requestBody).toMatchObject({
       required: true,

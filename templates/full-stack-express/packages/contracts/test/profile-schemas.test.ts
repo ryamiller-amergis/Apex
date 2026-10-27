@@ -76,9 +76,9 @@ describe('profile payloads (VT-04, TBI-009 DoD-2)', () => {
     expect(
       updateProfileBodySchema.parse({ displayName: '  Ada  ' }).displayName
     ).toBe('Ada');
-    expect(updateProfileBodySchema.safeParse({ displayName: '   ' }).success).toBe(
-      false
-    );
+    expect(
+      updateProfileBodySchema.safeParse({ displayName: '   ' }).success
+    ).toBe(false);
   });
 
   it('TBI-009 DoD-2 accepts a 254-character email, null, and an omitted email', () => {
@@ -95,8 +95,7 @@ describe('profile payloads (VT-04, TBI-009 DoD-2)', () => {
   it('TBI-009 DoD-2 rejects a 255-character email and a malformed email', () => {
     for (const email of [emailOfLength(255), 'not-an-email']) {
       expect(
-        updateProfileBodySchema.safeParse({ displayName: 'Ada', email })
-          .success
+        updateProfileBodySchema.safeParse({ displayName: 'Ada', email }).success
       ).toBe(false);
     }
   });
@@ -107,9 +106,9 @@ describe('profile payloads (VT-04, TBI-009 DoD-2)', () => {
     expect(
       profileSchema.safeParse({ ...profile, status: 'deleted' }).success
     ).toBe(false);
-    expect(
-      profileSchema.safeParse({ ...profile, subject: 'x' }).success
-    ).toBe(false);
+    expect(profileSchema.safeParse({ ...profile, subject: 'x' }).success).toBe(
+      false
+    );
   });
 
   it('TBI-009 DoD-2 failures map to Problem Details errors with a pointer and a code', () => {
