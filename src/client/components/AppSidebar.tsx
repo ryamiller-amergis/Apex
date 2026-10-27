@@ -1,6 +1,7 @@
 import React from 'react';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { canAccessMyWork } from '../utils/canAccessMyWork';
+import { canAccessBuilds } from '../utils/canAccessBuilds';
 import styles from './AppSidebar.module.css';
 
 interface NavItem {
@@ -51,6 +52,9 @@ interface AppSidebarProps {
   onNavigateDiagrams?: () => void;
   onNavigatePlaybooks?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  onNavigateBuilds?: () => void;
+  /** `build-from-prompt` evaluated for this user and project. */
+  buildsEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   /** MCP Servers stays hidden until the project flag and menu are both on. */
   mcpServersEnabled?: boolean;
@@ -175,6 +179,12 @@ const IconPlaybooks: React.FC = () => (
   </svg>
 );
 
+const IconBuilds: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 6l-4 4 4 4M13 6l4 4-4 4M11 4l-2 12" />
+  </svg>
+);
+
 const IconDiagrams: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="4" width="14" height="12" rx="2" />
@@ -235,6 +245,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateLoadTests,
   onNavigateDiagrams,
   onNavigatePlaybooks,
+  onNavigateBuilds,
+  buildsEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -252,6 +264,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
         { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+        { label: 'Builds', view: 'builds', icon: <IconBuilds />, permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
         { label: 'Diagrams', view: 'diagrams', icon: <IconDiagrams />, permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}), testId: 'nav-diagrams' },
       ],
     },
@@ -304,6 +317,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
+    }
+    if (item.view === 'builds') {
+      return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
     }
     if (item.view === 'playbooks') {
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;

@@ -432,7 +432,7 @@ describe('getters + listAnchors', () => {
 
     const coverage = await getModuleCoverage();
 
-    expect(coverage.totalModules).toBe(19);
+    expect(coverage.totalModules).toBe(20);
     expect(coverage.coveredModules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ key: 'profile', anchorCount: 2 }),
