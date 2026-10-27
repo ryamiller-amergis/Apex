@@ -2,17 +2,17 @@
 
 ## Problem
 
-`project_skill_settings` has 107 columns. Most of them are the same three fields repeated once per AI workflow: a skill path, a model, and an effort level, plus a handful of Bedrock and score fields for a few workflows.
+`project_skill_settings` has 110 columns. 77 of them are the same few fields repeated once per AI workflow: a skill path, a model, and an effort level, plus Bedrock and score fields for a few workflows. There are 24 workflows. Each new skill added its fields to the same row, one migration at a time.
 
-Postgres allows 100 arguments in one function call. Drizzle loads a related row by passing every column to `json_build_array`. The standup scheduler does that in `generateDailySessions` and the manual session path (`src/server/services/standupService.ts`, `with: { skillSettings: true }`). Production rejects that query with error 54023 (too many arguments). The scheduler only needs `standup_skill_path`, `skill_repo`, and `skill_branch`.
+Postgres allows 100 arguments in one function call. Drizzle loads a related row by passing every column to `json_build_array`. The standup scheduler did that in `generateDailySessions` and the manual session path (`src/server/services/standupService.ts`, `with: { skillSettings: true }`). Production rejected that query with error 54023 (too many arguments).
 
-Adding the next skill today means another migration and three more columns. The table will keep growing past the limit.
+The goal is that adding a skill never widens a table again.
 
 ## Target shape
 
 Keep one row per project skill configuration for the fields that are set once:
 
-`id`, `project`, `friendly_name`, `is_default`, `skill_provider`, `skill_repo`, `skill_branch`, `default_model`, `default_effort`, `approval_mode`, the Cursor account fields, the `repository_checkout_*` fields, the prototype and pill settings, and the timestamps. That is about 30 columns.
+`id`, `project`, `friendly_name`, `is_default`, `skill_provider`, `skill_repo`, `skill_branch`, `default_model`, `default_effort`, `approval_mode`, the Cursor account fields, the `repository_checkout_*` fields, the build profile fields, the prototype and pill settings, and the timestamps. That is 33 columns.
 
 Move each workflow into a child table, `project_skill_workflow_settings`, with one row per `(settings_id, workflow)`:
 
@@ -29,31 +29,36 @@ A workflow with no overrides has no row. The reader uses `default_model` and `de
 
 Three ADR workflows currently share `adr_model` and `adr_effort`. The migration copies those shared values onto each ADR workflow row, so each row can diverge later.
 
-After this, a new skill is a new value in a shared workflow list. It does not need a migration.
+When the rollout finishes, a new skill is one entry in `PROJECT_SKILL_WORKFLOWS` (`src/shared/constants/projectSkillWorkflows.ts`). It needs no migration, no new column, and no new field on `ProjectSkillConfig`.
 
 ## Rollout
 
-Staging and production share one database, so the old columns stay until both slots run the new code.
+Staging and production share one database, so the old columns stay until both slots run code that no longer reads them.
 
 1. **Expand.** Add the child table and backfill it from the existing columns. Update `src/server/db/schema.ts` to match the migration.
 2. **Keep the API flat.** `projectSettingsService.ts` reads the parent row and the child rows, then maps them back into today's `ProjectSkillConfig`. Routes, `AdminProjectSettings.tsx`, and the AI services stay as they are.
 3. **Write both.** For one release, writes update the old columns and the new rows. An older slot can still read the old columns.
-4. **Read the new table only.** Compare copied values in staging, then stop writing the old columns.
-5. **Contract.** After a full production release, a later migration drops the old columns.
+4. **Workflows without columns.** Make `legacy` optional on a registry entry, and give each entry a label and the list of fields it uses. Add `workflows: Record<ProjectSkillWorkflowKey, ProjectSkillWorkflowSettings>` to `ProjectSkillConfig` beside the flat fields, plus one helper that resolves a workflow's settings with the `default_model` / `default_effort` fallback. Move each consumer from the flat field to the helper. `AdminProjectSettings.tsx` renders one section per registry entry instead of a hand-written group per skill. From this step on, a new workflow is a registry entry only.
+5. **Read the new table only.** Check the backfill report in staging, then stop reading and writing the old columns.
+6. **Contract.** After a full production release on step 5, a migration drops the 77 per-workflow columns. `project_skill_settings` goes from 110 to 33 columns. Lower the ceilings in `src/server/__tests__/schemaTableWidth.test.ts` in the same change.
+7. **Remove the flat fields.** Delete the per-workflow fields from `ProjectSkillConfig` once no consumer reads them.
 
-**Status.** Steps 1-3 are delivered together: `migrations/20261027180000_c4d2_project-skill-workflow-settings.sql` adds `project_skill_workflow_settings` and backfills it, `src/shared/constants/projectSkillWorkflows.ts` lists the workflows that the backfill, the read mapping and the dual write share, and `src/server/services/projectSkillWorkflowSettings.ts` holds the mapping. Reads use a child row only when its `updated_at` is not older than the parent row's, so a slot that writes only the old columns is never shadowed by stale child rows. Steps 4 and 5 are not started.
+**Status.** Steps 1-3 are delivered together: `migrations/20261027180000_c4d2_project-skill-workflow-settings.sql` adds `project_skill_workflow_settings` and backfills it, `src/shared/constants/projectSkillWorkflows.ts` lists the workflows that the backfill, the read mapping and the dual write share, and `src/server/services/projectSkillWorkflowSettings.ts` holds the mapping. Reads use a child row only when its `updated_at` is not older than the parent row's, so a slot that writes only the old columns is never shadowed by stale child rows. The same pull request narrows the standup query to `standupSkillPath`, `skillRepo`, and `skillBranch`, which stops error 54023. Steps 4-7 are not started.
 
-## Immediate follow-up, separate from this redesign
+Step 4 is the next pull request. Until it ships, a new workflow has nowhere to live except new columns, so no new workflow should be added before it.
 
-`standupService.ts` selects only `standupSkillPath`, `skillRepo`, and `skillBranch` instead of `skillSettings: true`. That makes the failing query legal without waiting for the table split. This query change ships with the expand pull request. The old columns stay until the contract step.
+## Keeping the table from growing again
 
-## Later, optional
-
-Replace the flat fields on `ProjectSkillConfig` with `workflows: Record<WorkflowKey, WorkflowSettings>`. `AdminProjectSettings.tsx` can then render one section per workflow from the shared list instead of a hand-written group per skill.
+- `src/server/__tests__/schemaTableWidth.test.ts` fails when any table passes 50 columns. It also holds `project_skill_settings` at its current 110 columns and 77 per-workflow columns. Those ceilings may only go down.
+- `.cursor/rules/project-skill-settings.mdc` tells agents that a new workflow is a registry entry and never a column, and to select only the columns a relation needs.
+- `.cursor/rules/postgresql-db.mdc` adds the general rule: no table above 50 columns, repeated column groups become a child table, and relational includes select their columns.
+- `.cursor/skills/kick-off/SKILL.md` points feature design at the registry when a feature needs per-project AI settings.
 
 ## Tests
 
 Cover the mapping and the backfill in `projectSettingsService.test.ts`, `apiRoutes.skillConfig.test.ts`, `effortFoundation.test.ts`, `standupService.test.ts`, and the seed data in `src/server/routes/e2eSetup.ts`.
+
+Step 4 adds a test that a registry entry with no `legacy` mapping saves, reloads, and renders in Admin > Project Settings without a migration.
 
 The backfill should report any settings row whose workflow values did not copy.
 

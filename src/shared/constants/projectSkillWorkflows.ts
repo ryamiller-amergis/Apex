@@ -40,9 +40,9 @@ export interface ProjectSkillWorkflowDefinition {
 }
 
 /**
- * Every AI workflow with per-project settings. Adding a workflow is one entry
- * here; while the legacy columns exist (rollout steps 1-4) it also needs its
- * flat fields and the backfill row in the migration.
+ * Every AI workflow with per-project settings. `legacy` maps the existing
+ * workflows to the old project_skill_settings columns, which are being removed.
+ * Never add columns for a new workflow; see .cursor/rules/project-skill-settings.mdc.
  *
  * The three ADR workflows share `adrModel` / `adrEffort` in the flat shape.
  */

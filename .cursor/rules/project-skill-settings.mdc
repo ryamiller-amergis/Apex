@@ -1,0 +1,31 @@
+---
+description: How per-project AI workflow settings are stored. Use when adding a skill, workflow, model, effort, or Bedrock setting to project settings, or when querying project_skill_settings.
+globs: src/server/db/schema.ts,migrations/**/*.sql,src/shared/constants/projectSkillWorkflows.ts,src/shared/types/projectSettings.ts,src/server/services/projectSettingsService.ts,src/server/services/projectSkillWorkflowSettings.ts,src/client/components/AdminProjectSettings.tsx
+alwaysApply: false
+---
+
+# Project skill settings
+
+`project_skill_settings` reached 110 columns because every new AI workflow added its own skill path, model, and effort columns. Postgres rejects a function call with more than 100 arguments, and Drizzle passes every column of a related row to one function, so loading that row through a relation failed in production with error 54023.
+
+## Adding a workflow
+
+- Never add a `*_skill_path`, `*_model`, `*_effort`, `*_bedrock_*`, or `*_score_threshold` column to `project_skill_settings`.
+- Add the workflow as one entry in `PROJECT_SKILL_WORKFLOWS` (`src/shared/constants/projectSkillWorkflows.ts`). Its values live in `project_skill_workflow_settings`, one row per `(settings_id, workflow)`.
+- If the registry still requires a `legacy` column mapping, step 4 of `design-docs/project-skill-settings-normalization.plan.md` has not shipped. Ship that step first. Do not add columns to work around it.
+- A setting that applies to the whole project, not to one workflow, goes on the parent row only if the table stays under its ceiling. Otherwise it goes in a separate table.
+
+`src/server/__tests__/schemaTableWidth.test.ts` fails if the table or its per-workflow columns grow. Do not raise those ceilings. Lower them when the contract migration drops columns.
+
+## Reading settings
+
+- Read through `projectSettingsService.ts`. It returns the flat `ProjectSkillConfig` built from the parent row and the workflow rows.
+- When a relational query includes `skillSettings`, select only the columns the code uses:
+
+```typescript
+// ✅ GOOD
+with: { skillSettings: { columns: { standupSkillPath: true, skillRepo: true, skillBranch: true } } }
+
+// ❌ BAD: passes every column to json_build_array
+with: { skillSettings: true }
+```
