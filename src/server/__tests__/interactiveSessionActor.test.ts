@@ -63,6 +63,7 @@ function makeRequest(overrides: Partial<InteractiveTurnRequest> = {}): Interacti
 interface FakeAgentOptions {
   tokens?: string[];
   toolCall?: boolean;
+  toolName?: string;
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
@@ -82,7 +83,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
       capability === 'stream' || capability === 'cancel',
     async *stream(): AsyncIterable<CursorStreamEvent> {
       if (options.toolCall) {
-        yield { type: 'tool_call', name: 'ReadFile', status: 'running' };
+        yield { type: 'tool_call', name: options.toolName ?? 'ReadFile', status: 'running' };
       }
       for (const text of options.tokens ?? []) {
         yield { type: 'assistant', message: { content: [{ type: 'text', text }] } };
@@ -1551,6 +1552,63 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       status: 'failed',
       failureCategory: 'tool_timeout',
       artifactsFlushed: false,
+    });
+    setTimeoutSpy.mockRestore();
+  }, 15_000);
+
+  it('lets a shell step run for the rest of the turn instead of the MCP stall limit', async () => {
+    const waitGate = deferred();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          toolCall: true,
+          toolName: 'shell',
+          tokens: [],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+          onCancel: () => waitGate.resolve(),
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const turnPromise = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        absoluteDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 60_000,
+          toolCallMs: 40,
+        },
+      }),
+    });
+
+    const longTimers: Array<{ delay: number; cb: () => void }> = [];
+    for (let i = 0; i < 100 && longTimers.length < 2; i += 1) {
+      await new Promise((r) => setImmediate(r));
+      longTimers.length = 0;
+      for (const call of setTimeoutSpy.mock.calls) {
+        const delay = call[1];
+        if (typeof delay === 'number' && delay > 60_000) {
+          longTimers.push({ delay, cb: call[0] as () => void });
+        }
+      }
+    }
+    expect(longTimers.length).toBeGreaterThanOrEqual(2);
+    const shellTimer = longTimers.reduce((shorter, timer) =>
+      timer.delay < shorter.delay ? timer : shorter,
+    );
+    shellTimer.cb();
+    await expect(turnPromise).resolves.toEqual({
+      status: 'failed',
+      failureCategory: 'tool_timeout',
     });
     setTimeoutSpy.mockRestore();
   }, 15_000);

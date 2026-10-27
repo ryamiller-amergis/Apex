@@ -1050,12 +1050,14 @@ export function createInteractiveSessionActor(
       }
     };
 
-    const armToolTimer = (): void => {
+    const armToolTimer = (toolName?: string): void => {
       clearToolTimer();
-      const toolMs = Math.min(
-        effectiveDeadlines.toolCallMs,
-        absoluteMs - now(),
-      );
+      const remainingMs = absoluteMs - now();
+      // toolCallMs bounds a stalled MCP call. A shell is the step itself, so
+      // it keeps the rest of the turn instead of the MCP stall limit.
+      const configuredMs =
+        toolName?.toLowerCase() === 'shell' ? remainingMs : effectiveDeadlines.toolCallMs;
+      const toolMs = Math.min(configuredMs, remainingMs);
       if (!(toolMs > 0)) {
         failureCategory = 'tool_timeout';
         throw Object.assign(new Error('tool_timeout'), { code: 'tool_timeout' });
@@ -1483,11 +1485,11 @@ export function createInteractiveSessionActor(
               observeEvent();
               if (event.type === 'tool_call') {
                 if (mcpServerChat) mcpToolUsedThisAttempt = true;
-                armToolTimer();
+                armToolTimer(event.toolName);
               } else if (event.type === 'tool_status') {
                 if (mcpServerChat) mcpToolUsedThisAttempt = true;
                 if (event.status === 'running') {
-                  armToolTimer();
+                  armToolTimer(event.toolName);
                 } else {
                   clearToolTimer();
                 }
