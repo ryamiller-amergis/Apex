@@ -1,0 +1,51 @@
+{
+  "slug": "full-stack-express-starter-template",
+  "sourceBacklog": "local-dev/feat-002/backlog.json",
+  "sourceTestCases": null,
+  "generatedAt": "2026-10-27T13:20:00Z",
+  "features": [
+    { "id": "FEAT-001", "title": "Isolated pnpm Workspace and Pinned Toolchain", "epic": "Workspace and Local Development Foundation", "phase": 1, "dependsOn": [] },
+    { "id": "FEAT-002", "title": "Typed Configuration and Local Environment", "epic": "Workspace and Local Development Foundation", "phase": 1, "dependsOn": ["FEAT-001"] },
+    { "id": "FEAT-003", "title": "Starter Persistence with app_users", "epic": "Data and API Contract Layer", "phase": 2, "dependsOn": ["FEAT-001", "FEAT-002"] },
+    { "id": "FEAT-004", "title": "Zod-Authoritative API Contract", "epic": "Data and API Contract Layer", "phase": 2, "dependsOn": ["FEAT-001"] },
+    { "id": "FEAT-005", "title": "Identity Provider Adapter", "epic": "Reference API and Platform Services", "phase": 3, "dependsOn": ["FEAT-001", "FEAT-004"] },
+    { "id": "FEAT-006", "title": "Health and Self-Service Profile API", "epic": "Reference API and Platform Services", "phase": 3, "dependsOn": ["FEAT-003", "FEAT-004", "FEAT-005", "FEAT-007"] },
+    { "id": "FEAT-007", "title": "Observability and Graceful Shutdown", "epic": "Reference API and Platform Services", "phase": 3, "dependsOn": ["FEAT-001"] },
+    { "id": "FEAT-008", "title": "Provider-Neutral Feature Flag Interface", "epic": "Reference API and Platform Services", "phase": 3, "dependsOn": ["FEAT-001"] },
+    { "id": "FEAT-009", "title": "Neutral MUI Design System and App Shell", "epic": "Design System and Reference Web Client", "phase": 4, "dependsOn": ["FEAT-001"] },
+    { "id": "FEAT-010", "title": "Self-Service Profile Screen", "epic": "Design System and Reference Web Client", "phase": 4, "dependsOn": ["FEAT-004", "FEAT-006", "FEAT-009"] },
+    { "id": "FEAT-011", "title": "Reference Test Framework", "epic": "Testing, Quality Manifest and Supply Chain", "phase": 5, "dependsOn": ["FEAT-003", "FEAT-004", "FEAT-006", "FEAT-010"] },
+    { "id": "FEAT-012", "title": "Quality Manifest and NFR Manifest", "epic": "Testing, Quality Manifest and Supply Chain", "phase": 5, "dependsOn": ["FEAT-011"] },
+    { "id": "FEAT-013", "title": "Supply-Chain Baseline and Production Container", "epic": "Testing, Quality Manifest and Supply Chain", "phase": 5, "dependsOn": ["FEAT-006", "FEAT-010"] },
+    { "id": "FEAT-014", "title": "Docs-as-Code Knowledge Base", "epic": "Agent Guidance and Knowledge Base", "phase": 6, "dependsOn": ["FEAT-004", "FEAT-009", "FEAT-012"] },
+    { "id": "FEAT-015", "title": "API-Contract and UI-Standards Skills", "epic": "Agent Guidance and Knowledge Base", "phase": 6, "dependsOn": ["FEAT-004", "FEAT-009", "FEAT-014"] },
+    { "id": "FEAT-016", "title": "Role Skill Set", "epic": "Agent Guidance and Knowledge Base", "phase": 6, "dependsOn": ["FEAT-012", "FEAT-015"] },
+    { "id": "FEAT-017", "title": "Platform Engineering Handoff Package", "epic": "Agent Guidance and Knowledge Base", "phase": 6, "dependsOn": ["FEAT-013", "FEAT-014"] }
+  ],
+  "waves": [
+    { "wave": 1, "featureIds": ["FEAT-001"], "rationale": "Done. Workspace and pinned toolchain; every Feature depends on it. Commit 3b3fa13f." },
+    { "wave": 2, "featureIds": ["FEAT-002"], "rationale": "Done. Typed config and local PostgreSQL. Commit 3b3fa13f." },
+    { "wave": 3, "featureIds": ["FEAT-003", "FEAT-004", "FEAT-007", "FEAT-008", "FEAT-009"], "rationale": "Every upstream is done. FEAT-007, FEAT-008, and FEAT-009 belong to phases 3 and 4 but have no unmet edge, so they start early." },
+    { "wave": 4, "featureIds": ["FEAT-005"], "rationale": "Needs the contracts package from FEAT-004." },
+    { "wave": 5, "featureIds": ["FEAT-006"], "rationale": "Needs persistence (FEAT-003), contracts (FEAT-004), identity (FEAT-005), and observability (FEAT-007)." },
+    { "wave": 6, "featureIds": ["FEAT-010"], "rationale": "Needs the profile API (FEAT-006) and the app shell (FEAT-009)." },
+    { "wave": 7, "featureIds": ["FEAT-011", "FEAT-013"], "rationale": "Both need the finished API and screen. Neither depends on the other." },
+    { "wave": 8, "featureIds": ["FEAT-012"], "rationale": "The quality manifest lists the test framework's commands (FEAT-011)." },
+    { "wave": 9, "featureIds": ["FEAT-014"], "rationale": "The knowledge base describes the manifests (FEAT-012)." },
+    { "wave": 10, "featureIds": ["FEAT-015", "FEAT-017"], "rationale": "FEAT-015 needs FEAT-014. FEAT-017 needs FEAT-013 and FEAT-014. Neither depends on the other." },
+    { "wave": 11, "featureIds": ["FEAT-016"], "rationale": "The role skills read the manifests (FEAT-012) and the contract and UI skills (FEAT-015)." }
+  ],
+  "syncPoints": [
+    { "afterWave": 2, "mustMergeFeatureIds": ["FEAT-001", "FEAT-002"], "description": "Push tbi/create-eexpress-app so cloud agents can branch from it." },
+    { "afterWave": 3, "mustMergeFeatureIds": ["FEAT-003", "FEAT-004", "FEAT-007", "FEAT-008", "FEAT-009"], "description": "Merge all five branches into the integration branch. FEAT-005 needs FEAT-004; FEAT-006 needs FEAT-003 and FEAT-007." },
+    { "afterWave": 4, "mustMergeFeatureIds": ["FEAT-005"], "description": "Merge identity before the profile API." },
+    { "afterWave": 5, "mustMergeFeatureIds": ["FEAT-006"], "description": "Merge the profile API before the profile screen." },
+    { "afterWave": 6, "mustMergeFeatureIds": ["FEAT-010"], "description": "Merge the screen before tests and the container." },
+    { "afterWave": 7, "mustMergeFeatureIds": ["FEAT-011", "FEAT-013"], "description": "Merge tests and container." },
+    { "afterWave": 8, "mustMergeFeatureIds": ["FEAT-012"], "description": "Merge the manifests." },
+    { "afterWave": 9, "mustMergeFeatureIds": ["FEAT-014"], "description": "Merge the knowledge base." },
+    { "afterWave": 10, "mustMergeFeatureIds": ["FEAT-015", "FEAT-017"], "description": "Merge skills and handoff before the role skills." }
+  ],
+  "conflicts": [],
+  "deferredE2E": []
+}

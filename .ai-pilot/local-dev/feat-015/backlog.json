@@ -1,0 +1,3835 @@
+{
+  "epics": [
+    {
+      "title": "Workspace and Local Development Foundation",
+      "features": [
+        {
+          "id": "FEAT-001",
+          "items": [
+            {
+              "id": "TBI-001",
+              "type": "TBI",
+              "title": "Create the isolated pnpm workspace layout",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Create a nested, self-contained workspace in an isolated template folder with a web application, an API application, a contracts package, a UI package, and a config package. The workspace has its own lockfile, scripts, and lint rules, and shares nothing with Apex's root workspace. Document placeholders for project name, package scope, service name, and database name.",
+              "definitionOfDone": [
+                "The workspace contains the five members with working internal package links",
+                "Running Apex's root install, build, test, and lint commands produces the same results with and without the template folder",
+                "The template contains no Apex-specific code and no AWS, pipeline, or governance files",
+                "Replacement placeholders are listed in the template README"
+              ],
+              "technicalDependencies": [
+                "pnpm workspace support",
+                "Apex root formatting check compatibility"
+              ],
+              "nonFunctionalRequirements": [
+                "Installing and building the template must not modify any file outside its folder",
+                "Template files must pass Apex's existing formatting check or be excluded through an approved minimal ignore entry"
+              ]
+            },
+            {
+              "id": "TBI-002",
+              "type": "TBI",
+              "title": "Pin the toolchain and record a compatibility table",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Pin the Node LTS and pnpm versions through Corepack, commit the lockfile, require frozen installs, and publish a compatibility table of approved stable versions for Express 5, React, Vite, MUI, Drizzle, TypeScript, and the test tools.",
+              "definitionOfDone": [
+                "Node and pnpm versions are pinned and enforced by Corepack",
+                "A frozen install succeeds from a clean checkout and fails when the lockfile is out of date",
+                "The compatibility table lists every pinned framework and tool version",
+                "Every dependency version in the workspace appears in the lockfile"
+              ],
+              "technicalDependencies": [
+                "Corepack",
+                "Organization-approved version list"
+              ],
+              "nonFunctionalRequirements": [
+                "Installs must be reproducible from the lockfile alone"
+              ]
+            },
+            {
+              "id": "TBI-003",
+              "type": "TBI",
+              "title": "Create the shared config package",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001"
+              ],
+              "description": "Provide shared TypeScript, lint, formatting, and test configuration that all workspace members extend, so rules change in one place.",
+              "definitionOfDone": [
+                "Every workspace member extends the shared TypeScript configuration",
+                "Lint and format commands run across all members from the workspace root",
+                "A deliberate lint violation in any member fails the root lint command",
+                "Shared test configuration is consumed by the web and API applications"
+              ],
+              "technicalDependencies": [
+                "TypeScript",
+                "ESLint",
+                "Prettier",
+                "Vitest"
+              ],
+              "nonFunctionalRequirements": [
+                "A rule change in the config package must apply to every member without per-member edits"
+              ]
+            },
+            {
+              "id": "PBI-001",
+              "type": "PBI",
+              "title": "Install and build the workspace from a clean checkout",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-001",
+                "TBI-002",
+                "TBI-003"
+              ],
+              "userStory": {
+                "iWant": "install and build the whole workspace from a clean checkout using documented commands",
+                "soThat": "I can start a new project without choosing or configuring tools",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Running the full test suite",
+                "Container image build"
+              ],
+              "businessRules": [
+                "BR-008: Template is isolated from Apex and holds no AWS, pipeline, or governance files",
+                "BR-009: Versions are pinned and installs are frozen"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "All five workspace members install and build, and the web and API applications produce independent build artifacts",
+                  "when": "I run the documented install and build commands",
+                  "given": "I have a clean checkout and the pinned Node and pnpm versions"
+                },
+                {
+                  "then": "The install fails with a message naming the mismatch and changes no files",
+                  "when": "I run the frozen install",
+                  "given": "The lockfile is out of date with a package manifest"
+                },
+                {
+                  "then": "Corepack or the engine check reports the required version before any package installs",
+                  "when": "I run the install",
+                  "given": "I use a Node or pnpm version different from the pinned one"
+                },
+                {
+                  "then": "Apex's lockfile, scripts, and outputs are unchanged and the template is not built as part of Apex",
+                  "when": "The template folder is present",
+                  "given": "I run Apex's root install and build"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Frozen installs only; no install-time scripts fetch unpinned code",
+                "performance": "No target defined; each project supplies targets through the NFR manifest",
+                "accessibility": "Not applicable; command-line workflow with documented, screen-reader-friendly instructions"
+              }
+            }
+          ],
+          "route": "/template-preview",
+          "title": "Isolated pnpm Workspace and Pinned Toolchain",
+          "priority": "Must Have",
+          "dependsOn": [],
+          "userTypes": [
+            "Developer",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "Bootstrap or provisioning automation",
+            "Apex root workspace integration"
+          ],
+          "description": "Developers get a self-contained pnpm workspace with pinned tools and shared configuration. Platform Admin can review the sample and move it into the bootstrap source without touching Apex's root tooling.",
+          "dependencies": [
+            "Organization-approved version list for Node, pnpm, and key libraries"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "Platform Admin"
+          ]
+        },
+        {
+          "id": "FEAT-002",
+          "items": [
+            {
+              "id": "TBI-004",
+              "type": "TBI",
+              "title": "Add typed environment validation and an example environment file",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Validate every environment variable with Zod at startup for the API and for build-time web settings. Missing or invalid required values abort startup with a clear message. Provide an example environment file that lists every variable and contains no secrets.",
+              "definitionOfDone": [
+                "Startup aborts with a clear error when a required variable is missing or malformed",
+                "The example environment file lists every variable and contains no secrets",
+                "Web build-time variables are validated separately from server variables and carry no secrets",
+                "Unit tests cover valid, missing, and malformed values"
+              ],
+              "technicalDependencies": [
+                "Zod",
+                "Config package"
+              ],
+              "nonFunctionalRequirements": [
+                "Error messages must name the variable and never print secret values"
+              ]
+            },
+            {
+              "id": "TBI-005",
+              "type": "TBI",
+              "title": "Add Docker Compose PostgreSQL and the stable local script surface",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004"
+              ],
+              "description": "Provide a Docker Compose definition for local PostgreSQL and named scripts for running the web and API in development, so the same script names serve developers and Platform Engineering's pipeline.",
+              "definitionOfDone": [
+                "One command starts PostgreSQL locally and another stops it",
+                "Named scripts exist for install, build, check, test, run, migrate, and seed",
+                "The local database settings match the example environment file",
+                "The README documents each script and its purpose"
+              ],
+              "technicalDependencies": [
+                "Docker Compose",
+                "PostgreSQL image"
+              ],
+              "nonFunctionalRequirements": [
+                "Local database credentials must be synthetic and never reused for any shared environment"
+              ]
+            },
+            {
+              "id": "PBI-002",
+              "type": "PBI",
+              "title": "Start the full stack locally",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-004",
+                "TBI-005"
+              ],
+              "userStory": {
+                "iWant": "start the web client, API, and a local PostgreSQL with a few documented commands",
+                "soThat": "I can build and try features immediately on my own machine",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Dev container setup",
+                "Host-installed PostgreSQL instructions"
+              ],
+              "businessRules": [
+                "BR-010: Missing required configuration aborts startup"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The web client and API start and the API reports ready",
+                  "when": "I start the database and run the development scripts",
+                  "given": "Docker is running and I copied the example environment file"
+                },
+                {
+                  "then": "The API aborts at startup with an error naming the missing variable",
+                  "when": "I start the API",
+                  "given": "A required environment variable is missing"
+                },
+                {
+                  "then": "The failure is reported by Docker Compose and the README explains how to change the port",
+                  "when": "I start the database",
+                  "given": "The local PostgreSQL port is already in use"
+                },
+                {
+                  "then": "It contains only synthetic placeholders and no real credentials",
+                  "when": "I search it for secret values",
+                  "given": "The example environment file is unchanged"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Only synthetic local credentials appear in the example environment file",
+                "performance": "No target defined; each project supplies targets through the NFR manifest",
+                "accessibility": "Not applicable; command-line workflow"
+              }
+            }
+          ],
+          "route": "Component",
+          "title": "Typed Configuration and Local Environment",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Dev container support",
+            "Production secret storage"
+          ],
+          "description": "Developers get validated environment configuration and a local PostgreSQL through Docker Compose, so the stack starts with one set of commands.",
+          "dependencies": [
+            "Docker available on the developer's machine"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "AWS infrastructure and pipeline definitions",
+        "Generator or scaffolding command"
+      ],
+      "assumptions": [
+        "Organization-approved stable versions are available at implementation time",
+        "Apex's root formatting check either passes on the template or receives a minimal approved ignore entry"
+      ],
+      "description": "Teams that start ad hoc full-stack projects pick tooling from scratch, so projects differ and agents cannot rely on a common layout. This epic delivers the isolated pnpm workspace, pinned toolchain, typed configuration, and local environment that every other part of the template builds on.",
+      "dependencies": [
+        "None"
+      ],
+      "successMetrics": [
+        "A developer goes from a clean checkout to a running local stack using only documented commands",
+        "The template installs, builds, and runs without changing any Apex build, lockfile, or script"
+      ]
+    },
+    {
+      "title": "Data and API Contract Layer",
+      "features": [
+        {
+          "id": "FEAT-003",
+          "items": [
+            {
+              "id": "TBI-006",
+              "type": "TBI",
+              "title": "Define the app_users schema and data-access module",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Define the app_users table with a UUID primary key, a unique external identity subject, a display name, an optional email, a status, and created and updated timestamps. Wrap Drizzle in a data-access module with a small interface to find a profile by external subject, create it, and update it. Add no password, session, role, audit, or flag columns.",
+              "definitionOfDone": [
+                "The schema defines the listed columns with a unique constraint on the external identity subject",
+                "The data-access module exposes find, create, and update operations by external subject",
+                "Integration tests against real PostgreSQL cover create, find, update, and unique-constraint failure",
+                "No other table is defined"
+              ],
+              "technicalDependencies": [
+                "Drizzle ORM",
+                "PostgreSQL driver"
+              ],
+              "nonFunctionalRequirements": [
+                "The data-access module must be the only code that imports the Drizzle client for application queries",
+                "Constraint violations must surface as typed errors, not raw database errors"
+              ]
+            },
+            {
+              "id": "TBI-007",
+              "type": "TBI",
+              "title": "Add the reviewed SQL migration workflow and standalone migration command",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-006"
+              ],
+              "description": "Generate SQL migrations from schema changes, commit them with the schema change, and provide a standalone migration command that can run apart from the application process. The application never runs migrations or changes schema at startup. Document the forward-fix rollback policy and the ownership split.",
+              "definitionOfDone": [
+                "The initial migration creates app_users and is committed",
+                "The migration command runs standalone and exits non-zero on failure",
+                "Application startup contains no schema-changing code",
+                "A validation script confirms the committed migrations match the Drizzle schema",
+                "Documentation states that the application repository owns migration files, Platform Engineering owns execution, and rollback is forward-only in production"
+              ],
+              "technicalDependencies": [
+                "Drizzle Kit",
+                "PostgreSQL"
+              ],
+              "nonFunctionalRequirements": [
+                "Migrations must be re-runnable without error once applied",
+                "A failed migration must exit with a non-zero status"
+              ]
+            },
+            {
+              "id": "TBI-008",
+              "type": "TBI",
+              "title": "Add the synthetic seed command",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-006",
+                "TBI-007"
+              ],
+              "description": "Provide a seed command that inserts synthetic app_users rows for local development and tests. Seeds never use real names, emails, or identity subjects.",
+              "definitionOfDone": [
+                "The seed command inserts clearly synthetic rows",
+                "Running the seed twice leaves the same rows",
+                "The seed refuses to run when the environment is production",
+                "A test confirms seed values use synthetic domains and names"
+              ],
+              "technicalDependencies": [
+                "Data-access module",
+                "Migrations"
+              ],
+              "nonFunctionalRequirements": [
+                "Running the seed twice must not duplicate rows or fail"
+              ]
+            },
+            {
+              "id": "PBI-003",
+              "type": "PBI",
+              "title": "Change the data model with a reviewed migration",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-006",
+                "TBI-007"
+              ],
+              "userStory": {
+                "iWant": "change the data model and commit a reviewed SQL migration in the same pull request",
+                "soThat": "a feature that changes data can ship complete without waiting on another team",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Running migrations in production",
+                "Automatic down migrations"
+              ],
+              "businessRules": [
+                "BR-006: Application repository owns migration files; the application never changes schema at startup"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "A SQL migration file is created and validation confirms schema and migrations agree",
+                  "when": "I generate the migration and run the migration validation",
+                  "given": "I add a column to the Drizzle schema"
+                },
+                {
+                  "then": "Validation fails and names the schema difference",
+                  "when": "I run the migration validation",
+                  "given": "I changed the schema but did not generate a migration"
+                },
+                {
+                  "then": "They apply in order without error and produce the current schema",
+                  "when": "I apply all committed migrations",
+                  "given": "The database is empty"
+                },
+                {
+                  "then": "It does not alter the schema or apply the migration",
+                  "when": "The application boots",
+                  "given": "The API starts against a database that is missing a pending migration"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Migrations contain no real data or credentials",
+                "performance": "Migration validation completes in a local developer loop; no hard target defined",
+                "accessibility": "Not applicable; command-line workflow"
+              }
+            },
+            {
+              "id": "PBI-004",
+              "type": "PBI",
+              "title": "Run migrations as a separate deployment step",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-007"
+              ],
+              "userStory": {
+                "iWant": "run the committed migrations through one standalone command before switching traffic",
+                "soThat": "I control when schema changes reach each environment",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "ECS task definitions",
+                "Pipeline stages that call the command"
+              ],
+              "businessRules": [
+                "BR-006: Platform Engineering owns migration execution; rollback is forward-fix"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Pending migrations apply in order and the command exits with status zero",
+                  "when": "I run the standalone migration command",
+                  "given": "A database with pending migrations and a valid connection in the environment"
+                },
+                {
+                  "then": "The command exits non-zero, reports the failing migration, and does not report success",
+                  "when": "I run the migration command",
+                  "given": "A migration contains an error"
+                },
+                {
+                  "then": "Nothing changes and the command exits with status zero",
+                  "when": "I run the migration command again",
+                  "given": "All migrations are already applied"
+                },
+                {
+                  "then": "The command aborts before connecting and names the missing variable without printing secrets",
+                  "when": "I run the migration command",
+                  "given": "The database connection value is missing"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The command reads the database connection only from environment variables",
+                "performance": "No target defined; duration depends on the migration set",
+                "accessibility": "Not applicable; command-line workflow"
+              }
+            },
+            {
+              "id": "PBI-005",
+              "type": "PBI",
+              "title": "Load synthetic seed data locally",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-008"
+              ],
+              "userStory": {
+                "iWant": "load synthetic sample data into my local database",
+                "soThat": "I can develop and demo against realistic rows without real personal data",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Bulk data generation for load tests",
+                "Seeding shared environments"
+              ],
+              "businessRules": [
+                "BR-007: Seeds and fixtures use synthetic data only"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Synthetic app_users rows exist",
+                  "when": "I run the seed command",
+                  "given": "My local database has the current schema"
+                },
+                {
+                  "then": "The command fails with a message telling me to run migrations first",
+                  "when": "I run the seed command",
+                  "given": "My local database has no migrations applied"
+                },
+                {
+                  "then": "No duplicate rows are created and no error occurs",
+                  "when": "I run it again",
+                  "given": "I already ran the seed"
+                },
+                {
+                  "then": "The command refuses to run and changes no data",
+                  "when": "I run the seed command",
+                  "given": "The environment is set to production"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Seed data contains no real personal values and never runs in production",
+                "performance": "Seeding completes within a local developer loop; no hard target defined",
+                "accessibility": "Not applicable; command-line workflow"
+              }
+            }
+          ],
+          "title": "Starter Persistence with app_users",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001",
+            "FEAT-002"
+          ],
+          "userTypes": [
+            "Developer",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "Roles, permissions, sessions, audit events, and feature-flag tables",
+            "Destructive down migrations in production"
+          ],
+          "description": "Developers get Drizzle and PostgreSQL wired with a minimal app_users example, reviewed SQL migrations, and a synthetic seed. Platform Admin gets a standalone migration command to run as a separate deployment step.",
+          "dependencies": [
+            "Local PostgreSQL from Docker Compose"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "Platform Admin"
+          ]
+        },
+        {
+          "id": "FEAT-004",
+          "items": [
+            {
+              "id": "TBI-009",
+              "type": "TBI",
+              "title": "Create the contracts package with shared Zod route definitions",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Build the contracts package so each route is one shared definition holding its method, versioned path, request, response, and error schemas. TypeScript types for the API and the web client derive from these definitions. Expose a small interface so adding a route needs one definition.",
+              "definitionOfDone": [
+                "Profile read and update routes are defined once with request, response, and error schemas",
+                "The API and web client both import types derived from the definitions",
+                "Unit tests prove valid and invalid payloads parse as expected",
+                "The package builds with no framework or database imports"
+              ],
+              "technicalDependencies": [
+                "Zod",
+                "TypeScript"
+              ],
+              "nonFunctionalRequirements": [
+                "The contracts package must have no dependency on Express, React, or the database"
+              ]
+            },
+            {
+              "id": "TBI-010",
+              "type": "TBI",
+              "title": "Generate the OpenAPI 3.1 document and add the drift check",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-009"
+              ],
+              "description": "Generate an OpenAPI 3.1 document from the route definitions, commit it, and provide a drift check that fails when the committed file differs from a fresh generation. A route missing from the contracts package cannot appear in the document.",
+              "definitionOfDone": [
+                "A generate command writes the committed OpenAPI document",
+                "The drift check exits non-zero and shows the difference when the document is stale",
+                "Generation is deterministic across repeated runs",
+                "The committed document validates as OpenAPI 3.1"
+              ],
+              "technicalDependencies": [
+                "Contracts package",
+                "OpenAPI generation library selected from the organization-approved set"
+              ],
+              "nonFunctionalRequirements": [
+                "Generation must be deterministic so the same input yields byte-identical output"
+              ]
+            },
+            {
+              "id": "TBI-011",
+              "type": "TBI",
+              "title": "Define error, request ID, pagination, and versioning conventions",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-009"
+              ],
+              "description": "Define the shared RFC 9457 Problem Details schema, a request ID header on every response, bounded pagination conventions for future list endpoints, and versioned route prefixes, all as reusable definitions in the contracts package.",
+              "definitionOfDone": [
+                "A reusable Problem Details schema covers validation, authentication, not-found, and internal errors",
+                "Every route definition declares the request ID header and its error responses",
+                "Pagination parameters define a default and a maximum page size",
+                "Documentation lists the conventions for new endpoints"
+              ],
+              "technicalDependencies": [
+                "Contracts package",
+                "RFC 9457"
+              ],
+              "nonFunctionalRequirements": [
+                "Error definitions must never include identity values or stack traces"
+              ]
+            },
+            {
+              "id": "PBI-006",
+              "type": "PBI",
+              "title": "Define an endpoint once",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-009",
+                "TBI-010",
+                "TBI-011"
+              ],
+              "userStory": {
+                "iWant": "define a new endpoint once and have its validation, types, and API documentation follow from that definition",
+                "soThat": "implementation, documentation, and tests cannot drift apart",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Handwritten OpenAPI edits",
+                "Non-JSON payload formats"
+              ],
+              "businessRules": [
+                "BR-004: Zod is the single source of truth; OpenAPI is generated and drift-checked",
+                "BR-005: Errors use Problem Details; routes are versioned"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The new route appears with its request, response, and error schemas",
+                  "when": "I regenerate the OpenAPI document",
+                  "given": "I add a route definition to the contracts package"
+                },
+                {
+                  "then": "The check fails and shows the missing route",
+                  "when": "I run the drift check",
+                  "given": "I add a route definition but do not regenerate the document"
+                },
+                {
+                  "then": "Values at the limits pass and values outside them return a Problem Details validation error",
+                  "when": "I send values at, below, and above the limits",
+                  "given": "A route accepts an optional field with minimum and maximum lengths"
+                },
+                {
+                  "then": "The undocumented route is reported and the check fails",
+                  "when": "I run the checks",
+                  "given": "I implement a handler that is not defined in the contracts package"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Validation rejects malformed input before it reaches handlers",
+                "performance": "Contract generation completes in a local developer loop; no hard target defined",
+                "accessibility": "Not applicable; developer workflow"
+              }
+            },
+            {
+              "id": "PBI-007",
+              "type": "PBI",
+              "title": "Inspect the API contract without running the application",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-010"
+              ],
+              "userStory": {
+                "iWant": "read the committed OpenAPI document to plan and verify API tests without starting the application",
+                "soThat": "I can design tests from a stable, reviewable contract",
+                "persona": "QA"
+              },
+              "userTypes": [
+                "QA"
+              ],
+              "outOfScope": [
+                "Hosted API documentation site",
+                "Interactive API explorer"
+              ],
+              "businessRules": [
+                "BR-004: The committed OpenAPI document is generated from Zod and drift-checked"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It lists every route with request, response, and error schemas and the request ID header",
+                  "when": "I open it",
+                  "given": "The committed OpenAPI document is current"
+                },
+                {
+                  "then": "The check fails, so I do not rely on an outdated contract",
+                  "when": "I run the drift check",
+                  "given": "The committed document is stale"
+                },
+                {
+                  "then": "The schema still fully describes valid and invalid inputs",
+                  "when": "I read its entry",
+                  "given": "A route has no examples"
+                },
+                {
+                  "then": "Only clearly synthetic values appear",
+                  "when": "I search for real names, emails, or identity subjects",
+                  "given": "I look through the document examples"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The document contains no secrets or real identity values in examples",
+                "performance": "Not applicable; static document",
+                "accessibility": "The document is plain text and readable by assistive tools and agents"
+              }
+            }
+          ],
+          "title": "Zod-Authoritative API Contract",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Developer",
+            "QA"
+          ],
+          "outOfScope": [
+            "OpenAPI-first authoring",
+            "Manually maintained OpenAPI files"
+          ],
+          "description": "Developers define each endpoint once in Zod and get validation, types, and a committed OpenAPI 3.1 document from it. QA can read the stable contract without running the application.",
+          "dependencies": [
+            "Workspace config package"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "QA"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Production migration execution",
+        "Roles, sessions, audit events, and feature-flag tables"
+      ],
+      "assumptions": [
+        "The status value set for app_users is chosen at implementation and documented"
+      ],
+      "description": "Generated applications need a database and an API contract that agents and humans can trust. This epic delivers the Drizzle and PostgreSQL starter with the app_users example and reviewed migrations, and the Zod-authoritative contract package that generates the committed OpenAPI document.",
+      "dependencies": [
+        "Workspace and Local Development Foundation"
+      ],
+      "successMetrics": [
+        "A new endpoint definition produces runtime validation, TypeScript types, and an OpenAPI entry without manual duplication",
+        "The drift check fails whenever the committed OpenAPI document differs from the generated one",
+        "A schema change and its reviewed migration ship together and apply cleanly to an empty database"
+      ]
+    },
+    {
+      "title": "Reference API and Platform Services",
+      "features": [
+        {
+          "id": "FEAT-005",
+          "items": [
+            {
+              "id": "TBI-012",
+              "type": "TBI",
+              "title": "Define the principal contract, adapter interface, and authentication middleware",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Define an authenticated-principal contract carrying at least the external identity subject, an adapter interface that resolves a principal from a request, and an authentication middleware that rejects unauthenticated requests with a Problem Details 401. Add no role or permission concepts.",
+              "definitionOfDone": [
+                "The adapter interface and principal contract are documented",
+                "Unauthenticated requests to protected routes return a Problem Details 401",
+                "A test adapter proves handlers read the principal only from the middleware",
+                "No role or permission field exists on the principal contract"
+              ],
+              "technicalDependencies": [
+                "Contracts package (error schemas)",
+                "Express"
+              ],
+              "nonFunctionalRequirements": [
+                "The middleware must not log identity values",
+                "Swapping the adapter must need no change to route handlers"
+              ]
+            },
+            {
+              "id": "TBI-013",
+              "type": "TBI",
+              "title": "Add the development adapter and the production startup guard",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-012"
+              ],
+              "description": "Provide a development adapter that returns one fixed synthetic principal. Select it only when the authentication mode is development and the environment is not production. Abort startup in production if it is selected.",
+              "definitionOfDone": [
+                "The development adapter returns a fixed principal with clearly synthetic values",
+                "Startup aborts with a clear error when the development adapter is selected in production",
+                "Selecting the development adapter outside production works with no other configuration",
+                "Tests cover each combination of authentication mode and environment"
+              ],
+              "technicalDependencies": [
+                "Typed configuration",
+                "Principal contract"
+              ],
+              "nonFunctionalRequirements": [
+                "The guard must run before the server accepts connections"
+              ]
+            },
+            {
+              "id": "PBI-008",
+              "type": "PBI",
+              "title": "Use protected routes locally without an identity provider",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-012",
+                "TBI-013"
+              ],
+              "userStory": {
+                "iWant": "call protected routes locally as a fixed synthetic principal",
+                "soThat": "I can build and test authenticated features before an identity provider exists",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Header-based impersonation",
+                "Multiple synthetic principals"
+              ],
+              "businessRules": [
+                "BR-002: Development adapter only in development mode and outside production",
+                "BR-003: No roles or authorization policy"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The request runs as the fixed synthetic principal",
+                  "when": "I call a protected route",
+                  "given": "The authentication mode is development and the environment is local"
+                },
+                {
+                  "then": "Startup aborts with an error and no port opens",
+                  "when": "I start the API",
+                  "given": "The environment is production and the authentication mode is development"
+                },
+                {
+                  "then": "Startup aborts naming the missing setting and never falls back to the development adapter",
+                  "when": "I start the API",
+                  "given": "The authentication mode is not set"
+                },
+                {
+                  "then": "I receive a Problem Details 401 response",
+                  "when": "I call a protected route",
+                  "given": "No adapter authenticates the request"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Development adapter is unreachable in production by startup abort",
+                "performance": "Adapter resolution adds negligible overhead; no target defined",
+                "accessibility": "Not applicable; developer workflow"
+              }
+            },
+            {
+              "id": "PBI-009",
+              "type": "PBI",
+              "title": "Replace the adapter with the production identity provider",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-012"
+              ],
+              "userStory": {
+                "iWant": "plug a production identity provider into the adapter interface without changing route handlers",
+                "soThat": "a project can adopt the identity provider Platform Engineering chooses",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Shipping a specific provider implementation",
+                "Role mapping"
+              ],
+              "businessRules": [
+                "BR-003: RBAC remains an explicit extension point"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Protected routes resolve the principal from the provider with no handler changes",
+                  "when": "I select it through configuration",
+                  "given": "I implement the adapter interface for a provider"
+                },
+                {
+                  "then": "I receive a Problem Details 401 response and no identity values are logged",
+                  "when": "I call a protected route",
+                  "given": "The provider rejects or cannot verify credentials"
+                },
+                {
+                  "then": "The handler works because only the external subject is required",
+                  "when": "The principal reaches a handler",
+                  "given": "The provider returns a principal with no email"
+                },
+                {
+                  "then": "It states that roles are not defined and describes where RBAC would attach",
+                  "when": "I look for role or permission guidance",
+                  "given": "I read the adapter documentation"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "A provider adapter must verify credentials before returning a principal and must not log identity values",
+                "performance": "Adapter latency is project-defined through the NFR manifest",
+                "accessibility": "Not applicable; developer workflow"
+              }
+            }
+          ],
+          "title": "Identity Provider Adapter",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001",
+            "FEAT-004"
+          ],
+          "userTypes": [
+            "Developer",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "Choosing or integrating a production identity provider",
+            "Roles, permissions, and authorization policy"
+          ],
+          "description": "Developers get an authenticated-principal contract and a local development adapter, and can replace it with the production identity provider that Platform Admin selects. No roles or authorization policy are defined.",
+          "dependencies": [
+            "Production identity provider decision (open)"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "Platform Admin"
+          ]
+        },
+        {
+          "id": "FEAT-006",
+          "items": [
+            {
+              "id": "TBI-014",
+              "type": "TBI",
+              "title": "Build the Express composition root and error handling",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Compose the Express 5 application with request ID assignment, structured logging, authentication, versioned routing, a central error handler that returns Problem Details, a not-found handler, and hooks for rate limiting. Serve the built web client in the production container.",
+              "definitionOfDone": [
+                "Every response carries a request ID",
+                "Unknown routes and unhandled errors return Problem Details",
+                "Rate-limit hooks exist and can be configured by environment",
+                "The built web client is served for non-API paths when present",
+                "Supertest tests cover the middleware order and error paths"
+              ],
+              "technicalDependencies": [
+                "Express 5",
+                "Contracts package",
+                "Logging and identity modules"
+              ],
+              "nonFunctionalRequirements": [
+                "Unhandled errors must return a generic Problem Details body with no stack trace or identity values"
+              ]
+            },
+            {
+              "id": "TBI-015",
+              "type": "TBI",
+              "title": "Implement the profile service and routes",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-014"
+              ],
+              "description": "Implement the read and update profile routes against the data-access module. The service takes the external subject from the principal, creates the profile on first access using the principal's subject and display name, validates updates with the shared schemas, and never accepts an identifier from the request.",
+              "definitionOfDone": [
+                "GET and PUT on the profile resource are implemented from the shared definitions",
+                "A first request from a new principal creates the profile row",
+                "A request body containing an identifier or subject field is rejected or ignored as defined in the contract",
+                "Integration tests against PostgreSQL cover create-on-first-read, update, validation failure, and unauthenticated access"
+              ],
+              "technicalDependencies": [
+                "Data-access module",
+                "Contracts package",
+                "Authentication middleware"
+              ],
+              "nonFunctionalRequirements": [
+                "No route may accept a user identifier or subject from the request"
+              ]
+            },
+            {
+              "id": "PBI-010",
+              "type": "PBI",
+              "title": "Retrieve my own profile",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-014",
+                "TBI-015"
+              ],
+              "userStory": {
+                "iWant": "retrieve my own profile record",
+                "soThat": "I can see the details the application holds about me",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Retrieving another person's profile",
+                "Listing profiles"
+              ],
+              "businessRules": [
+                "BR-001: Only the authenticated principal's own profile is accessible",
+                "BR-005: Errors use Problem Details with a request ID"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "I receive my display name, optional email, and status in the documented response shape",
+                  "when": "I request my profile",
+                  "given": "I am authenticated and my profile exists"
+                },
+                {
+                  "then": "I receive a Problem Details error with a request ID and no database detail",
+                  "when": "I request my profile",
+                  "given": "The database is unavailable"
+                },
+                {
+                  "then": "A profile is created from my principal and returned",
+                  "when": "I request my profile",
+                  "given": "I am authenticated for the first time and have no profile yet"
+                },
+                {
+                  "then": "An unauthenticated request receives a Problem Details 401, and an added identifier has no effect on whose profile is returned",
+                  "when": "I request a profile",
+                  "given": "I am not authenticated, or I add another person's identifier to the request"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The subject comes only from the authenticated principal; identity values are not logged",
+                "performance": "No target defined; each project supplies targets through the NFR manifest",
+                "accessibility": "Not applicable at the API level; error messages are plain language for the screen to display"
+              }
+            },
+            {
+              "id": "PBI-011",
+              "type": "PBI",
+              "title": "Update my own profile",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-014",
+                "TBI-015"
+              ],
+              "userStory": {
+                "iWant": "change my own display name and email",
+                "soThat": "the application shows details that are correct",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Changing the external identity subject or status",
+                "Updating another person's profile"
+              ],
+              "businessRules": [
+                "BR-001: Only the authenticated principal's own profile is accessible",
+                "BR-005: Errors use Problem Details with a request ID"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "My profile is updated and the updated profile is returned",
+                  "when": "I submit a valid display name and email",
+                  "given": "I am authenticated"
+                },
+                {
+                  "then": "I receive a Problem Details validation error naming each invalid field, and nothing changes",
+                  "when": "I submit an empty display name or a malformed email",
+                  "given": "I am authenticated"
+                },
+                {
+                  "then": "The cleared email is accepted as optional, values at the limit are saved, and values over it are rejected",
+                  "when": "I submit the update with the email cleared, or with values at the maximum allowed length",
+                  "given": "My profile has an email"
+                },
+                {
+                  "then": "The field is rejected or ignored as the contract defines, and only my own display name and email can change",
+                  "when": "I include a subject, identifier, or status field in the update",
+                  "given": "I am authenticated"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Input validated by the shared schema; the external subject cannot be changed through the request",
+                "performance": "No target defined; each project supplies targets through the NFR manifest",
+                "accessibility": "Not applicable at the API level; validation errors name the field in plain language"
+              }
+            },
+            {
+              "id": "PBI-012",
+              "type": "PBI",
+              "title": "Check liveness and readiness of a running instance",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-014"
+              ],
+              "userStory": {
+                "iWant": "check whether an instance is alive and ready to serve traffic",
+                "soThat": "I can route traffic and restart instances based on their real state",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Detailed dependency diagnostics",
+                "Authenticated admin status pages"
+              ],
+              "businessRules": [
+                "BR-005: Responses follow the documented contract and carry a request ID"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Both return success",
+                  "when": "I request liveness and readiness",
+                  "given": "The process is running and the database is reachable"
+                },
+                {
+                  "then": "It returns a not-ready status with no connection strings, hosts, or error text, while liveness still succeeds",
+                  "when": "I request readiness",
+                  "given": "The database is unreachable"
+                },
+                {
+                  "then": "It returns not ready within the time limit instead of hanging",
+                  "when": "I request readiness",
+                  "given": "The database check takes longer than its time limit"
+                },
+                {
+                  "then": "I receive the health response, not a 401",
+                  "when": "I request either health endpoint",
+                  "given": "I send no credentials"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Health endpoints need no authentication and expose no sensitive detail",
+                "performance": "Liveness must not call the database; readiness uses a fast, bounded database check",
+                "accessibility": "Not applicable; machine-readable endpoints"
+              }
+            }
+          ],
+          "route": "/profile/details/edit",
+          "title": "Health and Self-Service Profile API",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-003",
+            "FEAT-004",
+            "FEAT-005",
+            "FEAT-007"
+          ],
+          "userTypes": [
+            "Authenticated User",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "User list, create, lookup, and CRUD endpoints",
+            "Cross-user access of any kind"
+          ],
+          "description": "Authenticated Users read and update their own profile through the profile API. Platform Admin checks liveness and readiness of a deployed instance.",
+          "dependencies": [
+            "Persistence, contracts, identity adapter, and logging modules"
+          ],
+          "affectedPersonas": [
+            "Authenticated User",
+            "Platform Admin"
+          ]
+        },
+        {
+          "id": "FEAT-007",
+          "items": [
+            {
+              "id": "TBI-016",
+              "type": "TBI",
+              "title": "Add Pino structured logging with request IDs and redaction",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Provide a logging module that writes structured JSON logs with request and correlation IDs and redaction hooks that remove display name, email, and external subject values from log output.",
+              "definitionOfDone": [
+                "Logs are single-line JSON with a request ID on request-scoped entries",
+                "Identity fields are redacted in request, response, and error logs",
+                "Tests assert no seed or fixture identity value appears in captured logs",
+                "Log level is set by environment"
+              ],
+              "technicalDependencies": [
+                "Pino",
+                "Request ID middleware"
+              ],
+              "nonFunctionalRequirements": [
+                "Redaction must apply to nested fields and to error objects"
+              ]
+            },
+            {
+              "id": "TBI-017",
+              "type": "TBI",
+              "title": "Add OpenTelemetry traces and metrics with environment-configured exporters",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-016"
+              ],
+              "description": "Instrument HTTP and database calls with OpenTelemetry traces and metrics. Exporters and endpoints come from environment settings only, so Platform Engineering can attach CloudWatch or ADOT without code changes. Span attributes exclude identity values.",
+              "definitionOfDone": [
+                "Traces and metrics are produced for HTTP requests and database calls",
+                "Exporter choice and endpoint are controlled only by environment variables",
+                "The application runs normally with no exporter configured",
+                "A test confirms span attributes contain no identity values"
+              ],
+              "technicalDependencies": [
+                "OpenTelemetry SDK",
+                "Typed configuration"
+              ],
+              "nonFunctionalRequirements": [
+                "Telemetry must be disabled cleanly when no exporter is configured"
+              ]
+            },
+            {
+              "id": "TBI-018",
+              "type": "TBI",
+              "title": "Add graceful shutdown",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-016"
+              ],
+              "description": "On a termination signal, stop accepting new connections, let in-flight requests finish within a configured time limit, flush telemetry, close database connections, and exit.",
+              "definitionOfDone": [
+                "In-flight requests complete after a termination signal within the time limit",
+                "New connections are refused after the signal",
+                "Database connections and telemetry are closed or flushed before exit",
+                "A test proves a hanging request does not block exit beyond the limit"
+              ],
+              "technicalDependencies": [
+                "Express server",
+                "Data-access module"
+              ],
+              "nonFunctionalRequirements": [
+                "Shutdown must finish within the configured time limit even if requests hang"
+              ]
+            },
+            {
+              "id": "PBI-013",
+              "type": "PBI",
+              "title": "Follow one request through the logs by its request ID",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-016"
+              ],
+              "userStory": {
+                "iWant": "follow a single request through the logs by its request ID",
+                "soThat": "I can diagnose problems without exposing personal data",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Log shipping and retention",
+                "Log search tooling"
+              ],
+              "businessRules": [
+                "BR-007: Logs never contain identity values"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The same request ID appears on the response and on every log entry for that request",
+                  "when": "I read the response header and the logs",
+                  "given": "A request is handled"
+                },
+                {
+                  "then": "The error is logged with the request ID and without identity values or the raw request body",
+                  "when": "I read the logs",
+                  "given": "A request fails with an unhandled error"
+                },
+                {
+                  "then": "A valid value is reused, and an over-long or malformed value is replaced with a generated one",
+                  "when": "The request is handled",
+                  "given": "A caller supplies its own request ID header"
+                },
+                {
+                  "then": "Neither value appears in any log entry",
+                  "when": "I search the captured logs for those values",
+                  "given": "A profile update contains a display name and email"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Display name, email, and external subject are redacted from all log output",
+                "performance": "Logging adds no blocking work to the request path; no hard target defined",
+                "accessibility": "Not applicable; developer workflow"
+              }
+            },
+            {
+              "id": "PBI-014",
+              "type": "PBI",
+              "title": "Connect telemetry exporters through environment settings",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-017"
+              ],
+              "userStory": {
+                "iWant": "connect trace and metric exporters through environment settings only",
+                "soThat": "I can send telemetry to CloudWatch or ADOT without changing application code",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Provisioning collectors or AWS resources",
+                "Alert rules"
+              ],
+              "businessRules": [
+                "BR-008: No AWS-specific code in the template"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Traces and metrics are sent to that endpoint",
+                  "when": "The application handles requests",
+                  "given": "I set the exporter endpoint in the environment"
+                },
+                {
+                  "then": "Requests still succeed and the export failure is logged without identity values",
+                  "when": "The application handles requests",
+                  "given": "The exporter endpoint is unreachable"
+                },
+                {
+                  "then": "It runs normally with telemetry disabled",
+                  "when": "The application starts",
+                  "given": "No exporter is configured"
+                },
+                {
+                  "then": "None exists; vendor choice is made only through environment settings",
+                  "when": "I look for cloud-vendor exporter code",
+                  "given": "I read the template's application code"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Exporter credentials arrive only through environment variables and are never logged",
+                "performance": "Exporting must not block request handling",
+                "accessibility": "Not applicable; operational configuration"
+              }
+            },
+            {
+              "id": "PBI-015",
+              "type": "PBI",
+              "title": "Stop an instance without dropping in-flight requests",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-018"
+              ],
+              "userStory": {
+                "iWant": "stop an instance during a deployment without dropping requests that are in progress",
+                "soThat": "rollouts do not cause failed requests",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Load balancer deregistration",
+                "ECS stop timeout settings"
+              ],
+              "businessRules": [
+                "BR-005: Responses follow the documented contract"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The request completes and the process then exits with status zero",
+                  "when": "The instance receives a termination signal",
+                  "given": "A request is in progress"
+                },
+                {
+                  "then": "The process exits and logs which work was abandoned",
+                  "when": "The time limit passes after the signal",
+                  "given": "A request does not finish within the time limit"
+                },
+                {
+                  "then": "It exits promptly after closing database connections",
+                  "when": "The instance receives a termination signal",
+                  "given": "No requests are in progress"
+                },
+                {
+                  "then": "Readiness reports not ready and new connections are not accepted",
+                  "when": "A new request or readiness check arrives",
+                  "given": "The instance is shutting down"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Connections close cleanly and no data is written after shutdown completes",
+                "performance": "Shutdown completes within a configurable time limit",
+                "accessibility": "Not applicable; operational behavior"
+              }
+            }
+          ],
+          "title": "Observability and Graceful Shutdown",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Developer",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "AWS-specific CloudWatch instrumentation in application code",
+            "Dashboards and alert rules"
+          ],
+          "description": "Developers get structured logs with request IDs and identity redaction. Platform Admin connects exporters through environment settings and can stop instances without dropping in-flight requests.",
+          "dependencies": [
+            "Environment-configured exporters supplied by Platform Engineering"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "Platform Admin"
+          ]
+        },
+        {
+          "id": "FEAT-008",
+          "items": [
+            {
+              "id": "TBI-019",
+              "type": "TBI",
+              "title": "Create the flag-evaluation interface and local adapter",
+              "priority": "Should Have",
+              "dependsOn": [],
+              "description": "Define an interface for evaluating a named flag with a default value, and a local adapter that reads flag values from configuration. Add no vendor SDK dependency.",
+              "definitionOfDone": [
+                "The interface evaluates a flag by name and returns the declared default for an unknown flag",
+                "The local adapter reads values from configuration",
+                "The workspace has no vendor flag SDK dependency",
+                "Unit tests cover on, off, unknown flag, and a replacement adapter"
+              ],
+              "technicalDependencies": [
+                "Typed configuration"
+              ],
+              "nonFunctionalRequirements": [
+                "Evaluation must be synchronous or cached so request handling never waits on a provider"
+              ]
+            },
+            {
+              "id": "PBI-016",
+              "type": "PBI",
+              "title": "Gate new behavior behind a flag",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-019"
+              ],
+              "userStory": {
+                "iWant": "gate new behavior behind a flag evaluated through a provider-neutral interface",
+                "soThat": "I can ship safely now and switch to a flag provider later without rewriting call sites",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Per-user or per-group targeting",
+                "Flag administration screens"
+              ],
+              "businessRules": [
+                "BR-011: Provider-neutral interface with a local adapter and no vendor SDK"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The interface returns true and the gated behavior runs",
+                  "when": "My code evaluates it",
+                  "given": "A flag is set on in configuration"
+                },
+                {
+                  "then": "The interface returns the flag's declared default and logs the problem",
+                  "when": "My code evaluates a flag",
+                  "given": "The local adapter cannot read its configuration"
+                },
+                {
+                  "then": "The declared default is returned and no error is thrown",
+                  "when": "My code evaluates it",
+                  "given": "A flag name is not defined anywhere"
+                },
+                {
+                  "then": "It works with no change to the call sites",
+                  "when": "My code evaluates a flag",
+                  "given": "I replace the local adapter with another implementation of the interface"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Flag values come from configuration and are never taken from request input",
+                "performance": "Flag evaluation adds negligible overhead to a request",
+                "accessibility": "Not applicable; developer workflow"
+              }
+            }
+          ],
+          "title": "Provider-Neutral Feature Flag Interface",
+          "priority": "Should Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Selecting or integrating a flag provider",
+            "Targeting rules and rollout management"
+          ],
+          "description": "Developers get a feature-flag evaluation interface with a local adapter, so generated applications can gate behavior now and adopt a provider later.",
+          "dependencies": [
+            "Feature-flag provider decision (open)"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Production identity provider",
+        "Roles, permissions, and RBAC",
+        "Feature-flag provider"
+      ],
+      "assumptions": [
+        "GET /api/v1/me creates the profile row on first authenticated access",
+        "Exporters are configured by environment so no application code change is needed per cloud"
+      ],
+      "description": "A starter is only useful if its backend works end to end. This epic delivers the identity-provider adapter, the health and self-service profile API, vendor-neutral observability with graceful shutdown, and the provider-neutral feature-flag interface, without defining RBAC.",
+      "dependencies": [
+        "Data and API Contract Layer"
+      ],
+      "successMetrics": [
+        "The profile read and update flow works end to end against PostgreSQL with the development adapter",
+        "Production startup aborts when the development adapter is selected",
+        "No log line, telemetry attribute, or error body in tests contains an identity value"
+      ]
+    },
+    {
+      "title": "Design System and Reference Web Client",
+      "features": [
+        {
+          "id": "FEAT-009",
+          "items": [
+            {
+              "id": "TBI-020",
+              "type": "TBI",
+              "title": "Create the UI package theme tokens and light and dark themes",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Build the UI package with semantic color and spacing tokens, typography, breakpoints, component defaults, and light and dark themes. Branding changes are token overrides, with no hard-coded styles in components.",
+              "definitionOfDone": [
+                "Tokens exist for color, spacing, typography, and breakpoints",
+                "Light and dark themes are exported and share one token set",
+                "Overriding tokens changes the rendered theme with no component edits",
+                "A contrast check or test covers both themes"
+              ],
+              "technicalDependencies": [
+                "MUI",
+                "React"
+              ],
+              "nonFunctionalRequirements": [
+                "Both themes must meet WCAG 2.1 AA contrast for text and meaningful controls"
+              ]
+            },
+            {
+              "id": "TBI-021",
+              "type": "TBI",
+              "title": "Create the app shell, error boundary, state components, and test selector convention",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-020"
+              ],
+              "description": "Provide a responsive application shell, an error boundary, and reusable loading, empty, and error state components. Define a stable test selector convention for interactive and key content elements.",
+              "definitionOfDone": [
+                "The shell adapts at phone, tablet, and desktop widths",
+                "The error boundary shows a recoverable error state instead of a blank page",
+                "Loading, empty, and error components exist with documented usage",
+                "Component tests cover each state and the selector convention"
+              ],
+              "technicalDependencies": [
+                "UI package theme",
+                "React Router"
+              ],
+              "nonFunctionalRequirements": [
+                "Shell and state components must be keyboard operable and expose accessible names"
+              ]
+            },
+            {
+              "id": "PBI-017",
+              "type": "PBI",
+              "title": "Rebrand the application by overriding theme tokens",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-020"
+              ],
+              "userStory": {
+                "iWant": "rebrand the application by overriding theme tokens only",
+                "soThat": "projects can match their own brand without editing components",
+                "persona": "UI/UX"
+              },
+              "userTypes": [
+                "UI/UX"
+              ],
+              "outOfScope": [
+                "Shipping a branded theme",
+                "A visual theme editor"
+              ],
+              "businessRules": [
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Buttons, links, and focus indicators use the new color with no component changes",
+                  "when": "I run the web client",
+                  "given": "I override the primary color token"
+                },
+                {
+                  "then": "The check reports the failing token and pairing",
+                  "when": "I run the contrast check",
+                  "given": "I override a token with a value that fails contrast"
+                },
+                {
+                  "then": "The dark theme still renders with its defaults and remains legible",
+                  "when": "I view the dark theme",
+                  "given": "I override only light-theme tokens"
+                },
+                {
+                  "then": "The hard-coded value is flagged as a violation",
+                  "when": "I run lint or review against the UI standards",
+                  "given": "A component sets a hard-coded color"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Not applicable; no data handling",
+                "performance": "Theme switching does not cause a full page reload",
+                "accessibility": "Overridden tokens must keep WCAG 2.1 AA contrast; the documentation explains how to check it"
+              }
+            },
+            {
+              "id": "PBI-018",
+              "type": "PBI",
+              "title": "Use the application on any screen size",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-021"
+              ],
+              "userStory": {
+                "iWant": "use the application comfortably on phone, tablet, and desktop screens",
+                "soThat": "I can manage my profile from any device",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Native mobile applications",
+                "Offline support"
+              ],
+              "businessRules": [
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Navigation and content are laid out for wide screens with landmarks and visible focus",
+                  "when": "The shell renders",
+                  "given": "I open the application on a desktop-width screen"
+                },
+                {
+                  "then": "I see a recoverable error state with a way to retry, not a blank page",
+                  "when": "The error boundary catches it",
+                  "given": "A page fails to render because of an error"
+                },
+                {
+                  "then": "Content stays readable with no horizontal scrolling and controls remain reachable",
+                  "when": "The shell re-renders",
+                  "given": "I resize the window to the narrowest supported width"
+                },
+                {
+                  "then": "A loading or empty state is shown instead of a blank area, and it is announced to assistive technology",
+                  "when": "The page renders",
+                  "given": "Data for a page is loading or empty"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Not applicable; no data handling",
+                "performance": "Layout changes at breakpoints without visible layout shift",
+                "accessibility": "Shell navigation is keyboard operable, has visible focus, and uses semantic landmarks"
+              }
+            }
+          ],
+          "title": "Neutral MUI Design System and App Shell",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-001"
+          ],
+          "userTypes": [
+            "UI/UX",
+            "Authenticated User"
+          ],
+          "outOfScope": [
+            "Brand-specific theming",
+            "A component library beyond the documented reference components"
+          ],
+          "description": "UI/UX gets replaceable theme tokens, light and dark themes, and documented UI states. Authenticated Users get a responsive application shell with consistent loading, empty, and error states.",
+          "dependencies": [
+            "MUI"
+          ],
+          "affectedPersonas": [
+            "UI/UX",
+            "Authenticated User"
+          ]
+        },
+        {
+          "id": "FEAT-010",
+          "items": [
+            {
+              "id": "TBI-022",
+              "type": "TBI",
+              "title": "Compose the web application with routing, query client, and typed API client",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Compose the web application with React Router, a TanStack Query client, and a typed API client built from the contracts package. Handle Problem Details errors and unauthenticated responses in one place. Use relative API paths so the client works in local development and in the container.",
+              "definitionOfDone": [
+                "The web application renders inside the application shell and error boundary",
+                "The API client is typed from the contracts package and reads Problem Details errors",
+                "Local development proxies API calls and the production build uses relative paths",
+                "Unit tests cover the client's success, error, and unauthenticated paths"
+              ],
+              "technicalDependencies": [
+                "Contracts package",
+                "UI package",
+                "TanStack Query",
+                "React Router"
+              ],
+              "nonFunctionalRequirements": [
+                "The API client must parse every response with the shared schema before returning data"
+              ]
+            },
+            {
+              "id": "PBI-019",
+              "type": "PBI",
+              "title": "See my profile on a profile screen",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-022"
+              ],
+              "userStory": {
+                "iWant": "see my display name, email, and status on a profile screen",
+                "soThat": "I know what the application holds about me",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Viewing other people's profiles",
+                "Profile history"
+              ],
+              "businessRules": [
+                "BR-001: Only my own profile is shown",
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "My display name, email, and status are shown after a loading state",
+                  "when": "I open the profile screen",
+                  "given": "I am signed in and my profile exists"
+                },
+                {
+                  "then": "An error state with a retry action is shown, and no technical detail appears",
+                  "when": "I open the profile screen",
+                  "given": "The profile request fails"
+                },
+                {
+                  "then": "The email area shows a clear empty value instead of blank space or the word null",
+                  "when": "I open the profile screen",
+                  "given": "My profile has no email"
+                },
+                {
+                  "then": "I am told I must sign in, and no profile data is shown",
+                  "when": "I open the profile screen",
+                  "given": "My session is no longer authenticated"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The screen never displays or sends another person's identifier",
+                "performance": "The screen shows a loading state immediately and renders data as soon as it arrives; no hard target defined",
+                "accessibility": "Headings, labels, and status text are readable by screen readers and meet WCAG 2.1 AA"
+              }
+            },
+            {
+              "id": "PBI-020",
+              "type": "PBI",
+              "title": "Edit my profile with clear validation",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-022",
+                "PBI-019"
+              ],
+              "userStory": {
+                "iWant": "edit my display name and email and see immediate feedback on mistakes",
+                "soThat": "I can correct my details without guessing what went wrong",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Editing status or external subject",
+                "Avatar upload"
+              ],
+              "businessRules": [
+                "BR-001: Only my own profile can be edited",
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The change is saved and the screen shows the updated profile without a reload",
+                  "when": "I change my display name and save with valid values",
+                  "given": "I am on the profile screen"
+                },
+                {
+                  "then": "My entered values stay in the form and an error message with a retry option is shown",
+                  "when": "The save request fails",
+                  "given": "I am editing my profile"
+                },
+                {
+                  "then": "The cleared email is accepted, the maximum length is accepted, and longer input shows a field error before I submit",
+                  "when": "I clear the optional email, or enter a display name at the maximum length",
+                  "given": "I am editing my profile"
+                },
+                {
+                  "then": "The form shows field-level errors, sends no request, and keeps focus on the first invalid field",
+                  "when": "I submit an empty display name or a malformed email",
+                  "given": "I am editing my profile"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The form submits only display name and email, validated with the shared schema",
+                "performance": "The form responds to input immediately; saving shows a pending state",
+                "accessibility": "Every field has a visible label, errors are tied to their fields and announced, and the form is fully keyboard operable"
+              }
+            },
+            {
+              "id": "PBI-021",
+              "type": "PBI",
+              "title": "Use the profile screen with a keyboard and screen reader",
+              "priority": "Must Have",
+              "dependsOn": [
+                "PBI-019",
+                "PBI-020"
+              ],
+              "userStory": {
+                "iWant": "complete the whole profile flow using only a keyboard and a screen reader",
+                "soThat": "I can manage my profile regardless of how I use a computer",
+                "persona": "Authenticated User"
+              },
+              "userTypes": [
+                "Authenticated User"
+              ],
+              "outOfScope": [
+                "Assistive technology beyond keyboard and screen reader",
+                "Full manual accessibility audit"
+              ],
+              "businessRules": [
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Every control is reachable in a logical order with visible focus and the save succeeds",
+                  "when": "I move through the profile screen, edit a field, and save",
+                  "given": "I use only the keyboard"
+                },
+                {
+                  "then": "The error is announced and linked to the relevant field or to the form",
+                  "when": "The error appears",
+                  "given": "I use a screen reader and the save fails"
+                },
+                {
+                  "then": "The state is announced and no focus is trapped",
+                  "when": "A screen reader reads the page",
+                  "given": "The screen is in its loading or empty state"
+                },
+                {
+                  "then": "The check reports a violation and the quality gate fails",
+                  "when": "A control lacks a label or has insufficient contrast",
+                  "given": "The automated accessibility check runs on every state of the screen"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Not applicable; no additional data handling",
+                "performance": "Focus moves without delay after save or error",
+                "accessibility": "Meets WCAG 2.1 AA; automated axe checks report no violations on the screen and its states"
+              }
+            }
+          ],
+          "route": "/profile/details/edit",
+          "title": "Self-Service Profile Screen",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-004",
+            "FEAT-006",
+            "FEAT-009"
+          ],
+          "userTypes": [
+            "Authenticated User"
+          ],
+          "outOfScope": [
+            "User list and user create screens",
+            "Avatar upload and notification preferences"
+          ],
+          "description": "Authenticated Users view and edit their own profile on a screen backed by the profile API. The screen shows the full client stack in use.",
+          "dependencies": [
+            "Profile API and design system"
+          ],
+          "affectedPersonas": [
+            "Authenticated User"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Amergis branding and Apex components",
+        "User list and create screens"
+      ],
+      "assumptions": [
+        "Theme selection mechanism for light and dark is chosen at implementation and documented in the ui-standards skill"
+      ],
+      "description": "Generated applications need a consistent, accessible interface that agents can extend without inventing styles. This epic delivers the neutral MUI design system and application shell, and the self-service profile screen that proves the stack end to end.",
+      "dependencies": [
+        "Reference API and Platform Services"
+      ],
+      "successMetrics": [
+        "The profile screen supports view, edit, loading, error, and empty states",
+        "The reference screen passes automated accessibility checks",
+        "Changing theme tokens alone changes the application's branding"
+      ]
+    },
+    {
+      "title": "Testing, Quality Manifest and Supply Chain",
+      "features": [
+        {
+          "id": "FEAT-011",
+          "items": [
+            {
+              "id": "TBI-023",
+              "type": "TBI",
+              "title": "Set up unit and component tests with coverage thresholds",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Configure Vitest and React Testing Library across the workspace with reference unit and component tests. Enforce coverage floors of 80% for lines, functions, and statements and 75% for branches.",
+              "definitionOfDone": [
+                "Reference unit tests cover the contracts, configuration, and data-access logic",
+                "Reference component tests cover the profile screen states",
+                "Coverage fails when lines, functions, or statements are below 80% or branches are below 75%",
+                "A single command runs all unit and component tests"
+              ],
+              "technicalDependencies": [
+                "Vitest",
+                "React Testing Library",
+                "Config package"
+              ],
+              "nonFunctionalRequirements": [
+                "Coverage thresholds must be defined once in shared configuration"
+              ]
+            },
+            {
+              "id": "TBI-024",
+              "type": "TBI",
+              "title": "Set up API and PostgreSQL integration tests",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-023"
+              ],
+              "description": "Add Supertest API tests and Testcontainers PostgreSQL integration tests that apply the committed migrations to a fresh database and exercise the profile and health endpoints and the data-access module.",
+              "definitionOfDone": [
+                "Integration tests apply committed migrations to an empty containerized database",
+                "API tests cover success, validation failure, unauthenticated, and database-failure paths",
+                "Tests prove one principal cannot read or change another principal's profile",
+                "A single command runs the integration suite"
+              ],
+              "technicalDependencies": [
+                "Supertest",
+                "Testcontainers",
+                "Docker"
+              ],
+              "nonFunctionalRequirements": [
+                "Each integration run must start from a fresh database and leave no shared state"
+              ]
+            },
+            {
+              "id": "TBI-025",
+              "type": "TBI",
+              "title": "Set up Playwright journeys with axe accessibility checks",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-023"
+              ],
+              "description": "Add a Playwright journey for the profile flow with axe checks on each screen state, using stable test selectors and the development adapter.",
+              "definitionOfDone": [
+                "A journey views, edits, and saves the profile and checks the failure path",
+                "axe checks run on loading, loaded, edit, and error states",
+                "Tests use the documented selector convention",
+                "A single command runs the end-to-end suite"
+              ],
+              "technicalDependencies": [
+                "Playwright",
+                "axe",
+                "Running web and API applications"
+              ],
+              "nonFunctionalRequirements": [
+                "Journeys must use only synthetic data and stable selectors"
+              ]
+            },
+            {
+              "id": "TBI-026",
+              "type": "TBI",
+              "title": "Add contract conformance tests from the OpenAPI document",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-024"
+              ],
+              "description": "Generate or run contract tests that call each documented route and verify that real responses match the committed OpenAPI schemas, including error responses.",
+              "definitionOfDone": [
+                "Conformance tests cover every route in the committed document",
+                "A response that differs from its schema fails the test",
+                "Error responses are validated against the Problem Details schema",
+                "A single command runs the contract tests"
+              ],
+              "technicalDependencies": [
+                "Committed OpenAPI document",
+                "API test harness"
+              ],
+              "nonFunctionalRequirements": [
+                "Every documented route must be covered by at least one conformance check"
+              ]
+            },
+            {
+              "id": "PBI-022",
+              "type": "PBI",
+              "title": "Run the complete reference test suite",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-023",
+                "TBI-024",
+                "TBI-025",
+                "TBI-026"
+              ],
+              "userStory": {
+                "iWant": "run unit, component, API, database integration, accessibility, and contract tests with documented commands",
+                "soThat": "I can verify a build at every layer from one repository",
+                "persona": "QA"
+              },
+              "userTypes": [
+                "QA"
+              ],
+              "outOfScope": [
+                "CI scheduling and required tiers",
+                "Load test execution"
+              ],
+              "businessRules": [
+                "BR-012: Coverage floors apply",
+                "BR-013: The template does not set when tests run"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Unit, component, API, integration, end-to-end, and contract tests all pass",
+                  "when": "I run each documented test command",
+                  "given": "Docker is running and the workspace is installed"
+                },
+                {
+                  "then": "It names the test, the expected behavior, and the observed behavior",
+                  "when": "I read the output",
+                  "given": "A test fails"
+                },
+                {
+                  "then": "They fail with a message that Docker is required, not with a database connection stack trace",
+                  "when": "I run the integration tests",
+                  "given": "Docker is not running"
+                },
+                {
+                  "then": "At least one test fails",
+                  "when": "I run the API tests",
+                  "given": "A change removes the unauthenticated rejection from a protected route"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Tests use synthetic data only and no real credentials",
+                "performance": "No target defined; suite duration is a project decision recorded in the NFR manifest",
+                "accessibility": "axe checks cover every state of the reference screen"
+              }
+            },
+            {
+              "id": "PBI-023",
+              "type": "PBI",
+              "title": "See coverage fail below the baseline floors",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-023"
+              ],
+              "userStory": {
+                "iWant": "see the coverage check fail when coverage drops below the baseline floors",
+                "soThat": "new code is tested before it merges",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Per-file thresholds",
+                "Coverage trend reporting"
+              ],
+              "businessRules": [
+                "BR-012: 80% lines, functions, and statements; 75% branches"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It passes and prints the totals",
+                  "when": "I run the coverage command",
+                  "given": "Coverage meets all four floors"
+                },
+                {
+                  "then": "It fails and names branches as the metric below its floor",
+                  "when": "I run the coverage command",
+                  "given": "Branch coverage is 74%"
+                },
+                {
+                  "then": "It passes",
+                  "when": "I run the coverage command",
+                  "given": "Branch coverage is exactly 75% and the other metrics are exactly 80%"
+                },
+                {
+                  "then": "The validator reports that the package does not use the shared floors",
+                  "when": "I run the quality manifest validator",
+                  "given": "I lower a threshold in one package's local configuration"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Coverage output contains no secrets or identity values",
+                "performance": "Coverage reporting adds no more than a normal test run's overhead; no hard target defined",
+                "accessibility": "Reports are plain text and machine-readable"
+              }
+            }
+          ],
+          "title": "Reference Test Framework",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-003",
+            "FEAT-004",
+            "FEAT-006",
+            "FEAT-010"
+          ],
+          "userTypes": [
+            "QA",
+            "Developer"
+          ],
+          "outOfScope": [
+            "CI execution policy and required tiers",
+            "Cross-browser matrices beyond the reference journey"
+          ],
+          "description": "QA and Developer get a full test framework with working reference tests for units, components, the API, PostgreSQL integration, accessibility journeys, and contract conformance, with coverage floors enforced.",
+          "dependencies": [
+            "Working API, database, and web client"
+          ],
+          "affectedPersonas": [
+            "QA",
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-012",
+          "items": [
+            {
+              "id": "TBI-027",
+              "type": "TBI",
+              "title": "Create the quality manifest schema and file",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Define a schema and a manifest listing each gate (build, type-check, lint, formatting, OpenAPI drift, migration validation, unit, component, API, integration, accessibility, and container build) with its script and coverage floors, and a place to record justified deferrals. Define no execution tiers.",
+              "definitionOfDone": [
+                "The schema and manifest are committed and validate against each other",
+                "Each gate names an existing script",
+                "Coverage floors in the manifest match the shared configuration",
+                "A deferral entry requires a reason and an owner"
+              ],
+              "technicalDependencies": [
+                "JSON Schema",
+                "Named workspace scripts"
+              ],
+              "nonFunctionalRequirements": [
+                "The manifest must be readable by agents and by pipeline code without running the application"
+              ]
+            },
+            {
+              "id": "TBI-028",
+              "type": "TBI",
+              "title": "Create the NFR manifest schema and load-test tooling",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-027"
+              ],
+              "description": "Define a required NFR manifest schema for response time, concurrency, and data volume targets, with illustrative example values marked as not production promises. Include load-test tooling and a sample load-test definition that reads its targets from the manifest. Define no execution policy.",
+              "definitionOfDone": [
+                "The NFR manifest schema covers response time, concurrency, and data volume",
+                "The sample load test reads targets from the manifest",
+                "Example values carry an illustrative label in the schema and documentation",
+                "No script or document states when load tests must run"
+              ],
+              "technicalDependencies": [
+                "Load-test tool selected from the organization-approved set",
+                "JSON Schema"
+              ],
+              "nonFunctionalRequirements": [
+                "Example values must be visibly labeled illustrative"
+              ]
+            },
+            {
+              "id": "TBI-029",
+              "type": "TBI",
+              "title": "Add the manifest validator",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-027",
+                "TBI-028"
+              ],
+              "description": "Provide a validation script that checks the quality and NFR manifests against their schemas, confirms every referenced script exists, and confirms coverage floors match the shared configuration.",
+              "definitionOfDone": [
+                "The validator passes on the committed manifests",
+                "It fails when a gate references a missing script",
+                "It fails when a manifest does not match its schema",
+                "It fails when coverage floors differ from the shared configuration"
+              ],
+              "technicalDependencies": [
+                "JSON Schema validator",
+                "Workspace scripts"
+              ],
+              "nonFunctionalRequirements": [
+                "The validator must exit non-zero with a message naming each problem"
+              ]
+            },
+            {
+              "id": "PBI-024",
+              "type": "PBI",
+              "title": "Invoke every quality gate from the manifest by script name",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-027",
+                "TBI-029"
+              ],
+              "userStory": {
+                "iWant": "read the quality manifest and call each gate's named script from our own pipeline",
+                "soThat": "I can build the pipeline without re-implementing repository logic",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Writing the pipeline",
+                "Choosing which gates run on which events"
+              ],
+              "businessRules": [
+                "BR-013: The manifest defines gates but not when they run",
+                "BR-008: The template contains no pipeline definitions"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The gate runs and exits zero on success and non-zero on failure",
+                  "when": "I run the script named for a gate",
+                  "given": "I read the quality manifest"
+                },
+                {
+                  "then": "The validator fails and names the gate and missing script",
+                  "when": "I run the manifest validator",
+                  "given": "A gate script does not exist"
+                },
+                {
+                  "then": "The deferral is accepted and listed in the output",
+                  "when": "I run the validator",
+                  "given": "A gate is deferred with a reason and owner"
+                },
+                {
+                  "then": "None are defined and the documentation states each team decides",
+                  "when": "I read it",
+                  "given": "I look for execution tiers or schedules in the manifest"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Gate scripts read secrets only from environment variables and never print them",
+                "performance": "No target defined; gate duration is project-specific",
+                "accessibility": "Manifest is plain, machine-readable text"
+              }
+            },
+            {
+              "id": "PBI-025",
+              "type": "PBI",
+              "title": "Record a justified deferral for a gate",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-027",
+                "TBI-029"
+              ],
+              "userStory": {
+                "iWant": "record why a gate is deferred, with an owner",
+                "soThat": "a skipped gate is visible and reviewed rather than silently ignored",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Approval workflow for deferrals",
+                "Expiry reminders"
+              ],
+              "businessRules": [
+                "BR-013: Deferrals are recorded in the quality manifest"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The validator accepts it and reports the deferred gate",
+                  "when": "I add a deferral with a reason and an owner and run the validator",
+                  "given": "A gate cannot run yet"
+                },
+                {
+                  "then": "The validator fails and names the incomplete deferral",
+                  "when": "I run the validator",
+                  "given": "I add a deferral with no reason"
+                },
+                {
+                  "then": "The validator fails with the unknown gate name",
+                  "when": "I run the validator",
+                  "given": "A deferral names a gate that does not exist"
+                },
+                {
+                  "then": "The deferral is listed and the gate is not reported as passed",
+                  "when": "I read the manifest summary",
+                  "given": "A gate is deferred"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Deferral text must not contain secrets",
+                "performance": "Validation completes in a local developer loop",
+                "accessibility": "Manifest is plain text and reviewable in any editor"
+              }
+            },
+            {
+              "id": "PBI-026",
+              "type": "PBI",
+              "title": "Trace non-functional requirements to verification evidence",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-028",
+                "TBI-029"
+              ],
+              "userStory": {
+                "iWant": "see each project's response-time, concurrency, and data-volume targets next to the load tests that verify them",
+                "soThat": "I can show that performance was checked against stated targets rather than only that tests passed",
+                "persona": "QA"
+              },
+              "userTypes": [
+                "QA"
+              ],
+              "outOfScope": [
+                "Running load tests automatically",
+                "Choosing targets for a project"
+              ],
+              "businessRules": [
+                "BR-013: Each project supplies its own NFR targets; examples are illustrative"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The test applies those targets and reports pass or fail against each",
+                  "when": "I run the sample load test",
+                  "given": "A project fills in its targets in the NFR manifest"
+                },
+                {
+                  "then": "The validator fails and names the missing fields",
+                  "when": "I run the manifest validator",
+                  "given": "The NFR manifest is missing required target fields"
+                },
+                {
+                  "then": "The values are labeled illustrative and the validator warns that the project has not set real targets",
+                  "when": "I read the manifest and run the validator",
+                  "given": "The manifest contains only the illustrative example values"
+                },
+                {
+                  "then": "None is given and the documentation states each team defines it",
+                  "when": "I read the template documentation",
+                  "given": "I look for a statement of when load tests run"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Load tests use synthetic data and are directed only at environments the team chooses",
+                "performance": "The sample load test reads its targets from the manifest; no fixed targets are defined by the template",
+                "accessibility": "Manifest and results are plain text"
+              }
+            }
+          ],
+          "route": "Component",
+          "title": "Quality Manifest and NFR Manifest",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-011"
+          ],
+          "userTypes": [
+            "Platform Admin",
+            "Developer",
+            "QA"
+          ],
+          "outOfScope": [
+            "Execution tiers, schedules, and push or pull-request policies",
+            "Fixed NFR targets for generated projects"
+          ],
+          "description": "Platform Admin invokes every gate through named scripts listed in a machine-readable quality manifest. Developer records justified deferrals, and QA traces non-functional requirements to evidence through the NFR manifest and load-test tooling.",
+          "dependencies": [
+            "Reference test framework and shared scripts"
+          ],
+          "affectedPersonas": [
+            "Platform Admin",
+            "Developer",
+            "QA"
+          ]
+        },
+        {
+          "id": "FEAT-013",
+          "items": [
+            {
+              "id": "TBI-030",
+              "type": "TBI",
+              "title": "Add secret, vulnerability, and license scan scripts",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Provide scripts that scan the repository for committed secrets, scan dependencies for known vulnerabilities, and check dependency licenses against an allowed list. Each script exits non-zero on findings.",
+              "definitionOfDone": [
+                "Each scan has its own named script that exits non-zero on findings",
+                "The allowed license list is stored in the repository",
+                "Seeded test fixtures prove a planted fake secret is detected",
+                "Documentation explains how to record a reviewed exception"
+              ],
+              "technicalDependencies": [
+                "Scanning tools selected from the organization-approved set",
+                "Lockfile"
+              ],
+              "nonFunctionalRequirements": [
+                "Scan output must not print the secret values it finds"
+              ]
+            },
+            {
+              "id": "TBI-031",
+              "type": "TBI",
+              "title": "Add SBOM generation",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-030"
+              ],
+              "description": "Provide a script that generates a software bill of materials in a standard format from the lockfile and container contents.",
+              "definitionOfDone": [
+                "The script writes an SBOM in a standard format",
+                "The SBOM lists every production dependency with its version",
+                "The script exits non-zero when it cannot generate the SBOM",
+                "Generated SBOM files are excluded from version control"
+              ],
+              "technicalDependencies": [
+                "SBOM tool selected from the organization-approved set"
+              ],
+              "nonFunctionalRequirements": [
+                "Output must be deterministic for the same lockfile"
+              ]
+            },
+            {
+              "id": "TBI-032",
+              "type": "TBI",
+              "title": "Create the production container definition",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-030"
+              ],
+              "description": "Create one multi-stage container definition that builds the API and the web client and produces a minimal runtime image, run as a non-root user, that serves the API and the built web client. Include no AWS, ECS, or registry assumptions.",
+              "definitionOfDone": [
+                "The image builds from a clean checkout with a frozen install",
+                "The runtime stage runs as a non-root user and contains only production dependencies",
+                "The running container passes the liveness and readiness checks and serves the web client",
+                "No AWS-specific configuration or credentials exist in the definition"
+              ],
+              "technicalDependencies": [
+                "Container build tool",
+                "Built API and web client artifacts",
+                "Pinned Node image"
+              ],
+              "nonFunctionalRequirements": [
+                "The runtime image must contain no build tools, dev dependencies, or secrets"
+              ]
+            },
+            {
+              "id": "PBI-027",
+              "type": "PBI",
+              "title": "Build one hardened container image",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-032"
+              ],
+              "userStory": {
+                "iWant": "build one hardened container image that holds the API and the built web client",
+                "soThat": "I can deploy it to ECS with my own infrastructure and pipeline",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Pushing the image to a registry",
+                "ECS task and service configuration"
+              ],
+              "businessRules": [
+                "BR-014: One staged, non-root container definition with no AWS assumptions",
+                "BR-010: Production secrets only through environment variables"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The build succeeds and the image serves the API and the web client",
+                  "when": "I build the container image",
+                  "given": "A clean checkout"
+                },
+                {
+                  "then": "It aborts with an error naming the missing variable, and no secret values are printed",
+                  "when": "It boots",
+                  "given": "The container starts without required environment values"
+                },
+                {
+                  "then": "The process is non-root and no development dependencies or build tools are present",
+                  "when": "I check the running user and installed packages",
+                  "given": "The container runs"
+                },
+                {
+                  "then": "It aborts and does not serve requests",
+                  "when": "The container starts",
+                  "given": "The development authentication mode is set while the environment is production"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Non-root runtime, minimal surface, no secrets baked into the image",
+                "performance": "No target defined; image size and start time are recorded by the project",
+                "accessibility": "Not applicable; build artifact"
+              }
+            },
+            {
+              "id": "PBI-028",
+              "type": "PBI",
+              "title": "Generate an SBOM for each build",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-031"
+              ],
+              "userStory": {
+                "iWant": "generate a software bill of materials with one script",
+                "soThat": "I can attach it to releases and answer dependency questions quickly",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "SBOM storage and publication",
+                "Signing"
+              ],
+              "businessRules": [
+                "BR-009: Dependencies are pinned and listed"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "An SBOM is written that lists every production dependency and version",
+                  "when": "I run the SBOM script",
+                  "given": "The workspace is installed"
+                },
+                {
+                  "then": "It exits non-zero with a message and writes no partial file",
+                  "when": "I run the SBOM script",
+                  "given": "The lockfile is missing or invalid"
+                },
+                {
+                  "then": "The package list in both outputs is identical",
+                  "when": "I run the script twice",
+                  "given": "The lockfile has not changed"
+                },
+                {
+                  "then": "Development-only dependencies are not listed as production components",
+                  "when": "I read the production SBOM",
+                  "given": "The repository contains development-only dependencies"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The SBOM lists packages and versions only and contains no secrets",
+                "performance": "No target defined; generation runs after the build",
+                "accessibility": "Output is a standard machine-readable format"
+              }
+            },
+            {
+              "id": "PBI-029",
+              "type": "PBI",
+              "title": "Catch secrets, vulnerable dependencies, and license violations before merging",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-030"
+              ],
+              "userStory": {
+                "iWant": "run secret, vulnerability, and license checks locally before I merge",
+                "soThat": "I fix supply-chain problems early",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Automated dependency-update proposals",
+                "Security review workflow"
+              ],
+              "businessRules": [
+                "BR-009: Approved stable versions are pinned; installs are frozen"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Each exits zero",
+                  "when": "I run the three checks",
+                  "given": "No secrets, vulnerable packages, or disallowed licenses are present"
+                },
+                {
+                  "then": "It exits non-zero, names the file and line, and does not print the secret",
+                  "when": "I run the secret scan",
+                  "given": "A fake secret is committed in a test file"
+                },
+                {
+                  "then": "The exception is honored and listed in the output",
+                  "when": "I run the vulnerability scan",
+                  "given": "A dependency has a reviewed exception recorded in the repository"
+                },
+                {
+                  "then": "It exits non-zero and names the package and license",
+                  "when": "I run the license check",
+                  "given": "A dependency uses a license not on the allowed list"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Findings never print the secret values they detect",
+                "performance": "No target defined; scans run on demand",
+                "accessibility": "Findings print as plain text"
+              }
+            }
+          ],
+          "route": "/profile/licenses/edit",
+          "title": "Supply-Chain Baseline and Production Container",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-006",
+            "FEAT-010"
+          ],
+          "userTypes": [
+            "Platform Admin",
+            "Developer"
+          ],
+          "outOfScope": [
+            "Image publishing, registry configuration, and ECS deployment",
+            "Automated dependency-update configuration"
+          ],
+          "description": "Platform Admin gets one hardened container definition, an SBOM script, and scan scripts. Developer sees secret, vulnerability, and license problems before merging.",
+          "dependencies": [
+            "Built API and web client artifacts"
+          ],
+          "affectedPersonas": [
+            "Platform Admin",
+            "Developer"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "CI pipeline definitions and execution policy",
+        "Fixed NFR targets",
+        "Publishing and deployment"
+      ],
+      "assumptions": [
+        "Tools for scanning, license checks, SBOM, and load testing are chosen from the organization-approved set at implementation",
+        "Express serves the built web client from the same process inside the container"
+      ],
+      "description": "An agent cannot show a build is acceptable without repository-defined gates and evidence. This epic delivers the full test framework with working reference tests, the quality and NFR manifests, and the supply-chain baseline with one hardened container definition, all as scripts and files that Platform Engineering's pipeline can call.",
+      "dependencies": [
+        "Reference API and Platform Services",
+        "Design System and Reference Web Client"
+      ],
+      "successMetrics": [
+        "Every gate in the quality manifest maps to a named script that runs locally",
+        "Reference tests exist at every layer and pass against PostgreSQL",
+        "Container build, vulnerability scan, secret scan, license check, and SBOM generation each run from a script"
+      ]
+    },
+    {
+      "title": "Agent Guidance and Knowledge Base",
+      "features": [
+        {
+          "id": "FEAT-014",
+          "items": [
+            {
+              "id": "TBI-033",
+              "type": "TBI",
+              "title": "Author the knowledge base structure and agent index",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Create an agent entry-point document and architecture documentation, an ADR area, module maps, API documentation, runbooks, testing guidance, a design-system reference, a component catalog, the compatibility table, and a plain-text index that lists them for agents.",
+              "definitionOfDone": [
+                "The entry-point document links to every other document and the agent index",
+                "Each module has a map entry naming its responsibility and public interface",
+                "Runbooks cover local setup, migrations, and common failures",
+                "The design-system reference and component catalog match the UI package"
+              ],
+              "technicalDependencies": [
+                "Finished modules and manifests"
+              ],
+              "nonFunctionalRequirements": [
+                "Every document must be plain Markdown or text that agents can read without running the application"
+              ]
+            },
+            {
+              "id": "TBI-034",
+              "type": "TBI",
+              "title": "Add the documentation validation script",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-033"
+              ],
+              "description": "Provide a script that checks internal links, required sections, and stale paths in the documents, and checks that the agent index lists every document.",
+              "definitionOfDone": [
+                "Broken internal links are reported",
+                "Missing required sections are reported",
+                "Paths that no longer exist in the repository are reported as stale",
+                "A document absent from the agent index is reported"
+              ],
+              "technicalDependencies": [
+                "Knowledge base documents"
+              ],
+              "nonFunctionalRequirements": [
+                "The script must exit non-zero with a message naming each problem"
+              ]
+            },
+            {
+              "id": "PBI-030",
+              "type": "PBI",
+              "title": "Find architecture, module boundaries, and runbooks from one index",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-033"
+              ],
+              "userStory": {
+                "iWant": "find the architecture, module boundaries, API documentation, and runbooks from one entry point",
+                "soThat": "I and my agents start work with accurate context",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Search service",
+                "Generated site"
+              ],
+              "businessRules": [
+                "BR-008: The template contains no Apex-specific code or content"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Each is linked and the agent index lists them all",
+                  "when": "I look for module maps, API docs, runbooks, and testing guidance",
+                  "given": "I open the entry-point document"
+                },
+                {
+                  "then": "The broken link is reported",
+                  "when": "I run the documentation validation",
+                  "given": "A link in the entry-point document points to a missing file"
+                },
+                {
+                  "then": "The missing entry is reported",
+                  "when": "I run the documentation validation",
+                  "given": "A new module is added without a module map entry"
+                },
+                {
+                  "then": "None appear outside an explicit note about the template's origin",
+                  "when": "I review the results",
+                  "given": "I search the documents for Apex-specific names or paths"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Documents contain no secrets, real identity values, or internal host names",
+                "performance": "Not applicable; static documents",
+                "accessibility": "Documents use headings and descriptive link text and are readable by assistive tools and agents"
+              }
+            },
+            {
+              "id": "PBI-031",
+              "type": "PBI",
+              "title": "Detect broken links, missing sections, and stale paths in documentation",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-034"
+              ],
+              "userStory": {
+                "iWant": "have a script report broken links, missing required sections, and stale paths in the documentation",
+                "soThat": "agents never act on outdated instructions",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Prose quality checks",
+                "Spell checking"
+              ],
+              "businessRules": [
+                "BR-013: Gates are exposed as scripts; teams decide when they run"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It exits zero",
+                  "when": "I run the documentation validation",
+                  "given": "All documents are consistent"
+                },
+                {
+                  "then": "It exits non-zero and names the document and the stale path",
+                  "when": "I run the validation",
+                  "given": "A document refers to a file path that was renamed"
+                },
+                {
+                  "then": "It exits non-zero and names the runbook and the section",
+                  "when": "I run the validation",
+                  "given": "A runbook is missing a required section heading"
+                },
+                {
+                  "then": "The external link is not fetched and is not reported as broken",
+                  "when": "I run the validation",
+                  "given": "A link points to an external address"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Output does not echo document contents beyond the offending link or path",
+                "performance": "Validation completes in a local developer loop",
+                "accessibility": "Output is plain text"
+              }
+            }
+          ],
+          "title": "Docs-as-Code Knowledge Base",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-004",
+            "FEAT-009",
+            "FEAT-012"
+          ],
+          "userTypes": [
+            "Developer"
+          ],
+          "outOfScope": [
+            "Generated static documentation site",
+            "Embedding or vector search"
+          ],
+          "description": "Developers and their agents find architecture, module maps, API documentation, runbooks, and testing guidance from one entry point, and a validation script keeps the documents accurate.",
+          "dependencies": [
+            "Finished modules, manifests, and design system to document"
+          ],
+          "affectedPersonas": [
+            "Developer"
+          ]
+        },
+        {
+          "id": "FEAT-015",
+          "items": [
+            {
+              "id": "TBI-035",
+              "type": "TBI",
+              "title": "Author the api-contract skill",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Write the api-contract skill covering Zod as the source of truth, generated OpenAPI, HTTP semantics, versioned routes, Problem Details errors, pagination, auth boundaries, and contract tests. State that undocumented or incompatible behavior fails the drift and contract checks.",
+              "definitionOfDone": [
+                "The skill lists the rules and the enforcing check for each",
+                "The skill gives a step list for adding an endpoint",
+                "The skill states that handlers must not accept another person's identifier on the profile resource",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "Contracts package",
+                "Drift check",
+                "Contract tests"
+              ],
+              "nonFunctionalRequirements": [
+                "Every rule in the skill must name the check that enforces it, or state that review enforces it"
+              ]
+            },
+            {
+              "id": "TBI-036",
+              "type": "TBI",
+              "title": "Author the ui-standards skill",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Write the ui-standards skill covering theme token use, component rules, responsive layout, loading, empty, and error states, accessibility, forms, query handling and invalidation, and stable test selectors.",
+              "definitionOfDone": [
+                "The skill lists the rules and the enforcing check for each",
+                "The skill gives a step list for adding a screen",
+                "The skill states the test selector convention and the form and query patterns used by the profile screen",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "UI package",
+                "Design-system reference",
+                "Accessibility checks"
+              ],
+              "nonFunctionalRequirements": [
+                "Every rule in the skill must name the check that enforces it, or state that review enforces it"
+              ]
+            },
+            {
+              "id": "PBI-032",
+              "type": "PBI",
+              "title": "Add an endpoint that follows the API contract rules",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-035"
+              ],
+              "userStory": {
+                "iWant": "follow one skill when adding an endpoint so it matches the API contract rules",
+                "soThat": "all endpoints behave the same way and stay documented",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Authorization rules and roles",
+                "Endpoint implementation for any specific project"
+              ],
+              "businessRules": [
+                "BR-004: Zod is authoritative; OpenAPI is generated and drift-checked",
+                "BR-015: The developer skill requires api-contract for endpoint work"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "They pass with the new route documented",
+                  "when": "I run the drift and contract checks",
+                  "given": "I follow the skill to add an endpoint"
+                },
+                {
+                  "then": "The checks fail and point to the undocumented route",
+                  "when": "I run the checks",
+                  "given": "I add a handler without a route definition"
+                },
+                {
+                  "then": "The route defines a default and a maximum page size and rejects larger values with a Problem Details error",
+                  "when": "I follow the pagination rules in the skill",
+                  "given": "My endpoint returns a list"
+                },
+                {
+                  "then": "The tests fail",
+                  "when": "I run the contract and error-handling tests",
+                  "given": "My endpoint returns an error body with a stack trace or identity value"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The skill requires authentication on non-health routes and forbids identity values in errors and logs",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The skill is plain Markdown readable by assistive tools and agents"
+              }
+            },
+            {
+              "id": "PBI-033",
+              "type": "PBI",
+              "title": "Build a screen that follows the UI standards",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-036"
+              ],
+              "userStory": {
+                "iWant": "follow one skill when building a screen so it matches the design system and accessibility rules",
+                "soThat": "all screens look and behave consistently",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Designing screens for a specific project",
+                "Brand-specific styling"
+              ],
+              "businessRules": [
+                "BR-015: The developer skill requires ui-standards for screen work"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "They pass for loading, empty, error, and loaded states",
+                  "when": "I run the accessibility and component tests",
+                  "given": "I follow the skill to add a screen"
+                },
+                {
+                  "then": "The check fails and names the field",
+                  "when": "I run the accessibility check",
+                  "given": "My screen has a form field without a label"
+                },
+                {
+                  "then": "It uses the shared query client and invalidates affected queries after a change",
+                  "when": "I follow the query rules in the skill",
+                  "given": "My screen fetches data"
+                },
+                {
+                  "then": "The deviation is reported as a violation",
+                  "when": "I review it against the skill checklist",
+                  "given": "My screen uses a hard-coded color or an unlisted component pattern"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The skill forbids sending identifiers other than those the contract defines",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The skill requires WCAG 2.1 AA, labeled controls, keyboard operation, and axe checks on every state"
+              }
+            },
+            {
+              "id": "PBI-034",
+              "type": "PBI",
+              "title": "Review a screen against the UI standards checklist",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-036"
+              ],
+              "userStory": {
+                "iWant": "review a new screen against a written UI standards checklist",
+                "soThat": "design consistency does not depend on who built the screen",
+                "persona": "UI/UX"
+              },
+              "userTypes": [
+                "UI/UX"
+              ],
+              "outOfScope": [
+                "Visual design of new components",
+                "Automated visual regression testing"
+              ],
+              "businessRules": [
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Every checklist item can be marked as met with evidence from the design-system reference or tests",
+                  "when": "I review it with the checklist",
+                  "given": "A new screen follows the standards"
+                },
+                {
+                  "then": "The missing state is identified as a failure",
+                  "when": "I review it with the checklist",
+                  "given": "A screen skips its empty or error state"
+                },
+                {
+                  "then": "It prompts me to confirm layout and focus order at both widths",
+                  "when": "I use the checklist",
+                  "given": "A screen is reviewed at the narrowest and widest supported widths"
+                },
+                {
+                  "then": "The component is flagged for catalog addition or replacement",
+                  "when": "I review it with the checklist",
+                  "given": "A screen uses a component outside the documented catalog"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Not applicable; no data handling",
+                "performance": "Not applicable; review checklist",
+                "accessibility": "The checklist includes keyboard, focus, contrast, and screen-reader checks"
+              }
+            }
+          ],
+          "title": "API-Contract and UI-Standards Skills",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-004",
+            "FEAT-009",
+            "FEAT-014"
+          ],
+          "userTypes": [
+            "Developer",
+            "UI/UX"
+          ],
+          "outOfScope": [
+            "Skills for infrastructure or pipelines",
+            "Apex-specific skills"
+          ],
+          "description": "Developers and UI/UX get two enforceable skills that keep every endpoint and screen consistent with the API contract and the design system.",
+          "dependencies": [
+            "Contracts package, design system, and knowledge base"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "UI/UX"
+          ]
+        },
+        {
+          "id": "FEAT-016",
+          "items": [
+            {
+              "id": "TBI-037",
+              "type": "TBI",
+              "title": "Author the planner skill",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Write the planner skill that reads the agent entry point, module maps, quality manifest, and NFR manifest, and produces a plan that names the modules touched, the checks that apply, and the NFR evidence required.",
+              "definitionOfDone": [
+                "The skill states its inputs, outputs, and stop conditions",
+                "The skill requires the plan to list applicable gates from the quality manifest",
+                "The skill requires NFR evidence to be named from the NFR manifest",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "Knowledge base",
+                "Quality manifest",
+                "NFR manifest"
+              ],
+              "nonFunctionalRequirements": [
+                "The skill must point only to repository references that exist in the template"
+              ]
+            },
+            {
+              "id": "TBI-038",
+              "type": "TBI",
+              "title": "Author the UI skill",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Write the UI skill that directs a UI specialist to the design-system reference, component catalog, and ui-standards skill before producing or changing screens.",
+              "definitionOfDone": [
+                "The skill states its inputs, outputs, and stop conditions",
+                "The skill requires reading the ui-standards skill first",
+                "The skill requires accessibility and state coverage evidence",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "ui-standards skill",
+                "Design-system reference",
+                "Component catalog"
+              ],
+              "nonFunctionalRequirements": [
+                "The skill must require stating which catalog components are reused"
+              ]
+            },
+            {
+              "id": "TBI-039",
+              "type": "TBI",
+              "title": "Author the developer skill",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-037"
+              ],
+              "description": "Write the developer skill that requires the api-contract skill for endpoint work and the ui-standards skill for screen work, requires a migration for data model changes, and requires the applicable quality gates to pass.",
+              "definitionOfDone": [
+                "The skill states when each of the api-contract and ui-standards skills is required",
+                "The skill requires a reviewed migration for any schema change",
+                "The skill lists the quality gates a change must pass",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "api-contract skill",
+                "ui-standards skill",
+                "Quality manifest"
+              ],
+              "nonFunctionalRequirements": [
+                "The skill must stop and report when a required reference is missing instead of guessing"
+              ]
+            },
+            {
+              "id": "TBI-040",
+              "type": "TBI",
+              "title": "Author the QA skill",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-039"
+              ],
+              "description": "Write the QA skill that reads the quality manifest and the NFR manifest, runs or reviews the applicable gates, and reports evidence for each, including deferrals.",
+              "definitionOfDone": [
+                "The skill states its inputs, outputs, and stop conditions",
+                "The skill requires evidence per gate from the manifest",
+                "The skill requires NFR targets to be traced to verification evidence",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "Quality manifest",
+                "NFR manifest",
+                "Reference tests"
+              ],
+              "nonFunctionalRequirements": [
+                "The skill must report deferred gates as not verified, not as passed"
+              ]
+            },
+            {
+              "id": "TBI-041",
+              "type": "TBI",
+              "title": "Author the integration skill",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-040"
+              ],
+              "description": "Write the integration skill that reads the quality manifest and the QA evidence and decides whether a build is ready to hand to Platform Engineering's pipeline, naming any unresolved gates or open decisions.",
+              "definitionOfDone": [
+                "The skill states its inputs, outputs, and stop conditions",
+                "The skill requires every gate to be passed or deferred with a recorded reason",
+                "The skill requires open decisions from the handoff document to be listed",
+                "The skill is linked from the agent entry point and the agent index"
+              ],
+              "technicalDependencies": [
+                "Quality manifest",
+                "QA skill evidence",
+                "Handoff document"
+              ],
+              "nonFunctionalRequirements": [
+                "The skill must not claim readiness when any required gate lacks evidence"
+              ]
+            },
+            {
+              "id": "PBI-035",
+              "type": "PBI",
+              "title": "Have the development agent apply the right skills automatically",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-039"
+              ],
+              "userStory": {
+                "iWant": "have my development agent load the api-contract skill for endpoint work and the ui-standards skill for screen work",
+                "soThat": "one-prompt builds meet the same standards as hand-written changes",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Agent orchestration provided by Apex",
+                "Skills for work outside the template's stack"
+              ],
+              "businessRules": [
+                "BR-015: The developer skill requires api-contract and ui-standards when relevant"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It directs the agent to the api-contract skill before any code is written",
+                  "when": "The developer skill runs",
+                  "given": "A task adds or changes an endpoint"
+                },
+                {
+                  "then": "It directs the agent to the ui-standards skill before any code is written",
+                  "when": "The developer skill runs",
+                  "given": "A task adds or changes a screen"
+                },
+                {
+                  "then": "It does not require either skill but still requires the applicable quality gates",
+                  "when": "The developer skill runs",
+                  "given": "A task changes only documentation or configuration"
+                },
+                {
+                  "then": "The agent stops and reports the missing reference instead of guessing",
+                  "when": "The developer skill runs",
+                  "given": "A required reference file is missing"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The skill forbids hard-coded secrets and identity values in code and tests",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The skill is plain Markdown readable by agents and assistive tools"
+              }
+            },
+            {
+              "id": "PBI-036",
+              "type": "PBI",
+              "title": "Plan a one-prompt build from repository references",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-037"
+              ],
+              "userStory": {
+                "iWant": "have a planner agent turn a prompt into a plan grounded in the module maps, manifests, and skills",
+                "soThat": "a build starts from the real structure and gates of the repository",
+                "persona": "Developer"
+              },
+              "userTypes": [
+                "Developer"
+              ],
+              "outOfScope": [
+                "Prompt authoring tools",
+                "Project management integration"
+              ],
+              "businessRules": [
+                "BR-013: Plans use the manifests; the template does not set execution policy"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The plan names the modules touched, the applicable quality gates, and the NFR evidence needed",
+                  "when": "The planner skill runs",
+                  "given": "A prompt describes a feature"
+                },
+                {
+                  "then": "The plan states that real targets are missing instead of using the examples",
+                  "when": "The planner skill runs",
+                  "given": "The NFR manifest has only illustrative values"
+                },
+                {
+                  "then": "The plan marks it as owned by Platform Engineering and excludes it",
+                  "when": "The planner skill runs",
+                  "given": "A prompt asks for work that is out of the template's scope, such as AWS infrastructure"
+                },
+                {
+                  "then": "The plan flags the open RBAC decision and does not invent a role model",
+                  "when": "The planner skill runs",
+                  "given": "A prompt asks for a user list or role-based access"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The plan must not include real credentials or identity values",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The skill is plain Markdown readable by agents and assistive tools"
+              }
+            },
+            {
+              "id": "PBI-037",
+              "type": "PBI",
+              "title": "Verify a build against the quality manifest",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-040"
+              ],
+              "userStory": {
+                "iWant": "have a QA agent check a build against every gate in the quality manifest and report evidence",
+                "soThat": "I can tell what was verified, what failed, and what was deferred",
+                "persona": "QA"
+              },
+              "userTypes": [
+                "QA"
+              ],
+              "outOfScope": [
+                "Writing new tests for project-specific features",
+                "Manual exploratory testing"
+              ],
+              "businessRules": [
+                "BR-013: The manifest lists gates and deferrals but not execution policy"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "The report lists each gate with evidence of its result",
+                  "when": "The QA skill runs",
+                  "given": "All gates pass"
+                },
+                {
+                  "then": "The report names the failing gate and its output and does not report the build as verified",
+                  "when": "The QA skill runs",
+                  "given": "A gate fails"
+                },
+                {
+                  "then": "The report lists it as not verified, with the reason and owner",
+                  "when": "The QA skill runs",
+                  "given": "A gate is deferred with a reason"
+                },
+                {
+                  "then": "The report flags a manifest error and stops",
+                  "when": "The QA skill runs",
+                  "given": "A referenced gate script is missing"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The report contains no secrets or identity values",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The report is plain text"
+              }
+            },
+            {
+              "id": "PBI-038",
+              "type": "PBI",
+              "title": "Confirm a build is ready for the pipeline",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-041"
+              ],
+              "userStory": {
+                "iWant": "have an integration agent confirm a build is ready to enter our pipeline and list anything unresolved",
+                "soThat": "I receive builds with known gaps clearly stated",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Running the pipeline",
+                "Deploying to ECS"
+              ],
+              "businessRules": [
+                "BR-013: Readiness uses manifest evidence, not execution policy",
+                "BR-008: Pipelines and infrastructure belong to Platform Engineering"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It reports the build as ready and lists the deferrals",
+                  "when": "The integration skill runs",
+                  "given": "Every gate has passing evidence or a recorded deferral"
+                },
+                {
+                  "then": "It reports the build as not ready and names the gate",
+                  "when": "The integration skill runs",
+                  "given": "A required gate has no evidence"
+                },
+                {
+                  "then": "It lists those decisions in its report",
+                  "when": "The integration skill runs",
+                  "given": "The handoff document lists open decisions that affect the build"
+                },
+                {
+                  "then": "It reports the build as not ready",
+                  "when": "The integration skill runs",
+                  "given": "The build contains the development authentication adapter selected for production"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The report contains no secrets or identity values",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The report is plain text"
+              }
+            },
+            {
+              "id": "PBI-039",
+              "type": "PBI",
+              "title": "Have the UI specialist agent work within the design system",
+              "priority": "Should Have",
+              "dependsOn": [
+                "TBI-038"
+              ],
+              "userStory": {
+                "iWant": "have the UI specialist agent reuse catalog components and theme tokens",
+                "soThat": "screens built by agents match the design system I maintain",
+                "persona": "UI/UX"
+              },
+              "userTypes": [
+                "UI/UX"
+              ],
+              "outOfScope": [
+                "Generating new visual designs",
+                "Visual regression testing"
+              ],
+              "businessRules": [
+                "BR-015: UI work follows the ui-standards skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It lists the catalog components and theme tokens it reused",
+                  "when": "It follows the UI skill",
+                  "given": "The UI specialist agent builds a screen"
+                },
+                {
+                  "then": "It proposes a catalog addition and does not create a one-off styled component",
+                  "when": "It follows the UI skill",
+                  "given": "The agent needs a component the catalog lacks"
+                },
+                {
+                  "then": "It provides evidence from component and accessibility tests for each state",
+                  "when": "The agent finishes",
+                  "given": "The screen has loading, empty, error, and loaded states"
+                },
+                {
+                  "then": "It stops and reports the missing reference",
+                  "when": "It starts the task",
+                  "given": "The agent cannot read the design-system reference"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "Not applicable; no data handling",
+                "performance": "Not applicable; guidance",
+                "accessibility": "The skill requires accessibility evidence for every screen state"
+              }
+            }
+          ],
+          "title": "Role Skill Set",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-012",
+            "FEAT-015"
+          ],
+          "userTypes": [
+            "Developer",
+            "QA",
+            "UI/UX",
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "Runtime AI services or model dependencies",
+            "Orchestration of agents, which Apex provides"
+          ],
+          "description": "Developer, QA, UI/UX, and Platform Admin get approved skills for the planner, UI, developer, QA, and integration roles. The developer skill requires the api-contract and ui-standards skills, and the QA and integration skills read the quality manifest.",
+          "dependencies": [
+            "Quality manifest, api-contract skill, ui-standards skill"
+          ],
+          "affectedPersonas": [
+            "Developer",
+            "QA",
+            "UI/UX",
+            "Platform Admin"
+          ]
+        },
+        {
+          "id": "FEAT-017",
+          "items": [
+            {
+              "id": "TBI-042",
+              "type": "TBI",
+              "title": "Write the handoff document",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "description": "Write a handoff document with an ownership table (template versus Platform Engineering for AWS infrastructure, pipelines, migration execution, deployment, and repository governance), the contracts Platform Engineering consumes (scripts, manifests, health endpoints, environment variables, the migration command, and the container definition), the replacement placeholders, and a register of unresolved decisions with the extension point each affects.",
+              "definitionOfDone": [
+                "The ownership table covers AWS infrastructure, pipelines, migration execution, deployment packaging, and repository governance",
+                "The document lists scripts, manifests, health endpoints, environment variables, the migration command, and the container definition",
+                "The unresolved-decision register lists production identity provider, RBAC, data classification, NFR targets and test execution policy, and feature-flag provider, each with its extension point",
+                "The documentation validation passes for the document"
+              ],
+              "technicalDependencies": [
+                "Knowledge base",
+                "Quality manifest",
+                "Container definition"
+              ],
+              "nonFunctionalRequirements": [
+                "Every contract named in the document must exist in the template"
+              ]
+            },
+            {
+              "id": "PBI-040",
+              "type": "PBI",
+              "title": "Review what the template provides and what Platform Engineering owns",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-042"
+              ],
+              "userStory": {
+                "iWant": "review one document that separates what the template provides from what Platform Engineering owns",
+                "soThat": "the team can decide whether to adopt the template into the bootstrap source",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Bootstrap implementation",
+                "Approval workflow for adoption"
+              ],
+              "businessRules": [
+                "BR-008: The template excludes AWS infrastructure, pipelines, and governance"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "Each of AWS infrastructure, pipelines, migration execution, deployment packaging, and governance has a named owner",
+                  "when": "I read the ownership table",
+                  "given": "I open the handoff document"
+                },
+                {
+                  "then": "It exists",
+                  "when": "I look for it in the template",
+                  "given": "The document names a script, manifest, or endpoint"
+                },
+                {
+                  "then": "I find the list of replacement values for project name, package scope, service name, and database name",
+                  "when": "I read the placeholder section",
+                  "given": "I want to start a project from the template"
+                },
+                {
+                  "then": "The validation reports the stale reference",
+                  "when": "I run the documentation validation",
+                  "given": "A document claims a contract that does not exist"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The document contains no secrets or internal host names",
+                "performance": "Not applicable; static document",
+                "accessibility": "The document uses headings and tables readable by assistive tools"
+              }
+            },
+            {
+              "id": "PBI-041",
+              "type": "PBI",
+              "title": "See the unresolved decisions and the extension points they affect",
+              "priority": "Must Have",
+              "dependsOn": [
+                "TBI-042"
+              ],
+              "userStory": {
+                "iWant": "see each unresolved decision listed with the part of the template it affects",
+                "soThat": "I know what we must decide before a project goes to production",
+                "persona": "Platform Admin"
+              },
+              "userTypes": [
+                "Platform Admin"
+              ],
+              "outOfScope": [
+                "Making the decisions",
+                "Tracking decision status over time"
+              ],
+              "businessRules": [
+                "BR-003: RBAC is an extension point",
+                "BR-013: NFR targets and execution policy are left to each team"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "then": "It lists the production identity provider, RBAC, data classification, NFR targets and test execution policy, and feature-flag provider",
+                  "when": "I read it",
+                  "given": "I open the unresolved-decision register"
+                },
+                {
+                  "then": "It names the adapter, manifest, or interface that the decision plugs into",
+                  "when": "I read its entry",
+                  "given": "A decision is listed"
+                },
+                {
+                  "then": "It states that synthetic fixtures and identity redaction are engineering practice, not a classification",
+                  "when": "I read it",
+                  "given": "The data classification entry"
+                },
+                {
+                  "then": "The validation reports the stale reference",
+                  "when": "I run the documentation validation",
+                  "given": "A listed extension point has no matching interface or file in the template"
+                }
+              ],
+              "nonFunctionalRequirements": {
+                "security": "The register states that data classification is unresolved and does not assume a classification",
+                "performance": "Not applicable; static document",
+                "accessibility": "The register is a plain table readable by assistive tools"
+              }
+            }
+          ],
+          "route": "/template-preview",
+          "title": "Platform Engineering Handoff Package",
+          "priority": "Must Have",
+          "dependsOn": [
+            "FEAT-013",
+            "FEAT-014"
+          ],
+          "userTypes": [
+            "Platform Admin"
+          ],
+          "outOfScope": [
+            "Bootstrap automation",
+            "Resolving the open decisions"
+          ],
+          "description": "Platform Admin reviews the template with the team, sees what the template provides versus what Platform Engineering owns, and sees every unresolved decision with the extension point it affects.",
+          "dependencies": [
+            "Completed template modules and documentation"
+          ],
+          "affectedPersonas": [
+            "Platform Admin"
+          ]
+        }
+      ],
+      "priority": "Must Have",
+      "outOfScope": [
+        "Runtime AI or LLM services",
+        "Runtime searchable wiki or generated documentation site",
+        "Repository governance documents"
+      ],
+      "assumptions": [
+        "The role skills follow the accepted single-prompt build orchestration ADR as summarized in the interview",
+        "Skills point to immutable project references"
+      ],
+      "description": "Agents that build from a single prompt need stable, checkable instructions. This epic delivers the docs-as-code knowledge base, the api-contract and ui-standards skills, the five role skills, and the handoff package that tells Platform Engineering what the template provides and what remains open.",
+      "dependencies": [
+        "Design System and Reference Web Client",
+        "Testing, Quality Manifest and Supply Chain"
+      ],
+      "successMetrics": [
+        "A new agent finds architecture, module boundaries, and runbooks from one entry point",
+        "Documentation validation reports broken links, missing sections, and stale paths",
+        "Platform Engineering can identify every open decision and its extension point from one document"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "Developer",
+      "type": "Technical",
+      "description": "Engineer, or Apex-launched development agent acting for one, who builds on the template in a generated project and keeps its API, UI, data, and quality conventions"
+    },
+    {
+      "name": "Platform Admin",
+      "type": "Admin",
+      "description": "Stand-in for Platform Engineering, who review the sample, bootstrap it into new projects, and own AWS infrastructure, pipelines, migration execution, and repository governance"
+    },
+    {
+      "name": "QA",
+      "type": "Internal",
+      "description": "Quality engineer, or QA agent, who verifies a generated project against its OpenAPI contract, quality manifest, and NFR manifest"
+    },
+    {
+      "name": "UI/UX",
+      "type": "Internal",
+      "description": "Designer who applies and reviews the neutral MUI design system, token overrides, and UI standards in generated projects"
+    },
+    {
+      "name": "Authenticated User",
+      "type": "Internal",
+      "description": "Person signed in through the identity-provider adapter of a generated application who views and updates their own profile"
+    }
+  ],
+  "businessRules": [
+    {
+      "id": "BR-001",
+      "rule": "The profile endpoints read or update only the profile of the authenticated principal, using the external subject supplied by the identity-provider adapter. No endpoint lists users, looks up another user, or accepts another user's identifier.",
+      "appliesTo": "Health and Self-Service Profile API (Feature)"
+    },
+    {
+      "id": "BR-002",
+      "rule": "The development identity adapter can be selected only when the authentication mode is development and the environment is not production. Production startup aborts if it is selected.",
+      "appliesTo": "Identity Provider Adapter (Feature)"
+    },
+    {
+      "id": "BR-003",
+      "rule": "The template defines no roles, permissions, or authorization policy. Protected routes require authentication only, and RBAC is an explicit extension point.",
+      "appliesTo": "Identity Provider Adapter (Feature)"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Zod schemas in shared route definitions are the single source of truth for validation, types, and documentation. The OpenAPI 3.1 document is generated from them and committed, and the drift check fails when the committed document differs from the generated one.",
+      "appliesTo": "Zod-Authoritative API Contract (Feature)"
+    },
+    {
+      "id": "BR-005",
+      "rule": "Every error response uses RFC 9457 Problem Details and carries the request ID. Routes are versioned and resource-oriented, and pagination conventions are bounded.",
+      "appliesTo": "Zod-Authoritative API Contract (Feature)"
+    },
+    {
+      "id": "BR-006",
+      "rule": "The application never changes the database schema at startup. Schema changes ship as reviewed SQL migrations committed with the Drizzle schema change in the application repository. Platform Engineering runs them as a separate deployment step, and production rollback uses forward corrective migrations.",
+      "appliesTo": "Starter Persistence with app_users (Feature)"
+    },
+    {
+      "id": "BR-007",
+      "rule": "Seeds, fixtures, and tests use synthetic data only. Logs, telemetry, and API error bodies never contain identity values (display name, email, external identity subject).",
+      "appliesTo": "Observability and Graceful Shutdown (Feature)"
+    },
+    {
+      "id": "BR-008",
+      "rule": "The template contains no AWS infrastructure, pipeline definitions, ECS configuration, repository governance files, runtime AI dependencies, or Apex-specific code. It has its own lockfile and scripts and does not change Apex runtime behavior or Apex builds.",
+      "appliesTo": "Isolated pnpm Workspace and Pinned Toolchain (Feature)"
+    },
+    {
+      "id": "BR-009",
+      "rule": "Dependencies use organization-approved stable versions, pinned through Corepack and a committed lockfile with frozen installs, and listed in a compatibility table.",
+      "appliesTo": "Isolated pnpm Workspace and Pinned Toolchain (Feature)"
+    },
+    {
+      "id": "BR-010",
+      "rule": "A missing or invalid required environment value aborts startup with a clear error. Production secrets arrive only through environment variables, and the example environment file contains no secrets.",
+      "appliesTo": "Typed Configuration and Local Environment (Feature)"
+    },
+    {
+      "id": "BR-011",
+      "rule": "The feature-flag interface is provider-neutral. The template ships a local adapter and no vendor SDK.",
+      "appliesTo": "Provider-Neutral Feature Flag Interface (Feature)"
+    },
+    {
+      "id": "BR-012",
+      "rule": "Coverage floors are 80% for lines, functions, and statements and 75% for branches.",
+      "appliesTo": "Reference Test Framework (Feature)"
+    },
+    {
+      "id": "BR-013",
+      "rule": "The quality manifest and NFR manifest define gates and targets but no execution tiers or schedule. Each consuming team decides when checks run. Each project supplies its own NFR targets, and example values are illustrative only.",
+      "appliesTo": "Quality Manifest and NFR Manifest (Feature)"
+    },
+    {
+      "id": "BR-014",
+      "rule": "The production container is defined once, built in stages, runs as a non-root user, and packages the API and the built web client. It makes no AWS or ECS assumptions.",
+      "appliesTo": "Supply-Chain Baseline and Production Container (Feature)"
+    },
+    {
+      "id": "BR-015",
+      "rule": "The developer skill requires the api-contract skill for any endpoint work and the ui-standards skill for any screen work. The QA and integration skills read the quality manifest.",
+      "appliesTo": "Role Skill Set (Feature)"
+    }
+  ],
+  "assumptionsMade": [
+    "The accepted ADR \"Build from prompt (single-prompt-build-orchestration)\" is cited in the transcript, but its text was not available in the repository checkout. The five-role skill set, quality manifest, and immutable project references follow the transcript's summary of it and should be confirmed against the ADR.",
+    "Platform Engineering is not an Apex persona. Backlog stories map it to `Platform Admin`, the closest cross-project administrator persona. Template consumers and Apex-launched development agents map to `Developer`. People who use the sample profile screen map to `Authenticated User`. No new personas are introduced.",
+    "`GET /api/v1/me` creates the `app_users` row on first authenticated access from the principal's subject and display name. The identity provider owns identities and the sample has no create endpoint, so this is the only way a profile can come to exist. Confirm this behavior.",
+    "The production container packages the API and the built web client, and Express serves the built client from the same process. The template still produces independent web and API build artifacts, as the transcript requires.",
+    "Apex's root formatting check scans the whole repository. The template must conform to Apex's existing formatting rules, or the maintainers must approve a minimal ignore entry. Confirm which approach to use.",
+    "The transcript does not name the tools for OpenAPI generation, load testing, secret and vulnerability scanning, license checks, or SBOM generation. Implementation selects them from the organization-approved set and records them in the compatibility table.",
+    "Automated dependency-update configuration is left to Platform Engineering with the pipeline and repository governance, because the transcript assigned both to them.",
+    "The set of `status` values on `app_users` is not specified. Implementation chooses a small documented set.",
+    "Example NFR values (P95 under 500 ms at 50 concurrent users, 100,000 user rows) illustrate the manifest format only. They are not requirements or promises.",
+    "Unresolved decisions that the template leaves as extension points are: production identity provider, RBAC, data classification, NFR targets and test execution policy, and feature-flag provider."
+  ],
+  "implementationPhases": [
+    {
+      "epics": [
+        "Workspace and Local Development Foundation"
+      ],
+      "phase": 1,
+      "rationale": "The workspace, pinned toolchain, shared configuration, and local database are the base every other package builds, tests, and runs on. Nothing else can be built or verified until they exist."
+    },
+    {
+      "epics": [
+        "Data and API Contract Layer"
+      ],
+      "phase": 2,
+      "rationale": "The app_users schema with its migrations, and the Zod-authoritative contracts package, define the data and API shapes that the backend, web client, tests, and skills all consume. They must exist before any handler, screen, or contract test is written."
+    },
+    {
+      "epics": [
+        "Reference API and Platform Services"
+      ],
+      "phase": 3,
+      "rationale": "The identity adapter, profile and health API, observability, and flag interface use the persistence and contracts from Phase 2. The web client needs a working profile API, and the test framework needs working endpoints to verify."
+    },
+    {
+      "epics": [
+        "Design System and Reference Web Client"
+      ],
+      "phase": 4,
+      "rationale": "The profile screen calls the profile API from Phase 3 through the generated client types and builds on the design system. Tests, the container, and the UI skill need the finished screen."
+    },
+    {
+      "epics": [
+        "Testing, Quality Manifest and Supply Chain"
+      ],
+      "phase": 5,
+      "rationale": "The reference tests, manifests, and container need the finished API and web client to verify and package. The role skills and handoff document read the manifests and container, so they follow."
+    },
+    {
+      "epics": [
+        "Agent Guidance and Knowledge Base"
+      ],
+      "phase": 6,
+      "rationale": "The knowledge base, skills, and handoff package describe finished modules, scripts, and manifests, and the QA and integration skills read the quality manifest. They are written last so every path and reference they name exists."
+    }
+  ]
+}
