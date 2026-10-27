@@ -47,7 +47,11 @@ jest.mock('../db/schema', () => ({
   appGroups: {},
 }));
 
-import { sendStandupReminders, runFacilitator } from '../services/standupService';
+import {
+  sendStandupReminders,
+  runFacilitator,
+  triggerSessionForConfig,
+} from '../services/standupService';
 import { createNotification } from '../services/notificationService';
 import { sendTeamsNotification } from '../services/teamsBotService';
 import { createThread } from '../services/chatAgentService';
@@ -210,5 +214,52 @@ describe('runFacilitator', () => {
       }),
     );
     expect(mockDb.update).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('triggerSessionForConfig project skill settings', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.query.standupSessions.findFirst.mockResolvedValue(null);
+    mockDb.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        innerJoin: () => ({
+          where: jest.fn().mockResolvedValue([
+            { userId: 'user-1', displayName: 'User One', email: 'one@example.com' },
+          ]),
+        }),
+      }),
+    });
+  });
+
+  it('still loads skill settings through the relational skillSettings include', async () => {
+    mockDb.query.standupConfigs.findFirst.mockResolvedValue({
+      id: 'config-1',
+      project: 'AI-Pilot',
+      groupIds: ['group-1'],
+      skillSettingsId: 'skill-1',
+      skillSettings: {
+        standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
+        skillRepo: 'org/skills',
+        skillBranch: 'main',
+      },
+    });
+
+    await triggerSessionForConfig('config-1');
+
+    expect(mockDb.query.standupConfigs.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ with: { group: true, skillSettings: true } }),
+    );
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        agentModule: 'standup',
+        repo: 'org/skills',
+        branch: 'main',
+        standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
+        skillSettingsId: 'skill-1',
+      }),
+    );
   });
 });

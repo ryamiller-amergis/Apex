@@ -9,6 +9,7 @@ import {
   interviews,
   prds,
   projectSkillSettings,
+  projectSkillWorkflowSettings,
 } from '../db/schema';
 import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from '../../shared/types/effort';
 import type {
@@ -194,6 +195,18 @@ describe('TBI-001 effort shared contract', () => {
       expect(columns[property].dataType).toBe('string');
       expect(columns[property].notNull).toBe(false);
     }
+  });
+});
+
+describe('per-workflow effort column', () => {
+  it('is nullable typed text like the legacy effort columns it mirrors', () => {
+    const effort = getTableColumns(projectSkillWorkflowSettings).effort;
+    expect(effort.name).toBe('effort');
+    expect(effort.dataType).toBe('string');
+    expect(effort.notNull).toBe(false);
+    expect(effort.hasDefault).toBe(false);
+    const typed: typeof projectSkillWorkflowSettings.$inferSelect.effort = 'medium' satisfies EffortLevel;
+    expect(isEffortLevel(typed)).toBe(true);
   });
 });
 
