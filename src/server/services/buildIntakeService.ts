@@ -4,7 +4,6 @@
  * data, and returns a hidden context block. Makes no agent call.
  */
 import type { ChatThread } from '../../shared/types/chat';
-import { BUILD_INTAKE_OPTION_KEY } from '../../shared/types/buildPreflight';
 import {
   countQuestionMarkers,
   sensitiveClassLabel,
@@ -13,6 +12,7 @@ import {
 } from '../../shared/utils/buildIntakeMarkers';
 import { appendBuildEvent } from './buildEventsService';
 import { detectSensitiveClasses } from './buildIntakeSensitiveText';
+import { buildIntakeRunId } from './buildIntakeThread';
 import { findBuildByPlaybookRun } from './buildOrchestrator/store';
 import { getThread } from './chatAgentService';
 import { trackEvent } from './telemetry';
@@ -39,18 +39,6 @@ export interface PrepareBuildIntakeTurnResult {
   budgetSpent: boolean;
   /** Empty when nothing matched or the check failed. */
   sensitiveClasses: SensitiveClass[];
-}
-
-interface BuildIntakeKickoff {
-  playbookInterview?: { runId?: string; snapshot?: { key?: string } };
-}
-
-function intakeKickoff(thread: ChatThread): BuildIntakeKickoff {
-  return thread.kickoff as ChatThread['kickoff'] & BuildIntakeKickoff;
-}
-
-export function isBuildIntakeThread(thread: ChatThread): boolean {
-  return intakeKickoff(thread).playbookInterview?.snapshot?.key === BUILD_INTAKE_OPTION_KEY;
 }
 
 function budgetLines(questionsAsked: number, budget: number): string[] {
@@ -111,7 +99,7 @@ async function recordWarning(
   turnId: string,
   classes: SensitiveClass[],
 ): Promise<void> {
-  const runId = intakeKickoff(thread).playbookInterview?.runId;
+  const runId = buildIntakeRunId(thread);
   if (!runId) return;
   const correlationId = `${thread.id}:${turnId}`;
   try {

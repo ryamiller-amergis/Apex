@@ -30,9 +30,9 @@ jest.mock('../services/buildIntakeSensitiveText', () => {
 
 import {
   BUILD_INTAKE_QUESTION_BUDGET,
-  isBuildIntakeThread,
   prepareBuildIntakeTurn,
 } from '../services/buildIntakeService';
+import { isBuildIntakeThread } from '../services/buildIntakeThread';
 import { BUILD_INTAKE_QUESTION_MARKER as Q } from '../../shared/utils/buildIntakeMarkers';
 import type { ChatThread } from '../../shared/types/chat';
 

@@ -7,7 +7,7 @@ import { getThread } from './chatAgentService';
 import { getUserPermissions } from './rbacService';
 import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
-import { isBuildIntakeThread } from './buildIntakeService';
+import { isBuildIntakeThread } from './buildIntakeThread';
 
 export type ThreadAccess = 'owner' | 'read';
 

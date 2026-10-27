@@ -39,7 +39,8 @@ import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
-import { isBuildIntakeThread, prepareBuildIntakeTurn } from '../services/buildIntakeService';
+import { prepareBuildIntakeTurn } from '../services/buildIntakeService';
+import { isBuildIntakeThread } from '../services/buildIntakeThread';
 import { isBuildFromPromptEnabled } from '../services/buildAccessService';
 import {
   BUILD_FLAG_DISABLED_CODE,
