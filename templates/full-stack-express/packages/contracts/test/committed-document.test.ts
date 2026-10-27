@@ -108,7 +108,10 @@ describe('committed document content (VT-08, PBI-007 AC-0, TBI-011 DoD-1)', () =
     const documented = operations
       .map(({ key }) => {
         const [method, p] = key.split(' ');
-        return routeKey({ method: method!, path: p! });
+        return routeKey({
+          method: method!,
+          path: p!.replace(/\{(\w+)\}/g, ':$1'),
+        });
       })
       .sort();
     expect(documented).toEqual(routeList.map(routeKey).sort());

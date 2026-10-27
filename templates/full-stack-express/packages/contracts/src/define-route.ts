@@ -129,18 +129,42 @@ const standardDescriptions = {
   500: 'Unexpected server error',
 } as const;
 
-function fieldNames(schema: z.core.$ZodType): string[] {
+function isZodSchema(value: unknown): value is z.core.$ZodType {
+  return Boolean(value && typeof value === 'object' && '_zod' in value);
+}
+
+function fieldNames(
+  schema: z.core.$ZodType,
+  seen: Set<z.core.$ZodType> = new Set()
+): string[] {
+  if (seen.has(schema)) return [];
+  seen.add(schema);
+
   if (schema instanceof z.ZodObject) {
     return Object.entries(schema.shape).flatMap(([name, value]) => [
       name,
-      ...fieldNames(value as z.core.$ZodType),
+      ...fieldNames(value as z.core.$ZodType, seen),
     ]);
   }
-  if (schema instanceof z.ZodArray) {
-    return fieldNames(schema.element as z.core.$ZodType);
-  }
-  const inner = (schema._zod.def as { innerType?: z.core.$ZodType }).innerType;
-  return inner ? fieldNames(inner) : [];
+
+  const def = schema._zod.def as unknown as Record<string, unknown>;
+  const nested: z.core.$ZodType[] = [];
+  const take = (value: unknown) => {
+    if (isZodSchema(value)) nested.push(value);
+    else if (Array.isArray(value)) value.forEach(take);
+  };
+
+  take(def.element);
+  take(def.innerType);
+  take(def.options);
+  take(def.left);
+  take(def.right);
+  take(def.in);
+  take(def.out);
+  take(def.valueType);
+  if (typeof def.getter === 'function') take(def.getter());
+
+  return nested.flatMap((child) => fieldNames(child, seen));
 }
 
 export function defineRoute<

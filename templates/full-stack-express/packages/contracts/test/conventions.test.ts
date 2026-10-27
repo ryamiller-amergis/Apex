@@ -210,6 +210,40 @@ describe('definition guards (VT-11)', () => {
     ).toThrow(/identifier guard/);
   });
 
+  it.each([
+    [
+      'union',
+      z.union([
+        z.strictObject({ name: z.string() }),
+        z.strictObject({ userId: z.string() }),
+      ]),
+    ],
+    [
+      'intersection',
+      z.intersection(
+        z.strictObject({ name: z.string() }),
+        z.strictObject({ userId: z.string() })
+      ),
+    ],
+    [
+      'pipe',
+      z.strictObject({ userId: z.string() }).transform((value) => value),
+    ],
+    ['lazy', z.lazy(() => z.strictObject({ userId: z.string() }))],
+    ['record', z.record(z.string(), z.strictObject({ userId: z.string() }))],
+  ] as const)(
+    'TBI-009 BR-001 rejects an identifier nested inside a %s body',
+    (_kind, body) => {
+      expect(() =>
+        defineRoute({
+          ...ok,
+          method: 'put',
+          request: { body },
+        })
+      ).toThrow(/identifier guard/);
+    }
+  );
+
   it('TBI-011 rejects an example that does not match its schema', () => {
     expect(() =>
       defineRoute({
