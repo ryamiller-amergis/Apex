@@ -142,5 +142,3 @@ export const CreateCabRequestModal: React.FC<CreateCabRequestModalProps> = ({
     </div>
   );
 };
-
-export default CreateCabRequestModal;

@@ -17,7 +17,6 @@ const MAX_WIDTH = 860;
 const DEFAULT_WIDTH = 420;
 
 export interface CabReleaseAssistantPanelProps {
-  open: boolean;
   onClose: () => void;
   project: string;
   targetVersion: string;
@@ -30,7 +29,6 @@ export interface CabReleaseAssistantPanelProps {
 }
 
 export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> = ({
-  open,
   onClose,
   project,
   targetVersion,
@@ -61,19 +59,10 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   } = useProjectSkillConfig(project);
   const session = useAgentChatSession(threadId);
 
-  useEffect(() => {
-    if (open) return;
-    setThreadId(null);
-    setCreateError(null);
-    setIsCreating(false);
-    setInput('');
-    kickoffSentRef.current = false;
-  }, [open]);
-
   const startChatMutate = startChat.mutateAsync;
 
   useEffect(() => {
-    if (!open || threadId) return;
+    if (threadId) return;
     if (skillConfigPending) return;
     if (skillConfigFailed) {
       setCreateError(
@@ -117,7 +106,6 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
       cancelled = true;
     };
   }, [
-    open,
     threadId,
     skillConfig,
     skillConfigPending,
@@ -150,18 +138,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     void sendKickoff(kickoffText, {
       skill: { name: CAB_RELEASE_SKILL_NAME, path: CAB_RELEASE_SKILL_PATH },
     });
-  }, [
-    threadId,
-    targetVersion,
-    apexReleaseEpicId,
-    relatedWorkItemIds,
-    previousReleaseBranch,
-    snowMode,
-    cutReleaseBranch,
-    kickoffText,
-    sendKickoff,
-    session.isPreparing,
-  ]);
+  }, [threadId, kickoffText, sendKickoff, session.isPreparing]);
 
   const handleResizeMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -192,8 +169,6 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     setInput('');
     await session.send(text);
   }, [input, session]);
-
-  if (!open) return null;
 
   return (
     <div {...{ 'data-testid': dataTestId }}>
@@ -244,5 +219,3 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     </div>
   );
 };
-
-export default CabReleaseAssistantPanel;

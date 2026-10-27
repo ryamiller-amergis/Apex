@@ -45,8 +45,8 @@ jest.mock('../../hooks/useAgentChatSession', () => ({
 }));
 
 jest.mock('../CabReleaseAssistantPanel', () => ({
-  CabReleaseAssistantPanel: ({ open, targetVersion }: { open: boolean; targetVersion: string }) =>
-    open ? <div data-testid="cab-release-assistant-panel">CAB {targetVersion}</div> : null,
+  CabReleaseAssistantPanel: ({ targetVersion }: { targetVersion: string }) =>
+    <div data-testid="cab-release-assistant-panel">CAB {targetVersion}</div>,
 }));
 
 const createWrapper = () => {

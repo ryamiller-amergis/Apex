@@ -2057,7 +2057,6 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
         <CabReleaseAssistantPanel
           key={cabPanel.requestId}
           {...{ 'data-testid': 'cab-release-assistant-panel' }}
-          open
           onClose={() => setCabPanel(null)}
           project={project}
           targetVersion={cabPanel.version}

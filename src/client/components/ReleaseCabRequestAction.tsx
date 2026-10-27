@@ -46,5 +46,3 @@ export const ReleaseCabRequestAction: React.FC<ReleaseCabRequestActionProps> = (
   // @feature-flag:release-cab-request enabled-end
   // @feature-flag:release-cab-request end
 };
-
-export default ReleaseCabRequestAction;

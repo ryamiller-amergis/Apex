@@ -23,9 +23,7 @@ const ALLOWED_PATHS: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: 'POST', path: /^\/MaxView\/_apis\/wit\/workitemsbatch$/ },
   { method: 'GET', path: /^\/MaxView\/_apis\/wiki\/wikis\/[^/]+\/pages$/ },
   { method: 'PUT', path: /^\/MaxView\/_apis\/wiki\/wikis\/[^/]+\/pages$/ },
-  { method: 'GET', path: /^\/MaxView\/_apis\/pipelines\/(670|595)\/runs$/ },
   { method: 'POST', path: /^\/MaxView\/_apis\/pipelines\/(670|595)\/runs$/ },
-  { method: 'GET', path: /^\/MaxView\/_apis\/pipelines\/(670|595)\/runs\/\d+$/ },
 ];
 
 export class CabReleaseBrokerError extends Error {
@@ -110,16 +108,10 @@ function buildResource(relativePath: string): { id: string; child: boolean } | n
 }
 
 function assertCabBuild(body: unknown): void {
-  const record = body as { sourceBranch?: unknown; definition?: { id?: unknown; name?: unknown } };
-  if (!record || typeof record !== 'object') {
-    throw new CabReleaseBrokerError(
-      'Build reads are limited to mv-prod-cd and snow pipelines 670 and 595',
-      403,
-      'CAB_BROKER_FORBIDDEN',
-    );
-  }
-  if (SNOW_DEFINITION_IDS.has(Number(record.definition?.id))) return;
-  if (record.definition?.name !== 'mv-prod-cd') {
+  const record = body as { sourceBranch?: unknown; definition?: { id?: unknown; name?: unknown } } | null;
+  const definition = record && typeof record === 'object' ? record.definition : undefined;
+  if (SNOW_DEFINITION_IDS.has(Number(definition?.id))) return;
+  if (definition?.name !== 'mv-prod-cd') {
     throw new CabReleaseBrokerError(
       'Build reads are limited to mv-prod-cd and snow pipelines 670 and 595',
       403,

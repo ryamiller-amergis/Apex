@@ -51,13 +51,12 @@ jest.mock('react-markdown', () => ({
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 
-function renderPanel(open = true) {
+function renderPanel() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onClose = jest.fn();
   render(
     <QueryClientProvider client={queryClient}>
       <CabReleaseAssistantPanel
-        open={open}
         onClose={onClose}
         project="MaxView"
         targetVersion="2026.13.0"
@@ -81,13 +80,8 @@ describe('CabReleaseAssistantPanel', () => {
     send.mockResolvedValue(undefined);
   });
 
-  it('renders nothing when closed', () => {
-    renderPanel(false);
-    expect(screen.queryByTestId('cab-release-assistant-panel')).not.toBeInTheDocument();
-  });
-
   it('starts a cab-release thread and sends the kickoff message', async () => {
-    renderPanel(true);
+    renderPanel();
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
@@ -119,7 +113,6 @@ describe('CabReleaseAssistantPanel', () => {
     const view = render(
       <QueryClientProvider client={queryClient}>
         <CabReleaseAssistantPanel
-          open
           onClose={jest.fn()}
           project="MaxView"
           targetVersion="2026.13.0"
@@ -140,7 +133,6 @@ describe('CabReleaseAssistantPanel', () => {
     view.rerender(
       <QueryClientProvider client={queryClient}>
         <CabReleaseAssistantPanel
-          open
           onClose={jest.fn()}
           project="MaxView"
           targetVersion="2026.13.0"
@@ -165,7 +157,6 @@ describe('CabReleaseAssistantPanel', () => {
     const view = render(
       <QueryClientProvider client={queryClient}>
         <CabReleaseAssistantPanel
-          open
           onClose={jest.fn()}
           project="MaxView"
           targetVersion="2026.13.0"
@@ -187,7 +178,6 @@ describe('CabReleaseAssistantPanel', () => {
     view.rerender(
       <QueryClientProvider client={queryClient}>
         <CabReleaseAssistantPanel
-          open
           onClose={jest.fn()}
           project="MaxView"
           targetVersion="2026.13.0"
@@ -213,7 +203,6 @@ describe('CabReleaseAssistantPanel', () => {
     render(
       <QueryClientProvider client={queryClient}>
         <CabReleaseAssistantPanel
-          open
           onClose={jest.fn()}
           project="MaxView"
           targetVersion="2026.13.0"
@@ -234,7 +223,7 @@ describe('CabReleaseAssistantPanel', () => {
 
   it('closes from the panel close control', async () => {
     const user = userEvent.setup();
-    const { onClose } = renderPanel(true);
+    const { onClose } = renderPanel();
     await user.click(screen.getByTestId('cab-release-assistant-close'));
     expect(onClose).toHaveBeenCalled();
   });
