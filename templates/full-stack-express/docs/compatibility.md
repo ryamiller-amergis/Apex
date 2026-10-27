@@ -15,7 +15,7 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | eslint-plugin-react-hooks | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
 | eslint-plugin-jsx-a11y    | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
 | globals                   | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
-| prettier                  | 3.9.10         | implementation-date latest stable                 | package root                                                         |
+| prettier                  | 3.9.10         | implementation-date latest stable                 | package root, packages/contracts                                     |
 | vitest                    | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
 | vite                      | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
 | @vitejs/plugin-react      | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
@@ -23,7 +23,7 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | react-dom                 | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
 | @types/react              | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
 | @types/react-dom          | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/node               | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web                                                   |
+| @types/node               | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
 | express                   | 5.3.0          | implementation-date latest stable                 | reserved                                                             |
 | @mui/material             | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
 | drizzle-orm               | 0.45.4         | implementation-date latest stable                 | reserved                                                             |
@@ -32,7 +32,9 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | @testing-library/react    | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
 | testcontainers            | 12.2.1         | implementation-date latest stable                 | reserved                                                             |
 | yaml                      | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
-| zod                       | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web                                                   |
+| zod                       | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
+| @readme/openapi-parser    | 10.0.0         | implementation-date latest stable                 | packages/contracts                                                   |
+| diff                      | 9.0.0          | implementation-date latest stable                 | packages/contracts                                                   |
 
 ## Selection notes
 
@@ -47,6 +49,8 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - `.npmrc` does not set `package-lock=false`. pnpm treats that key as "do not use a lockfile" and then refuses a frozen install. npm still writes `package-lock.json` before `preinstall` returns, so the guard deletes that file when the package manager is not pnpm.
 - zod `4.6.7` is the newest Zod 4 release on 2026-10-26. Apex allows `zod ^4.3.6`. This workspace pins the exact release. Schema messages are static strings, so a later Zod 4 release cannot start printing received values.
 - yaml `2.9.1` parses `compose.yaml` in the configuration tests.
+- `@readme/openapi-parser` `10.0.0` validates the committed OpenAPI document as OpenAPI 3.1 in `openapi:check`. Zod's built-in `z.toJSONSchema` converts the schemas, so no Zod-to-OpenAPI package is installed.
+- diff `9.0.0` prints the unified diff when `openapi:check` finds a stale document. It ships its own type declarations, so `@types/diff` is not installed.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry
