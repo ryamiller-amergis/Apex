@@ -3,19 +3,34 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./openapi": {
+      "types": "./dist/openapi/build-document.d.ts",
+      "import": "./dist/openapi/build-document.js"
+    },
+    "./openapi.json": "./openapi/openapi.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "openapi:generate": "node scripts/generate-openapi.ts",
+    "openapi:check": "node scripts/check-openapi.ts"
+  },
+  "dependencies": {
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@project-scope/config": "workspace:*",
+    "@readme/openapi-parser": "catalog:",
+    "@types/node": "catalog:",
+    "diff": "catalog:",
+    "prettier": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
