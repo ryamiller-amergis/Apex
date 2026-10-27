@@ -67,7 +67,7 @@ beforeAll(async () => {
   await symlink(
     path.join(packageRoot, 'node_modules'),
     path.join(workDir, 'node_modules'),
-    'dir'
+    'junction'
   );
 });
 
