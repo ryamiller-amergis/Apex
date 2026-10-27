@@ -4,35 +4,43 @@ Pinned versions for this workspace. The source is the newest stable release on
 the implementation date, except where a peer dependency forces the previous
 major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagree.
 
-| Component                 | Pinned version | Source                                            | Installed in                                                         |
-| ------------------------- | -------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
-| Node                      | 24.22.1        | implementation-date latest stable                 | .nvmrc                                                               |
-| pnpm                      | 10.34.9        | implementation-date latest peer-compatible stable | packageManager                                                       |
-| typescript                | 6.0.3          | implementation-date latest peer-compatible stable | apps/api, apps/web, packages/contracts, packages/ui                  |
-| eslint                    | 9.39.5         | implementation-date latest peer-compatible stable | package root, packages/config                                        |
-| @eslint/js                | 9.39.5         | implementation-date latest stable                 | packages/config                                                      |
-| typescript-eslint         | 8.72.1         | implementation-date latest stable                 | packages/config                                                      |
-| eslint-plugin-react-hooks | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
-| eslint-plugin-jsx-a11y    | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
-| globals                   | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
-| prettier                  | 3.9.10         | implementation-date latest stable                 | package root                                                         |
-| vitest                    | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
-| vite                      | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
-| @vitejs/plugin-react      | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
-| react                     | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
-| react-dom                 | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
-| @types/react              | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/react-dom          | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/node               | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web                                                   |
-| express                   | 5.3.0          | implementation-date latest stable                 | reserved                                                             |
-| @mui/material             | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
-| drizzle-orm               | 0.45.4         | implementation-date latest stable                 | reserved                                                             |
-| drizzle-kit               | 0.31.11        | implementation-date latest stable                 | reserved                                                             |
-| @playwright/test          | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
-| @testing-library/react    | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
-| testcontainers            | 12.2.1         | implementation-date latest stable                 | reserved                                                             |
-| yaml                      | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
-| zod                       | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web                                                   |
+| Component                   | Pinned version | Source                                            | Installed in                                                         |
+| --------------------------- | -------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
+| Node                        | 24.22.1        | implementation-date latest stable                 | .nvmrc                                                               |
+| pnpm                        | 10.34.9        | implementation-date latest peer-compatible stable | packageManager                                                       |
+| typescript                  | 6.0.3          | implementation-date latest peer-compatible stable | apps/api, apps/web, packages/contracts, packages/ui                  |
+| eslint                      | 9.39.5         | implementation-date latest peer-compatible stable | package root, packages/config                                        |
+| @eslint/js                  | 9.39.5         | implementation-date latest stable                 | packages/config                                                      |
+| typescript-eslint           | 8.72.1         | implementation-date latest stable                 | packages/config                                                      |
+| eslint-plugin-react-hooks   | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
+| eslint-plugin-jsx-a11y      | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
+| globals                     | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
+| prettier                    | 3.9.10         | implementation-date latest stable                 | package root                                                         |
+| vitest                      | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
+| vite                        | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
+| @vitejs/plugin-react        | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
+| react                       | 19.3.1         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| react-dom                   | 19.3.1         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @types/react                | 19.3.0         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @types/react-dom            | 19.3.0         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @types/node                 | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web, packages/ui                                      |
+| express                     | 5.3.0          | implementation-date latest stable                 | reserved                                                             |
+| @mui/material               | 9.5.0          | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @emotion/react              | 11.14.0        | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @emotion/styled             | 11.14.1        | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| react-router                | 8.5.0          | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| react-error-boundary        | 6.1.6          | implementation-date latest stable                 | packages/ui                                                          |
+| drizzle-orm                 | 0.45.4         | implementation-date latest stable                 | reserved                                                             |
+| drizzle-kit                 | 0.31.11        | implementation-date latest stable                 | reserved                                                             |
+| @playwright/test            | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
+| @testing-library/react      | 16.3.3         | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/dom        | 10.4.2         | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/jest-dom   | 7.0.1          | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/user-event | 14.6.8         | implementation-date latest stable                 | packages/ui                                                          |
+| jsdom                       | 30.1.3         | implementation-date latest stable                 | packages/ui                                                          |
+| testcontainers              | 12.2.1         | implementation-date latest stable                 | reserved                                                             |
+| yaml                        | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
+| zod                         | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web                                                   |
 
 ## Selection notes
 
@@ -47,6 +55,8 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - `.npmrc` does not set `package-lock=false`. pnpm treats that key as "do not use a lockfile" and then refuses a frozen install. npm still writes `package-lock.json` before `preinstall` returns, so the guard deletes that file when the package manager is not pnpm.
 - zod `4.6.7` is the newest Zod 4 release on 2026-10-26. Apex allows `zod ^4.3.6`. This workspace pins the exact release. Schema messages are static strings, so a later Zod 4 release cannot start printing received values.
 - yaml `2.9.1` parses `compose.yaml` in the configuration tests.
+- `@emotion/react` and `@emotion/styled` are the styling peers of `@mui/material` `9.5.0`. `packages/ui` lists them, `react`, `react-dom`, `@mui/material`, and `react-router` as peer dependencies, and `apps/web` installs them.
+- `jsdom` `30.1.3` supports Node `^24.15.0`. It is the DOM for `packages/ui` component tests, together with `@testing-library/dom`, `@testing-library/jest-dom`, and `@testing-library/user-event`.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry
