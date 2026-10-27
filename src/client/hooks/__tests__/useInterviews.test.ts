@@ -275,6 +275,69 @@ describe('usePrd', () => {
 
     expect(global.fetch).not.toHaveBeenCalled();
   });
+
+  describe('failed requests', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('does not retry a 404 and exposes its status', async () => {
+      mockFetchError(404, { error: 'PRD not found' });
+      const { wrapper } = createWrapper();
+
+      const { result } = renderHook(() => usePrd('prd-1'), { wrapper });
+
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(result.current.error).toMatchObject({ status: 404 });
+    });
+
+    it('retries a 5xx three times before reporting the error', async () => {
+      mockFetchError(503);
+      const { wrapper } = createWrapper();
+
+      const { result } = renderHook(() => usePrd('prd-1'), { wrapper });
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(result.current.isError).toBe(true);
+      expect(global.fetch).toHaveBeenCalledTimes(4);
+      expect(result.current.error).toMatchObject({ status: 503 });
+    });
+
+    it('keeps the cached PRD and keeps polling after a failed refetch', async () => {
+      const generating = { ...prd, status: 'generating', content: '' };
+      const ok = { ok: true, status: 200, json: () => Promise.resolve(generating) };
+      const fail = { ok: false, status: 502, json: () => Promise.resolve({}) };
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce(ok)
+        .mockResolvedValueOnce(fail)
+        .mockResolvedValueOnce(fail)
+        .mockResolvedValueOnce(fail)
+        .mockResolvedValueOnce(fail)
+        .mockResolvedValue(ok) as jest.Mock;
+      const { wrapper } = createWrapper();
+
+      const { result } = renderHook(() => usePrd('prd-1'), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      // One 5s poll, then 1s + 2s + 4s of retry backoff.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(12_000);
+      });
+      expect(global.fetch).toHaveBeenCalledTimes(5);
+      expect(result.current.isError).toBe(true);
+      expect(result.current.data).toMatchObject({ id: 'prd-1', status: 'generating' });
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5_000);
+      });
+      expect(global.fetch).toHaveBeenCalledTimes(6);
+      expect(result.current.isError).toBe(false);
+      expect(result.current.data).toMatchObject({ id: 'prd-1' });
+    });
+  });
 });
 
 // ── usePrdTestCases ───────────────────────────────────────────────────────────
