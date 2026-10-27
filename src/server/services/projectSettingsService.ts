@@ -38,10 +38,12 @@ import {
 } from './projectSkillWorkflowSettings';
 
 /** Parent columns plus the workflow rows, mapped back to the flat shape by toSkillConfig. */
-const skillConfigSelection = {
-  ...getTableColumns(projectSkillSettings),
-  workflowSettings: workflowSettingsSubquery(),
-};
+function skillConfigSelection() {
+  return {
+    ...getTableColumns(projectSkillSettings),
+    workflowSettings: workflowSettingsSubquery(),
+  };
+}
 
 function toSkillConfig(stored: Record<string, unknown>): ProjectSkillConfig {
   const { workflowSettings, ...settings } = stored;
@@ -90,7 +92,7 @@ export async function getSkillConfig(
   project: string
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
-    .select(skillConfigSelection)
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .where(
       and(
@@ -106,7 +108,7 @@ export async function getSkillConfigById(
   id: string
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
-    .select(skillConfigSelection)
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.id, id))
     .limit(1);
@@ -117,7 +119,7 @@ export async function listSkillConfigsForProject(
   project: string
 ): Promise<ProjectSkillConfig[]> {
   const rows = await db
-    .select(skillConfigSelection)
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.project, project))
     .orderBy(
@@ -137,7 +139,7 @@ export async function resolveSkillConfig(opts: {
 
 export async function listSkillConfigs(): Promise<ProjectSkillConfig[]> {
   const rows = await db
-    .select(skillConfigSelection)
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .orderBy(projectSkillSettings.project);
   return rows.map(toSkillConfig);
