@@ -12,12 +12,30 @@
     "db:seed": "node scripts/persistence-placeholder.mjs"
   },
   "dependencies": {
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/context-async-hooks": "catalog:",
+    "@opentelemetry/core": "catalog:",
+    "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
+    "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
+    "@opentelemetry/instrumentation": "catalog:",
+    "@opentelemetry/instrumentation-express": "catalog:",
+    "@opentelemetry/instrumentation-http": "catalog:",
+    "@opentelemetry/instrumentation-pg": "catalog:",
+    "@opentelemetry/resources": "catalog:",
+    "@opentelemetry/sdk-metrics": "catalog:",
+    "@opentelemetry/sdk-trace": "catalog:",
     "@project-scope/contracts": "workspace:*",
+    "express": "catalog:",
+    "pino": "catalog:",
+    "pino-http": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@project-scope/config": "workspace:*",
+    "@types/express": "catalog:",
     "@types/node": "catalog:",
+    "@types/supertest": "catalog:",
+    "supertest": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
