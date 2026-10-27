@@ -1,63 +1,13 @@
-import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  baseEnv,
+  gracefulExitCode,
+  runApi,
+} from '../../test/support/apiProcess.ts';
 import { API_ENV_KEYS } from './env.ts';
 
-const apiRoot = fileURLToPath(new URL('../..', import.meta.url));
 const templateRoot = new URL('../../../../', import.meta.url);
-
-function baseEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of [
-    'PATH',
-    'Path',
-    'SystemRoot',
-    'PATHEXT',
-    'COMSPEC',
-    'TEMP',
-    'TMP',
-    'USERPROFILE',
-  ]) {
-    const value = process.env[key];
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-  return env;
-}
-
-function runApi(
-  env: NodeJS.ProcessEnv
-): Promise<{ status: number | null; output: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['src/index.ts'], {
-      cwd: apiRoot,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    let output = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      output += chunk.toString();
-    });
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`API process timed out\n${output}`));
-    }, 15000);
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on('close', (status) => {
-      clearTimeout(timer);
-      resolve({ status, output });
-    });
-  });
-}
 
 function readExampleKeys(): string[] {
   const text = readFileSync(new URL('.env.example', templateRoot), 'utf8');
@@ -86,7 +36,7 @@ describe('API startup', () => {
     expect(result.output).not.toContain('listening');
   }, 20000);
 
-  it('VT-07 exits 0 when the environment is valid and the entry is still a stub', async () => {
+  it('VT-07 starts listening when the environment is valid and exits 0 on SIGTERM', async () => {
     const result = await runApi({
       ...baseEnv(),
       NODE_ENV: 'test',
@@ -94,8 +44,10 @@ describe('API startup', () => {
         'postgresql://app_user:local-dev-only-password@localhost:5432/project_db',
       AUTH_MODE: 'development',
     });
-    expect(result.status).toBe(0);
+    expect(result.listened).toBe(true);
+    expect(result.status).toBe(gracefulExitCode);
     expect(result.output).not.toContain('Invalid environment configuration');
+    expect(result.output).toContain('shutdown.complete');
   }, 20000);
 });
 
