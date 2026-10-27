@@ -157,6 +157,32 @@ pnpm --filter @project-scope/web... build
 
 The first command writes `apps/api/dist` and `packages/contracts/dist`. The second writes `apps/web/dist`, `packages/ui/dist`, and `packages/contracts/dist`.
 
+## Logs, traces, and shutdown
+
+The API writes one JSON log line per event to stdout. Each line inside a request carries `requestId`, `correlationId`, and, when tracing is on, `trace_id` and `span_id`. Credentials, tokens, cookies, and identity fields log as `[Redacted]`.
+
+Start the API with the instrumentation entry loaded first, or Express and PostgreSQL spans are lost:
+
+```sh
+node --import ./dist/instrument.js dist/index.js
+```
+
+In a container, run `node` as the entry command. Do not start it through `pnpm` or a shell, because they do not pass `SIGTERM` to Node.
+
+Mount the middleware in this order: `requestId()`, `requestLogging(logger)`, `inFlight.middleware`, the routes, `errorLogging(logger)`, then the Problem Details handler. Wire `createShutdown` with the server, the in-flight registry, the database as a closable resource, `telemetry`, and `logger`, then call `registerSignalHandlers`. The readiness route returns 503 while `lifecycle.isShuttingDown()` is true.
+
+On `SIGTERM` or `SIGINT` the API stops accepting connections and lets running requests finish. Within `SHUTDOWN_TIMEOUT_MS` it closes the database, flushes telemetry and logs, and exits 0. It exits 1 when requests were still running at the deadline, a cleanup step failed, or a second signal arrived.
+
+| Variable                      | Meaning                                                              |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `LOG_LEVEL`                   | Lowest level written                                                 |
+| `SHUTDOWN_TIMEOUT_MS`         | Total shutdown budget. Keep it below the platform's grace period     |
+| `OTEL_SDK_DISABLED`           | `true` turns tracing and metrics off                                 |
+| `OTEL_SERVICE_NAME`           | `service.name` on every span and metric                              |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL. Empty means nothing is exported                  |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | `key=value` pairs sent to the collector. Treated as a secret         |
+| `OTEL_TRACES_EXPORTER`        | `otlp`, `console`, or `none`. `OTEL_METRICS_EXPORTER` works the same |
+
 ## Package source
 
 Packages download from the public npm registry. That registry is not the git remote where a new product repository will live. `.npmrc` has no registry URL and no token. A product that uses a private feed adds the feed URL locally and reads the token from the environment. Do not commit the token.

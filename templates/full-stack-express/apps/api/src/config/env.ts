@@ -9,8 +9,25 @@ const LOG_LEVEL_MESSAGE =
 const AUTH_MODE_MESSAGE = 'expected development or external';
 const PRODUCTION_AUTH_MESSAGE =
   'development is not allowed when NODE_ENV is production';
+const SHUTDOWN_TIMEOUT_MESSAGE = 'expected an integer from 1000 to 120000';
+const BOOLEAN_MESSAGE = 'expected true or false';
+const SERVICE_NAME_MESSAGE = 'expected a non-empty service name';
+const HTTP_URL_MESSAGE = 'expected an http or https URL';
+const OTLP_PROTOCOL_MESSAGE = 'expected http/protobuf';
+const OTLP_HEADERS_MESSAGE = 'expected comma-separated key=value pairs';
+const OTEL_EXPORTER_MESSAGE = 'expected otlp, console, or none';
+const POSITIVE_MS_MESSAGE = 'expected a positive integer of milliseconds';
 
-const SECRET_NAMES = new Set(['DATABASE_URL']);
+// Endpoints can carry user information and headers carry collector credentials.
+const SECRET_NAMES = new Set([
+  'DATABASE_URL',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_HEADERS',
+]);
+
+const OTLP_HEADERS_PATTERN = /^[^=,\s]+\s*=[^,]*(?:,\s*[^=,\s]+\s*=[^,]*)*$/;
 
 export class EnvValidationError extends Error {
   constructor(message: string) {
@@ -32,6 +49,15 @@ function isPostgresUrl(value: string): boolean {
   }
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 const portSchema = z.preprocess(
   unsetBlank,
   z.coerce
@@ -42,12 +68,31 @@ const portSchema = z.preprocess(
     .default(3000)
 );
 
-const envObject = z.object({
-  NODE_ENV: z.preprocess(
-    unsetBlank,
-    z.enum(['development', 'test', 'production'], { error: NODE_ENV_MESSAGE })
-  ),
-  PORT: portSchema,
+const httpUrlSchema = z.preprocess(
+  unsetBlank,
+  z
+    .string({ error: HTTP_URL_MESSAGE })
+    .refine(isHttpUrl, { error: HTTP_URL_MESSAGE })
+    .optional()
+);
+
+const exporterSchema = z.preprocess(
+  unsetBlank,
+  z
+    .enum(['otlp', 'console', 'none'], { error: OTEL_EXPORTER_MESSAGE })
+    .optional()
+);
+
+const positiveMsSchema = z.preprocess(
+  unsetBlank,
+  z.coerce
+    .number({ error: POSITIVE_MS_MESSAGE })
+    .int({ error: POSITIVE_MS_MESSAGE })
+    .min(1, { error: POSITIVE_MS_MESSAGE })
+    .optional()
+);
+
+const telemetryEnvObject = z.object({
   LOG_LEVEL: z.preprocess(
     unsetBlank,
     z
@@ -56,6 +101,50 @@ const envObject = z.object({
       })
       .default('info')
   ),
+  OTEL_SDK_DISABLED: z.preprocess(
+    unsetBlank,
+    z
+      .enum(['true', 'false'], { error: BOOLEAN_MESSAGE })
+      .default('false')
+      .transform((value) => value === 'true')
+  ),
+  OTEL_SERVICE_NAME: z.preprocess(
+    unsetBlank,
+    z
+      .string({ error: SERVICE_NAME_MESSAGE })
+      .trim()
+      .min(1, { error: SERVICE_NAME_MESSAGE })
+      .default('api')
+  ),
+  OTEL_EXPORTER_OTLP_ENDPOINT: httpUrlSchema,
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: httpUrlSchema,
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: httpUrlSchema,
+  OTEL_EXPORTER_OTLP_PROTOCOL: z.preprocess(
+    unsetBlank,
+    z
+      .enum(['http/protobuf'], { error: OTLP_PROTOCOL_MESSAGE })
+      .default('http/protobuf')
+  ),
+  OTEL_EXPORTER_OTLP_HEADERS: z.preprocess(
+    unsetBlank,
+    z
+      .string({ error: OTLP_HEADERS_MESSAGE })
+      .regex(OTLP_HEADERS_PATTERN, { error: OTLP_HEADERS_MESSAGE })
+      .optional()
+  ),
+  OTEL_EXPORTER_OTLP_TIMEOUT: positiveMsSchema,
+  OTEL_TRACES_EXPORTER: exporterSchema,
+  OTEL_METRICS_EXPORTER: exporterSchema,
+  OTEL_METRIC_EXPORT_INTERVAL: positiveMsSchema,
+  OTEL_BSP_SCHEDULE_DELAY: positiveMsSchema,
+});
+
+const envObject = z.object({
+  NODE_ENV: z.preprocess(
+    unsetBlank,
+    z.enum(['development', 'test', 'production'], { error: NODE_ENV_MESSAGE })
+  ),
+  PORT: portSchema,
   DATABASE_URL: z.preprocess(
     unsetBlank,
     z
@@ -66,6 +155,16 @@ const envObject = z.object({
     unsetBlank,
     z.enum(['development', 'external'], { error: AUTH_MODE_MESSAGE })
   ),
+  SHUTDOWN_TIMEOUT_MS: z.preprocess(
+    unsetBlank,
+    z.coerce
+      .number({ error: SHUTDOWN_TIMEOUT_MESSAGE })
+      .int({ error: SHUTDOWN_TIMEOUT_MESSAGE })
+      .min(1000, { error: SHUTDOWN_TIMEOUT_MESSAGE })
+      .max(120000, { error: SHUTDOWN_TIMEOUT_MESSAGE })
+      .default(25000)
+  ),
+  ...telemetryEnvObject.shape,
 });
 
 export const envSchema = envObject.superRefine((value, ctx) => {
@@ -85,13 +184,17 @@ export const databaseEnvSchema = envObject.pick({
   DATABASE_URL: true,
 });
 
+// instrument.ts runs before the application and reads only this fragment.
+export const telemetryEnvSchema = telemetryEnvObject;
+
 export const API_ENV_KEYS = Object.keys(envObject.shape).sort();
 
 export type Env = z.infer<typeof envSchema>;
 export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;
+export type TelemetryEnv = z.infer<typeof telemetryEnvSchema>;
 
-export function parseEnv(source: object): Env {
-  const result = envSchema.safeParse(source);
+function parseWith<T>(schema: z.ZodType<T>, source: object): T {
+  const result = schema.safeParse(source);
   if (!result.success) {
     throw new EnvValidationError(
       formatEnvIssues(result.error.issues, source, SECRET_NAMES)
@@ -139,9 +242,9 @@ export function readDatabaseEnv(
   };
 }
 
-export function loadEnv(source: object = process.env): Env {
+function loadWith<T>(parse: (source: object) => T, source: object): T {
   try {
-    return parseEnv(source);
+    return parse(source);
   } catch (error) {
     if (error instanceof EnvValidationError) {
       console.error(error.message);
@@ -149,4 +252,20 @@ export function loadEnv(source: object = process.env): Env {
     }
     throw error;
   }
+}
+
+export function parseEnv(source: object): Env {
+  return parseWith(envSchema, source);
+}
+
+export function parseTelemetryEnv(source: object): TelemetryEnv {
+  return parseWith(telemetryEnvSchema, source);
+}
+
+export function loadEnv(source: object = process.env): Env {
+  return loadWith(parseEnv, source);
+}
+
+export function loadTelemetryEnv(source: object = process.env): TelemetryEnv {
+  return loadWith(parseTelemetryEnv, source);
 }

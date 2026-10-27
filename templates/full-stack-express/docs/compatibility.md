@@ -4,39 +4,56 @@ Pinned versions for this workspace. The source is the newest stable release on
 the implementation date, except where a peer dependency forces the previous
 major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagree.
 
-| Component                 | Pinned version | Source                                            | Installed in                                                         |
-| ------------------------- | -------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
-| Node                      | 24.22.1        | implementation-date latest stable                 | .nvmrc                                                               |
-| pnpm                      | 10.34.9        | implementation-date latest peer-compatible stable | packageManager                                                       |
-| typescript                | 6.0.3          | implementation-date latest peer-compatible stable | apps/api, apps/web, packages/contracts, packages/ui                  |
-| eslint                    | 9.39.5         | implementation-date latest peer-compatible stable | package root, packages/config                                        |
-| @eslint/js                | 9.39.5         | implementation-date latest stable                 | packages/config                                                      |
-| typescript-eslint         | 8.72.1         | implementation-date latest stable                 | packages/config                                                      |
-| eslint-plugin-react-hooks | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
-| eslint-plugin-jsx-a11y    | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
-| globals                   | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
-| prettier                  | 3.9.10         | implementation-date latest stable                 | package root, apps/api, packages/contracts                           |
-| vitest                    | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
-| vite                      | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
-| @vitejs/plugin-react      | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
-| react                     | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
-| react-dom                 | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
-| @types/react              | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/react-dom          | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
-| @types/node               | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
-| express                   | 5.3.0          | implementation-date latest stable                 | reserved                                                             |
-| @mui/material             | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
-| drizzle-orm               | 0.45.4         | implementation-date latest stable                 | apps/api                                                             |
-| drizzle-kit               | 0.31.11        | implementation-date latest stable                 | apps/api                                                             |
-| pg                        | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
-| @types/pg                 | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
-| @playwright/test          | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
-| @testing-library/react    | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
-| testcontainers            | 12.2.1         | implementation-date latest stable                 | apps/api                                                             |
-| yaml                      | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
-| zod                       | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
-| @readme/openapi-parser    | 10.0.0         | implementation-date latest stable                 | packages/contracts                                                   |
-| diff                      | 9.0.0          | implementation-date latest stable                 | packages/contracts                                                   |
+| Component                                  | Pinned version | Source                                            | Installed in                                                         |
+| ------------------------------------------ | -------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
+| Node                                       | 24.22.1        | implementation-date latest stable                 | .nvmrc                                                               |
+| pnpm                                       | 10.34.9        | implementation-date latest peer-compatible stable | packageManager                                                       |
+| typescript                                 | 6.0.3          | implementation-date latest peer-compatible stable | apps/api, apps/web, packages/contracts, packages/ui                  |
+| eslint                                     | 9.39.5         | implementation-date latest peer-compatible stable | package root, packages/config                                        |
+| @eslint/js                                 | 9.39.5         | implementation-date latest stable                 | packages/config                                                      |
+| typescript-eslint                          | 8.72.1         | implementation-date latest stable                 | packages/config                                                      |
+| eslint-plugin-react-hooks                  | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
+| eslint-plugin-jsx-a11y                     | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
+| globals                                    | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
+| prettier                                   | 3.9.10         | implementation-date latest stable                 | package root, apps/api, packages/contracts                           |
+| vitest                                     | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
+| vite                                       | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
+| @vitejs/plugin-react                       | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
+| react                                      | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
+| react-dom                                  | 19.3.1         | implementation-date latest stable                 | apps/web                                                             |
+| @types/react                               | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
+| @types/react-dom                           | 19.3.0         | implementation-date latest stable                 | apps/web                                                             |
+| @types/node                                | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
+| express                                    | 5.3.0          | implementation-date latest stable                 | apps/api                                                             |
+| @mui/material                              | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
+| drizzle-orm                                | 0.45.4         | implementation-date latest stable                 | apps/api                                                             |
+| drizzle-kit                                | 0.31.11        | implementation-date latest stable                 | apps/api                                                             |
+| @playwright/test                           | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
+| @testing-library/react                     | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
+| testcontainers                             | 12.2.1         | implementation-date latest stable                 | apps/api                                                             |
+| yaml                                       | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
+| zod                                        | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
+| pino                                       | 10.4.0         | implementation-date latest stable                 | apps/api                                                             |
+| pino-http                                  | 11.0.0         | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/api                         | 1.10.0         | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/core                        | 3.0.0          | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/resources                   | 3.0.0          | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/sdk-trace                   | 3.0.0          | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/sdk-metrics                 | 3.0.0          | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/context-async-hooks         | 3.0.0          | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/instrumentation             | 0.300.0        | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/instrumentation-http        | 0.300.0        | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/instrumentation-express     | 0.72.0         | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/instrumentation-pg          | 0.77.0         | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/exporter-trace-otlp-proto   | 0.300.0        | implementation-date latest stable                 | apps/api                                                             |
+| @opentelemetry/exporter-metrics-otlp-proto | 0.300.0        | implementation-date latest stable                 | apps/api                                                             |
+| @types/express                             | 5.0.6          | implementation-date latest stable                 | apps/api                                                             |
+| supertest                                  | 7.3.1          | implementation-date latest stable                 | apps/api                                                             |
+| @types/supertest                           | 7.2.1          | implementation-date latest stable                 | apps/api                                                             |
+| pg                                         | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
+| @types/pg                                  | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
+| @readme/openapi-parser                     | 10.0.0         | implementation-date latest stable                 | packages/contracts                                                   |
+| diff                                       | 9.0.0          | implementation-date latest stable                 | packages/contracts                                                   |
 
 ## Selection notes
 
@@ -56,6 +73,9 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - pg `8.23.1` is the driver behind `drizzle-orm/node-postgres`; `@types/pg` `8.23.1` matches it. Only `apps/api/src/persistence/` imports either.
 - testcontainers `12.2.1` starts `postgres:16` for the API integration tests. Those tests skip when Docker is not available.
 - pnpm reports ignored build scripts for `esbuild` (used by drizzle-kit), and for `ssh2`, `cpu-features`, and `protobufjs` (used by testcontainers). None is needed: esbuild ships its binary as an optional dependency, and the native SSH helpers are optional. `onlyBuiltDependencies` stays empty.
+- OpenTelemetry JS 3.0 renamed the trace SDK to `@opentelemetry/sdk-trace`. The OTLP exporters `0.300.0` depend on that package, so this workspace pins the 3.0 line and not `@opentelemetry/sdk-trace-node` `2.12.0`. Every 3.0 package requires `@opentelemetry/api` `>=1.10.0 <1.11.0`.
+- The OTLP exporters are the `-otlp-proto` packages because `OTEL_EXPORTER_OTLP_PROTOCOL` accepts only `http/protobuf`. The `-otlp-http` packages send JSON.
+- `@opentelemetry/instrumentation-pg` `0.77.0` records the `db.client.operation.duration` histogram, so the data-access module needs no metrics code of its own.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry
