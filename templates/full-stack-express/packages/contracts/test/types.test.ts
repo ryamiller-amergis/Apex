@@ -1,4 +1,4 @@
-import { describe, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import {
   defineRoute,
@@ -66,5 +66,6 @@ describe('derived types (VT-13, TBI-009 DoD-1)', () => {
     expectTypeOf<keyof typeof getThing.responses>().toEqualTypeOf<
       200 | 400 | 500
     >();
+    expect(Object.keys(getThing.responses)).toEqual(['200', '400', '500']);
   });
 });
