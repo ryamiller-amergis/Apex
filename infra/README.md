@@ -857,6 +857,11 @@ Optional Terraform: `enable_ai_platform_v2_runtime = true` **and**
 — see `ai-platform-v2-runtime.tf`, `ai-platform-v2-interactive-runtime.tf`, and
 `terraform.tfvars.example`.
 
+With `ai_platform_v2_grant_app_service_blob = true`, the App Service identity,
+and a distinct staging-slot identity when enabled, receive `Storage Blob Data
+Contributor` on the V2 artifact container. Staging shares production's database,
+so its recovery sweep can harvest a finished V2 attempt and needs the same read.
+
 **Document worker scaling:** `ca-apex-ai-runs-documents-v2-{env}` scales from
 `min_replicas` to `ai_platform_v2_documents_max_replicas` on the documents queue
 length (KEDA rule `documents-v2-servicebus-keda`, secret `documents-keda-sb-connection`
