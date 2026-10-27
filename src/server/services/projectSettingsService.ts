@@ -8,7 +8,7 @@ import {
   appGroups,
   appUsers,
 } from '../db/schema';
-import { eq, and, asc, desc } from 'drizzle-orm';
+import { eq, and, asc, desc, getTableColumns } from 'drizzle-orm';
 import * as groupService from './groupService';
 import type {
   ProjectSkillConfig,
@@ -30,8 +30,24 @@ import type {
 } from '../../shared/types/approvals';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
 import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagService';
+import {
+  workflowSettingsSubquery,
+  withWorkflowSettings,
+  type StoredWorkflowSettings,
+} from './projectSkillWorkflowSettings';
 
-function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
+/** Parent columns plus the workflow rows, mapped back to the flat shape by toSkillConfig. */
+const skillConfigSelection = {
+  ...getTableColumns(projectSkillSettings),
+  workflowSettings: workflowSettingsSubquery(),
+};
+
+function toSkillConfig(stored: Record<string, unknown>): ProjectSkillConfig {
+  const { workflowSettings, ...settings } = stored;
+  const row = withWorkflowSettings(
+    settings,
+    workflowSettings as StoredWorkflowSettings[] | null | undefined,
+  );
   return {
     ...row,
     approvalMode: row.approvalMode as ApprovalMode | undefined,
@@ -73,7 +89,7 @@ export async function getSkillConfig(
   project: string
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection)
     .from(projectSkillSettings)
     .where(
       and(
@@ -89,7 +105,7 @@ export async function getSkillConfigById(
   id: string
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection)
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.id, id))
     .limit(1);
@@ -100,7 +116,7 @@ export async function listSkillConfigsForProject(
   project: string
 ): Promise<ProjectSkillConfig[]> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection)
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.project, project))
     .orderBy(
@@ -120,7 +136,7 @@ export async function resolveSkillConfig(opts: {
 
 export async function listSkillConfigs(): Promise<ProjectSkillConfig[]> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection)
     .from(projectSkillSettings)
     .orderBy(projectSkillSettings.project);
   return rows.map(toSkillConfig);
