@@ -201,6 +201,21 @@ describe('PrdReviewView load errors', () => {
     expect(screen.queryByTestId('prd-load-retry-btn')).not.toBeInTheDocument();
   });
 
+  it('shows PRD not found for a 404 even when a PRD is cached', () => {
+    mockUsePrd.mockReturnValue(prdQuery({
+      data: generatingPrd,
+      isError: true,
+      error: new ApiFetchError('PRD not found', 404),
+    }));
+
+    renderView();
+
+    expect(screen.getByText('PRD not found.')).toBeInTheDocument();
+    expect(screen.queryByTestId('prd-review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Feature PRD' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('prd-reconnecting-hint')).not.toBeInTheDocument();
+  });
+
   it('shows a retryable message for a 5xx with no cached PRD', () => {
     mockUsePrd.mockReturnValue(prdQuery({
       isError: true,

@@ -337,6 +337,33 @@ describe('usePrd', () => {
       expect(result.current.isError).toBe(false);
       expect(result.current.data).toMatchObject({ id: 'prd-1' });
     });
+
+    it('stops polling a cached PRD once a poll returns 404', async () => {
+      const generating = { ...prd, status: 'generating', content: '' };
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(generating) })
+        .mockResolvedValue({
+          ok: false,
+          status: 404,
+          json: () => Promise.resolve({ error: 'PRD not found' }),
+        }) as jest.Mock;
+      const { wrapper } = createWrapper();
+
+      const { result } = renderHook(() => usePrd('prd-1'), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5_000);
+      });
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      expect(result.current.isError).toBe(true);
+      expect(result.current.error).toMatchObject({ status: 404 });
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(30_000);
+      });
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

@@ -1642,10 +1642,10 @@ export const PrdReviewView: React.FC = () => {
       </div>
     );
   }
+  const prdNotFound = isError && isApiNotFoundError(prdError);
+  if (prdNotFound || (!prd && !isError))
+    return <div className={styles.errorState}>PRD not found.</div>;
   if (!prd) {
-    if (!isError || isApiNotFoundError(prdError)) {
-      return <div className={styles.errorState}>PRD not found.</div>;
-    }
     return (
       <div className={styles.errorState} role="alert">
         <span>Couldn&apos;t load this PRD.</span>
