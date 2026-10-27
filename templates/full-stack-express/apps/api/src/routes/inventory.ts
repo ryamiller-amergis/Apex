@@ -7,7 +7,10 @@ import type { Express, Router } from 'express';
 const mountPaths = new WeakMap<object, string | null>();
 
 /** Records the prefix of a router; call it for every router given to app.use. */
-export function mountedAt<R extends Router>(router: R, prefix: string | null): R {
+export function mountedAt<R extends Router>(
+  router: R,
+  prefix: string | null
+): R {
   mountPaths.set(router, prefix);
   return router;
 }

@@ -8,7 +8,9 @@ import express, { type Router } from 'express';
  * a deploy takes effect at once. Returns undefined when `dir` has no
  * index.html, so an API-only run serves no static files.
  */
-export function createClientStatic(dir: string | undefined): Router | undefined {
+export function createClientStatic(
+  dir: string | undefined
+): Router | undefined {
   if (dir === undefined) {
     return undefined;
   }
@@ -20,11 +22,15 @@ export function createClientStatic(dir: string | undefined): Router | undefined 
   const router = express.Router();
   router.use(express.static(root, { index: false }));
   router.get('/{*splat}', (_req, res, next) => {
-    res.sendFile(indexFile, { headers: { 'Cache-Control': 'no-cache' } }, (error) => {
-      if (error) {
-        next(error);
+    res.sendFile(
+      indexFile,
+      { headers: { 'Cache-Control': 'no-cache' } },
+      (error) => {
+        if (error) {
+          next(error);
+        }
       }
-    });
+    );
   });
   return router;
 }

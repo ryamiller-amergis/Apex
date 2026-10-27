@@ -47,7 +47,8 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
   const logger = createLogger({ LOG_LEVEL: 'debug' }, capture.stream);
   const persistence = (options.persistence ??
     createMemoryPersistence()) as MemoryPersistence;
-  const source = options.principal === undefined ? PRINCIPAL_A : options.principal;
+  const source =
+    options.principal === undefined ? PRINCIPAL_A : options.principal;
   const adapter = createStaticAdapter(() =>
     Promise.resolve(typeof source === 'function' ? source() : source)
   );

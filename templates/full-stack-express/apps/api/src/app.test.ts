@@ -9,11 +9,7 @@ import {
 } from '@project-scope/contracts';
 import request, { type Response } from 'supertest';
 import { afterAll, describe, expect, it } from 'vitest';
-import {
-  buildTestApp,
-  PRINCIPAL_A,
-  settle,
-} from '../test/support/testApp.ts';
+import { buildTestApp, PRINCIPAL_A, settle } from '../test/support/testApp.ts';
 import { createRateLimit } from './middleware/rateLimit.ts';
 import { getRequestContext } from './observability/requestContext.ts';
 import { PersistenceUnavailableError } from './persistence/index.ts';

@@ -69,7 +69,12 @@ describe('GET /api/v1/me (PBI-010)', () => {
     const response = await request(app).get('/api/v1/me');
     const body = expectProblem(response, 503, problemTypes.serviceUnavailable);
     expect(body.title).toBe('Service unavailable');
-    for (const fragment of ['postgres', 'db.internal', 'synthetic-pw', 'pool.js']) {
+    for (const fragment of [
+      'postgres',
+      'db.internal',
+      'synthetic-pw',
+      'pool.js',
+    ]) {
       expect(response.text).not.toContain(fragment);
     }
   });

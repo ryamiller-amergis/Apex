@@ -117,6 +117,8 @@ Every route under `/api/v1` requires an authenticated principal. `AUTH_MODE` pic
 | `development` | Every request runs as one synthetic principal. Startup stops if `NODE_ENV` is `production`  |
 | `external`    | The adapter registered in `apps/api/src/identity/registry.ts`. None ships with the template |
 
+The routes, response shapes, error types, probes, and HTTP settings are in [apps/api/README.md](apps/api/README.md).
+
 A request the adapter does not authenticate gets a `401` Problem Details response. The template defines no roles or permissions. The contract, the steps to add a production identity provider, and where RBAC would attach are in [apps/api/src/identity/README.md](apps/api/src/identity/README.md).
 
 ## Feature flags
@@ -152,7 +154,8 @@ The flag provider is an open decision. The extension point is the `createLocalFl
 | `preinstall`       | Runs the toolchain guard before any dependency is fetched                                           |
 | `setup`            | Installs from the lockfile. This is the install step                                                |
 | `build`            | Builds members in dependency order through Corepack. The config package has no build                |
-| `check`            | Runs typecheck, lint, format:check, and openapi:check                                               |
+| `check`            | Runs typecheck, lint, format:check, openapi:check, and routes:check                                 |
+| `routes:check`     | Fails when the API's registered routes and the contract routes differ                               |
 | `typecheck`        | Type-checks every member that defines the script                                                    |
 | `lint`             | Lints the whole workspace once                                                                      |
 | `format`           | Rewrites files with Prettier                                                                        |
@@ -206,7 +209,7 @@ node --import ./dist/instrument.js dist/index.js
 
 In a container, run `node` as the entry command. Do not start it through `pnpm` or a shell, because they do not pass `SIGTERM` to Node.
 
-Mount the middleware in this order: `requestId()`, `requestLogging(logger)`, `inFlight.middleware`, the routes, `errorLogging(logger)`, then the Problem Details handler. Wire `createShutdown` with the server, the in-flight registry, the database as a closable resource, `telemetry`, and `logger`, then call `registerSignalHandlers`. The readiness route returns 503 while `lifecycle.isShuttingDown()` is true.
+`apps/api/src/app.ts` mounts the middleware in this order: `requestId()`, `requestLogging(logger)`, the in-flight registry, the routes, then the Problem Details handler. `apps/api/src/index.ts` wires `createShutdown` with the server, the in-flight registry, the database as a closable resource, `telemetry`, and `logger`, then calls `registerSignalHandlers`. The readiness route returns 503 while the process shuts down.
 
 On `SIGTERM` or `SIGINT` the API stops accepting connections and lets running requests finish. Within `SHUTDOWN_TIMEOUT_MS` it closes the database, flushes telemetry and logs, and exits 0. It exits 1 when requests were still running at the deadline, a cleanup step failed, or a second signal arrived.
 

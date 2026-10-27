@@ -16,7 +16,6 @@ import { createInFlightRegistry } from './lifecycle/inFlight.ts';
 import {
   createShutdown,
   registerSignalHandlers,
-  type Lifecycle,
 } from './lifecycle/shutdown.ts';
 import { createRateLimit } from './middleware/rateLimit.ts';
 import { createPersistence } from './persistence/index.ts';
@@ -64,14 +63,12 @@ const rateLimiter: RequestHandler | undefined =
       });
 
 const inFlight = createInFlightRegistry();
-let lifecycle: Lifecycle | undefined;
-
 const app = createApp({
   logger,
   identityAdapter,
   persistence,
   readinessTimeoutMs: env.READINESS_TIMEOUT_MS,
-  isShuttingDown: () => lifecycle?.isShuttingDown() ?? false,
+  isShuttingDown: () => lifecycle.isShuttingDown(),
   clientDistDir: env.CLIENT_DIST_DIR,
   requestTracking: inFlight.middleware,
   ...(rateLimiter ? { rateLimiter } : {}),
@@ -92,7 +89,7 @@ const server = app.listen(env.PORT, (error?: Error) => {
   logger.info({ event: 'server.listening', port: env.PORT }, 'listening');
 });
 
-lifecycle = createShutdown({
+const lifecycle = createShutdown({
   server,
   inFlight,
   resources: [{ name: 'database', close: () => persistence.close() }],

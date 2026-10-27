@@ -68,7 +68,8 @@ export function createApp(deps: AppDeps): Express {
 
   const profiles = createProfileService({
     users: deps.persistence.users,
-    onProfileCreated: () => logger.info({ event: 'profile.created' }, 'profile created'),
+    onProfileCreated: () =>
+      logger.info({ event: 'profile.created' }, 'profile created'),
   });
   app.use(
     API_V1_PREFIX,

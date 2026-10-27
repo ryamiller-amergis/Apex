@@ -96,7 +96,10 @@ describe('profileService.getOwnProfile (VT-30)', () => {
 
   it.each([
     ['no display name', { subject: 'synthetic-subject-nodn' }],
-    ['a blank display name', { subject: 'synthetic-subject-nodn', displayName: '   ' }],
+    [
+      'a blank display name',
+      { subject: 'synthetic-subject-nodn', displayName: '   ' },
+    ],
   ])(
     'PBI-010 AC-2 stores the fallback name, never the subject, for %s',
     async (_label, principal) => {
@@ -113,7 +116,10 @@ describe('profileService.getOwnProfile (VT-30)', () => {
   it('PBI-010 AC-2 trims the principal name and cuts it to 100 code points', async () => {
     const { persistence, service } = setup();
     const long = `  ${'\u{1F600}'.repeat(120)}  `;
-    await service.getOwnProfile({ subject: 'synthetic-long', displayName: long });
+    await service.getOwnProfile({
+      subject: 'synthetic-long',
+      displayName: long,
+    });
     const stored = persistence.row('synthetic-long')!.displayName;
     expect([...stored]).toHaveLength(100);
     expect(stored.startsWith('\u{1F600}')).toBe(true);

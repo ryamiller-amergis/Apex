@@ -62,7 +62,12 @@ describe('GET /health/ready', () => {
       detail: 'The service is not ready to accept traffic.',
       requestId: ready.headers['x-request-id'],
     });
-    for (const fragment of ['postgres', 'db.internal', 'synthetic-pw', '5432']) {
+    for (const fragment of [
+      'postgres',
+      'db.internal',
+      'synthetic-pw',
+      '5432',
+    ]) {
       expect(ready.text).not.toContain(fragment);
     }
     await request(app).get('/health/live').expect(200);

@@ -31,19 +31,22 @@ export function createReadinessService(deps: ReadinessDeps): ReadinessService {
         return Promise.reject(new NotReadyError());
       }
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new NotReadyError()), deps.timeoutMs);
+        const timer = setTimeout(
+          () => reject(new NotReadyError()),
+          deps.timeoutMs
+        );
         Promise.resolve()
           .then(() => deps.ping())
           .then(
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          () => {
-            clearTimeout(timer);
-            reject(new NotReadyError());
-          }
-        );
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            () => {
+              clearTimeout(timer);
+              reject(new NotReadyError());
+            }
+          );
       });
     },
   };
