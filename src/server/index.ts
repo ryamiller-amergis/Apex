@@ -112,6 +112,10 @@ import walkthroughsRoutes from './routes/walkthroughs';
 import mcpServerRoutes from './routes/mcpServers';
 import workflowEvaluationsRoutes from './routes/workflowEvaluations';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
+import {
+  resolveBackgroundJobsMode,
+  runsSharedBackgroundJobs,
+} from './services/backgroundJobsMode';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
 // When E2E_MODE=true, background services and schedulers are suppressed so
@@ -411,10 +415,33 @@ const server = app.listen(PORT, () => {
   startObservabilityCapture().catch((err) =>
     console.error('[startup] observability capture failed to start:', err),
   );
+  server.once('close', () => {
+    void stopObservabilityCapture();
+  });
+
+  // Grounding maintenance reads GROUNDING_MAINTENANCE_MODE, so staging still
+  // evicts and compacts its own disk when shared background jobs are off.
+  groundingMaintenanceScheduler.start();
+  console.log('Grounding maintenance scheduler started');
+
+  startDbPoolTelemetryScheduler();
+  server.once('close', stopDbPoolTelemetryScheduler);
+
+  // Chat SSE streams served by this instance receive run events through LISTEN.
+  initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
+
+  const backgroundJobsMode = resolveBackgroundJobsMode(process.env.BACKGROUND_JOBS_MODE);
+  if (!runsSharedBackgroundJobs(backgroundJobsMode)) {
+    console.log(
+      '[background-jobs] BACKGROUND_JOBS_MODE=off — background jobs that act on shared data are off for this slot.',
+    );
+    registerGracefulShutdown(server);
+    return;
+  }
+
   startObservabilityOperations();
   startJourneyAggregation();
   server.once('close', () => {
-    void stopObservabilityCapture();
     stopObservabilityOperations();
     stopJourneyAggregation();
   });
@@ -444,12 +471,6 @@ const server = app.listen(PORT, () => {
   foundationSkillScanScheduler.start();
   console.log('Foundation skill scan scheduler started');
 
-  groundingMaintenanceScheduler.start();
-  console.log('Grounding maintenance scheduler started');
-
-  startDbPoolTelemetryScheduler();
-  server.once('close', stopDbPoolTelemetryScheduler);
-
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
 
@@ -467,7 +488,6 @@ const server = app.listen(PORT, () => {
   startPlaybookStepOutputCleanup();
   server.once('close', stopPlaybookStepOutputCleanup);
   startLoadTestRunReaper();
-  initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.
   registerGracefulShutdown(server);
