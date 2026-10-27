@@ -181,6 +181,32 @@ export async function linkPlaybookRun(buildRunId: string, playbookRunId: string)
   }).where(and(eq(buildRuns.id, buildRunId), isNull(buildRuns.playbookRunId)));
 }
 
+export interface BuildForPlaybookRun {
+  id: string;
+  repository: string;
+  requestedByUserId: string;
+}
+
+export async function findBuildByPlaybookRun(playbookRunId: string): Promise<BuildForPlaybookRun | null> {
+  const [row] = await db
+    .select({
+      id: buildRuns.id,
+      repository: buildRuns.repository,
+      requestedByUserId: buildRuns.requestedByUserId,
+    })
+    .from(buildRuns)
+    .where(eq(buildRuns.playbookRunId, playbookRunId))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function linkBuildInterview(buildRunId: string, interviewId: string): Promise<void> {
+  await db.update(buildRuns).set({
+    interviewId,
+    updatedAt: new Date().toISOString(),
+  }).where(and(eq(buildRuns.id, buildRunId), isNull(buildRuns.interviewId)));
+}
+
 export async function markBuildFailed(buildRunId: string): Promise<void> {
   const now = new Date().toISOString();
   await db.update(buildRuns).set({

@@ -96,6 +96,26 @@ export function useActiveBuildCount(project: string | undefined, enabled: boolea
   });
 }
 
+export interface BuildIntakeRef {
+  interviewId: string | null;
+  threadId: string | null;
+}
+
+/** Reads `intake` from the build detail route (`GET /api/builds/:id`). */
+export function useBuildIntake(buildId: string | undefined) {
+  return useQuery({
+    queryKey: ['builds', 'detail', buildId, 'intake'],
+    enabled: Boolean(buildId),
+    queryFn: async () => {
+      const body = await apiFetch<{ intake?: BuildIntakeRef | null }>(
+        `/api/builds/${encodeURIComponent(buildId ?? '')}`,
+      );
+      return body.intake ?? null;
+    },
+    refetchInterval: (query) => (query.state.data?.interviewId ? false : 5_000),
+  });
+}
+
 export function useBuildRepositories(project: string) {
   return useQuery({
     queryKey: ['builds', 'repositories', project],

@@ -128,6 +128,9 @@ const BuildsRouteGuard = lazy(() =>
 );
 const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
 const NewBuildForm = lazy(() => import('./components/NewBuildForm').then((m) => ({ default: m.NewBuildForm })));
+const BuildIntakeChatRoute = lazy(() =>
+  import('./components/BuildIntakeChatRoute').then((m) => ({ default: m.BuildIntakeChatRoute })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -384,6 +387,8 @@ function App() {
       )
     );
   const buildsEnabled = !homeFlagsLoading && homeFlags[BUILD_FROM_PROMPT_FLAG] === true;
+  const buildIntakeBuildId = /^\/builds\/([^/]+)\/intake\/?$/.exec(location.pathname)?.[1];
+  const isBuildIntakePath = buildIntakeBuildId !== undefined;
   const mcpServersEnabled =
     !homeFlagsLoading && homeFlags['mcp-servers'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
@@ -1532,7 +1537,7 @@ function App() {
                   can={can}
                   isSuperAdmin={isSuperAdmin}
                   enabledViews={effectiveEnabledViews}
-                  flagEnabled={buildsEnabled}
+                  flagEnabled={buildsEnabled || isBuildIntakePath}
                   isLoading={homeFlagsLoading || !menuConfigReady || !permissionsLoaded}
                   fallbackPath={resolveAccessibleRoute({
                     canAccessHome,
@@ -1543,7 +1548,9 @@ function App() {
                     isInAnyGroup,
                   })}
                 >
-                  {location.pathname === '/builds/new' ? (
+                  {isBuildIntakePath ? (
+                    <BuildIntakeChatRoute buildId={buildIntakeBuildId} />
+                  ) : location.pathname === '/builds/new' ? (
                     // data-testid-exempt — NewBuildForm owns its new-build-form root id; no data-testid prop
                     <NewBuildForm project={selectedProject} />
                   ) : (
