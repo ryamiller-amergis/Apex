@@ -12,6 +12,10 @@ export interface ErrorStateProps {
   /** Renders a retry button when set. */
   onRetry?: () => void;
   retryLabel?: string;
+  /** Selector for this state. Defaults to `error-state`. */
+  testId?: string;
+  /** Selector for the retry button. Defaults to `error-state-retry`. */
+  retryTestId?: string;
 }
 
 /**
@@ -29,10 +33,12 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
   message,
   onRetry,
   retryLabel = 'Try again',
+  testId = 'error-state',
+  retryTestId = 'error-state-retry',
 }) => (
   <Box
     role="alert"
-    data-testid="error-state"
+    data-testid={testId}
     sx={{
       display: 'flex',
       flexDirection: 'column',
@@ -49,7 +55,7 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
       <Button
         variant="contained"
         onClick={onRetry}
-        data-testid="error-state-retry"
+        data-testid={retryTestId}
         sx={{ mt: 1 }}
       >
         {retryLabel}

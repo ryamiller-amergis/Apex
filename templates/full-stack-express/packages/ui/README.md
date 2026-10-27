@@ -77,9 +77,9 @@ if (query.isError)
 if (!query.data) return <EmptyState title="No profile yet" />;
 ```
 
-- `LoadingState({ label = 'Loading', variant = 'page' | 'inline' })`
+- `LoadingState({ label = 'Loading', variant = 'page' | 'inline', testId = 'loading-state' })`
 - `EmptyState({ title, description?, action?: { label, onClick } })`
-- `ErrorState({ title = 'Something went wrong', message?, onRetry?, retryLabel = 'Try again' })`
+- `ErrorState({ title = 'Something went wrong', message?, onRetry?, retryLabel = 'Try again', testId = 'error-state', retryTestId = 'error-state-retry' })`
 
 Pass fixed strings to `ErrorState`. Never pass an `Error` message, a stack trace, or a Problem Details `detail` field; they can hold identity values. `AppErrorBoundary` never renders the thrown message. It passes the error to `onError`, and the host must redact identity values before logging it.
 
