@@ -37,6 +37,66 @@ const scriptRules = {
 
 const browserFiles = ['apps/web/**/*.{ts,tsx}', 'packages/ui/**/*.{ts,tsx}'];
 
+const databaseImports = {
+  paths: [
+    {
+      name: 'pg',
+      message:
+        'Only apps/api/src/persistence may import the database driver or Drizzle.',
+    },
+  ],
+  patterns: [
+    {
+      group: ['drizzle-orm', 'drizzle-orm/*', 'drizzle-kit', 'drizzle-kit/*'],
+      message:
+        'Only apps/api/src/persistence may import the database driver or Drizzle.',
+    },
+  ],
+};
+const migrationRunnerImports = {
+  group: ['**/persistence/migrations', '**/persistence/migrations/**'],
+  message:
+    'Only the migrate command and test support may import the migration runner.',
+};
+
+// Flat config replaces a rule per file rather than merging it, so each block
+// lists every restriction that applies to its files.
+const persistenceBoundaries = [
+  {
+    files: ['apps/api/**/*.ts'],
+    ignores: [
+      'apps/api/src/persistence/**',
+      'apps/api/src/cli/**',
+      'apps/api/scripts/**',
+      'apps/api/test/**',
+      'apps/api/drizzle.config.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          ...databaseImports,
+          patterns: [...databaseImports.patterns, migrationRunnerImports],
+        },
+      ],
+    },
+  },
+  {
+    files: ['apps/api/src/cli/**/*.ts', 'apps/api/scripts/**/*.ts'],
+    rules: { 'no-restricted-imports': ['error', databaseImports] },
+  },
+  {
+    files: ['apps/api/src/persistence/**/*.ts'],
+    ignores: ['apps/api/src/persistence/migrations/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        { patterns: [migrationRunnerImports] },
+      ],
+    },
+  },
+];
+
 export default tseslint.config(
   {
     ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**'],
@@ -72,7 +132,7 @@ export default tseslint.config(
   },
   {
     files: ['apps/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}'],
-    ignores: ['**/*.test.ts', '**/*.test.tsx'],
+    ignores: ['**/*.test.ts', '**/*.test.tsx', 'apps/api/test/**'],
     rules: {
       'no-restricted-properties': [
         'error',
@@ -92,6 +152,7 @@ export default tseslint.config(
       ],
     },
   },
+  ...persistenceBoundaries,
   {
     files: ['apps/api/src/config/env.ts'],
     rules: {

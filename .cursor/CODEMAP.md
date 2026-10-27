@@ -16,6 +16,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `tests/integration/`: `*.integration.test.ts`, run with `jest.config.integration.js`.
 - `foundation-skills/`: packaged skills library (`foundation-skills/catalog.json`, `foundation-skills/foundation/`, `foundation-skills/adapters/`); published by `.github/workflows/publish-apex-skills.yml`.
 - `templates/full-stack-express/`: isolated pnpm workspace starter (own lockfile and toolchain; not part of the Apex root workspace).
+- `templates/full-stack-express/apps/api/src/persistence/`: the starter's own `app_users` table (UUID key) and store; unrelated to Apex's `app_users` in `src/server/db/schema.ts`.
 - `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`.
 - `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
 - `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), changelog, dev→prod migration.

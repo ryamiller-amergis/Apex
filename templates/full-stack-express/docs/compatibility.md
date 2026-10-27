@@ -15,7 +15,7 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | eslint-plugin-react-hooks | 7.1.1          | implementation-date latest stable                 | packages/config                                                      |
 | eslint-plugin-jsx-a11y    | 6.10.2         | implementation-date latest stable                 | packages/config                                                      |
 | globals                   | 17.13.0        | implementation-date latest stable                 | packages/config                                                      |
-| prettier                  | 3.9.10         | implementation-date latest stable                 | package root                                                         |
+| prettier                  | 3.9.10         | implementation-date latest stable                 | package root, apps/api                                               |
 | vitest                    | 5.0.5          | implementation-date latest stable                 | apps/api, apps/web, packages/config, packages/contracts, packages/ui |
 | vite                      | 8.3.5          | implementation-date latest stable                 | apps/web                                                             |
 | @vitejs/plugin-react      | 6.1.2          | implementation-date latest stable                 | apps/web                                                             |
@@ -26,11 +26,13 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | @types/node               | 24.19.2        | implementation-date latest stable                 | apps/api, apps/web                                                   |
 | express                   | 5.3.0          | implementation-date latest stable                 | reserved                                                             |
 | @mui/material             | 9.5.0          | implementation-date latest stable                 | reserved                                                             |
-| drizzle-orm               | 0.45.4         | implementation-date latest stable                 | reserved                                                             |
-| drizzle-kit               | 0.31.11        | implementation-date latest stable                 | reserved                                                             |
+| drizzle-orm               | 0.45.4         | implementation-date latest stable                 | apps/api                                                             |
+| drizzle-kit               | 0.31.11        | implementation-date latest stable                 | apps/api                                                             |
+| pg                        | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
+| @types/pg                 | 8.23.1         | implementation-date latest stable                 | apps/api                                                             |
 | @playwright/test          | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
 | @testing-library/react    | 16.3.3         | implementation-date latest stable                 | reserved                                                             |
-| testcontainers            | 12.2.1         | implementation-date latest stable                 | reserved                                                             |
+| testcontainers            | 12.2.1         | implementation-date latest stable                 | apps/api                                                             |
 | yaml                      | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
 | zod                       | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web                                                   |
 
@@ -47,6 +49,9 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - `.npmrc` does not set `package-lock=false`. pnpm treats that key as "do not use a lockfile" and then refuses a frozen install. npm still writes `package-lock.json` before `preinstall` returns, so the guard deletes that file when the package manager is not pnpm.
 - zod `4.6.7` is the newest Zod 4 release on 2026-10-26. Apex allows `zod ^4.3.6`. This workspace pins the exact release. Schema messages are static strings, so a later Zod 4 release cannot start printing received values.
 - yaml `2.9.1` parses `compose.yaml` in the configuration tests.
+- pg `8.23.1` is the driver behind `drizzle-orm/node-postgres`; `@types/pg` `8.23.1` matches it. Only `apps/api/src/persistence/` imports either.
+- testcontainers `12.2.1` starts `postgres:16` for the API integration tests. Those tests skip when Docker is not available.
+- pnpm reports ignored build scripts for `esbuild` (used by drizzle-kit), and for `ssh2`, `cpu-features`, and `protobufjs` (used by testcontainers). None is needed: esbuild ships its binary as an optional dependency, and the native SSH helpers are optional. `onlyBuiltDependencies` stays empty.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry

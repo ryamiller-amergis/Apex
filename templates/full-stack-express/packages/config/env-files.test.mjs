@@ -130,15 +130,21 @@ describe('script surface', () => {
     expect(readme).toContain('DATABASE_URL');
   });
 
-  it('migrate and seed placeholders exit 1 until Starter Persistence', () => {
-    const result = spawnSync(
-      process.execPath,
-      ['apps/api/scripts/persistence-placeholder.mjs'],
-      { cwd: templateRoot, encoding: 'utf8', windowsHide: true }
+  it('TBI-007 migrate, seed, db:generate, and migrate:validate run the API persistence commands', () => {
+    const apiManifest = JSON.parse(
+      readFileSync(path.join(templateRoot, 'apps/api/package.json'), 'utf8')
     );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      'Provided by the Starter Persistence feature'
-    );
+    for (const [root, api, entry] of [
+      ['migrate', 'db:migrate', 'src/cli/migrate.ts'],
+      ['seed', 'db:seed', 'src/cli/seed.ts'],
+      ['db:generate', 'db:generate', 'scripts/generateMigration.ts'],
+      ['migrate:validate', 'migrate:validate', 'scripts/validateMigrations.ts'],
+    ]) {
+      expect(rootManifest.scripts[root], root).toContain(`run ${api}`);
+      expect(apiManifest.scripts[api], api).toContain(entry);
+      expect(readme).toContain(`\`${root}\``);
+    }
+    expect(readme).not.toContain('Provided by the Starter Persistence feature');
+    expect(readme).toContain('docs/runbooks/migrations.md');
   });
 });
