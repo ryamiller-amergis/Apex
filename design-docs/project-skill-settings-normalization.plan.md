@@ -45,7 +45,7 @@ Staging and production share one database, so the old columns stay until both sl
 
 ## Immediate follow-up, separate from this redesign
 
-`standupService.ts` should select only `standupSkillPath`, `skillRepo`, and `skillBranch` instead of `skillSettings: true`. That makes the failing query legal without waiting for the table split. It is a small change and can ship on its own. This plan does not include that edit.
+`standupService.ts` selects only `standupSkillPath`, `skillRepo`, and `skillBranch` instead of `skillSettings: true`. That makes the failing query legal without waiting for the table split. This query change ships with the expand pull request. The old columns stay until the contract step.
 
 ## Later, optional
 

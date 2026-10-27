@@ -8,7 +8,6 @@ import {
   standupFollowups,
   appGroupMembers,
   appUsers,
-  projectSkillSettings,
   chatMessages,
 } from '../db/schema';
 import { createThread } from './chatAgentService';
@@ -16,6 +15,17 @@ import { deleteThread } from './chatThreadRepository';
 import { createNotification } from './notificationService';
 import { sendTeamsNotification } from './teamsBotService';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
+
+// Postgres rejects a function call with more than 100 arguments (54023).
+// Loading every project_skill_settings column through the relation does that.
+// Session creation only needs these three.
+const standupSkillSettingsColumns = {
+  columns: {
+    standupSkillPath: true,
+    skillRepo: true,
+    skillBranch: true,
+  },
+} as const;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -107,7 +117,7 @@ export async function generateDailySessions(): Promise<number> {
 
   const configs = await db.query.standupConfigs.findMany({
     where: eq(standupConfigs.enabled, true),
-    with: { group: true, skillSettings: true },
+    with: { group: true, skillSettings: standupSkillSettingsColumns },
   });
 
   let sessionsCreated = 0;
@@ -149,10 +159,9 @@ export async function generateDailySessions(): Promise<number> {
     let skillRepo = '';
     let skillBranch: string | undefined;
     if (config.skillSettings) {
-      const settings = config.skillSettings as typeof projectSkillSettings.$inferSelect;
-      standupSkillPath = settings.standupSkillPath ?? undefined;
-      skillRepo = settings.skillRepo;
-      skillBranch = settings.skillBranch;
+      standupSkillPath = config.skillSettings.standupSkillPath ?? undefined;
+      skillRepo = config.skillSettings.skillRepo;
+      skillBranch = config.skillSettings.skillBranch;
     }
 
     // Create session
@@ -233,7 +242,7 @@ export async function triggerSessionForConfig(
 ): Promise<{ sessionId: string; alreadyExisted: boolean }> {
   const config = await db.query.standupConfigs.findFirst({
     where: eq(standupConfigs.id, configId),
-    with: { group: true, skillSettings: true },
+    with: { group: true, skillSettings: standupSkillSettingsColumns },
   });
   if (!config) throw new Error(`Standup config ${configId} not found`);
 
@@ -261,10 +270,9 @@ export async function triggerSessionForConfig(
   let skillRepo = '';
   let skillBranch: string | undefined;
   if (config.skillSettings) {
-    const settings = config.skillSettings as typeof projectSkillSettings.$inferSelect;
-    standupSkillPath = settings.standupSkillPath ?? undefined;
-    skillRepo = settings.skillRepo;
-    skillBranch = settings.skillBranch;
+    standupSkillPath = config.skillSettings.standupSkillPath ?? undefined;
+    skillRepo = config.skillSettings.skillRepo;
+    skillBranch = config.skillSettings.skillBranch;
   }
 
   const sessionId = uuidv4();

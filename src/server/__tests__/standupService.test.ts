@@ -51,6 +51,7 @@ import {
   sendStandupReminders,
   runFacilitator,
   triggerSessionForConfig,
+  generateDailySessions,
 } from '../services/standupService';
 import { createNotification } from '../services/notificationService';
 import { sendTeamsNotification } from '../services/teamsBotService';
@@ -217,6 +218,32 @@ describe('runFacilitator', () => {
   });
 });
 
+const standupSkillColumns = {
+  columns: {
+    standupSkillPath: true,
+    skillRepo: true,
+    skillBranch: true,
+  },
+};
+
+describe('generateDailySessions project skill settings', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('loads only the standup skill columns when generating sessions', async () => {
+    mockDb.query.standupConfigs.findMany.mockResolvedValue([]);
+
+    await generateDailySessions();
+
+    expect(mockDb.query.standupConfigs.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        with: { group: true, skillSettings: standupSkillColumns },
+      }),
+    );
+  });
+});
+
 describe('triggerSessionForConfig project skill settings', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -233,7 +260,7 @@ describe('triggerSessionForConfig project skill settings', () => {
     });
   });
 
-  it('still loads skill settings through the relational skillSettings include', async () => {
+  it('loads only the standup skill columns and still passes them to the participant thread', async () => {
     mockDb.query.standupConfigs.findFirst.mockResolvedValue({
       id: 'config-1',
       project: 'AI-Pilot',
@@ -249,7 +276,7 @@ describe('triggerSessionForConfig project skill settings', () => {
     await triggerSessionForConfig('config-1');
 
     expect(mockDb.query.standupConfigs.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ with: { group: true, skillSettings: true } }),
+      expect.objectContaining({ with: { group: true, skillSettings: standupSkillColumns } }),
     );
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-1',
