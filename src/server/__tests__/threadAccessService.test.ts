@@ -246,3 +246,50 @@ describe('canCreateDesignDocAssistantThread', () => {
     expect(await canCreateDesignDocAssistantThread('viewer-1', 'doc-1')).toBe(false);
   });
 });
+
+describe('VT-13 — build-intake thread read narrowing (PBI-009 security NFR)', () => {
+  const intakeThread: ChatThread = {
+    ...baseThread,
+    userId: 'requester-1',
+    kickoff: {
+      project: 'Apex',
+      repo: 'org/target',
+      playbookInterview: { runId: 'run-1', stepId: 'intake', snapshot: { key: 'build-intake', mode: 'human_led' } },
+    } as ChatThread['kickoff'],
+  };
+
+  beforeEach(() => {
+    mockGetThread.mockResolvedValue(intakeThread);
+    mockDb.query.interviews.findFirst.mockResolvedValue({ id: 'iv-1' });
+  });
+
+  it('allows the requester as owner', async () => {
+    await expect(resolveThreadAccess('requester-1', 'thread-1')).resolves.toEqual({ access: 'owner', thread: intakeThread });
+  });
+
+  it('allows a Project Admin of the build project', async () => {
+    mockIsProjectAdmin.mockImplementation(async (_user: string, project: string) => project === 'Apex');
+    await expect(resolveThreadAccess('pa-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: intakeThread });
+  });
+
+  it('allows a Platform Admin', async () => {
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    await expect(resolveThreadAccess('platform-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: intakeThread });
+  });
+
+  it('refuses a member with interviews:view', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+    await expect(resolveThreadAccess('member-1', 'thread-1')).resolves.toBeNull();
+  });
+
+  it('refuses a chat:view_all holder who is not a Project Admin', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:view_all']));
+    await expect(resolveThreadAccess('viewer-all-1', 'thread-1')).resolves.toBeNull();
+  });
+
+  it('leaves a non-build interview thread on today\'s rules', async () => {
+    mockGetThread.mockResolvedValue(baseThread);
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+    await expect(resolveThreadAccess('member-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: baseThread });
+  });
+});

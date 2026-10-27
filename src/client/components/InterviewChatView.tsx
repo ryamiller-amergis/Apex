@@ -55,6 +55,12 @@ import {
   usesGuidedInterviewPhases,
 } from '../utils/interviewPhaseProgress';
 import { InterviewPhaseBar } from './InterviewPhaseBar';
+import { BuildIntakeWarning, stripWarningLabelLine } from './BuildIntakeWarning';
+import { stripBuildIntakeMarkers, warningClasses } from '../../shared/utils/buildIntakeMarkers';
+import { BUILD_INTAKE_OPTION_KEY } from '../../shared/types/buildPreflight';
+import { BUILD_INTAKE_PAUSED_MESSAGE } from '../../shared/types/buildAccess';
+import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
+import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
@@ -187,7 +193,10 @@ interface InterviewAgentMessageProps {
 }
 
 export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false, anchorRef }) => {
-  const visibleText = stripInterviewPhaseMarkers(text);
+  const intakeWarnings = warningClasses(text);
+  const markerFreeText = stripBuildIntakeMarkers(stripInterviewPhaseMarkers(text));
+  const visibleText = intakeWarnings.length > 0 ? stripWarningLabelLine(markerFreeText) : markerFreeText;
+  const warning = <BuildIntakeWarning classes={intakeWarnings} />;
   const parts = parseAgentMessage(visibleText);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -240,6 +249,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
             {...{ 'data-testid': 'interview-message-read-aloud' }}
           />
         </div>
+        {warning}
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleText}</ReactMarkdown>
       </div>
     );
@@ -287,6 +297,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
           {...{ 'data-testid': 'interview-message-read-aloud' }}
         />
       </div>
+      {warning}
       {parts.map((part) => {
         if (part.type === 'markdown') {
           return (
@@ -1013,7 +1024,7 @@ const NewInterviewCompose: React.FC = () => {
 
 // ── Existing interview chat view ──────────────────────────────────────────────
 
-const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
+export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { can, userId, isAdmin } = useAppShell();
@@ -1023,6 +1034,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const { data: interview, isLoading, isError } = useInterview(id);
   const { projectRoles: interviewProjectRoles } = useMyPermissions(interview?.project);
   const isPlaybookInterview = Boolean(interview?.playbookRunId);
+  const isBuildIntake = interview?.playbookProfileKey === BUILD_INTAKE_OPTION_KEY;
+  const buildFlags = useFeatureFlags(isBuildIntake ? interview?.project ?? undefined : undefined);
   const {
     data: interviewBrief,
     isLoading: isBriefLoading,
@@ -1416,6 +1429,20 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const canAssignPhases = isAuthor || isInterviewAdmin;
   const isStatusLocked = interview.status !== 'in_progress';
   const isChatLocked = isReadOnlyViewer || isStatusLocked;
+  const visibleStreamingText = streamingText
+    ? stripBuildIntakeMarkers(stripInterviewPhaseMarkers(streamingText))
+    : '';
+  let buildIntakePaused = false;
+  // @feature-flag:build-from-prompt start winner=enabled
+  if (isBuildIntake && !buildFlags.isLoading && !buildFlags.flags[BUILD_FROM_PROMPT_FLAG]) {
+    // @feature-flag:build-from-prompt disabled-start
+    buildIntakePaused = true;
+    // @feature-flag:build-from-prompt disabled-end
+  }
+  // @feature-flag:build-from-prompt enabled-start
+  // Enabled projects keep the intake composer open.
+  // @feature-flag:build-from-prompt enabled-end
+  // @feature-flag:build-from-prompt end
   const isGuidedInterview = usesGuidedInterviewPhases(
     chatThread?.kickoff.skillPath,
   );
@@ -1515,7 +1542,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               endpoint={`/api/interviews/${interview.id}/usage`}
               visible={interview.status === 'complete'}
             />
-            {(interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.testCaseOwnerName) && (
+            {!isBuildIntake && (interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.testCaseOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
                 {interview.prdOwnerName && (
                   <span className={styles.ownerChip} {...{ 'data-testid': 'interview-owner-chip-prd' }}>
@@ -1566,20 +1593,22 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
 
         <div className={styles.headerRight}>
-          <button
-            ref={linkedContextTriggerRef}
-            className={styles.actionBtn}
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={showLinkedContext}
-            onClick={openLinkedContext}
-            {...{ 'data-testid': 'interview-linked-context-trigger' }}
-          >
-            Linked Context
-          </button>
+          {!isBuildIntake && (
+            <button
+              ref={linkedContextTriggerRef}
+              className={styles.actionBtn}
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={showLinkedContext}
+              onClick={openLinkedContext}
+              {...{ 'data-testid': 'interview-linked-context-trigger' }}
+            >
+              Linked Context
+            </button>
+          )}
           {(canManage || canCompleteInterview) && (
             <div className={styles.actions}>
-              {canCompleteInterview && interview.status === 'in_progress' && !isPlaybookInterview && (
+              {canCompleteInterview && interview.status === 'in_progress' && !isPlaybookInterview && !isBuildIntake && (
                 <button
                   className={styles.actionBtn}
                   onClick={() => void handleStatusChange('complete')}
@@ -1610,7 +1639,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Reopen
                 </button>
               )}
-              {canManage && (interview.status === 'in_progress' || interview.status === 'complete') && (
+              {canManage && !isBuildIntake && (interview.status === 'in_progress' || interview.status === 'complete') && (
                 <button
                   className={styles.actionBtnDanger}
                   onClick={() => void handleStatusChange('archived')}
@@ -1627,7 +1656,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Archive
                 </button>
               )}
-              {canCompleteInterview && interview.status === 'complete' && (
+              {canCompleteInterview && !isBuildIntake && interview.status === 'complete' && (
                 <button
                   className={styles.actionBtnPrimary}
                   onClick={requestGeneratePrd}
@@ -1745,7 +1774,10 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
       )}
 
       <div className={styles.messages}>
-        <div className={styles.messageList}>
+        <div
+          className={styles.messageList}
+          {...(isBuildIntake ? { 'aria-live': 'polite' as const, 'aria-relevant': 'additions' as const } : {})}
+        >
           {hasPreparationError && (
             <div className={styles.preparationState} role="alert">
               <div className={styles.preparationErrorIcon}>!</div>
@@ -1879,9 +1911,12 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {streamingText && stripInterviewPhaseMarkers(streamingText) && (
-            <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{stripInterviewPhaseMarkers(streamingText)}</ReactMarkdown>
+          {visibleStreamingText && (
+            <div
+              className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}
+              {...(isBuildIntake ? { 'aria-hidden': true } : {})}
+            >
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleStreamingText}</ReactMarkdown>
             </div>
           )}
 
@@ -1889,7 +1924,11 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {isChatLocked ? (
+      {buildIntakePaused ? (
+        <div className={styles.lockedNotice} role="status" {...{ 'data-testid': 'build-intake-paused-notice' }}>
+          <span>{BUILD_INTAKE_PAUSED_MESSAGE}</span>
+        </div>
+      ) : isChatLocked ? (
         <div className={styles.lockedNotice} {...{ 'data-testid': 'locked-notice' }}>
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="7" width="10" height="8" rx="1.5" />
@@ -1932,7 +1971,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </span>
           </div>
 
-          {contextEstimate.isCritical && (
+          {contextEstimate.isCritical && !isBuildIntake && (
             <div className={styles.wrapUpBannerCritical}>
               <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -1960,7 +1999,7 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
           )}
 
-          {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && (
+          {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && !isBuildIntake && (
             <div className={styles.wrapUpBannerWarn}>
               <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -1995,16 +2034,18 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               </div>
             </div>
           )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
-            className={styles.fileInput}
-            onChange={handleAttachmentChange}
-            disabled={isInteractionBusy || isSending}
-            {...{ 'data-testid': 'interview-file-input' }}
-          />
+          {!isBuildIntake && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+              className={styles.fileInput}
+              onChange={handleAttachmentChange}
+              disabled={isInteractionBusy || isSending}
+              {...{ 'data-testid': 'interview-file-input' }}
+            />
+          )}
           <AgentComposer
             className={styles.composerEmbed}
             shellClassName={styles.interviewComposerShell}
@@ -2040,8 +2081,8 @@ const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             attachments={attachments}
             attachmentError={attachmentError}
             onRemoveAttachment={removeAttachment}
-            onAttachClick={() => fileInputRef.current?.click()}
-            speech={{
+            onAttachClick={isBuildIntake ? undefined : () => fileInputRef.current?.click()}
+            speech={isBuildIntake ? undefined : {
               isListening: speech.isListening,
               isSpeechSupported: speech.isSpeechSupported,
               speechError: speech.speechError,

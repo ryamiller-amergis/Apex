@@ -129,6 +129,7 @@ export const BUILD_SCAFFOLD_KINDS = [
 export const BUILD_EVENT_TYPES = [
   'build.queued',
   'build.started',
+  'intake.sensitive_text_warning',
   'intake.brief_approved',
   'plan.validated',
   'plan.invalid',

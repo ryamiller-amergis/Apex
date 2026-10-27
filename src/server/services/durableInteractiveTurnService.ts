@@ -1072,7 +1072,9 @@ async function defaultLoadSkill(
     );
   }
   let pinnedReader: Pick<RepoReader, 'readFile'>;
-  if (!input.grounding) {
+  if (hasSeparateSkillRepo(input.thread)) {
+    pinnedReader = branchTipReader(input.thread);
+  } else if (!input.grounding) {
     if (!input.readBranchTip) {
       warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
       throw unavailableSkill();
@@ -1208,13 +1210,22 @@ async function defaultIsBackgroundGroundingEnabled(
   }
 }
 
+function skillRepoOf(thread: ChatThread): string {
+  return thread.kickoff.skillRepo?.trim() || thread.kickoff.repo;
+}
+
+/** The skill lives outside the grounding repository, so the grounded reader cannot load it. */
+function hasSeparateSkillRepo(thread: ChatThread): boolean {
+  return skillRepoOf(thread) !== thread.kickoff.repo;
+}
+
 function branchTipReader(thread: ChatThread): Pick<RepoReader, 'readFile'> {
   const { kickoff } = thread;
   return {
     readFile: (filePath) =>
       getSkillFile(
         kickoff.project,
-        kickoff.repo,
+        skillRepoOf(thread),
         filePath,
         kickoff.skillBranch ?? kickoff.branch ?? 'main',
         kickoff.skillProvider ?? 'ado',

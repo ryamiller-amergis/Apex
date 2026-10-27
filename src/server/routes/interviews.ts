@@ -1,7 +1,7 @@
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
+import { requireAnyPermission, requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
@@ -49,6 +49,8 @@ import type {
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
 import { getActiveUsers, getUserPermissions } from '../services/rbacService';
+import { BUILDS_VIEW } from '../../shared/types/buildAccess';
+import { BUILD_INTAKE_OPTION_KEY } from '../../shared/types/buildPreflight';
 import { getUserGroupNames } from '../services/groupService';
 import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
@@ -118,7 +120,7 @@ import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
-import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
+import { canCreateDesignDocAssistantThread, isBuildIntakeParticipant } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
 import {
   getTestCases,
@@ -3283,7 +3285,42 @@ router.get('/:id/usage', requirePermission('interviews:view'), async (req, res, 
   }
 });
 
-router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
+/**
+ * `interviews:view`, or `builds:view` on a build-intake interview for its
+ * requester, a Project Admin or a Platform Admin.
+ */
+async function allowBuildIntakeParticipant(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.interviews.findFirst({
+      where: eq(interviewsTable.id, req.params.id),
+      columns: { authorId: true, project: true, playbookProfileKey: true },
+    });
+    if (
+      row?.playbookProfileKey === BUILD_INTAKE_OPTION_KEY
+      && await isBuildIntakeParticipant(getUserId(req), row.authorId ?? '', row.project)
+    ) {
+      next();
+      return;
+    }
+    requirePermission('interviews:view')(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+}
+
+const requireInterviewReadOrBuildsView = requireAnyPermission('interviews:view', BUILDS_VIEW);
+
+const requireInterviewRead: RequestHandler = (req, res, next) => {
+  void requireInterviewReadOrBuildsView(req, res, (err?: unknown) => {
+    if (err) {
+      next(err);
+      return;
+    }
+    void allowBuildIntakeParticipant(req, res, next);
+  });
+};
+
+router.get('/:id', requireInterviewRead, async (req, res, next) => {
   try {
     const interview = await getInterview(req.params.id);
     if (!interview) {
@@ -3356,7 +3393,7 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
   }
 });
 
-router.get('/:id/brief', requirePermission('interviews:view'), async (req, res, next) => {
+router.get('/:id/brief', requireInterviewRead, async (req, res, next) => {
   try {
     const brief = await getInterviewBrief(req.params.id);
     res.json(brief);

@@ -821,6 +821,14 @@ export interface RepositoryReadRuntime {
   repoReader?: RepoReader;
 }
 
+function skillRepoOf(kickoff: ChatThreadKickoff): string {
+  return kickoff.skillRepo?.trim() || kickoff.repo;
+}
+
+function hasSeparateSkillRepo(kickoff: ChatThreadKickoff): boolean {
+  return skillRepoOf(kickoff) !== kickoff.repo;
+}
+
 function targetedRepositoryName(kickoff: ChatThreadKickoff): string {
   if (kickoff.skillProvider !== 'github') return kickoff.repo;
   return kickoff.repo.split('/').pop() || kickoff.repo;
@@ -1952,13 +1960,14 @@ async function buildNewAgentTurnPrompt(
 
       const results = await Promise.allSettled(
         requests.map(async (request) => {
-          if (options?.repoReader) {
+          const fromSkillRepo = request.key === 'skill' && hasSeparateSkillRepo(kickoff);
+          if (options?.repoReader && !fromSkillRepo) {
             return options.repoReader.readFile(request.path);
           }
           const { getSkillFile } = await import('./skillCatalogFacade');
           return getSkillFile(
             kickoff.project,
-            kickoff.repo,
+            fromSkillRepo ? skillRepoOf(kickoff) : kickoff.repo,
             request.path,
             resolvedBranch,
             provider
@@ -1980,7 +1989,7 @@ async function buildNewAgentTurnPrompt(
         if (request.key === 'skill') {
           skillContent = result.value;
           resolvedSkillPath = request.path.replace(/^\//, '');
-          skillSource = options?.repoReader ? 'local' : provider;
+          skillSource = options?.repoReader && !hasSeparateSkillRepo(kickoff) ? 'local' : provider;
         } else if (request.key === 'context') {
           contextContent = result.value;
         } else {
@@ -2005,13 +2014,13 @@ async function buildNewAgentTurnPrompt(
     if (!skillContent && !skipProviderCatalog) {
       for (const candidate of candidates.slice(1)) {
         try {
-          const content = options?.repoReader
+          const content = options?.repoReader && !hasSeparateSkillRepo(kickoff)
             ? await options.repoReader.readFile(candidate)
             : await (
                 await import('./skillCatalogFacade')
               ).getSkillFile(
                 kickoff.project,
-                kickoff.repo,
+                skillRepoOf(kickoff),
                 candidate,
                 resolvedBranch,
                 provider
@@ -2019,7 +2028,7 @@ async function buildNewAgentTurnPrompt(
           if (content) {
             skillContent = content;
             resolvedSkillPath = candidate;
-            skillSource = options?.repoReader ? 'local' : provider;
+            skillSource = options?.repoReader && !hasSeparateSkillRepo(kickoff) ? 'local' : provider;
             break;
           }
         } catch (err) {

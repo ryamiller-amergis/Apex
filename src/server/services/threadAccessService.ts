@@ -7,6 +7,7 @@ import { getThread } from './chatAgentService';
 import { getUserPermissions } from './rbacService';
 import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
+import { isBuildIntakeThread } from './buildIntakeService';
 
 export type ThreadAccess = 'owner' | 'read';
 
@@ -81,6 +82,20 @@ async function userCanReadLinkedThread(userId: string): Promise<boolean> {
 }
 
 /**
+ * Who may see a build intake: the requester, a Project Admin of the build's
+ * project, or a Platform Admin. The build-intake write rule uses the same check.
+ */
+export async function isBuildIntakeParticipant(
+  userId: string,
+  requesterUserId: string,
+  project: string | null | undefined,
+): Promise<boolean> {
+  if (userId === requesterUserId) return true;
+  if (await isPlatformAdmin(userId)) return true;
+  return Boolean(project) && isProjectAdmin(userId, project as string);
+}
+
+/**
  * Resolve read access to a chat thread. Returns null when the thread does not
  * exist or the user may not read it (callers should respond with 404).
  */
@@ -95,6 +110,13 @@ export async function resolveThreadAccess(
 
   if (thread.userId === userId) {
     return { access: 'owner', thread };
+  }
+
+  // chat:view_all and interviews:view do not reach a build-intake thread.
+  if (isBuildIntakeThread(thread)) {
+    return (await isBuildIntakeParticipant(userId, thread.userId, thread.kickoff.project))
+      ? { access: 'read', thread }
+      : null;
   }
 
   const perms = await getUserPermissions(userId);
