@@ -1199,6 +1199,41 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   projectFriendlyName: unique('project_skill_settings_project_friendly_name_key').on(t.project, t.friendlyName),
 }));
 
+/**
+ * One row per (settings row, workflow); keys come from PROJECT_SKILL_WORKFLOWS in
+ * src/shared/constants/projectSkillWorkflows.ts. Replaces the per-workflow columns
+ * above, which stay until the contract step of the normalization rollout.
+ */
+export const projectSkillWorkflowSettings = pgTable('project_skill_workflow_settings', {
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  workflow: text('workflow').notNull(),
+  skillPath: text('skill_path'),
+  model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
+  bedrockModelId: text('bedrock_model_id'),
+  bedrockMaxTokens: integer('bedrock_max_tokens'),
+  bedrockTimeoutMs: integer('bedrock_timeout_ms'),
+  bedrockTemperature: real('bedrock_temperature'),
+  regenBedrockModelId: text('regen_bedrock_model_id'),
+  regenBedrockMaxTokens: integer('regen_bedrock_max_tokens'),
+  scoreThreshold: integer('score_threshold'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.settingsId, t.workflow] }),
+}));
+
+export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ many }) => ({
+  workflowSettings: many(projectSkillWorkflowSettings),
+}));
+
+export const projectSkillWorkflowSettingsRelations = relations(projectSkillWorkflowSettings, ({ one }) => ({
+  settings: one(projectSkillSettings, {
+    fields: [projectSkillWorkflowSettings.settingsId],
+    references: [projectSkillSettings.id],
+  }),
+}));
+
 export const projectApprovers = pgTable('project_approvers', {
   id: uuid('id').primaryKey().defaultRandom(),
   settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
