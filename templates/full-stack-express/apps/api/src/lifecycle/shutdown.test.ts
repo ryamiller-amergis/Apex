@@ -359,6 +359,65 @@ describe('createShutdown', () => {
     await lifecycle.begin('SIGTERM');
     expect(order.slice(-2)).toEqual(['flush', 'exit']);
   });
+
+  it('flushes the logger before a watchdog exit', async () => {
+    const order: string[] = [];
+    const { logger } = fakeLogger(order);
+    const flush = vi.fn((callback?: (err?: Error) => void) => {
+      order.push('flush');
+      callback?.();
+    });
+    let resolveExit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    const exit = vi.fn(() => {
+      order.push('exit');
+      resolveExit();
+    });
+    let watchdog: (() => void) | undefined;
+    const { lifecycle } = setup({
+      logger: { ...logger, flush },
+      exit,
+      setTimer: (callback, ms) => {
+        if (ms === 10000 && watchdog === undefined) {
+          watchdog = callback;
+        }
+        return {};
+      },
+      clearTimer: () => {},
+    });
+    void lifecycle.begin('SIGTERM');
+    expect(watchdog).toBeDefined();
+    watchdog?.();
+    await exited;
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(order.slice(-2)).toEqual(['flush', 'exit']);
+  });
+
+  it('flushes the logger before an unexpected-error exit', async () => {
+    const order: string[] = [];
+    const { logger } = fakeLogger(order);
+    const flush = vi.fn((callback?: (err?: Error) => void) => {
+      order.push('flush');
+      callback?.();
+    });
+    const exit = vi.fn(() => order.push('exit'));
+    const { lifecycle } = setup({
+      logger: { ...logger, flush },
+      exit,
+      server: {
+        close() {
+          throw new Error('close failed');
+        },
+        closeIdleConnections() {},
+        closeAllConnections() {},
+      },
+    });
+    await expect(lifecycle.begin('SIGTERM')).resolves.toBe(1);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(order.slice(-2)).toEqual(['flush', 'exit']);
+  });
 });
 
 describe('in-flight registry', () => {

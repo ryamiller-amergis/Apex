@@ -154,7 +154,7 @@ export function createShutdown(deps: ShutdownDeps): Lifecycle {
         { forced: true, elapsedMs: now() - startedAt, exitCode: 1 },
         'shutdown.complete'
       );
-      exitOnce(1);
+      void flushLogger().then(() => exitOnce(1));
     }, deps.timeoutMs);
 
     logger.info(
@@ -221,8 +221,9 @@ export function createShutdown(deps: ShutdownDeps): Lifecycle {
         endDrainNow?.();
         return running;
       }
-      running = run(signal).catch((err: unknown) => {
+      running = run(signal).catch(async (err: unknown) => {
         logger.error({ step: 'shutdown', err }, 'shutdown.cleanup_failed');
+        await flushLogger();
         exitOnce(1);
         return 1;
       });
