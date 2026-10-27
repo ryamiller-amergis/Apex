@@ -7,6 +7,8 @@ const NODE_ENV_MESSAGE = 'expected development, test, or production';
 const LOG_LEVEL_MESSAGE =
   'expected fatal, error, warn, info, debug, trace, or silent';
 const AUTH_MODE_MESSAGE = 'expected development or external';
+const FEATURE_FLAGS_MESSAGE =
+  'expected a JSON object of flag names to booleans';
 const PRODUCTION_AUTH_MESSAGE =
   'development is not allowed when NODE_ENV is production';
 const SHUTDOWN_TIMEOUT_MESSAGE = 'expected an integer from 1000 to 120000';
@@ -154,6 +156,12 @@ const envObject = z.object({
   AUTH_MODE: z.preprocess(
     unsetBlank,
     z.enum(['development', 'external'], { error: AUTH_MODE_MESSAGE })
+  ),
+  // Optional and not shape-checked here: the flag adapter rejects a bad value
+  // and returns defaults instead of aborting startup.
+  FEATURE_FLAGS: z.preprocess(
+    unsetBlank,
+    z.string({ error: FEATURE_FLAGS_MESSAGE }).optional()
   ),
   SHUTDOWN_TIMEOUT_MS: z.preprocess(
     unsetBlank,

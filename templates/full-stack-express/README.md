@@ -108,6 +108,32 @@ Docker Compose reports the failure when the host port is already in use. Node's 
 
 To format files, run `pnpm format` from `templates/full-stack-express/`.
 
+## Feature flags
+
+The API gates new behavior through `FlagEvaluator` in `apps/api/src/feature-flags/`. The local adapter reads one optional variable.
+
+| Variable        | Required | Format                                                       |
+| --------------- | -------- | ------------------------------------------------------------ |
+| `FEATURE_FLAGS` | No       | JSON object of kebab-case flag names to booleans, e.g. `{}`. |
+
+In `.env`, wrap a non-empty value in single quotes: `FEATURE_FLAGS='{"checkout-v2":true}'`. The API reads the value once at start-up, so a change needs a restart. An unset or empty value defines no flags. An invalid value is ignored as a whole: the API still starts, logs one `feature_flags.config_invalid` warning that never includes the value, and every flag returns its default. Check the JSON locally when that warning appears.
+
+Read a flag once at the top of a handler or service entry point, declare the default there, and branch once. Keep the name and default in one constant when more than one place reads the flag.
+
+```ts
+const CHECKOUT_V2 = { name: 'checkout-v2', defaultValue: false } as const;
+
+if (flags.isEnabled(CHECKOUT_V2.name, CHECKOUT_V2.defaultValue)) {
+  // new behavior
+} else {
+  // existing behavior
+}
+```
+
+`isEnabled` is synchronous, never throws, and never reads request input. Do not gate authentication, authorization, or the development identity guard behind a flag. Flags switch new product behavior only.
+
+The flag provider is an open decision. The extension point is the `createLocalFlagEvaluator` call in the API entry point. To adopt a provider, write an adapter that implements `FlagEvaluator` from an in-memory cache and replace that one call. Call sites do not change.
+
 ## Scripts
 
 | Script             | What it does                                                                                        |
