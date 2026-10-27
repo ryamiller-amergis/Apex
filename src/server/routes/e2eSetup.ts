@@ -39,6 +39,9 @@ import {
 import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
 import { clerkTicketFetchStub, setMcpServerFetchStub } from '../services/mcpServerFetchStub';
 import type { ValidationScorecard } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
+import { legacyWorkflowFields } from '../../shared/constants/projectSkillWorkflows';
 
 const router = express.Router();
 
@@ -47,6 +50,8 @@ const E2E_ASSIGNED_BY = 'e2e-setup';
 
 /** Modules that inherit the legacy `approvalMode` payload; `adr` is always seeded as `any_one`. */
 const LEGACY_APPROVAL_MODE_MODULES = ['prd', 'design_doc', 'design_prototype', 'test_case'] as const;
+
+const LEGACY_WORKFLOW_FIELDS = new Set<string>(legacyWorkflowFields());
 
 function e2eTitle(title: string): string {
   return title.startsWith(E2E_PREFIX) ? title : `${E2E_PREFIX} ${title}`;
@@ -859,6 +864,9 @@ router.post('/seed/project-settings', async (req, res) => {
       designPrototypeApprovers,
       testCaseApprovers,
       adrApprovers,
+      defaultModel,
+      defaultEffort,
+      legacyWorkflowValues = {},
     } = req.body as {
       project: string;
       friendlyName?: string;
@@ -882,7 +890,29 @@ router.post('/seed/project-settings', async (req, res) => {
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
       adrApprovers?: string[];
+      defaultModel?: string | null;
+      defaultEffort?: EffortLevel | null;
+      /**
+       * Flat per-workflow values written to the legacy columns only, the way
+       * app code from before project_skill_workflow_settings saved them.
+       */
+      legacyWorkflowValues?: Partial<Record<keyof ProjectSkillConfig, unknown>>;
     };
+
+    const unknownLegacyFields = Object.keys(legacyWorkflowValues).filter(
+      (field) => !LEGACY_WORKFLOW_FIELDS.has(field),
+    );
+    if (unknownLegacyFields.length > 0) {
+      res.status(400).json({
+        error: `legacyWorkflowValues accepts only legacy workflow fields; got ${unknownLegacyFields.join(', ')}`,
+      });
+      return;
+    }
+    const legacyColumns = {
+      ...legacyWorkflowValues,
+      ...(defaultModel !== undefined && { defaultModel }),
+      ...(defaultEffort !== undefined && { defaultEffort }),
+    } as Partial<typeof projectSkillSettings.$inferInsert>;
 
     const prefixedName = e2eTitle(friendlyName);
 
@@ -917,6 +947,7 @@ router.post('/seed/project-settings', async (req, res) => {
           ...(testCaseSkillPath !== undefined && { testCaseSkillPath }),
           ...(updatedBy !== undefined && { updatedBy }),
           ...(isDefault ? { isDefault: true } : {}),
+          ...legacyColumns,
           updatedAt: sql`now()`,
         })
         .where(eq(projectSkillSettings.id, existing[0].id))
@@ -951,6 +982,7 @@ router.post('/seed/project-settings', async (req, res) => {
           designPrototypeSkillPath: designPrototypeSkillPath ?? null,
           testCaseSkillPath: testCaseSkillPath ?? null,
           updatedBy: updatedBy ?? 'e2e',
+          ...legacyColumns,
         })
         .returning();
       row = inserted;
@@ -1053,6 +1085,46 @@ router.post('/seed/project-settings', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/project-settings failed: ${message}` });
+  }
+});
+
+// Grant a user a project-scoped copy of the built-in admin role (admin:roles and
+// the rest), so specs can open Admin pages. Reset removes it by its [E2E] name.
+router.post('/seed/project-admin', async (req, res) => {
+  try {
+    const { userId, project } = req.body as { userId: string; project: string };
+    const [admin] = await db.select().from(appRoles).where(eq(appRoles.name, 'admin')).limit(1);
+    if (!admin) {
+      res.status(500).json({ error: 'admin role is missing' });
+      return;
+    }
+    const adminLinks = await db
+      .select({ permissionId: appRolePermissions.permissionId })
+      .from(appRolePermissions)
+      .where(eq(appRolePermissions.roleId, admin.id));
+    const [role] = await db
+      .insert(appRoles)
+      .values({
+        name: `${E2E_PREFIX} project-admin ${project} ${userId.slice(-8)}`,
+        description: 'E2E project-scoped admin',
+        isDefault: false,
+      })
+      .returning();
+    if (adminLinks.length > 0) {
+      await db.insert(appRolePermissions).values(
+        adminLinks.map((link) => ({ roleId: role.id, permissionId: link.permissionId })),
+      );
+    }
+    await db.insert(appUserProjectRoles).values({
+      userId,
+      project,
+      roleId: role.id,
+      assignedBy: 'e2e',
+    });
+    res.json({ ok: true, roleId: role.id });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/project-admin failed: ${message}` });
   }
 });
 

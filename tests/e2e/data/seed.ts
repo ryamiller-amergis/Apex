@@ -364,9 +364,24 @@ export const SeedApi = {
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
       adrApprovers?: string[];
+      defaultModel?: string | null;
+      defaultEffort?: 'low' | 'medium' | 'high' | null;
+      /**
+       * Flat per-workflow values (e.g. `interviewModel`, `adrEffort`) written to the
+       * legacy columns only, as app code from before project_skill_workflow_settings did.
+       */
+      legacyWorkflowValues?: Record<string, string | number | null>;
     },
   ): Promise<SeededProjectSettings> {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
+  },
+
+  /** Grant a persona a project-scoped admin role (admin:roles etc.); removed by reset(). */
+  async seedProjectAdmin(
+    request: APIRequestContext,
+    opts: { userId: string; project: string },
+  ): Promise<void> {
+    await post(request, '/seed/project-admin', opts);
   },
 
   async seedPlaybookLifecycle(
