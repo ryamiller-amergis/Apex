@@ -18,9 +18,16 @@ let mockReviewConfig: {
   approvalMode?: 'any_one' | 'all_required';
   approvalModes?: { adr?: 'any_one' | 'all_required' };
 } | null = null;
+let mockChatThread: {
+  id: string;
+  status: 'idle' | 'running' | 'error';
+  messages: Array<{ id: string; role: 'agent' | 'user'; text: string; ts?: string }>;
+  lastError?: string | null;
+} | null = null;
 let mockStreamState: {
-  messages: Array<{ id: string; role: 'agent' | 'user'; text: string }>;
+  messages: Array<{ id: string; role: 'agent' | 'user'; text: string; ts?: string }>;
   streamingText: string;
+  thinkingText?: string;
   status: 'idle' | 'running' | 'error';
   progressLabel?: string | null;
   progressPhase?: AgentRunPhase | null;
@@ -58,11 +65,18 @@ jest.mock('../../hooks/useAppShell', () => ({
 }));
 
 jest.mock('../../hooks/useChatStream', () => ({
-  useChatStream: () => mockStreamState,
+  useChatStream: () => ({
+    ...mockStreamState,
+    clearRetryableRunId: jest.fn(),
+  }),
 }));
 
 jest.mock('../../hooks/useChatThreads', () => ({
-  useChatThread: () => ({ data: null }),
+  useChatThread: () => ({
+    data: mockChatThread,
+    isLoading: false,
+    isError: false,
+  }),
   useSkillRepos: () => ({ data: [] }),
   useStartChat: () => ({ mutateAsync: jest.fn(), isPending: false }),
 }));
@@ -187,6 +201,14 @@ function renderAdrView() {
   return render(<AdrChatView />, { wrapper: makeWrapper(['/adr/adr-1']) });
 }
 
+function mockFetch(messagesResponse: () => Promise<{ ok: boolean; json: () => Promise<unknown> }>) {
+  global.fetch = jest.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/messages')) return messagesResponse();
+    return Promise.reject(new Error(`unmocked fetch ${url}`));
+  }) as jest.Mock;
+}
+
 describe('AdrChatView — delete', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -196,7 +218,12 @@ describe('AdrChatView — delete', () => {
     mockAssignmentsError = false;
     mockReviewConfig = null;
     createCommentMutateAsync.mockResolvedValue(undefined);
-    mockStreamState = { messages: [], streamingText: '', status: 'idle' };
+    mockChatThread = null;
+    mockStreamState = { messages: [], streamingText: '', thinkingText: '', status: 'idle' };
+    mockFetch(() => Promise.resolve({
+      ok: true,
+      json: async () => ({ ok: true }),
+    }));
     mockCan.mockImplementation((key: string) => key === 'adr:delete' || key === 'adr:edit' || key === 'adr:review');
     (useAdr as jest.Mock).mockReturnValue({ data: sampleAdr, isLoading: false, isError: false });
   });
@@ -402,7 +429,7 @@ describe('AdrChatView — delete', () => {
     expect(screen.queryByTestId('adr-agent-processing')).not.toBeInTheDocument();
   });
 
-  it('shows the kickoff prompt immediately while waiting for the first agent reply', () => {
+  it('shows the kickoff prompt immediately while waiting for the first agent reply', async () => {
     mockStreamState = {
       messages: [],
       streamingText: '',
@@ -416,7 +443,13 @@ describe('AdrChatView — delete', () => {
       }]),
     });
 
-    expect(screen.getByText('Should we use Service Bus or Event Hub?')).toBeInTheDocument();
+    expect(await screen.findByText('Should we use Service Bus or Event Hub?')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/chat/threads/thread-1/messages',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
     expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
       'Architect is preparing a response',
     );
@@ -436,5 +469,169 @@ describe('AdrChatView — delete', () => {
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
       'Queued',
     );
+  });
+
+  it('unlocks the composer when the latest message is an agent reply even if the thread query is still running', () => {
+    mockStreamState = {
+      messages: [
+        { id: 'u1', role: 'user', text: 'What should we decide?', ts: '2026-10-27T00:00:00.000Z' },
+        { id: 'a1', role: 'agent', text: 'Use a queue.', ts: '2026-10-27T00:00:01.000Z' },
+      ],
+      streamingText: '',
+      thinkingText: '',
+      status: 'running',
+    };
+    mockChatThread = {
+      id: 'thread-1',
+      status: 'running',
+      messages: mockStreamState.messages,
+    };
+
+    renderAdrView();
+
+    expect(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)')).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('adr-stop-btn')).not.toBeInTheDocument();
+  });
+
+  it('keeps the composer busy while a running thread is still waiting on the first agent reply', () => {
+    mockStreamState = {
+      messages: [
+        { id: 'u1', role: 'user', text: 'What should we decide?', ts: '2026-10-27T00:00:00.000Z' },
+      ],
+      streamingText: '',
+      thinkingText: '',
+      status: 'running',
+    };
+    mockChatThread = {
+      id: 'thread-1',
+      status: 'running',
+      messages: mockStreamState.messages,
+    };
+
+    renderAdrView();
+
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Preparing the workspace|Architect is thinking/i)).toBeDisabled();
+  });
+
+  it('keeps Stop visible while the agent reply is still streaming', () => {
+    mockStreamState = {
+      messages: [
+        { id: 'u1', role: 'user', text: 'What should we decide?', ts: '2026-10-27T00:00:00.000Z' },
+        { id: 'a1', role: 'agent', text: 'Use a queue.', ts: '2026-10-27T00:00:01.000Z' },
+      ],
+      streamingText: 'Still writing the trade-off.',
+      thinkingText: '',
+      status: 'running',
+    };
+    mockChatThread = {
+      id: 'thread-1',
+      status: 'running',
+      messages: mockStreamState.messages,
+    };
+
+    renderAdrView();
+
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Architect is thinking…')).toBeDisabled();
+  });
+
+  it('keeps Stop visible while the agent is still thinking after an earlier reply', () => {
+    mockStreamState = {
+      messages: [
+        { id: 'u1', role: 'user', text: 'What should we decide?', ts: '2026-10-27T00:00:00.000Z' },
+        { id: 'a1', role: 'agent', text: 'Use a queue.', ts: '2026-10-27T00:00:01.000Z' },
+      ],
+      streamingText: '',
+      thinkingText: 'Weighing the options',
+      status: 'running',
+    };
+    mockChatThread = {
+      id: 'thread-1',
+      status: 'running',
+      messages: mockStreamState.messages,
+    };
+
+    renderAdrView();
+
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Architect is thinking…')).toBeDisabled();
+  });
+
+  it('sends the kickoff from the chat page and surfaces a failed kickoff POST for retry', async () => {
+    let messageOk = false;
+    mockFetch(() => Promise.resolve({
+      ok: messageOk,
+      json: async () => (messageOk
+        ? { ok: true }
+        : { error: 'Failed to start the ADR interview' }),
+    }));
+
+    render(<AdrChatView />, {
+      wrapper: makeWrapper([{
+        pathname: '/adr/adr-1',
+        state: {
+          kickoffPrompt: 'Compare queue and event-stream options.',
+          kickoffModel: 'composer-2',
+          kickoffAttachments: [{
+            id: 'attachment-1',
+            name: 'constraints.txt',
+            size: 12,
+            type: 'text/plain',
+            content: 'must remain backward compatible',
+          }],
+        },
+      }]),
+    });
+
+    expect(await screen.findByText('Failed to start the ADR interview')).toBeInTheDocument();
+    expect(screen.getByText('Compare queue and event-stream options.')).toBeInTheDocument();
+    expect(screen.queryByTestId('adr-preparation-state')).not.toBeInTheDocument();
+    expect(screen.getByTestId('adr-kickoff-retry')).toBeInTheDocument();
+
+    messageOk = true;
+    fireEvent.click(screen.getByTestId('adr-kickoff-retry'));
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    const messageCall = (global.fetch as jest.Mock).mock.calls.find((call) =>
+      String(call[0]).includes('/api/chat/threads/thread-1/messages'),
+    );
+    expect(messageCall).toBeTruthy();
+    expect(JSON.parse(messageCall[1].body).text).toBe('Compare queue and event-stream options.');
+    expect(JSON.parse(messageCall[1].body).attachments[0].name).toBe('constraints.txt');
+    expect(JSON.parse(messageCall[1].body).turnId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('does not send the kickoff again when the thread already contains that prompt', async () => {
+    mockFetch(() => Promise.resolve({
+      ok: true,
+      json: async () => ({ ok: true }),
+    }));
+    mockStreamState = {
+      messages: [{
+        id: 'u1',
+        role: 'user',
+        text: 'Should we use Service Bus or Event Hub?',
+        ts: '2026-10-27T00:00:00.000Z',
+      }],
+      streamingText: '',
+      thinkingText: '',
+      status: 'idle',
+    };
+
+    render(<AdrChatView />, {
+      wrapper: makeWrapper([{
+        pathname: '/adr/adr-1',
+        state: { kickoffPrompt: 'Should we use Service Bus or Event Hub?' },
+      }]),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Should we use Service Bus or Event Hub?')).toBeInTheDocument();
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
