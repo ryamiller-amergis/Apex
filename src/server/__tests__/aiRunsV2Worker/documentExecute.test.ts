@@ -331,6 +331,73 @@ describe('V2 document execution', () => {
       );
     });
 
+    it('restores scratch inputs under the output directory before retrying', async () => {
+      const originalBacklog = '{"epics":[],"testCaseCount":0}';
+      const seenOnRetry: { prd?: string; backlog?: string; staleCases?: boolean } = {};
+      const createExecution = jest.fn(async (snapshot) => {
+        const attempt = createExecution.mock.calls.length;
+        const output = path.join(snapshot.workspaceRef, '.ai-pilot', 'output');
+        return {
+          run: {
+            supports: () => false,
+            async *stream() {
+              yield undefined as never;
+            },
+            async wait() {
+              if (attempt === 1) {
+                await fs.writeFile(path.join(output, 'feature.backlog.json'), '{"patched":true}');
+                await fs.writeFile(path.join(output, 'feature.test-cases.json'), '[]');
+                throw prematureClose();
+              }
+              seenOnRetry.prd = await fs.readFile(path.join(output, 'feature.prd.md'), 'utf8');
+              seenOnRetry.backlog = await fs.readFile(
+                path.join(output, 'feature.backlog.json'),
+                'utf8',
+              );
+              seenOnRetry.staleCases = await fs
+                .stat(path.join(output, 'feature.test-cases.json'))
+                .then(() => true, () => false);
+              await fs.writeFile(path.join(output, 'feature.test-cases.json'), '[{"id":1}]');
+              await fs.writeFile(path.join(output, 'feature.test-cases.md'), '# Cases');
+              await fs.writeFile(path.join(output, 'feature.backlog.json'), '{"patched":true}');
+              return { status: 'finished' };
+            },
+          },
+          dispose: jest.fn().mockResolvedValue(undefined),
+        };
+      });
+      const execute = createDocumentExecute({
+        openRepository: jest.fn().mockResolvedValue(repoReader),
+        createExecution,
+      });
+
+      const outcome = await execute({
+        specification: specification({
+          workflowClass: 'test-cases',
+          scratchInputs: [
+            { path: '.ai-pilot/kickoff-context.md', content: '# Context' },
+            { path: '.ai-pilot/output/feature.prd.md', content: '# Source PRD' },
+            { path: '.ai-pilot/output/feature.backlog.json', content: originalBacklog },
+          ],
+        }),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      });
+
+      expect(createExecution).toHaveBeenCalledTimes(2);
+      expect(seenOnRetry).toEqual({
+        prd: '# Source PRD',
+        backlog: originalBacklog,
+        staleCases: false,
+      });
+      expect(outcome.files.map((file) => file.path)).toEqual([
+        'output/feature.backlog.json',
+        'output/feature.test-cases.json',
+        'output/feature.test-cases.md',
+      ]);
+    });
+
     it('retries a wait result that reports the dropped connection', async () => {
       const createExecution = jest.fn(async (snapshot) => {
         const attempt = createExecution.mock.calls.length;

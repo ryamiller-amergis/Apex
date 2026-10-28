@@ -313,30 +313,61 @@ async function prepareDocumentWorkspace(
       mode: 0o600,
     });
     if (signal.aborted) throw abortError();
-    for (const input of specification.scratchInputs) {
-      if (signal.aborted) throw abortError();
-      const target = path.resolve(workspacePath, ...input.path.split('/'));
-      const relative = path.relative(workspacePath, target);
-      if (
-        relative === '..'
-        || relative.startsWith(`..${path.sep}`)
-        || path.isAbsolute(relative)
-      ) {
-        throw new Error(`Scratch input escaped the attempt workspace: ${input.path}`);
-      }
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, input.content, {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o600,
-      });
-    }
+    await writeScratchInputs(specification, workspacePath, signal);
     if (signal.aborted) throw abortError();
     return workspacePath;
   } catch (error) {
     await fs.rm(workspacePath, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function writeScratchInputs(
+  specification: AiRunV2DocumentSpecification,
+  workspacePath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  for (const input of specification.scratchInputs) {
+    if (signal.aborted) throw abortError();
+    const target = path.resolve(workspacePath, ...input.path.split('/'));
+    const relative = path.relative(workspacePath, target);
+    if (
+      relative === '..'
+      || relative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relative)
+    ) {
+      throw new Error(`Scratch input escaped the attempt workspace: ${input.path}`);
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, input.content, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  }
+}
+
+/**
+ * Return the workspace to its pre-run state before a retry. Some workflows
+ * place scratch inputs under the output directory (test cases read and patch
+ * the PRD and backlog there), so the inputs are rewritten from the
+ * specification, not just the output cleared.
+ */
+async function resetDocumentWorkspace(
+  specification: AiRunV2DocumentSpecification,
+  workspacePath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const outputDirectory = path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS);
+  await fs.rm(outputDirectory, { recursive: true, force: true });
+  for (const input of specification.scratchInputs) {
+    await fs.rm(path.resolve(workspacePath, ...input.path.split('/')), {
+      recursive: true,
+      force: true,
+    });
+  }
+  await fs.mkdir(outputDirectory, { recursive: true });
+  await writeScratchInputs(specification, workspacePath, signal);
 }
 
 async function openDocumentRepository(
@@ -588,10 +619,7 @@ export function createDocumentExecute(
           );
           await execution?.dispose().catch(() => undefined);
           execution = undefined;
-          await fs.rm(path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS), {
-            recursive: true,
-            force: true,
-          });
+          await resetDocumentWorkspace(specification, workspacePath, signal);
         }
         execution = await raceOperation(
           createExecution(snapshot, repository, signal),
