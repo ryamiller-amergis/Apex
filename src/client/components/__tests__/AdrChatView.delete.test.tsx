@@ -605,6 +605,29 @@ describe('AdrChatView — delete', () => {
     );
   });
 
+  it('keeps Retry and the composer usable after dismissing a failed kickoff error', async () => {
+    mockFetch(() => Promise.resolve({
+      ok: false,
+      json: async () => ({ error: 'Failed to start the ADR interview' }),
+    }));
+
+    render(<AdrChatView />, {
+      wrapper: makeWrapper([{
+        pathname: '/adr/adr-1',
+        state: { kickoffPrompt: 'Compare queue and event-stream options.' },
+      }]),
+    });
+
+    expect(await screen.findByText('Failed to start the ADR interview')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('adr-error-dismiss-btn'));
+
+    expect(screen.queryByText('Failed to start the ADR interview')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('adr-error-dismiss-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('adr-kickoff-retry')).toBeInTheDocument();
+    expect(screen.queryByTestId('adr-preparation-state')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)')).toBeEnabled();
+  });
+
   it('does not send the kickoff again when the thread already contains that prompt', async () => {
     mockFetch(() => Promise.resolve({
       ok: true,

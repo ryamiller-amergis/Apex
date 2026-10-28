@@ -432,6 +432,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const [seededKickoffPrompt, setSeededKickoffPrompt] = useState<string | null>(kickoffFromNav);
   const [kickoffAttachments] = useState<ChatAttachment[]>(kickoffFromState?.kickoffAttachments ?? []);
   const [kickoffModel] = useState<string | null>(kickoffFromState?.kickoffModel ?? null);
+  const [kickoffSendFailed, setKickoffSendFailed] = useState(false);
   const kickoffSentRef = useRef(false);
   const { can, userId, isSuperAdmin } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
@@ -514,7 +515,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const agentReplySettled = lastVisibleRole === 'agent' && !streamingText && !thinkingText;
   const isRunning = session.isRunning || (thread?.status === 'running' && !agentReplySettled);
   const isInteractionBusy = session.isInteractionBusy || isRunning;
-  const kickoffFailed = Boolean(seededKickoffPrompt && session.sendError);
+  const kickoffFailed = Boolean(
+    seededKickoffPrompt
+    && !session.isSending
+    && !session.isAwaitingAgentResponse
+    && (session.sendError || kickoffSendFailed),
+  );
   const resumeGate = useGroundingResumeGate(
     'adr',
     id,
@@ -537,6 +543,18 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   useEffect(() => {
     if (session.sendError) setError(session.sendError);
   }, [session.sendError]);
+
+  useEffect(() => {
+    if (!seededKickoffPrompt) {
+      setKickoffSendFailed(false);
+      return;
+    }
+    if (session.isSending) {
+      setKickoffSendFailed(false);
+      return;
+    }
+    if (session.sendError) setKickoffSendFailed(true);
+  }, [seededKickoffPrompt, session.isSending, session.sendError]);
 
   useEffect(() => {
     if (kickoffSentRef.current || !seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
@@ -896,10 +914,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           )}
         </div>
       </div>
-      {error && (
+      {(error || kickoffFailed) && (
         <div className={styles.sendError}>
-          <span>{error}</span>
-          {error.toLowerCase().includes('already running') && (
+          {error && <span>{error}</span>}
+          {error?.toLowerCase().includes('already running') && (
             <button
               type="button"
               className={styles.sendErrorDismiss}
@@ -910,7 +928,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               Stop
             </button>
           )}
-          {seededKickoffPrompt && session.sendError && (
+          {kickoffFailed && (
             <button
               type="button"
               className={styles.sendErrorDismiss}
@@ -920,18 +938,20 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               Retry
             </button>
           )}
-          <button
-            type="button"
-            className={styles.sendErrorDismiss}
-            onClick={() => {
-              setError(null);
-              session.clearSendError();
-            }}
-            aria-label="Dismiss"
-            {...{ 'data-testid': 'adr-error-dismiss-btn' }}
-          >
-            ×
-          </button>
+          {error && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => {
+                setError(null);
+                session.clearSendError();
+              }}
+              aria-label="Dismiss"
+              {...{ 'data-testid': 'adr-error-dismiss-btn' }}
+            >
+              ×
+            </button>
+          )}
         </div>
       )}
       {adr.content && (
