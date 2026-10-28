@@ -32,21 +32,44 @@ export function categoryToneClass(category: string | null | undefined): string {
   return index === null ? styles.toneOther : TONES[index];
 }
 
-interface CategoryHeadingProps {
+interface CategoryToggleProps {
   category: string | null;
-  'data-testid'?: string;
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+  'data-testid': string;
 }
 
-export const CategoryHeading: React.FC<CategoryHeadingProps> = ({ category, 'data-testid': testId }) => (
-  <div
-    className={`${styles.heading} ${categoryToneClass(category)}`}
-    aria-hidden="true"
-    {...(testId ? { 'data-testid': testId } : {})}
-  >
-    <span className={styles.dot} />
-    {category ?? OTHER_CATEGORY_LABEL}
-  </div>
-);
+/** A category heading inside the Quick Links menu that collapses or expands its links. */
+export const CategoryToggle: React.FC<CategoryToggleProps> = ({
+  category,
+  count,
+  expanded,
+  onToggle,
+  'data-testid': testId,
+}) => {
+  const name = category ?? OTHER_CATEGORY_LABEL;
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      tabIndex={-1}
+      className={`${styles.heading} ${styles.headingButton} ${categoryToneClass(category)}`}
+      aria-expanded={expanded}
+      aria-label={`${name}, ${count} link${count === 1 ? '' : 's'}`}
+      title={expanded ? `Collapse ${name}` : `Expand ${name}`}
+      onClick={onToggle}
+      {...{ 'data-testid': testId }}
+    >
+      <span className={styles.dot} />
+      <span className={styles.headingName}>{name}</span>
+      <span className={styles.headingCount}>{count}</span>
+      <span className={`${styles.headingChevron} ${expanded ? styles.headingChevronOpen : ''}`} aria-hidden="true">
+        ▸
+      </span>
+    </button>
+  );
+};
 
 interface CategoryPillProps {
   category: string | null;

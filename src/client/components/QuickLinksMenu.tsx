@@ -19,14 +19,17 @@ import {
   useUpdateMyQuickLink,
   useUpdateProjectQuickLink,
 } from '../hooks/useProjectQuickLinks';
+import { useCollapsedQuickLinkCategories } from '../hooks/useCollapsedQuickLinkCategories';
 import { BookmarkImportModal } from './BookmarkImportModal';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
-import { CategoryHeading, QuickLinkFavicon, categoryToneClass, hostnameOf } from './QuickLinkCategory';
+import { CategoryToggle, QuickLinkFavicon, categoryToneClass, hostnameOf } from './QuickLinkCategory';
 import { QuickLinkEditModal, type QuickLinkEditValues } from './QuickLinkEditModal';
 import styles from './QuickLinksMenu.module.css';
 
 const MANAGE_LINKS_PATH = '/admin/project-settings#quick-links';
 const TOAST_DURATION_MS = 6000;
+/** Links rendered per category before a "Show all N" button, so 1,000 links stay fast. */
+export const CATEGORY_RENDER_LIMIT = 25;
 
 type AnyQuickLink = ProjectQuickLink | UserQuickLink;
 
@@ -54,6 +57,17 @@ function groupByCategory<T extends AnyQuickLink>(links: T[]): QuickLinkGroup<T>[
     else groups.push({ category, links: [link] });
   }
   return groups;
+}
+
+/** Case-insensitive match on label, URL, hostname, or category. */
+export function matchesQuickLinkSearch(link: AnyQuickLink, query: string): boolean {
+  if (!query) return true;
+  return (
+    link.label.toLowerCase().includes(query) ||
+    link.url.toLowerCase().includes(query) ||
+    hostnameOf(link.url).toLowerCase().includes(query) ||
+    (link.category ?? '').toLowerCase().includes(query)
+  );
 }
 
 function sectionName(scope: QuickLinkScope): string {
@@ -115,6 +129,13 @@ const TrashIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
+const SearchIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg {...svgProps} className={className}>
+    <circle cx="9" cy="9" r="5" />
+    <path d="M13 13l4 4" />
+  </svg>
+);
+
 const PlusIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg {...svgProps} className={className}>
     <path d="M10 4v12M4 10h12" />
@@ -156,7 +177,10 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
   const [toast, setToast] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [showAllCategories, setShowAllCategories] = useState<Set<string>>(new Set());
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -169,8 +193,15 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
   const updateProjectLink = useUpdateProjectQuickLink(project);
   const deleteProjectLink = useDeleteProjectQuickLink(project);
 
-  const projectGroups = useMemo(() => groupByCategory(projectLinks), [projectLinks]);
-  const myGroups = useMemo(() => groupByCategory(myLinks), [myLinks]);
+  const query = search.trim().toLowerCase();
+  const projectGroups = useMemo(
+    () => groupByCategory(projectLinks.filter((l) => matchesQuickLinkSearch(l, query))),
+    [projectLinks, query],
+  );
+  const myGroups = useMemo(
+    () => groupByCategory(myLinks.filter((l) => matchesQuickLinkSearch(l, query))),
+    [myLinks, query],
+  );
   const projectCategories = useMemo(() => categoriesOf(projectLinks), [projectLinks]);
   const personalCategories = useMemo(() => categoriesOf(myLinks), [myLinks]);
 
@@ -181,6 +212,7 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
 
   const close = useCallback((restoreFocus: boolean) => {
     setIsOpen(false);
+    setSearch('');
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
@@ -192,7 +224,7 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    menuItems()[0]?.focus();
+    searchRef.current?.focus();
     const handleClickOutside = (event: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) close(false);
     };
@@ -206,6 +238,7 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const { collapsed, toggle: toggleCollapsed } = useCollapsedQuickLinkCategories(project);
   const navigate = useNavigate();
 
   const openDialog = (next: DialogState) => {
@@ -225,7 +258,12 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
     switch (e.key) {
       case 'Escape':
         e.preventDefault();
-        close(true);
+        if (search) {
+          setSearch('');
+          searchRef.current?.focus();
+        } else {
+          close(true);
+        }
         break;
       case 'Tab':
         close(false);
@@ -236,7 +274,8 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
         break;
       case 'ArrowUp':
         e.preventDefault();
-        items[(current - 1 + items.length) % items.length]?.focus();
+        if (current <= 0) searchRef.current?.focus();
+        else items[current - 1]?.focus();
         break;
       case 'Home':
         e.preventDefault();
@@ -245,6 +284,25 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
       case 'End':
         e.preventDefault();
         items[items.length - 1]?.focus();
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        if (search) setSearch('');
+        else close(true);
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        menuItems()[0]?.focus();
+        break;
+      case 'Tab':
+        close(false);
         break;
       default:
         break;
@@ -361,8 +419,8 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
           <BookmarkImportModal
             project={project}
             canShare={canManage}
-            existingPersonalCount={myLinks.length}
-            existingProjectCount={projectLinks.length}
+            existingPersonalUrls={myLinks.map((l) => l.url)}
+            existingProjectUrls={projectLinks.map((l) => l.url)}
             personalCategories={personalCategories}
             projectCategories={projectCategories}
             onCancel={closeDialog}
@@ -444,19 +502,52 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
     groups: QuickLinkGroup<T>[],
     toTarget: (link: T) => LinkTarget,
     canEdit: boolean,
-    keyPrefix: string,
+    scope: QuickLinkScope,
   ) =>
-    groups.map((group) => (
-      <div
-        key={`${keyPrefix}-${group.category ?? '__other__'}`}
-        role="group"
-        aria-label={group.category ?? 'Other'}
-        className={`${styles.category} ${categoryToneClass(group.category)}`}
-      >
-        <CategoryHeading category={group.category} />
-        {group.links.map((link) => renderRow(toTarget(link), canEdit))}
-      </div>
-    ));
+    groups.map((group, index) => {
+      const key = `${scope}:${group.category ?? ''}`;
+      const isOpen = Boolean(query) || !collapsed.has(key);
+      const showEverything = showAllCategories.has(key);
+      const rows = showEverything ? group.links : group.links.slice(0, CATEGORY_RENDER_LIMIT);
+      const testKey = `${scope}-${index}`;
+      return (
+        <div
+          key={key}
+          role="group"
+          aria-label={group.category ?? 'Other'}
+          className={`${styles.category} ${categoryToneClass(group.category)}`}
+          {...{ 'data-testid': `quick-links-menu-category-${testKey}` }}
+        >
+          <CategoryToggle
+            category={group.category}
+            count={group.links.length}
+            expanded={isOpen}
+            onToggle={() => toggleCollapsed(key)}
+            data-testid={`quick-links-menu-category-toggle-${testKey}`}
+          />
+          {isOpen && rows.map((link) => renderRow(toTarget(link), canEdit))}
+          {isOpen && group.links.length > CATEGORY_RENDER_LIMIT && (
+            <button
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              className={styles.showAll}
+              onClick={() =>
+                setShowAllCategories((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+              {...{ 'data-testid': `quick-links-menu-category-show-all-${testKey}` }}
+            >
+              {showEverything ? 'Show fewer' : `Show all ${group.links.length.toLocaleString('en-US')}`}
+            </button>
+          )}
+        </div>
+      );
+    });
 
   const showProjectSection = projectLinks.length > 0 || canManage;
   const showMySection = myLinks.length > 0 || canAddPersonal;
@@ -483,118 +574,141 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
       </button>
 
       {isOpen && (
-        <div
-          ref={menuRef}
-          id="quick-links-menu-list"
-          className={styles.menu}
-          role="menu"
-          tabIndex={-1}
-          aria-label={`Quick links for ${project}`}
-          onKeyDown={handleMenuKeyDown}
-          {...{ 'data-testid': 'quick-links-menu-list' }}
-        >
-          {showProjectSection && (
-            <div
-              role="group"
-              aria-labelledby="quick-links-section-project"
-              className={styles.section}
-              {...{ 'data-testid': 'quick-links-menu-project' }}
-            >
-              <div className={styles.sectionHeader}>
-                <span id="quick-links-section-project" className={styles.sectionTitle}>Project links</span>
-                <span className={styles.sectionHint}>Shared with everyone in {project}</span>
-              </div>
-              {projectLinks.length === 0 ? (
-                <p className={styles.empty} {...{ 'data-testid': 'quick-links-menu-project-empty' }}>
-                  No shared links yet
-                  {canOpenSettings ? (
-                    <>
-                      {' — '}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        tabIndex={-1}
-                        className={styles.inlineAction}
-                        onClick={openSettings}
-                        {...{ 'data-testid': 'quick-links-menu-project-empty-manage' }}
-                      >
-                        Manage links…
-                      </button>
-                    </>
-                  ) : (
-                    <> — use Add link and choose &ldquo;Everyone in {project}&rdquo;.</>
-                  )}
-                </p>
-              ) : (
-                renderCategories(projectGroups, (link) => ({ scope: 'project', link }), canManage, 'project')
-              )}
-            </div>
-          )}
+        <div className={styles.menu} {...{ 'data-testid': 'quick-links-menu-panel' }}>
+          <div className={styles.searchBar}>
+            <SearchIcon className={styles.searchIcon} />
+            <input
+              ref={searchRef}
+              type="search"
+              className={styles.searchInput}
+              placeholder="Search links…"
+              aria-label={`Search quick links for ${project}`}
+              aria-controls="quick-links-menu-list"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              {...{ 'data-testid': 'quick-links-menu-search' }}
+            />
+          </div>
+          <div
+            ref={menuRef}
+            id="quick-links-menu-list"
+            className={styles.menuList}
+            role="menu"
+            tabIndex={-1}
+            aria-label={`Quick links for ${project}`}
+            onKeyDown={handleMenuKeyDown}
+            {...{ 'data-testid': 'quick-links-menu-list' }}
+          >
+            {query && projectGroups.length === 0 && myGroups.length === 0 && (
+              <p className={styles.noMatches} role="status" {...{ 'data-testid': 'quick-links-menu-no-matches' }}>
+                No matching links
+              </p>
+            )}
 
-          {showMySection && (
-            <div
-              role="group"
-              aria-labelledby="quick-links-section-mine"
-              className={styles.section}
-              {...{ 'data-testid': 'quick-links-menu-mine' }}
-            >
-              <div className={styles.sectionHeader}>
-                <span id="quick-links-section-mine" className={styles.sectionTitle}>My links</span>
-                <span className={styles.sectionHint}>Only visible to you</span>
+            {showProjectSection && (!query || projectGroups.length > 0) && (
+              <div
+                role="group"
+                aria-labelledby="quick-links-section-project"
+                className={styles.section}
+                {...{ 'data-testid': 'quick-links-menu-project' }}
+              >
+                <div className={styles.sectionHeader}>
+                  <span id="quick-links-section-project" className={styles.sectionTitle}>Project links</span>
+                  <span className={styles.sectionHint}>Shared with everyone in {project}</span>
+                </div>
+                {projectLinks.length === 0 ? (
+                  <p className={styles.empty} {...{ 'data-testid': 'quick-links-menu-project-empty' }}>
+                    No shared links yet
+                    {canOpenSettings ? (
+                      <>
+                        {' — '}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          tabIndex={-1}
+                          className={styles.inlineAction}
+                          onClick={openSettings}
+                          {...{ 'data-testid': 'quick-links-menu-project-empty-manage' }}
+                        >
+                          Manage links…
+                        </button>
+                      </>
+                    ) : (
+                      <> — use Add link and choose &ldquo;Everyone in {project}&rdquo;.</>
+                    )}
+                  </p>
+                ) : (
+                  renderCategories(projectGroups, (link) => ({ scope: 'project', link }), canManage, 'project')
+                )}
               </div>
-              {myLinks.length === 0 ? (
-                <p className={styles.empty} {...{ 'data-testid': 'quick-links-menu-mine-empty' }}>
-                  No personal links yet. Add one or import your bookmarks.
-                </p>
-              ) : (
-                renderCategories(myGroups, (link) => ({ scope: 'personal', link }), true, 'mine')
-              )}
-            </div>
-          )}
+            )}
 
-          {showFooter && (
-            <div className={styles.footer} {...{ 'data-testid': 'quick-links-menu-footer' }}>
-              {canAddPersonal && (
-                <>
+            {showMySection && (!query || myGroups.length > 0) && (
+              <div
+                role="group"
+                aria-labelledby="quick-links-section-mine"
+                className={styles.section}
+                {...{ 'data-testid': 'quick-links-menu-mine' }}
+              >
+                <div className={styles.sectionHeader}>
+                  <span id="quick-links-section-mine" className={styles.sectionTitle}>My links</span>
+                  <span className={styles.sectionHint}>Only visible to you</span>
+                </div>
+                {myLinks.length === 0 ? (
+                  <p className={styles.empty} {...{ 'data-testid': 'quick-links-menu-mine-empty' }}>
+                    No personal links yet. Add one or import your bookmarks.
+                  </p>
+                ) : (
+                  renderCategories(myGroups, (link) => ({ scope: 'personal', link }), true, 'personal')
+                )}
+              </div>
+            )}
+
+            {showFooter && (
+              <div className={styles.footer} {...{ 'data-testid': 'quick-links-menu-footer' }}>
+                {canAddPersonal && (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      tabIndex={-1}
+                      className={styles.footerButton}
+                      onClick={() => openDialog({ kind: 'add' })}
+                      {...{ 'data-testid': 'quick-links-menu-add' }}
+                    >
+                      <PlusIcon className={styles.actionIcon} />
+                      Add link
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      tabIndex={-1}
+                      className={styles.footerButton}
+                      onClick={() => openDialog({ kind: 'import' })}
+                      {...{ 'data-testid': 'quick-links-menu-import' }}
+                    >
+                      <ImportIcon className={styles.actionIcon} />
+                      Import bookmarks
+                    </button>
+                  </>
+                )}
+                {canOpenSettings && (
                   <button
                     type="button"
                     role="menuitem"
                     tabIndex={-1}
                     className={styles.footerButton}
-                    onClick={() => openDialog({ kind: 'add' })}
-                    {...{ 'data-testid': 'quick-links-menu-add' }}
+                    onClick={openSettings}
+                    {...{ 'data-testid': 'quick-links-menu-manage' }}
                   >
-                    <PlusIcon className={styles.actionIcon} />
-                    Add link
+                    <GearIcon className={styles.actionIcon} />
+                    Manage links…
                   </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    tabIndex={-1}
-                    className={styles.footerButton}
-                    onClick={() => openDialog({ kind: 'import' })}
-                    {...{ 'data-testid': 'quick-links-menu-import' }}
-                  >
-                    <ImportIcon className={styles.actionIcon} />
-                    Import bookmarks
-                  </button>
-                </>
-              )}
-              {canOpenSettings && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  tabIndex={-1}
-                  className={styles.footerButton}
-                  onClick={openSettings}
-                  {...{ 'data-testid': 'quick-links-menu-manage' }}
-                >
-                  <GearIcon className={styles.actionIcon} />
-                  Manage links…
-                </button>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

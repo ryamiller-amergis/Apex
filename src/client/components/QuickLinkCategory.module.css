@@ -64,6 +64,51 @@
   color: var(--text-secondary);
 }
 
+.headingButton {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.headingButton:hover,
+.headingButton:focus-visible {
+  outline: none;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.headingName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headingCount {
+  font-variant: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.headingChevron {
+  display: inline-block;
+  font-variant: normal;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+}
+
+.headingChevronOpen {
+  transform: rotate(90deg);
+}
+
 .favicon {
   position: relative;
   flex: none;

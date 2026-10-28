@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ProjectQuickLink, UserQuickLink } from '../../../shared/types/projectQuickLinks';
-import { QuickLinksMenu, describeImportResult } from '../QuickLinksMenu';
+import { CATEGORY_RENDER_LIMIT, QuickLinksMenu, describeImportResult } from '../QuickLinksMenu';
 import { useMyQuickLinks, useProjectQuickLinks } from '../../hooks/useProjectQuickLinks';
 
 const mockNavigate = jest.fn();
@@ -95,6 +95,7 @@ const myLinks = [
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.localStorage.clear();
   [createMy, updateMy, deleteMy, createShared, updateShared, deleteShared].forEach((fn) => fn.mockResolvedValue({}));
   mockUseProjectQuickLinks.mockReturnValue({ data: sharedLinks });
   mockUseMyQuickLinks.mockReturnValue({ data: [] });
@@ -129,7 +130,8 @@ describe('visibility', () => {
     openMenu();
     expect(screen.getByTestId('quick-links-menu-mine-empty')).toBeInTheDocument();
     expect(screen.queryByTestId('quick-links-menu-project')).not.toBeInTheDocument();
-    expect(screen.getByTestId('quick-links-menu-add')).toHaveFocus();
+    expect(screen.getByTestId('quick-links-menu-search')).toHaveFocus();
+    expect(screen.getByTestId('quick-links-menu-add')).toBeInTheDocument();
   });
 
   it('requests links for the selected project only', () => {
@@ -165,7 +167,6 @@ describe('sections', () => {
     expect(prod).toHaveAttribute('href', 'https://prod.example.com/');
     expect(prod).toHaveAttribute('target', '_blank');
     expect(prod).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(prod).toHaveFocus();
   });
 
   it('tells managers the shared section is empty and links to settings', () => {
@@ -236,15 +237,20 @@ describe('keyboard and dismissal', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('moves focus with the arrow keys', () => {
+  it('moves from the search box into the list and back with the arrow keys', () => {
     render(<QuickLinksMenu project="MaxView" />);
     openMenu();
+    const search = screen.getByTestId('quick-links-menu-search');
+    expect(search).toHaveFocus();
+
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(screen.getByTestId('quick-links-menu-category-toggle-project-0')).toHaveFocus();
     const menu = screen.getByRole('menu');
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
-    expect(screen.getByTestId('quick-links-menu-item-test')).toHaveFocus();
+    expect(screen.getByTestId('quick-links-menu-item-prod')).toHaveFocus();
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
-    expect(screen.getByTestId('quick-links-menu-item-clerk')).toHaveFocus();
+    expect(search).toHaveFocus();
   });
 });
 
@@ -417,5 +423,133 @@ describe('import', () => {
     expect(describeImportResult({ created: 1, skippedDuplicates: 0, rejected: [] }, 'project')).toBe(
       'Imported 1 link to Project links',
     );
+  });
+});
+
+describe('search', () => {
+  beforeEach(() => {
+    mockUseMyQuickLinks.mockReturnValue({ data: myLinks });
+  });
+
+  function type(value: string) {
+    fireEvent.change(screen.getByTestId('quick-links-menu-search'), { target: { value } });
+  }
+
+  it('filters both sections by label', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+    type('maxview');
+
+    expect(screen.getByTestId('quick-links-menu-item-prod')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-links-menu-item-test')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-item-clerk')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-mine')).not.toBeInTheDocument();
+  });
+
+  it('matches hostname and category', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+
+    type('jira.example');
+    expect(screen.getByTestId('quick-links-menu-my-item-jira')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-project')).not.toBeInTheDocument();
+
+    type('tools');
+    expect(screen.getByTestId('quick-links-menu-item-clerk')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-item-prod')).not.toBeInTheDocument();
+  });
+
+  it('shows No matching links when nothing matches', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+    type('zzz');
+    expect(screen.getByTestId('quick-links-menu-no-matches')).toHaveTextContent('No matching links');
+    expect(screen.getByTestId('quick-links-menu-footer')).toBeInTheDocument();
+  });
+
+  it('clears the search on the first Escape and closes on the second', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+    type('clerk');
+    const search = screen.getByTestId('quick-links-menu-search');
+
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(search).toHaveValue('');
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByTestId('quick-links-menu-trigger')).toHaveFocus();
+  });
+
+  it('starts empty each time the menu opens', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+    type('clerk');
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    openMenu();
+    expect(screen.getByTestId('quick-links-menu-search')).toHaveValue('');
+  });
+});
+
+describe('collapsible categories', () => {
+  it('collapses a category and remembers it per project', () => {
+    const { unmount } = render(<QuickLinksMenu project="MaxView" />);
+    openMenu();
+    const toggle = screen.getByTestId('quick-links-menu-category-toggle-project-0');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAccessibleName('Environments, 2 links');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('quick-links-menu-item-prod')).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem('apex.quickLinks.collapsed.MaxView') ?? '[]')).toEqual([
+      'project:Environments',
+    ]);
+    unmount();
+
+    render(<QuickLinksMenu project="MaxView" />);
+    openMenu();
+    expect(screen.queryByTestId('quick-links-menu-item-prod')).not.toBeInTheDocument();
+    expect(screen.getByTestId('quick-links-menu-item-clerk')).toBeInTheDocument();
+  });
+
+  it('keeps collapsed state separate for each project', () => {
+    window.localStorage.setItem('apex.quickLinks.collapsed.Amego', JSON.stringify(['project:Environments']));
+    render(<QuickLinksMenu project="MaxView" />);
+    openMenu();
+    expect(screen.getByTestId('quick-links-menu-item-prod')).toBeInTheDocument();
+  });
+
+  it('shows matches inside collapsed categories while searching', () => {
+    window.localStorage.setItem('apex.quickLinks.collapsed.MaxView', JSON.stringify(['project:Environments']));
+    render(<QuickLinksMenu project="MaxView" />);
+    openMenu();
+    fireEvent.change(screen.getByTestId('quick-links-menu-search'), { target: { value: 'prod' } });
+    expect(screen.getByTestId('quick-links-menu-item-prod')).toBeInTheDocument();
+  });
+
+  it('ignores unreadable stored state', () => {
+    window.localStorage.setItem('apex.quickLinks.collapsed.MaxView', '{not json');
+    render(<QuickLinksMenu project="MaxView" />);
+    openMenu();
+    expect(screen.getByTestId('quick-links-menu-item-prod')).toBeInTheDocument();
+  });
+
+  it('renders a limited number of links per category with Show all', () => {
+    const many = Array.from({ length: CATEGORY_RENDER_LIMIT + 15 }, (_, i) => makeMyLink(`m${i}`, `Link ${i}`, 'Bulk'));
+    mockUseProjectQuickLinks.mockReturnValue({ data: [] });
+    mockUseMyQuickLinks.mockReturnValue({ data: many });
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+
+    expect(document.querySelectorAll('[data-testid^="quick-links-menu-my-item-"]')).toHaveLength(CATEGORY_RENDER_LIMIT);
+    const showAll = screen.getByTestId('quick-links-menu-category-show-all-personal-0');
+    expect(showAll).toHaveTextContent(`Show all ${CATEGORY_RENDER_LIMIT + 15}`);
+
+    fireEvent.click(showAll);
+    expect(document.querySelectorAll('[data-testid^="quick-links-menu-my-item-"]')).toHaveLength(CATEGORY_RENDER_LIMIT + 15);
+    expect(showAll).toHaveTextContent('Show fewer');
   });
 });
