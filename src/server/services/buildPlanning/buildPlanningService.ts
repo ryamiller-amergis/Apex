@@ -138,7 +138,7 @@ export async function applyPlannerCompletion(
 
   let parsed: Awaited<ReturnType<typeof readValidatedPlan>>;
   try {
-    parsed = await readValidatedPlan(view, input.agentStatus, input.branchName ?? null, deps);
+    parsed = await readValidatedPlan(view, input.branchName ?? null, deps);
   } catch (error) {
     if (error instanceof PlanFileReadError) return { status: 'deferred' };
     throw error;
@@ -169,6 +169,7 @@ export async function applyPlannerCompletion(
       ],
     });
     if (!claimed) return { status: 'ignored' };
+    await deps.releaseAgentRun(input.agentRunId, input.agentStatus === 'error' ? 'failed' : 'completed');
     deps.track?.('build.plan.validated', {
       taskCount: String(plan.tasks.length),
       classification: plan.classification,
@@ -379,13 +380,9 @@ async function launchFullPlanner(
 
 async function readValidatedPlan(
   view: PlanningView,
-  agentStatus: 'finished' | 'error',
   branch: string | null,
   deps: BuildPlanningDeps,
 ): Promise<{ ok: true; plan: unknown; redactionCount: number } | { ok: false; violations: PlanViolation[]; redactionCount: number }> {
-  if (agentStatus === 'error') {
-    return { ok: false, violations: [stoppedViolation()], redactionCount: 0 };
-  }
   let text: string | null;
   try {
     text = await deps.readPlanFile(view, branch);
@@ -417,10 +414,6 @@ async function suspend(
     suspendReason: reason,
     suspendedFromStatus: from,
   });
-}
-
-function stoppedViolation(): PlanViolation {
-  return { code: 'invalid_value', message: PLANNER_STOPPED_MESSAGE };
 }
 
 function elapsed(view: PlanningView, deps: BuildPlanningDeps): number {

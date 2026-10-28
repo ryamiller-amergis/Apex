@@ -62,11 +62,15 @@ export function buildPlannerPrompt(input: BuildPlannerPromptInput): string {
     catalog || '(none)',
   ];
 
-  if (input.mode === 'full') {
+  // A repair retries a full-path plan, so it needs the full-path rules too.
+  if (input.mode === 'full' || input.mode === 'repair') {
     lines.push(
       '',
-      'Full path: in this same session, commit the scaffold from the plan manifest (shared types, migration and schema, router mount, route and navigation entries pointing at empty components, empty test files) and the context-notes file.',
+      'Full path: set classification to "full" and include a scaffoldManifest. In this same session, commit the scaffold from the plan manifest (shared types, migration and schema, router mount, route and navigation entries pointing at empty components, empty test files) and the context-notes file.',
     );
+  }
+  if (input.mode === 'repair') {
+    lines.push('Scaffold files and context notes already on the branch do not need to be committed again.');
   }
   if (input.mode === 'small') {
     lines.push(

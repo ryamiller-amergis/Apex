@@ -47,6 +47,8 @@ describe('planner prompt', () => {
     expect(prompt).toContain('empty_reuse');
     expect(prompt).toContain('t2');
     expect(prompt).toContain('plan.json');
+    expect(prompt).toContain('scaffoldManifest');
+    expect(prompt).toContain('classification to "full"');
     expect(prompt).not.toContain(secret);
     expect(prompt).not.toContain('function save(');
   });

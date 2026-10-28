@@ -29,7 +29,7 @@ Write a short plan on the integration branch, then implement. Do not add a scaff
 
 ### repair
 
-A previous plan failed the checks below. Commit a corrected plan file that fixes every listed code. Do not start a new scaffold if one is already on the branch.
+A previous plan failed the checks below, or no plan file was found. Commit a corrected plan file that fixes every listed code. A repair plan is still a full plan: set `classification` to `full` and include `scaffoldManifest`. Commit only the scaffold files and context notes that are not already on the branch.
 
 ## Plan rules
 
@@ -56,11 +56,11 @@ Each task lists the components, hooks, services, or helpers it should reuse (`pa
 
 ## Scaffold rules
 
-Full mode only. In the same session as the plan, commit the files named by `scaffoldManifest`: shared types, migration and schema, router mount, route and navigation entries that point at empty components, and empty test files. Do not put product behavior in those files.
+Full and repair modes. In the same session as the plan, commit the files named by `scaffoldManifest`: shared types, migration and schema, router mount, route and navigation entries that point at empty components, and empty test files. Do not put product behavior in those files.
 
 Also commit one context-notes file at `.apex/build/<buildRunId>/context-notes.md`. It holds the overview, the approach and why, the ordered tasks and their blockers, the files each task owns, the reuse list and where each reused thing lives, and the risk constraints. Set the plan's `contextNotesPath` to that path.
 
-Small mode and repair mode do not add a scaffold manifest.
+Small mode does not add a scaffold manifest. Repair mode keeps the manifest in the plan and skips files already committed.
 
 ## Output contract
 

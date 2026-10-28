@@ -473,6 +473,25 @@ describe('build planning service', () => {
     expect(heads).toEqual({ setup: null, a: 'a', b: 'a', c: 'a' });
   });
 
+  it('a passing plan ends its agent run', async () => {
+    const store = new MemoryStore(view());
+    const { deps, releases } = harness(store);
+    await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    expect(await finish(store, deps)).toEqual({ status: 'validated' });
+    expect(releases).toEqual([['agent-1', 'completed']]);
+  });
+
+  it('accepts a plan committed before the agent ended in error', async () => {
+    const store = new MemoryStore(view());
+    const { deps, requests, releases } = harness(store);
+    await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    expect(await finish(store, deps, 'error')).toEqual({ status: 'validated' });
+    expect(store.current.status).toBe('building');
+    expect(store.current.repairAttempts).toBe(0);
+    expect(requests).toHaveLength(1);
+    expect(releases).toEqual([['agent-1', 'failed']]);
+  });
+
   it('a cancelled planner run is ended before the next launch', async () => {
     const store = new MemoryStore(view());
     const { deps, requests, releases } = harness(store);
