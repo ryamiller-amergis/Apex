@@ -51,6 +51,7 @@ export class PlaybookTemplateAlreadyPublishedError extends Error {
 
 const TEMPLATE_FILES: Record<string, string> = {
   [CORE_INTERVIEW_TEMPLATE_KEY]: 'interview.json',
+  'build-from-prompt': 'build-from-prompt.json',
 };
 
 function isUniqueViolation(error: unknown): boolean {

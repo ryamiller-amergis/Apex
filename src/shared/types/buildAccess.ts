@@ -7,6 +7,12 @@ export const BUILD_FLAG_DISABLED_CODE = 'BUILD_FLAG_DISABLED';
 export const BUILD_FLAG_DISABLED_MESSAGE =
   'Builds are turned off for this project right now. Ask a Platform Admin if you need them.';
 
+/** Shown when a build-intake chat message is refused because `build-from-prompt` is off. Reads stay open. */
+export const BUILD_INTAKE_PAUSED_MESSAGE =
+  'Builds are paused for this project. Your conversation is saved. Ask a Project Admin to resume builds.';
+
+export const BUILD_INTAKE_ATTACHMENTS_MESSAGE = 'Attachments are not supported in a build intake chat.';
+
 /** Returned when the project and repository pair is not on the build allow-list. */
 export const BUILD_PAIR_NOT_ALLOWED_CODE = 'BUILD_PAIR_NOT_ALLOWED';
 export const BUILD_PAIR_NOT_ALLOWED_MESSAGE =

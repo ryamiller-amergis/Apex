@@ -57,10 +57,10 @@ test.describe('Builds access and gating @feat-002', () => {
 
     await page.getByTestId('nav-item-builds').click();
     await expect(page).toHaveURL(/\/builds$/);
-    await expect(page.getByTestId('builds-view')).toBeVisible();
-    await expect(page.getByTestId('builds-empty-state')).toHaveText('No builds yet.');
+    await expect(page.getByTestId('builds-list-view')).toBeVisible();
+    await expect(page.getByTestId('builds-list-empty')).toContainText('No builds yet.');
 
-    await page.getByTestId('builds-new-build-btn').click();
+    await page.getByTestId('builds-list-new-build').click();
     await expect(page).toHaveURL(/\/builds\/new$/);
   });
 
@@ -70,8 +70,8 @@ test.describe('Builds access and gating @feat-002', () => {
     await loginAsPersona('ba');
     await page.goto('/builds');
 
-    await expect(page.getByTestId('builds-view')).toBeVisible();
-    await expect(page.getByTestId('builds-new-build-btn')).toHaveCount(0);
+    await expect(page.getByTestId('builds-list-view')).toBeVisible();
+    await expect(page.getByTestId('builds-list-new-build')).toHaveCount(0);
   });
 
   test('VT-20 PBI-003 AC-1: a project without the Builds menu redirects away from /builds', async ({ page, loginAsPersona }) => {
@@ -80,7 +80,7 @@ test.describe('Builds access and gating @feat-002', () => {
     await page.goto('/builds');
 
     await expect(page).not.toHaveURL(/\/builds/);
-    await expect(page.getByTestId('builds-view')).toHaveCount(0);
+    await expect(page.getByTestId('builds-list-view')).toHaveCount(0);
     await expect(page.getByTestId('nav-item-builds')).toHaveCount(0);
   });
 });
