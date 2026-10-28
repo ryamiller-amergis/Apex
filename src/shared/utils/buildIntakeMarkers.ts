@@ -78,6 +78,24 @@ export function hasConfirmMarker(text: string): boolean {
   return text.includes(BUILD_INTAKE_CONFIRM_MARKER);
 }
 
+/** Picker replies read `Q1 · <question>\nAnswer: A — <option>`. */
+const PICKER_CONFIRM_RE = /^\s*answer:\s*a\b/im;
+/** A typed reply that starts with "a" or "confirm". */
+const TYPED_CONFIRM_RE = /^\s*(?:a|confirm)\b/i;
+
+/** True when `answerText` picks "Confirm" on the latest visible agent message, which carries the confirm marker. */
+export function isBuildIntakeConfirmation(
+  messages: ReadonlyArray<MarkerMessage>,
+  answerText: string,
+): boolean {
+  const lastAgent = [...messages].reverse().find(isVisibleAgent);
+  return Boolean(
+    lastAgent
+    && hasConfirmMarker(lastAgent.text)
+    && (PICKER_CONFIRM_RE.test(answerText) || TYPED_CONFIRM_RE.test(answerText)),
+  );
+}
+
 export function warningClasses(text: string): SensitiveClass[] {
   const found = new Set<SensitiveClass>();
   for (const match of text.matchAll(WARNING_RE)) {

@@ -113,9 +113,22 @@ import {
   formatInterviewBriefForPrd,
   getApprovedInterviewBriefForPrd,
   getInterviewBrief,
+  InterviewBriefError,
   saveInterviewBrief,
 } from '../services/interviewBriefService';
 import { draftInterviewBriefSections } from '../services/interviewOrchestratorService';
+import {
+  approveBuildBrief,
+  BuildBriefError,
+  draftBuildBrief,
+  getBuildBriefAnalysis,
+  getRedactedBuildBrief,
+  saveBuildBrief,
+} from '../services/buildBriefService';
+import { isBuildIntakeInterview } from '../services/buildIntakeAccess';
+import { buildIntakeInterviewOf, requireBriefEditor, requireBriefReader } from '../middleware/buildIntakeBrief';
+
+const BUILD_REQUEST_NO_PRD_MESSAGE = 'Build requests do not create a PRD.';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -3393,16 +3406,60 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
   }
 });
 
-router.get('/:id/brief', requireInterviewRead, async (req, res, next) => {
+function sendBuildBriefError(res: Response, err: unknown, next: NextFunction): void {
+  if (err instanceof BuildBriefError) {
+    res.status(err.statusCode).json({ error: err.message, ...(err.draftFailed ? { draftFailed: true } : {}) });
+    return;
+  }
+  if (err instanceof InterviewBriefError) {
+    res.status(err.statusCode).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
+
+const notBuildIntake: RequestHandler = (_req, res) => {
+  res.status(404).json({ error: 'Interview not found' });
+};
+
+const requireBriefEditorOrManager = () => requireBriefEditor([
+  requirePermission('interviews:manage'),
+  requireGroupMembership('BA', 'Manager', 'Product-Owner'),
+]);
+
+router.get('/:id/brief', requireInterviewRead, requireBriefReader([]), async (req, res, next) => {
   try {
-    const brief = await getInterviewBrief(req.params.id);
+    const brief = buildIntakeInterviewOf(res)
+      ? await getRedactedBuildBrief(req.params.id)
+      : await getInterviewBrief(req.params.id);
     res.json(brief);
   } catch (err) {
     next(err);
   }
 });
 
-router.put('/:id/brief', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+router.get('/:id/brief/analysis', requireBriefReader([notBuildIntake]), async (req, res, next) => {
+  try {
+    res.json(await getBuildBriefAnalysis({ interviewId: req.params.id, viewerId: getUserId(req) }));
+  } catch (err) {
+    sendBuildBriefError(res, err, next);
+  }
+});
+
+router.put('/:id/brief', requireBriefEditorOrManager(), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) {
+    try {
+      res.json(await saveBuildBrief({
+        interviewId: req.params.id,
+        actorId: getUserId(req),
+        sections: req.body?.sections,
+        requirements: req.body?.requirements,
+      }));
+    } catch (err) {
+      sendBuildBriefError(res, err, next);
+    }
+    return;
+  }
   try {
     const brief = await saveInterviewBrief({
       interviewId: req.params.id,
@@ -3415,7 +3472,15 @@ router.put('/:id/brief', requirePermission('interviews:manage'), requireGroupMem
   }
 });
 
-router.post('/:id/brief/draft', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+router.post('/:id/brief/draft', requireBriefEditorOrManager(), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) {
+    try {
+      res.json(await draftBuildBrief({ interviewId: req.params.id, actorId: getUserId(req), mode: 'manual' }));
+    } catch (err) {
+      sendBuildBriefError(res, err, next);
+    }
+    return;
+  }
   try {
     const sections = await draftInterviewBriefSections({ interviewId: req.params.id });
     const brief = await saveInterviewBrief({
@@ -3433,7 +3498,16 @@ const BRIEF_APPROVE_FORBIDDEN_MESSAGE =
   'Only the author, an interview section owner, a project admin, a platform admin, or a BA, Manager, or Product Owner with interviews:manage can approve this interview brief';
 const BRIEF_APPROVER_GROUPS = ['BA', 'Manager', 'Product-Owner'];
 
-router.post('/:id/brief/approve', async (req, res, next) => {
+async function approveBuildIntakeBrief(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.json(await approveBuildBrief({ interviewId: req.params.id, actorId: getUserId(req) }));
+  } catch (err) {
+    sendBuildBriefError(res, err, next);
+  }
+}
+
+router.post('/:id/brief/approve', requireBriefEditor([]), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) return approveBuildIntakeBrief(req, res, next);
   try {
     const userId = getUserId(req);
     const interview = await getInterview(req.params.id);
@@ -3490,6 +3564,10 @@ router.post('/:interviewId/prds', async (req, res, next) => {
     const interview = await getInterview(req.params.interviewId);
     if (!interview) {
       res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+    if (isBuildIntakeInterview(interview)) {
+      res.status(409).json({ error: BUILD_REQUEST_NO_PRD_MESSAGE });
       return;
     }
     const canGenerate = await canCompleteInterviewAndGeneratePrd(userId, interview);

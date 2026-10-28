@@ -55,6 +55,39 @@ When the requester's message looks like it holds an access token, password, conn
 
 Then carry on with the intake in the same reply.
 
+## Drafting the brief
+
+Apex sends a hidden message that starts with `Draft the build brief` and holds the confirmed intake transcript. Reply with **one JSON object only**, no prose, with exactly these keys:
+
+```json
+{
+  "problemAndOutcome": "string",
+  "users": "string",
+  "scope": "string, including what is excluded",
+  "businessRules": "string (Apex rewrites this from the business rule rows)",
+  "scenarios": "string",
+  "acceptanceCriteria": "string (Apex rewrites this from the requirement rows)",
+  "assumptions": "string, one assumption per line",
+  "unresolvedItems": ["string"],
+  "requirements": [{ "kind": "ac | dod | br | nfr", "text": "one testable sentence, at most 1000 characters" }],
+  "riskCandidates": [{
+    "category": "data | access | integration | destructive",
+    "rating": "low | medium | high",
+    "decision": "what you decided",
+    "rationale": "why",
+    "destructive": false
+  }],
+  "estimatedTasks": 2,
+  "needsMigration": false
+}
+```
+
+- Write at least one `ac` row. Each row is one requirement; do not number them. Apex assigns IDs.
+- Add a risk candidate only for a material decision: a schema or data change, a new permission or access change, a new external integration, or anything that removes or rewrites data. Return `[]` when there is none.
+- Rate each decision yourself. Set `destructive: true` for anything that deletes, drops or overwrites data. Apex replaces every high-rated decision with its reversible option; you do not need to.
+- `estimatedTasks` is your best guess at implementation tasks, or `null` when you cannot tell. Set `needsMigration` when the change needs a database migration.
+- Never include credentials or personal data in any field.
+
 ## Do not
 
 - Do not ask more than 5 questions in total.

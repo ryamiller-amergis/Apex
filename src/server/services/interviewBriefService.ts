@@ -41,7 +41,12 @@ export interface ApproveInterviewBriefResult {
   unresolvedCount: number;
   output: InterviewStepOutput;
   resumed: boolean;
+  /** True when the brief was already approved before this call. */
+  alreadyApproved: boolean;
 }
+
+/** Runs after the approval commits and before the Playbook step resumes, on every approval call. */
+export type BeforeBriefResume = (brief: InterviewBriefRecord) => Promise<void>;
 
 type BriefRow = {
   id: string;
@@ -289,6 +294,7 @@ function approvalResult(
   brief: BriefRow,
   interviewId: string,
   resumed: boolean,
+  alreadyApproved: boolean,
 ): ApproveInterviewBriefResult {
   const sections = parseInterviewBriefSections(brief.sections);
   const count = unresolvedCount(sections);
@@ -313,14 +319,18 @@ function approvalResult(
     unresolvedCount: count,
     output,
     resumed,
+    alreadyApproved,
   };
 }
 
 async function resumeApprovedBrief(
   interview: InterviewLink,
   brief: BriefRow,
+  alreadyApproved: boolean,
+  beforeResume?: BeforeBriefResume,
 ): Promise<ApproveInterviewBriefResult> {
-  const base = approvalResult(brief, interview.id, false);
+  const base = approvalResult(brief, interview.id, false, alreadyApproved);
+  if (beforeResume) await beforeResume(toRecord(brief));
   if (!interview.playbookRunId || !interview.playbookStepRunId) return base;
 
   const moved = await resumeStepRun({
@@ -340,6 +350,7 @@ async function resumeApprovedBrief(
 export async function approveInterviewBrief(input: {
   interviewId: string;
   approvedBy: string;
+  beforeResume?: BeforeBriefResume;
 }): Promise<ApproveInterviewBriefResult> {
   const interview = await loadInterview(input.interviewId);
   const existing = await loadBrief(interview.id);
@@ -349,7 +360,7 @@ export async function approveInterviewBrief(input: {
 
   const sections = parseInterviewBriefSections(existing.sections);
   if (existing.status === 'approved') {
-    return resumeApprovedBrief(interview, { ...existing, sections });
+    return resumeApprovedBrief(interview, { ...existing, sections }, true, input.beforeResume);
   }
 
   const approvedAt = new Date().toISOString();
@@ -404,10 +415,10 @@ export async function approveInterviewBrief(input: {
   if (!approved) {
     const concurrent = await loadBrief(interview.id);
     if (concurrent?.status === 'approved') {
-      return resumeApprovedBrief(interview, concurrent);
+      return resumeApprovedBrief(interview, concurrent, true, input.beforeResume);
     }
     throw new InterviewBriefError('The brief was no longer a draft.');
   }
 
-  return resumeApprovedBrief(interview, approved);
+  return resumeApprovedBrief(interview, approved, false, input.beforeResume);
 }

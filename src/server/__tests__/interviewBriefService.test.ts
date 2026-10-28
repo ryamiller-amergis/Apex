@@ -332,6 +332,7 @@ describe('VT-BRIEF-5 — approving a draft resumes the Playbook when the step mo
       approvedAt: NOW,
       unresolvedCount: 2,
       resumed: true,
+      alreadyApproved: false,
       output: {
         interviewId: 'interview-1',
         briefId: 'brief-1',
@@ -445,6 +446,7 @@ describe('VT-BRIEF-6 — a second approval is the same version', () => {
       approvedAt: '2026-10-07T15:00:00.000Z',
       unresolvedCount: 2,
       resumed: false,
+      alreadyApproved: true,
       output: {
         interviewId: 'interview-1',
         briefId: 'brief-1',
@@ -510,5 +512,45 @@ describe('VT-BRIEF-7 — an ordinary interview approves without a Playbook resum
     expect(result.output.unresolvedCount).toBe(sections.unresolvedItems.length);
     expect(mockResumeStepRun).not.toHaveBeenCalled();
     expect(mockAdvanceRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-15 — beforeResume runs after the approval commit and before the step resumes (FEAT-006 A11)', () => {
+  const draft = {
+    id: 'brief-1',
+    interviewId: 'interview-1',
+    status: 'draft',
+    version: 2,
+    sections,
+    approvedBy: null,
+    approvedAt: null,
+  };
+
+  beforeEach(() => {
+    installDb({
+      interviews: [linkedInterview],
+      interview_briefs: [draft],
+      playbook_step_runs: [{ stepId: 'interview-node' }],
+    });
+  });
+
+  it('VT-15 calls the hook with the approved version before resumeStepRun', async () => {
+    const order: string[] = [];
+    mockResumeStepRun.mockImplementation(async () => { order.push('resume'); return true; });
+    const beforeResume = jest.fn(async () => { order.push('hook'); });
+
+    const result = await approveInterviewBrief({ interviewId: 'interview-1', approvedBy: 'user-pa', beforeResume });
+
+    expect(beforeResume).toHaveBeenCalledWith(expect.objectContaining({ status: 'approved', version: 3, approvedBy: 'user-pa' }));
+    expect(order).toEqual(['hook', 'resume']);
+    expect(result.alreadyApproved).toBe(false);
+  });
+
+  it('VT-15 leaves the step suspended when the hook throws', async () => {
+    const beforeResume = jest.fn(async () => { throw new Error('revision write failed'); });
+
+    await expect(approveInterviewBrief({ interviewId: 'interview-1', approvedBy: 'user-pa', beforeResume }))
+      .rejects.toThrow('revision write failed');
+    expect(mockResumeStepRun).not.toHaveBeenCalled();
   });
 });

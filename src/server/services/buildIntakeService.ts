@@ -6,6 +6,7 @@
 import type { ChatThread } from '../../shared/types/chat';
 import {
   countQuestionMarkers,
+  isBuildIntakeConfirmation,
   sensitiveClassLabel,
   warningMarker,
   type SensitiveClass,
@@ -39,6 +40,8 @@ export interface PrepareBuildIntakeTurnResult {
   budgetSpent: boolean;
   /** Empty when nothing matched or the check failed. */
   sensitiveClasses: SensitiveClass[];
+  /** The message confirms the intake summary, so the brief can be drafted. */
+  confirmed: boolean;
 }
 
 function budgetLines(questionsAsked: number, budget: number): string[] {
@@ -151,5 +154,6 @@ export async function prepareBuildIntakeTurn(
     questionsAsked,
     budgetSpent,
     sensitiveClasses,
+    confirmed: thread ? isBuildIntakeConfirmation(thread.messages, input.messageText) : false,
   };
 }
