@@ -549,12 +549,8 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       setKickoffSendFailed(false);
       return;
     }
-    if (session.isSending) {
-      setKickoffSendFailed(false);
-      return;
-    }
     if (session.sendError) setKickoffSendFailed(true);
-  }, [seededKickoffPrompt, session.isSending, session.sendError]);
+  }, [seededKickoffPrompt, session.sendError]);
 
   useEffect(() => {
     if (kickoffSentRef.current || !seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
@@ -650,6 +646,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     setInput('');
     clearAttachments();
     setError(null);
+    if (kickoffFailed) {
+      kickoffSentRef.current = true;
+      if (payload) setSeededKickoffPrompt(payload);
+    }
     await session.send(payload, {
       model,
       attachments: pendingAttachments,

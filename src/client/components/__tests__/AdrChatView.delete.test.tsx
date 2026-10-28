@@ -628,6 +628,66 @@ describe('AdrChatView — delete', () => {
     expect(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)')).toBeEnabled();
   });
 
+  it('does not lock the composer after recovering a failed kickoff with a new message', async () => {
+    let messageOk = false;
+    mockFetch(() => Promise.resolve({
+      ok: messageOk,
+      json: async () => (messageOk
+        ? { ok: true }
+        : { error: 'Failed to start the ADR interview' }),
+    }));
+
+    const view = render(<AdrChatView />, {
+      wrapper: makeWrapper([{
+        pathname: '/adr/adr-1',
+        state: { kickoffPrompt: 'Compare queue and event-stream options.' },
+      }]),
+    });
+
+    expect(await screen.findByText('Failed to start the ADR interview')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('adr-error-dismiss-btn'));
+
+    messageOk = true;
+    fireEvent.change(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)'), {
+      target: { value: 'Use Service Bus instead.' },
+    });
+    fireEvent.click(screen.getByTestId('adr-send-btn'));
+
+    await waitFor(() => {
+      const continuation = (global.fetch as jest.Mock).mock.calls.find((call) => {
+        if (!String(call[0]).includes('/api/chat/threads/thread-1/messages')) return false;
+        try {
+          return JSON.parse(call[1].body).text === 'Use Service Bus instead.';
+        } catch {
+          return false;
+        }
+      });
+      expect(continuation).toBeTruthy();
+    });
+
+    mockStreamState = {
+      messages: [
+        { id: 'u1', role: 'user', text: 'Use Service Bus instead.', ts: '2026-10-27T00:00:00.000Z' },
+        { id: 'a1', role: 'agent', text: 'Service Bus is the better fit.', ts: '2026-10-27T00:00:01.000Z' },
+      ],
+      streamingText: '',
+      thinkingText: '',
+      status: 'running',
+    };
+    mockChatThread = {
+      id: 'thread-1',
+      status: 'running',
+      messages: mockStreamState.messages,
+    };
+    view.rerender(<AdrChatView />);
+
+    expect(screen.queryByText('Compare queue and event-stream options.')).not.toBeInTheDocument();
+    expect(screen.getByText('Use Service Bus instead.')).toBeInTheDocument();
+    expect(screen.getByText('Service Bus is the better fit.')).toBeInTheDocument();
+    expect(screen.queryByTestId('adr-kickoff-retry')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)')).toBeEnabled();
+  });
+
   it('does not send the kickoff again when the thread already contains that prompt', async () => {
     mockFetch(() => Promise.resolve({
       ok: true,
