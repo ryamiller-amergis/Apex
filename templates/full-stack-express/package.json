@@ -17,7 +17,16 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm openapi:check && corepack pnpm routes:check",
-    "test": "corepack pnpm -r run test && node --test \"scripts/__tests__/**/*.test.mjs\"",
+    "test": "node scripts/run-suites.mjs",
+    "test:unit": "vitest run --project unit",
+    "test:component": "vitest run --project component",
+    "test:coverage": "vitest run --project unit --project component --project api --coverage",
+    "test:api": "vitest run --project api",
+    "test:integration": "node scripts/docker-guard.mjs integration && vitest run --project integration --no-file-parallelism",
+    "test:contract": "vitest run --project contract",
+    "e2e:install": "playwright install chromium",
+    "test:e2e": "node scripts/docker-guard.mjs e2e && corepack pnpm build && playwright test",
+    "test:a11y": "node scripts/docker-guard.mjs e2e && corepack pnpm build && playwright test --grep @a11y",
     "dev": "corepack pnpm --parallel --filter \"./apps/*\" dev",
     "migrate": "corepack pnpm --filter ./apps/api run db:migrate",
     "seed": "corepack pnpm --filter ./apps/api run db:seed",
@@ -31,7 +40,14 @@
     "routes:check": "corepack pnpm --filter @project-scope/api run routes:check"
   },
   "devDependencies": {
+    "@axe-core/playwright": "catalog:",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
     "eslint": "catalog:",
-    "prettier": "catalog:"
+    "jsdom": "catalog:",
+    "prettier": "catalog:",
+    "testcontainers": "catalog:",
+    "vitest": "catalog:"
   }
 }

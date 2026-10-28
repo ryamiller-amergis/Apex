@@ -1,11 +1,11 @@
 import { defineConfig, mergeConfig } from 'vitest/config';
-import base from './vitest.mjs';
+import { defineTestProject } from './testing.mjs';
 
 export default mergeConfig(
-  base,
+  defineTestProject({ name: 'unit', environment: 'node' }),
   defineConfig({
     test: {
-      include: ['src/**/*.test.ts', '**/*.test.mjs'],
+      include: ['**/*.test.mjs'],
     },
   })
 );

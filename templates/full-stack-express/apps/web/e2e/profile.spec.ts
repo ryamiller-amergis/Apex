@@ -1,58 +1,70 @@
 import { expect, test } from '@playwright/test';
+import { expectNoAxeViolations } from '../../../e2e/support/axe.ts';
 
-// DEFERRED: Playwright env unavailable. FEAT-011 (TBI-025) owns the browser
-// harness, and this session has no running web/API stack. Each journey below
-// is skipped. Vitest covers the same acceptance criteria.
+// FEAT-011 runs this file from the template-root Playwright config. When
+// Chromium or Docker is missing, `pnpm test` skips the suite and prints why.
 
-test.skip('VT-13 PBI-021 AC-0 keyboard journey saves and focuses the heading', async ({
+test('VT-13 PBI-021 AC-0 keyboard journey saves and focuses the heading', async ({
   page,
 }) => {
-  // DEFERRED: Playwright env unavailable
   await page.goto('/profile');
   await page.getByTestId('profile-edit-button').focus();
   await page.keyboard.press('Enter');
-  await page.getByTestId('profile-display-name-input').fill('Keyboard Name');
+  await page
+    .getByTestId('profile-display-name-input')
+    .fill('test-name-keyboard');
   await page.getByTestId('profile-save-button').focus();
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('profile-heading')).toBeFocused();
   await expect(page.getByTestId('profile-display-name')).toHaveText(
-    'Keyboard Name'
+    'test-name-keyboard'
   );
 });
 
-test.skip('VT-16 PBI-021 AC-2 focus leaves loading, sign-in, and empty email', async ({
+test('VT-16 PBI-021 AC-2 focus leaves loading, sign-in, and empty email', async ({
   page,
 }) => {
-  // DEFERRED: Playwright env unavailable
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   await page.route('**/api/v1/me', async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await gate;
     await route.fulfill({
-      json: { displayName: 'Sam', email: null, status: 'active' },
+      json: {
+        displayName: 'test-name-sam',
+        email: null,
+        status: 'active',
+      },
     });
   });
   await page.goto('/profile');
   await page.getByTestId('profile-loading').waitFor();
   await page.keyboard.press('Tab');
   await expect(page.getByTestId('app-shell-skip-link')).toBeVisible();
+  release();
 });
 
-test.skip('VT-17 PBI-021 AC-3 axe reports no violations for every state in both themes', async ({
+test('VT-17 PBI-021 AC-3 @a11y axe reports no violations for the loaded profile in both themes', async ({
   page,
 }) => {
-  // DEFERRED: Playwright env unavailable — run axe here once TBI-025 lands.
   await page.goto('/profile');
   await expect(page.getByTestId('profile-heading')).toBeVisible();
+  await expectNoAxeViolations(page, 'loaded-light');
+  await page.getByTestId('app-shell-color-mode-toggle').click();
+  await expectNoAxeViolations(page, 'loaded-dark');
 });
 
-test.skip('VT-18 PBI-021 AC-3 the axe helper fails a bad control', async () => {
-  // DEFERRED: Playwright env unavailable.
-  // Lower-tier substitute: profileA11y.test.tsx "PBI-021 AC-3 the check fails".
-});
-
-test.skip('VT-19 PBI-019 AC-0 phone width does not scroll sideways', async ({
+test('VT-18 PBI-021 AC-3 the axe helper fails a bad control', async ({
   page,
 }) => {
-  // DEFERRED: Playwright env unavailable
+  await page.setContent('<main><input /></main>');
+  await expect(expectNoAxeViolations(page, 'planted')).rejects.toThrow(/label/);
+});
+
+test('VT-19 PBI-019 AC-0 phone width does not scroll sideways', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 320, height: 640 });
   await page.goto('/profile');
   const scrollWidth = await page.evaluate(
@@ -65,19 +77,18 @@ test.skip('VT-19 PBI-019 AC-0 phone width does not scroll sideways', async ({
   await expect(page.getByTestId('profile-edit-button')).toBeVisible();
 });
 
-test.skip('VT-22 PBI-019 AC-0 and PBI-020 AC-0 the real API creates and reloads the profile', async ({
+test('VT-22 PBI-019 AC-0 and PBI-020 AC-0 the real API creates and reloads the profile', async ({
   page,
 }) => {
-  // DEFERRED: Playwright env unavailable — needs PostgreSQL and the development adapter.
   await page.goto('/profile');
   await page.getByTestId('profile-edit-button').click();
-  await page.getByTestId('profile-display-name-input').fill('Saved Name');
+  await page.getByTestId('profile-display-name-input').fill('test-name-saved');
   await page.getByTestId('profile-save-button').click();
   await expect(page.getByTestId('profile-display-name')).toHaveText(
-    'Saved Name'
+    'test-name-saved'
   );
   await page.reload();
   await expect(page.getByTestId('profile-display-name')).toHaveText(
-    'Saved Name'
+    'test-name-saved'
   );
 });

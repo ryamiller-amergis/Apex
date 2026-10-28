@@ -149,26 +149,47 @@ The flag provider is an open decision. The extension point is the `createLocalFl
 
 ## Scripts
 
-| Script             | What it does                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `preinstall`       | Runs the toolchain guard before any dependency is fetched                                           |
-| `setup`            | Installs from the lockfile. This is the install step                                                |
-| `build`            | Builds members in dependency order through Corepack. The config package has no build                |
-| `check`            | Runs typecheck, lint, format:check, openapi:check, and routes:check                                 |
-| `routes:check`     | Fails when the API's registered routes and the contract routes differ                               |
-| `typecheck`        | Type-checks every member that defines the script                                                    |
-| `lint`             | Lints the whole workspace once                                                                      |
-| `format`           | Rewrites files with Prettier                                                                        |
-| `format:check`     | Fails when a file disagrees with Prettier                                                           |
-| `test`             | Runs member tests, then the toolchain guard tests                                                   |
-| `dev`              | Runs the API and the web client with file watching. This is the local run step                      |
-| `migrate`          | Applies pending SQL migrations. Exits 0 on success, 1 on a failed migration, 2 on bad configuration |
-| `seed`             | Inserts synthetic `app_users` rows into a local database. Refuses when `NODE_ENV` is production     |
-| `db:generate`      | Generates a SQL migration from the Drizzle schema. Pass `-- --name <slug>`                          |
-| `migrate:validate` | Fails when the Drizzle schema and the committed migrations disagree. Needs no database              |
-| `db:up`            | Starts local PostgreSQL and waits until it is healthy                                               |
-| `db:down`          | Stops local PostgreSQL. The data volume stays                                                       |
-| `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends               |
+| Script             | What it does                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `preinstall`       | Runs the toolchain guard before any dependency is fetched                                                                |
+| `setup`            | Installs from the lockfile. This is the install step                                                                     |
+| `build`            | Builds members in dependency order through Corepack. The config package has no build                                     |
+| `check`            | Runs typecheck, lint, format:check, openapi:check, and routes:check                                                      |
+| `routes:check`     | Fails when the API's registered routes and the contract routes differ                                                    |
+| `typecheck`        | Type-checks every member that defines the script                                                                         |
+| `lint`             | Lints the whole workspace once                                                                                           |
+| `format`           | Rewrites files with Prettier                                                                                             |
+| `format:check`     | Fails when a file disagrees with Prettier                                                                                |
+| `test`             | Runs unit, component, API, and contract tests, then integration and browser tests when Docker and Chromium are available |
+| `dev`              | Runs the API and the web client with file watching. This is the local run step                                           |
+| `migrate`          | Applies pending SQL migrations. Exits 0 on success, 1 on a failed migration, 2 on bad configuration                      |
+| `seed`             | Inserts synthetic `app_users` rows into a local database. Refuses when `NODE_ENV` is production                          |
+| `db:generate`      | Generates a SQL migration from the Drizzle schema. Pass `-- --name <slug>`                                               |
+| `migrate:validate` | Fails when the Drizzle schema and the committed migrations disagree. Needs no database                                   |
+| `db:up`            | Starts local PostgreSQL and waits until it is healthy                                                                    |
+| `db:down`          | Stops local PostgreSQL. The data volume stays                                                                            |
+| `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends                                    |
+
+## Testing
+
+Working directory: `templates/full-stack-express/`. Install the workspace first. Each team decides when to run the suites. This template does not schedule them.
+
+| Command            | What it runs                                                                                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`             | Unit, component, API, and contract tests. Integration and browser tests run only when Docker (and, for the browser, Chromium) is available. A missing runtime skips that suite and prints the reason. Toolchain guard tests run last. |
+| `test:unit`        | Contract, configuration, and data-access tests                                                                                                                                                                                        |
+| `test:component`   | Profile screen tests in jsdom                                                                                                                                                                                                         |
+| `test:api`         | HTTP tests against an in-memory store. No Docker                                                                                                                                                                                      |
+| `test:contract`    | Every committed operation checked against `openapi.json`                                                                                                                                                                              |
+| `test:coverage`    | Unit, component, and API tests with the shared coverage floors                                                                                                                                                                        |
+| `test:integration` | PostgreSQL tests. Needs Docker. Exits with the Docker message when no runtime answers                                                                                                                                                 |
+| `test:e2e`         | Browser journeys. Needs Docker and Chromium. Builds the workspace, then starts the stack                                                                                                                                              |
+| `test:a11y`        | The same browser run, limited to tests tagged `@a11y`                                                                                                                                                                                 |
+| `e2e:install`      | Downloads the Chromium build Playwright drives. `pnpm install` does not                                                                                                                                                               |
+
+`pnpm test:coverage` fails when lines, functions, or statements are below 80%, or branches are below 75%. Those floors live in `packages/config/testing.mjs`. A package Vitest config cannot set its own.
+
+Browser tests locate elements by role, label, or `data-testid`. A CSS class, an element id, or an XPath locator fails lint.
 
 ## API contract
 
