@@ -44,7 +44,10 @@
     "scan": "node scripts/supply-chain/scan.mjs",
     "sbom": "node scripts/supply-chain/sbom.mjs",
     "container:build": "node scripts/supply-chain/container-build.mjs",
-    "test:container": "node scripts/supply-chain/test-container.mjs"
+    "test:container": "node scripts/supply-chain/test-container.mjs",
+    "test:quality": "vitest run --project unit scripts/quality",
+    "quality:validate": "node scripts/quality/validate-manifests.mjs",
+    "loadtest:run": "node scripts/quality/run-load-test.mjs"
   },
   "pnpm": {
     "overrides": {
@@ -58,12 +61,15 @@
     "@secretlint/secretlint-rule-preset-recommend": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "ajv": "catalog:",
     "eslint": "catalog:",
     "jsdom": "catalog:",
+    "pg": "catalog:",
     "prettier": "catalog:",
     "secretlint": "catalog:",
     "testcontainers": "catalog:",
     "vitest": "catalog:",
+    "yaml": "catalog:",
     "zod": "catalog:"
   }
 }
