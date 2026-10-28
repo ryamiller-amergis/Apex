@@ -790,12 +790,21 @@ function lastQuestion(agentText: string): string {
  *
  * The UI can show a second agent question before the user answers the first
  * (a race it guards against separately), so the transcript may hold more
- * than one outstanding agent question at once. Pair each user reply with the
- * specific question it quotes — the UI's `Q<n> · <question>` answer format
- * echoes the question text verbatim — rather than always the most recently
- * asked one. An outstanding question with no quoted reply stays out of the
- * recap entirely, so the model is never told it was answered.
+ * than one outstanding agent question at once. Pair each user reply with
+ * every pending question it quotes — the UI's `Q<n> · <question>` format
+ * can join several answers into one transcript entry — rather than always
+ * the most recently asked one. An outstanding question with no quoted
+ * reply stays out of the recap entirely, so the model is never told it
+ * was answered.
  */
+function recapAnswerForQuestion(text: string, question: string): string {
+  const blocks = text.split(/\n\n+/);
+  const match = question.length > 0
+    ? blocks.find((block) => block.includes(question))
+    : undefined;
+  return clipped(match ?? text, MAX_RECAP_ANSWER_CHARS);
+}
+
 function answersSoFar(
   transcript: DurableInteractiveTurnSpecification['transcript'],
   workflowClass: InteractiveWorkflowClass,
@@ -808,21 +817,28 @@ function answersSoFar(
       pendingQuestions.push(lastQuestion(entry.text));
       continue;
     }
-    const answer = clipped(entry.text, MAX_RECAP_ANSWER_CHARS);
     if (pendingQuestions.length === 0) {
-      entries.push(`${entries.length + 1}. Original request: ${answer}`);
+      entries.push(
+        `${entries.length + 1}. Original request: ${clipped(entry.text, MAX_RECAP_ANSWER_CHARS)}`,
+      );
       continue;
     }
-    const quotedIndex = pendingQuestions.findIndex(
-      (question) => question.length > 0 && entry.text.includes(question),
-    );
+    const quotedIndexes = pendingQuestions
+      .map((question, index) => ({ question, index }))
+      .filter(({ question }) => question.length > 0 && entry.text.includes(question));
     // No explicit quote (plain free-text reply): assume it answers the
     // earliest still-open question, matching the normal one-question flow.
-    const matchedIndex = quotedIndex >= 0 ? quotedIndex : 0;
-    const [question] = pendingQuestions.splice(matchedIndex, 1);
-    entries.push(
-      `${entries.length + 1}. You asked: ${question}\n   User answered: ${answer}`,
-    );
+    const matched = quotedIndexes.length > 0
+      ? quotedIndexes
+      : [{ question: pendingQuestions[0], index: 0 }];
+    for (let i = matched.length - 1; i >= 0; i -= 1) {
+      pendingQuestions.splice(matched[i].index, 1);
+    }
+    for (const { question } of matched) {
+      entries.push(
+        `${entries.length + 1}. You asked: ${question}\n   User answered: ${recapAnswerForQuestion(entry.text, question)}`,
+      );
+    }
   }
   if (entries.length === 0) return [];
   return [

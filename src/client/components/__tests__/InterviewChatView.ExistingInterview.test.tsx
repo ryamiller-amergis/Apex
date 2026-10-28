@@ -1097,6 +1097,83 @@ describe('ExistingInterviewView — deferred send for out-of-order choice answer
       'Q1 · Who may create a Brainstorm session?\nAnswer: A — Any project member',
     );
   });
+
+  it('flushes a held choice answer when the composer sends a free-text reply', () => {
+    mockSend.mockClear();
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [earlierQuestionMessage, laterQuestionMessage],
+    });
+    renderExistingInterview();
+
+    fireEvent.click(screen.getAllByTestId('interview-choice-a')[0]);
+    fireEvent.click(screen.getAllByTestId('interview-submit-answers')[0]);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/Answer sent/)).toHaveLength(1);
+
+    fireEvent.change(screen.getByTestId('interview-message-input'), {
+      target: { value: 'The creator, unless an admin takes over.' },
+    });
+    fireEvent.click(screen.getByTestId('interview-send-message'));
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toBe(
+      'Q1 · Who may create a Brainstorm session?\nAnswer: A — Any project member\n\n'
+      + 'The creator, unless an admin takes over.',
+    );
+  });
+});
+
+describe('ExistingInterviewView — choice lock after reload', () => {
+  it('locks a build-intake confirmation whose submitted reply quotes the stripped question', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [
+        {
+          id: 'agent-confirm',
+          role: 'agent' as const,
+          text: '[[build-intake:confirm]]\nDoes this look right?\n\na. Confirm\nb. Change it',
+          ts: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'user-confirm',
+          role: 'user' as const,
+          text: 'Q1 · Does this look right?\nAnswer: A — Confirm',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      ],
+    });
+    renderExistingInterview();
+
+    expect(screen.getByText(/Answer sent/)).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-submit-answers')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-choice-a')).toBeDisabled();
+  });
+
+  it('locks a guided question whose phase marker sat on the same lines as the question', () => {
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [
+        {
+          id: 'agent-q1',
+          role: 'agent' as const,
+          text: '[[interview-phase:discovery:1:6]]Who owns this?\na. Product\nb. Engineering',
+          ts: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'user-q1',
+          role: 'user' as const,
+          text: 'Q1 · Who owns this?\nAnswer: A — Product',
+          ts: '2026-01-01T00:00:01Z',
+        },
+      ],
+    });
+    renderExistingInterview();
+
+    expect(screen.getByText(/Answer sent/)).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-submit-answers')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-choice-a')).toBeDisabled();
+  });
 });
 
 // ── Optimistic processing state ───────────────────────────────────────────────

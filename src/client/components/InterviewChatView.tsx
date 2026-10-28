@@ -181,6 +181,18 @@ const InterviewChoiceBlockUI: React.FC<ChoiceBlockUIProps> = ({
 
 // ── Assistant message with interactive choices ────────────────────────────────
 
+/**
+ * Markers are stripped before the choice parser so quoted replies match the
+ * question the picker actually sent (`Q{n} · {question}`), not the raw
+ * `[[build-intake:…]]` / `[[interview-phase:…]]` lines sitting above it.
+ */
+function visibleInterviewAgentText(text: string): string {
+  const markerFreeText = stripBuildIntakeMarkers(stripInterviewPhaseMarkers(text));
+  return warningClasses(text).length > 0
+    ? stripWarningLabelLine(markerFreeText)
+    : markerFreeText;
+}
+
 interface QuestionState { selected: string | null; freeform: string; }
 
 interface InterviewAgentMessageProps {
@@ -196,8 +208,7 @@ interface InterviewAgentMessageProps {
 
 export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false, anchorRef }) => {
   const intakeWarnings = warningClasses(text);
-  const markerFreeText = stripBuildIntakeMarkers(stripInterviewPhaseMarkers(text));
-  const visibleText = intakeWarnings.length > 0 ? stripWarningLabelLine(markerFreeText) : markerFreeText;
+  const visibleText = visibleInterviewAgentText(text);
   const warning = <BuildIntakeWarning classes={intakeWarnings} />;
   const parts = parseAgentMessage(visibleText);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
@@ -1256,8 +1267,15 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     includeDraftAttachments: boolean,
   ) => {
     const outgoingAttachments = includeDraftAttachments ? attachments : [];
+    const heldText = [...heldChoiceAnswers]
+      .sort((a, b) => a.order - b.order)
+      .map((held) => held.text)
+      .join('\n\n');
+    const combinedText = [heldText, text]
+      .filter((part) => part.trim().length > 0)
+      .join('\n\n');
     if (
-      (!text && outgoingAttachments.length === 0)
+      (!combinedText && outgoingAttachments.length === 0)
       || isInteractionBusy
       || !interview?.chatThreadId
       || resumeGate.composerBlocked
@@ -1265,8 +1283,9 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
 
     if (speech.isListening) speech.stop();
     setInput('');
+    setHeldChoiceAnswers([]);
     clearSendError();
-    await session.send(text || 'Please use the attached files as context.', {
+    await session.send(combinedText || 'Please use the attached files as context.', {
       attachments: outgoingAttachments,
       model,
     });
@@ -1275,6 +1294,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     attachments,
     clearAttachments,
     clearSendError,
+    heldChoiceAnswers,
     isInteractionBusy,
     interview?.chatThreadId,
     model,
@@ -1466,7 +1486,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   for (const msg of visibleMessages) {
     if (msg.role === 'agent') {
       messageQOffsets.set(msg.id, runningQCount);
-      const parts = parseAgentMessage(msg.text);
+      const parts = parseAgentMessage(visibleInterviewAgentText(msg.text));
       const blocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
       messageChoiceBlocks.set(msg.id, blocks);
       runningQCount += blocks.length;
@@ -1915,15 +1935,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                     ]);
                     return;
                   }
-                  const combinedText = [
-                    ...heldChoiceAnswers,
-                    { messageId: msg.id, order, text },
-                  ]
-                    .sort((a, b) => a.order - b.order)
-                    .map((held) => held.text)
-                    .join('\n\n');
-                  setHeldChoiceAnswers([]);
-                  void sendMessageToAgent(combinedText, false);
+                  void sendMessageToAgent(text, false);
                 }}
                 isRunning={isInteractionBusy}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}

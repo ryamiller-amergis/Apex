@@ -252,6 +252,29 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).not.toContain('Who may delete a Brainstorm session?');
   });
 
+  it('recaps every question quoted in a combined user reply', async () => {
+    const specification = await admittedSpecification([
+      message('user', 'We need a Brainstorm session feature', 1),
+      message('agent', 'Who may create a Brainstorm session?\na. Any project member\nb. Admins only', 2),
+      message('agent', 'Who may delete a Brainstorm session?\na. The creator\nb. Any admin', 3),
+      message(
+        'user',
+        'Q3 · Who may create a Brainstorm session?\nAnswer: A — Any project member\n\n'
+        + 'Q4 · Who may delete a Brainstorm session?\nAnswer: A — The creator',
+        4,
+      ),
+    ]);
+
+    expect(specification.currentPrompt).toContain(
+      '2. You asked: Who may create a Brainstorm session?\n'
+      + '   User answered: Q3 · Who may create a Brainstorm session? Answer: A — Any project member',
+    );
+    expect(specification.currentPrompt).toContain(
+      '3. You asked: Who may delete a Brainstorm session?\n'
+      + '   User answered: Q4 · Who may delete a Brainstorm session? Answer: A — The creator',
+    );
+  });
+
   it('does not add an answer recap to Home chat turns', async () => {
     const specification = await admittedSpecification(
       [
