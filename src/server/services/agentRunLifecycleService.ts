@@ -119,6 +119,8 @@ export interface EnqueueAgentRunInput {
   ownerInstance?: string | null;
   runId?: string;
   devSessionId?: string | null;
+  /** Person who asked for the run. Cloud Agent cost rows attribute spend to this id. */
+  requestedByUserId?: string | null;
   /** Optional link to build_tasks. No other enqueue behavior changes. */
   buildTaskId?: string | null;
   workflowClass?: AgentRunWorkflowClass | null;
@@ -360,9 +362,14 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     ...(input.snapshot.cloudAgent
       ? {
           cloudAgent: {
-            workItemId: input.snapshot.cloudAgent.workItemId,
+            ...(input.snapshot.cloudAgent.workItemId != null
+              ? { workItemId: input.snapshot.cloudAgent.workItemId }
+              : {}),
             ...(input.snapshot.cloudAgent.workItemTitle
               ? { workItemTitle: input.snapshot.cloudAgent.workItemTitle }
+              : {}),
+            ...(input.snapshot.cloudAgent.branchName
+              ? { branchName: input.snapshot.cloudAgent.branchName }
               : {}),
             baseBranch: input.snapshot.cloudAgent.baseBranch,
             ...(input.snapshot.cloudAgent.initiatorName
@@ -374,8 +381,38 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.skillName
               ? { skillName: input.snapshot.cloudAgent.skillName }
               : {}),
+            ...(input.snapshot.cloudAgent.customPrompt
+              ? { customPrompt: input.snapshot.cloudAgent.customPrompt }
+              : {}),
             ...(input.snapshot.cloudAgent.userTokenInstance
               ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
+              : {}),
+            ...(input.snapshot.cloudAgent.delivery
+              ? { delivery: input.snapshot.cloudAgent.delivery }
+              : {}),
+            ...(input.snapshot.cloudAgent.opensPullRequest === true
+              ? { opensPullRequest: true as const }
+              : {}),
+            ...(input.snapshot.cloudAgent.guidedJobId
+              ? { guidedJobId: input.snapshot.cloudAgent.guidedJobId }
+              : {}),
+            ...(input.snapshot.cloudAgent.task
+              ? { task: input.snapshot.cloudAgent.task }
+              : {}),
+            ...(input.snapshot.cloudAgent.images?.length
+              ? {
+                  images: input.snapshot.cloudAgent.images.map((image) => ({
+                    name: image.name,
+                    mimeType: image.mimeType,
+                    data: image.data,
+                  })),
+                }
+              : {}),
+            ...(input.snapshot.cloudAgent.bugWorkItemId != null
+              ? { bugWorkItemId: input.snapshot.cloudAgent.bugWorkItemId }
+              : {}),
+            ...(input.snapshot.cloudAgent.bugUrl
+              ? { bugUrl: input.snapshot.cloudAgent.bugUrl }
               : {}),
           },
         }
@@ -405,6 +442,7 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
     createdAt: nowIso,
     updatedAt: nowIso,
     ...(input.devSessionId ? { devSessionId: input.devSessionId } : {}),
+    ...(input.requestedByUserId ? { requestedByUserId: input.requestedByUserId } : {}),
     ...(input.buildTaskId ? { buildTaskId: input.buildTaskId } : {}),
     ...(input.workflowClass ? { workflowClass: input.workflowClass } : {}),
   });

@@ -5726,6 +5726,8 @@ export class AzureDevOpsService {
     title: string;
     description?: string;
     acceptanceCriteriaHtml?: string;
+    reproStepsHtml?: string;
+    systemInfoHtml?: string;
     priority?: string;
     parentId?: number;
     predecessorIds?: number[];
@@ -5752,6 +5754,14 @@ export class AzureDevOpsService {
 
         if (spec.acceptanceCriteriaHtml) {
           patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
+        }
+
+        if (spec.reproStepsHtml) {
+          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: spec.reproStepsHtml });
+        }
+
+        if (spec.systemInfoHtml) {
+          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.SystemInfo', value: spec.systemInfoHtml });
         }
 
         if (spec.priority) {

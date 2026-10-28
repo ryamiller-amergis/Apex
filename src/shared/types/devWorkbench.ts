@@ -179,14 +179,80 @@ export function isLeftoverWorkClean(
   );
 }
 
+export type CloudAgentLaunchIntent = 'start' | 'resume' | 'retry';
+
+export interface CloudAgentSkillChoice {
+  name: string;
+  path: string;
+  description: string;
+}
+
+export interface CloudAgentLaunchOptions {
+  recommendedSkillPath: string;
+  recommendedModel: string;
+  reason: string;
+  skills: CloudAgentSkillChoice[];
+  models: { id: string; displayName: string }[];
+  priorSkillPath: string | null;
+  priorModel: string | null;
+  priorCustomPrompt: string | null;
+}
+
 export interface StartCloudAgentRunRequest {
   workItemId: number;
   project: string;
+  intent?: CloudAgentLaunchIntent;
+  skillPath?: string;
+  model?: string;
+  /** Optional instructions added to the cloud agent prompt for this start or retry. */
+  customPrompt?: string;
+}
+
+export interface GuidedCloudJobOption {
+  id: string;
+  title: string;
+  description: string;
+  skillName: string;
+  skillPath: string | null;
+}
+
+export interface GuidedCloudAgentSession {
+  sessionId: string;
+  jobId: string;
+  title: string;
+  task: string;
+  skillPath: string;
+  model: string;
+  updatedAt: string;
+  bugWorkItemId: number | null;
+  bugUrl: string | null;
+  run: CloudAgentRunSummary | null;
+}
+
+export interface GuidedCloudJobsResponse {
+  jobs: GuidedCloudJobOption[];
+  skills: CloudAgentSkillChoice[];
+  models: { id: string; displayName: string }[];
+  recommendedModel: string;
+  runs: GuidedCloudAgentSession[];
+}
+
+export interface StartGuidedCloudAgentRequest {
+  project: string;
+  jobId: string;
+  task: string;
+  intent?: CloudAgentLaunchIntent;
+  sessionId?: string;
+  skillPath?: string;
+  model?: string;
+  images?: Array<{ name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }>;
 }
 
 export interface StartCloudAgentRunResponse {
   sessionId: string;
   runId: string;
+  bugWorkItemId?: number | null;
+  bugUrl?: string | null;
 }
 
 export interface BacklogFeatureItem {

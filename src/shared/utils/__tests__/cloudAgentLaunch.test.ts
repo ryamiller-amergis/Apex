@@ -1,0 +1,306 @@
+import {
+  CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS,
+  GUIDED_CLOUD_JOBS,
+  buildGuidedCloudAgentPrompt,
+  customPromptForCloudAgentLaunch,
+  guidedSiteIssueBranchName,
+  guidedCloudJobById,
+  injectCloudAgentCustomPrompt,
+  parseCloudAgentCustomPrompt,
+  parseSiteIssueImages,
+  parseSiteIssueReport,
+  recommendGuidedSiteSkill,
+  recommendImplementationSkill,
+  resolveCloudAgentLaunchSelection,
+} from '../cloudAgentLaunch';
+import { DEFAULT_DEVELOPMENT_SKILL_PATH } from '../developmentKickoff';
+
+const skills = [
+  { name: 'dev-orchestrator', path: '.cursor/skills/dev-orchestrator/SKILL.md', description: 'Implements work' },
+  { name: 'fullstack-node-bff', path: '.cursor/skills/fullstack-node-bff/SKILL.md', description: 'Node BFF' },
+  { name: 'issue-analysis', path: '.cursor/skills/issue-analysis/SKILL.md', description: 'Issues' },
+];
+
+describe('recommendImplementationSkill', () => {
+  it('picks the development skill for a product backlog item', () => {
+    expect(recommendImplementationSkill({
+      workItemType: 'Product Backlog Item',
+      skills,
+    })).toMatchObject({
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
+    });
+  });
+
+  it('picks the node skill for a technical backlog item when it is installed', () => {
+    expect(recommendImplementationSkill({
+      workItemType: 'Technical Backlog Item',
+      skills,
+    }).skillName).toBe('fullstack-node-bff');
+  });
+
+  it('falls back to the project development skill when the preferred skill is missing', () => {
+    expect(recommendImplementationSkill({
+      workItemType: 'Technical Backlog Item',
+      skills: [],
+      configuredSkillPath: '.cursor/skills/custom-dev/SKILL.md',
+    })).toMatchObject({
+      skillPath: '.cursor/skills/custom-dev/SKILL.md',
+      skillName: 'custom-dev',
+    });
+  });
+
+  it('uses the default development skill when nothing else is available', () => {
+    expect(recommendImplementationSkill({
+      workItemType: 'Bug',
+      skills: [],
+    }).skillPath).toBe(DEFAULT_DEVELOPMENT_SKILL_PATH);
+  });
+});
+
+describe('resolveCloudAgentLaunchSelection', () => {
+  const base = {
+    recommendedSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+    recommendedModel: 'composer-2.5',
+    allowedSkillPaths: skills.map((skill) => skill.path),
+    allowedModelIds: ['composer-2.5', 'claude-sonnet-4-6'],
+    priorSkillPath: '.cursor/skills/fullstack-node-bff/SKILL.md',
+    priorModel: 'claude-sonnet-4-6',
+  };
+
+  it('resume keeps the original skill and model and ignores a requested change', () => {
+    expect(resolveCloudAgentLaunchSelection({
+      ...base,
+      intent: 'resume',
+      requestedSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      requestedModel: 'composer-2.5',
+    })).toEqual({
+      ok: true,
+      skillPath: '.cursor/skills/fullstack-node-bff/SKILL.md',
+      model: 'claude-sonnet-4-6',
+      keptPriorSettings: true,
+    });
+  });
+
+  it('resume fails when the original run did not save a skill and model', () => {
+    const result = resolveCloudAgentLaunchSelection({
+      ...base,
+      intent: 'resume',
+      priorSkillPath: null,
+      priorModel: null,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('retry uses the requested skill and model', () => {
+    expect(resolveCloudAgentLaunchSelection({
+      ...base,
+      intent: 'retry',
+      requestedSkillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      requestedModel: 'composer-2.5',
+    })).toMatchObject({
+      ok: true,
+      skillPath: '.cursor/skills/issue-analysis/SKILL.md',
+      model: 'composer-2.5',
+      keptPriorSettings: false,
+    });
+  });
+
+  it('rejects a skill that is not installed and was not the recommendation', () => {
+    const result = resolveCloudAgentLaunchSelection({
+      ...base,
+      intent: 'start',
+      requestedSkillPath: '.cursor/skills/not-a-skill/SKILL.md',
+    });
+    expect(result).toEqual({ ok: false, error: 'Choose a skill from this project.' });
+  });
+});
+
+describe('custom prompt', () => {
+  it('treats a blank prompt as absent', () => {
+    expect(parseCloudAgentCustomPrompt('   ')).toEqual({ ok: true, customPrompt: null });
+    expect(parseCloudAgentCustomPrompt(undefined)).toEqual({ ok: true, customPrompt: null });
+  });
+
+  it('rejects a prompt that is not text or is too long', () => {
+    expect(parseCloudAgentCustomPrompt(12).ok).toBe(false);
+    expect(parseCloudAgentCustomPrompt('x'.repeat(CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS + 1)).ok).toBe(false);
+  });
+
+  it('keeps a trimmed prompt', () => {
+    expect(parseCloudAgentCustomPrompt('  Prefer the scheduler service.  ')).toEqual({
+      ok: true,
+      customPrompt: 'Prefer the scheduler service.',
+    });
+  });
+
+  it('resume reuses the saved prompt and ignores a new one', () => {
+    expect(customPromptForCloudAgentLaunch({
+      intent: 'resume',
+      requested: 'Ignore this',
+      priorCustomPrompt: 'Prefer the scheduler service.',
+    })).toEqual({ ok: true, customPrompt: 'Prefer the scheduler service.' });
+  });
+
+  it('injects the prompt after the generated kickoff', () => {
+    expect(injectCloudAgentCustomPrompt('Implement the work item.', 'Prefer the scheduler service.')).toBe(
+      [
+        'Implement the work item.',
+        'Additional instructions from the developer who started this run:\nPrefer the scheduler service.',
+      ].join('\n\n'),
+    );
+  });
+
+  it('leaves the kickoff unchanged when no custom prompt was given', () => {
+    expect(injectCloudAgentCustomPrompt('Implement the work item.', null)).toBe('Implement the work item.');
+  });
+});
+
+describe('guided cloud jobs', () => {
+  it('uses the skill the project has installed when dev-orchestrator is absent', () => {
+    expect(recommendGuidedSiteSkill({
+      skills: [{ name: 'apex-implement-feature', path: '.cursor/skills/apex-implement-feature/SKILL.md' }],
+      configuredSkillPath: null,
+    })).toEqual({
+      skillPath: '.cursor/skills/apex-implement-feature/SKILL.md',
+      skillName: 'apex-implement-feature',
+    });
+  });
+
+  it('prefers an installed bug-fix skill over the development skill', () => {
+    expect(recommendGuidedSiteSkill({
+      skills: [
+        { name: 'dev-orchestrator', path: '.cursor/skills/dev-orchestrator/SKILL.md' },
+        { name: 'bug-fix', path: '.cursor/skills/bug-fix/SKILL.md' },
+      ],
+      configuredSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+    })).toEqual({
+      skillPath: '.cursor/skills/bug-fix/SKILL.md',
+      skillName: 'bug-fix',
+    });
+  });
+
+  it('lists the site-issue report', () => {
+    expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual(['site-issue']);
+    expect(guidedCloudJobById('site-issue')?.skillName).toBe('bug-fix');
+  });
+
+  it('names a branch from the report without a work item id', () => {
+    expect(guidedSiteIssueBranchName({
+      sessionId: 'abc12345-0000-0000-0000-000000000000',
+      task: 'The login page times out.',
+    })).toBe('feature/apex-site-abc123-the-login-page-times-out');
+  });
+
+  it('names a branch from the Bug id and the Problem section, not the page URL', () => {
+    expect(guidedSiteIssueBranchName({
+      sessionId: 'abc12345-0000-0000-0000-000000000000',
+      task: [
+        'Page: https://dev.mymaxview.com/AdminPortal/Landing',
+        'Problem: Sync templates fail to load',
+        'Steps:',
+        '1. Open Document Management',
+      ].join('\n'),
+      bugWorkItemId: 59314,
+    })).toBe('feature/apex-59314-sync-templates-fail-to-load');
+  });
+
+  it('tells the agent to investigate and open a pull request', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-site-abc123-the-login-page-times-out',
+    });
+    expect(prompt.startsWith('/dev-orchestrator')).toBe(true);
+    expect(prompt).toContain('Open a pull request titled `[APEX] apex-site-abc123-the-login-page-times-out`');
+    expect(prompt).toContain('The login page times out.');
+    expect(prompt).toContain('This report has no work item.');
+    expect(prompt).toContain('Do not wait for approval.');
+    expect(prompt).toContain('Add a regression test that fails without the fix');
+    expect(prompt).not.toContain('screenshot');
+  });
+
+  it('uses the repository pull request instructions when given', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/bug-fix/SKILL.md',
+      skillName: 'bug-fix',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-45681-the-login-page-times-out',
+      bugWorkItemId: 45681,
+      pullRequestInstructions: 'Open a pull request titled `[APEX] apex-45681-the-login-page-times-out`. Use the template.',
+    });
+    expect(prompt).toContain('Use the template.');
+    expect(prompt).not.toContain('Describe the cause, the fix, and how you tested it.');
+  });
+
+  it('names the Bug that Apex already created and tells the agent not to edit it', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-site-abc123-the-login-page-times-out',
+      bugWorkItemId: 45681,
+      bugUrl: 'https://dev.azure.com/amergis/MaxView/_workitems/edit/45681',
+    });
+    expect(prompt).toContain('An Azure DevOps Bug already exists: #45681');
+    expect(prompt).toContain('Do not change its state, tags, or fields.');
+  });
+
+  it('tells the agent to use attached screenshots', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: "There's an issue on the site",
+      skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      skillName: 'dev-orchestrator',
+      task: 'The login page times out.',
+      branchName: 'feature/apex-site-abc123-the-login-page-times-out',
+      imageCount: 2,
+    });
+    expect(prompt).toContain('This message includes 2 screenshots from the person who reported it.');
+    expect(prompt).toContain('check the fixed page in a browser');
+  });
+
+  it('accepts up to three small screenshots', () => {
+    const image = { name: 'home.png', mimeType: 'image/png' as const, data: 'YQ==' };
+    expect(parseSiteIssueImages([image, image, image])).toEqual({
+      ok: true,
+      images: [image, image, image],
+    });
+    expect(parseSiteIssueImages([image, image, image, image])).toEqual({
+      ok: false,
+      error: 'Add up to 3 screenshots.',
+    });
+    expect(parseSiteIssueImages([{ ...image, mimeType: 'image/gif' }])).toEqual({
+      ok: false,
+      error: 'Screenshots must be PNG, JPEG, or WebP.',
+    });
+  });
+
+  it('puts each report heading in its own section', () => {
+    expect(parseSiteIssueReport([
+      'Page: https://dev.mymaxview.com/AdminPortal/Landing',
+      '',
+      'Problem:',
+      'The Document Management sync templates fail to load.',
+      '',
+      'Steps:',
+      '1. Open Document Management.',
+      '2. Open sync templates.',
+      '',
+      'Expected:',
+      'The templates load.',
+      '',
+      'Actual:',
+      'No templates are displayed.',
+    ].join('\n'))).toEqual({
+      page: 'https://dev.mymaxview.com/AdminPortal/Landing',
+      problem: 'The Document Management sync templates fail to load.',
+      steps: '1. Open Document Management.\n2. Open sync templates.',
+      expected: 'The templates load.',
+      actual: 'No templates are displayed.',
+    });
+  });
+});

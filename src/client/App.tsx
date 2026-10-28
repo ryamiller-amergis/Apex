@@ -1138,6 +1138,7 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
+                  canStartGuidedJobs={isSuperAdmin || can('chat:create')}
                   isActive={currentView === 'home' && !documentProjectOpening}
                   onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={handleRestoreHomeThread}

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useHomeDashboard } from '../hooks/useHomeDashboard';
 import { HomeDashboardSection } from './HomeDashboardSection';
+import { GuidedCloudJobs } from './GuidedCloudJobs';
 import styles from './AgentHome.module.css';
 
 export type HomeView = 'chat' | 'status';
@@ -9,6 +10,7 @@ export type HomeView = 'chat' | 'status';
 interface AgentHomeProps {
   selectedProject: string;
   isActive?: boolean;
+  canStartGuidedJobs?: boolean;
   onHomeViewChange?: (view: HomeView) => void;
   onRestoreThread?: (threadId: string) => void;
 }
@@ -26,6 +28,7 @@ const loadHomeView = (project: string): HomeView => {
 export const AgentHome: React.FC<AgentHomeProps> = ({
   selectedProject,
   isActive = true,
+  canStartGuidedJobs = false,
   onHomeViewChange,
   onRestoreThread,
 }) => {
@@ -109,6 +112,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
             Project status
           </button>
         )}
+        {canStartGuidedJobs ? <GuidedCloudJobs project={selectedProject} /> : null}
       </div>
       {view === 'status' && statusAvailable && (
         <div className={styles.statusView} role="tabpanel" aria-label="Project status">

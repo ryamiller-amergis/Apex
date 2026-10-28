@@ -17,6 +17,7 @@ export type AiFeature =
   | 'design-plan'
   | 'design-prototype'
   | 'my-work'
+  | 'cloud-agent'
   | 'standup'
   | 'test-case'
   | 'feature-request'

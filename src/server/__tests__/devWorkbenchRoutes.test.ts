@@ -136,6 +136,12 @@ jest.mock('../services/cloudAgentService', () => {
       this.name = 'CloudAgentConflictError';
     }
   }
+  class CloudAgentLaunchError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'CloudAgentLaunchError';
+    }
+  }
   return {
     attachCloudAgentEligibility: (items: unknown[]) => mockAttachCloudAgentEligibility(items),
     getCloudAgentRunStatus: (sessionId: string, userId: string) =>
@@ -146,8 +152,11 @@ jest.mock('../services/cloudAgentService', () => {
       mockGetCloudAgentActivityStream(...args),
     startCloudAgentRun: (input: unknown) => mockStartCloudAgentRun(input),
     cancelCloudAgentRun: (sessionId: unknown) => mockCancelCloudAgentRun(sessionId),
+    loadCloudAgentSkillChoices: jest.fn().mockResolvedValue([]),
+    getImplementationLaunchOptions: jest.fn().mockResolvedValue(null),
     CloudAgentEligibilityError,
     CloudAgentConflictError,
+    CloudAgentLaunchError,
   };
 });
 
@@ -418,6 +427,25 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
     }));
     expect(mockStartCloudAgentRun).toHaveBeenCalledTimes(1);
   });
+
+  it('forwards an optional custom prompt', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': callerAssignedTo,
+    });
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({
+        workItemId: 42,
+        project: 'MaxView',
+        customPrompt: 'Prefer the existing scheduler service.',
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
+      customPrompt: 'Prefer the existing scheduler service.',
+    }));
+  });
 });
 
 describe('GET /api/dev-workbench/sessions/:id/cloud-agent/stream', () => {
@@ -533,7 +561,9 @@ describe('POST /api/dev-workbench/start', () => {
     mockGroupMembershipGranted = true;
     jest.clearAllMocks();
     isFeatureEnabled.mockResolvedValue(true);
-    MockAzureDevOpsService.mockImplementation(() => ({}) as unknown as AzureDevOpsService);
+    MockAzureDevOpsService.mockImplementation(() => ({
+      getDefaultBranch: jest.fn().mockResolvedValue('main'),
+    }) as unknown as AzureDevOpsService);
   });
 
   it('creates a session record and returns sessionId immediately', async () => {

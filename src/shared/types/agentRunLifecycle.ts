@@ -91,7 +91,8 @@ export interface ExecutionSnapshot {
    * request as that developer once the container has pushed a branch.
    */
   cloudAgent?: {
-    workItemId: number;
+    /** Absent on guided jobs, which do not have an Azure DevOps work item. */
+    workItemId?: number;
     workItemTitle?: string;
     /** My Work branch: feature/apex-<workItemId>-<title-slug>. */
     branchName?: string;
@@ -100,6 +101,26 @@ export interface ExecutionSnapshot {
     initiatorEmail?: string;
     /** Configured development skill, invoked as `/name` by the container CLI. */
     skillName?: string;
+    /**
+     * `guided` jobs have no Azure DevOps work item and do not add the ai-code tag.
+     * Omitted on older runs, which stay implementation runs.
+     */
+    delivery?: 'implementation' | 'guided';
+    /**
+     * Guided site reports set this so Cursor opens a pull request.
+     * Older guided runs omit it and stay analysis-only.
+     */
+    opensPullRequest?: boolean;
+    guidedJobId?: string;
+    /** The person's task text for a guided job. */
+    task?: string;
+    /** Extra instructions the developer added when starting or retrying this run. */
+    customPrompt?: string;
+    /** Small screenshots attached to a site report. */
+    images?: Array<{ name: string; mimeType: string; data: string }>;
+    /** Bug created for a site report. Kept off dev_sessions.work_item_id so the report stays listed. */
+    bugWorkItemId?: number;
+    bugUrl?: string;
     /**
      * App Service instance that holds the developer's ADO token in memory.
      * Other instances wait before claiming the run so the pull request opens

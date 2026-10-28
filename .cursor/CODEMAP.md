@@ -17,7 +17,8 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `foundation-skills/`: packaged skills library (`foundation-skills/catalog.json`, `foundation-skills/foundation/`, `foundation-skills/adapters/`); published by `.github/workflows/publish-apex-skills.yml`. `foundation-skills/starters/react-mui-express/` = build starter templates, copied by hand.
 - `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`.
 - `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
-- `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), changelog, dev→prod migration.
+- `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), changelog, dev→prod migration. Cloud-agent scorecard: `scripts/export-cloud-agent-eval-cases.ts`, `scripts/cloud-agent-report.mjs` (`npm run cloud-agent:report`).
+- `evals/`: local promptfoo scorecards. Cloud-agent outcomes: `evals/cloud-agent/promptfooconfig.yaml`.
 - `design-docs/`: feature design docs. `docs/`: setup and ops (auth, Azure cost, release, security).
 - `public/`: static assets; `public/CHANGELOG.json` is the release record.
 - `pr-description.md`: pull request description skeleton. My Work fills the Work items line; the cursor pool worker copies it for the agent.

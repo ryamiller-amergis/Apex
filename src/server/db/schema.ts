@@ -2271,6 +2271,9 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   projectCreatedIdx: index('idx_ai_usage_events_project_created').on(t.project, t.createdAt),
   entityIdx: index('idx_ai_usage_events_entity').on(t.entityType, t.entityId),
   threadIdx: index('idx_ai_usage_events_thread_id').on(t.threadId),
+  cloudAgentRunUq: uniqueIndex('uq_ai_usage_events_cloud_agent_run')
+    .on(t.runId)
+    .where(sql`${t.feature} = 'cloud-agent' AND ${t.runId} IS NOT NULL`),
 }));
 
 export const cursorUsageEvents = pgTable('cursor_usage_events', {

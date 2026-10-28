@@ -44,6 +44,7 @@
     "migrate:local:up": "dotenv -e .env.local -- node-pg-migrate up --no-check-order",
     "migrate:local:down": "dotenv -e .env.local -- node-pg-migrate down --no-check-order",
     "migrate:dev-to-prod": "ts-node -P tsconfig.server.json scripts/migrate-dev-to-prod.ts",
+    "cloud-agent:report": "node scripts/cloud-agent-report.mjs",
     "postinstall": "node scripts/patch-esbuild-wasm.js",
     "prepare": "husky || true"
   },

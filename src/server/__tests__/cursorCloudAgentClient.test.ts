@@ -140,6 +140,21 @@ describe('cursorCloudAgentClient', () => {
         cursorRunId: 'run-1',
         jobName: 'cursor-sdk',
       });
+
+      mockCreate.mockClear();
+      await launchCloudAgent({
+        project: 'MaxView',
+        prompt: 'Analyze the issue',
+        model: 'composer-2.5',
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'development',
+        workItemTitle: 'Analyze an issue',
+        autoCreatePr: false,
+      });
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+        cloud: expect.objectContaining({ autoCreatePR: false }),
+      }));
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
       else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
@@ -185,6 +200,9 @@ describe('cursorCloudAgentClient', () => {
         summary: 'Opened the pull request.',
         noChanges: false,
         settled: true,
+        modelId: null,
+        durationMs: null,
+        usage: null,
       });
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
@@ -282,6 +300,32 @@ describe('cursorCloudAgentClient', () => {
     expect(observed.status).toBe('running');
     expect(observed.noChanges).toBe(false);
     expect(observed.settled).toBe(false);
+  });
+
+  it('copies Cursor token usage onto the observation', () => {
+    const observed = observeCloudRun({
+      status: 'finished',
+      result: 'Implemented the change',
+      git: { branches: [{ branch: 'feature/apex-1-login', prUrl: 'https://example/pr/1' }] },
+      model: { id: 'composer-2.5' },
+      durationMs: 4200,
+      usage: {
+        inputTokens: 100,
+        outputTokens: 40,
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+        totalTokens: 155,
+      },
+    } as unknown as Parameters<typeof observeCloudRun>[0]);
+
+    expect(observed.modelId).toBe('composer-2.5');
+    expect(observed.durationMs).toBe(4200);
+    expect(observed.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 40,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 5,
+    });
   });
 
   it('treats an explicit empty branch list as no file changes', () => {
