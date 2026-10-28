@@ -43,9 +43,7 @@ Staging and production share one database, so the old columns stay until both sl
 6. **Contract.** After a full production release on step 5, a migration drops the 77 per-workflow columns. `project_skill_settings` goes from 110 to 33 columns. Lower the ceilings in `src/server/__tests__/schemaTableWidth.test.ts` in the same change.
 7. **Remove the flat fields.** Delete the per-workflow fields from `ProjectSkillConfig` once no consumer reads them.
 
-**Status.** Steps 1-3 are delivered together: `migrations/20261027180000_c4d2_project-skill-workflow-settings.sql` adds `project_skill_workflow_settings` and backfills it, `src/shared/constants/projectSkillWorkflows.ts` lists the workflows that the backfill, the read mapping and the dual write share, and `src/server/services/projectSkillWorkflowSettings.ts` holds the mapping. Reads use a child row only when its `updated_at` is not older than the parent row's, so a slot that writes only the old columns is never shadowed by stale child rows. The same pull request narrows the standup query to `standupSkillPath`, `skillRepo`, and `skillBranch`, which stops error 54023. Steps 4-7 are not started.
-
-Step 4 is the next pull request. Until it ships, a new workflow has nowhere to live except new columns, so no new workflow should be added before it.
+**Status.** This pull request delivers steps 1-6. The expand migration copies the old columns into `project_skill_workflow_settings`. `migrations/20261027190000_c4d2_drop-project-skill-workflow-columns.sql` then drops those 77 columns, leaving `project_skill_settings` at 33 columns. Reads and writes use the child table and still return today's flat `ProjectSkillConfig`, so existing screens keep working. A new workflow is a `PROJECT_SKILL_WORKFLOWS` entry. It does not add a column. Step 7, removing the flat fields from the TypeScript type, stays for later. Do not deploy this to production while a slot is still running the previous release: staging and production share the database, and the old code reads the columns this migration drops.
 
 ## Keeping the table from growing again
 

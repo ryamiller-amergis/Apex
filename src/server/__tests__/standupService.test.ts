@@ -43,6 +43,7 @@ jest.mock('../db/schema', () => ({
   appGroupMembers: {},
   appUsers: {},
   projectSkillSettings: {},
+  projectSkillWorkflowSettings: { workflow: 'workflow' },
   chatMessages: {},
   appGroups: {},
 }));
@@ -220,9 +221,14 @@ describe('runFacilitator', () => {
 
 const standupSkillColumns = {
   columns: {
-    standupSkillPath: true,
     skillRepo: true,
     skillBranch: true,
+  },
+  with: {
+    workflowSettings: {
+      columns: { skillPath: true },
+      where: expect.anything(),
+    },
   },
 };
 
@@ -267,9 +273,9 @@ describe('triggerSessionForConfig project skill settings', () => {
       groupIds: ['group-1'],
       skillSettingsId: 'skill-1',
       skillSettings: {
-        standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
         skillRepo: 'org/skills',
         skillBranch: 'main',
+        workflowSettings: [{ skillPath: '.cursor/skills/custom-standup/SKILL.md' }],
       },
     });
 

@@ -9,6 +9,7 @@ import {
   appGroupMembers,
   appUsers,
   chatMessages,
+  projectSkillWorkflowSettings,
 } from '../db/schema';
 import { createThread } from './chatAgentService';
 import { deleteThread } from './chatThreadRepository';
@@ -16,16 +17,20 @@ import { createNotification } from './notificationService';
 import { sendTeamsNotification } from './teamsBotService';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 
-// Postgres rejects a function call with more than 100 arguments (54023).
-// Loading every project_skill_settings column through the relation does that.
-// Session creation only needs these three.
-const standupSkillSettingsColumns = {
+// The standup skill path lives on project_skill_workflow_settings. The parent
+// row only still has the repo and branch.
+const standupSkillSettings = {
   columns: {
-    standupSkillPath: true,
     skillRepo: true,
     skillBranch: true,
   },
-} as const;
+  with: {
+    workflowSettings: {
+      where: eq(projectSkillWorkflowSettings.workflow, 'standup'),
+      columns: { skillPath: true },
+    },
+  },
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -117,7 +122,7 @@ export async function generateDailySessions(): Promise<number> {
 
   const configs = await db.query.standupConfigs.findMany({
     where: eq(standupConfigs.enabled, true),
-    with: { group: true, skillSettings: standupSkillSettingsColumns },
+    with: { group: true, skillSettings: standupSkillSettings },
   });
 
   let sessionsCreated = 0;
@@ -158,10 +163,15 @@ export async function generateDailySessions(): Promise<number> {
     let standupSkillPath: string | undefined;
     let skillRepo = '';
     let skillBranch: string | undefined;
-    if (config.skillSettings) {
-      standupSkillPath = config.skillSettings.standupSkillPath ?? undefined;
-      skillRepo = config.skillSettings.skillRepo;
-      skillBranch = config.skillSettings.skillBranch;
+    const skillSettings = config.skillSettings as {
+      skillRepo: string;
+      skillBranch: string;
+      workflowSettings: Array<{ skillPath: string | null }>;
+    } | null;
+    if (skillSettings) {
+      standupSkillPath = skillSettings.workflowSettings[0]?.skillPath ?? undefined;
+      skillRepo = skillSettings.skillRepo;
+      skillBranch = skillSettings.skillBranch;
     }
 
     // Create session
@@ -242,7 +252,7 @@ export async function triggerSessionForConfig(
 ): Promise<{ sessionId: string; alreadyExisted: boolean }> {
   const config = await db.query.standupConfigs.findFirst({
     where: eq(standupConfigs.id, configId),
-    with: { group: true, skillSettings: standupSkillSettingsColumns },
+    with: { group: true, skillSettings: standupSkillSettings },
   });
   if (!config) throw new Error(`Standup config ${configId} not found`);
 
@@ -269,10 +279,15 @@ export async function triggerSessionForConfig(
   let standupSkillPath: string | undefined;
   let skillRepo = '';
   let skillBranch: string | undefined;
-  if (config.skillSettings) {
-    standupSkillPath = config.skillSettings.standupSkillPath ?? undefined;
-    skillRepo = config.skillSettings.skillRepo;
-    skillBranch = config.skillSettings.skillBranch;
+  const skillSettings = config.skillSettings as {
+    skillRepo: string;
+    skillBranch: string;
+    workflowSettings: Array<{ skillPath: string | null }>;
+  } | null;
+  if (skillSettings) {
+    standupSkillPath = skillSettings.workflowSettings[0]?.skillPath ?? undefined;
+    skillRepo = skillSettings.skillRepo;
+    skillBranch = skillSettings.skillBranch;
   }
 
   const sessionId = uuidv4();

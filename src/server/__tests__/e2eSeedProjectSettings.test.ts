@@ -205,7 +205,7 @@ describe('E2E seed/project-settings legacy workflow columns', () => {
     mockState.insertedSettingsRow = { id: 'settings-1', project: 'E2E Project', isDefault: true };
   });
 
-  it('writes workflow values into the legacy columns only, like app code that predates the child table', async () => {
+  it('writes workflow values into the child table and keeps them off the parent row', async () => {
     const response = await request(buildApp())
       .post('/seed/project-settings')
       .send({
@@ -219,12 +219,14 @@ describe('E2E seed/project-settings legacy workflow columns', () => {
     const settingsInsert = inserts.find((record) => record.table === projectSkillSettings);
     expect(settingsInsert?.values).toEqual(
       expect.objectContaining({
-        ...legacyWorkflowValues,
         defaultModel: 'project-default-model',
         defaultEffort: 'medium',
       }),
     );
-    expect(inserts.some((record) => record.table === projectSkillWorkflowSettings)).toBe(false);
+    expect(settingsInsert?.values).not.toEqual(
+      expect.objectContaining({ interviewModel: 'legacy-interview-model' }),
+    );
+    expect(inserts.some((record) => record.table === projectSkillWorkflowSettings)).toBe(true);
   });
 
   it('applies the same legacy values when re-seeding an existing row', async () => {
@@ -235,8 +237,8 @@ describe('E2E seed/project-settings legacy workflow columns', () => {
       .send({ project: 'E2E Project', legacyWorkflowValues });
 
     const settingsUpdate = updates.find((record) => record.table === projectSkillSettings);
-    expect(settingsUpdate?.set).toEqual(expect.objectContaining(legacyWorkflowValues));
-    expect(inserts.some((record) => record.table === projectSkillWorkflowSettings)).toBe(false);
+    expect(settingsUpdate?.set).not.toEqual(expect.objectContaining(legacyWorkflowValues));
+    expect(inserts.some((record) => record.table === projectSkillWorkflowSettings)).toBe(true);
   });
 
   it('rejects keys that are not registry legacy workflow fields', async () => {

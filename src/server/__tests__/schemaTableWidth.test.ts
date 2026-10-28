@@ -8,12 +8,11 @@ import * as schema from '../db/schema';
 const MAX_TABLE_COLUMNS = 50;
 
 /**
- * project_skill_settings predates the cap. Its per-workflow columns are being moved
- * to project_skill_workflow_settings (design-docs/project-skill-settings-normalization.plan.md).
- * These ceilings may only go down; lower them when the contract migration drops columns.
+ * project_skill_settings keeps the fields that are set once per project. Per-workflow
+ * values live in project_skill_workflow_settings. These ceilings may only go down.
  */
-const PROJECT_SKILL_SETTINGS_COLUMN_CEILING = 110;
-const PROJECT_SKILL_SETTINGS_WORKFLOW_COLUMN_CEILING = 77;
+const PROJECT_SKILL_SETTINGS_COLUMN_CEILING = 33;
+const PROJECT_SKILL_SETTINGS_WORKFLOW_COLUMN_CEILING = 0;
 
 const workflowColumnPattern = /(_skill_path|_model|_effort|_bedrock_[a-z_]+|_score_threshold)$/;
 const projectWideColumns = new Set(['default_model', 'default_effort']);

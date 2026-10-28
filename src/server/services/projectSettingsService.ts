@@ -31,9 +31,10 @@ import type {
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
 import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagService';
 import {
+  omitWorkflowColumns,
+  saveWorkflowSettings,
   workflowSettingsSubquery,
   withWorkflowSettings,
-  writeWorkflowSettings,
   type StoredWorkflowSettings,
 } from './projectSkillWorkflowSettings';
 
@@ -387,13 +388,16 @@ export async function upsertSkillConfig(
           },
         );
 
+      const parentValues = omitWorkflowColumns(values);
       const rows = await tx
         .update(projectSkillSettings)
-        .set(resetCheckout ? { ...values, ...CHECKOUT_RESET } : values)
+        .set(
+          (resetCheckout ? { ...parentValues, ...CHECKOUT_RESET } : parentValues) as typeof projectSkillSettings.$inferInsert,
+        )
         .where(eq(projectSkillSettings.id, opts.id))
         .returning();
       const row = rows[0];
-      await writeWorkflowSettings(tx, row, now);
+      await saveWorkflowSettings(tx, row.id, values, now);
       await writeApprovalModeRows(
         tx,
         row.id,
@@ -417,10 +421,10 @@ export async function upsertSkillConfig(
 
     const rows = await tx
       .insert(projectSkillSettings)
-      .values({ ...values, ...CHECKOUT_RESET })
+      .values({ ...omitWorkflowColumns(values), ...CHECKOUT_RESET } as typeof projectSkillSettings.$inferInsert)
       .returning();
     const row = rows[0];
-    await writeWorkflowSettings(tx, row, now);
+    await saveWorkflowSettings(tx, row.id, values, now);
     const initialModes: ModuleApprovalModes = {
       prd: approvalModeValue,
       design_doc: approvalModeValue,

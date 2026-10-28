@@ -3,7 +3,6 @@ import { projectSkillSettings } from '../db/schema';
 import {
   PROJECT_SKILL_WORKFLOWS,
   PROJECT_SKILL_WORKFLOW_FIELDS,
-  legacyWorkflowFields,
 } from '../../shared/constants/projectSkillWorkflows';
 
 const legacyColumns = getTableColumns(projectSkillSettings);
@@ -29,24 +28,14 @@ describe('project skill workflow registry', () => {
     for (const key of keys) expect(key).toMatch(/^[a-z]+(_[a-z]+)*$/);
   });
 
-  it('maps every workflow field to a real project_skill_settings column', () => {
+  it('does not store workflow fields as columns on project_skill_settings', () => {
     for (const workflow of PROJECT_SKILL_WORKFLOWS) {
       for (const [field, legacyField] of Object.entries(workflow.legacy)) {
         expect(PROJECT_SKILL_WORKFLOW_FIELDS).toContain(field);
-        expect(legacyColumns).toHaveProperty(legacyField as string);
+        expect(legacyColumns).not.toHaveProperty(legacyField as string);
       }
     }
-  });
-
-  it('covers every per-workflow legacy column exactly, so registry and schema cannot drift', () => {
-    const registryColumnNames = [
-      ...new Set(
-        legacyWorkflowFields().map(
-          (field) => legacyColumns[field as keyof typeof legacyColumns].name,
-        ),
-      ),
-    ].sort();
-    expect(registryColumnNames).toEqual(schemaWorkflowColumnNames());
+    expect(schemaWorkflowColumnNames()).toEqual([]);
   });
 
   it('gives each legacy column to one workflow, except the shared ADR model and effort', () => {

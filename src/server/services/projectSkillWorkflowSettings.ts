@@ -5,6 +5,7 @@ import {
   PROJECT_SKILL_WORKFLOWS,
   PROJECT_SKILL_WORKFLOW_FIELDS,
   isEmptyWorkflowSettings,
+  legacyWorkflowFields,
   workflowSettingsFromLegacy,
   type ProjectSkillWorkflowSettings,
 } from '../../shared/constants/projectSkillWorkflows';
@@ -17,9 +18,7 @@ export type StoredWorkflowSettings = ProjectSkillWorkflowSettings & { workflow: 
  * Correlated subquery that loads a settings row's workflow rows as one JSON
  * array, so readers keep a single `select` on the parent table.
  *
- * While the legacy columns are still written, a row older than its parent row
- * was left behind by app code that only writes the legacy columns; it is
- * skipped and the reader falls back to those columns.
+ * The per-workflow columns are gone, so this is the only copy of those values.
  */
 export function workflowSettingsSubquery(): SQL<StoredWorkflowSettings[] | null> {
   // Drizzle drops table qualifiers inside a single-table select, which would
@@ -40,11 +39,41 @@ export function workflowSettingsSubquery(): SQL<StoredWorkflowSettings[] | null>
     select json_agg(json_build_object(${fields}))
     from ${projectSkillWorkflowSettings} ${sql.identifier('w')}
     where ${child(projectSkillWorkflowSettings.settingsId)} = ${parent(projectSkillSettings.id)}
-      and ${child(projectSkillWorkflowSettings.updatedAt)} >= ${parent(projectSkillSettings.updatedAt)}
   )`;
 }
 
-type WorkflowWriter = Pick<typeof db, 'insert' | 'delete'>;
+type WorkflowWriter = Pick<typeof db, 'insert' | 'delete' | 'select'>;
+
+/** Parent-table writes must not mention the dropped per-workflow columns. */
+export function omitWorkflowColumns<T extends Record<string, unknown>>(row: T): T {
+  const copy = { ...row };
+  for (const field of legacyWorkflowFields()) delete copy[field];
+  return copy;
+}
+
+/**
+ * Writes the incoming workflow fields and keeps child-row values for fields
+ * the caller does not send. Standup's skill path is one of those: the project
+ * settings form does not edit it.
+ */
+export async function saveWorkflowSettings(
+  tx: WorkflowWriter,
+  settingsId: string,
+  incoming: Partial<Record<string, unknown>>,
+  updatedAt: string,
+): Promise<void> {
+  const existing = await tx
+    .select()
+    .from(projectSkillWorkflowSettings)
+    .where(eq(projectSkillWorkflowSettings.settingsId, settingsId));
+  const merged = withWorkflowSettings({} as Record<string, unknown>, existing as StoredWorkflowSettings[]);
+  for (const field of legacyWorkflowFields()) {
+    if (Object.prototype.hasOwnProperty.call(incoming, field)) {
+      merged[field] = incoming[field] ?? null;
+    }
+  }
+  await writeWorkflowSettings(tx, { id: settingsId, ...merged }, updatedAt);
+}
 
 /**
  * Mirrors a just-written settings row into its child rows. Runs inside the
@@ -96,18 +125,21 @@ export async function writeWorkflowSettings(
 }
 
 /**
- * Overlays child-row values onto the flat legacy fields. A workflow with a
- * child row owns every field it maps, nulls included; a workflow without one
- * keeps the legacy column values. For the shared ADR fields the first ADR
- * workflow with a row wins.
+ * Overlays child-row values onto the flat fields the rest of the app reads.
+ * A workflow with a child row owns every field it maps, nulls included.
+ * A workflow with no row leaves that field null. For the shared ADR fields
+ * the first ADR workflow with a row wins.
  */
 export function withWorkflowSettings<Row extends Record<string, unknown>>(
   row: Row,
   workflowRows: StoredWorkflowSettings[] | null | undefined,
 ): Row {
-  if (!workflowRows?.length) return row;
-  const byWorkflow = new Map(workflowRows.map((child) => [child.workflow, child]));
   const merged: Record<string, unknown> = { ...row };
+  for (const field of legacyWorkflowFields()) {
+    if (!Object.prototype.hasOwnProperty.call(merged, field)) merged[field] = null;
+  }
+  if (!workflowRows?.length) return merged as Row;
+  const byWorkflow = new Map(workflowRows.map((child) => [child.workflow, child]));
   const resolved = new Set<string>();
   for (const workflow of PROJECT_SKILL_WORKFLOWS) {
     const child = byWorkflow.get(workflow.key);

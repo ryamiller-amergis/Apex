@@ -6,16 +6,15 @@ alwaysApply: false
 
 # Project skill settings
 
-`project_skill_settings` reached 110 columns because every new AI workflow added its own skill path, model, and effort columns. Postgres rejects a function call with more than 100 arguments, and Drizzle passes every column of a related row to one function, so loading that row through a relation failed in production with error 54023.
+`project_skill_settings` once had 110 columns because every new AI workflow added its own skill path, model, and effort columns. Those columns are gone. Workflow values live in `project_skill_workflow_settings`, and the parent table stays at 33 columns. Postgres rejects a function call with more than 100 arguments, which is what made the old shape fail.
 
 ## Adding a workflow
 
 - Never add a `*_skill_path`, `*_model`, `*_effort`, `*_bedrock_*`, or `*_score_threshold` column to `project_skill_settings`.
-- Add the workflow as one entry in `PROJECT_SKILL_WORKFLOWS` (`src/shared/constants/projectSkillWorkflows.ts`). Its values live in `project_skill_workflow_settings`, one row per `(settings_id, workflow)`.
-- If the registry still requires a `legacy` column mapping, step 4 of `design-docs/project-skill-settings-normalization.plan.md` has not shipped. Ship that step first. Do not add columns to work around it.
+- Add the workflow as one entry in `PROJECT_SKILL_WORKFLOWS` (`src/shared/constants/projectSkillWorkflows.ts`). Its values live in `project_skill_workflow_settings`, one row per `(settings_id, workflow)`. The `legacy` map names the flat API fields, not database columns.
 - A setting that applies to the whole project, not to one workflow, goes on the parent row only if the table stays under its ceiling. Otherwise it goes in a separate table.
 
-`src/server/__tests__/schemaTableWidth.test.ts` fails if the table or its per-workflow columns grow. Do not raise those ceilings. Lower them when the contract migration drops columns.
+`src/server/__tests__/schemaTableWidth.test.ts` fails if the table grows past 33 columns or gains a per-workflow column. Do not raise those ceilings.
 
 ## Reading settings
 
@@ -24,7 +23,7 @@ alwaysApply: false
 
 ```typescript
 // ✅ GOOD
-with: { skillSettings: { columns: { standupSkillPath: true, skillRepo: true, skillBranch: true } } }
+with: { skillSettings: { columns: { skillRepo: true, skillBranch: true } } }
 
 // ❌ BAD: passes every column to json_build_array
 with: { skillSettings: true }

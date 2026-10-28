@@ -66,9 +66,7 @@ describe('project_skill_workflow_settings migration', () => {
       const legacy = workflow.legacy as Partial<Record<string, string>>;
       const expected = PROJECT_SKILL_WORKFLOW_FIELDS.map((field) => {
         const legacyField = legacy[field];
-        return legacyField
-          ? `s.${legacyColumns[legacyField as keyof typeof legacyColumns].name}`
-          : 'NULL';
+        return legacyField ? `s.${snake(legacyField)}` : 'NULL';
       });
       expect({ workflow: workflow.key, values: tuples.get(workflow.key) }).toEqual({
         workflow: workflow.key,
@@ -120,15 +118,17 @@ describe('projectSkillWorkflowSettings Drizzle schema', () => {
     expect(config.foreignKeys[0].onDelete).toBe('cascade');
   });
 
-  it('types each value column like the legacy column it replaces', () => {
+  it('stores workflow values in the child table, not on project_skill_settings', () => {
     const child = getTableColumns(projectSkillWorkflowSettings);
+    expect(child.skillPath.columnType).toBe('PgText');
+    expect(child.model.columnType).toBe('PgText');
+    expect(child.effort.columnType).toBe('PgText');
+    expect(child.bedrockMaxTokens.columnType).toBe('PgInteger');
+    expect(child.scoreThreshold.columnType).toBe('PgInteger');
+    expect(child.bedrockTemperature.columnType).toBe('PgReal');
     for (const workflow of PROJECT_SKILL_WORKFLOWS) {
-      for (const [field, legacyField] of Object.entries(workflow.legacy)) {
-        const legacy = legacyColumns[legacyField as keyof typeof legacyColumns];
-        expect({ field, type: child[field as keyof typeof child].columnType }).toEqual({
-          field,
-          type: legacy.columnType,
-        });
+      for (const legacyField of Object.values(workflow.legacy)) {
+        expect(legacyColumns).not.toHaveProperty(legacyField as string);
       }
     }
   });

@@ -44,6 +44,7 @@ import type { ValidationScorecard } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { legacyWorkflowFields } from '../../shared/constants/projectSkillWorkflows';
+import { saveWorkflowSettings } from '../services/projectSkillWorkflowSettings';
 
 const router = express.Router();
 
@@ -910,11 +911,22 @@ router.post('/seed/project-settings', async (req, res) => {
       });
       return;
     }
-    const legacyColumns = {
-      ...legacyWorkflowValues,
+    const parentColumns = {
       ...(defaultModel !== undefined && { defaultModel }),
       ...(defaultEffort !== undefined && { defaultEffort }),
-    } as Partial<typeof projectSkillSettings.$inferInsert>;
+    };
+    const workflowPatch: Partial<Record<keyof ProjectSkillConfig, unknown>> = {
+      ...legacyWorkflowValues,
+      ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
+      ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
+      ...(prdValidationScoreThreshold !== undefined && { prdValidationScoreThreshold }),
+      ...(designDocValidationScoreThreshold !== undefined && { designDocValidationScoreThreshold }),
+      ...(interviewSkillPath !== undefined && { interviewSkillPath }),
+      ...(prdSkillPath !== undefined && { prdSkillPath }),
+      ...(designDocSkillPath !== undefined && { designDocSkillPath }),
+      ...(designPrototypeSkillPath !== undefined && { designPrototypeSkillPath }),
+      ...(testCaseSkillPath !== undefined && { testCaseSkillPath }),
+    };
 
     const prefixedName = e2eTitle(friendlyName);
 
@@ -936,20 +948,9 @@ router.post('/seed/project-settings', async (req, res) => {
         .set({
           ...(approvalMode !== undefined && { approvalMode }),
           ...(prototypeStageEnabled !== undefined && { prototypeStageEnabled }),
-          ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
-          ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
-          ...(prdValidationScoreThreshold !== undefined && { prdValidationScoreThreshold }),
-          ...(designDocValidationScoreThreshold !== undefined && {
-            designDocValidationScoreThreshold,
-          }),
-          ...(interviewSkillPath !== undefined && { interviewSkillPath }),
-          ...(prdSkillPath !== undefined && { prdSkillPath }),
-          ...(designDocSkillPath !== undefined && { designDocSkillPath }),
-          ...(designPrototypeSkillPath !== undefined && { designPrototypeSkillPath }),
-          ...(testCaseSkillPath !== undefined && { testCaseSkillPath }),
           ...(updatedBy !== undefined && { updatedBy }),
           ...(isDefault ? { isDefault: true } : {}),
-          ...legacyColumns,
+          ...parentColumns,
           updatedAt: sql`now()`,
         })
         .where(eq(projectSkillSettings.id, existing[0].id))
@@ -974,17 +975,8 @@ router.post('/seed/project-settings', async (req, res) => {
           isDefault,
           approvalMode: approvalMode ?? 'any_one',
           prototypeStageEnabled: prototypeStageEnabled ?? true,
-          prdValidationSkillPath: prdValidationSkillPath ?? null,
-          designDocValidationSkillPath: designDocValidationSkillPath ?? null,
-          prdValidationScoreThreshold: prdValidationScoreThreshold ?? 90,
-          designDocValidationScoreThreshold: designDocValidationScoreThreshold ?? 90,
-          interviewSkillPath: interviewSkillPath ?? null,
-          prdSkillPath: prdSkillPath ?? null,
-          designDocSkillPath: designDocSkillPath ?? null,
-          designPrototypeSkillPath: designPrototypeSkillPath ?? null,
-          testCaseSkillPath: testCaseSkillPath ?? null,
           updatedBy: updatedBy ?? 'e2e',
-          ...legacyColumns,
+          ...parentColumns,
         })
         .returning();
       row = inserted;
@@ -1015,25 +1007,23 @@ router.post('/seed/project-settings', async (req, res) => {
           set: { mode: sql`excluded.mode`, updatedAt: sql`now()` },
         });
     }
-    if (designDocValidationSkillPath !== undefined) {
-      await db
-        .update(projectSkillSettings)
-        .set({
-          designDocValidationSkillPath,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(projectSkillSettings.project, project));
-      row = { ...row, designDocValidationSkillPath };
+    const workflowNow = new Date().toISOString();
+    if (Object.keys(workflowPatch).length > 0) {
+      await saveWorkflowSettings(db, row.id, workflowPatch, workflowNow);
     }
-    if (prdValidationSkillPath !== undefined) {
-      await db
-        .update(projectSkillSettings)
-        .set({
-          prdValidationSkillPath,
-          updatedAt: sql`now()`,
-        })
+    if (designDocValidationSkillPath !== undefined || prdValidationSkillPath !== undefined) {
+      const projectRows = await db
+        .select({ id: projectSkillSettings.id })
+        .from(projectSkillSettings)
         .where(eq(projectSkillSettings.project, project));
-      row = { ...row, prdValidationSkillPath };
+      const propagated: Partial<Record<keyof ProjectSkillConfig, unknown>> = {
+        ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
+        ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
+      };
+      for (const projectRow of projectRows) {
+        if (projectRow.id === row.id) continue;
+        await saveWorkflowSettings(db, projectRow.id, propagated, workflowNow);
+      }
     }
 
     const poolEntries: Array<{ documentType: string; userIds: string[] }> = [

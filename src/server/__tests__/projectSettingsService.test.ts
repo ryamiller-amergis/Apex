@@ -651,9 +651,9 @@ describe('upsertSkillConfig effort levels', () => {
 
     await upsertSkillConfig(makeUpsertInput({ interviewEffort: 'medium' }));
 
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ interviewEffort: 'medium' })
-    );
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent).not.toHaveProperty('interviewEffort');
+    expect(parent.defaultEffort).toBeNull();
   });
 
   it('FEAT-002 PBI-001 AC-2 / TBI-004 DoD-3 persists null when a level is cleared to Inherit', async () => {
@@ -663,9 +663,9 @@ describe('upsertSkillConfig effort levels', () => {
       makeUpsertInput({ prdEffort: null, designDocEffort: 'high' })
     );
 
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ prdEffort: null, designDocEffort: 'high' })
-    );
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent).not.toHaveProperty('prdEffort');
+    expect(parent).not.toHaveProperty('designDocEffort');
   });
 
   it('FEAT-002 TBI-004 DoD-0 persists all twenty effort fields', async () => {
@@ -679,7 +679,12 @@ describe('upsertSkillConfig effort levels', () => {
 
     await upsertSkillConfig(makeUpsertInput(supplied));
 
-    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining(supplied));
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent.defaultEffort).toBe('medium');
+    for (const field of EFFORT_FIELDS) {
+      if (field === 'defaultEffort') continue;
+      expect(parent).not.toHaveProperty(field);
+    }
   });
 
   it('FEAT-002 TBI-004 DoD-3 writes null for every omitted effort field', async () => {
@@ -687,11 +692,12 @@ describe('upsertSkillConfig effort levels', () => {
 
     await upsertSkillConfig(makeUpsertInput());
 
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining(
-        Object.fromEntries(EFFORT_FIELDS.map((field) => [field, null]))
-      )
-    );
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent.defaultEffort).toBeNull();
+    for (const field of EFFORT_FIELDS) {
+      if (field === 'defaultEffort') continue;
+      expect(parent).not.toHaveProperty(field);
+    }
   });
 });
 
@@ -1772,7 +1778,8 @@ describe('workflow settings read mapping', () => {
       .toSQL();
     expect(text).toMatch(/from "project_skill_workflow_settings" "w"/);
     expect(text).toContain('"w"."settings_id" = "project_skill_settings"."id"');
-    expect(text).toContain('"w"."updated_at" >= "project_skill_settings"."updated_at"');
+    expect(text).not.toContain('"w"."updated_at" >= "project_skill_settings"."updated_at"');
+    expect(text).toContain('project_skill_workflow_settings');
   });
 });
 
@@ -1804,10 +1811,41 @@ function mockDualWriteTransaction(opts: {
   const workflowValues = jest.fn().mockReturnValue({ onConflictDoUpdate: workflowOnConflict });
   const workflowDeleteWhere = jest.fn().mockResolvedValue(undefined);
   const tx = {
-    select: jest.fn().mockReturnValue({
-      from: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      limit: jest.fn().mockResolvedValue([opts.returnedRow]),
+    select: jest.fn().mockImplementation(() => {
+      let table: unknown;
+      const rowsFor = () => {
+        if (table === projectSkillWorkflowSettings && opts.returnedRow?.standupSkillPath) {
+          return [{
+            workflow: 'standup',
+            skillPath: opts.returnedRow.standupSkillPath,
+            model: null,
+            effort: null,
+            bedrockModelId: null,
+            bedrockMaxTokens: null,
+            bedrockTimeoutMs: null,
+            bedrockTemperature: null,
+            regenBedrockModelId: null,
+            regenBedrockMaxTokens: null,
+            scoreThreshold: null,
+          }];
+        }
+        return table === projectSkillWorkflowSettings ? [] : [opts.returnedRow];
+      };
+      const chain = {
+        from(next: unknown) {
+          table = next;
+          return chain;
+        },
+        where() {
+          const result = Promise.resolve(rowsFor()) as Promise<unknown[]> & {
+            limit: () => Promise<unknown[]>;
+          };
+          result.limit = () => Promise.resolve(rowsFor());
+          return result;
+        },
+        limit: () => Promise.resolve(rowsFor()),
+      };
+      return chain;
     }),
     update: jest.fn().mockImplementation(() => ({ set: parentSet })),
     insert: jest.fn().mockImplementation((table) => {
@@ -1878,7 +1916,7 @@ describe('workflow settings dual write', () => {
     );
 
     expect(parentSet).toHaveBeenCalledWith(
-      expect.objectContaining({ interviewModel: 'claude-interview', adrModel: 'claude-adr' })
+      expect.not.objectContaining({ interviewModel: 'claude-interview', adrModel: 'claude-adr' })
     );
     const rows = writtenWorkflowRows(workflowValues);
     const byWorkflow = Object.fromEntries(rows.map((row) => [row.workflow, row]));

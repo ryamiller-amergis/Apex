@@ -141,10 +141,9 @@ void [
   invalidQuickStdio,
 ];
 
-// TBI-001 DoD-1: every project setting effort column uses the shared nullable type.
-type ProjectEffortProperty = (typeof projectEffortProperties)[number];
-type ProjectEffortInsert = Pick<typeof projectSkillSettings.$inferInsert, ProjectEffortProperty>;
-type ExpectedProjectEffortInsert = { [Key in ProjectEffortProperty]?: EffortLevel | null };
+// Per-workflow effort lives on project_skill_workflow_settings. The parent keeps defaultEffort.
+type ProjectEffortInsert = Pick<typeof projectSkillSettings.$inferInsert, 'defaultEffort'>;
+type ExpectedProjectEffortInsert = { defaultEffort?: EffortLevel | null };
 type ProjectEffortTypeContract = Assert<Equal<ProjectEffortInsert, ExpectedProjectEffortInsert>>;
 const projectEffortTypeContract: ProjectEffortTypeContract = true;
 
@@ -188,12 +187,14 @@ describe('TBI-001 effort shared contract', () => {
     }
   });
 
-  it('DoD-1 exposes exactly 20 nullable typed project settings effort columns', () => {
+  it('DoD-1 keeps default_effort on the parent and moves the other effort fields off that table', () => {
     const columns = getTableColumns(projectSkillSettings);
+    expect(columns.defaultEffort.name).toBe('default_effort');
+    expect(columns.defaultEffort.dataType).toBe('string');
+    expect(columns.defaultEffort.notNull).toBe(false);
     for (const property of projectEffortProperties) {
-      expect(columns[property].name).toBe(projectEffortColumns[projectEffortProperties.indexOf(property)]);
-      expect(columns[property].dataType).toBe('string');
-      expect(columns[property].notNull).toBe(false);
+      if (property === 'defaultEffort') continue;
+      expect(columns).not.toHaveProperty(property);
     }
   });
 });

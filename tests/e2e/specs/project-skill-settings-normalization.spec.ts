@@ -203,7 +203,7 @@ test.describe('Project skill settings normalization @project-settings', () => {
     await caption(page, '(a) Passed: UI, consumer API and child rows agree');
   });
 
-  test('(b) a row with values only in the legacy flat columns displays and resolves', async ({
+  test('(b) workflow values stored in the child table display and resolve', async ({
     page,
     loginAsPersona,
     e2eApi,
@@ -221,10 +221,19 @@ test.describe('Project skill settings normalization @project-settings', () => {
         prdReviewBedrockMaxTokens: 64000,
       },
     });
-    expect(await SeedApi.inspectWorkflowSettings(e2eApi, config.id)).toEqual([]);
+    const seeded = byWorkflow(await SeedApi.inspectWorkflowSettings(e2eApi, config.id));
+    expect(seeded.prd).toEqual(expect.objectContaining({
+      skillPath: SKILLS[1].path,
+      model: 'e2e-model-beta',
+      effort: 'medium',
+    }));
+    expect(seeded.prd_review).toEqual(expect.objectContaining({
+      bedrockModelId: 'e2e.bedrock-alpha',
+      bedrockMaxTokens: 64000,
+    }));
 
     const settings = await openAdmin(page, loginAsPersona);
-    await openConfig(page, settings, config.id, '(b) Legacy-only row (no child rows) opens in the admin form');
+    await openConfig(page, settings, config.id, '(b) Child-table values open in the admin form');
     await expect(page.getByTestId('ps-stage-skill-prdSkillPath')).toHaveValue(SKILLS[1].path);
     await expect(page.getByTestId('ps-stage-model-prdModel')).toHaveValue('e2e-model-beta');
     await expect(page.getByTestId('ps-stage-effort-prdEffort')).toHaveValue('medium');
@@ -241,7 +250,7 @@ test.describe('Project skill settings normalization @project-settings', () => {
       prdReviewBedrockModelId: 'e2e.bedrock-alpha',
       prdReviewBedrockMaxTokens: 64000,
     }));
-    await caption(page, '(b) Passed: legacy columns display and reach consumers unchanged');
+    await caption(page, '(b) Passed: child-table values display and reach consumers');
   });
 
   test('(c) a workflow with no override falls back to default_model and default_effort', async ({
