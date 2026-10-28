@@ -33,7 +33,50 @@ export interface ProjectQuickLinksListResponse {
   items: ProjectQuickLink[];
 }
 
-export type ProjectQuickLinkErrorCode = 'VALIDATION' | 'NOT_FOUND';
+/** Personal links each user may keep per project; also bounds a bookmark import. */
+export const USER_QUICK_LINKS_MAX_PER_PROJECT = 200;
+/** Most items one import request may carry, selected or not yet deduplicated. */
+export const USER_QUICK_LINKS_IMPORT_MAX_ITEMS = 1000;
+export const BOOKMARK_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+/** A personal link. Visible only to its owner, and only while its project is selected. */
+export interface UserQuickLink {
+  id: string;
+  project: string;
+  label: string;
+  url: string;
+  category: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CreateUserQuickLinkInput = Omit<CreateProjectQuickLinkInput, 'sortOrder'>;
+export type UpdateUserQuickLinkInput = Partial<CreateUserQuickLinkInput>;
+
+export interface UserQuickLinksListResponse {
+  items: UserQuickLink[];
+}
+
+export interface ImportUserQuickLinksInput {
+  items: CreateUserQuickLinkInput[];
+}
+
+export interface RejectedQuickLinkImport {
+  /** Position of the item in the request. */
+  index: number;
+  label: string;
+  url: string;
+  reason: string;
+}
+
+export interface ImportUserQuickLinksResult {
+  created: number;
+  skippedDuplicates: number;
+  rejected: RejectedQuickLinkImport[];
+}
+
+export type ProjectQuickLinkErrorCode = 'VALIDATION' | 'NOT_FOUND' | 'DUPLICATE' | 'LIMIT_REACHED';
 
 export class ProjectQuickLinkError extends Error {
   readonly code: ProjectQuickLinkErrorCode;
