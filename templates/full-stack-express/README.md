@@ -169,6 +169,8 @@ The flag provider is an open decision. The extension point is the `createLocalFl
 | `db:up`            | Starts local PostgreSQL and waits until it is healthy                                                                    |
 | `db:down`          | Stops local PostgreSQL. The data volume stays                                                                            |
 | `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends                                    |
+| `quality:validate` | Checks the quality and NFR manifests in `quality/`. See [quality/README.md](quality/README.md)                           |
+| `loadtest:run`     | Runs the sample k6 load test against `LOAD_TEST_BASE_URL` and prints a verdict per NFR target                            |
 
 ## Testing
 
@@ -185,6 +187,7 @@ Working directory: `templates/full-stack-express/`. Install the workspace first.
 | `test:integration` | PostgreSQL tests. Needs Docker. Exits with the Docker message when no runtime answers                                                                                                                                                 |
 | `test:e2e`         | Browser journeys. Needs Docker and Chromium. Builds the workspace, then starts the stack                                                                                                                                              |
 | `test:a11y`        | The same browser run, limited to tests tagged `@a11y`                                                                                                                                                                                 |
+| `test:quality`     | Validator and load-test runner tests for the manifests in `quality/`. `test:unit` runs them too                                                                                                                                       |
 | `e2e:install`      | Downloads the Chromium build Playwright drives. `pnpm install` does not                                                                                                                                                               |
 
 `pnpm test:coverage` fails when lines, functions, or statements are below 80%, or branches are below 75%. Those floors live in `packages/config/testing.mjs`. A package Vitest config cannot set its own.

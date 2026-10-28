@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "quality-manifest.schema.json",
+  "title": "Quality manifest",
+  "description": "Lists each quality gate by the root script that runs it, the coverage floors, and justified deferrals. It defines no tiers, schedules, or triggers. Each team decides when gates run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "coverage", "gates", "deferrals"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this schema, for editor completion."
+    },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Raised when a field is removed or renamed."
+    },
+    "coverage": {
+      "type": "object",
+      "description": "A copy of the shared floors in packages/config/testing.mjs. The validator fails when the two differ.",
+      "additionalProperties": false,
+      "required": ["lines", "functions", "statements", "branches"],
+      "properties": {
+        "lines": { "$ref": "#/$defs/percent" },
+        "functions": { "$ref": "#/$defs/percent" },
+        "statements": { "$ref": "#/$defs/percent" },
+        "branches": { "$ref": "#/$defs/percent" }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "deferrals": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/deferral" }
+    }
+  },
+  "$defs": {
+    "percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "script"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Kebab-case gate id."
+        },
+        "title": { "$ref": "#/$defs/text" },
+        "script": {
+          "$ref": "#/$defs/text",
+          "description": "Name of a script in the root package.json. Run it with pnpm run <script>."
+        }
+      }
+    },
+    "deferral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate", "reason", "owner"],
+      "properties": {
+        "gate": {
+          "type": "string",
+          "description": "Id of a gate in gates."
+        },
+        "reason": {
+          "$ref": "#/$defs/text",
+          "description": "Why the gate cannot run yet. Do not paste secrets."
+        },
+        "owner": {
+          "$ref": "#/$defs/text",
+          "description": "Person or team that will bring the gate back."
+        }
+      }
+    }
+  }
+}
