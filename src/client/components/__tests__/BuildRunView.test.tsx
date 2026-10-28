@@ -261,8 +261,10 @@ describe('tabs (PBI-017 AC-0)', () => {
     expect(overview).toHaveFocus();
     await user.keyboard('{End}');
     expect(timeline).toHaveFocus();
-    await user.keyboard('{ArrowLeft}{Enter}');
-    expect(screen.getByTestId('location')).toHaveTextContent(`/builds/${BUILD_ID}/plan`);
+    await user.keyboard('{ArrowLeft}');
+    expect(plan).toHaveFocus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(`/builds/${BUILD_ID}/plan`));
     expect(await screen.findByTestId('build-run-panel-plan')).toBeInTheDocument();
   });
 
