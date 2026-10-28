@@ -81,12 +81,6 @@
   color: var(--error-color);
 }
 
-.warning {
-  margin: 0;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -321,4 +315,110 @@
 .bookmarkUrl {
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.bookmarkSaved {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.savedBadge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.folderTitle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.folderToggle {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.folderToggle:hover:not(:disabled),
+.folderToggle:focus-visible {
+  outline: none;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.folderToggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.chevron {
+  display: inline-block;
+  transition: all 0.2s ease;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.showAll {
+  margin: 4px 0 0 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.showAll:hover,
+.showAll:focus-visible {
+  outline: none;
+  background: var(--bg-tertiary);
+}
+
+.reading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.capWarning {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warning-color) 50%, transparent);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+  font-size: 0.82rem;
+  color: var(--text-primary);
 }

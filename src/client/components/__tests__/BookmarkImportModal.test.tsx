@@ -27,6 +27,27 @@ const EXPORT = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
   <DT><A HREF="javascript:void(0)">Bookmarklet</A>
 </DL><p>`;
 
+if (!File.prototype.text) {
+  // jsdom 20 has no Blob.text(); browsers do.
+  File.prototype.text = function text(this: File) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(this);
+    });
+  };
+}
+
+function urls(count: number): string[] {
+  return Array.from({ length: count }, (_, i) => `https://existing-${i}.example.com/`);
+}
+
+function bigExport(total: number): string {
+  const rows = Array.from({ length: total }, (_, i) => `<DT><A HREF="https://big-${i}.example.com/">Big ${i}</A>`);
+  return `<DL><p><DT><H3>Huge</H3><DL><p>${rows.join('\n')}</DL><p><DT><H3>Small</H3><DL><p><DT><A HREF="https://small.example.com/">Small</A></DL><p></DL>`;
+}
+
 function bookmarkFile(content = EXPORT, name = 'bookmarks.html') {
   return new File([content], name, { type: 'text/html' });
 }
@@ -43,8 +64,8 @@ function renderModal(props: Partial<ComponentProps<typeof BookmarkImportModal>> 
     <BookmarkImportModal
       project="MaxView"
       canShare={false}
-      existingPersonalCount={0}
-      existingProjectCount={0}
+      existingPersonalUrls={[]}
+      existingProjectUrls={[]}
       personalCategories={[]}
       projectCategories={[]}
       onCancel={onCancel}
@@ -73,7 +94,7 @@ describe('BookmarkImportModal', () => {
 
     fireEvent.change(screen.getByTestId('bookmark-import-file'), { target: { files: [file] } });
 
-    expect(await screen.findByTestId('bookmark-import-file-error')).toHaveTextContent('larger than 5 MB');
+    expect(await screen.findByTestId('bookmark-import-file-error')).toHaveTextContent('larger than 20 MB');
     expect(screen.queryByTestId('bookmark-import-tree')).not.toBeInTheDocument();
   });
 
@@ -92,7 +113,7 @@ describe('BookmarkImportModal', () => {
     expect(screen.getByTestId('bookmark-import-folder-0')).toHaveTextContent('Bookmarks bar');
     expect(screen.getByTestId('bookmark-import-folder-1')).toHaveTextContent('Bookmarks bar / Tools');
     expect(screen.getByTestId('bookmark-import-category-1-new')).toHaveValue('Tools');
-    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('3 of 3 selected · 2 skipped (not http or https)');
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('3 selected of 3 · 2 skipped (not http or https)');
     expect(screen.getByTestId('bookmark-import-confirm')).toHaveTextContent('Import 3 links');
   });
 
@@ -101,8 +122,8 @@ describe('BookmarkImportModal', () => {
       <BookmarkImportModal
         project="MaxView"
         canShare={false}
-        existingPersonalCount={0}
-        existingProjectCount={0}
+        existingPersonalUrls={[]}
+        existingProjectUrls={[]}
         personalCategories={[]}
         projectCategories={[]}
         onCancel={jest.fn()}
@@ -119,16 +140,16 @@ describe('BookmarkImportModal', () => {
     await upload();
 
     fireEvent.click(screen.getByTestId('bookmark-import-folder-toggle-1'));
-    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('1 of 3 selected');
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('1 selected of 3');
 
     fireEvent.click(screen.getByTestId('bookmark-import-item-bm-1'));
-    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('2 of 3 selected');
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('2 selected of 3');
     expect(screen.getByTestId('bookmark-import-folder-toggle-1')).toHaveAttribute('aria-checked', 'mixed');
 
     fireEvent.click(screen.getByTestId('bookmark-import-select-all'));
-    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('3 of 3 selected');
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('3 selected of 3');
     fireEvent.click(screen.getByTestId('bookmark-import-select-all'));
-    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('0 of 3 selected');
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('0 selected of 3');
     expect(screen.getByTestId('bookmark-import-confirm')).toBeDisabled();
   });
 
@@ -167,10 +188,66 @@ describe('BookmarkImportModal', () => {
     expect(onImported).toHaveBeenCalledWith(result, 'personal');
   });
 
-  it('warns when the selection is larger than the room left', async () => {
-    renderModal({ existingPersonalCount: 199 });
+  it('blocks Import until the selection fits the room left', async () => {
+    renderModal({ existingPersonalUrls: urls(999) });
     await upload();
-    expect(screen.getByTestId('bookmark-import-cap-warning')).toHaveTextContent('room for 1 more');
+
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('0 selected of 3');
+    fireEvent.click(screen.getByTestId('bookmark-import-select-all'));
+
+    expect(screen.getByTestId('bookmark-import-cap-warning')).toHaveTextContent(
+      'You can add 1 more links in MaxView. Deselect 2 to import (limit 1,000 per project).',
+    );
+    expect(screen.getByTestId('bookmark-import-confirm')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('bookmark-import-item-bm-0'));
+    fireEvent.click(screen.getByTestId('bookmark-import-item-bm-1'));
+    expect(screen.queryByTestId('bookmark-import-cap-warning')).not.toBeInTheDocument();
+    expect(screen.getByTestId('bookmark-import-confirm')).toBeEnabled();
+  });
+
+  it('shows already-saved bookmarks but does not let them be selected', async () => {
+    renderModal({ existingPersonalUrls: ['https://dashboard.clerk.com/'] });
+    await upload();
+
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('2 selected of 3 · 1 already saved');
+    expect(screen.getByTestId('bookmark-import-item-bm-1')).toBeDisabled();
+    expect(screen.getByTestId('bookmark-import-folder-count-1')).toHaveTextContent('1/1');
+  });
+
+  it('shows a reading state while it parses', async () => {
+    renderModal();
+    fireEvent.change(screen.getByTestId('bookmark-import-file'), { target: { files: [bookmarkFile()] } });
+    expect(screen.getByTestId('bookmark-import-reading')).toHaveTextContent('Reading bookmarks…');
+    expect(screen.getByTestId('bookmark-import-file')).toBeDisabled();
+    await screen.findByTestId('bookmark-import-tree');
+    expect(screen.queryByTestId('bookmark-import-reading')).not.toBeInTheDocument();
+  });
+
+  it('collapses folders for large exports and renders rows only when expanded', async () => {
+    renderModal();
+    await upload(bookmarkFile(bigExport(800)));
+
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('801 selected of 801');
+    expect(screen.queryByTestId('bookmark-import-item-bm-0')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('bookmark-import-folder-expand-0'));
+    expect(screen.getByTestId('bookmark-import-item-bm-0')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-testid^="bookmark-import-item-"]')).toHaveLength(200);
+    expect(screen.queryByTestId('bookmark-import-item-bm-799')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('bookmark-import-folder-show-all-0'));
+    expect(screen.getByTestId('bookmark-import-item-bm-799')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('bookmark-import-folder-toggle-0'));
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('1 selected of 801');
+  });
+
+  it('starts with nothing selected when the export is bigger than the room left', async () => {
+    renderModal();
+    await upload(bookmarkFile(bigExport(1200)));
+    expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('0 selected of 1,201');
+    expect(screen.getByTestId('bookmark-import-confirm')).toBeDisabled();
   });
 
   it('hides the Save to choice without quick-links:manage', () => {
@@ -179,12 +256,11 @@ describe('BookmarkImportModal', () => {
   });
 
   it('lets managers import into the shared project links', async () => {
-    const { onImported } = renderModal({ canShare: true, projectCategories: ['Tools'], existingProjectCount: 199 });
+    const { onImported } = renderModal({ canShare: true, projectCategories: ['Tools'] });
     expect(screen.getByTestId('bookmark-import-scope-personal')).toBeChecked();
     fireEvent.click(screen.getByTestId('bookmark-import-scope-project'));
     await upload();
 
-    expect(screen.getByTestId('bookmark-import-cap-warning')).toHaveTextContent('room for 1 more shared links');
     expect(screen.getByTestId('bookmark-import-category-1')).toHaveValue('Tools');
     fireEvent.click(screen.getByTestId('bookmark-import-confirm'));
 
@@ -196,6 +272,18 @@ describe('BookmarkImportModal', () => {
     const result = { created: 3, skippedDuplicates: 0, rejected: [] };
     importSharedMutate.mock.calls[0][1].onSuccess(result);
     expect(onImported).toHaveBeenCalledWith(result, 'project');
+  });
+
+  it('uses the shared cap of 200 when importing into project links', async () => {
+    renderModal({ canShare: true, existingProjectUrls: urls(199) });
+    fireEvent.click(screen.getByTestId('bookmark-import-scope-project'));
+    await upload();
+    fireEvent.click(screen.getByTestId('bookmark-import-select-all'));
+
+    expect(screen.getByTestId('bookmark-import-cap-warning')).toHaveTextContent(
+      'You can add 1 more shared links in MaxView. Deselect 2 to import (limit 200 per project).',
+    );
+    expect(screen.getByTestId('bookmark-import-confirm')).toBeDisabled();
   });
 
   it('offers existing categories in each folder picker', async () => {
