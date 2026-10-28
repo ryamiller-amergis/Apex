@@ -55,6 +55,11 @@
       "id": "container-build",
       "title": "Build the production image",
       "script": "container:build"
+    },
+    {
+      "id": "docs-validation",
+      "title": "Documentation links, sections, paths, and index coverage",
+      "script": "docs:check"
     }
   ],
   "deferrals": []

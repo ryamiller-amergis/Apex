@@ -57,7 +57,7 @@ export function readCommitted<T>(relative: string): T {
   ) as T;
 }
 
-/** A valid quality manifest: the 12 committed gates and no deferrals. */
+/** A valid quality manifest: the committed gates and no deferrals. */
 export function validQuality(): QualityManifest {
   return readCommitted<QualityManifest>('quality/quality-manifest.json');
 }

@@ -10,6 +10,27 @@ the same name in the repository the template came from.
 
 Run every command from the workspace root.
 
+## Purpose
+
+Change the `app_users` schema safely: generate a reviewed SQL migration, check it, and apply it. The sections below hold ownership, the workflow, the command, and rollback.
+
+## Prerequisites
+
+- Dependencies installed with `pnpm setup`.
+- For `pnpm migrate` and `pnpm seed`, PostgreSQL running and a valid `DATABASE_URL`. `pnpm migrate:validate` needs no database.
+
+## Steps
+
+Follow [Workflow](#workflow), then apply the migration as described in [Running the migration command](#running-the-migration-command).
+
+## Verify
+
+`pnpm migrate:validate` prints `Migrations match the Drizzle schema.` and exits 0.
+
+## Troubleshooting
+
+The exit codes are in the table under Running the migration command. A failed install or a startup abort is in [common failures](common-failures.md).
+
 ## Ownership
 
 - The application repository owns the migration files.
@@ -29,7 +50,7 @@ Run every command from the workspace root.
    pnpm db:generate -- --name add_phone_number
    ```
 
-   This writes `apps/api/drizzle/NNNN_add_phone_number.sql`, updates the
+   This writes `NNNN_add_phone_number.sql` under `apps/api/drizzle/`, updates the
    journal and snapshot under `apps/api/drizzle/meta/`, and formats the JSON
    with Prettier.
 

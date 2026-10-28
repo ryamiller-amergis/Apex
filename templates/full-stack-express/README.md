@@ -2,7 +2,7 @@
 
 Self-contained pnpm workspace for a React web client and an Express API. It has its own lockfile, toolchain, and lint rules. It does not join the host repository's install, build, or test commands.
 
-Run every command in this README from `templates/full-stack-express/` while this folder sits inside the Apex repository. Do not run `pnpm install` from the Apex root. That writes a lockfile beside the host project and breaks this workspace's isolation. After the folder is copied into its own repository, run the same commands from the directory that contains this README.
+Run every command in this README from `templates/full-stack-express/` while this folder sits inside a host repository. Do not run `pnpm install` from the host repository root. That writes a lockfile beside the host project and breaks this workspace's isolation. After the folder is copied into its own repository, run the same commands from the directory that contains this README. Where the template came from is recorded in [docs/architecture.md](docs/architecture.md).
 
 Node 25 and later do not bundle Corepack. This workspace stays on the Node 24 line, which does bundle it. On Node 25 or later, install Corepack with `npm install -g corepack` before `corepack enable`.
 
@@ -169,6 +169,7 @@ The flag provider is an open decision. The extension point is the `createLocalFl
 | `db:up`            | Starts local PostgreSQL and waits until it is healthy                                                                    |
 | `db:down`          | Stops local PostgreSQL. The data volume stays                                                                            |
 | `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends                                    |
+| `docs:check`       | Reports broken links, missing sections, stale paths, and index gaps. Exits 0, 1, or 2. See [AGENTS.md](AGENTS.md)        |
 | `quality:validate` | Checks the quality and NFR manifests in `quality/`. See [quality/README.md](quality/README.md)                           |
 | `loadtest:run`     | Runs the sample k6 load test against `LOAD_TEST_BASE_URL` and prints a verdict per NFR target                            |
 

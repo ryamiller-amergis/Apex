@@ -35,7 +35,7 @@ Working directory: `templates/full-stack-express/`.
 | `deferrals[].reason` | Why the gate cannot run yet. Must not be blank                                                               |
 | `deferrals[].owner`  | Person or team that will bring the gate back. Must not be blank                                              |
 
-The validator requires these 12 gate ids. Other kebab-case ids are allowed.
+The validator requires these 12 gate ids. Other kebab-case ids are allowed. The committed manifest also includes `docs-validation`, which runs `docs:check`.
 
 | Gate                   | Script             |
 | ---------------------- | ------------------ |

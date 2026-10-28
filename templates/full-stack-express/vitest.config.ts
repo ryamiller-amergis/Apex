@@ -31,7 +31,11 @@ export default defineConfig({
     },
     projects: [
       project('unit', 'node', {
-        include: ['**/*.test.ts', 'packages/config/**/*.test.mjs'],
+        include: [
+          '**/*.test.ts',
+          'packages/config/**/*.test.mjs',
+          'scripts/check-docs.test.mjs',
+        ],
         exclude: [
           '**/node_modules/**',
           '**/dist/**',

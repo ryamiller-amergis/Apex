@@ -19,7 +19,7 @@ function gateRow(output: string, id: string): string | undefined {
 
 describe('manifest validator', () => {
   it(
-    'VT-01 TBI-027 DoD-0 TBI-029 PBI-024 AC-0: a valid fixture passes and lists 12 defined gates',
+    'VT-01 TBI-027 DoD-0 TBI-029 PBI-024 AC-0: a valid fixture passes and lists the committed gates',
     async () => {
       const result = await validateFixture({});
       expect(result.status).toBe(0);
@@ -27,7 +27,7 @@ describe('manifest validator', () => {
       for (const gate of validQuality().gates) {
         expect(gateRow(result.output, gate.id)).toMatch(/\sdefined\s/);
       }
-      expect(validQuality().gates).toHaveLength(12);
+      expect(validQuality().gates).toHaveLength(13);
       expect(result.output.trimEnd()).toMatch(
         /0 error\(s\), \d+ warning\(s\)$/
       );

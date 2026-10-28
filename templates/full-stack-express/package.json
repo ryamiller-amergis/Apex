@@ -35,6 +35,7 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "toolchain:check": "node scripts/check-toolchain.mjs",
+    "docs:check": "node scripts/check-docs.mjs",
     "openapi:generate": "corepack pnpm --filter @project-scope/contracts run openapi:generate",
     "openapi:check": "corepack pnpm --filter @project-scope/contracts run openapi:check",
     "routes:check": "corepack pnpm --filter @project-scope/api run routes:check",

@@ -5,6 +5,28 @@ not quality-manifest gates. `container:build` is the gate name a manifest
 should cite. Secret scan, vulnerability scan, license check, and SBOM
 generation stay scripts a pipeline can call.
 
+## Purpose
+
+Run the secret scan, the vulnerability scan, the license check, write the SBOM, and build the production image. These are local scripts. Each team decides when a pipeline calls them.
+
+## Prerequisites
+
+- A checkout with dependencies installed (`pnpm setup`), so the scan tools are present.
+- Docker, for `pnpm container:build`, `pnpm test:container`, and `pnpm sbom -- --image`. The lockfile SBOM and the three scans do not need Docker.
+- Network access on the first vulnerability scan, which downloads the scanner.
+
+## Steps
+
+Run the command from the table below. Record a reviewed vulnerability exception with the fields in [Record a reviewed exception](#record-a-reviewed-exception).
+
+## Verify
+
+`pnpm scan` exits 0 when there is nothing to fix. It exits 1 when it finds a problem and 2 when a check could not run. A check that cannot run is not a pass.
+
+## Troubleshooting
+
+An exception file that omits a field exits 2 and names the file and the field. `pnpm test:container` exits 2 and names Docker when Docker is not available. Install and startup failures are in [common failures](common-failures.md).
+
 The organization has not confirmed this tool list. The versions below are the
 spec defaults, pinned in `docs/compatibility.md`.
 
