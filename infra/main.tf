@@ -44,7 +44,10 @@ resource "azurerm_linux_web_app" "main" {
   resource_group_name = local.app_resource_group_name
   service_plan_id     = azurerm_service_plan.main.id
   https_only          = true
-  tags                = merge(var.tags, { Environment = var.environment })
+  # ARR affinity pins a browser to one instance; when that instance hangs, the
+  # user stays pinned to it. deploy.yml enforces the live value.
+  client_affinity_enabled = false
+  tags                    = merge(var.tags, { Environment = var.environment })
 
   identity {
     type = "SystemAssigned"
@@ -89,6 +92,10 @@ resource "azurerm_linux_web_app" "main" {
     "ENABLE_ORYX_BUILD"                   = "false"
     "WEBSITE_RUN_FROM_PACKAGE"            = "1"
     "WEBSITES_ENABLE_APP_SERVICE_STORAGE" = "true"
+
+    # Evict an unresponsive instance after 2 failed health pings instead of the
+    # default 10.
+    "WEBSITE_HEALTHCHECK_MAXPINGFAILURES" = "2"
 
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
@@ -181,6 +188,14 @@ resource "azurerm_linux_web_app" "main" {
       # shortly after the former 90s reaper threshold. Keep this with each slot
       # until V2 confirms worker loss through checkpoints plus platform status.
       "AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS",
+      # Staging shares production's database, so a full grounding sweep there
+      # clones production's repositories onto staging's disk. Staging holds
+      # "cleanup-only" and production "full"; a swap must not trade them.
+      "GROUNDING_MAINTENANCE_MODE",
+      # Staging shares production's database, so its background sweeps would
+      # claim production's work. Staging holds "off" and production "full"; a
+      # swap must not trade them.
+      "BACKGROUND_JOBS_MODE",
     ])
   }
 
@@ -224,7 +239,9 @@ resource "azurerm_linux_web_app_slot" "staging" {
   name           = var.staging_slot_name
   app_service_id = azurerm_linux_web_app.main.id
   https_only     = true
-  tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
+  # Same as production; deploy.yml enforces the live value.
+  client_affinity_enabled = false
+  tags                    = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
 
   # Slot identities are not swapped with application code. Keep a dedicated
   # system identity on staging so pre-swap checks retain managed-identity

@@ -39,6 +39,15 @@ import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
+import { autoDraftBuildBriefForThread } from '../services/buildBriefService';
+import { prepareBuildIntakeTurn } from '../services/buildIntakeService';
+import { isBuildIntakeThread } from '../services/buildIntakeThread';
+import { isBuildFromPromptEnabled } from '../services/buildAccessService';
+import {
+  BUILD_FLAG_DISABLED_CODE,
+  BUILD_INTAKE_ATTACHMENTS_MESSAGE,
+  BUILD_INTAKE_PAUSED_MESSAGE,
+} from '../../shared/types/buildAccess';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
   replayRunEventPage,
@@ -70,6 +79,12 @@ import {
   DurableInteractiveTurnError,
 } from '../services/durableInteractiveTurnService';
 import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
+import { MCP_SERVERS_FLAG } from '../../shared/types/mcpServers';
+import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
+import { McpServerError } from '../services/mcpServerErrors';
+import { assertCallerCanUseMcpServer } from '../services/mcpServerReadService';
+import { getMenuConfig } from '../services/menuSettingsService';
+import { getUserPermissions } from '../services/rbacService';
 
 const router = Router();
 
@@ -412,12 +427,51 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     const agentModule = deriveAgentModule(clientKickoff, skillConfig);
 
+    if (clientKickoff.assistantType === 'mcp-server') {
+      const connectionId = clientKickoff.mcpServerId;
+      if (!connectionId) {
+        return res.status(400).json({ error: 'mcpServerId is required' });
+      }
+      const enabled = await isFeatureEnabled(MCP_SERVERS_FLAG, {
+        userId,
+        project: clientKickoff.project,
+      });
+      // @feature-flag:mcp-servers start winner=enabled
+      if (!enabled) {
+        // @feature-flag:mcp-servers disabled-start
+        return res.status(404).json({ error: 'Not found' });
+        // @feature-flag:mcp-servers disabled-end
+      }
+      // @feature-flag:mcp-servers enabled-start
+      const menu = await getMenuConfig(clientKickoff.project);
+      const views = menu?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS;
+      if (!views.includes('mcp-servers')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      if (!isSuperAdminRequest(req)) {
+        const permissions = await getUserPermissions(userId, clientKickoff.project);
+        if (!permissions.has('mcp-servers:view')) {
+          return res.status(403).json({ error: 'Forbidden', missing: ['mcp-servers:view'] });
+        }
+      }
+      await assertCallerCanUseMcpServer({
+        project: clientKickoff.project,
+        connectionId,
+        userId,
+      });
+      // @feature-flag:mcp-servers enabled-end
+      // @feature-flag:mcp-servers end
+    }
+
     // Home pill admission (TBI-005) covers Home starts only: a kickoff that names
     // a configured quick pill, or one the server cannot map to any module (Home
     // free chat, or an unrecognized direct call). Configured Interview/ADR/PRD/
-    // assistant/development/standup workflows keep their own gates (BR-008).
+    // assistant/development/standup/MCP-server workflows keep their own gates (BR-008).
     // Runs before any persistence, so a denied kickoff leaves no thread row.
-    if (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined) {
+    if (
+      clientKickoff.assistantType !== 'mcp-server' &&
+      (namesHomePill(clientKickoff, skillConfig) || agentModule === undefined)
+    ) {
       const isSuperAdmin = isSuperAdminRequest(req);
       const admission = resolveThreadCreationAdmission({
         skillPills: skillConfig?.quickSkillPills,
@@ -451,6 +505,9 @@ router.post('/threads', async (req: Request, res: Response) => {
     });
     res.status(201).json({ threadId: thread.id });
   } catch (err: unknown) {
+    if (err instanceof McpServerError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     console.error('[chat] createThread error:', errorMessage(err));
     res.status(500).json({ error: errorMessage(err) || 'Failed to create thread' });
   }
@@ -698,6 +755,26 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
 
   const thread = (req as ThreadRequest).thread!;
   const requesterUserId = getUserId(req);
+  const buildIntake = isBuildIntakeThread(thread);
+  if (buildIntake) {
+    const buildsEnabled = await isBuildFromPromptEnabled({
+      userId: requesterUserId,
+      project: thread.kickoff.project,
+    });
+    // @feature-flag:build-from-prompt start winner=enabled
+    if (!buildsEnabled) {
+      // @feature-flag:build-from-prompt disabled-start
+      return res.status(403).json({ error: BUILD_INTAKE_PAUSED_MESSAGE, code: BUILD_FLAG_DISABLED_CODE });
+      // @feature-flag:build-from-prompt disabled-end
+    }
+    // @feature-flag:build-from-prompt enabled-start
+    // Enabled projects accept build-intake messages.
+    // @feature-flag:build-from-prompt enabled-end
+    // @feature-flag:build-from-prompt end
+    if (attachments.length > 0) {
+      return res.status(400).json({ error: BUILD_INTAKE_ATTACHMENTS_MESSAGE });
+    }
+  }
 
   let releaseAdoWriteTurn = () => {};
   let durableToolGrant:
@@ -756,7 +833,23 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   let internalContext: string | undefined;
-  if (isMultiAgentAssistedThread(thread)) {
+  let draftBriefAfterSend = false;
+  if (buildIntake) {
+    try {
+      const prepared = await prepareBuildIntakeTurn({
+        threadId,
+        messageText: body.text ?? '',
+        turnId: body.turnId ?? '',
+      });
+      internalContext = prepared.internalContext;
+      draftBriefAfterSend = prepared.confirmed;
+    } catch (err: unknown) {
+      console.error(
+        `[chat] build intake preparation failed for thread ${threadId}:`,
+        err instanceof Error ? err.name : 'UnknownError',
+      );
+    }
+  } else if (isMultiAgentAssistedThread(thread)) {
     try {
       const prepared = await prepareAutonomousInterviewTurn({
         mainThreadId: threadId,
@@ -791,6 +884,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         ...(internalContext ? { internalContext } : {}),
       },
     );
+    if (draftBriefAfterSend) void autoDraftBuildBriefForThread(threadId);
     if (submission?.route === 'durable') {
       releaseAdoWriteTurn();
       const accepted = submission.response;

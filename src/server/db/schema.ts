@@ -2,6 +2,7 @@ import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
+import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
 import type {
   OverlayTextBox,
   PageManifestEntry,
@@ -27,6 +28,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
+import type { McpServerOperation } from '../../shared/types/mcpServers';
 import type {
   AgentRunCancelState,
   AgentRunExecutionSnapshot,
@@ -90,6 +92,7 @@ import type {
   BuildCorrelationKind,
   BuildDeploymentStatus,
   BuildEventSeverity,
+  BuildProfile,
   BuildQualityManifestSnapshot,
   BuildRequirement,
   BuildReuseEntry,
@@ -502,6 +505,29 @@ export const devEnvAllowlist = pgTable('dev_env_allowlist', {
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+export const buildAllowlist = pgTable('build_allowlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectRepositoryKey: unique('build_allowlist_project_repository_key').on(t.project, t.repository),
+}));
+
+export const buildAllowlistAudit = pgTable('build_allowlist_audit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  action: text('action').$type<BuildAllowlistAuditAction>().notNull(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  actorId: text('actor_id').notNull(),
+  actorLabel: text('actor_label'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  actionCheck: check('build_allowlist_audit_action_check', sql`${t.action} IN ('added', 'removed')`),
+  createdAtIdx: index('build_allowlist_audit_created_at_idx').on(t.createdAt),
+}));
 
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -1050,73 +1076,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   friendlyName: text('friendly_name').notNull(),
   isDefault: boolean('is_default').notNull().default(false),
   updatedBy: text('updated_by'),
-  interviewSkillPath: text('interview_skill_path'),
-  prdSkillPath: text('prd_skill_path'),
-  adrInterviewSkillPath: text('adr_interview_skill_path'),
-  adrFinalizeSkillPath: text('adr_finalize_skill_path'),
-  adrAssistantSkillPath: text('adr_assistant_skill_path'),
-  designDocSkillPath: text('design_doc_skill_path'),
-  designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
-  designPrototypeSkillPath: text('design_prototype_skill_path'),
-  testCaseSkillPath: text('test_case_skill_path'),
-  interviewModel: text('interview_model'),
-  interviewEffort: text('interview_effort').$type<EffortLevel>(),
-  prdModel: text('prd_model'),
-  prdEffort: text('prd_effort').$type<EffortLevel>(),
-  adrModel: text('adr_model'),
-  adrEffort: text('adr_effort').$type<EffortLevel>(),
-  designDocModel: text('design_doc_model'),
-  designDocEffort: text('design_doc_effort').$type<EffortLevel>(),
-  designDocAssistantModel: text('design_doc_assistant_model'),
-  designDocAssistantEffort: text('design_doc_assistant_effort').$type<EffortLevel>(),
-  designPrototypeModel: text('design_prototype_model'),
-  designPrototypeEffort: text('design_prototype_effort').$type<EffortLevel>(),
-  testCaseModel: text('test_case_model'),
-  testCaseEffort: text('test_case_effort').$type<EffortLevel>(),
-  designDocValidationSkillPath: text('design_doc_validation_skill_path'),
-  designDocValidationModel: text('design_doc_validation_model'),
-  designDocValidationEffort: text('design_doc_validation_effort').$type<EffortLevel>(),
-  prdAssistantSkillPath: text('prd_assistant_skill_path'),
-  prdAssistantModel: text('prd_assistant_model'),
-  prdAssistantEffort: text('prd_assistant_effort').$type<EffortLevel>(),
-  prdValidationSkillPath: text('prd_validation_skill_path'),
-  prdValidationModel: text('prd_validation_model'),
-  prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
   defaultModel: text('default_model'),
   defaultEffort: text('default_effort').$type<EffortLevel>(),
-  prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
-  prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
-  designPrototypeBedrockModelId: text('design_prototype_bedrock_model_id'),
-  designPrototypeBedrockMaxTokens: integer('design_prototype_bedrock_max_tokens'),
-  designPrototypeBedrockTimeoutMs: integer('design_prototype_bedrock_timeout_ms'),
-  designPrototypeRegenBedrockModelId: text('design_prototype_regen_bedrock_model_id'),
-  designPrototypeRegenBedrockMaxTokens: integer('design_prototype_regen_bedrock_max_tokens'),
-  designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
-  designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
-  prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
-  designDocValidationScoreThreshold: integer('design_doc_validation_score_threshold'),
-  uiLabBedrockModelId: text('ui_lab_bedrock_model_id'),
-  uiLabBedrockMaxTokens: integer('ui_lab_bedrock_max_tokens'),
-  uiLabBedrockTimeoutMs: integer('ui_lab_bedrock_timeout_ms'),
-  uiLabRegenBedrockModelId: text('ui_lab_regen_bedrock_model_id'),
-  uiLabRegenBedrockMaxTokens: integer('ui_lab_regen_bedrock_max_tokens'),
-  uiLabBedrockTemperature: real('ui_lab_bedrock_temperature'),
-  uiLabSkillPath: text('ui_lab_skill_path'),
-  developmentSkillPath: text('development_skill_path'),
-  developmentModel: text('development_model'),
-  developmentEffort: text('development_effort').$type<EffortLevel>(),
-  standupSkillPath: text('standup_skill_path'),
-  standupModel: text('standup_model'),
-  standupEffort: text('standup_effort').$type<EffortLevel>(),
-  featureRequestSkillPath: text('feature_request_skill_path'),
-  featureRequestModel: text('feature_request_model'),
-  featureRequestEffort: text('feature_request_effort').$type<EffortLevel>(),
-  technicalSkillPath: text('technical_skill_path'),
-  technicalModel: text('technical_model'),
-  technicalEffort: text('technical_effort').$type<EffortLevel>(),
-  issueSkillPath: text('issue_skill_path'),
-  issueModel: text('issue_model'),
-  issueEffort: text('issue_effort').$type<EffortLevel>(),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
@@ -1131,18 +1092,6 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   cursorApiKeyEnvRef: text('cursor_api_key_env_ref'),
   cursorServiceAccountId: text('cursor_service_account_id'),
-  calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
-  calendarAssistantModel: text('calendar_assistant_model'),
-  calendarAssistantEffort: text('calendar_assistant_effort').$type<EffortLevel>(),
-  loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
-  loadTestGenerationModel: text('load_test_generation_model'),
-  loadTestGenerationEffort: text('load_test_generation_effort').$type<EffortLevel>(),
-  designModuleSkillPath: text('design_module_skill_path'),
-  designModuleModel: text('design_module_model'),
-  designModuleEffort: text('design_module_effort').$type<EffortLevel>(),
-  designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
-  designModuleScopingModel: text('design_module_scoping_model'),
-  designModuleScopingEffort: text('design_module_scoping_effort').$type<EffortLevel>(),
   /** Admin-managed checkout readiness for this skill-settings repository identity. */
   repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
   repositoryCheckoutSha: text('repository_checkout_sha'),
@@ -1155,14 +1104,57 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
     withTimezone: true,
     mode: 'string',
   }),
+  /** Null means no Build profile yet. Saved through its own route, never by upsertSkillConfig. */
+  buildProfile: jsonb('build_profile').$type<BuildProfile>(),
+  buildProfileUpdatedAt: timestamp('build_profile_updated_at', { withTimezone: true, mode: 'string' }),
+  buildProfileUpdatedBy: text('build_profile_updated_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
+  buildProfileObjectCheck: check(
+    'project_skill_settings_build_profile_object_check',
+    sql`${t.buildProfile} IS NULL OR jsonb_typeof(${t.buildProfile}) = 'object'`,
+  ),
   // Exactly one default repo config per project.
   oneDefaultPerProject: uniqueIndex('project_skill_settings_one_default_per_project')
     .on(t.project)
     .where(sql`is_default`),
   projectFriendlyName: unique('project_skill_settings_project_friendly_name_key').on(t.project, t.friendlyName),
+}));
+
+/**
+ * One row per (settings row, workflow). Keys come from PROJECT_SKILL_WORKFLOWS in
+ * src/shared/constants/projectSkillWorkflows.ts. A new workflow is a new key here,
+ * not a new column on project_skill_settings.
+ */
+export const projectSkillWorkflowSettings = pgTable('project_skill_workflow_settings', {
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  workflow: text('workflow').notNull(),
+  skillPath: text('skill_path'),
+  model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
+  bedrockModelId: text('bedrock_model_id'),
+  bedrockMaxTokens: integer('bedrock_max_tokens'),
+  bedrockTimeoutMs: integer('bedrock_timeout_ms'),
+  bedrockTemperature: real('bedrock_temperature'),
+  regenBedrockModelId: text('regen_bedrock_model_id'),
+  regenBedrockMaxTokens: integer('regen_bedrock_max_tokens'),
+  scoreThreshold: integer('score_threshold'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.settingsId, t.workflow] }),
+}));
+
+export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ many }) => ({
+  workflowSettings: many(projectSkillWorkflowSettings),
+}));
+
+export const projectSkillWorkflowSettingsRelations = relations(projectSkillWorkflowSettings, ({ one }) => ({
+  settings: one(projectSkillSettings, {
+    fields: [projectSkillWorkflowSettings.settingsId],
+    references: [projectSkillSettings.id],
+  }),
 }));
 
 export const projectApprovers = pgTable('project_approvers', {
@@ -3517,6 +3509,27 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
   }),
 }));
 
+export const mcpServers = pgTable('mcp_servers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  provider: text('provider').notNull(),
+  status: text('status').notNull().default('untested'),
+  credentialCiphertext: text('credential_ciphertext').notNull(),
+  credentialIv: text('credential_iv').notNull(),
+  credentialAuthTag: text('credential_auth_tag').notNull(),
+  credentialHint: text('credential_hint').notNull(),
+  baseUrl: text('base_url'),
+  operations: jsonb('operations').$type<McpServerOperation[]>().notNull().default([]),
+  allowedUserIds: jsonb('allowed_user_ids').$type<string[]>().notNull().default([]),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  lastTestedAt: timestamp('last_tested_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  projectIdx: index('idx_mcp_servers_project').on(t.project),
+}));
+
 export const workflowEvaluationDefinitions = pgTable('workflow_evaluation_definitions', {
   id: uuid('id').primaryKey().defaultRandom(),
   processKey: text('process_key').notNull(),
@@ -3692,8 +3705,10 @@ export const buildRuns = pgTable('build_runs', {
   clientRequestId: text('client_request_id').notNull(),
   modelOverride: text('model_override'),
   prompt: text('prompt').notNull(),
-  playbookRunId: uuid('playbook_run_id').notNull().references(() => playbookRuns.id, { onDelete: 'restrict' }),
+  playbookRunId: uuid('playbook_run_id').references(() => playbookRuns.id, { onDelete: 'restrict' }),
   playbookStepRunId: uuid('playbook_step_run_id').references(() => playbookStepRuns.id, { onDelete: 'restrict' }),
+  skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
+  queuedAt: buildTimestamp('queued_at'),
   interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'restrict' }),
   briefId: uuid('brief_id').references(() => interviewBriefs.id, { onDelete: 'restrict' }),
   status: text('status').$type<BuildRunStatus>().notNull().default('queued'),
@@ -3727,7 +3742,7 @@ export const buildRuns = pgTable('build_runs', {
   promptCheck: check('build_runs_prompt_check', sql`char_length(btrim(${t.prompt})) >= 1`),
   statusCheck: check('build_runs_status_check', sql`${t.status} IN ('queued', 'intake', 'planning', 'building', 'checking', 'deploying', 'preview_ready', 'suspended', 'deployment_failed', 'needs_developer', 'accepted', 'cancelled', 'failed')`),
   suspendReasonCheck: check('build_runs_suspend_reason_check', sql`${t.suspendReason} IS NULL OR ${t.suspendReason} IN ('cost_cap', 'elapsed_cap', 'repair_cap', 'flag_disabled', 'permission_revoked', 'configuration', 'plan_invalid')`),
-  suspendedFromStatusCheck: check('build_runs_suspended_from_status_check', sql`${t.suspendedFromStatus} IS NULL OR ${t.suspendedFromStatus} IN ('intake', 'planning', 'building', 'checking', 'deploying')`),
+  suspendedFromStatusCheck: check('build_runs_suspended_from_status_check', sql`${t.suspendedFromStatus} IS NULL OR ${t.suspendedFromStatus} IN ('queued', 'intake', 'planning', 'building', 'checking', 'deploying')`),
   suspendedCoherenceCheck: check('build_runs_suspended_coherence_check', sql`(${t.status} = 'suspended') = (${t.suspendReason} IS NOT NULL AND ${t.suspendedFromStatus} IS NOT NULL)`),
   revisionCounterCheck: check('build_runs_revision_counter_check', sql`${t.revisionCap} >= 1 AND ${t.currentRevisionNumber} >= 1 AND ${t.revisionsUsed} >= 0 AND ${t.revisionsUsed} <= ${t.revisionCap} AND ${t.currentRevisionNumber} = ${t.revisionsUsed} + 1`),
   integrationBranchCheck: check('build_runs_integration_branch_check', sql`${t.integrationBranch} IS NULL OR ${t.integrationBranch} = 'apex/build/' || ${t.id}::text`),
@@ -3747,6 +3762,7 @@ export const buildRuns = pgTable('build_runs', {
   projectCreatedIdx: index('idx_build_runs_project_created').on(t.project, t.createdAt),
   slotIdx: index('idx_build_runs_slot').on(t.project, t.status).where(sql`${t.status} IN ('intake', 'planning', 'building', 'checking', 'deploying')`),
   queueIdx: index('idx_build_runs_queue').on(t.createdAt).where(sql`${t.status} = 'queued'`),
+  queuedAtIdx: index('idx_build_runs_queued_at').on(t.project, t.queuedAt).where(sql`${t.status} = 'queued'`),
   cancelCleanupIdx: index('idx_build_runs_cancel_cleanup').on(t.endedAt).where(sql`${t.status} = 'cancelled' AND ${t.integrationBranchDeletedAt} IS NULL`),
   retentionIdx: index('idx_build_runs_retention').on(t.endedAt).where(sql`${t.endedAt} IS NOT NULL`),
   interviewIdx: index('idx_build_runs_interview').on(t.interviewId).where(sql`${t.interviewId} IS NOT NULL`),

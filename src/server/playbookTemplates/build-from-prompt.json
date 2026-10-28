@@ -1,0 +1,32 @@
+{
+  "templateKey": "build-from-prompt",
+  "templateVersion": 1,
+  "name": "Build from prompt",
+  "description": "A human-led intake interview, then the build step that parks until the build finishes.",
+  "graph": {
+    "nodes": [
+      {
+        "id": "intake",
+        "stepType": "interview",
+        "config": {
+          "mode": "human_led",
+          "profileKey": "build-intake",
+          "openingMessage": "${input.prompt}",
+          "skillSettingsId": "${input.skillSettingsId}"
+        }
+      },
+      {
+        "id": "build",
+        "stepType": "build",
+        "config": {
+          "buildRunId": "${input.buildRunId}",
+          "briefId": "${steps.intake.briefId}",
+          "interviewId": "${steps.intake.interviewId}"
+        }
+      }
+    ],
+    "edges": [
+      { "from": "intake", "to": "build" }
+    ]
+  }
+}

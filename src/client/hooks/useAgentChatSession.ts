@@ -84,6 +84,12 @@ export interface SendOptions {
   attachments?: ChatAttachment[];
   model?: string;
   skill?: ChatTurnSkill;
+  /**
+   * Send the opening prompt while the empty-thread preparation state is the
+   * only reason the session is busy. A live run, an in-flight send, or an
+   * awaited reply still blocks.
+   */
+  duringPreparation?: boolean;
 }
 
 export interface AgentChatSession {
@@ -119,7 +125,7 @@ export interface AgentChatSession {
   showTypingIndicator: boolean;
 
   // --- Actions ---
-  send: (text: string, opts?: SendOptions) => Promise<void>;
+  send: (text: string, opts?: SendOptions) => Promise<boolean>;
   retryLast: () => void;
   /** Retry a failed durable run by identity — never resends text. */
   retryFailedRun: () => Promise<void>;
@@ -395,15 +401,21 @@ export function useAgentChatSession(
 
   // --- Send ---
   const send = useCallback(
-    async (text: string, opts: SendOptions = {}) => {
-      if (locked || !threadId) return;
-      if (!text && !opts.attachments?.length) return;
-      if (isInteractionBusy) return;
+    async (text: string, opts: SendOptions = {}): Promise<boolean> => {
+      if (locked || !threadId) return false;
+      if (!text && !opts.attachments?.length) return false;
+      const preparationOnly =
+        opts.duringPreparation === true &&
+        isPreparing &&
+        !isRunning &&
+        !isSending &&
+        !isAwaitingAgentResponse;
+      if (isInteractionBusy && !preparationOnly) return false;
 
       // beforeSend hook (e.g. syncToken)
       if (beforeSend) {
         const result = await beforeSend(text);
-        if (result === false) return;
+        if (result === false) return false;
       }
 
       setSendError(null);
@@ -472,7 +484,7 @@ export function useAgentChatSession(
           setSendError(msg);
           setOptimisticUserMessage(null);
           clearAwaitingAgentResponse();
-          return;
+          return true;
         }
 
         try {
@@ -495,12 +507,14 @@ export function useAgentChatSession(
         if (afterSend) {
           await afterSend();
         }
+        return true;
       } catch (err: unknown) {
         const msg =
           err instanceof Error ? err.message : 'Failed to send message';
         setSendError(msg);
         setOptimisticUserMessage(null);
         clearAwaitingAgentResponse();
+        return true;
       } finally {
         setIsSending(false);
       }
@@ -509,6 +523,10 @@ export function useAgentChatSession(
       locked,
       threadId,
       isInteractionBusy,
+      isPreparing,
+      isRunning,
+      isSending,
+      isAwaitingAgentResponse,
       beforeSend,
       beginAwaitingAgentResponse,
       messages,

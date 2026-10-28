@@ -59,8 +59,10 @@ import {
   getSkillConfig,
   getSkillConfigById,
   listSkillConfigsForProject,
+  listSkillConfigs,
   resolveSkillConfig,
   upsertSkillConfig,
+  updateRepositoryCheckoutState,
   deleteSkillConfig,
   setApprovers,
   replaceApproverPools,
@@ -77,11 +79,13 @@ import {
   projectApprovers,
   projectApproverGroups,
   projectApprovalModes,
+  projectSkillWorkflowSettings,
 } from '../db/schema';
 import type {
   QuickMcpPill,
   QuickSkillPill,
 } from '../../shared/types/projectSettings';
+import { QueryBuilder } from 'drizzle-orm/pg-core';
 import { readFileSync } from 'fs';
 import path from 'path';
 
@@ -147,6 +151,11 @@ function selectResolving(
   };
   chain[terminal] = jest.fn().mockResolvedValue(rows);
   return chain;
+}
+
+/** A tx.delete stub for transactions that also prune workflow rows. */
+function noopDelete() {
+  return jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
 }
 
 // ── getSkillConfigById ──────────────────────────────────────────────────────────
@@ -336,6 +345,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         // existing-config lookup → none for this project
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
@@ -347,6 +357,7 @@ describe('upsertSkillConfig', () => {
       };
       return fn(tx);
     });
+    mockDb.select.mockReturnValue(selectResolving([insertedRow], 'limit'));
 
     const result = await upsertSkillConfig(
       makeUpsertInput({ isDefault: false })
@@ -383,6 +394,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -429,6 +441,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -461,6 +474,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) => {
       const tx = {
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -471,6 +485,7 @@ describe('upsertSkillConfig', () => {
       };
       return fn(tx);
     });
+    mockDb.select.mockReturnValue(selectResolving([updatedRow], 'limit'));
 
     const result = await upsertSkillConfig(
       makeUpsertInput({
@@ -502,6 +517,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) =>
       fn({
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -543,6 +559,7 @@ describe('upsertSkillConfig', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) =>
       fn({
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -615,6 +632,7 @@ describe('upsertSkillConfig effort levels', () => {
 
     mockDb.transaction.mockImplementation(async (fn: any) =>
       fn({
+        delete: noopDelete(),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnThis(),
           where: jest.fn().mockReturnThis(),
@@ -636,9 +654,9 @@ describe('upsertSkillConfig effort levels', () => {
 
     await upsertSkillConfig(makeUpsertInput({ interviewEffort: 'medium' }));
 
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ interviewEffort: 'medium' })
-    );
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent).not.toHaveProperty('interviewEffort');
+    expect(parent.defaultEffort).toBeNull();
   });
 
   it('FEAT-002 PBI-001 AC-2 / TBI-004 DoD-3 persists null when a level is cleared to Inherit', async () => {
@@ -648,9 +666,9 @@ describe('upsertSkillConfig effort levels', () => {
       makeUpsertInput({ prdEffort: null, designDocEffort: 'high' })
     );
 
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ prdEffort: null, designDocEffort: 'high' })
-    );
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent).not.toHaveProperty('prdEffort');
+    expect(parent).not.toHaveProperty('designDocEffort');
   });
 
   it('FEAT-002 TBI-004 DoD-0 persists all twenty effort fields', async () => {
@@ -664,7 +682,12 @@ describe('upsertSkillConfig effort levels', () => {
 
     await upsertSkillConfig(makeUpsertInput(supplied));
 
-    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining(supplied));
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent.defaultEffort).toBe('medium');
+    for (const field of EFFORT_FIELDS) {
+      if (field === 'defaultEffort') continue;
+      expect(parent).not.toHaveProperty(field);
+    }
   });
 
   it('FEAT-002 TBI-004 DoD-3 writes null for every omitted effort field', async () => {
@@ -672,11 +695,12 @@ describe('upsertSkillConfig effort levels', () => {
 
     await upsertSkillConfig(makeUpsertInput());
 
-    expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining(
-        Object.fromEntries(EFFORT_FIELDS.map((field) => [field, null]))
-      )
-    );
+    const parent = valuesMock.mock.calls[0][0];
+    expect(parent.defaultEffort).toBeNull();
+    for (const field of EFFORT_FIELDS) {
+      if (field === 'defaultEffort') continue;
+      expect(parent).not.toHaveProperty(field);
+    }
   });
 });
 
@@ -821,6 +845,13 @@ describe('deleteSkillConfig', () => {
 function resetDbMocks() {
   jest.clearAllMocks();
   mockDb.select.mockReset();
+  mockDb.select.mockImplementation(() => ({
+    from: jest.fn().mockReturnThis(),
+    innerJoin: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockResolvedValue([]),
+    orderBy: jest.fn().mockResolvedValue([]),
+  }));
   mockDb.insert.mockReset();
   mockDb.update.mockReset();
   mockDb.delete.mockReset();
@@ -1405,6 +1436,7 @@ function mockPillInsertPath() {
 
   mockDb.transaction.mockImplementation(async (fn: any) =>
     fn({
+      delete: noopDelete(),
       select: jest.fn().mockReturnValue({
         from: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
@@ -1532,5 +1564,557 @@ describe('quick pill allow-lists', () => {
 
     expect(config?.quickSkillPills).toEqual([legacySkillPill]);
     expect(config?.quickMcpPills).toEqual([legacyMcpPill]);
+  });
+});
+
+// ── Workflow settings read mapping (normalization rollout step 2) ─────────────────
+
+/** A stored `project_skill_workflow_settings` row as the read subquery returns it. */
+function workflowRow(workflow: string, overrides: Record<string, unknown> = {}) {
+  return {
+    workflow,
+    skillPath: null,
+    model: null,
+    effort: null,
+    bedrockModelId: null,
+    bedrockMaxTokens: null,
+    bedrockTimeoutMs: null,
+    bedrockTemperature: null,
+    regenBedrockModelId: null,
+    regenBedrockMaxTokens: null,
+    scoreThreshold: null,
+    ...overrides,
+  };
+}
+
+const legacyWorkflowRow = {
+  ...defaultRow,
+  interviewSkillPath: '.cursor/skills/legacy-interview/SKILL.md',
+  interviewModel: 'legacy-interview-model',
+  interviewEffort: 'low',
+  adrModel: 'legacy-adr-model',
+  adrEffort: 'medium',
+  uiLabBedrockTemperature: 0.2,
+  standupSkillPath: '.cursor/skills/daily-standup/SKILL.md',
+  defaultModel: 'project-default-model',
+  defaultEffort: 'medium',
+};
+
+describe('workflow settings read mapping', () => {
+  beforeEach(() => resetDbMocks());
+
+  it('prefers a child row value over the legacy column', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [
+              workflowRow('interview', {
+                skillPath: '.cursor/skills/child-interview/SKILL.md',
+                model: 'child-interview-model',
+                effort: 'high',
+              }),
+              workflowRow('ui_lab', { bedrockTemperature: 0.7, bedrockMaxTokens: 12000 }),
+            ],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).toMatchObject({
+      interviewSkillPath: '.cursor/skills/child-interview/SKILL.md',
+      interviewModel: 'child-interview-model',
+      interviewEffort: 'high',
+      uiLabBedrockTemperature: 0.7,
+      uiLabBedrockMaxTokens: 12000,
+    });
+  });
+
+  it('falls back to the legacy column when no child row exists', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving([{ ...legacyWorkflowRow, workflowSettings: null }], 'limit')
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).toMatchObject({
+      interviewSkillPath: '.cursor/skills/legacy-interview/SKILL.md',
+      interviewModel: 'legacy-interview-model',
+      interviewEffort: 'low',
+      adrModel: 'legacy-adr-model',
+      adrEffort: 'medium',
+      uiLabBedrockTemperature: 0.2,
+      standupSkillPath: '.cursor/skills/daily-standup/SKILL.md',
+    });
+  });
+
+  it('falls back per workflow, keeping legacy values for workflows without a child row', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [workflowRow('interview', { model: 'child-interview-model' })],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.interviewModel).toBe('child-interview-model');
+    expect(config?.standupSkillPath).toBe('.cursor/skills/daily-standup/SKILL.md');
+    expect(config?.adrModel).toBe('legacy-adr-model');
+  });
+
+  it('treats a child row as authoritative for every field it maps, including nulls', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [workflowRow('interview', { model: 'child-interview-model' })],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.interviewSkillPath).toBeNull();
+    expect(config?.interviewEffort).toBeNull();
+  });
+
+  it('reads the shared ADR model and effort from the ADR workflow rows', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...legacyWorkflowRow,
+            workflowSettings: [
+              workflowRow('adr_finalize', {
+                skillPath: '.cursor/skills/adr-finalize/SKILL.md',
+                model: 'child-adr-model',
+                effort: 'high',
+              }),
+              workflowRow('adr_assistant', { model: 'child-adr-model', effort: 'high' }),
+            ],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).toMatchObject({
+      adrModel: 'child-adr-model',
+      adrEffort: 'high',
+      adrFinalizeSkillPath: '.cursor/skills/adr-finalize/SKILL.md',
+    });
+  });
+
+  it('leaves a workflow with no override empty so callers use default_model and default_effort', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [{ ...defaultRow, defaultModel: 'project-default-model', defaultEffort: 'medium', workflowSettings: [] }],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config?.prdModel ?? null).toBeNull();
+    expect(config?.prdEffort ?? null).toBeNull();
+    expect(config?.defaultModel).toBe('project-default-model');
+    expect(config?.defaultEffort).toBe('medium');
+  });
+
+  it('returns the flat ProjectSkillConfig shape without the internal workflow rows', async () => {
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [{ ...defaultRow, workflowSettings: [workflowRow('prd', { model: 'child-prd-model' })] }],
+        'limit'
+      )
+    );
+
+    const config = await getSkillConfigById('cfg-default');
+
+    expect(config).not.toHaveProperty('workflowSettings');
+    expect(config?.prdModel).toBe('child-prd-model');
+  });
+
+  it('maps child rows for every reader: default, by project, and all projects', async () => {
+    const rows = [
+      { ...defaultRow, workflowSettings: [workflowRow('prd', { model: 'child-prd-model' })] },
+      { ...secondRow, prdModel: 'legacy-prd-model', workflowSettings: null },
+    ];
+
+    mockDb.select.mockReturnValue(selectResolving(rows.slice(0, 1), 'limit'));
+    expect((await getSkillConfig('proj-alpha'))?.prdModel).toBe('child-prd-model');
+
+    mockDb.select.mockReturnValue(selectResolving(rows, 'orderBy'));
+    expect((await listSkillConfigsForProject('proj-alpha')).map((c) => c.prdModel)).toEqual([
+      'child-prd-model',
+      'legacy-prd-model',
+    ]);
+
+    mockDb.select.mockReturnValue(selectResolving(rows, 'orderBy'));
+    expect((await listSkillConfigs()).map((c) => c.prdModel)).toEqual([
+      'child-prd-model',
+      'legacy-prd-model',
+    ]);
+  });
+
+  it('loads child rows in the same query and ignores rows older than the parent row', async () => {
+    mockDb.select.mockReturnValue(selectResolving([defaultRow], 'limit'));
+
+    await getSkillConfigById('cfg-default');
+
+    const selection = mockDb.select.mock.calls[0][0];
+    expect(selection).toEqual(expect.objectContaining({ id: projectSkillSettings.id }));
+    // Render the parent select the way the service builds it: Drizzle drops
+    // table qualifiers inside a single-table select, so a correlated column
+    // must be qualified explicitly to reach the outer row.
+    const { sql: text } = new QueryBuilder()
+      .select(selection)
+      .from(projectSkillSettings)
+      .toSQL();
+    expect(text).toMatch(/from "project_skill_workflow_settings" "w"/);
+    expect(text).toContain('"w"."settings_id" = "project_skill_settings"."id"');
+    expect(text).not.toContain('"w"."updated_at" >= "project_skill_settings"."updated_at"');
+    expect(text).toContain('project_skill_workflow_settings');
+  });
+});
+
+// ── Workflow settings dual write (normalization rollout step 3) ───────────────────
+
+const NOW = '2026-10-27T17:00:00.000Z';
+
+/**
+ * Mocks db.transaction for upsertSkillConfig. The parent write returns
+ * `returnedRow`; writes to project_skill_workflow_settings are captured.
+ */
+function mockDualWriteTransaction(opts: {
+  returnedRow: Record<string, unknown>;
+  failWorkflowWrite?: boolean;
+}) {
+  const parentSet = jest.fn().mockReturnValue({
+    where: jest.fn().mockReturnValue({
+      returning: jest.fn().mockResolvedValue([opts.returnedRow]),
+    }),
+  });
+  const parentValues = jest.fn().mockReturnValue({
+    returning: jest.fn().mockResolvedValue([opts.returnedRow]),
+  });
+  const workflowOnConflict = jest.fn().mockImplementation(() =>
+    opts.failWorkflowWrite
+      ? Promise.reject(new Error('workflow write failed'))
+      : Promise.resolve(undefined)
+  );
+  const workflowValues = jest.fn().mockReturnValue({ onConflictDoUpdate: workflowOnConflict });
+  const workflowDeleteWhere = jest.fn().mockResolvedValue(undefined);
+  const tx = {
+    select: jest.fn().mockImplementation(() => {
+      let table: unknown;
+      const rowsFor = () => {
+        if (table === projectSkillWorkflowSettings && opts.returnedRow?.standupSkillPath) {
+          return [{
+            workflow: 'standup',
+            skillPath: opts.returnedRow.standupSkillPath,
+            model: null,
+            effort: null,
+            bedrockModelId: null,
+            bedrockMaxTokens: null,
+            bedrockTimeoutMs: null,
+            bedrockTemperature: null,
+            regenBedrockModelId: null,
+            regenBedrockMaxTokens: null,
+            scoreThreshold: null,
+          }];
+        }
+        return table === projectSkillWorkflowSettings ? [] : [opts.returnedRow];
+      };
+      const chain = {
+        from(next: unknown) {
+          table = next;
+          return chain;
+        },
+        where() {
+          const result = Promise.resolve(rowsFor()) as Promise<unknown[]> & {
+            limit: () => Promise<unknown[]>;
+          };
+          result.limit = () => Promise.resolve(rowsFor());
+          return result;
+        },
+        limit: () => Promise.resolve(rowsFor()),
+      };
+      return chain;
+    }),
+    update: jest.fn().mockImplementation(() => ({ set: parentSet })),
+    insert: jest.fn().mockImplementation((table) => {
+      if (table === projectSkillSettings) return { values: parentValues };
+      if (table === projectSkillWorkflowSettings) return { values: workflowValues };
+      return {
+        values: jest.fn().mockReturnValue({
+          onConflictDoUpdate: jest.fn().mockResolvedValue(undefined),
+        }),
+      };
+    }),
+    delete: jest.fn().mockImplementation((table) =>
+      table === projectSkillWorkflowSettings
+        ? { where: workflowDeleteWhere }
+        : { where: jest.fn().mockResolvedValue(undefined) }
+    ),
+  };
+  mockDb.transaction.mockImplementation(async (fn: any) => fn(tx));
+  return { tx, parentSet, parentValues, workflowValues, workflowOnConflict, workflowDeleteWhere };
+}
+
+function writtenWorkflowRows(workflowValues: jest.Mock): Array<Record<string, unknown>> {
+  return workflowValues.mock.calls[0]?.[0] ?? [];
+}
+
+const savedRow = {
+  ...defaultRow,
+  interviewSkillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+  interviewModel: 'claude-interview',
+  interviewEffort: 'high',
+  adrModel: 'claude-adr',
+  adrEffort: 'low',
+  adrFinalizeSkillPath: '.cursor/skills/adr-finalize/SKILL.md',
+  uiLabBedrockTemperature: 0.4,
+  uiLabBedrockMaxTokens: 9000,
+  prdValidationScoreThreshold: 85,
+  standupSkillPath: '.cursor/skills/daily-standup/SKILL.md',
+  standupModel: 'claude-standup',
+  updatedAt: NOW,
+};
+
+describe('workflow settings dual write', () => {
+  beforeEach(() => {
+    resetDbMocks();
+    jest.useFakeTimers().setSystemTime(new Date(NOW));
+    mockIsCheckoutReadinessEnabled.mockResolvedValue(false);
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it('updates the legacy columns and upserts child rows from the saved row', async () => {
+    const { parentSet, workflowValues, workflowOnConflict } = mockDualWriteTransaction({
+      returnedRow: savedRow,
+    });
+
+    await upsertSkillConfig(
+      makeUpsertInput({
+        id: 'cfg-default',
+        interviewSkillPath: savedRow.interviewSkillPath,
+        interviewModel: 'claude-interview',
+        interviewEffort: 'high',
+        adrModel: 'claude-adr',
+        adrEffort: 'low',
+        adrFinalizeSkillPath: savedRow.adrFinalizeSkillPath,
+        uiLabBedrockTemperature: 0.4,
+        uiLabBedrockMaxTokens: 9000,
+        prdValidationScoreThreshold: 85,
+        standupSkillPath: savedRow.standupSkillPath,
+        standupModel: savedRow.standupModel,
+      })
+    );
+
+    expect(parentSet).toHaveBeenCalledWith(
+      expect.not.objectContaining({ interviewModel: 'claude-interview', adrModel: 'claude-adr' })
+    );
+    const rows = writtenWorkflowRows(workflowValues);
+    const byWorkflow = Object.fromEntries(rows.map((row) => [row.workflow, row]));
+    expect(Object.keys(byWorkflow).sort()).toEqual([
+      'adr_assistant',
+      'adr_finalize',
+      'adr_interview',
+      'interview',
+      'prd_validation',
+      'standup',
+      'ui_lab',
+    ]);
+    expect(byWorkflow.interview).toMatchObject({
+      settingsId: 'cfg-default',
+      skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+      model: 'claude-interview',
+      effort: 'high',
+      bedrockModelId: null,
+      updatedAt: NOW,
+    });
+    expect(byWorkflow.ui_lab).toMatchObject({ bedrockTemperature: 0.4, bedrockMaxTokens: 9000 });
+    expect(byWorkflow.prd_validation).toMatchObject({ scoreThreshold: 85 });
+    expect(byWorkflow.standup).toMatchObject({
+      skillPath: '.cursor/skills/daily-standup/SKILL.md',
+      model: 'claude-standup',
+    });
+    for (const adr of ['adr_interview', 'adr_finalize', 'adr_assistant']) {
+      expect(byWorkflow[adr]).toMatchObject({ model: 'claude-adr', effort: 'low' });
+    }
+    expect(byWorkflow.adr_finalize.skillPath).toBe('.cursor/skills/adr-finalize/SKILL.md');
+    expect(workflowOnConflict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: [projectSkillWorkflowSettings.settingsId, projectSkillWorkflowSettings.workflow],
+      })
+    );
+  });
+
+  it('writes standup skill path and model from the save payload when no child row exists yet', async () => {
+    const { workflowValues } = mockDualWriteTransaction({
+      returnedRow: { ...defaultRow, updatedAt: NOW },
+    });
+
+    await upsertSkillConfig(
+      makeUpsertInput({
+        standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
+        standupModel: 'claude-standup',
+        standupEffort: 'high',
+      })
+    );
+
+    const standup = writtenWorkflowRows(workflowValues).find((row) => row.workflow === 'standup');
+    expect(standup).toMatchObject({
+      settingsId: 'cfg-default',
+      skillPath: '.cursor/skills/custom-standup/SKILL.md',
+      model: 'claude-standup',
+      effort: 'high',
+    });
+  });
+
+  it('stamps child rows with the same updated_at as the parent row so readers treat them as current', async () => {
+    const { parentSet, workflowValues } = mockDualWriteTransaction({ returnedRow: savedRow });
+
+    await upsertSkillConfig(makeUpsertInput({ id: 'cfg-default', interviewModel: 'claude-interview' }));
+
+    const parentUpdatedAt = parentSet.mock.calls[0][0].updatedAt;
+    const rows = writtenWorkflowRows(workflowValues);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.updatedAt).toBe(parentUpdatedAt);
+    }
+  });
+
+  it('deletes the child rows of workflows that no longer carry an override', async () => {
+    const { tx, workflowDeleteWhere, workflowValues } = mockDualWriteTransaction({
+      returnedRow: { ...defaultRow, interviewModel: 'claude-interview', updatedAt: NOW },
+    });
+
+    await upsertSkillConfig(makeUpsertInput({ id: 'cfg-default', interviewModel: 'claude-interview' }));
+
+    expect(tx.delete).toHaveBeenCalledWith(projectSkillWorkflowSettings);
+    expect(workflowDeleteWhere).toHaveBeenCalledTimes(1);
+    expect(writtenWorkflowRows(workflowValues).map((row) => row.workflow)).toEqual(['interview']);
+  });
+
+  it('writes child rows on insert as well', async () => {
+    const { parentValues, workflowValues } = mockDualWriteTransaction({
+      returnedRow: { ...savedRow, id: 'cfg-new' },
+    });
+
+    await upsertSkillConfig(makeUpsertInput({ interviewModel: 'claude-interview' }));
+
+    expect(parentValues).toHaveBeenCalledTimes(1);
+    const rows = writtenWorkflowRows(workflowValues);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.settingsId).toBe('cfg-new');
+  });
+
+  it('writes both shapes in one transaction and rejects the save when the child write fails', async () => {
+    mockDualWriteTransaction({ returnedRow: savedRow, failWorkflowWrite: true });
+
+    await expect(
+      upsertSkillConfig(makeUpsertInput({ id: 'cfg-default', interviewModel: 'claude-interview' }))
+    ).rejects.toThrow('workflow write failed');
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.delete).not.toHaveBeenCalled();
+    expect(mockSeedDefaultGroupsForProject).not.toHaveBeenCalled();
+  });
+
+  it('returns the saved workflow fields from child rows, not a parent-only null-filled row', async () => {
+    const parentOnly = { ...defaultRow, updatedAt: NOW };
+    mockDualWriteTransaction({ returnedRow: parentOnly });
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...parentOnly,
+            workflowSettings: [
+              workflowRow('interview', {
+                skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+                model: 'claude-interview',
+                effort: 'high',
+              }),
+            ],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const result = await upsertSkillConfig(
+      makeUpsertInput({
+        id: 'cfg-default',
+        interviewSkillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+        interviewModel: 'claude-interview',
+        interviewEffort: 'high',
+      })
+    );
+
+    expect(result).toMatchObject({
+      interviewSkillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+      interviewModel: 'claude-interview',
+      interviewEffort: 'high',
+    });
+    expect(result).not.toHaveProperty('workflowSettings');
+  });
+});
+
+describe('updateRepositoryCheckoutState', () => {
+  beforeEach(resetDbMocks);
+
+  it('returns workflow fields from child rows after updating checkout state', async () => {
+    const parentOnly = {
+      ...defaultRow,
+      repositoryCheckoutStatus: 'ready',
+      repositoryCheckoutSha: 'abc123',
+    };
+    mockDb.update.mockReturnValue({
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([parentOnly]),
+      }),
+    });
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...parentOnly,
+            workflowSettings: [workflowRow('interview', { model: 'claude-interview' })],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const result = await updateRepositoryCheckoutState('cfg-default', {
+      status: 'ready',
+      sha: 'abc123',
+    });
+
+    expect(result).toMatchObject({
+      repositoryCheckoutStatus: 'ready',
+      repositoryCheckoutSha: 'abc123',
+      interviewModel: 'claude-interview',
+    });
+    expect(result).not.toHaveProperty('workflowSettings');
   });
 });

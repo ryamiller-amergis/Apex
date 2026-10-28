@@ -7,6 +7,8 @@ import { getThread } from './chatAgentService';
 import { getUserPermissions } from './rbacService';
 import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
+import { isBuildIntakeThread } from './buildIntakeThread';
+import { canActOnBuildIntakeInterview, isBuildIntakeInterview } from './buildIntakeAccess';
 
 export type ThreadAccess = 'owner' | 'read';
 
@@ -81,6 +83,18 @@ async function userCanReadLinkedThread(userId: string): Promise<boolean> {
 }
 
 /**
+ * Who may see a build intake: the requester, a Project Admin of the build's
+ * project, or a Platform Admin. The build-intake write rule uses the same check.
+ */
+export async function isBuildIntakeParticipant(
+  userId: string,
+  requesterUserId: string,
+  project: string | null | undefined,
+): Promise<boolean> {
+  return canActOnBuildIntakeInterview(userId, { authorId: requesterUserId, project: project ?? null });
+}
+
+/**
  * Resolve read access to a chat thread. Returns null when the thread does not
  * exist or the user may not read it (callers should respond with 404).
  */
@@ -95,6 +109,13 @@ export async function resolveThreadAccess(
 
   if (thread.userId === userId) {
     return { access: 'owner', thread };
+  }
+
+  // chat:view_all and interviews:view do not reach a build-intake thread.
+  if (isBuildIntakeThread(thread)) {
+    return (await isBuildIntakeParticipant(userId, thread.userId, thread.kickoff.project))
+      ? { access: 'read', thread }
+      : null;
   }
 
   const perms = await getUserPermissions(userId);
@@ -155,9 +176,12 @@ async function canAnswerInterview(userId: string, interviewId: string): Promise<
       discoveryAssigneeId: true,
       deliveryAssigneeId: true,
       technicalAssigneeId: true,
+      playbookProfileKey: true,
     },
   });
   if (!row) return false;
+  // Section owners and phase assignees do not reach a build-intake interview.
+  if (isBuildIntakeInterview(row)) return canActOnBuildIntakeInterview(userId, row);
   if (
     row.authorId === userId
     || row.prdOwnerId === userId

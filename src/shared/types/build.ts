@@ -2,6 +2,7 @@
  * Shared build contract for App Builder (FEAT-001).
  * Epic 1 and Epic 2 import these vocabularies. A pin test fails if a list changes.
  */
+import type { InterviewBriefSections } from './interview';
 import type { ArtifactRef } from './loadTest';
 
 export type { ArtifactRef };
@@ -14,6 +15,17 @@ export const BUILD_RUN_SLOT_STATUSES = [
   'checking',
   'deploying',
 ] as const;
+
+/** Same set as the slot list. Named for callers that talk about active builds. */
+export const BUILD_ACTIVE_STATUSES = BUILD_RUN_SLOT_STATUSES;
+
+export const BUILD_CONCURRENCY_LIMITS = { perProject: 3, platform: 10 } as const;
+
+export const BUILD_PROMPT_MAX_LENGTH = 8000;
+export const BUILD_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
+
+/** Badge and list "in progress" include the queue. The queue does not hold a slot. */
+export const BUILD_IN_PROGRESS_STATUSES = ['queued', ...BUILD_RUN_SLOT_STATUSES] as const;
 
 /** Stages a suspended run may return to. Same five as the slot list. */
 export const BUILD_RUN_STAGE_STATUSES = BUILD_RUN_SLOT_STATUSES;
@@ -118,6 +130,10 @@ export const BUILD_SCAFFOLD_KINDS = [
 export const BUILD_EVENT_TYPES = [
   'build.queued',
   'build.started',
+  'intake.sensitive_text_warning',
+  'intake.brief_drafted',
+  'intake.brief_draft_failed',
+  'intake.brief_edited',
   'intake.brief_approved',
   'plan.validated',
   'plan.invalid',
@@ -167,7 +183,7 @@ export const BUILD_TASK_KEY_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
 export const BUILD_EVENT_TYPE_PATTERN = /^[a-z][a-z0-9_.]{0,63}$/;
 
 const BUILD_RUN_TRANSITIONS: Record<BuildRunStatus, readonly BuildRunStatus[]> = {
-  queued: ['intake', 'cancelled', 'failed'],
+  queued: ['intake', 'suspended', 'cancelled', 'failed'],
   intake: ['planning', 'building', 'suspended', 'cancelled', 'failed'],
   planning: ['building', 'suspended', 'cancelled', 'failed'],
   building: ['checking', 'deploying', 'suspended', 'cancelled', 'failed'],
@@ -199,10 +215,52 @@ const BUILD_DEPLOYMENT_TRANSITIONS: Record<BuildDeploymentStatus, readonly Build
   failed: ['queued'],
 };
 
+/** A suspended queued build records `queued` so a later resume can put it back. */
+export type BuildSuspendedFromStatus = BuildRunStageStatus | 'queued';
+
+export function isBuildInProgress(status: BuildRunStatus): boolean {
+  return (BUILD_IN_PROGRESS_STATUSES as readonly string[]).includes(status);
+}
+
+export function buildStatusLabel(status: BuildRunStatus): string {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'intake':
+      return 'Intake';
+    case 'planning':
+      return 'Planning';
+    case 'building':
+      return 'Building';
+    case 'checking':
+      return 'Checking';
+    case 'deploying':
+      return 'Deploying';
+    case 'preview_ready':
+      return 'Preview ready';
+    case 'suspended':
+      return 'Suspended';
+    case 'deployment_failed':
+      return 'Deployment failed';
+    case 'needs_developer':
+      return 'Needs a developer';
+    case 'accepted':
+      return 'Accepted';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'failed':
+      return 'Failed';
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
 export function isLegalBuildRunTransition(
   from: BuildRunStatus,
   to: BuildRunStatus,
-  suspendedFromStatus?: BuildRunStageStatus | null,
+  suspendedFromStatus?: BuildSuspendedFromStatus | null,
 ): boolean {
   if (from === 'suspended') {
     if (to === 'cancelled' || to === 'failed') return true;
@@ -280,26 +338,98 @@ export interface BuildRiskDecision {
   rating: BuildRiskRating;
   decision: string;
   rationale: string;
+  /** True when a high rating replaced the agent's decision with the fixed reversible option. */
+  reversible?: boolean;
 }
 
+export const BUILD_REQUIREMENT_TEXT_MAX = 1000;
+export const BUILD_BRIEF_MAX_REQUIREMENTS = 100;
+
+export const BUILD_REQUIREMENT_PREFIXES: Record<BuildRequirementKind, string> = {
+  ac: 'AC',
+  dod: 'DOD',
+  br: 'BR',
+  nfr: 'NFR',
+};
+
+export const BUILD_RISK_DECISION_PREFIX = 'RD';
+
+/** Highest number issued per ID prefix. Counters only grow, so a removed number is never reused. */
+export type BuildIdCounters = Record<'AC' | 'DOD' | 'BR' | 'NFR' | 'RD', number>;
+
+/** A requirement row as a person or the drafting agent submits it. `id` is null for a new row. */
+export interface BuildRequirementInput {
+  id: string | null;
+  kind: BuildRequirementKind;
+  text: string;
+}
+
+/** A risk decision as the drafting agent proposes it, before validation and the reversible swap. */
+export interface RiskCandidate {
+  category: BuildRiskCategory;
+  rating: BuildRiskRating;
+  decision: string;
+  rationale: string;
+  destructive: boolean;
+}
+
+export interface BuildClassificationResult {
+  value: BuildClassification;
+  reasons: string[];
+}
+
+export interface BuildBriefAnalysis {
+  requirements: BuildRequirement[];
+  riskDecisions: BuildRiskDecision[];
+  classification: BuildClassificationResult;
+  counters: BuildIdCounters;
+}
+
+export interface BuildBriefAnalysisResponse {
+  interviewId: string;
+  buildRunId: string;
+  revisionNumber: number;
+  briefVersion: number;
+  briefStatus: 'draft' | 'approved';
+  requirements: BuildRequirement[];
+  riskDecisions: BuildRiskDecision[];
+  classification: BuildClassificationResult;
+  requester: { id: string; displayName: string };
+  approval: { approvedBy: { id: string; displayName: string }; approvedAt: string } | null;
+  viewer: { mayEdit: boolean; actingFor: string | null };
+}
+
+/** Body of `GET /api/interviews/:id/brief/analysis` when no draft exists yet (404). */
+export interface BuildBriefAnalysisMissing {
+  error: string;
+  draftFailed: boolean;
+}
+
+export interface SaveBuildBriefRequest {
+  sections: InterviewBriefSections;
+  requirements: BuildRequirementInput[];
+}
+
+/** Null means "not set": the resolver falls back for models; skill paths have no fallback. */
 export interface BuildProfileRoleSetting {
-  skillPath: string;
-  model: string;
+  skillPath: string | null;
+  model: string | null;
 }
 
-/** Shape only. FEAT-003 stores the profile. */
+export interface BuildProfileCaps {
+  costUsd: number | null;
+  elapsedMinutesPerRevision: number | null;
+  /** Change requests, not counting the first build. */
+  maxRevisions: number | null;
+  maxParallelism: number | null;
+}
+
+/** Stored on `project_skill_settings.build_profile`, one per repository configuration. */
 export interface BuildProfile {
-  intake: BuildProfileRoleSetting;
-  planner: BuildProfileRoleSetting;
-  implementer: BuildProfileRoleSetting;
-  qa: BuildProfileRoleSetting;
-  check: BuildProfileRoleSetting;
-  costCapUsd: number;
-  elapsedCapSeconds: number;
-  parallelismCap: number;
-  /** Change requests, not counting the first build. Default 5. */
-  revisionCap: number;
-  qualityManifestRef: string;
+  roles: Record<BuildProfileRole, BuildProfileRoleSetting>;
+  caps: BuildProfileCaps;
+  qualityManifestPath: string | null;
+  deployPipelineId: number | null;
   supportContactUserIds: string[];
 }
 
@@ -332,13 +462,16 @@ export interface BuildRun {
   clientRequestId: string;
   modelOverride: string | null;
   prompt: string;
-  playbookRunId: string;
+  /** Null while the build is queued and has not started a Playbook run. */
+  playbookRunId: string | null;
   playbookStepRunId: string | null;
+  skillSettingsId: string | null;
+  queuedAt: string | null;
   interviewId: string | null;
   briefId: string | null;
   status: BuildRunStatus;
   suspendReason: BuildSuspendReason | null;
-  suspendedFromStatus: BuildRunStageStatus | null;
+  suspendedFromStatus: BuildSuspendedFromStatus | null;
   currentRevisionNumber: number;
   revisionsUsed: number;
   revisionCap: number;
@@ -458,6 +591,48 @@ export interface BuildEvent {
   actorUserId: string | null;
   dedupeKey: string | null;
   createdAt: string;
+}
+
+export interface StartBuildRequest {
+  project: string;
+  repository: string;
+  prompt: string;
+  model?: string;
+  clientRequestId: string;
+}
+
+export interface StartBuildResponse {
+  buildRunId: string;
+  playbookRunId: string | null;
+  status: 'queued' | 'intake' | 'failed';
+  queuePosition: number | null;
+  queueReason: 'project_limit' | 'platform_limit' | null;
+  replayed: boolean;
+}
+
+export interface BuildListItem {
+  id: string;
+  repository: string;
+  status: BuildRunStatus;
+  suspendReason: BuildSuspendReason | null;
+  requesterUserId: string;
+  requesterDisplayName: string;
+  createdAt: string;
+  queuePosition: number | null;
+  interviewId: string | null;
+  playbookRunId: string | null;
+}
+
+export interface BuildListResponse {
+  builds: BuildListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BuildRepositoryOption {
+  repository: string;
+  label: string;
 }
 
 export type { BuildPlan } from '../buildPlanSchema';

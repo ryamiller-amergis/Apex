@@ -66,7 +66,9 @@ describe('VT-09 final build vocabularies', () => {
       'navigation_entry', 'empty_component', 'empty_test',
     ]);
     expect([...BUILD_EVENT_TYPES]).toEqual([
-      'build.queued', 'build.started', 'intake.brief_approved', 'plan.validated', 'plan.invalid',
+      'build.queued', 'build.started', 'intake.sensitive_text_warning',
+      'intake.brief_drafted', 'intake.brief_draft_failed', 'intake.brief_edited', 'intake.brief_approved',
+      'plan.validated', 'plan.invalid',
       'task.launched', 'task.completed', 'task.merged', 'task.failed', 'check.passed',
       'deploy.queued', 'deploy.started', 'deploy.succeeded', 'deploy.failed',
       'revision.requested', 'pull_request.opened', 'run.suspended', 'run.resumed',

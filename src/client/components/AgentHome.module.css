@@ -21,23 +21,23 @@
 
 .tabStrip {
   display: flex;
-  min-height: 56px;
+  min-height: 46px;
   flex-shrink: 0;
   align-items: center;
   gap: 4px;
-  padding: 8px 24px;
+  padding: 5px 20px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
 }
 
 .tab {
-  min-height: 36px;
-  padding: 0 16px;
+  min-height: 32px;
+  padding: 0 14px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
@@ -1435,8 +1435,8 @@
 
 @media (max-width: 768px) {
   .tabStrip {
-    min-height: 52px;
-    padding: 8px 12px;
+    min-height: 44px;
+    padding: 4px 12px;
   }
 
   .page {

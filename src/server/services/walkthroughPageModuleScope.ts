@@ -247,6 +247,24 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  builds: {
+    pageEntries: [
+      {
+        component: 'src/client/components/BuildsView.tsx',
+        routePattern: '/builds',
+        suggestedRoute: '/builds',
+      },
+    ],
+  },
+  'mcp-servers': {
+    pageEntries: [
+      {
+        component: 'src/client/components/McpServersView.tsx',
+        routePattern: '/mcp-servers',
+        suggestedRoute: '/mcp-servers',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

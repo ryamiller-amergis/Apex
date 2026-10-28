@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.39.2",
+    "date": "2026-10-26",
+    "title": "Repository Cache Disk Usage",
+    "changes": [
+      {
+        "type": "bugfix",
+        "description": "Repairing a cached repository no longer leaves a full duplicate copy on disk each time, which had filled App Service storage and taken production offline"
+      },
+      {
+        "type": "bugfix",
+        "description": "Background maintenance now shrinks cached repositories that have grown far past their real size, including ones in active use"
+      },
+      {
+        "type": "improvement",
+        "description": "The staging slot only cleans up its repository cache and no longer clones production's repositories onto its own disk"
+      }
+    ]
+  },
+  {
     "version": "1.39.1",
     "date": "2026-10-13",
     "title": "Production Reliability",

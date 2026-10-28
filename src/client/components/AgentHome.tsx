@@ -35,6 +35,8 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   const [projectViews, setProjectViews] = useState<Record<string, HomeView>>({});
   const restoredProjectRef = useRef<string | null>(null);
   const restoredUrlThreadRef = useRef<string | null>(null);
+  const onRestoreThreadRef = useRef(onRestoreThread);
+  onRestoreThreadRef.current = onRestoreThread;
   const dashboard = useHomeDashboard(selectedProject, 'team');
   const [searchParams] = useSearchParams();
   const preferredView = projectViews[selectedProject] ?? loadHomeView(selectedProject);
@@ -61,6 +63,10 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
   }, [isActive, onHomeViewChange, selectedProject, threadFromUrl, view]);
 
   useEffect(() => {
+    if (!isActive) {
+      restoredUrlThreadRef.current = null;
+      return;
+    }
     if (threadFromUrl) {
       if (
         restoredUrlThreadRef.current === threadFromUrl
@@ -70,7 +76,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
       }
       restoredUrlThreadRef.current = threadFromUrl;
       restoredProjectRef.current = selectedProject;
-      onRestoreThread?.(threadFromUrl);
+      onRestoreThreadRef.current?.(threadFromUrl);
       return;
     }
 
@@ -78,11 +84,11 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
     if (restoredProjectRef.current === selectedProject) return;
     restoredProjectRef.current = selectedProject;
     const storedThreadId = sessionStorage.getItem(`agentHomeThreadId:${selectedProject}`);
-    if (storedThreadId) onRestoreThread?.(storedThreadId);
-  }, [onRestoreThread, selectedProject, threadFromUrl]);
+    if (storedThreadId) onRestoreThreadRef.current?.(storedThreadId);
+  }, [isActive, selectedProject, threadFromUrl]);
 
   return (
-    <main className={styles.dashboardPage} data-testid="agent-home-dashboard">
+    <main className={styles.dashboardPage} {...{ 'data-testid': 'agent-home-dashboard' }}>
       <div className={styles.tabStrip} role="tablist" aria-label="Home view">
         <button
           type="button"
@@ -90,7 +96,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
           aria-selected={view === 'chat'}
           className={`${styles.tab} ${view === 'chat' ? styles.activeTab : ''}`}
           onClick={() => selectView('chat')}
-          data-testid="home-view-chat"
+          {...{ 'data-testid': 'home-view-chat' }}
         >
           Chat
         </button>
@@ -101,7 +107,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
             aria-selected={view === 'status'}
             className={`${styles.tab} ${view === 'status' ? styles.activeTab : ''}`}
             onClick={() => selectView('status')}
-            data-testid="home-view-status"
+            {...{ 'data-testid': 'home-view-status' }}
           >
             Project status
           </button>

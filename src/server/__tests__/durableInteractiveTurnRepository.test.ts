@@ -1273,6 +1273,48 @@ describe('durable interactive turn service', () => {
     });
   });
 
+  it('freezes one shared project MCP connection and no other servers', async () => {
+    const connectionId = '20000000-0000-4000-8000-000000000002';
+    const { service, admitted } = durableServiceHarness({
+      maxviewCapability: 'enabled',
+      thread: authoritativeThread({
+        kickoff: {
+          project: 'project-1',
+          repo: 'repo-1',
+          skillProvider: 'github',
+          model: 'model-a',
+          effort: 'low',
+          assistantType: 'mcp-server',
+          mcpServerId: connectionId,
+          pillLabel: 'Clerk',
+        },
+      }),
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'home-chat',
+      turnId: TURN_ID,
+      text: 'Which applications do I have?',
+      attachments: [],
+    });
+
+    expect(admitted[0].specification.grounding).toBeNull();
+    expect(admitted[0].specification.mcpServers).toEqual([{
+      kind: 'internal-proxy',
+      serverName: 'mcp-server',
+      connectionId,
+      boundUserId: USER_ID,
+      enableRepoBrowse: false,
+    }]);
+    expect(admitted[0].specification.currentPrompt).toContain('Clerk');
+    expect(admitted[0].specification.currentPrompt).toContain('read-only tools');
+    expect(admitted[0].specification.currentPrompt).toContain(
+      'at most eight MCP calls',
+    );
+  });
+
   it('fails explicitly when registered MaxView is enabled but unavailable', async () => {
     const { service, repository } = durableServiceHarness({
       maxviewCapability: 'unavailable',
