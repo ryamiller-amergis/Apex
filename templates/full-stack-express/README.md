@@ -191,6 +191,22 @@ Working directory: `templates/full-stack-express/`. Install the workspace first.
 
 Browser tests locate elements by role, label, or `data-testid`. A CSS class, an element id, or an XPath locator fails lint.
 
+| Command           | What it does                                                                   |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `scan:secrets`    | Scans tracked files for secrets. Prints rule, file, and line, never the value  |
+| `scan:vulns`      | Scans `pnpm-lock.yaml` with OSV-Scanner. Fails on high and critical advisories |
+| `scan:licenses`   | Checks production dependency licenses against the allowed list                 |
+| `scan`            | Runs the three scans and prints every finding                                  |
+| `sbom`            | Writes a CycloneDX SBOM of production dependencies                             |
+| `container:build` | Builds the production image `project-service:local`                            |
+| `test:container`  | Proves the image. Exits 2 when Docker is not available                         |
+
+## Supply chain and the production image
+
+The commands and the exception file are described in [docs/runbooks/supply-chain.md](docs/runbooks/supply-chain.md).
+
+`pnpm container:build` tags the image `project-service:local`. The process listens on port `3000` unless `PORT` is set. The image sets `NODE_ENV=production` and `CLIENT_DIST_DIR=/app/web` only. Pass `DATABASE_URL`, `AUTH_MODE`, and any telemetry variables at run time. Those are the names in `.env.example`. The image does not run migrations. Run `pnpm migrate` before sending traffic. `pnpm test` runs the supply-chain Vitest suite after the other suites.
+
 ## API contract
 
 Routes are defined once in Zod in `packages/contracts`. The committed `packages/contracts/openapi/openapi.json` is generated from them. The conventions for a new endpoint are in `packages/contracts/README.md`.

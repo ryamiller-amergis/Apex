@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm openapi:check && corepack pnpm routes:check",
-    "test": "node scripts/run-suites.mjs",
+    "test": "node scripts/run-suites.mjs && corepack pnpm exec vitest run --config scripts/supply-chain/vitest.config.mjs",
     "test:unit": "vitest run --project unit",
     "test:component": "vitest run --project component",
     "test:coverage": "vitest run --project unit --project component --project api --coverage",
@@ -37,17 +37,33 @@
     "toolchain:check": "node scripts/check-toolchain.mjs",
     "openapi:generate": "corepack pnpm --filter @project-scope/contracts run openapi:generate",
     "openapi:check": "corepack pnpm --filter @project-scope/contracts run openapi:check",
-    "routes:check": "corepack pnpm --filter @project-scope/api run routes:check"
+    "routes:check": "corepack pnpm --filter @project-scope/api run routes:check",
+    "scan:secrets": "node scripts/supply-chain/scan-secrets.mjs",
+    "scan:vulns": "node scripts/supply-chain/scan-vulns.mjs",
+    "scan:licenses": "node scripts/supply-chain/scan-licenses.mjs",
+    "scan": "node scripts/supply-chain/scan.mjs",
+    "sbom": "node scripts/supply-chain/sbom.mjs",
+    "container:build": "node scripts/supply-chain/container-build.mjs",
+    "test:container": "node scripts/supply-chain/test-container.mjs"
+  },
+  "pnpm": {
+    "overrides": {
+      "body-parser": "2.4.0"
+    }
   },
   "devDependencies": {
     "@axe-core/playwright": "catalog:",
+    "@cyclonedx/cdxgen": "catalog:",
     "@playwright/test": "catalog:",
+    "@secretlint/secretlint-rule-preset-recommend": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "eslint": "catalog:",
     "jsdom": "catalog:",
     "prettier": "catalog:",
+    "secretlint": "catalog:",
     "testcontainers": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }

@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "files": [
+    "dist",
+    "openapi/openapi.json"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
