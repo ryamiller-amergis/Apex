@@ -787,6 +787,14 @@ function lastQuestion(agentText: string): string {
  * the only record of earlier answers. Question-driven sessions resend the
  * saved question/answer pairs every turn so an answered question is not
  * asked again.
+ *
+ * The UI can show a second agent question before the user answers the first
+ * (a race it guards against separately), so the transcript may hold more
+ * than one outstanding agent question at once. Pair each user reply with the
+ * specific question it quotes — the UI's `Q<n> · <question>` answer format
+ * echoes the question text verbatim — rather than always the most recently
+ * asked one. An outstanding question with no quoted reply stays out of the
+ * recap entirely, so the model is never told it was answered.
  */
 function answersSoFar(
   transcript: DurableInteractiveTurnSpecification['transcript'],
@@ -794,19 +802,27 @@ function answersSoFar(
 ): string[] {
   if (workflowClass !== 'interview' && workflowClass !== 'adr') return [];
   const entries: string[] = [];
-  let pendingQuestion: string | null = null;
+  const pendingQuestions: string[] = [];
   for (const entry of transcript) {
     if (entry.role === 'agent') {
-      pendingQuestion = lastQuestion(entry.text);
+      pendingQuestions.push(lastQuestion(entry.text));
       continue;
     }
     const answer = clipped(entry.text, MAX_RECAP_ANSWER_CHARS);
-    entries.push(
-      pendingQuestion === null
-        ? `${entries.length + 1}. Original request: ${answer}`
-        : `${entries.length + 1}. You asked: ${pendingQuestion}\n   User answered: ${answer}`,
+    if (pendingQuestions.length === 0) {
+      entries.push(`${entries.length + 1}. Original request: ${answer}`);
+      continue;
+    }
+    const quotedIndex = pendingQuestions.findIndex(
+      (question) => question.length > 0 && entry.text.includes(question),
     );
-    pendingQuestion = null;
+    // No explicit quote (plain free-text reply): assume it answers the
+    // earliest still-open question, matching the normal one-question flow.
+    const matchedIndex = quotedIndex >= 0 ? quotedIndex : 0;
+    const [question] = pendingQuestions.splice(matchedIndex, 1);
+    entries.push(
+      `${entries.length + 1}. You asked: ${question}\n   User answered: ${answer}`,
+    );
   }
   if (entries.length === 0) return [];
   return [

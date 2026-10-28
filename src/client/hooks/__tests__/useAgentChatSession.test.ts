@@ -398,6 +398,35 @@ describe('useAgentChatSession', () => {
     );
   });
 
+  it('sends an opening prompt while the empty thread is still preparing', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'idle', messages: [] };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        createTurnId: () => TURN_ID_1,
+      }),
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+
+    await act(async () => {
+      await result.current.send('Hello');
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.send('Open the ADR', { duringPreparation: true });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('Open the ADR'),
+      }),
+    );
+  });
+
   it('computes isPreparing when enablePreparationState is true and no messages', () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'idle' };
     const { result } = renderHook(() =>
