@@ -1892,8 +1892,8 @@ const savedRow = {
   uiLabBedrockTemperature: 0.4,
   uiLabBedrockMaxTokens: 9000,
   prdValidationScoreThreshold: 85,
-  // Not an upsertSkillConfig input: the child row must come from the saved row.
   standupSkillPath: '.cursor/skills/daily-standup/SKILL.md',
+  standupModel: 'claude-standup',
   updatedAt: NOW,
 };
 
@@ -1922,6 +1922,8 @@ describe('workflow settings dual write', () => {
         uiLabBedrockTemperature: 0.4,
         uiLabBedrockMaxTokens: 9000,
         prdValidationScoreThreshold: 85,
+        standupSkillPath: savedRow.standupSkillPath,
+        standupModel: savedRow.standupModel,
       })
     );
 
@@ -1949,7 +1951,10 @@ describe('workflow settings dual write', () => {
     });
     expect(byWorkflow.ui_lab).toMatchObject({ bedrockTemperature: 0.4, bedrockMaxTokens: 9000 });
     expect(byWorkflow.prd_validation).toMatchObject({ scoreThreshold: 85 });
-    expect(byWorkflow.standup).toMatchObject({ skillPath: '.cursor/skills/daily-standup/SKILL.md' });
+    expect(byWorkflow.standup).toMatchObject({
+      skillPath: '.cursor/skills/daily-standup/SKILL.md',
+      model: 'claude-standup',
+    });
     for (const adr of ['adr_interview', 'adr_finalize', 'adr_assistant']) {
       expect(byWorkflow[adr]).toMatchObject({ model: 'claude-adr', effort: 'low' });
     }
@@ -1959,6 +1964,28 @@ describe('workflow settings dual write', () => {
         target: [projectSkillWorkflowSettings.settingsId, projectSkillWorkflowSettings.workflow],
       })
     );
+  });
+
+  it('writes standup skill path and model from the save payload when no child row exists yet', async () => {
+    const { workflowValues } = mockDualWriteTransaction({
+      returnedRow: { ...defaultRow, updatedAt: NOW },
+    });
+
+    await upsertSkillConfig(
+      makeUpsertInput({
+        standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
+        standupModel: 'claude-standup',
+        standupEffort: 'high',
+      })
+    );
+
+    const standup = writtenWorkflowRows(workflowValues).find((row) => row.workflow === 'standup');
+    expect(standup).toMatchObject({
+      settingsId: 'cfg-default',
+      skillPath: '.cursor/skills/custom-standup/SKILL.md',
+      model: 'claude-standup',
+      effort: 'high',
+    });
   });
 
   it('stamps child rows with the same updated_at as the parent row so readers treat them as current', async () => {

@@ -53,8 +53,7 @@ export function omitWorkflowColumns<T extends Record<string, unknown>>(row: T): 
 
 /**
  * Writes the incoming workflow fields and keeps child-row values for fields
- * the caller does not send. Standup's skill path is one of those: the project
- * settings form does not edit it.
+ * the caller does not send.
  */
 export async function saveWorkflowSettings(
   tx: WorkflowWriter,

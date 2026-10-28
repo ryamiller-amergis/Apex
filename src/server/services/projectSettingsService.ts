@@ -202,6 +202,8 @@ export interface UpsertSkillConfigOptions extends ProjectEffortSettings {
   designPlanBedrockMaxTokens?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
+  standupSkillPath?: string | null;
+  standupModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
   technicalSkillPath?: string | null;
@@ -294,6 +296,8 @@ export async function upsertSkillConfig(
     designPlanBedrockMaxTokens: opts.designPlanBedrockMaxTokens ?? null,
     developmentSkillPath: opts.developmentSkillPath ?? null,
     developmentModel: opts.developmentModel ?? null,
+    standupSkillPath: opts.standupSkillPath ?? null,
+    standupModel: opts.standupModel ?? null,
     featureRequestSkillPath: opts.featureRequestSkillPath ?? null,
     featureRequestModel: opts.featureRequestModel ?? null,
     technicalSkillPath: opts.technicalSkillPath ?? null,
