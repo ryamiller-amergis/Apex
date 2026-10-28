@@ -204,7 +204,7 @@ describe('header (PBI-016)', () => {
       stage: { kind: 'exception', key: 'deployment_failed', tasks: null, queuePosition: null, suspendReason: null },
     })));
     const first = renderAt(`/builds/${BUILD_ID}`);
-    expect(await screen.findByTestId('build-run-exception-cause')).toHaveTextContent('Dana (dana@example.com) have been notified');
+    expect(await screen.findByTestId('build-run-exception-cause')).toHaveTextContent('Dana (dana@example.com) has been notified');
     first.unmount();
 
     stubFetch(() => json(200, detail({
@@ -311,6 +311,16 @@ describe('Overview tab (PBI-017)', () => {
     const before = detailCalls();
     await userEvent.click(screen.getByTestId('build-overview-retry'));
     await waitFor(() => expect(detailCalls()).toBeGreaterThan(before));
+  });
+
+  it('shows a not-ready message, not an error, before the first revision exists', async () => {
+    const early = detail();
+    early.currentRevision = null;
+    stubFetch(() => json(200, early));
+    renderAt(`/builds/${BUILD_ID}/overview`);
+    expect(await screen.findByTestId('build-overview-pending'))
+      .toHaveTextContent('The brief is not ready yet. It appears here once intake drafts it.');
+    expect(screen.queryByTestId('build-overview-error')).not.toBeInTheDocument();
   });
 });
 

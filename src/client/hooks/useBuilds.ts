@@ -175,7 +175,10 @@ export function useBuildIntake(project: string, buildId: string | undefined) {
     enabled: Boolean(project) && Boolean(buildId),
     queryFn: () => fetchBuildDetail(project, buildId ?? ''),
     select: (detail): BuildIntakeRef => ({ interviewId: detail.build.intakeInterviewId }),
-    refetchInterval: (query) => (query.state.data?.build.intakeInterviewId ? false : BUILD_POLL_MS),
+    refetchInterval: (query) => {
+      const build = query.state.data?.build;
+      return build && !build.intakeInterviewId && isBuildLive(build.status) ? BUILD_POLL_MS : false;
+    },
     retry: retryUnlessDenied,
   });
 }

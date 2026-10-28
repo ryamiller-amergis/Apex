@@ -72,7 +72,14 @@ interface BuildOverviewTabProps {
 }
 
 export const BuildOverviewTab: React.FC<BuildOverviewTabProps> = ({ brief, onRetry }) => {
-  if (!brief || brief.status === 'unavailable') {
+  if (!brief) {
+    return (
+      <p className={styles.empty} {...{ 'data-testid': 'build-overview-pending' }}>
+        The brief is not ready yet. It appears here once intake drafts it.
+      </p>
+    );
+  }
+  if (brief.status === 'unavailable') {
     return (
       <div className={styles.message} role="alert" {...{ 'data-testid': 'build-overview-error' }}>
         <p>Could not load the brief.</p>

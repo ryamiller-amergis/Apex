@@ -73,6 +73,13 @@ describe('exceptionCopy', () => {
       .toBe('Your feature was built and passed its checks, but deployment failed. Dana (dana@example.com) and Lee have been notified.');
     expect(exceptionCopy(stage({ kind: 'exception', key: 'needs_developer' }), contacts)?.cause)
       .toBe('Apex could not merge your change with the latest code. Dana (dana@example.com) and Lee have been notified.');
+    const one = [{ displayName: 'Dana', email: null }];
+    expect(exceptionCopy(stage({ kind: 'exception', key: 'deployment_failed' }), one)?.cause)
+      .toBe('Your feature was built and passed its checks, but deployment failed. Dana has been notified.');
+    expect(exceptionCopy(stage({ kind: 'exception', key: 'needs_developer' }), one)?.cause)
+      .toBe('Apex could not merge your change with the latest code. Dana has been notified.');
+    expect(exceptionCopy(stage({ kind: 'exception', key: 'needs_developer' }), [])?.cause)
+      .toBe('Apex could not merge your change with the latest code. the Build support contacts have been notified.');
     const failed = exceptionCopy(stage({ kind: 'exception', key: 'failed' }), contacts);
     expect(failed?.cause).toBe('Apex could not finish this build.');
     expect(failed?.contact).toMatch(/Dana/);

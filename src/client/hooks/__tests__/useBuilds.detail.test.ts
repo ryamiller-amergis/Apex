@@ -177,4 +177,25 @@ describe('useBuildIntake', () => {
     await waitFor(() => expect(result.current.data).toEqual({ interviewId: 'iv-1' }));
     expect(fetchMock).toHaveBeenCalledWith('/api/builds/b1?project=Apex', expect.anything());
   });
+
+  it('polls a live build until the interview id appears', async () => {
+    const waiting = { build: { ...detail('intake').build, intakeInterviewId: null } };
+    fetchMock.mockResolvedValueOnce(response(200, waiting)).mockResolvedValue(response(200, detail('intake')));
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useBuildIntake('Apex', BUILD_ID), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual({ interviewId: null }));
+    await advance(5_000);
+    await waitFor(() => expect(result.current.data).toEqual({ interviewId: 'iv-1' }));
+    await advance(15_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 403, 404])('stops polling after a %d', async (status) => {
+    fetchMock.mockResolvedValue(response(status, { error: 'Denied' }));
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useBuildIntake('Apex', BUILD_ID), { wrapper });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    await advance(20_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -61,10 +61,15 @@ const PROJECT_ADMIN = 'Contact a Project Admin.';
 const PLATFORM_ADMIN = 'Contact a Platform Admin.';
 const LIMIT_CAUSE = 'This build stopped because it reached a limit on revisions, time or parallel agents. It continues once the limit is raised and someone resumes it.';
 
-function contactNames(contacts: readonly BuildSupportContactView[]): string {
-  return formatSupportContacts(contacts.map((contact) => (
+function contactLabels(contacts: readonly BuildSupportContactView[]): string[] {
+  return contacts.map((contact) => (
     contact.email ? `${contact.displayName} (${contact.email})` : contact.displayName
-  )));
+  ));
+}
+
+/** `formatSupportContacts` drops blank labels, so only exactly one non-blank label reads as singular. */
+function notifiedVerb(labels: readonly string[]): 'has' | 'have' {
+  return labels.filter((label) => label.trim().length > 0).length === 1 ? 'has' : 'have';
 }
 
 function suspendedCopy(reason: BuildSuspendReason, who: string): Pick<ExceptionCopy, 'cause' | 'contact'> {
@@ -100,7 +105,9 @@ export function exceptionCopy(
   contacts: readonly BuildSupportContactView[],
 ): ExceptionCopy | null {
   if (stage.kind === 'stage') return null;
-  const who = contactNames(contacts);
+  const labels = contactLabels(contacts);
+  const who = formatSupportContacts(labels);
+  const notified = `${who} ${notifiedVerb(labels)} been notified.`;
   const key = stage.key;
   switch (key) {
     case 'suspended':
@@ -115,14 +122,14 @@ export function exceptionCopy(
       return { ...suspendedCopy(stage.suspendReason, who), resume: RESUME_LINE, dataError: false };
     case 'deployment_failed':
       return {
-        cause: `Your feature was built and passed its checks, but deployment failed. ${who} have been notified.`,
+        cause: `Your feature was built and passed its checks, but deployment failed. ${notified}`,
         contact: `Contact ${who}.`,
         resume: null,
         dataError: false,
       };
     case 'needs_developer':
       return {
-        cause: `Apex could not merge your change with the latest code. ${who} have been notified.`,
+        cause: `Apex could not merge your change with the latest code. ${notified}`,
         contact: `Contact ${who}.`,
         resume: null,
         dataError: false,
