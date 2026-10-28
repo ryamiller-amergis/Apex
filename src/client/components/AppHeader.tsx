@@ -283,7 +283,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         <QuickLinksMenu
           project={selectedProject}
           hidden={hideProjectChrome}
-          canManage={can('quick-links:manage') && can('admin:roles')}
+          canManage={can('quick-links:manage')}
+          canOpenSettings={can('quick-links:manage') && can('admin:roles')}
           canAddPersonal={can('quick-links:personal')}
           data-testid="app-header-quick-links"
         />

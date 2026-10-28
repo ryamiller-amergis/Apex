@@ -1,18 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BOOKMARK_IMPORT_MAX_FILE_BYTES,
-  USER_QUICK_LINKS_IMPORT_MAX_ITEMS,
+  PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
+  QUICK_LINKS_IMPORT_MAX_ITEMS,
   USER_QUICK_LINKS_MAX_PER_PROJECT,
   type CreateUserQuickLinkInput,
-  type ImportUserQuickLinksResult,
+  type ImportQuickLinksResult,
+  type QuickLinkScope,
 } from '../../shared/types/projectQuickLinks';
-import { useImportMyQuickLinks } from '../hooks/useProjectQuickLinks';
+import { useImportMyQuickLinks, useImportProjectQuickLinks } from '../hooks/useProjectQuickLinks';
 import {
   defaultCategoryFor,
   parseBookmarksHtml,
   type ParsedBookmark,
   type ParsedBookmarks,
 } from '../utils/parseBookmarksHtml';
+import { categoryToneClass } from './QuickLinkCategory';
+import { QuickLinkCategoryField } from './QuickLinkCategoryField';
 import styles from './QuickLinkModals.module.css';
 
 const MAX_FILE_MB = BOOKMARK_IMPORT_MAX_FILE_BYTES / (1024 * 1024);
@@ -84,16 +88,25 @@ const TriStateCheckbox: React.FC<TriStateCheckboxProps> = ({
 
 interface BookmarkImportModalProps {
   project: string;
-  /** Personal links the user already has in this project, to warn before the cap. */
-  existingCount: number;
+  /** True with quick-links:manage: the whole import can go to the shared project links instead. */
+  canShare: boolean;
+  /** Links already saved in each destination, to warn before the cap. */
+  existingPersonalCount: number;
+  existingProjectCount: number;
+  personalCategories: string[];
+  projectCategories: string[];
   onCancel: () => void;
-  onImported: (result: ImportUserQuickLinksResult) => void;
+  onImported: (result: ImportQuickLinksResult, scope: QuickLinkScope) => void;
   'data-testid'?: string;
 }
 
 export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
   project,
-  existingCount,
+  canShare,
+  existingPersonalCount,
+  existingProjectCount,
+  personalCategories,
+  projectCategories,
   onCancel,
   onImported,
   'data-testid': testId = 'bookmark-import-modal',
@@ -103,9 +116,12 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [categories, setCategories] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
+  const [scope, setScope] = useState<QuickLinkScope>('personal');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const importLinks = useImportMyQuickLinks(project);
+  const importMine = useImportMyQuickLinks(project);
+  const importShared = useImportProjectQuickLinks(project);
+  const importLinks = scope === 'project' ? importShared : importMine;
 
   const folders = useMemo(() => groupByFolder(parsed?.bookmarks ?? []), [parsed]);
 
@@ -124,6 +140,14 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
       }))
       .filter((folder) => folder.bookmarks.length > 0);
   }, [folders, search]);
+
+  const categoryOptions = useMemo(
+    () =>
+      scope === 'project'
+        ? projectCategories
+        : Array.from(new Set([...personalCategories, ...projectCategories])).sort((a, b) => a.localeCompare(b)),
+    [scope, personalCategories, projectCategories],
+  );
 
   const visibleIds = useMemo(
     () => visibleFolders.flatMap((f) => f.bookmarks.map((b) => b.id)),
@@ -188,10 +212,11 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
         .map((b) => ({ label: b.label, url: b.url, category: categoryFor(folder).trim() || null })),
     );
     if (items.length === 0) return;
-    importLinks.mutate({ items }, { onSuccess: onImported });
+    importLinks.mutate({ items }, { onSuccess: (result) => onImported(result, scope) });
   };
 
-  const room = Math.max(0, USER_QUICK_LINKS_MAX_PER_PROJECT - existingCount);
+  const cap = scope === 'project' ? PROJECT_QUICK_LINKS_MAX_PER_PROJECT : USER_QUICK_LINKS_MAX_PER_PROJECT;
+  const room = Math.max(0, cap - (scope === 'project' ? existingProjectCount : existingPersonalCount));
   const selectedCount = selected.size;
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
   const someVisibleSelected = visibleIds.some((id) => selected.has(id));
@@ -207,6 +232,38 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
     >
       <div className={`${styles.card} ${styles.cardWide}`}>
         <h2 className={styles.title} id="bookmark-import-title">Import bookmarks</h2>
+
+        {canShare && (
+          <fieldset className={styles.scopeGroup} {...{ 'data-testid': 'bookmark-import-scope' }}>
+            <legend className={styles.label}>Save to</legend>
+            {(
+              [
+                ['personal', 'Only me', 'Private links under My links'],
+                ['project', `Everyone in ${project}`, 'Shared links under Project links'],
+              ] as const
+            ).map(([value, title, hint]) => (
+              <label
+                key={value}
+                className={`${styles.scopeOption} ${scope === value ? styles.scopeOptionActive : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="bookmark-import-scope"
+                  value={value}
+                  className={styles.scopeRadio}
+                  checked={scope === value}
+                  disabled={importLinks.isPending}
+                  onChange={() => setScope(value)}
+                  {...{ 'data-testid': `bookmark-import-scope-${value}` }}
+                />
+                <span className={styles.scopeText}>
+                  <span className={styles.scopeTitle}>{title}</span>
+                  <span className={styles.scopeHint}>{hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        )}
 
         <div className={styles.field}>
           <p className={styles.text}>
@@ -273,7 +330,7 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
                 return (
                   <section
                     key={folder.key}
-                    className={styles.folder}
+                    className={`${styles.folder} ${categoryToneClass(categoryFor(folder))}`}
                     aria-label={folder.name}
                     {...{ 'data-testid': `bookmark-import-folder-${folder.index}` }}
                   >
@@ -289,15 +346,19 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
                         <span className={styles.folderName}>{folder.name}</span>
                         <span className={styles.folderCount}>({folder.bookmarks.length})</span>
                       </label>
-                      <input
-                        className={`${styles.input} ${styles.categoryInput}`}
-                        value={categoryFor(folder)}
-                        onChange={(e) => setCategories((prev) => ({ ...prev, [folder.key]: e.target.value }))}
-                        placeholder="No category"
-                        maxLength={60}
-                        aria-label={`Category for ${folder.name}`}
-                        {...{ 'data-testid': `bookmark-import-category-${folder.index}` }}
-                      />
+                      <div className={styles.categoryPicker}>
+                        <QuickLinkCategoryField
+                          key={`${scope}-${folder.key}`}
+                          id={`bookmark-import-category-${folder.index}`}
+                          label={`Category for ${folder.name}`}
+                          hideLabel
+                          compact
+                          value={categoryFor(folder)}
+                          onChange={(value) => setCategories((prev) => ({ ...prev, [folder.key]: value }))}
+                          options={categoryOptions}
+                          data-testid={`bookmark-import-category-${folder.index}`}
+                        />
+                      </div>
                     </div>
                     <ul className={styles.bookmarkList}>
                       {folder.bookmarks.map((bookmark) => (
@@ -324,7 +385,7 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
 
             {selectedCount > room && (
               <p className={styles.warning} {...{ 'data-testid': 'bookmark-import-cap-warning' }}>
-                You have room for {room} more personal links in this project (limit {USER_QUICK_LINKS_MAX_PER_PROJECT}).
+                You have room for {room} more {scope === 'project' ? 'shared' : 'personal'} links in this project (limit {cap}).
                 Links already saved are skipped; anything past the limit is not imported.
               </p>
             )}
@@ -354,7 +415,7 @@ export const BookmarkImportModal: React.FC<BookmarkImportModalProps> = ({
             disabled={
               !parsed
               || selectedCount === 0
-              || selectedCount > USER_QUICK_LINKS_IMPORT_MAX_ITEMS
+              || selectedCount > QUICK_LINKS_IMPORT_MAX_ITEMS
               || importLinks.isPending
             }
             {...{ 'data-testid': 'bookmark-import-confirm' }}

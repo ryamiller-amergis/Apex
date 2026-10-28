@@ -4,9 +4,11 @@ import { BookmarkImportModal } from '../BookmarkImportModal';
 import { BOOKMARK_IMPORT_MAX_FILE_BYTES } from '../../../shared/types/projectQuickLinks';
 
 const importMutate = jest.fn();
+const importSharedMutate = jest.fn();
 
 jest.mock('../../hooks/useProjectQuickLinks', () => ({
   useImportMyQuickLinks: () => ({ mutate: importMutate, isPending: false, error: null }),
+  useImportProjectQuickLinks: () => ({ mutate: importSharedMutate, isPending: false, error: null }),
 }));
 
 const EXPORT = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
@@ -40,7 +42,11 @@ function renderModal(props: Partial<ComponentProps<typeof BookmarkImportModal>> 
   render(
     <BookmarkImportModal
       project="MaxView"
-      existingCount={0}
+      canShare={false}
+      existingPersonalCount={0}
+      existingProjectCount={0}
+      personalCategories={[]}
+      projectCategories={[]}
       onCancel={onCancel}
       onImported={onImported}
       {...props}
@@ -85,14 +91,23 @@ describe('BookmarkImportModal', () => {
 
     expect(screen.getByTestId('bookmark-import-folder-0')).toHaveTextContent('Bookmarks bar');
     expect(screen.getByTestId('bookmark-import-folder-1')).toHaveTextContent('Bookmarks bar / Tools');
-    expect(screen.getByTestId('bookmark-import-category-1')).toHaveValue('Tools');
+    expect(screen.getByTestId('bookmark-import-category-1-new')).toHaveValue('Tools');
     expect(screen.getByTestId('bookmark-import-summary')).toHaveTextContent('3 of 3 selected · 2 skipped (not http or https)');
     expect(screen.getByTestId('bookmark-import-confirm')).toHaveTextContent('Import 3 links');
   });
 
   it('renders bookmark titles as text, not HTML', async () => {
     const { container } = render(
-      <BookmarkImportModal project="MaxView" existingCount={0} onCancel={jest.fn()} onImported={jest.fn()} />,
+      <BookmarkImportModal
+        project="MaxView"
+        canShare={false}
+        existingPersonalCount={0}
+        existingProjectCount={0}
+        personalCategories={[]}
+        projectCategories={[]}
+        onCancel={jest.fn()}
+        onImported={jest.fn()}
+      />,
     );
     await upload();
     expect(screen.getByText('Pendo <img src=x onerror=alert(1)>')).toBeInTheDocument();
@@ -131,8 +146,8 @@ describe('BookmarkImportModal', () => {
   it('imports the selected bookmarks with folder categories and reports the result', async () => {
     const { onImported } = renderModal();
     await upload();
-    fireEvent.change(screen.getByTestId('bookmark-import-category-1'), { target: { value: 'Dev tools' } });
-    fireEvent.change(screen.getByTestId('bookmark-import-category-0'), { target: { value: '' } });
+    fireEvent.change(screen.getByTestId('bookmark-import-category-1-new'), { target: { value: 'Dev tools' } });
+    fireEvent.change(screen.getByTestId('bookmark-import-category-0-new'), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('bookmark-import-item-bm-2'));
 
     fireEvent.click(screen.getByTestId('bookmark-import-confirm'));
@@ -149,13 +164,50 @@ describe('BookmarkImportModal', () => {
 
     const result = { created: 2, skippedDuplicates: 0, rejected: [] };
     importMutate.mock.calls[0][1].onSuccess(result);
-    expect(onImported).toHaveBeenCalledWith(result);
+    expect(onImported).toHaveBeenCalledWith(result, 'personal');
   });
 
   it('warns when the selection is larger than the room left', async () => {
-    renderModal({ existingCount: 199 });
+    renderModal({ existingPersonalCount: 199 });
     await upload();
     expect(screen.getByTestId('bookmark-import-cap-warning')).toHaveTextContent('room for 1 more');
+  });
+
+  it('hides the Save to choice without quick-links:manage', () => {
+    renderModal();
+    expect(screen.queryByTestId('bookmark-import-scope')).not.toBeInTheDocument();
+  });
+
+  it('lets managers import into the shared project links', async () => {
+    const { onImported } = renderModal({ canShare: true, projectCategories: ['Tools'], existingProjectCount: 199 });
+    expect(screen.getByTestId('bookmark-import-scope-personal')).toBeChecked();
+    fireEvent.click(screen.getByTestId('bookmark-import-scope-project'));
+    await upload();
+
+    expect(screen.getByTestId('bookmark-import-cap-warning')).toHaveTextContent('room for 1 more shared links');
+    expect(screen.getByTestId('bookmark-import-category-1')).toHaveValue('Tools');
+    fireEvent.click(screen.getByTestId('bookmark-import-confirm'));
+
+    expect(importMutate).not.toHaveBeenCalled();
+    expect(importSharedMutate).toHaveBeenCalledWith(
+      { items: expect.arrayContaining([{ label: 'Clerk', url: 'https://dashboard.clerk.com/', category: 'Tools' }]) },
+      expect.any(Object),
+    );
+    const result = { created: 3, skippedDuplicates: 0, rejected: [] };
+    importSharedMutate.mock.calls[0][1].onSuccess(result);
+    expect(onImported).toHaveBeenCalledWith(result, 'project');
+  });
+
+  it('offers existing categories in each folder picker', async () => {
+    renderModal({ personalCategories: ['Work'], projectCategories: ['Tools'] });
+    await upload();
+    const picker = screen.getByTestId('bookmark-import-category-1');
+    expect(Array.from((picker as HTMLSelectElement).options).map((o) => o.text)).toEqual([
+      'No category',
+      'Tools',
+      'Work',
+      '+ New category…',
+    ]);
   });
 
   it('closes on Escape', () => {
