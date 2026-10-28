@@ -144,6 +144,7 @@ function harness(store: MemoryStore, options?: {
     now: options?.now ?? (() => 5_000),
     track: jest.fn(),
     releaseAgentRun: async (agentRunId, outcome) => {
+      if (releases.some(([id]) => id === agentRunId)) return;
       releases.push([agentRunId, outcome]);
     },
     catalogExcerpt: async () => 'Button',
@@ -470,6 +471,19 @@ describe('build planning service', () => {
     } as BuildPlan);
     const heads = Object.fromEntries(stored.map((row) => [row.taskKey, row.chainHeadKey]));
     expect(heads).toEqual({ setup: null, a: 'a', b: 'a', c: 'a' });
+  });
+
+  it('a cancelled planner run is ended before the next launch', async () => {
+    const store = new MemoryStore(view());
+    const { deps, requests, releases } = harness(store);
+    await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    expect(await finish(store, deps, 'cancelled')).toEqual({ status: 'ignored' });
+    expect(store.current.planner?.status).toBe('failed');
+    expect(releases).toEqual([['agent-1', 'cancelled']]);
+
+    expect(await resumePlanning({ buildRunId: 'run-1' }, deps)).toEqual({ status: 'launched', attempt: 2 });
+    expect(requests).toHaveLength(2);
+    expect(releases).toEqual([['agent-1', 'cancelled']]);
   });
 
   it('a launch error leaves the planner failed so the next attempt can start', async () => {

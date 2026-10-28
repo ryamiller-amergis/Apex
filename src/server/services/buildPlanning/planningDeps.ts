@@ -3,6 +3,7 @@
  * The execution snapshot is written before the Cloud Agent SDK call.
  */
 import { eq } from 'drizzle-orm';
+import { isAgentRunTerminalStatus } from '../../../shared/types/agentRunLifecycle';
 import { integrationBranchName } from '../../../shared/types/build';
 import { db } from '../../db/drizzle';
 import { agentRuns } from '../../db/schema';
@@ -111,9 +112,9 @@ async function launchPlanner(request: PlannerLaunchRequest): Promise<PlannerLaun
 async function releaseAgentRun(id: string, outcome: AgentRunOutcome): Promise<void> {
   const row = await db.query.agentRuns.findFirst({
     where: eq(agentRuns.id, id),
-    columns: { projectId: true, cloudAgentIdentity: true, dispatchMessageId: true },
+    columns: { projectId: true, cloudAgentIdentity: true, dispatchMessageId: true, status: true },
   });
-  if (!row) return;
+  if (!row || isAgentRunTerminalStatus(row.status)) return;
   if (outcome === 'cancelled' && row.projectId && row.cloudAgentIdentity && row.dispatchMessageId) {
     await cancelQuietly(id, {
       project: row.projectId,
@@ -126,7 +127,7 @@ async function releaseAgentRun(id: string, outcome: AgentRunOutcome): Promise<vo
     ...(outcome === 'cancelled' ? { terminalReason: 'forced_cancel' as const } : {}),
     ...(row.dispatchMessageId ? { dispatchMessageId: row.dispatchMessageId } : {}),
   });
-  if (!result.ok && !result.reason.startsWith('already_terminal')) {
+  if (!result.ok) {
     console.warn('[build-planning] could not end the old planner agent run', JSON.stringify({
       agentRunId: id,
       reason: result.reason,

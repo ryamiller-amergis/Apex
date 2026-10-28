@@ -42,8 +42,8 @@ export interface BuildPlanningDeps {
   readPlanFile: (view: PlanningView, branch: string | null) => Promise<string | null>;
   /**
    * Ends a planner agent run that Apex no longer waits on, so the next attempt
-   * can hold the one live agent run allowed per build task. Safe to call on a
-   * run that has already ended.
+   * can hold the one live agent run allowed per build task. Must do nothing
+   * when the run has already ended.
    */
   releaseAgentRun: (agentRunId: string, outcome: AgentRunOutcome) => Promise<void>;
   catalogExcerpt?: (view: PlanningView) => Promise<string>;
@@ -93,9 +93,6 @@ export async function resumePlanning(
     return notPlanning(view);
   }
 
-  if (view.planner?.agentRunId && (view.planner.status === 'running' || view.planner.status === 'ready')) {
-    await deps.releaseAgentRun(view.planner.agentRunId, 'cancelled');
-  }
   view = await deps.store.apply(view.buildRunId, {
     runStatus: 'planning',
     suspendReason: null,
@@ -131,10 +128,11 @@ export async function applyPlannerCompletion(
     return { status: 'ignored' };
   }
   if (input.agentStatus === 'cancelled') {
-    await deps.store.claimAndApply(view.buildRunId, input.agentRunId, {
+    const claimed = await deps.store.claimAndApply(view.buildRunId, input.agentRunId, {
       planner: { ...view.planner, status: 'failed' },
       events: [ignoredEvent(view, 'agent_cancelled')],
     });
+    if (claimed) await deps.releaseAgentRun(input.agentRunId, 'cancelled');
     return { status: 'ignored' };
   }
 
@@ -308,6 +306,9 @@ async function launchFullPlanner(
     return { status: 'launched', attempt: view.planner.attempt };
   }
 
+  if (view.planner?.agentRunId) {
+    await deps.releaseAgentRun(view.planner.agentRunId, 'cancelled');
+  }
   const attempt = view.planner?.status === 'failed' ? view.planner.attempt + 1 : 1;
   const planner = {
     id: view.planner?.id ?? randomUUID(),
