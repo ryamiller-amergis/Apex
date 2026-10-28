@@ -26,6 +26,8 @@ Read these when the task needs them. Paths are relative to the repository root.
 - [Migrations runbook](../../../docs/runbooks/migrations.md) (`docs/runbooks/migrations.md`), when the schema changes
 - Schema file: `apps/api/src/persistence/schema.ts`, when the schema changes
 - [Testing guide](../../../docs/testing.md) (`docs/testing.md`)
+- [Feature slices](../../../docs/feature-slices.md) (`docs/feature-slices.md`), when the task adds a feature slice
+- [Build artifacts](../../../docs/plans/README.md) (`docs/plans/README.md`), when the task comes from a brief
 
 ## Required references
 
@@ -35,14 +37,15 @@ Classify the task with the table in Procedure before the first edit. Load every 
 
 The Enforced by cell is a gate id from `quality/quality-manifest.json`, or `Review`.
 
-| ID      | Rule                                                                                                                                                                               | Enforced by          |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| DEV-R01 | An endpoint added or changed loads the API contract skill before any code is written.                                                                                              | Review               |
-| DEV-R02 | A screen added or changed loads the UI standards skill before any code is written.                                                                                                 | Review               |
-| DEV-R03 | A schema change ships a reviewed SQL migration committed with the Drizzle change. Follow `docs/runbooks/migrations.md`. The application does not change the schema when it starts. | migration-validation |
-| DEV-R04 | A missing required reference stops the task. Report the missing path instead of guessing.                                                                                          | Review               |
-| DEV-R05 | Do not put a hard-coded secret or an identity value in code or tests. Use a synthetic value or an environment variable.                                                            | Review               |
-| DEV-R06 | Documentation only, or configuration only, does not require the API contract skill or the UI standards skill. The applicable gates in the procedure table still apply.             | formatting           |
+| ID      | Rule                                                                                                                                                                                                                                                                              | Enforced by          |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| DEV-R01 | An endpoint added or changed loads the API contract skill before any code is written.                                                                                                                                                                                             | Review               |
+| DEV-R02 | A screen added or changed loads the UI standards skill before any code is written.                                                                                                                                                                                                | Review               |
+| DEV-R03 | A schema change ships a reviewed SQL migration committed with the Drizzle change. Follow `docs/runbooks/migrations.md`. The application does not change the schema when it starts.                                                                                                | migration-validation |
+| DEV-R04 | A missing required reference stops the task. Report the missing path instead of guessing.                                                                                                                                                                                         | Review               |
+| DEV-R05 | Do not put a hard-coded secret or an identity value in code or tests. Use a synthetic value or an environment variable.                                                                                                                                                           | Review               |
+| DEV-R06 | Documentation only, or configuration only, does not require the API contract skill or the UI standards skill. The applicable gates in the procedure table still apply.                                                                                                            | formatting           |
+| DEV-R07 | A task that needs authorization, a production identity provider, or a performance target reads the recorded answer in the brief. A missing answer stops the task and asks the matching question in `docs/plans/README.md` verbatim. Write no code. A pause answer writes no code. | Review               |
 
 ## Procedure
 
@@ -53,14 +56,14 @@ The Enforced by cell is a gate id from `quality/quality-manifest.json`, or `Revi
 5. Run the gates for each matching row, using the `script` field in `quality/quality-manifest.json`. Do not treat a script name as a gate id.
 6. List the gates you ran and the exit status of each. Do not call the build verified. The QA skill owns that verdict.
 
-| Change type                 | Required skills                            | Gates                                                                      |
-| --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------- |
-| Endpoint added or changed   | api-contract                               | build, type-check, lint, formatting, openapi-drift, unit, api, integration |
-| Screen added or changed     | ui-standards                               | build, type-check, lint, formatting, unit, component, accessibility        |
-| Schema change               | api-contract when an endpoint also changes | migration-validation, integration                                          |
-| Container definition change | none                                       | container-build                                                            |
-| Documentation only          | none                                       | formatting, docs-validation                                                |
-| Configuration only          | none                                       | build, type-check, lint, formatting                                        |
+| Change type                 | Required skills                            | Gates                                                                                              |
+| --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Endpoint added or changed   | api-contract                               | build, type-check, lint, formatting, openapi-drift, routes-check, contract, unit, api, integration |
+| Screen added or changed     | ui-standards                               | build, type-check, lint, formatting, unit, component, accessibility                                |
+| Schema change               | api-contract when an endpoint also changes | migration-validation, integration                                                                  |
+| Container definition change | none                                       | container-build                                                                                    |
+| Documentation only          | none                                       | formatting, docs-validation                                                                        |
+| Configuration only          | none                                       | build, type-check, lint, formatting                                                                |
 
 Documentation only and configuration only do not require either skill. They still require the applicable quality gates in that row.
 
@@ -70,7 +73,7 @@ A schema change that also changes an endpoint uses both rows.
 
 - The code, documentation, or configuration change
 - The list of gates run, by manifest id, with each exit status
-- For a screen, the UI role skill's evidence note
+- For a screen, the UI role skill's evidence note at `quality/evidence/<slug>-ui.md`
 - For a schema change, the reviewed SQL migration path
 
 The change contains no hard-coded secret and no identity value.
@@ -87,6 +90,7 @@ Mark each item yes, no, or not applicable. A no is a failure.
 | A missing reference stopped the task (DEV-R04)                                               | The missing-path report                  |                                |
 | Secrets and identity values are synthetic or environment variables (DEV-R05)                 | The diff                                 |                                |
 | Documentation or configuration did not load an unneeded skill, and gates still ran (DEV-R06) | The gate list                            |                                |
+| A missing brief answer stopped the task and asked the recorded question (DEV-R07)            | `docs/plans/README.md`                   |                                |
 
 ## Stop conditions
 
@@ -97,6 +101,8 @@ Stop and report the missing piece. Do not guess. Write no further code.
 - `quality/quality-manifest.json` cannot be read.
 - A schema change is required and `docs/runbooks/migrations.md` or `apps/api/src/persistence/schema.ts` cannot be read.
 - The task asks for a hard-coded secret or a real identity value in code or tests. Refuse the literal. Use a synthetic value or an environment variable.
+- The task needs authorization, a production identity provider, or a performance target, and the brief has no answer. Ask the matching question in `docs/plans/README.md` verbatim.
+- The brief records pause.
 
 ## Boundaries
 

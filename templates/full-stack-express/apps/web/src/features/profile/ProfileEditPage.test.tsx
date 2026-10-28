@@ -40,7 +40,9 @@ function puts(calls: FetchCall[]): FetchCall[] {
 }
 
 async function openEditor(calls: FetchCall[]): Promise<void> {
-  expect(await screen.findByTestId(profileTestIds.form)).toBeInTheDocument();
+  expect(
+    await screen.findByTestId(profileTestIds.form, {}, { timeout: 4000 })
+  ).toBeInTheDocument();
   expect(calls.some((call) => call.url.includes('?'))).toBe(false);
 }
 

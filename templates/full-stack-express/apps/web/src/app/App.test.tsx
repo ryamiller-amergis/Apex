@@ -32,4 +32,21 @@ describe('app composition', () => {
     expect(screen.getByTestId('app-shell-header')).toBeInTheDocument();
     expect(screen.queryByText('boom-secret')).not.toBeInTheDocument();
   });
+
+  it('shows Profile in the shell navigation', () => {
+    render(
+      <AppProviders client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={['/profile']}>
+          <AppLayout>
+            <div>content</div>
+          </AppLayout>
+        </MemoryRouter>
+      </AppProviders>
+    );
+
+    expect(screen.getByTestId('app-shell-nav-item-profile')).toHaveAttribute(
+      'href',
+      '/profile'
+    );
+  });
 });

@@ -27,7 +27,7 @@ describe('manifest validator', () => {
       for (const gate of validQuality().gates) {
         expect(gateRow(result.output, gate.id)).toMatch(/\sdefined\s/);
       }
-      expect(validQuality().gates).toHaveLength(13);
+      expect(validQuality().gates).toHaveLength(15);
       expect(result.output.trimEnd()).toMatch(
         /0 error\(s\), \d+ warning\(s\)$/
       );

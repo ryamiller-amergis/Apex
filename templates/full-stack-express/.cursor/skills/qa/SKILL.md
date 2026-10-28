@@ -7,7 +7,7 @@ description: Reads the quality manifest and the NFR manifest, runs or reviews ev
 
 ## Purpose
 
-The QA skill serves QA, or a QA agent acting for one. It checks a build against every gate in the quality manifest and reports evidence, including deferrals. The verdict is verified only when every gate passed.
+The QA skill serves QA, or a QA agent acting for one. It checks a build against every gate in the quality manifest and reports evidence, including deferrals. The verdict is verified only when every gate passed. The integration skill writes the status the person sees.
 
 ## When to use
 
@@ -22,6 +22,7 @@ Read these before the report. Stop if the quality manifest or the NFR manifest c
 - [Quality guide](../../../quality/README.md) (`quality/README.md`)
 - [NFR schema](../../../quality/nfr-manifest.schema.json) (`quality/nfr-manifest.schema.json`)
 - [Testing guide](../../../docs/testing.md) (`docs/testing.md`)
+- [Build artifacts](../../../docs/plans/README.md) (`docs/plans/README.md`)
 
 Gate scripts are the `script` values in the quality manifest. Run each with `pnpm run` and that script name. Do not hard-code a script name in the report in place of the gate id.
 
@@ -50,6 +51,7 @@ The Enforced by cell is a gate id from `quality/quality-manifest.json`, or `Revi
 4. A gate listed in `deferrals` with a reason and an owner is not verified. A gate that was not run is not verified. Neither is passed.
 5. Read `quality/nfr-manifest.json`. For each target, trace it to the `verifiedBy` evidence. When `illustrative` is true, the status is no target supplied.
 6. Set the verdict. The verdict is `verified` only when every gate is `passed`. Otherwise the verdict is `not verified`.
+7. Write the report to `quality/evidence/<slug>.md` when a brief names a slug. The integration skill reads this file and writes the status the person sees.
 
 The report lists each gate. Use the manifest id in the Gate column. One shape example, not a substitute for the full list:
 

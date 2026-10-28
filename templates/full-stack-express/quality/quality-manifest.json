@@ -30,6 +30,16 @@
       "script": "openapi:check"
     },
     {
+      "id": "routes-check",
+      "title": "Registered routes match the contract routes",
+      "script": "routes:check"
+    },
+    {
+      "id": "contract",
+      "title": "Committed operations match the OpenAPI document",
+      "script": "test:contract"
+    },
+    {
       "id": "migration-validation",
       "title": "Drizzle schema matches the committed migrations",
       "script": "migrate:validate"

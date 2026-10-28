@@ -16,6 +16,8 @@ open.
 - Machine-readable quality and NFR manifests, a committed OpenAPI 3.1 document,
   reference tests, role skills, and a multi-stage production container
   definition.
+- An orchestrator skill that writes a brief and a plan, asks the recorded
+  questions, and shows the integration verdict after QA.
 
 ## Ownership
 

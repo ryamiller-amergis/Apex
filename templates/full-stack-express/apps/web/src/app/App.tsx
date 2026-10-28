@@ -12,7 +12,9 @@ import overrides from '../theme/overrides';
 import { queryClient as defaultQueryClient } from './queryClient';
 import { AppRoutes } from './routes';
 
-const navItems: NavItem[] = [];
+const navItems: NavItem[] = [
+  { id: 'profile', label: 'Profile', to: '/profile' },
+];
 
 export const AppLayout: React.FC<{ children: ReactNode }> = ({ children }) => {
   const location = useLocation();

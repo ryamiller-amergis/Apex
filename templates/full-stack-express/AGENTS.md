@@ -24,6 +24,8 @@ Rules that hold everywhere:
 | [README](README.md)                                                                      | You need the command reference, environment variables, or placeholders |
 | [Architecture overview](docs/architecture.md)                                            | You need the big picture: layers, request flow, data, identity         |
 | [Module map](docs/module-map.md)                                                         | You need to know which member owns a behavior and what it exports      |
+| [Feature slices](docs/feature-slices.md)                                                 | You add a product area and need the profile files to copy              |
+| [Build artifacts](docs/plans/README.md)                                                  | You run a prompted build and need the brief, plan, and question text   |
 | [API documentation](docs/api.md)                                                         | You call, change, or add an HTTP endpoint                              |
 | [Testing guide](docs/testing.md)                                                         | You write tests or need to know which suite and gate covers a change   |
 | [Design-system reference](docs/design-system.md)                                         | You style a screen, change a token, or brand the app                   |
@@ -49,6 +51,7 @@ Member guides with more detail:
 - [Contract conventions](packages/contracts/README.md)
 - [UI package usage](packages/ui/README.md)
 - [Quality and NFR manifests](quality/README.md)
+- [Evidence reports](quality/evidence/README.md)
 
 ## Skills
 
@@ -56,6 +59,7 @@ Skills are step-by-step instructions an agent loads for one kind of task. Each s
 
 When you add a skill, link its `SKILL.md` from this section and add its path to the [agent index](docs/agent-index.txt). `pnpm docs:check` reports a skill that is missing from either place.
 
+- [Orchestrator](.cursor/skills/orchestrator/SKILL.md) — run a prompted build, ask the recorded questions, and show the integration verdict
 - [API contract](.cursor/skills/api-contract/SKILL.md) — adding or changing an HTTP endpoint
 - [UI standards](.cursor/skills/ui-standards/SKILL.md) — adding or changing a screen
 - [Planner](.cursor/skills/planner/SKILL.md) — turn a prompt into a plan from the module map and the manifests

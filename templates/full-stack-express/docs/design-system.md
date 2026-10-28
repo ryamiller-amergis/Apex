@@ -1,6 +1,6 @@
 # Design-system reference
 
-The design system is the `@project-scope/ui` package in `packages/ui/`. It is a neutral MUI theme: semantic tokens, a light and a dark scheme, component defaults, and a contrast check. Screens use its components and the theme. They never write colour or spacing literals. Every export is listed in the [component catalog](component-catalog.md). Usage examples are in the [UI package guide](../packages/ui/README.md).
+The design system is the `@project-scope/ui` package in `packages/ui/`. It is a neutral MUI theme: semantic tokens, a light and a dark scheme, component defaults, and a contrast check. Screens use its components and the theme. They never write colour or spacing literals. Screens may also use MUI components that read this theme, such as `Button` and `TextField`. Every export, and that MUI rule, is listed in the [component catalog](component-catalog.md). Usage examples are in the [UI package guide](../packages/ui/README.md).
 
 ## Tokens
 

@@ -7,7 +7,7 @@ description: Reads the quality manifest, the QA evidence report, and the recorde
 
 ## Purpose
 
-The integration skill serves Platform Admin, standing in for the people who run the pipeline. It reads the QA evidence and reports ready or not ready. It names every gap. It does not run the pipeline and it does not deploy.
+The integration skill serves Platform Admin, standing in for the people who run the pipeline. It reads the QA evidence and reports ready or not ready. It names every gap. It does not run the pipeline and it does not deploy. The readiness report is the status the person sees. The QA verdict stays in the evidence report.
 
 ## When to use
 
@@ -27,6 +27,7 @@ Read these before the verdict. Paths are relative to the repository root.
 - [Identity guide](../../../apps/api/src/identity/README.md) (`apps/api/src/identity/README.md`)
 - API entry point: `apps/api/src/index.ts`
 - [Agent guide](../../../AGENTS.md)
+- [Build artifacts](../../../docs/plans/README.md) (`docs/plans/README.md`)
 - [Container definition](../../../Dockerfile)
 
 Production settings use the names in `.env.example`. The image described in `docs/runbooks/supply-chain.md` sets `NODE_ENV` to `production` and does not set `AUTH_MODE`. `AUTH_MODE=development` together with `NODE_ENV=production` is not allowed. That selection is the development authentication adapter selected for production.
@@ -57,6 +58,7 @@ The Enforced by cell is a gate id from `quality/quality-manifest.json`, or `Revi
 5. List open decisions. Include ADR 0002 (no roles or permissions; extension point `apps/api/src/identity/README.md`) and the flag provider (extension point `apps/api/src/index.ts`). Mark whether this build touches that extension point.
 6. If this build needs a decision that none of the Inputs files record, the handoff document is required. If the handoff document is not linked from AGENTS.md, the verdict is not ready. Name `AGENTS.md`. Do not invent a handoff path. If `AGENTS.md` does link one, list every decision in it with its extension point.
 7. When every gate is passed or deferred with a reason and an owner, the development adapter is not selected for production, and step 6 does not block, the verdict is ready. List the deferrals.
+8. Write the report to `quality/evidence/<slug>-readiness.md` when a brief names a slug. Show this verdict to the person. Leave the QA verdict in `quality/evidence/<slug>.md`.
 
 The verdict is `ready` or `not ready`. There is no third verdict.
 

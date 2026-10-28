@@ -75,6 +75,10 @@
       "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
     },
     {
+      "match": ".cursor/skills/orchestrator/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
       "match": "docs/handoff.md",
       "headings": [
         "What the Template Provides",

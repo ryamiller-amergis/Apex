@@ -4,7 +4,7 @@ Every suite runs on Vitest except the browser journeys, which run on Playwright.
 
 ## Quality gates
 
-The [quality manifest](../quality/quality-manifest.json) lists each quality gate by the root script that runs it, plus the coverage floors and any deferred gates. The [NFR manifest](../quality/nfr-manifest.json) holds the response-time, concurrency, and data-volume targets. `pnpm quality:validate` checks both files. The [quality guide](../quality/README.md) describes every field, how to record a deferral, and how to run the sample load test.
+The [quality manifest](../quality/quality-manifest.json) lists each quality gate by the root script that runs it, plus the coverage floors and any deferred gates. `routes-check` and `contract` are gates. They run `pnpm routes:check` and `pnpm test:contract`. The [NFR manifest](../quality/nfr-manifest.json) holds the response-time, concurrency, and data-volume targets. `pnpm quality:validate` checks both files. The [quality guide](../quality/README.md) describes every field, how to record a deferral, and how to run the sample load test.
 
 ## Suites
 

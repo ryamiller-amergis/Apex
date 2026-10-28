@@ -6,6 +6,8 @@ AGENTS.md  Entry point. Links every document, the skills, and the main scripts.
 README.md  Command reference, environment variables, identity, feature flags, placeholders.
 docs/architecture.md  Layers, request flow, data, identity, observability, and the template origin note.
 docs/module-map.md  One entry per workspace member: responsibility, public interface, dependencies.
+docs/feature-slices.md  Profile slice to copy when adding a product area inside the workspace members.
+docs/plans/README.md  Brief, plan, evidence paths, and the authorization, identity, and performance questions.
 docs/api.md  The committed OpenAPI document, the reference endpoints, and their auth rules.
 docs/testing.md  Test suites, quality gates, coverage floors, selectors, and when Docker is needed.
 docs/design-system.md  Tokens, themes, colour mode, branding overrides, and the contrast check.
@@ -22,6 +24,7 @@ docs/runbooks/migrations.md  Generate, validate, and apply schema migrations; ow
 docs/runbooks/common-failures.md  Install and startup errors with their fixes.
 docs/runbooks/supply-chain.md  Secret, vulnerability, and license scans, the SBOM, and the production image.
 docs/handoff.md  Platform Engineering adoption: ownership, pipeline contracts, placeholders, open decisions.
+.cursor/skills/orchestrator/SKILL.md  Prompted build: brief, recorded questions, plan approval, then the other role skills.
 .cursor/skills/api-contract/SKILL.md  Rules and steps for adding an endpoint so it matches the API contract.
 .cursor/skills/ui-standards/SKILL.md  Rules, screen steps, and the review checklist for the design system.
 .cursor/skills/planner/SKILL.md  Plan a prompt from the module map, the manifests, and recorded decisions.

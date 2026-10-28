@@ -4,6 +4,8 @@ One entry per workspace member listed in `pnpm-workspace.yaml`. Each entry names
 
 When you add a member, add a `###` heading whose text is the member's path, then fill in every field.
 
+A product area is a feature slice inside these members, not a new member. The profile slice is the copy target. See [feature slices](feature-slices.md).
+
 ### `apps/api`
 
 **Responsibility:** The Express HTTP API. Authenticates callers, validates requests against the contracts, runs services, reads and writes PostgreSQL, serves the built web client in production, and provides the `migrate` and `seed` commands.

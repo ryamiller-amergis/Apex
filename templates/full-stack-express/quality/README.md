@@ -35,7 +35,7 @@ Working directory: `templates/full-stack-express/`.
 | `deferrals[].reason` | Why the gate cannot run yet. Must not be blank                                                               |
 | `deferrals[].owner`  | Person or team that will bring the gate back. Must not be blank                                              |
 
-The validator requires these 12 gate ids. Other kebab-case ids are allowed. The committed manifest also includes `docs-validation`, which runs `docs:check`.
+The validator requires these 12 gate ids. Other kebab-case ids are allowed. The committed manifest also includes `docs-validation` (`docs:check`), `routes-check` (`routes:check`), and `contract` (`test:contract`).
 
 | Gate                   | Script             |
 | ---------------------- | ------------------ |
@@ -54,7 +54,7 @@ The validator requires these 12 gate ids. Other kebab-case ids are allowed. The 
 
 Each script exits 0 on success and non-zero on failure. A gate script reads secrets only from environment variables and never prints them.
 
-These root scripts exist but are not gates in the committed manifest: `test:contract`, `test:coverage`, `test:e2e`, `routes:check`, `scan:secrets`, `scan:vulns`, `scan:licenses`, `scan`, `sbom`, and `test:container`. To make one a gate, add an entry to `gates`. The schema does not change.
+These root scripts exist but are not gates in the committed manifest: `test:coverage`, `test:e2e`, `scan:secrets`, `scan:vulns`, `scan:licenses`, `scan`, `sbom`, and `test:container`. To make one a gate, add an entry to `gates`. The schema does not change.
 
 ### Record a deferral
 

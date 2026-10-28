@@ -927,7 +927,7 @@ describe('committed api-contract and ui-standards skills', () => {
     const config = loadConfig(templateRoot);
     const result = checkDocs({ root: templateRoot, config });
     expect(result.findings).toEqual([]);
-    expect(result.documentCount).toBe(27);
+    expect(result.documentCount).toBe(30);
     const agents = readSkill('AGENTS.md');
     const index = readSkill('docs/agent-index.txt');
     for (const skillPath of skillPaths) {
@@ -998,6 +998,7 @@ describe('committed api-contract and ui-standards skills', () => {
 
 describe('committed role skills', () => {
   const roleSkills = [
+    '.cursor/skills/orchestrator/SKILL.md',
     '.cursor/skills/planner/SKILL.md',
     '.cursor/skills/ui/SKILL.md',
     '.cursor/skills/developer/SKILL.md',
@@ -1128,6 +1129,27 @@ describe('committed role skills', () => {
     expect(skill).toMatch(/Do not invent a handoff path/);
     expect(skill).toMatch(/Do not run the pipeline/);
     expect(skill).toMatch(/do not deploy/i);
+    expect(skill).not.toMatch(/@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/);
+  });
+
+  it('the orchestrator skill asks the recorded questions and shows the integration verdict', () => {
+    const skill = readSkill('.cursor/skills/orchestrator/SKILL.md');
+    const questions = readSkill('docs/plans/README.md');
+    expect(skill).toMatch(/^name: orchestrator$/m);
+    expect(skill).toContain('docs/plans/README.md');
+    expect(skill).toContain('docs/feature-slices.md');
+    expect(skill).toContain('quality/evidence/README.md');
+    expect(skill).toMatch(/approv/i);
+    expect(skill).toMatch(/readiness report/i);
+    expect(questions).toMatch(
+      /Stay on the caller's own data, or pause until an authorization model is decided\?/
+    );
+    expect(questions).toMatch(
+      /Keep the development adapter for local runs, or pause until a production identity provider is chosen\?/
+    );
+    expect(questions).toMatch(
+      /Supply real targets, or leave load-test evidence out of this plan\?/
+    );
     expect(skill).not.toMatch(/@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/);
   });
 });

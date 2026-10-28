@@ -27,6 +27,12 @@ Every public export of `@project-scope/ui`, grouped by purpose. The entry file i
 
 Pass fixed strings to `ErrorState`. Never pass an `Error` message, a stack trace, or a Problem Details `detail` field.
 
+## Theme-styled MUI primitives
+
+Screens may use MUI components that take their colour, type, and spacing from the theme. The profile form uses `Button`, `TextField`, `Alert`, and `Box` from `@mui/material`. Those components are not exports of `@project-scope/ui`. Import them from `@mui/material`.
+
+A shared pattern this catalog does not list, such as a new shell or a new state, is proposed as a catalog addition. A component that sets its own colour or spacing is a one-off styled component. Do not add one.
+
 ## Theme and colour mode
 
 | Export                   | Kind      | Source                                       | Use it to                                                                         |
