@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateProjectQuickLinkInput,
   CreateUserQuickLinkInput,
-  ImportUserQuickLinksResult,
+  ImportQuickLinksResult,
   ProjectQuickLink,
   ProjectQuickLinksListResponse,
   UpdateProjectQuickLinkInput,
@@ -118,6 +118,26 @@ export function useReorderProjectQuickLinks(project: string | null | undefined) 
   });
 }
 
+export function useImportProjectQuickLinks(project: string | null | undefined) {
+  const invalidate = useInvalidateQuickLinks(project);
+  return useMutation<ImportQuickLinksResult, ProjectQuickLinksApiError, { items: CreateUserQuickLinkInput[] }>({
+    mutationFn: ({ items }) =>
+      apiFetch<ImportQuickLinksResult>(linksUrl(project!, 'import'), {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ items }),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+/** Distinct, sorted categories used by a list of links. */
+export function categoriesOf(links: { category: string | null }[]): string[] {
+  return Array.from(new Set(links.map((l) => l.category).filter((c): c is string => Boolean(c)))).sort(
+    (a, b) => a.localeCompare(b),
+  );
+}
+
 function myLinksUrl(project: string, suffix?: string): string {
   const base = `/api/projects/${encodeURIComponent(project)}/my-quick-links`;
   return suffix ? `${base}/${suffix}` : base;
@@ -187,9 +207,9 @@ export function useDeleteMyQuickLink(project: string | null | undefined) {
 
 export function useImportMyQuickLinks(project: string | null | undefined) {
   const invalidate = useInvalidateMyQuickLinks(project);
-  return useMutation<ImportUserQuickLinksResult, ProjectQuickLinksApiError, { items: CreateUserQuickLinkInput[] }>({
+  return useMutation<ImportQuickLinksResult, ProjectQuickLinksApiError, { items: CreateUserQuickLinkInput[] }>({
     mutationFn: ({ items }) =>
-      apiFetch<ImportUserQuickLinksResult>(myLinksUrl(project!, 'import'), {
+      apiFetch<ImportQuickLinksResult>(myLinksUrl(project!, 'import'), {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({ items }),

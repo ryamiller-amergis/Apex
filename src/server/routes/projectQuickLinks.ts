@@ -12,6 +12,7 @@ import {
 import * as quickLinksService from '../services/projectQuickLinksService';
 import type {
   CreateProjectQuickLinkInput,
+  ImportQuickLinksInput,
   ReorderProjectQuickLinksInput,
   UpdateProjectQuickLinkInput,
 } from '../../shared/types/projectQuickLinks';
@@ -41,6 +42,16 @@ router.post(
     const body = (req.body ?? {}) as CreateProjectQuickLinkInput;
     const link = await quickLinksService.createLink(req.params.projectId, body, actorUserId(req));
     res.status(201).json(link);
+  }),
+);
+
+router.post(
+  '/import',
+  requirePermission('quick-links:manage'),
+  route(async (req, res) => {
+    const body = (req.body ?? {}) as Partial<ImportQuickLinksInput>;
+    const result = await quickLinksService.importLinks(req.params.projectId, body.items, actorUserId(req));
+    res.json(result);
   }),
 );
 

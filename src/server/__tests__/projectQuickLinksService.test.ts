@@ -1,22 +1,32 @@
 const returning = jest.fn();
 const values = jest.fn(() => ({ returning }));
 const insert = jest.fn(() => ({ values }));
+const selectWhere = jest.fn();
+const select = jest.fn(() => ({ from: () => ({ where: selectWhere }) }));
 
-jest.mock('../db/drizzle', () => ({
-  db: {
+jest.mock('../db/drizzle', () => {
+  const db = {
     insert: (...args: unknown[]) => (insert as jest.Mock)(...args),
-  },
-}));
+    select: (...args: unknown[]) => (select as jest.Mock)(...args),
+    transaction: (fn: (tx: unknown) => unknown) => fn(db),
+  };
+  return { db };
+});
 
 import {
   createLink,
+  importLinks,
   normalizeCategory,
   normalizeLabel,
   normalizeSortOrder,
   normalizeUrl,
   reorderLinks,
 } from '../services/projectQuickLinksService';
-import { ProjectQuickLinkError, QUICK_LINK_LABEL_MAX_LENGTH } from '../../shared/types/projectQuickLinks';
+import {
+  PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
+  ProjectQuickLinkError,
+  QUICK_LINK_LABEL_MAX_LENGTH,
+} from '../../shared/types/projectQuickLinks';
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -145,5 +155,57 @@ describe('createLink', () => {
 describe('reorderLinks', () => {
   it.each([[undefined], ['abc'], [[1, 2]], [['a', 'a']]])('rejects ids %p', async (ids) => {
     await expect(reorderLinks('MaxView', ids, 'user-1')).rejects.toBeInstanceOf(ProjectQuickLinkError);
+  });
+});
+
+describe('importLinks (shared project links)', () => {
+  it('skips URLs the project already has, rejects invalid items, and records the importer', async () => {
+    selectWhere.mockResolvedValue([{ url: 'https://dashboard.clerk.com/' }]);
+
+    const result = await importLinks(
+      'MaxView',
+      [
+        { label: 'Clerk', url: 'https://dashboard.clerk.com' },
+        { label: 'Pendo', url: 'https://app.pendo.io', category: 'Analytics' },
+        { label: 'Bad', url: 'chrome://settings' },
+        { label: 'Pendo again', url: 'https://app.pendo.io/' },
+      ],
+      'admin-1',
+    );
+
+    expect(result.created).toBe(1);
+    expect(result.skippedDuplicates).toBe(2);
+    expect(result.rejected.map((r) => r.index)).toEqual([2]);
+    expect(values).toHaveBeenCalledWith([
+      {
+        project: 'MaxView',
+        label: 'Pendo',
+        url: 'https://app.pendo.io/',
+        category: 'Analytics',
+        sortOrder: 1,
+        createdBy: 'admin-1',
+        updatedBy: 'admin-1',
+      },
+    ]);
+  });
+
+  it('rejects links past the project cap', async () => {
+    selectWhere.mockResolvedValue(
+      Array.from({ length: PROJECT_QUICK_LINKS_MAX_PER_PROJECT }, (_, i) => ({ url: `https://e${i}.example.com/` })),
+    );
+
+    const result = await importLinks('MaxView', [{ label: 'One more', url: 'https://more.example.com' }], 'admin-1');
+
+    expect(result).toEqual({
+      created: 0,
+      skippedDuplicates: 0,
+      rejected: [expect.objectContaining({ index: 0, reason: expect.stringContaining('shared links') })],
+    });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed list before querying', async () => {
+    await expect(importLinks('MaxView', 'nope', 'admin-1')).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(select).not.toHaveBeenCalled();
   });
 });

@@ -3,13 +3,21 @@ import { db } from '../db/drizzle';
 import { projectQuickLinks } from '../db/schema';
 import {
   ProjectQuickLinkError,
-  QUICK_LINK_CATEGORY_MAX_LENGTH,
-  QUICK_LINK_LABEL_MAX_LENGTH,
-  QUICK_LINK_URL_MAX_LENGTH,
+  PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
+  type ImportQuickLinksResult,
   type CreateProjectQuickLinkInput,
   type ProjectQuickLink,
   type UpdateProjectQuickLinkInput,
 } from '../../shared/types/projectQuickLinks';
+import { assertImportItems, planQuickLinkImport } from './quickLinkImport';
+import {
+  normalizeCategory,
+  normalizeLabel,
+  normalizeSortOrder,
+  normalizeUrl,
+} from './quickLinkValidation';
+
+export { normalizeCategory, normalizeLabel, normalizeSortOrder, normalizeUrl };
 
 type QuickLinkRow = typeof projectQuickLinks.$inferSelect;
 
@@ -32,64 +40,6 @@ function requireProject(project: string): string {
   const trimmed = typeof project === 'string' ? project.trim() : '';
   if (!trimmed) throw new ProjectQuickLinkError('Project is required');
   return trimmed;
-}
-
-export function normalizeLabel(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new ProjectQuickLinkError('Label is required');
-  }
-  const label = value.trim();
-  if (label.length > QUICK_LINK_LABEL_MAX_LENGTH) {
-    throw new ProjectQuickLinkError(
-      `Label must be ${QUICK_LINK_LABEL_MAX_LENGTH} characters or fewer`,
-    );
-  }
-  return label;
-}
-
-/** Accepts only absolute http(s) URLs so a link can never run script (`javascript:`, `data:`). */
-export function normalizeUrl(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new ProjectQuickLinkError('URL is required');
-  }
-  const raw = value.trim();
-  if (raw.length > QUICK_LINK_URL_MAX_LENGTH) {
-    throw new ProjectQuickLinkError(
-      `URL must be ${QUICK_LINK_URL_MAX_LENGTH} characters or fewer`,
-    );
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new ProjectQuickLinkError('URL is not valid');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new ProjectQuickLinkError('URL must start with http:// or https://');
-  }
-  return parsed.toString();
-}
-
-export function normalizeCategory(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== 'string') throw new ProjectQuickLinkError('Category must be text');
-  const category = value.trim();
-  if (!category) return null;
-  if (category.length > QUICK_LINK_CATEGORY_MAX_LENGTH) {
-    throw new ProjectQuickLinkError(
-      `Category must be ${QUICK_LINK_CATEGORY_MAX_LENGTH} characters or fewer`,
-    );
-  }
-  return category;
-}
-
-export function normalizeSortOrder(value: unknown): number {
-  if (value === undefined || value === null || value === '') return 0;
-  const n = typeof value === 'string' ? Number(value) : value;
-  if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n > 100_000) {
-    throw new ProjectQuickLinkError('Sort order must be a whole number from 0 to 100000');
-  }
-  return n;
 }
 
 export async function listLinks(project: string): Promise<ProjectQuickLink[]> {
@@ -187,4 +137,44 @@ export async function reorderLinks(
     });
   }
   return listLinks(projectName);
+}
+
+/** Creates shared project links from a bookmark import, with the same per-item rules as personal imports. */
+export async function importLinks(
+  project: string,
+  items: unknown,
+  actor: string,
+): Promise<ImportQuickLinksResult> {
+  const projectName = requireProject(project);
+  assertImportItems(items);
+  return db.transaction(async (tx) => {
+    const existingRows = await tx
+      .select({ url: projectQuickLinks.url })
+      .from(projectQuickLinks)
+      .where(eq(projectQuickLinks.project, projectName));
+    const plan = planQuickLinkImport(
+      items,
+      existingRows.map((r) => r.url),
+      PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
+      `A project can have up to ${PROJECT_QUICK_LINKS_MAX_PER_PROJECT} shared links`,
+    );
+    if (plan.toInsert.length > 0) {
+      await tx.insert(projectQuickLinks).values(
+        plan.toInsert.map((item, i) => ({
+          project: projectName,
+          label: item.label,
+          url: item.url,
+          category: item.category,
+          sortOrder: existingRows.length + i,
+          createdBy: actor,
+          updatedBy: actor,
+        })),
+      );
+    }
+    return {
+      created: plan.toInsert.length,
+      skippedDuplicates: plan.skippedDuplicates,
+      rejected: plan.rejected,
+    };
+  });
 }

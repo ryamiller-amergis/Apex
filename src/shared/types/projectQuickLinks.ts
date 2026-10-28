@@ -35,8 +35,13 @@ export interface ProjectQuickLinksListResponse {
 
 /** Personal links each user may keep per project; also bounds a bookmark import. */
 export const USER_QUICK_LINKS_MAX_PER_PROJECT = 200;
+/** Shared links a bookmark import may bring a project up to. */
+export const PROJECT_QUICK_LINKS_MAX_PER_PROJECT = 200;
+
+/** Where a link is saved: private to its creator, or shared with everyone in the project. */
+export type QuickLinkScope = 'personal' | 'project';
 /** Most items one import request may carry, selected or not yet deduplicated. */
-export const USER_QUICK_LINKS_IMPORT_MAX_ITEMS = 1000;
+export const QUICK_LINKS_IMPORT_MAX_ITEMS = 1000;
 export const BOOKMARK_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 /** A personal link. Visible only to its owner, and only while its project is selected. */
@@ -58,7 +63,7 @@ export interface UserQuickLinksListResponse {
   items: UserQuickLink[];
 }
 
-export interface ImportUserQuickLinksInput {
+export interface ImportQuickLinksInput {
   items: CreateUserQuickLinkInput[];
 }
 
@@ -70,7 +75,7 @@ export interface RejectedQuickLinkImport {
   reason: string;
 }
 
-export interface ImportUserQuickLinksResult {
+export interface ImportQuickLinksResult {
   created: number;
   skippedDuplicates: number;
   rejected: RejectedQuickLinkImport[];

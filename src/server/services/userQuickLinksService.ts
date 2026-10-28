@@ -3,15 +3,14 @@ import { db } from '../db/drizzle';
 import { userQuickLinks } from '../db/schema';
 import {
   ProjectQuickLinkError,
-  USER_QUICK_LINKS_IMPORT_MAX_ITEMS,
   USER_QUICK_LINKS_MAX_PER_PROJECT,
   type CreateUserQuickLinkInput,
-  type ImportUserQuickLinksResult,
-  type RejectedQuickLinkImport,
+  type ImportQuickLinksResult,
   type UpdateUserQuickLinkInput,
   type UserQuickLink,
 } from '../../shared/types/projectQuickLinks';
-import { normalizeCategory, normalizeLabel, normalizeUrl } from './projectQuickLinksService';
+import { assertImportItems, planQuickLinkImport } from './quickLinkImport';
+import { normalizeCategory, normalizeLabel, normalizeUrl } from './quickLinkValidation';
 
 type UserQuickLinkRow = typeof userQuickLinks.$inferSelect;
 
@@ -134,69 +133,27 @@ export async function importUserLinks(
   userId: string,
   project: string,
   items: unknown,
-): Promise<ImportUserQuickLinksResult> {
+): Promise<ImportQuickLinksResult> {
   const owner = requireOwner(userId, project);
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new ProjectQuickLinkError('items must be a non-empty list');
-  }
-  if (items.length > USER_QUICK_LINKS_IMPORT_MAX_ITEMS) {
-    throw new ProjectQuickLinkError(
-      `An import can include at most ${USER_QUICK_LINKS_IMPORT_MAX_ITEMS} links`,
-    );
-  }
-
-  const rejected: RejectedQuickLinkImport[] = [];
-  const valid: { index: number; label: string; url: string; category: string | null }[] = [];
-  items.forEach((raw, index) => {
-    const item = (raw ?? {}) as Partial<CreateUserQuickLinkInput>;
-    try {
-      valid.push({
-        index,
-        label: normalizeLabel(item.label),
-        url: normalizeUrl(item.url),
-        category: normalizeCategory(item.category),
-      });
-    } catch (err) {
-      if (!(err instanceof ProjectQuickLinkError)) throw err;
-      rejected.push({
-        index,
-        label: typeof item.label === 'string' ? item.label : '',
-        url: typeof item.url === 'string' ? item.url : '',
-        reason: err.message,
-      });
-    }
-  });
-
+  assertImportItems(items);
   return db.transaction(async (tx) => {
     const existingRows = await tx
       .select({ url: userQuickLinks.url })
       .from(userQuickLinks)
       .where(ownedBy(owner));
-    const seen = new Set(existingRows.map((r) => r.url));
-
-    let skippedDuplicates = 0;
-    const fresh: typeof valid = [];
-    for (const item of valid) {
-      if (seen.has(item.url)) {
-        skippedDuplicates += 1;
-        continue;
-      }
-      seen.add(item.url);
-      fresh.push(item);
-    }
-
-    const capacity = Math.max(0, USER_QUICK_LINKS_MAX_PER_PROJECT - existingRows.length);
-    const toInsert = fresh.slice(0, capacity);
-    for (const item of fresh.slice(capacity)) {
-      rejected.push({ index: item.index, label: item.label, url: item.url, reason: LIMIT_MESSAGE });
-    }
+    const plan = planQuickLinkImport(
+      items,
+      existingRows.map((r) => r.url),
+      USER_QUICK_LINKS_MAX_PER_PROJECT,
+      LIMIT_MESSAGE,
+    );
 
     let created = 0;
-    if (toInsert.length > 0) {
+    if (plan.toInsert.length > 0) {
       const inserted = await tx
         .insert(userQuickLinks)
         .values(
-          toInsert.map((item, i) => ({
+          plan.toInsert.map((item, i) => ({
             ...owner,
             label: item.label,
             url: item.url,
@@ -207,10 +164,12 @@ export async function importUserLinks(
         .onConflictDoNothing()
         .returning({ id: userQuickLinks.id });
       created = inserted.length;
-      skippedDuplicates += toInsert.length - created;
     }
 
-    rejected.sort((a, b) => a.index - b.index);
-    return { created, skippedDuplicates, rejected };
+    return {
+      created,
+      skippedDuplicates: plan.skippedDuplicates + plan.toInsert.length - created,
+      rejected: plan.rejected,
+    };
   });
 }

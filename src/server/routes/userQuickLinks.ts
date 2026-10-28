@@ -13,7 +13,7 @@ import {
 import * as userQuickLinksService from '../services/userQuickLinksService';
 import type {
   CreateUserQuickLinkInput,
-  ImportUserQuickLinksInput,
+  ImportQuickLinksInput,
   UpdateUserQuickLinkInput,
 } from '../../shared/types/projectQuickLinks';
 import { quickLinkRoute as route } from './quickLinkRoute';
@@ -61,7 +61,7 @@ router.post(
 router.post(
   '/import',
   route(async (req, res) => {
-    const body = (req.body ?? {}) as Partial<ImportUserQuickLinksInput>;
+    const body = (req.body ?? {}) as Partial<ImportQuickLinksInput>;
     const result = await userQuickLinksService.importUserLinks(
       authUserId(req),
       req.params.projectId,

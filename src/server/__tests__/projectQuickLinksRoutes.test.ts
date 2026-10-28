@@ -28,6 +28,7 @@ const createLink = jest.fn();
 const updateLink = jest.fn();
 const deleteLink = jest.fn();
 const reorderLinks = jest.fn();
+const importLinks = jest.fn();
 
 jest.mock('../services/projectQuickLinksService', () => ({
   listLinks: (...args: unknown[]) => listLinks(...args),
@@ -35,6 +36,7 @@ jest.mock('../services/projectQuickLinksService', () => ({
   updateLink: (...args: unknown[]) => updateLink(...args),
   deleteLink: (...args: unknown[]) => deleteLink(...args),
   reorderLinks: (...args: unknown[]) => reorderLinks(...args),
+  importLinks: (...args: unknown[]) => importLinks(...args),
 }));
 
 import quickLinksRouter from '../routes/projectQuickLinks';
@@ -99,6 +101,7 @@ describe('write routes require quick-links:manage', () => {
     ['patch', '/api/projects/MaxView/quick-links/link-1', { label: 'y' }],
     ['delete', '/api/projects/MaxView/quick-links/link-1', undefined],
     ['put', '/api/projects/MaxView/quick-links/order', { ids: ['link-1'] }],
+    ['post', '/api/projects/MaxView/quick-links/import', { items: [{ label: 'x', url: 'https://x.com' }] }],
   ] as const)('%s %s returns 403', async (method, url, body) => {
     const res = await request(buildApp())[method](url).send(body);
 
@@ -108,6 +111,7 @@ describe('write routes require quick-links:manage', () => {
     expect(updateLink).not.toHaveBeenCalled();
     expect(deleteLink).not.toHaveBeenCalled();
     expect(reorderLinks).not.toHaveBeenCalled();
+    expect(importLinks).not.toHaveBeenCalled();
   });
 
   it('checks project access before the permission', async () => {
@@ -174,5 +178,19 @@ describe('write routes with quick-links:manage', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ items: [link] });
     expect(reorderLinks).toHaveBeenCalledWith('MaxView', ['link-1'], 'user-1');
+  });
+});
+
+describe('POST /quick-links/import', () => {
+  it('imports shared links as the current user', async () => {
+    const result = { created: 2, skippedDuplicates: 1, rejected: [] };
+    importLinks.mockResolvedValue(result);
+    const items = [{ label: 'A', url: 'https://a.com' }];
+
+    const res = await request(buildApp()).post('/api/projects/MaxView/quick-links/import').send({ items });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(importLinks).toHaveBeenCalledWith('MaxView', items, 'user-1');
   });
 });

@@ -2,7 +2,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
 import {
   ProjectQuickLinkError,
-  USER_QUICK_LINKS_IMPORT_MAX_ITEMS,
+  QUICK_LINKS_IMPORT_MAX_ITEMS,
   USER_QUICK_LINKS_MAX_PER_PROJECT,
 } from '../../shared/types/projectQuickLinks';
 
@@ -268,7 +268,7 @@ describe('importUserLinks', () => {
   });
 
   it('rejects an import larger than the request limit', async () => {
-    const items = Array.from({ length: USER_QUICK_LINKS_IMPORT_MAX_ITEMS + 1 }, (_, i) => ({
+    const items = Array.from({ length: QUICK_LINKS_IMPORT_MAX_ITEMS + 1 }, (_, i) => ({
       label: `L${i}`,
       url: `https://l${i}.example.com`,
     }));
