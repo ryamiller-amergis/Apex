@@ -1,0 +1,96 @@
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.legend {
+  padding: 0 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inputLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.inputLine textarea {
+  flex: 1 1 auto;
+  min-height: 48px;
+  padding: 8px 10px;
+  resize: vertical;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.inputLine textarea:focus,
+.remove:focus-visible,
+.add:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.inputLine textarea:disabled {
+  color: var(--text-secondary);
+}
+
+.remove,
+.add {
+  padding: 6px 12px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.add {
+  align-self: flex-start;
+}
+
+.remove:disabled,
+.add:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.rowError {
+  margin: 0;
+  color: var(--error-color, #b42318);
+  font-size: 12px;
+}

@@ -39,6 +39,7 @@ import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
+import { autoDraftBuildBriefForThread } from '../services/buildBriefService';
 import { prepareBuildIntakeTurn } from '../services/buildIntakeService';
 import { isBuildIntakeThread } from '../services/buildIntakeThread';
 import { isBuildFromPromptEnabled } from '../services/buildAccessService';
@@ -832,6 +833,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   let internalContext: string | undefined;
+  let draftBriefAfterSend = false;
   if (buildIntake) {
     try {
       const prepared = await prepareBuildIntakeTurn({
@@ -840,6 +842,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         turnId: body.turnId ?? '',
       });
       internalContext = prepared.internalContext;
+      draftBriefAfterSend = prepared.confirmed;
     } catch (err: unknown) {
       console.error(
         `[chat] build intake preparation failed for thread ${threadId}:`,
@@ -881,6 +884,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         ...(internalContext ? { internalContext } : {}),
       },
     );
+    if (draftBriefAfterSend) void autoDraftBuildBriefForThread(threadId);
     if (submission?.route === 'durable') {
       releaseAdoWriteTurn();
       const accepted = submission.response;

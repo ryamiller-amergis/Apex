@@ -38,6 +38,7 @@ import {
   useDeleteInterview,
 } from '../hooks/useInterviews';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { BuildBriefReview } from './BuildBriefReview';
 import { InterviewBriefReview } from './InterviewBriefReview';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { SectionOwnerModal } from './SectionOwnerModal';
@@ -1759,7 +1760,8 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         />
       )}
 
-      {isPlaybookInterview && (
+      {isPlaybookInterview && isBuildIntake && <BuildBriefReview interviewId={id} />}
+      {isPlaybookInterview && !isBuildIntake && (
         <InterviewBriefReview
           brief={interviewBrief}
           isLoading={isBriefLoading}

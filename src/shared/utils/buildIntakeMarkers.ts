@@ -6,6 +6,15 @@
 export const BUILD_INTAKE_QUESTION_MARKER = '[[build-intake:question]]';
 export const BUILD_INTAKE_CONFIRM_MARKER = '[[build-intake:confirm]]';
 
+/** The only reasons an extra question (past the normal budget) may give. */
+export const BUILD_INTAKE_EXTRA_REASONS = ['access', 'data_removal', 'integration', 'workflow'] as const;
+
+export type BuildIntakeExtraReason = (typeof BUILD_INTAKE_EXTRA_REASONS)[number];
+
+export function extraReasonMarker(reason: BuildIntakeExtraReason): string {
+  return `[[build-intake:reason:${reason}]]`;
+}
+
 export const SENSITIVE_CLASSES = [
   'access_token',
   'connection_string',
@@ -38,6 +47,7 @@ export function warningMarker(value: SensitiveClass): string {
 
 const QUESTION_RE = /\[\[build-intake:question\]\]/g;
 const WARNING_RE = /\[\[build-intake:warning:([a-z_]+)\]\]/g;
+const REASON_RE = /\[\[build-intake:reason:([a-z_]+)\]\]/g;
 const ANY_MARKER_RE = /\[\[build-intake:[a-z_:]*\]\][ \t]*/g;
 const MARKER_PREFIX = 'build-intake:';
 
@@ -78,6 +88,24 @@ export function hasConfirmMarker(text: string): boolean {
   return text.includes(BUILD_INTAKE_CONFIRM_MARKER);
 }
 
+/** Picker replies read `Q1 · <question>\nAnswer: A — <option>`; a free-text pick reads `Answer: <notes>`. */
+const PICKER_CONFIRM_RE = /^Answer: A — /m;
+/** A typed reply that is only "a" or "confirm". */
+const TYPED_CONFIRM_RE = /^\s*(?:a|confirm)\s*[.!]?\s*$/i;
+
+/** True when `answerText` picks "Confirm" on the latest visible agent message, which carries the confirm marker. */
+export function isBuildIntakeConfirmation(
+  messages: ReadonlyArray<MarkerMessage>,
+  answerText: string,
+): boolean {
+  const lastAgent = [...messages].reverse().find(isVisibleAgent);
+  return Boolean(
+    lastAgent
+    && hasConfirmMarker(lastAgent.text)
+    && (PICKER_CONFIRM_RE.test(answerText) || TYPED_CONFIRM_RE.test(answerText)),
+  );
+}
+
 export function warningClasses(text: string): SensitiveClass[] {
   const found = new Set<SensitiveClass>();
   for (const match of text.matchAll(WARNING_RE)) {
@@ -85,6 +113,24 @@ export function warningClasses(text: string): SensitiveClass[] {
     if ((SENSITIVE_CLASSES as readonly string[]).includes(value)) found.add(value);
   }
   return [...found];
+}
+
+/** Known extra-question reasons in `text`, in order, without repeats. Unknown values are dropped. */
+export function extraQuestionReasons(text: string): BuildIntakeExtraReason[] {
+  const found = new Set<BuildIntakeExtraReason>();
+  for (const match of text.matchAll(REASON_RE)) {
+    const value = match[1] as BuildIntakeExtraReason;
+    if ((BUILD_INTAKE_EXTRA_REASONS as readonly string[]).includes(value)) found.add(value);
+  }
+  return [...found];
+}
+
+/** The latest agent message the requester could see, or null. */
+export function lastVisibleAgentText(messages: ReadonlyArray<MarkerMessage>): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isVisibleAgent(messages[index])) return messages[index].text;
+  }
+  return null;
 }
 
 /** A marker still being streamed: `[[`, `[[build-in`, `[[build-intake:warn`, … */

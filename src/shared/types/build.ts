@@ -2,6 +2,7 @@
  * Shared build contract for App Builder (FEAT-001).
  * Epic 1 and Epic 2 import these vocabularies. A pin test fails if a list changes.
  */
+import type { InterviewBriefSections } from './interview';
 import type { ArtifactRef } from './loadTest';
 
 export type { ArtifactRef };
@@ -130,6 +131,9 @@ export const BUILD_EVENT_TYPES = [
   'build.queued',
   'build.started',
   'intake.sensitive_text_warning',
+  'intake.brief_drafted',
+  'intake.brief_draft_failed',
+  'intake.brief_edited',
   'intake.brief_approved',
   'plan.validated',
   'plan.invalid',
@@ -334,6 +338,76 @@ export interface BuildRiskDecision {
   rating: BuildRiskRating;
   decision: string;
   rationale: string;
+  /** True when a high rating replaced the agent's decision with the fixed reversible option. */
+  reversible?: boolean;
+}
+
+export const BUILD_REQUIREMENT_TEXT_MAX = 1000;
+export const BUILD_BRIEF_MAX_REQUIREMENTS = 100;
+
+export const BUILD_REQUIREMENT_PREFIXES: Record<BuildRequirementKind, string> = {
+  ac: 'AC',
+  dod: 'DOD',
+  br: 'BR',
+  nfr: 'NFR',
+};
+
+export const BUILD_RISK_DECISION_PREFIX = 'RD';
+
+/** Highest number issued per ID prefix. Counters only grow, so a removed number is never reused. */
+export type BuildIdCounters = Record<'AC' | 'DOD' | 'BR' | 'NFR' | 'RD', number>;
+
+/** A requirement row as a person or the drafting agent submits it. `id` is null for a new row. */
+export interface BuildRequirementInput {
+  id: string | null;
+  kind: BuildRequirementKind;
+  text: string;
+}
+
+/** A risk decision as the drafting agent proposes it, before validation and the reversible swap. */
+export interface RiskCandidate {
+  category: BuildRiskCategory;
+  rating: BuildRiskRating;
+  decision: string;
+  rationale: string;
+  destructive: boolean;
+}
+
+export interface BuildClassificationResult {
+  value: BuildClassification;
+  reasons: string[];
+}
+
+export interface BuildBriefAnalysis {
+  requirements: BuildRequirement[];
+  riskDecisions: BuildRiskDecision[];
+  classification: BuildClassificationResult;
+  counters: BuildIdCounters;
+}
+
+export interface BuildBriefAnalysisResponse {
+  interviewId: string;
+  buildRunId: string;
+  revisionNumber: number;
+  briefVersion: number;
+  briefStatus: 'draft' | 'approved';
+  requirements: BuildRequirement[];
+  riskDecisions: BuildRiskDecision[];
+  classification: BuildClassificationResult;
+  requester: { id: string; displayName: string };
+  approval: { approvedBy: { id: string; displayName: string }; approvedAt: string } | null;
+  viewer: { mayEdit: boolean; actingFor: string | null };
+}
+
+/** Body of `GET /api/interviews/:id/brief/analysis` when no draft exists yet (404). */
+export interface BuildBriefAnalysisMissing {
+  error: string;
+  draftFailed: boolean;
+}
+
+export interface SaveBuildBriefRequest {
+  sections: InterviewBriefSections;
+  requirements: BuildRequirementInput[];
 }
 
 /** Null means "not set": the resolver falls back for models; skill paths have no fallback. */
