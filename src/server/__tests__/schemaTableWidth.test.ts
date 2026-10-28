@@ -1,5 +1,4 @@
-import { getTableColumns, getTableName, is } from 'drizzle-orm';
-import { PgTable } from 'drizzle-orm/pg-core';
+import { getTableColumns, getTableName } from 'drizzle-orm';
 import * as schema from '../db/schema';
 
 /**
@@ -19,13 +18,26 @@ const PROJECT_SKILL_SETTINGS_WORKFLOW_COLUMN_CEILING = 77;
 const workflowColumnPattern = /(_skill_path|_model|_effort|_bedrock_[a-z_]+|_score_threshold)$/;
 const projectWideColumns = new Set(['default_model', 'default_effort']);
 
+type ColumnTable = Parameters<typeof getTableColumns>[0];
+type NamedTable = Parameters<typeof getTableName>[0];
+
+function readTable(value: unknown): { name: string; columns: string[] } | null {
+  if (value === null || typeof value !== 'object') return null;
+  try {
+    const name = getTableName(value as NamedTable);
+    if (typeof name !== 'string' || name.length === 0) return null;
+    const columns = Object.values(getTableColumns(value as ColumnTable)).map((column) => column.name);
+    return columns.length === 0 ? null : { name, columns };
+  } catch {
+    return null;
+  }
+}
+
 function tableWidths(): Array<{ name: string; columns: string[] }> {
-  return Object.values(schema)
-    .filter((value): value is PgTable => is(value, PgTable))
-    .map((table) => ({
-      name: getTableName(table),
-      columns: Object.values(getTableColumns(table)).map((column) => column.name),
-    }));
+  return Object.values(schema).flatMap((value) => {
+    const table = readTable(value);
+    return table ? [table] : [];
+  });
 }
 
 describe('schema table width', () => {
