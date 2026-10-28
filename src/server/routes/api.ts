@@ -73,6 +73,7 @@ import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
 import projectQuickLinksRouter from './projectQuickLinks';
+import userQuickLinksRouter from './userQuickLinks';
 const router = express.Router();
 const publicHealthPaths = new Set([
   '/health',
@@ -111,6 +112,7 @@ export function shouldSkipSessionMiddleware(fullPath: string): boolean {
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
 router.use('/projects/:projectId/quick-links', projectQuickLinksRouter);
+router.use('/projects/:projectId/my-quick-links', userQuickLinksRouter);
 router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.

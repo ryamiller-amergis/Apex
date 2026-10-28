@@ -3,26 +3,19 @@
  * Anyone assigned to the project can read; changes need quick-links:manage.
  */
 
-import {
-  Router,
-  type NextFunction,
-  type Request,
-  type RequestHandler,
-  type Response,
-} from 'express';
+import { Router, type Request } from 'express';
 import {
   requirePermission,
   requireProjectAccess,
   resolveRequestProject,
 } from '../middleware/rbac';
 import * as quickLinksService from '../services/projectQuickLinksService';
-import {
-  ProjectQuickLinkError,
-  type CreateProjectQuickLinkInput,
-  type ProjectQuickLinkErrorCode,
-  type ReorderProjectQuickLinksInput,
-  type UpdateProjectQuickLinkInput,
+import type {
+  CreateProjectQuickLinkInput,
+  ReorderProjectQuickLinksInput,
+  UpdateProjectQuickLinkInput,
 } from '../../shared/types/projectQuickLinks';
+import { quickLinkRoute as route } from './quickLinkRoute';
 
 const router = Router({ mergeParams: true });
 
@@ -31,33 +24,6 @@ router.use(requireProjectAccess(resolveRequestProject));
 function actorUserId(req: Request): string {
   const user = req.user as { profile?: { oid?: unknown } } | undefined;
   return typeof user?.profile?.oid === 'string' ? user.profile.oid : 'unknown';
-}
-
-function statusForCode(code: ProjectQuickLinkErrorCode): number {
-  switch (code) {
-    case 'VALIDATION':
-      return 422;
-    case 'NOT_FOUND':
-      return 404;
-    default: {
-      const unhandled: never = code;
-      return unhandled;
-    }
-  }
-}
-
-function route(handler: (req: Request, res: Response) => Promise<void>): RequestHandler {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      await handler(req, res);
-    } catch (err) {
-      if (err instanceof ProjectQuickLinkError) {
-        res.status(statusForCode(err.code)).json({ error: err.message, code: err.code });
-        return;
-      }
-      next(err);
-    }
-  };
 }
 
 router.get(
