@@ -24,10 +24,14 @@ import {
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
 import type { ArtifactFile } from './artifactUploader';
+import { isTransientCursorConnectionError } from './transientCursorError';
 import type { ExecuteWorkload, ExecutionOutcome } from './worker';
 
 const OUTPUT_DIRECTORY_PARTS = ['.ai-pilot', 'output'] as const;
 const ARTIFACT_OUTPUT_PREFIX = 'output/';
+/** One retry for a dropped Cursor connection; any other failure ends the run. */
+const MAX_CURSOR_ATTEMPTS = 2;
+const CURSOR_RETRY_DETAIL = 'Retrying after the Cursor connection dropped';
 
 type CreateExecution = (
   snapshot: Readonly<ExecutionSnapshot>,
@@ -537,55 +541,88 @@ export function createDocumentExecute(
         checkpoints.publishProgress('workspace', 'ready'),
         signal,
       );
-      execution = await raceOperation(
-        createExecution(snapshot, repository, signal),
-        signal,
-      );
-      await raceOperation(
-        checkpoints.publishProgress('execution', 'running'),
-        signal,
-      );
-
       let sequence = 0;
-      const result = await executeWithAbort(
-        execution,
-        () =>
-          executeCursorExecutionCore({
-            snapshot,
-            run: execution!.run,
-            context: {
-              runId: command.runId,
-              sourceInstance: 'ai-runs-v2-document-worker',
-            },
-            sink: {
-              publish: (event, envelope) => {
-                if (
-                  event.type !== 'phase'
-                  && event.type !== 'tool_call'
-                  && event.type !== 'tool_status'
-                  && event.type !== 'error'
-                ) {
-                  return;
-                }
-                return checkpoints.publishProgress(
-                  envelope.phase,
-                  envelope.status,
-                  envelope.detail,
-                );
+      const runCursor = (active: WorkerCursorExecution) =>
+        executeWithAbort(
+          active,
+          () =>
+            executeCursorExecutionCore({
+              snapshot,
+              run: active.run,
+              context: {
+                runId: command.runId,
+                sourceInstance: 'ai-runs-v2-document-worker',
               },
-            },
-            hooks: {
-              beforeStreamEvent: () => {
-                if (signal.aborted) throw abortError();
+              sink: {
+                publish: (event, envelope) => {
+                  if (
+                    event.type !== 'phase'
+                    && event.type !== 'tool_call'
+                    && event.type !== 'tool_status'
+                    && event.type !== 'error'
+                  ) {
+                    return;
+                  }
+                  return checkpoints.publishProgress(
+                    envelope.phase,
+                    envelope.status,
+                    envelope.detail,
+                  );
+                },
               },
-            },
-            nextSequence: () => ++sequence,
-          }),
-        signal,
-      );
-      if (!isSuccessfulWait(result)) {
+              hooks: {
+                beforeStreamEvent: () => {
+                  if (signal.aborted) throw abortError();
+                },
+              },
+              nextSequence: () => ++sequence,
+            }),
+          signal,
+        );
+
+      let result: CursorExecutionResult;
+      for (let attempt = 1; ; attempt += 1) {
+        if (attempt > 1) {
+          console.warn(
+            `[aiRunsV2Worker/document] Cursor connection dropped on attempt ${attempt - 1}/${MAX_CURSOR_ATTEMPTS} (runId=${command.runId}); retrying`,
+          );
+          await execution?.dispose().catch(() => undefined);
+          execution = undefined;
+          await fs.rm(path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS), {
+            recursive: true,
+            force: true,
+          });
+        }
+        execution = await raceOperation(
+          createExecution(snapshot, repository, signal),
+          signal,
+        );
+        await raceOperation(
+          attempt === 1
+            ? checkpoints.publishProgress('execution', 'running')
+            : checkpoints.publishProgress('execution', 'running', CURSOR_RETRY_DETAIL),
+          signal,
+        );
+
+        const canRetry = (failure: unknown): boolean =>
+          attempt < MAX_CURSOR_ATTEMPTS
+          && !signal.aborted
+          && isTransientCursorConnectionError(failure);
+
+        let attemptResult: CursorExecutionResult;
+        try {
+          attemptResult = await runCursor(execution);
+        } catch (error) {
+          if (canRetry(error)) continue;
+          throw error;
+        }
+        if (isSuccessfulWait(attemptResult)) {
+          result = attemptResult;
+          break;
+        }
+        if (canRetry(attemptResult.waitResult.error)) continue;
         throw new Error(
-          `Cursor document execution did not finish successfully: ${describeWaitFailure(result)}`,
+          `Cursor document execution did not finish successfully: ${describeWaitFailure(attemptResult)}`,
         );
       }
 
