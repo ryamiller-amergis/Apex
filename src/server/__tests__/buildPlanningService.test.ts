@@ -10,12 +10,13 @@ import {
   type BuildPlanningDeps,
 } from '../services/buildPlanning/buildPlanningService';
 import { BuildLaunchRefusedError } from '../services/buildPlanning/launchGuard';
-import { toStoredTasks } from '../services/buildPlanning/planningModel';
+import { guardMatches, PLANNER_READY_STALE_MS, toStoredTasks } from '../services/buildPlanning/planningModel';
 import type { BuildPlan } from '../../shared/buildPlanSchema';
 import type {
   AgentRunOutcome,
   PlannerLaunchRequest,
   PlanningEvent,
+  PlanningGuard,
   PlanningStore,
   PlanningView,
   PlanningWrite,
@@ -98,8 +99,15 @@ class MemoryStore implements PlanningStore {
     return structuredClone(this.current);
   }
 
+  async applyIf(_buildRunId: string, guard: PlanningGuard, write: PlanningWrite): Promise<PlanningView | null> {
+    if (!guardMatches(this.current, guard)) return null;
+    this.applyWrite(write);
+    return structuredClone(this.current);
+  }
+
   async claimAndApply(_buildRunId: string, agentRunId: string, write: PlanningWrite): Promise<PlanningView | null> {
     const planner = this.current.planner;
+    if (this.current.status !== 'planning') return null;
     if (!planner || planner.status !== 'running' || planner.agentRunId !== agentRunId) return null;
     this.applyWrite(write);
     return structuredClone(this.current);
@@ -471,6 +479,69 @@ describe('build planning service', () => {
     } as BuildPlan);
     const heads = Object.fromEntries(stored.map((row) => [row.taskKey, row.chainHeadKey]));
     expect(heads).toEqual({ setup: null, a: 'a', b: 'a', c: 'a' });
+  });
+
+  it('a cancel that lands before the claim is not overwritten to building', async () => {
+    const store = new MemoryStore(view());
+    const { deps } = harness(store);
+    await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    const claim = store.claimAndApply.bind(store);
+    store.claimAndApply = async (...args) => {
+      store.current.status = 'cancelled';
+      return claim(...args);
+    };
+    expect(await finish(store, deps)).toEqual({ status: 'ignored' });
+    expect(store.current.status).toBe('cancelled');
+    expect(store.current.planTasks).toHaveLength(0);
+    expect(store.current.planValidation).toBeNull();
+  });
+
+  it('a second start while a launch is in progress does not launch again', async () => {
+    const store = new MemoryStore(view());
+    const { deps, requests } = harness(store);
+    const launch = deps.launch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    deps.launch = async (request) => {
+      await gate;
+      return launch(request);
+    };
+    const first = startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.current.planner?.status).toBe('ready');
+    expect(await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps)).toEqual({ status: 'launched', attempt: 1 });
+    expect(await resumePlanning({ buildRunId: 'run-1' }, deps)).toEqual({ status: 'launched', attempt: 1 });
+    release();
+    expect(await first).toEqual({ status: 'launched', attempt: 1 });
+    expect(requests).toHaveLength(1);
+    expect(store.current.planner?.status).toBe('running');
+  });
+
+  it('a cancel during the launch ends the new agent run', async () => {
+    const store = new MemoryStore(view());
+    const { deps, releases } = harness(store);
+    const launch = deps.launch;
+    deps.launch = async (request) => {
+      const result = await launch(request);
+      store.current.status = 'cancelled';
+      return result;
+    };
+    const result = await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    expect(result).toEqual({ status: 'not_planning', runStatus: 'cancelled', suspendReason: null });
+    expect(releases).toEqual([['agent-1', 'cancelled']]);
+    expect(store.current.planner?.status).toBe('failed');
+  });
+
+  it('relaunches when a ready planner is older than the stale window', async () => {
+    const store = new MemoryStore(view({
+      status: 'planning',
+      planner: { id: 'planner-1', status: 'ready', attempt: 1, agentRunId: null, startedAtMs: 0 },
+    }));
+    const { deps, requests } = harness(store, { now: () => PLANNER_READY_STALE_MS + 1 });
+    expect(await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps)).toEqual({ status: 'launched', attempt: 2 });
+    expect(requests).toHaveLength(1);
   });
 
   it('a passing plan ends its agent run', async () => {

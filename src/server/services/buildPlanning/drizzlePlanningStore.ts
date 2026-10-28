@@ -6,7 +6,7 @@ import type { PlanViolation } from '../../../shared/buildPlanSchema';
 import { db } from '../../db/drizzle';
 import { agentRuns, buildRevisions, buildRuns, buildTasks } from '../../db/schema';
 import { appendBuildEvent } from '../buildEventsService';
-import type { PlanningStore, PlanningView, PlanningWrite, StoredPlanTask } from './planningModel';
+import { guardMatches, type PlanningStore, type PlanningView, type PlanningWrite, type StoredPlanTask } from './planningModel';
 
 type Database = typeof db;
 type Executor = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -15,6 +15,7 @@ export function createDrizzlePlanningStore(database: Database = db): PlanningSto
   return {
     load: (buildRunId, revisionNumber) => loadPlanning(database, buildRunId, revisionNumber),
     apply: (buildRunId, write) => database.transaction(async (tx) => {
+      await lockRun(tx, buildRunId);
       const current = await loadPlanning(tx, buildRunId);
       if (!current) throw new Error(`Build ${buildRunId} was not found.`);
       await persist(tx, current, write);
@@ -22,9 +23,22 @@ export function createDrizzlePlanningStore(database: Database = db): PlanningSto
       if (!next) throw new Error(`Build ${buildRunId} was not found.`);
       return next;
     }),
-    claimAndApply: (buildRunId, agentRunId, write) => database.transaction(async (tx) => {
+    applyIf: (buildRunId, guard, write) => database.transaction(async (tx) => {
+      await lockRun(tx, buildRunId);
       const current = await loadPlanning(tx, buildRunId);
-      if (!current?.planner || current.planner.status !== 'running' || current.planner.agentRunId !== agentRunId) {
+      if (!current || !guardMatches(current, guard)) return null;
+      await persist(tx, current, write);
+      return loadPlanning(tx, buildRunId);
+    }),
+    claimAndApply: (buildRunId, agentRunId, write) => database.transaction(async (tx) => {
+      await lockRun(tx, buildRunId);
+      const current = await loadPlanning(tx, buildRunId);
+      if (
+        current?.status !== 'planning'
+        || !current.planner
+        || current.planner.status !== 'running'
+        || current.planner.agentRunId !== agentRunId
+      ) {
         return null;
       }
       const claimed = await tx.update(buildTasks).set({
@@ -39,6 +53,14 @@ export function createDrizzlePlanningStore(database: Database = db): PlanningSto
       return loadPlanning(tx, buildRunId);
     }),
   };
+}
+
+/**
+ * Holds the run row until the transaction ends, so a cancel or suspend that
+ * writes the run waits for this write and is never overwritten by it.
+ */
+async function lockRun(tx: Executor, buildRunId: string): Promise<void> {
+  await tx.select({ id: buildRuns.id }).from(buildRuns).where(eq(buildRuns.id, buildRunId)).for('update');
 }
 
 async function loadPlanning(

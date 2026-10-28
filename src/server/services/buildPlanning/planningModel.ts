@@ -20,7 +20,30 @@ export interface PlannerTaskState {
   status: BuildTaskStatus;
   attempt: number;
   agentRunId: string | null;
+  /** While `ready`, when the launch began. While `running`, when the agent started. */
   startedAtMs: number | null;
+}
+
+/** A `ready` planner older than this is treated as a launch that died mid-way. */
+export const PLANNER_READY_STALE_MS = 10 * 60 * 1000;
+
+export function guardMatches(view: PlanningView, guard: PlanningGuard): boolean {
+  if (!guard.runStatuses.includes(view.status)) return false;
+  if (guard.planner === undefined) return true;
+  if (guard.planner === null) return view.planner === null;
+  return view.planner?.status === guard.planner.status && view.planner.attempt === guard.planner.attempt;
+}
+
+export function plannerGuard(planner: PlannerTaskState | null): PlanningGuard['planner'] {
+  return planner ? { status: planner.status, attempt: planner.attempt } : null;
+}
+
+/** True when a launch for this planner is in progress or its agent is working. */
+export function plannerInFlight(planner: PlannerTaskState | null, nowMs: number): boolean {
+  if (!planner) return false;
+  if (planner.status === 'running') return true;
+  if (planner.status !== 'ready') return false;
+  return planner.startedAtMs != null && nowMs - planner.startedAtMs < PLANNER_READY_STALE_MS;
 }
 
 export interface PlanningView {
@@ -98,12 +121,22 @@ export interface PlanningWrite {
   events?: PlanningEvent[];
 }
 
+/** What the run and planner must still look like, under the run row lock, for a write to apply. */
+export interface PlanningGuard {
+  runStatuses: readonly BuildRunStatus[];
+  /** Null means no planner row yet. Omit to skip the planner check. */
+  planner?: { status: BuildTaskStatus; attempt: number } | null;
+}
+
 export interface PlanningStore {
   load(buildRunId: string, revisionNumber?: number): Promise<PlanningView | null>;
   apply(buildRunId: string, write: PlanningWrite): Promise<PlanningView>;
+  /** Applies the write only when the guard still matches. Returns null otherwise. */
+  applyIf(buildRunId: string, guard: PlanningGuard, write: PlanningWrite): Promise<PlanningView | null>;
   /**
-   * Applies the write only when the planner task is `running` for this agent run.
-   * Returns null when another completion already claimed it, or the run moved on.
+   * Applies the write only when the run is `planning` and the planner task is
+   * `running` for this agent run. Returns null when another completion already
+   * claimed it, or the run moved on.
    */
   claimAndApply(
     buildRunId: string,

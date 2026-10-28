@@ -5,12 +5,14 @@
  */
 import { randomUUID } from 'crypto';
 import type { BuildPlan, PlanValidationResult, PlanViolation } from '../../../shared/buildPlanSchema';
-import { integrationBranchName, type BuildSuspendReason } from '../../../shared/types/build';
+import { BUILD_RUN_STATUSES, integrationBranchName, type BuildSuspendReason } from '../../../shared/types/build';
 import { BuildLaunchRefusedError } from './launchGuard';
 import {
   contactNames,
   expectedClassification,
   focusedError,
+  plannerGuard,
+  plannerInFlight,
   plannerRoleReady,
   toStoredTasks,
   validationRecord,
@@ -83,7 +85,7 @@ export async function resumePlanning(
   if (!loaded) return { status: 'refused', reason: 'configuration' };
   if (loaded.planValidation?.status === 'pass') return { status: 'already_planned' };
 
-  let view = loaded;
+  const view = loaded;
   if (view.status === 'suspended') {
     const reason = view.suspendReason;
     if (!reason || !RESUME_REASONS.includes(reason) || view.suspendedFromStatus !== 'planning') {
@@ -93,18 +95,39 @@ export async function resumePlanning(
     return notPlanning(view);
   }
 
-  view = await deps.store.apply(view.buildRunId, {
+  const keepLaunch = view.planner?.status === 'ready' && plannerInFlight(view.planner, nowOf(deps));
+  const reset = await deps.store.applyIf(view.buildRunId, {
+    runStatuses: [view.status],
+    planner: plannerGuard(view.planner),
+  }, {
     runStatus: 'planning',
     suspendReason: null,
     suspendedFromStatus: null,
-    ...(view.planner ? { planner: { ...view.planner, status: 'failed' as const } } : {}),
+    ...(view.planner && !keepLaunch ? { planner: { ...view.planner, status: 'failed' as const } } : {}),
   });
-  if (view.classification === 'small') return recordSmallPath(view, deps);
-  return launchFullPlanner(view, deps, 'resume');
+  if (!reset) return currentStartResult(view.buildRunId, deps);
+  if (reset.classification === 'small') return recordSmallPath(reset, deps);
+  return launchFullPlanner(reset, deps, 'resume');
 }
 
 function notPlanning(view: PlanningView): PlanningStartResult {
   return { status: 'not_planning', runStatus: view.status, suspendReason: view.suspendReason };
+}
+
+/** Reports where a run stands after another caller changed it first. */
+async function currentStartResult(buildRunId: string, deps: BuildPlanningDeps): Promise<PlanningStartResult> {
+  const current = await deps.store.load(buildRunId);
+  if (!current) return { status: 'refused', reason: 'configuration' };
+  if (current.planValidation?.status === 'pass') return { status: 'already_planned' };
+  if (current.status === 'building' && current.classification === 'small') return { status: 'small_path' };
+  if (current.status === 'planning' && current.planner && plannerInFlight(current.planner, nowOf(deps))) {
+    return { status: 'launched', attempt: current.planner.attempt };
+  }
+  return notPlanning(current);
+}
+
+function nowOf(deps: BuildPlanningDeps): number {
+  return (deps.now ?? Date.now)();
 }
 
 export async function applyPlannerCompletion(
@@ -272,7 +295,7 @@ export async function validateAndRecordPlan(
 
 async function recordSmallPath(view: PlanningView, deps: BuildPlanningDeps): Promise<PlanningStartResult> {
   if (view.status === 'intake' || view.status === 'planning') {
-    await deps.store.apply(view.buildRunId, {
+    const moved = await deps.store.applyIf(view.buildRunId, { runStatuses: ['intake', 'planning'] }, {
       runStatus: 'building',
       events: [{
         eventType: 'plan.started',
@@ -281,6 +304,7 @@ async function recordSmallPath(view: PlanningView, deps: BuildPlanningDeps): Pro
         dedupeKey: `${view.revisionId}:plan.started:small`,
       }],
     });
+    if (!moved) return currentStartResult(view.buildRunId, deps);
   }
   return { status: 'small_path' };
 }
@@ -303,23 +327,25 @@ async function launchFullPlanner(
     await suspend(view, 'configuration', deps);
     return { status: 'refused', reason: 'configuration' };
   }
-  if (view.planner?.status === 'running') {
+  const nowMs = nowOf(deps);
+  if (view.planner && plannerInFlight(view.planner, nowMs)) {
     return { status: 'launched', attempt: view.planner.attempt };
   }
 
-  if (view.planner?.agentRunId) {
-    await deps.releaseAgentRun(view.planner.agentRunId, 'cancelled');
-  }
-  const attempt = view.planner?.status === 'failed' ? view.planner.attempt + 1 : 1;
+  const retrying = view.planner?.status === 'failed' || view.planner?.status === 'ready';
+  const attempt = view.planner && retrying ? view.planner.attempt + 1 : 1;
   const planner = {
     id: view.planner?.id ?? randomUUID(),
     status: 'ready' as const,
     attempt,
     agentRunId: null,
-    startedAtMs: null,
+    startedAtMs: nowMs,
   };
   const branch = view.integrationBranch ?? integrationBranchName(view.buildRunId);
-  const prepared = await deps.store.apply(view.buildRunId, {
+  const prepared = await deps.store.applyIf(view.buildRunId, {
+    runStatuses: ['intake', 'planning'],
+    planner: plannerGuard(view.planner),
+  }, {
     runStatus: 'planning',
     suspendReason: null,
     suspendedFromStatus: null,
@@ -333,6 +359,11 @@ async function launchFullPlanner(
       }],
     }),
   });
+  if (!prepared) return currentStartResult(view.buildRunId, deps);
+  if (view.planner?.agentRunId) {
+    await deps.releaseAgentRun(view.planner.agentRunId, 'cancelled');
+  }
+  const ours = { status: 'ready' as const, attempt };
 
   const mode = reason === 'repair' || prepared.repairAttempts > 0 ? 'repair' : 'full';
   const violations = prepared.planValidation?.status === 'fail' ? prepared.planValidation.violations : [];
@@ -363,18 +394,27 @@ async function launchFullPlanner(
       attempt,
     });
   } catch (error) {
-    // A planner row left at `ready` would block every later attempt.
-    await deps.store.apply(prepared.buildRunId, { planner: { ...planner, status: 'failed' } });
+    await deps.store.applyIf(prepared.buildRunId, { runStatuses: BUILD_RUN_STATUSES, planner: ours }, {
+      planner: { ...planner, status: 'failed' },
+    });
     throw error;
   }
-  await deps.store.apply(prepared.buildRunId, {
+  const running = await deps.store.applyIf(prepared.buildRunId, { runStatuses: ['planning'], planner: ours }, {
     planner: {
       ...planner,
       status: 'running',
       agentRunId: launched.agentRunId,
-      startedAtMs: (deps.now ?? Date.now)(),
+      startedAtMs: nowOf(deps),
     },
   });
+  if (!running) {
+    // The run was cancelled or suspended, or the slot was reset, while the agent launched.
+    await deps.releaseAgentRun(launched.agentRunId, 'cancelled');
+    await deps.store.applyIf(prepared.buildRunId, { runStatuses: BUILD_RUN_STATUSES, planner: ours }, {
+      planner: { ...planner, status: 'failed' },
+    });
+    return currentStartResult(prepared.buildRunId, deps);
+  }
   return { status: 'launched', attempt };
 }
 
@@ -409,7 +449,7 @@ async function suspend(
   deps: BuildPlanningDeps,
 ): Promise<void> {
   const from = view.status === 'planning' || view.status === 'intake' ? view.status : 'planning';
-  await deps.store.apply(view.buildRunId, {
+  await deps.store.applyIf(view.buildRunId, { runStatuses: ['intake', 'planning'] }, {
     runStatus: 'suspended',
     suspendReason: reason,
     suspendedFromStatus: from,
