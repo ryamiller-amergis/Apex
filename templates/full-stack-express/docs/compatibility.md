@@ -28,8 +28,8 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | @mui/material                              | 9.5.0          | implementation-date latest stable                 | apps/web, packages/ui                                                |
 | drizzle-orm                                | 0.45.4         | implementation-date latest stable                 | apps/api                                                             |
 | drizzle-kit                                | 0.31.11        | implementation-date latest stable                 | apps/api                                                             |
-| @playwright/test                           | 1.64.1         | implementation-date latest stable                 | reserved                                                             |
-| @testing-library/react                     | 16.3.3         | implementation-date latest stable                 | packages/ui                                                          |
+| @playwright/test                           | 1.64.1         | implementation-date latest stable                 | apps/web                                                             |
+| @testing-library/react                     | 16.3.3         | implementation-date latest stable                 | apps/web, packages/ui                                                |
 | testcontainers                             | 12.2.1         | implementation-date latest stable                 | apps/api                                                             |
 | yaml                                       | 2.9.1          | implementation-date latest stable                 | packages/config                                                      |
 | zod                                        | 4.6.7          | implementation-date latest stable                 | apps/api, apps/web, packages/contracts                               |
@@ -58,10 +58,14 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 | @emotion/styled                            | 11.14.1        | implementation-date latest stable                 | apps/web, packages/ui                                                |
 | react-router                               | 8.5.0          | implementation-date latest stable                 | apps/web, packages/ui                                                |
 | react-error-boundary                       | 6.1.6          | implementation-date latest stable                 | packages/ui                                                          |
-| @testing-library/dom                       | 10.4.2         | implementation-date latest stable                 | packages/ui                                                          |
-| @testing-library/jest-dom                  | 7.0.1          | implementation-date latest stable                 | packages/ui                                                          |
-| @testing-library/user-event                | 14.6.8         | implementation-date latest stable                 | packages/ui                                                          |
-| jsdom                                      | 30.1.3         | implementation-date latest stable                 | packages/ui                                                          |
+| @testing-library/dom                       | 10.4.2         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @testing-library/jest-dom                  | 7.0.1          | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @testing-library/user-event                | 14.6.8         | implementation-date latest stable                 | apps/web, packages/ui                                                |
+| @tanstack/react-query                      | 5.105.0        | implementation-date latest stable                 | apps/web                                                             |
+| react-hook-form                            | 7.91.0         | implementation-date latest stable                 | apps/web                                                             |
+| @hookform/resolvers                        | 6.0.1          | implementation-date latest stable                 | apps/web                                                             |
+| axe-core                                   | 4.14.0         | implementation-date latest stable                 | apps/web                                                             |
+| jsdom                                      | 30.1.3         | implementation-date latest stable                 | apps/web, packages/ui                                                |
 
 ## Selection notes
 
@@ -85,7 +89,10 @@ major. `toolchain:check` fails when this table and `pnpm-workspace.yaml` disagre
 - The OTLP exporters are the `-otlp-proto` packages because `OTEL_EXPORTER_OTLP_PROTOCOL` accepts only `http/protobuf`. The `-otlp-http` packages send JSON.
 - `@opentelemetry/instrumentation-pg` `0.77.0` records the `db.client.operation.duration` histogram, so the data-access module needs no metrics code of its own.
 - `@emotion/react` and `@emotion/styled` are the styling peers of `@mui/material` `9.5.0`. `packages/ui` lists them, `react`, `react-dom`, `@mui/material`, and `react-router` as peer dependencies, and `apps/web` installs them.
-- `jsdom` `30.1.3` supports Node `^24.15.0`. It is the DOM for `packages/ui` component tests, together with `@testing-library/dom`, `@testing-library/jest-dom`, and `@testing-library/user-event`.
+- `jsdom` `30.1.3` supports Node `^24.15.0`. It is the DOM for `packages/ui` and `apps/web` component tests, together with `@testing-library/dom`, `@testing-library/jest-dom`, and `@testing-library/user-event`.
+- `@tanstack/react-query` `5.105.0` is the newest 5.x release and supports React 19. The profile screen keeps server state in it. Mutations do not retry; the profile query turns retries off itself.
+- `react-hook-form` `7.91.0` and `@hookform/resolvers` `6.0.1` run the profile form. Resolvers 6 accepts Zod 4, which is the Zod this workspace pins.
+- `axe-core` `4.14.0` checks the profile screen in component tests. `@playwright/test` `1.64.1` was reserved until this screen; the browser journeys are authored and skipped until the Playwright harness exists. `onlyBuiltDependencies` stays empty, so Playwright's browser download does not run.
 - Local PostgreSQL uses the image `postgres:16`, the same major version Apex CI runs. The tag is pinned in `compose.yaml`. This table mirrors the pnpm catalog, and the toolchain check rejects a row the catalog does not have, so the image tag is not a catalog row.
 
 ## Registry

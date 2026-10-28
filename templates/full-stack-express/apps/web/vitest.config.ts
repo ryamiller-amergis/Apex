@@ -3,5 +3,9 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 
 export default mergeConfig(
   base as Parameters<typeof mergeConfig>[0],
-  defineConfig({})
+  defineConfig({
+    test: {
+      setupFiles: ['./src/testing/setupTests.ts'],
+    },
+  })
 );

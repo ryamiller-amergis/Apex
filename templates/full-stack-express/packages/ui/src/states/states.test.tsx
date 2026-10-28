@@ -23,6 +23,25 @@ describe('LoadingState', () => {
     renderThemed(<LoadingState label="Loading profile" variant="inline" />);
     expect(screen.getByRole('status')).toHaveTextContent('Loading profile');
   });
+
+  it('accepts a screen-specific test id and keeps the default', () => {
+    const { rerender } = renderThemed(
+      <LoadingState testId="profile-loading" />
+    );
+    expect(screen.getByRole('status')).toHaveAttribute(
+      'data-testid',
+      'profile-loading'
+    );
+    rerender(
+      <AppThemeProvider>
+        <LoadingState />
+      </AppThemeProvider>
+    );
+    expect(screen.getByRole('status')).toHaveAttribute(
+      'data-testid',
+      'loading-state'
+    );
+  });
 });
 
 describe('EmptyState', () => {
@@ -88,5 +107,36 @@ describe('ErrorState', () => {
     expect(
       screen.getByRole('button', { name: 'Save again' })
     ).toBeInTheDocument();
+  });
+
+  it('accepts screen-specific test ids and keeps the defaults', () => {
+    const { rerender } = renderThemed(
+      <ErrorState
+        testId="profile-error"
+        retryTestId="profile-retry"
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveAttribute(
+      'data-testid',
+      'profile-error'
+    );
+    expect(screen.getByRole('button', { name: 'Try again' })).toHaveAttribute(
+      'data-testid',
+      'profile-retry'
+    );
+    rerender(
+      <AppThemeProvider>
+        <ErrorState onRetry={vi.fn()} />
+      </AppThemeProvider>
+    );
+    expect(screen.getByRole('alert')).toHaveAttribute(
+      'data-testid',
+      'error-state'
+    );
+    expect(screen.getByRole('button', { name: 'Try again' })).toHaveAttribute(
+      'data-testid',
+      'error-state-retry'
+    );
   });
 });

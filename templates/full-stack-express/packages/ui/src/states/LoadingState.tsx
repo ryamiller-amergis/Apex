@@ -7,6 +7,8 @@ export interface LoadingStateProps {
   label?: string;
   /** `page` centres the state in the content area; `inline` sits in a row. */
   variant?: 'page' | 'inline';
+  /** Selector for this state. Defaults to `loading-state`. */
+  testId?: string;
 }
 
 /**
@@ -19,12 +21,13 @@ export interface LoadingStateProps {
 export const LoadingState: React.FC<LoadingStateProps> = ({
   label = 'Loading',
   variant = 'page',
+  testId = 'loading-state',
 }) => {
   const isPage = variant === 'page';
   return (
     <Box
       role="status"
-      data-testid="loading-state"
+      data-testid={testId}
       sx={{
         display: 'flex',
         alignItems: 'center',
