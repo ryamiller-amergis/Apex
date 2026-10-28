@@ -2,12 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import {
-  QUICK_LINK_CATEGORY_MAX_LENGTH,
-  QUICK_LINK_LABEL_MAX_LENGTH,
-  QUICK_LINK_URL_MAX_LENGTH,
-  type ProjectQuickLink,
-} from '../../shared/types/projectQuickLinks';
+import type { ProjectQuickLink } from '../../shared/types/projectQuickLinks';
 import {
   useCreateProjectQuickLink,
   useDeleteProjectQuickLink,
@@ -16,6 +11,11 @@ import {
   useUpdateProjectQuickLink,
 } from '../hooks/useProjectQuickLinks';
 import { useAppShell } from '../hooks/useAppShell';
+import {
+  quickLinkCategoryField,
+  quickLinkLabelField,
+  quickLinkUrlField,
+} from '../utils/quickLinkForm';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { DataGridFilterSelect, DataGridToolbar } from './DataGridToolbar';
 import { NumberStepper } from './NumberStepper';
@@ -26,31 +26,10 @@ export const QUICK_LINKS_SECTION_ID = 'quick-links';
 
 const UNCATEGORIZED = '__none__';
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
 const quickLinkSchema = z.object({
-  label: z
-    .string()
-    .trim()
-    .min(1, 'Label is required')
-    .max(QUICK_LINK_LABEL_MAX_LENGTH, `Label must be ${QUICK_LINK_LABEL_MAX_LENGTH} characters or fewer`),
-  url: z
-    .string()
-    .trim()
-    .min(1, 'URL is required')
-    .max(QUICK_LINK_URL_MAX_LENGTH, `URL must be ${QUICK_LINK_URL_MAX_LENGTH} characters or fewer`)
-    .refine(isHttpUrl, 'Enter a full URL starting with http:// or https://'),
-  category: z
-    .string()
-    .trim()
-    .max(QUICK_LINK_CATEGORY_MAX_LENGTH, `Category must be ${QUICK_LINK_CATEGORY_MAX_LENGTH} characters or fewer`),
+  label: quickLinkLabelField,
+  url: quickLinkUrlField,
+  category: quickLinkCategoryField,
   sortOrder: z.number().int().min(0),
 });
 

@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateProjectQuickLinkInput,
+  CreateUserQuickLinkInput,
+  ImportUserQuickLinksResult,
   ProjectQuickLink,
   ProjectQuickLinksListResponse,
   UpdateProjectQuickLinkInput,
+  UpdateUserQuickLinkInput,
+  UserQuickLink,
+  UserQuickLinksListResponse,
 } from '../../shared/types/projectQuickLinks';
 
 export class ProjectQuickLinksApiError extends Error {
@@ -109,6 +114,86 @@ export function useReorderProjectQuickLinks(project: string | null | undefined) 
         headers: JSON_HEADERS,
         body: JSON.stringify({ ids }),
       }).then((data) => data.items),
+    onSuccess: invalidate,
+  });
+}
+
+function myLinksUrl(project: string, suffix?: string): string {
+  const base = `/api/projects/${encodeURIComponent(project)}/my-quick-links`;
+  return suffix ? `${base}/${suffix}` : base;
+}
+
+export const myQuickLinksQueryKey = (project: string) => ['my-quick-links', project] as const;
+
+/** The signed-in user's personal links for a project. Pass `enabled: false` without `quick-links:personal`. */
+export function useMyQuickLinks(project: string | null | undefined, enabled = true) {
+  return useQuery<UserQuickLink[]>({
+    queryKey: myQuickLinksQueryKey(project ?? ''),
+    queryFn: async () => {
+      const data = await apiFetch<UserQuickLinksListResponse>(myLinksUrl(project!));
+      return data.items;
+    },
+    enabled: Boolean(project) && enabled,
+    staleTime: 60_000,
+  });
+}
+
+function useInvalidateMyQuickLinks(project: string | null | undefined) {
+  const queryClient = useQueryClient();
+  return () => {
+    if (!project) return;
+    void queryClient.invalidateQueries({ queryKey: myQuickLinksQueryKey(project) });
+  };
+}
+
+export function useCreateMyQuickLink(project: string | null | undefined) {
+  const invalidate = useInvalidateMyQuickLinks(project);
+  return useMutation<UserQuickLink, ProjectQuickLinksApiError, CreateUserQuickLinkInput>({
+    mutationFn: (input) =>
+      apiFetch<UserQuickLink>(myLinksUrl(project!), {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(input),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateMyQuickLink(project: string | null | undefined) {
+  const invalidate = useInvalidateMyQuickLinks(project);
+  return useMutation<
+    UserQuickLink,
+    ProjectQuickLinksApiError,
+    { id: string; input: UpdateUserQuickLinkInput }
+  >({
+    mutationFn: ({ id, input }) =>
+      apiFetch<UserQuickLink>(myLinksUrl(project!, encodeURIComponent(id)), {
+        method: 'PATCH',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(input),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteMyQuickLink(project: string | null | undefined) {
+  const invalidate = useInvalidateMyQuickLinks(project);
+  return useMutation<void, ProjectQuickLinksApiError, { id: string }>({
+    mutationFn: ({ id }) =>
+      apiFetch<void>(myLinksUrl(project!, encodeURIComponent(id)), { method: 'DELETE' }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useImportMyQuickLinks(project: string | null | undefined) {
+  const invalidate = useInvalidateMyQuickLinks(project);
+  return useMutation<ImportUserQuickLinksResult, ProjectQuickLinksApiError, { items: CreateUserQuickLinkInput[] }>({
+    mutationFn: ({ items }) =>
+      apiFetch<ImportUserQuickLinksResult>(myLinksUrl(project!, 'import'), {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ items }),
+      }),
     onSuccess: invalidate,
   });
 }

@@ -1,18 +1,35 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import type { ProjectQuickLink } from '../../shared/types/projectQuickLinks';
-import { useProjectQuickLinks } from '../hooks/useProjectQuickLinks';
+import type {
+  ImportUserQuickLinksResult,
+  ProjectQuickLink,
+  UserQuickLink,
+} from '../../shared/types/projectQuickLinks';
+import {
+  useCreateMyQuickLink,
+  useDeleteMyQuickLink,
+  useMyQuickLinks,
+  useProjectQuickLinks,
+  useUpdateMyQuickLink,
+} from '../hooks/useProjectQuickLinks';
+import { BookmarkImportModal } from './BookmarkImportModal';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { PersonalQuickLinkModal, type PersonalQuickLinkFormValues } from './PersonalQuickLinkModal';
 import styles from './QuickLinksMenu.module.css';
 
 const MANAGE_LINKS_PATH = '/admin/project-settings#quick-links';
+const TOAST_DURATION_MS = 6000;
 
-interface QuickLinkGroup {
+type AnyQuickLink = ProjectQuickLink | UserQuickLink;
+
+interface QuickLinkGroup<T extends AnyQuickLink> {
   category: string | null;
-  links: ProjectQuickLink[];
+  links: T[];
 }
 
-function groupByCategory(links: ProjectQuickLink[]): QuickLinkGroup[] {
-  const groups: QuickLinkGroup[] = [];
+function groupByCategory<T extends AnyQuickLink>(links: T[]): QuickLinkGroup<T>[] {
+  const groups: QuickLinkGroup<T>[] = [];
   for (const link of links) {
     const category = link.category ?? null;
     const last = groups[groups.length - 1];
@@ -21,6 +38,19 @@ function groupByCategory(links: ProjectQuickLink[]): QuickLinkGroup[] {
   }
   return groups;
 }
+
+export function describeImportResult(result: ImportUserQuickLinksResult): string {
+  const parts = [`Imported ${result.created} link${result.created === 1 ? '' : 's'}`];
+  if (result.skippedDuplicates > 0) parts.push(`${result.skippedDuplicates} already saved`);
+  if (result.rejected.length > 0) parts.push(`${result.rejected.length} not imported`);
+  return parts.join(' · ');
+}
+
+type DialogState =
+  | { kind: 'add' }
+  | { kind: 'edit'; link: UserQuickLink }
+  | { kind: 'delete'; link: UserQuickLink }
+  | { kind: 'import' };
 
 const LinkIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
@@ -32,19 +62,36 @@ const LinkIcon: React.FC<{ className?: string }> = ({ className }) => (
 interface QuickLinksMenuBodyProps {
   project: string;
   canManage: boolean;
+  canAddPersonal: boolean;
   testId: string;
 }
 
-const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({ project, canManage, testId }) => {
+const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
+  project,
+  canManage,
+  canAddPersonal,
+  testId,
+}) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [dialog, setDialog] = useState<DialogState | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const { data: links = [] } = useProjectQuickLinks(project);
+  const { data: projectLinks = [] } = useProjectQuickLinks(project);
+  const { data: myLinks = [] } = useMyQuickLinks(project, canAddPersonal);
+  const createMyLink = useCreateMyQuickLink(project);
+  const updateMyLink = useUpdateMyQuickLink(project);
+  const deleteMyLink = useDeleteMyQuickLink(project);
 
-  const groups = useMemo(() => groupByCategory(links), [links]);
-  const showGroupHeadings = groups.length > 1 || groups[0]?.category != null;
+  const projectGroups = useMemo(() => groupByCategory(projectLinks), [projectLinks]);
+  const myGroups = useMemo(() => groupByCategory(myLinks), [myLinks]);
+  const myCategories = useMemo(
+    () => Array.from(new Set(myLinks.map((l) => l.category).filter((c): c is string => Boolean(c)))),
+    [myLinks],
+  );
+  const showProjectHeadings = projectGroups.length > 1 || projectGroups[0]?.category != null;
 
   const menuItems = useCallback(
     () => Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []),
@@ -56,6 +103,13 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({ project, canMan
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
+  const closeDialog = useCallback(() => {
+    createMyLink.reset();
+    updateMyLink.reset();
+    setDialog(null);
+    triggerRef.current?.focus();
+  }, [createMyLink, updateMyLink]);
+
   useEffect(() => {
     if (!isOpen) return;
     menuItems()[0]?.focus();
@@ -66,7 +120,18 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({ project, canMan
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen, close, menuItems]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), TOAST_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
   const navigate = useNavigate();
+
+  const openDialog = (next: DialogState) => {
+    setIsOpen(false);
+    setDialog(next);
+  };
 
   const handleMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const items = menuItems();
@@ -107,7 +172,67 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({ project, canMan
     }
   };
 
-  if (links.length === 0) return null;
+  const savePersonalLink = (values: PersonalQuickLinkFormValues) => {
+    const input = { label: values.label, url: values.url, category: values.category || null };
+    if (dialog?.kind === 'edit') {
+      updateMyLink.mutate({ id: dialog.link.id, input }, { onSuccess: closeDialog });
+    } else {
+      createMyLink.mutate(input, { onSuccess: closeDialog });
+    }
+  };
+
+  const renderDialog = (current: DialogState): React.ReactNode => {
+    switch (current.kind) {
+      case 'add':
+      case 'edit':
+        return (
+          <PersonalQuickLinkModal
+            link={current.kind === 'edit' ? current.link : null}
+            categories={myCategories}
+            isPending={createMyLink.isPending || updateMyLink.isPending}
+            serverError={(createMyLink.error ?? updateMyLink.error)?.message ?? null}
+            onSubmit={savePersonalLink}
+            onCancel={closeDialog}
+            data-testid="quick-links-personal-modal"
+          />
+        );
+      case 'delete':
+        return (
+          <ConfirmDeleteModal
+            title="Delete my link"
+            itemName={current.link.label}
+            isPending={deleteMyLink.isPending}
+            onConfirm={() =>
+              deleteMyLink.mutate(
+                { id: current.link.id },
+                { onSuccess: closeDialog, onError: (err) => { setToast(err.message); closeDialog(); } },
+              )
+            }
+            onCancel={closeDialog}
+            data-testid="quick-links-personal-delete-modal"
+          />
+        );
+      case 'import':
+        return (
+          <BookmarkImportModal
+            project={project}
+            existingCount={myLinks.length}
+            onCancel={closeDialog}
+            onImported={(result) => {
+              setToast(describeImportResult(result));
+              closeDialog();
+            }}
+            data-testid="quick-links-import-modal"
+          />
+        );
+      default: {
+        const unhandled: never = current;
+        return unhandled;
+      }
+    }
+  };
+
+  if (projectLinks.length === 0 && myLinks.length === 0 && !canAddPersonal) return null;
 
   return (
     <div className={styles.wrapper} ref={wrapperRef} {...{ 'data-testid': testId }}>
@@ -138,14 +263,14 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({ project, canMan
           onKeyDown={handleMenuKeyDown}
           {...{ 'data-testid': 'quick-links-menu-list' }}
         >
-          {groups.map((group) => (
+          {projectGroups.map((group) => (
             <div
               key={group.category ?? '__uncategorized__'}
               role="group"
               aria-label={group.category ?? 'Other links'}
               className={styles.group}
             >
-              {showGroupHeadings && (
+              {showProjectHeadings && (
                 <div className={styles.groupHeading} aria-hidden="true">
                   {group.category ?? 'Other'}
                 </div>
@@ -169,25 +294,124 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({ project, canMan
             </div>
           ))}
 
-          {canManage && (
+          {myLinks.length > 0 && (
+            <div role="group" aria-label="My links" className={styles.group} {...{ 'data-testid': 'quick-links-menu-mine' }}>
+              {projectLinks.length > 0 && <div className={styles.divider} role="separator" />}
+              <div className={styles.sectionHeading} aria-hidden="true">My links</div>
+              {myGroups.map((group) => (
+                <div key={group.category ?? '__mine_uncategorized__'} role="group" aria-label={group.category ?? 'My other links'}>
+                  {group.category && (
+                    <div className={styles.groupHeading} aria-hidden="true">{group.category}</div>
+                  )}
+                  {group.links.map((link) => (
+                    <div key={link.id} className={styles.personalRow}>
+                      <a
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={`${styles.item} ${styles.personalLink}`}
+                        onClick={() => close(false)}
+                        {...{ 'data-testid': `quick-links-menu-my-item-${link.id}` }}
+                      >
+                        <span className={styles.itemLabel}>{link.label}</span>
+                        <span className={styles.external} aria-hidden="true">↗</span>
+                      </a>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={styles.rowAction}
+                        aria-label={`Edit ${link.label}`}
+                        title="Edit"
+                        onClick={() => openDialog({ kind: 'edit', link })}
+                        {...{ 'data-testid': `quick-links-menu-my-edit-${link.id}` }}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={-1}
+                        className={styles.rowAction}
+                        aria-label={`Delete ${link.label}`}
+                        title="Delete"
+                        onClick={() => openDialog({ kind: 'delete', link })}
+                        {...{ 'data-testid': `quick-links-menu-my-delete-${link.id}` }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(canAddPersonal || canManage) && (projectLinks.length > 0 || myLinks.length > 0) && (
+            <div className={styles.divider} role="separator" />
+          )}
+
+          {canAddPersonal && (
             <>
-              <div className={styles.divider} role="separator" />
               <button
                 type="button"
                 role="menuitem"
                 tabIndex={-1}
                 className={`${styles.item} ${styles.manageItem}`}
-                onClick={() => {
-                  close(false);
-                  navigate(MANAGE_LINKS_PATH);
-                }}
-                {...{ 'data-testid': 'quick-links-menu-manage' }}
+                onClick={() => openDialog({ kind: 'add' })}
+                {...{ 'data-testid': 'quick-links-menu-add' }}
               >
-                Manage links…
+                Add link
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                className={`${styles.item} ${styles.manageItem}`}
+                onClick={() => openDialog({ kind: 'import' })}
+                {...{ 'data-testid': 'quick-links-menu-import' }}
+              >
+                Import bookmarks
               </button>
             </>
           )}
+
+          {canManage && (
+            <button
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              className={`${styles.item} ${styles.manageItem}`}
+              onClick={() => {
+                close(false);
+                navigate(MANAGE_LINKS_PATH);
+              }}
+              {...{ 'data-testid': 'quick-links-menu-manage' }}
+            >
+              Manage links…
+            </button>
+          )}
         </div>
+      )}
+
+      {dialog && createPortal(renderDialog(dialog), document.body)}
+
+      {toast && createPortal(
+        <div className={styles.toast} role="status" aria-live="polite" {...{ 'data-testid': 'quick-links-toast' }}>
+          <span>{toast}</span>
+          <button
+            type="button"
+            className={styles.toastDismiss}
+            aria-label="Dismiss"
+            onClick={() => setToast(null)}
+            {...{ 'data-testid': 'quick-links-toast-dismiss' }}
+          >
+            ×
+          </button>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -197,6 +421,7 @@ interface QuickLinksMenuProps {
   project?: string | null;
   hidden?: boolean;
   canManage?: boolean;
+  canAddPersonal?: boolean;
   'data-testid'?: string;
 }
 
@@ -204,10 +429,19 @@ export const QuickLinksMenu: React.FC<QuickLinksMenuProps> = ({
   project,
   hidden = false,
   canManage = false,
+  canAddPersonal = false,
   'data-testid': testId = 'quick-links-menu',
 }) => {
   if (!project || hidden) return null;
-  return <QuickLinksMenuBody key={project} project={project} canManage={canManage} testId={testId} />;
+  return (
+    <QuickLinksMenuBody
+      key={project}
+      project={project}
+      canManage={canManage}
+      canAddPersonal={canAddPersonal}
+      testId={testId}
+    />
+  );
 };
 
 export default QuickLinksMenu;

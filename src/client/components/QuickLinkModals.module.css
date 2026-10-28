@@ -1,0 +1,253 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--text-primary) 35%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+  padding: 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 48px);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+}
+
+.cardWide {
+  max-width: 720px;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.input {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.input:focus,
+.input:-webkit-autofill {
+  outline: none;
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+  box-shadow: var(--glow-accent);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--error-color);
+}
+
+.fieldError,
+.formError {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--error-color);
+}
+
+.warning {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.button,
+.buttonPrimary {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--accent-color);
+}
+
+.buttonPrimary {
+  border-color: var(--accent-color);
+  background: var(--accent-color);
+  color: var(--on-accent);
+  box-shadow: var(--glow-accent);
+}
+
+.buttonPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.button:disabled,
+.buttonPrimary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.button:focus-visible,
+.buttonPrimary:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* ── Bookmark import ───────────────────────────────────── */
+
+.steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.previewToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.search {
+  flex: 1;
+  min-width: 200px;
+}
+
+.summary {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.tree {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folder {
+  border: 1px solid var(--border-color-light);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  padding: 8px 12px;
+}
+
+.folderHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.folderName {
+  font-weight: 600;
+}
+
+.folderCount {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.categoryInput {
+  width: 180px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.bookmarkList {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bookmark {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.bookmarkText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bookmarkLabel,
+.bookmarkUrl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmarkUrl {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
