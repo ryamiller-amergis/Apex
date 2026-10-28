@@ -648,7 +648,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     setError(null);
     if (kickoffFailed) {
       kickoffSentRef.current = true;
-      if (payload) setSeededKickoffPrompt(payload);
+      setSeededKickoffPrompt(payload || null);
     }
     await session.send(payload, {
       model,

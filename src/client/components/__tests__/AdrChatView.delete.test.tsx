@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdrChatView } from '../AdrChatView';
-import type { AgentRunPhase } from '../../../shared/types/chat';
+import type { AgentRunPhase, ChatAttachment } from '../../../shared/types/chat';
 import type { Adr } from '../../../shared/types/adr';
 
 const mockNavigate = jest.fn();
@@ -87,9 +87,11 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useAvailableModels: () => ({ data: [] }),
 }));
 
+let mockAttachments: ChatAttachment[] = [];
+
 jest.mock('../../hooks/useChatAttachments', () => ({
   useChatAttachments: () => ({
-    attachments: [],
+    attachments: mockAttachments,
     attachmentError: null,
     addFiles: jest.fn(),
     removeAttachment: jest.fn(),
@@ -219,6 +221,7 @@ describe('AdrChatView — delete', () => {
     mockReviewConfig = null;
     createCommentMutateAsync.mockResolvedValue(undefined);
     mockChatThread = null;
+    mockAttachments = [];
     mockStreamState = { messages: [], streamingText: '', thinkingText: '', status: 'idle' };
     mockFetch(() => Promise.resolve({
       ok: true,
@@ -684,6 +687,69 @@ describe('AdrChatView — delete', () => {
     expect(screen.queryByText('Compare queue and event-stream options.')).not.toBeInTheDocument();
     expect(screen.getByText('Use Service Bus instead.')).toBeInTheDocument();
     expect(screen.getByText('Service Bus is the better fit.')).toBeInTheDocument();
+    expect(screen.queryByTestId('adr-kickoff-retry')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)')).toBeEnabled();
+  });
+
+  it('does not keep kickoff Retry after recovering with an attachment-only send', async () => {
+    let messageOk = false;
+    mockFetch(() => Promise.resolve({
+      ok: messageOk,
+      json: async () => (messageOk
+        ? { ok: true }
+        : { error: 'Failed to start the ADR interview' }),
+    }));
+    mockAttachments = [{
+      id: 'attachment-2',
+      name: 'notes.txt',
+      size: 8,
+      type: 'text/plain',
+      content: 'fallback',
+    }];
+
+    const view = render(<AdrChatView />, {
+      wrapper: makeWrapper([{
+        pathname: '/adr/adr-1',
+        state: { kickoffPrompt: 'Compare queue and event-stream options.' },
+      }]),
+    });
+
+    expect(await screen.findByText('Failed to start the ADR interview')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('adr-error-dismiss-btn'));
+
+    messageOk = true;
+    fireEvent.click(screen.getByTestId('adr-send-btn'));
+
+    await waitFor(() => {
+      const continuation = (global.fetch as jest.Mock).mock.calls.find((call) => {
+        if (!String(call[0]).includes('/api/chat/threads/thread-1/messages')) return false;
+        try {
+          const body = JSON.parse(call[1].body);
+          return body.text === '' && body.attachments?.[0]?.name === 'notes.txt';
+        } catch {
+          return false;
+        }
+      });
+      expect(continuation).toBeTruthy();
+    });
+
+    mockStreamState = {
+      messages: [
+        { id: 'u1', role: 'user', text: '', ts: '2026-10-27T00:00:00.000Z' },
+        { id: 'a1', role: 'agent', text: 'Noted the attachment.', ts: '2026-10-27T00:00:01.000Z' },
+      ],
+      streamingText: '',
+      thinkingText: '',
+      status: 'idle',
+    };
+    mockChatThread = {
+      id: 'thread-1',
+      status: 'idle',
+      messages: mockStreamState.messages,
+    };
+    view.rerender(<AdrChatView />);
+
+    expect(screen.queryByText('Compare queue and event-stream options.')).not.toBeInTheDocument();
     expect(screen.queryByTestId('adr-kickoff-retry')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('Continue the ADR interview… (Enter to send)')).toBeEnabled();
   });
