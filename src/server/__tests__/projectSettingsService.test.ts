@@ -62,6 +62,7 @@ import {
   listSkillConfigs,
   resolveSkillConfig,
   upsertSkillConfig,
+  updateRepositoryCheckoutState,
   deleteSkillConfig,
   setApprovers,
   replaceApproverPools,
@@ -356,6 +357,7 @@ describe('upsertSkillConfig', () => {
       };
       return fn(tx);
     });
+    mockDb.select.mockReturnValue(selectResolving([insertedRow], 'limit'));
 
     const result = await upsertSkillConfig(
       makeUpsertInput({ isDefault: false })
@@ -483,6 +485,7 @@ describe('upsertSkillConfig', () => {
       };
       return fn(tx);
     });
+    mockDb.select.mockReturnValue(selectResolving([updatedRow], 'limit'));
 
     const result = await upsertSkillConfig(
       makeUpsertInput({
@@ -842,6 +845,13 @@ describe('deleteSkillConfig', () => {
 function resetDbMocks() {
   jest.clearAllMocks();
   mockDb.select.mockReset();
+  mockDb.select.mockImplementation(() => ({
+    from: jest.fn().mockReturnThis(),
+    innerJoin: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockResolvedValue([]),
+    orderBy: jest.fn().mockResolvedValue([]),
+  }));
   mockDb.insert.mockReset();
   mockDb.update.mockReset();
   mockDb.delete.mockReset();
@@ -2000,5 +2010,84 @@ describe('workflow settings dual write', () => {
     expect(mockDb.insert).not.toHaveBeenCalled();
     expect(mockDb.delete).not.toHaveBeenCalled();
     expect(mockSeedDefaultGroupsForProject).not.toHaveBeenCalled();
+  });
+
+  it('returns the saved workflow fields from child rows, not a parent-only null-filled row', async () => {
+    const parentOnly = { ...defaultRow, updatedAt: NOW };
+    mockDualWriteTransaction({ returnedRow: parentOnly });
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...parentOnly,
+            workflowSettings: [
+              workflowRow('interview', {
+                skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+                model: 'claude-interview',
+                effort: 'high',
+              }),
+            ],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const result = await upsertSkillConfig(
+      makeUpsertInput({
+        id: 'cfg-default',
+        interviewSkillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+        interviewModel: 'claude-interview',
+        interviewEffort: 'high',
+      })
+    );
+
+    expect(result).toMatchObject({
+      interviewSkillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+      interviewModel: 'claude-interview',
+      interviewEffort: 'high',
+    });
+    expect(result).not.toHaveProperty('workflowSettings');
+  });
+});
+
+describe('updateRepositoryCheckoutState', () => {
+  beforeEach(resetDbMocks);
+
+  it('returns workflow fields from child rows after updating checkout state', async () => {
+    const parentOnly = {
+      ...defaultRow,
+      repositoryCheckoutStatus: 'ready',
+      repositoryCheckoutSha: 'abc123',
+    };
+    mockDb.update.mockReturnValue({
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnValue({
+        returning: jest.fn().mockResolvedValue([parentOnly]),
+      }),
+    });
+    mockDb.select.mockReturnValue(
+      selectResolving(
+        [
+          {
+            ...parentOnly,
+            workflowSettings: [workflowRow('interview', { model: 'claude-interview' })],
+          },
+        ],
+        'limit'
+      )
+    );
+
+    const result = await updateRepositoryCheckoutState('cfg-default', {
+      status: 'ready',
+      sha: 'abc123',
+    });
+
+    expect(result).toMatchObject({
+      repositoryCheckoutStatus: 'ready',
+      repositoryCheckoutSha: 'abc123',
+      interviewModel: 'claude-interview',
+    });
+    expect(result).not.toHaveProperty('workflowSettings');
   });
 });

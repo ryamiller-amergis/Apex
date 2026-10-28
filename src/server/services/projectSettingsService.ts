@@ -475,7 +475,9 @@ export async function upsertSkillConfig(
     // @feature-flag:project-repository-checkout-readiness disabled-end
   }
   // @feature-flag:project-repository-checkout-readiness end
-  return toSkillConfig(result);
+  // Parent `.returning()` no longer carries workflow fields; reload so the
+  // save response matches GET instead of null-filling from the parent row.
+  return (await getSkillConfigById(result.id)) ?? toSkillConfig(result);
 }
 
 /**
@@ -512,7 +514,8 @@ export async function updateRepositoryCheckoutState(
     })
     .where(eq(projectSkillSettings.id, skillSettingsId))
     .returning();
-  return rows[0] ? toSkillConfig(rows[0]) : null;
+  if (!rows[0]) return null;
+  return (await getSkillConfigById(skillSettingsId)) ?? toSkillConfig(rows[0]);
 }
 
 export async function deleteSkillConfig(id: string): Promise<void> {
