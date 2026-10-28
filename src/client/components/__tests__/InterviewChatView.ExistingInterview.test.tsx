@@ -1015,6 +1015,90 @@ describe('ExistingInterviewView — choice block submit gating', () => {
   });
 });
 
+// ── Deferred send for out-of-order choice answers ──────────────────────────────
+// Reproduces interview d05034ee-4d85-423b-9677-e034547efde5: the UI showed a
+// second question (Q4) before the user answered the first (Q3). Answering
+// the first question visible must not disable or "Answer sent"-lock a later,
+// still-unanswered question, and must not start an agent run until the last
+// outstanding visible question is actually answered.
+
+describe('ExistingInterviewView — deferred send for out-of-order choice answers', () => {
+  const earlierQuestionMessage = {
+    id: 'agent-q3',
+    role: 'agent' as const,
+    text: 'Who may create a Brainstorm session?\n\na. Any project member\nb. Admins only',
+    ts: '2026-01-01T00:00:00Z',
+  };
+  const laterQuestionMessage = {
+    id: 'agent-q4',
+    role: 'agent' as const,
+    text: 'Who may delete a Brainstorm session?\n\na. The creator\nb. Any admin',
+    ts: '2026-01-01T00:00:01Z',
+  };
+
+  it('holds an earlier answer, keeps a later unanswered question interactive, and sends both together once the last one is answered', () => {
+    mockSend.mockClear();
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [earlierQuestionMessage, laterQuestionMessage],
+    });
+    renderExistingInterview();
+
+    // Answer the earlier question (Q3) first and submit it.
+    fireEvent.click(screen.getAllByTestId('interview-choice-a')[0]);
+    fireEvent.click(screen.getAllByTestId('interview-submit-answers')[0]);
+
+    // The later question (Q4) is still unanswered, so the agent must not run yet.
+    expect(mockSend).not.toHaveBeenCalled();
+
+    // Only Q3 shows "Answer sent" so far — Q4 is not locked. Q3's option is
+    // now disabled (locked), but Q4's stays clickable.
+    expect(screen.getAllByText(/Answer sent/)).toHaveLength(1);
+    const [earlierOption, laterOption] = screen.getAllByTestId('interview-choice-a');
+    expect(earlierOption).toBeDisabled();
+    expect(laterOption).toBeEnabled();
+
+    // Q3's footer switched from a button to the "Answer sent" label, so the
+    // one remaining submit control belongs to Q4. It is not stuck disabled
+    // or showing "Agent is thinking" from a run the earlier submit should
+    // not have started.
+    const laterSubmit = screen.getByTestId('interview-submit-answers');
+    expect(laterSubmit).toHaveTextContent('Submit answer');
+    expect(laterSubmit).not.toHaveTextContent('Agent is thinking');
+
+    // Select Q4's option — selection alone (no run pending) enables submit.
+    fireEvent.click(laterOption);
+    expect(laterSubmit).toBeEnabled();
+
+    // Answer Q4 — now the last outstanding visible question is answered.
+    fireEvent.click(laterSubmit);
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toBe(
+      'Q1 · Who may create a Brainstorm session?\nAnswer: A — Any project member\n\n'
+      + 'Q2 · Who may delete a Brainstorm session?\nAnswer: A — The creator',
+    );
+    expect(screen.getAllByText(/Answer sent/)).toHaveLength(2);
+  });
+
+  it('sends a single question immediately when no later question is outstanding', () => {
+    mockSend.mockClear();
+    mockUseAgentChatSession.mockReturnValue({
+      ...idleStream,
+      messages: [earlierQuestionMessage],
+    });
+    renderExistingInterview();
+
+    fireEvent.click(screen.getByTestId('interview-choice-a'));
+    fireEvent.click(screen.getByTestId('interview-submit-answers'));
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toBe(
+      'Q1 · Who may create a Brainstorm session?\nAnswer: A — Any project member',
+    );
+  });
+});
+
 // ── Optimistic processing state ───────────────────────────────────────────────
 
 describe('ExistingInterviewView — processing state after send', () => {
