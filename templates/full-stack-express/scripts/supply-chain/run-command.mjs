@@ -10,10 +10,12 @@ export function runCommand(command, args, options = {}) {
     const stdout = [];
     const stderr = [];
     const inherit = options.stdio === 'inherit';
-    const child = spawn(command, args, {
+    // corepack is corepack.cmd on Windows, and spawn does not resolve it.
+    const windowsShim = process.platform === 'win32' && command === 'corepack';
+    const child = spawn(windowsShim ? 'corepack.cmd' : command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
-      shell: false,
+      shell: windowsShim,
       windowsHide: true,
       stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });

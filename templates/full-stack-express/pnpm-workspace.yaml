@@ -64,5 +64,9 @@ catalog:
   secretlint: 13.1.0
   '@secretlint/secretlint-rule-preset-recommend': 13.1.0
   '@cyclonedx/cdxgen': 12.9.0
+  '@vitest/coverage-v8': 5.0.5
+  ajv: 8.20.0
+  msw: 3.0.3
+  '@axe-core/playwright': 4.14.0
 
 onlyBuiltDependencies: []

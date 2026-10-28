@@ -24,6 +24,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@axe-core/playwright": "catalog:",
     "@playwright/test": "catalog:",
     "@project-scope/config": "workspace:*",
     "@testing-library/dom": "catalog:",
@@ -36,6 +37,7 @@
     "@vitejs/plugin-react": "catalog:",
     "axe-core": "catalog:",
     "jsdom": "catalog:",
+    "msw": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"

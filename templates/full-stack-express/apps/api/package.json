@@ -46,6 +46,7 @@
     "@types/supertest": "catalog:",
     "drizzle-kit": "catalog:",
     "prettier": "catalog:",
+    "ajv": "catalog:",
     "supertest": "catalog:",
     "testcontainers": "catalog:",
     "typescript": "catalog:",

@@ -2,6 +2,9 @@ node_modules/
 dist/
 coverage/
 artifacts/
+playwright-report/
+test-results/
+.test-fixtures/
 *.tsbuildinfo
 .pnpm-store
 .env

@@ -47,6 +47,7 @@ export interface TestDatabase {
 }
 
 export interface TestDatabaseServer {
+  id: string;
   createDatabase(options?: { migrated?: boolean }): Promise<TestDatabase>;
   stop(): Promise<void>;
 }
@@ -87,6 +88,7 @@ export async function startTestDatabaseServer(): Promise<TestDatabaseServer> {
   const adminUrl = urlFor(container, 'postgres');
 
   return {
+    id: container.getId(),
     async createDatabase(options = {}) {
       const name = `test_${randomUUID().replaceAll('-', '')}`;
       await withClient(adminUrl, (client) =>
@@ -116,6 +118,17 @@ export async function startTestDatabaseServer(): Promise<TestDatabaseServer> {
       await container.stop();
     },
   };
+}
+
+export async function querySql<Row extends pg.QueryResultRow>(
+  url: string,
+  text: string,
+  values?: unknown[]
+): Promise<Row[]> {
+  return withClient(url, async (client) => {
+    const result = await client.query<Row>(text, values);
+    return result.rows;
+  });
 }
 
 export const CLOSED_PORT_URL =

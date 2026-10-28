@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { templateRoot } from '../constants.mjs';
 import { runCommand } from '../run-command.mjs';
@@ -34,10 +35,14 @@ function probe(port) {
 }
 
 function startApi(env) {
-  return runCommand(process.execPath, ['--import', instrument, entry], {
-    cwd: apiRoot,
-    env,
-  });
+  return runCommand(
+    process.execPath,
+    ['--import', pathToFileURL(instrument).href, entry],
+    {
+      cwd: apiRoot,
+      env,
+    }
+  );
 }
 
 describe('running API the image starts', () => {
@@ -62,11 +67,15 @@ describe('running API the image starts', () => {
       READINESS_TIMEOUT_MS: '500',
     };
     const { spawn } = await import('node:child_process');
-    const child = spawn(process.execPath, ['--import', instrument, entry], {
-      cwd: apiRoot,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child = spawn(
+      process.execPath,
+      ['--import', pathToFileURL(instrument).href, entry],
+      {
+        cwd: apiRoot,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
     let output = '';
     child.stdout.on('data', (chunk) => {
       output += chunk.toString('utf8');

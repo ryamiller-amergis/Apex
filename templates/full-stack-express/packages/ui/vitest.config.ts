@@ -1,11 +1,14 @@
-import base from '@project-scope/config/vitest';
+import { defineTestProject } from '@project-scope/config/testing';
 import { defineConfig, mergeConfig } from 'vitest/config';
 
 export default mergeConfig(
-  base as Parameters<typeof mergeConfig>[0],
+  defineTestProject({
+    name: 'component',
+    environment: 'jsdom',
+  }) as Parameters<typeof mergeConfig>[0],
   defineConfig({
     test: {
-      environment: 'jsdom',
+      include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
       setupFiles: ['./src/testing/setupTests.ts'],
     },
   })

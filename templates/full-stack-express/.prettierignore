@@ -2,5 +2,7 @@ pnpm-lock.yaml
 artifacts/
 **/dist
 **/coverage
+**/playwright-report
+**/test-results
 .env
 .env.*
