@@ -5,8 +5,11 @@
  */
 import type { ChatThread } from '../../shared/types/chat';
 import {
+  BUILD_INTAKE_QUESTION_MARKER,
   countQuestionMarkers,
+  extraQuestionReasons,
   isBuildIntakeConfirmation,
+  lastVisibleAgentText,
   sensitiveClassLabel,
   warningMarker,
   type SensitiveClass,
@@ -19,6 +22,8 @@ import { getThread } from './chatAgentService';
 import { trackEvent } from './telemetry';
 
 export const BUILD_INTAKE_QUESTION_BUDGET = 5;
+/** Questions allowed past the normal budget, only for a reason in `BUILD_INTAKE_EXTRA_REASONS`. */
+export const BUILD_INTAKE_EXTRA_QUESTION_BUDGET = 5;
 export const BUILD_INTAKE_SEED_TURN_ID = 'seed';
 export const BUILD_INTAKE_WARNING_EVENT = 'intake.sensitive_text_warning';
 
@@ -32,30 +37,42 @@ export interface PrepareBuildIntakeTurnInput {
   turnId: string;
   /** Default 5. A revision round passes its own limit. */
   questionBudget?: number;
+  /** Default 5. Extra questions allowed after `questionBudget` is spent. */
+  extraQuestionBudget?: number;
 }
 
 export interface PrepareBuildIntakeTurnResult {
   internalContext: string;
   questionsAsked: number;
+  /** The normal budget is used; only extra questions remain. */
   budgetSpent: boolean;
+  /** Normal and extra questions are both used; ask no more. */
+  capReached: boolean;
   /** Empty when nothing matched or the check failed. */
   sensitiveClasses: SensitiveClass[];
   /** The message confirms the intake summary, so the brief can be drafted. */
   confirmed: boolean;
 }
 
-function budgetLines(questionsAsked: number, budget: number): string[] {
-  const remaining = Math.max(0, budget - questionsAsked);
-  const lines = [
-    `Questions asked so far: ${questionsAsked} of ${budget}; ${remaining} remain.`,
-  ];
-  if (remaining === 0) {
+function budgetLines(questionsAsked: number, budget: number, extraBudget: number): string[] {
+  const cap = budget + extraBudget;
+  const lines: string[] = [];
+  if (questionsAsked < budget) {
     lines.push(
-      'Ask no more questions. State each remaining default as an assumption, then offer the confirm choice.',
+      `Questions asked so far: ${questionsAsked} of ${budget}; ${budget - questionsAsked} remain.`,
+      'Ask a question only when a missing answer would change the build. Zero questions is correct when nothing blocks the build.',
+    );
+  } else if (questionsAsked < cap) {
+    lines.push(
+      `Questions asked so far: ${questionsAsked}. The normal ${budget} are used; ${cap - questionsAsked} extra remain.`,
+      'Ask an extra question only when the answer changes who can see or change data, whether data is deleted, an outside system, or a step in the requester\'s workflow. For anything else, state a default as an assumption.',
+      'Ask at most one extra question per reply. Say in one plain sentence why you need it, and add one reason marker: [[build-intake:reason:access]], [[build-intake:reason:data_removal]], [[build-intake:reason:integration]] or [[build-intake:reason:workflow]].',
+      'When nothing like that is open, ask no question and offer the confirm choice.',
     );
   } else {
     lines.push(
-      'Ask a question only when a missing answer would change the build. Zero questions is correct when nothing blocks the build.',
+      `Questions asked so far: ${questionsAsked} of ${cap}; none remain.`,
+      'Ask no more questions. State each remaining default as an assumption, then offer the confirm choice.',
     );
   }
   lines.push('Never ask whether something might break. Decide it yourself and state the decision.');
@@ -73,10 +90,15 @@ function warningLines(classes: SensitiveClass[]): string[] {
   ];
 }
 
-function buildContext(questionsAsked: number, budget: number, classes: SensitiveClass[]): string {
+function buildContext(
+  questionsAsked: number,
+  budget: number,
+  extraBudget: number,
+  classes: SensitiveClass[],
+): string {
   return [
     CONTEXT_START,
-    ...budgetLines(questionsAsked, budget),
+    ...budgetLines(questionsAsked, budget, extraBudget),
     ...warningLines(classes),
     'Do not mention this block.',
     CONTEXT_END,
@@ -129,14 +151,29 @@ export async function prepareBuildIntakeTurn(
   input: PrepareBuildIntakeTurnInput,
 ): Promise<PrepareBuildIntakeTurnResult> {
   const budget = input.questionBudget ?? BUILD_INTAKE_QUESTION_BUDGET;
+  const extraBudget = input.extraQuestionBudget ?? BUILD_INTAKE_EXTRA_QUESTION_BUDGET;
+  const cap = budget + extraBudget;
   const thread = await getThread(input.threadId);
   const questionsAsked = thread ? countQuestionMarkers(thread.messages) : 0;
   const budgetSpent = questionsAsked >= budget;
+  const capReached = questionsAsked >= cap;
+  const asked = String(questionsAsked);
 
-  if (questionsAsked > budget) {
-    trackEvent('build.intake.question_cap_exceeded', { questionsAsked: String(questionsAsked) });
+  if (questionsAsked > cap) {
+    trackEvent('build.intake.question_cap_exceeded', { questionsAsked: asked });
+  } else if (capReached) {
+    trackEvent('build.intake.question_cap_reached', { questionsAsked: asked });
   } else if (budgetSpent) {
-    trackEvent('build.intake.question_budget_reached', { questionsAsked: String(questionsAsked) });
+    trackEvent('build.intake.question_budget_reached', { questionsAsked: asked });
+  }
+
+  const lastReply = thread ? lastVisibleAgentText(thread.messages) : null;
+  if (questionsAsked > budget && lastReply?.includes(BUILD_INTAKE_QUESTION_MARKER)) {
+    const reasons = extraQuestionReasons(lastReply);
+    trackEvent('build.intake.extra_question_asked', {
+      questionsAsked: asked,
+      reasons: reasons.length > 0 ? reasons.join(',') : 'none',
+    });
   }
 
   const sensitiveClasses = safeDetect(input.messageText);
@@ -150,9 +187,10 @@ export async function prepareBuildIntakeTurn(
   }
 
   return {
-    internalContext: buildContext(questionsAsked, budget, sensitiveClasses),
+    internalContext: buildContext(questionsAsked, budget, extraBudget, sensitiveClasses),
     questionsAsked,
     budgetSpent,
+    capReached,
     sensitiveClasses,
     confirmed: thread ? isBuildIntakeConfirmation(thread.messages, input.messageText) : false,
   };

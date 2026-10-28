@@ -2,11 +2,35 @@ import {
   BUILD_INTAKE_CONFIRM_MARKER,
   BUILD_INTAKE_QUESTION_MARKER,
   countQuestionMarkers,
+  extraQuestionReasons,
+  extraReasonMarker,
   hasConfirmMarker,
   isBuildIntakeConfirmation,
+  lastVisibleAgentText,
   stripBuildIntakeMarkers,
   warningClasses,
 } from '../../shared/utils/buildIntakeMarkers';
+
+describe('extra-question reason markers', () => {
+  it('reads known reasons once each and drops unknown ones', () => {
+    const text = `${extraReasonMarker('access')} [[build-intake:reason:colour]] ${extraReasonMarker('access')} ${extraReasonMarker('workflow')}`;
+    expect(extraQuestionReasons(text)).toEqual(['access', 'workflow']);
+  });
+
+  it('is stripped before display', () => {
+    expect(stripBuildIntakeMarkers(`${BUILD_INTAKE_QUESTION_MARKER}${extraReasonMarker('integration')} Which system?`)).toBe('Which system?');
+  });
+
+  it('finds the latest visible agent message', () => {
+    const messages = [
+      { role: 'agent', text: 'first' },
+      { role: 'user', text: 'reply' },
+      { role: 'agent', text: 'hidden', hidden: true },
+    ];
+    expect(lastVisibleAgentText(messages)).toBe('first');
+    expect(lastVisibleAgentText([])).toBeNull();
+  });
+});
 
 describe('VT-01 — build-intake markers (TBI-009 DoD-1)', () => {
   it('counts question markers in visible agent messages only', () => {
