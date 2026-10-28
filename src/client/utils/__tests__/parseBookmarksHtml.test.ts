@@ -1,4 +1,9 @@
-import { defaultCategoryFor, parseBookmarksHtml } from '../parseBookmarksHtml';
+import {
+  BookmarkParseCancelled,
+  defaultCategoryFor,
+  parseBookmarksHtml,
+  parseBookmarksHtmlAsync,
+} from '../parseBookmarksHtml';
 
 const CHROME_EXPORT = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
 <!-- This is an automatically generated file. -->
@@ -73,5 +78,73 @@ describe('defaultCategoryFor', () => {
   it('uses the innermost folder name', () => {
     expect(defaultCategoryFor(['Bookmarks bar', 'Tools'])).toBe('Tools');
     expect(defaultCategoryFor([])).toBe('');
+  });
+});
+
+function bigExport(folders: number, perFolder: number): string {
+  const parts = ['<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<DL><p>'];
+  for (let f = 0; f < folders; f += 1) {
+    parts.push(`<DT><H3>Folder ${f}</H3>\n<DL><p>`);
+    for (let i = 0; i < perFolder; i += 1) {
+      parts.push(`<DT><A HREF="https://f${f}-${i}.example.com/?a=1&amp;b=2">Site ${f}-${i}</A>`);
+    }
+    parts.push('</DL><p>');
+  }
+  parts.push('</DL><p>');
+  return parts.join('\n');
+}
+
+describe('scanner details', () => {
+  it('decodes entities in URLs and titles', () => {
+    const html = `<DL><DT><A HREF="https://x.com/?a=1&amp;b=2">Tom &amp; Jerry &#39;s &#x263A;</A></DL>`;
+    const [bookmark] = parseBookmarksHtml(html).bookmarks;
+    expect(bookmark.url).toBe('https://x.com/?a=1&b=2');
+    expect(bookmark.label).toBe("Tom & Jerry 's ☺");
+  });
+
+  it('handles single-quoted and lowercase attributes', () => {
+    const html = `<dl><dt><h3>Work</h3><dl><dt><a href='https://work.example.com'>Work</a></dl></dl>`;
+    expect(parseBookmarksHtml(html).bookmarks[0]).toMatchObject({
+      url: 'https://work.example.com/',
+      folderPath: ['Work'],
+    });
+  });
+
+  it('does not treat a heading with no list after it as a folder', () => {
+    const html = `<DL><DT><H3>Empty</H3><DT><A HREF="https://a.com">A</A><DT><H3>Real</H3><DL><DT><A HREF="https://b.com">B</A></DL></DL>`;
+    const { bookmarks } = parseBookmarksHtml(html);
+    expect(bookmarks.map((b) => b.folderPath)).toEqual([[], ['Real']]);
+  });
+});
+
+describe('parseBookmarksHtmlAsync', () => {
+  it('gives the same result as the synchronous parser', async () => {
+    const html = bigExport(5, 300);
+    await expect(parseBookmarksHtmlAsync(html)).resolves.toEqual(parseBookmarksHtml(html));
+  });
+
+  it('yields between slices and reports progress on a large export', async () => {
+    const html = bigExport(40, 500);
+    const progress: number[] = [];
+
+    const result = await parseBookmarksHtmlAsync(html, { sliceMs: 0, onProgress: (n) => progress.push(n) });
+
+    expect(result.bookmarks).toHaveLength(20000);
+    expect(result.bookmarks[19999].folderPath).toEqual(['Folder 39']);
+    expect(progress.length).toBeGreaterThan(10);
+    expect(progress).toEqual([...progress].sort((a, b) => a - b));
+  });
+
+  it('stops when cancelled', async () => {
+    let calls = 0;
+    await expect(
+      parseBookmarksHtmlAsync(bigExport(10, 500), {
+        sliceMs: 0,
+        isCancelled: () => {
+          calls += 1;
+          return calls > 2;
+        },
+      }),
+    ).rejects.toBeInstanceOf(BookmarkParseCancelled);
   });
 });
