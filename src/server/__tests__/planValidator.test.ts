@@ -34,6 +34,25 @@ describe('plan validator', () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it('rejects a plan whose classification differs from the revision', () => {
+    const result = validateBuildPlan({
+      plan: validSmallPlan,
+      requirements: [requirement('AC-1')],
+      riskDecisions: [],
+      classification: 'full',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.violations).toEqual([
+      expect.objectContaining({ code: 'invalid_value', path: 'classification' }),
+    ]);
+    expect(validateBuildPlan({
+      plan: validSmallPlan,
+      requirements: [requirement('AC-1')],
+      riskDecisions: [],
+      classification: 'small',
+    }).ok).toBe(validateBuildPlan({ plan: validSmallPlan, requirements: [requirement('AC-1')], riskDecisions: [] }).ok);
+  });
+
   it('VT-02 / DoD-3 accepts independent tasks with disjoint files', () => {
     const plan: BuildPlan = {
       classification: 'small',

@@ -10,7 +10,10 @@ import {
   type BuildPlanningDeps,
 } from '../services/buildPlanning/buildPlanningService';
 import { BuildLaunchRefusedError } from '../services/buildPlanning/launchGuard';
+import { toStoredTasks } from '../services/buildPlanning/planningModel';
+import type { BuildPlan } from '../../shared/buildPlanSchema';
 import type {
+  AgentRunOutcome,
   PlannerLaunchRequest,
   PlanningEvent,
   PlanningStore,
@@ -134,11 +137,15 @@ function harness(store: MemoryStore, options?: {
 }) {
   const files = [...(options?.files ?? [JSON.stringify(validFullPlan)])];
   const requests: PlannerLaunchRequest[] = [];
+  const releases: Array<[string, AgentRunOutcome]> = [];
   let guardCalls = 0;
   const deps: BuildPlanningDeps & { track: jest.Mock } = {
     store,
     now: options?.now ?? (() => 5_000),
     track: jest.fn(),
+    releaseAgentRun: async (agentRunId, outcome) => {
+      releases.push([agentRunId, outcome]);
+    },
     catalogExcerpt: async () => 'Button',
     assertLaunch: async () => {
       guardCalls += 1;
@@ -158,7 +165,7 @@ function harness(store: MemoryStore, options?: {
       return { agentRunId: `agent-${requests.length}` };
     },
   };
-  return { deps, requests, guardCalls: () => guardCalls };
+  return { deps, requests, releases, guardCalls: () => guardCalls };
 }
 
 async function finish(store: MemoryStore, deps: BuildPlanningDeps, status: 'finished' | 'error' | 'cancelled' = 'finished') {
@@ -216,10 +223,11 @@ describe('build planning service', () => {
   it('VT-19 / PBI-014 (b) counts one repair and then accepts the corrected plan', async () => {
     const broken = { ...validFullPlan, tasks: validFullPlan.tasks.map((task) => ({ ...task, ownedFiles: ['src/shared.ts'] })) };
     const store = new MemoryStore(view());
-    const { deps } = harness(store, { files: [JSON.stringify(broken), JSON.stringify(validFullPlan)] });
+    const { deps, releases } = harness(store, { files: [JSON.stringify(broken), JSON.stringify(validFullPlan)] });
     await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
     const first = await finish(store, deps);
     expect(first.status).toBe('repair_requested');
+    expect(releases).toEqual([['agent-1', 'completed']]);
     expect(store.current.repairAttempts).toBe(1);
     expect(store.current.status).toBe('planning');
     expect(store.events.some((event) => event.eventType === 'plan.repair_requested')).toBe(true);
@@ -329,12 +337,13 @@ describe('build planning service', () => {
       repairAttempts: 1,
       planner: { id: 'planner-1', status: 'running', attempt: 1, agentRunId: 'agent-old', startedAtMs: 1 },
     }));
-    const { deps, requests } = harness(store);
+    const { deps, requests, releases } = harness(store);
     const result = await resumePlanning({ buildRunId: 'run-1' }, deps);
     expect(result).toEqual({ status: 'launched', attempt: 2 });
     expect(store.current.repairAttempts).toBe(1);
     expect(store.current.status).toBe('planning');
     expect(requests).toHaveLength(1);
+    expect(releases).toEqual([['agent-old', 'cancelled']]);
 
     store.current.planValidation = { status: 'pass', violations: [] };
     const again = await resumePlanning({ buildRunId: 'run-1' }, deps);
@@ -381,5 +390,98 @@ describe('build planning service', () => {
     expect(store.current.repairAttempts).toBe(0);
     expect(JSON.stringify(store.current.plan)).toContain('Nothing reusable exists');
     expect(store.events.some((event) => event.eventType === 'plan.recorded_small')).toBe(true);
+  });
+
+  it('a failed plan file read changes nothing and can be retried', async () => {
+    const store = new MemoryStore(view());
+    const { deps, requests } = harness(store);
+    await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    deps.readPlanFile = async () => {
+      throw new Error('ADO timed out');
+    };
+    const deferred = await finish(store, deps);
+    expect(deferred).toEqual({ status: 'deferred' });
+    expect(store.current.repairAttempts).toBe(0);
+    expect(store.current.planner?.status).toBe('running');
+    expect(requests).toHaveLength(1);
+
+    deps.readPlanFile = async () => JSON.stringify(validFullPlan);
+    expect(await finish(store, deps)).toEqual({ status: 'validated' });
+  });
+
+  it('start planning leaves a plan_invalid run suspended', async () => {
+    const store = new MemoryStore(view({
+      status: 'suspended',
+      suspendReason: 'plan_invalid',
+      suspendedFromStatus: 'planning',
+      repairAttempts: 2,
+    }));
+    const { deps, requests } = harness(store);
+    const result = await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    expect(result).toEqual({ status: 'not_planning', runStatus: 'suspended', suspendReason: 'plan_invalid' });
+    expect(store.current.suspendReason).toBe('plan_invalid');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('a suspended small run stays suspended on start and is refused on a non-resumable resume', async () => {
+    const store = new MemoryStore(view({
+      classification: 'small',
+      status: 'suspended',
+      suspendReason: 'plan_invalid',
+      suspendedFromStatus: 'planning',
+    }));
+    const { deps } = harness(store);
+    expect((await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps)).status).toBe('not_planning');
+    expect((await resumePlanning({ buildRunId: 'run-1' }, deps)).status).toBe('not_planning');
+    expect(store.current.status).toBe('suspended');
+    expect(store.current.suspendReason).toBe('plan_invalid');
+  });
+
+  it('a full revision does not accept a small plan', async () => {
+    const store = new MemoryStore(view());
+    const { scaffoldManifest: _scaffold, ...rest } = validFullPlan;
+    const smallPlan = { ...rest, classification: 'small' as const };
+    const { deps } = harness(store, { files: [JSON.stringify(smallPlan), JSON.stringify(validFullPlan)] });
+    await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps);
+    const first = await finish(store, deps);
+    expect(first.status).toBe('repair_requested');
+    expect(store.current.status).toBe('planning');
+    expect(store.current.planValidation?.violations.some((row) => row.path === 'classification')).toBe(true);
+  });
+
+  it('every task in a chain records the first chain task as its head', () => {
+    const task = (key: string, blockers: string[], runMode: 'chain' | 'own_agent') => ({
+      key,
+      role: 'implementer' as const,
+      blockers,
+      ownedFiles: [`src/${key}.ts`],
+      reuse: [{ path: 'src/shared/x.ts' }],
+      runMode,
+      covers: ['AC-1'],
+    });
+    const stored = toStoredTasks({
+      classification: 'small',
+      tasks: [
+        task('setup', [], 'own_agent'),
+        task('a', ['setup'], 'chain'),
+        task('b', ['setup', 'a'], 'chain'),
+        task('c', ['b'], 'chain'),
+      ],
+    } as BuildPlan);
+    const heads = Object.fromEntries(stored.map((row) => [row.taskKey, row.chainHeadKey]));
+    expect(heads).toEqual({ setup: null, a: 'a', b: 'a', c: 'a' });
+  });
+
+  it('a launch error leaves the planner failed so the next attempt can start', async () => {
+    const store = new MemoryStore(view());
+    const { deps } = harness(store);
+    const launch = deps.launch;
+    deps.launch = async () => {
+      throw new Error('SDK down');
+    };
+    await expect(startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps)).rejects.toThrow('SDK down');
+    expect(store.current.planner?.status).toBe('failed');
+    deps.launch = launch;
+    expect(await startPlanning({ buildRunId: 'run-1', revisionNumber: 1 }, deps)).toEqual({ status: 'launched', attempt: 2 });
   });
 });

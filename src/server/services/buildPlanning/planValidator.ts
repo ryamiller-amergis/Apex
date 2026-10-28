@@ -9,7 +9,7 @@ import {
   buildPlanSchema,
 } from '../../../shared/buildPlanSchema';
 import type { z } from 'zod';
-import type { BuildRequirement, BuildRiskDecision } from '../../../shared/types/build';
+import type { BuildClassification, BuildRequirement, BuildRiskDecision } from '../../../shared/types/build';
 
 const RESERVED_TASK_KEY = 'planner';
 
@@ -17,6 +17,8 @@ export interface ValidateBuildPlanInput {
   plan: unknown;
   requirements: BuildRequirement[];
   riskDecisions: BuildRiskDecision[];
+  /** When set, the plan must carry this classification. */
+  classification?: BuildClassification;
   coverageScope?: {
     requirementIds?: string[];
     riskDecisionIds?: string[];
@@ -90,6 +92,13 @@ function schemaViolation(
 
 function semanticViolations(plan: BuildPlan, input: ValidateBuildPlanInput): PlanViolation[] {
   const violations: PlanViolation[] = [];
+  if (input.classification && plan.classification !== input.classification) {
+    violations.push({
+      code: 'invalid_value',
+      path: 'classification',
+      message: `The plan is ${plan.classification} but this build is ${input.classification}`,
+    });
+  }
   const knownKeys = new Set(plan.tasks.map((task) => task.key));
   const carried = new Set(plan.delta?.carriedOverTaskKeys ?? []);
 

@@ -134,13 +134,19 @@ export type PlanningStartResult =
   | { status: 'launched'; attempt: number }
   | { status: 'small_path' }
   | { status: 'already_planned' }
+  /** The run is not in a state planning can start from. Nothing was changed. */
+  | { status: 'not_planning'; runStatus: BuildRunStatus; suspendReason: BuildSuspendReason | null }
   | { status: 'refused'; reason: 'flag_disabled' | 'permission_revoked' | 'configuration' };
 
 export type PlanningCompletionResult =
   | { status: 'validated' }
   | { status: 'repair_requested'; attempt: number }
   | { status: 'suspended'; reason: 'plan_invalid' | 'flag_disabled' | 'permission_revoked' | 'configuration' }
+  /** The plan file could not be read. Nothing was changed; call again later. */
+  | { status: 'deferred' }
   | { status: 'ignored' };
+
+export type AgentRunOutcome = 'completed' | 'failed' | 'cancelled';
 
 export function contactNames(view: PlanningView): string[] {
   return view.supportContacts.map((contact) => contact.displayName);
@@ -165,6 +171,7 @@ export function focusedError(violations: PlanViolation[], contacts: readonly str
 }
 
 export function toStoredTasks(plan: BuildPlan): StoredPlanTask[] {
+  const byKey = new Map(plan.tasks.map((task) => [task.key, task]));
   return plan.tasks.map((task) => ({
     taskKey: task.key,
     role: task.role,
@@ -173,8 +180,30 @@ export function toStoredTasks(plan: BuildPlan): StoredPlanTask[] {
     covers: [...task.covers],
     reuse: task.reuse.map((entry) => ({ ...entry })),
     runMode: task.runMode,
-    chainHeadKey: task.runMode === 'chain' ? (task.blockers[0] ?? task.key) : null,
+    chainHeadKey: task.runMode === 'chain' ? chainHeadOf(task.key, byKey) : null,
   }));
+}
+
+/** Follows chain-mode blockers back to the chain task that waits on no other chain task. */
+function chainHeadOf(key: string, byKey: Map<string, BuildPlan['tasks'][number]>): string {
+  const seen = new Set<string>();
+  let current = key;
+  for (;;) {
+    seen.add(current);
+    const task = byKey.get(current);
+    const previous = task?.blockers.find((blocker) => byKey.get(blocker)?.runMode === 'chain' && !seen.has(blocker));
+    if (!previous) return current;
+    current = previous;
+  }
+}
+
+export function expectedClassification(
+  revision: BuildClassification | null,
+  source: 'planner' | 'small_agent' | 'escalation',
+): BuildClassification {
+  if (source === 'escalation') return 'full';
+  if (source === 'small_agent') return 'small';
+  return revision === 'small' ? 'small' : 'full';
 }
 
 export function validationRecord(result: PlanValidationResult): PlanningView['planValidation'] {

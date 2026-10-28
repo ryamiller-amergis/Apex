@@ -9,10 +9,12 @@ import { integrationBranchName, type BuildSuspendReason } from '../../../shared/
 import { BuildLaunchRefusedError } from './launchGuard';
 import {
   contactNames,
+  expectedClassification,
   focusedError,
   plannerRoleReady,
   toStoredTasks,
   validationRecord,
+  type AgentRunOutcome,
   type PlannerLaunchRequest,
   type PlannerLaunchResult,
   type PlanningCompletionResult,
@@ -33,11 +35,28 @@ export interface BuildPlanningDeps {
   store: PlanningStore;
   assertLaunch: (input: { buildRunId: string }) => Promise<void>;
   launch: (request: PlannerLaunchRequest) => Promise<PlannerLaunchResult>;
-  /** `branch` is the branch the agent reported. Null means read the integration branch. */
+  /**
+   * `branch` is the branch the agent reported; null means the integration branch.
+   * Returns null when the file does not exist. Throws when the read itself fails.
+   */
   readPlanFile: (view: PlanningView, branch: string | null) => Promise<string | null>;
+  /**
+   * Ends a planner agent run that Apex no longer waits on, so the next attempt
+   * can hold the one live agent run allowed per build task. Safe to call on a
+   * run that has already ended.
+   */
+  releaseAgentRun: (agentRunId: string, outcome: AgentRunOutcome) => Promise<void>;
   catalogExcerpt?: (view: PlanningView) => Promise<string>;
   now?: () => number;
   track?: (name: string, properties: Record<string, string>) => void;
+}
+
+/** Thrown when the plan file read fails for a reason other than "not found". */
+export class PlanFileReadError extends Error {
+  constructor(readonly cause?: unknown) {
+    super('The plan file could not be read.');
+    this.name = 'PlanFileReadError';
+  }
 }
 
 export async function startPlanning(
@@ -47,7 +66,12 @@ export async function startPlanning(
   const view = await deps.store.load(input.buildRunId, input.revisionNumber);
   if (!view) return { status: 'refused', reason: 'configuration' };
   if (view.planValidation?.status === 'pass') return { status: 'already_planned' };
-  if (view.classification === 'small') return recordSmallPath(view, deps);
+  if (view.classification === 'small') {
+    if (view.status === 'building') return { status: 'small_path' };
+    if (view.status !== 'intake' && view.status !== 'planning') return notPlanning(view);
+    return recordSmallPath(view, deps);
+  }
+  if (view.status !== 'intake' && view.status !== 'planning') return notPlanning(view);
   return launchFullPlanner(view, deps, 'start');
 }
 
@@ -58,26 +82,32 @@ export async function resumePlanning(
   const loaded = await deps.store.load(input.buildRunId);
   if (!loaded) return { status: 'refused', reason: 'configuration' };
   if (loaded.planValidation?.status === 'pass') return { status: 'already_planned' };
-  if (loaded.classification === 'small') return recordSmallPath(loaded, deps);
 
   let view = loaded;
   if (view.status === 'suspended') {
     const reason = view.suspendReason;
     if (!reason || !RESUME_REASONS.includes(reason) || view.suspendedFromStatus !== 'planning') {
-      return { status: 'refused', reason: 'configuration' };
+      return notPlanning(view);
     }
-    view = await deps.store.apply(view.buildRunId, {
-      runStatus: 'planning',
-      suspendReason: null,
-      suspendedFromStatus: null,
-      ...(view.planner ? { planner: { ...view.planner, status: 'failed' as const } } : {}),
-    });
-  } else if (view.planner?.status === 'running') {
-    view = await deps.store.apply(view.buildRunId, {
-      planner: { ...view.planner, status: 'failed' },
-    });
+  } else if (view.status !== 'planning') {
+    return notPlanning(view);
   }
+
+  if (view.planner?.agentRunId && (view.planner.status === 'running' || view.planner.status === 'ready')) {
+    await deps.releaseAgentRun(view.planner.agentRunId, 'cancelled');
+  }
+  view = await deps.store.apply(view.buildRunId, {
+    runStatus: 'planning',
+    suspendReason: null,
+    suspendedFromStatus: null,
+    ...(view.planner ? { planner: { ...view.planner, status: 'failed' as const } } : {}),
+  });
+  if (view.classification === 'small') return recordSmallPath(view, deps);
   return launchFullPlanner(view, deps, 'resume');
+}
+
+function notPlanning(view: PlanningView): PlanningStartResult {
+  return { status: 'not_planning', runStatus: view.status, suspendReason: view.suspendReason };
 }
 
 export async function applyPlannerCompletion(
@@ -108,7 +138,13 @@ export async function applyPlannerCompletion(
     return { status: 'ignored' };
   }
 
-  const parsed = await readValidatedPlan(view, input.agentStatus, input.branchName ?? null, deps);
+  let parsed: Awaited<ReturnType<typeof readValidatedPlan>>;
+  try {
+    parsed = await readValidatedPlan(view, input.agentStatus, input.branchName ?? null, deps);
+  } catch (error) {
+    if (error instanceof PlanFileReadError) return { status: 'deferred' };
+    throw error;
+  }
   if (parsed.ok) {
     const plan = parsed.plan as BuildPlan;
     const durationMs = elapsed(view, deps);
@@ -185,6 +221,7 @@ export async function applyPlannerCompletion(
         }),
   });
   if (!claimed) return { status: 'ignored' };
+  await deps.releaseAgentRun(input.agentRunId, input.agentStatus === 'error' ? 'failed' : 'completed');
   if (suspend) return { status: 'suspended', reason: 'plan_invalid' };
 
   const refreshed = await deps.store.load(view.buildRunId);
@@ -212,6 +249,7 @@ export async function validateAndRecordPlan(
     plan: redacted.plan,
     requirements: view.requirements,
     riskDecisions: view.riskDecisions,
+    classification: expectedClassification(view.classification, input.source),
   });
   const storedPlan = redacted.plan as Partial<BuildPlan>;
   const events: PlanningEvent[] = [];
@@ -234,7 +272,7 @@ export async function validateAndRecordPlan(
 }
 
 async function recordSmallPath(view: PlanningView, deps: BuildPlanningDeps): Promise<PlanningStartResult> {
-  if (view.status !== 'building') {
+  if (view.status === 'intake' || view.status === 'planning') {
     await deps.store.apply(view.buildRunId, {
       runStatus: 'building',
       events: [{
@@ -307,19 +345,26 @@ async function launchFullPlanner(
     catalogExcerpt: await (deps.catalogExcerpt ?? (async () => ''))(prepared),
     violations,
   });
-  const launched = await deps.launch({
-    buildRunId: prepared.buildRunId,
-    project: prepared.project,
-    repository: prepared.repository,
-    prompt,
-    model: prepared.skillSnapshot.planner.model,
-    skillPath: prepared.skillSnapshot.planner.skillPath,
-    skillHash: prepared.skillSnapshot.planner.contentHash,
-    startingRef: attempt === 1 ? (prepared.baseCommit ?? branch) : branch,
-    integrationBranch: branch,
-    plannerTaskId: planner.id,
-    attempt,
-  });
+  let launched: PlannerLaunchResult;
+  try {
+    launched = await deps.launch({
+      buildRunId: prepared.buildRunId,
+      project: prepared.project,
+      repository: prepared.repository,
+      prompt,
+      model: prepared.skillSnapshot.planner.model,
+      skillPath: prepared.skillSnapshot.planner.skillPath,
+      skillHash: prepared.skillSnapshot.planner.contentHash,
+      startingRef: attempt === 1 ? (prepared.baseCommit ?? branch) : branch,
+      integrationBranch: branch,
+      plannerTaskId: planner.id,
+      attempt,
+    });
+  } catch (error) {
+    // A planner row left at `ready` would block every later attempt.
+    await deps.store.apply(prepared.buildRunId, { planner: { ...planner, status: 'failed' } });
+    throw error;
+  }
   await deps.store.apply(prepared.buildRunId, {
     planner: {
       ...planner,
@@ -343,8 +388,8 @@ async function readValidatedPlan(
   let text: string | null;
   try {
     text = await deps.readPlanFile(view, branch);
-  } catch {
-    text = null;
+  } catch (error) {
+    throw new PlanFileReadError(error);
   }
   const parsed = parsePlanFile(text);
   if (!parsed.ok) return { ok: false, violations: [parsed.violation], redactionCount: 0 };
@@ -352,6 +397,7 @@ async function readValidatedPlan(
     plan: parsed.redacted.plan,
     requirements: view.requirements,
     riskDecisions: view.riskDecisions,
+    classification: expectedClassification(view.classification, 'planner'),
   });
   if (!result.ok) {
     return { ok: false, violations: result.violations, redactionCount: parsed.redacted.redactionCount };
