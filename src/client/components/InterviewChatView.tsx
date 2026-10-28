@@ -63,6 +63,7 @@ import { BUILD_INTAKE_PAUSED_MESSAGE } from '../../shared/types/buildAccess';
 import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
+import { choiceBlocksAnsweredByLaterMessages } from '../utils/choiceAnswerMatching';
 import { createChatTurnId } from '../utils/chatTurnId';
 import { trackEvent, trackException } from '../services/telemetry';
 import { ReadAloudButton } from './ReadAloudButton';
@@ -1060,6 +1061,14 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const [showLinkedContext, setShowLinkedContext] = useState(
     Boolean(linkedContextLocationState?.openLinkedContext),
   );
+  // Answers submitted while a later agent message still has an unanswered
+  // choice question. Held client-side (not sent to the agent) until the last
+  // outstanding visible question is answered, then combined into one send so
+  // the agent only runs once per human reply. Lost on reload before the real
+  // send completes — the user re-answers the held question in that case.
+  const [heldChoiceAnswers, setHeldChoiceAnswers] = useState<
+    ReadonlyArray<{ messageId: string; order: number; text: string }>
+  >([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeQuestionRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1453,21 +1462,38 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   // for each agent reply.
   let runningQCount = 0;
   const messageQOffsets = new Map<string, number>();
+  const messageChoiceBlocks = new Map<string, ChoiceBlock[]>();
   for (const msg of visibleMessages) {
     if (msg.role === 'agent') {
       messageQOffsets.set(msg.id, runningQCount);
       const parts = parseAgentMessage(msg.text);
-      runningQCount += parts.filter((p): p is ChoiceBlock => p.type === 'choices').length;
+      const blocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
+      messageChoiceBlocks.set(msg.id, blocks);
+      runningQCount += blocks.length;
     }
   }
 
-  // An agent message's choice block has already been answered if any user
-  // message follows it in the thread (submitting answers creates a user
-  // message). Used to persist the "Answers sent" lock across reloads.
+  // Layout only: messages after the latest user reply render full-width.
   let lastUserMsgIndex = -1;
   visibleMessages.forEach((m, i) => {
     if (m.role === 'user') lastUserMsgIndex = i;
   });
+
+  // An agent message's choice block is answered only once a *later* user
+  // message actually quotes its question text (via `formatChoiceAnswers`'s
+  // `Q{n} · {question}` line) or its answer is held locally pending send.
+  // A later user message merely existing is not enough — it may answer a
+  // different, more recently asked question (see choiceAnswerMatching.ts).
+  const isChoiceMessageAnswered = (candidateId: string, candidateIndex: number): boolean => {
+    const blocks = messageChoiceBlocks.get(candidateId);
+    if (!blocks || blocks.length === 0) return false;
+    if (heldChoiceAnswers.some((held) => held.messageId === candidateId)) return true;
+    const laterUserTexts = visibleMessages
+      .slice(candidateIndex + 1)
+      .filter((m) => m.role === 'user')
+      .map((m) => m.text);
+    return choiceBlocksAnsweredByLaterMessages(blocks, laterUserTexts);
+  };
 
   return (
     <div className={styles.container}>
@@ -1872,12 +1898,37 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 text={msg.text}
                 onSend={(text) => {
                   if (isChatLocked) return;
-                  void sendMessageToAgent(text, false);
+                  const order = messageQOffsets.get(msg.id) ?? msgIndex;
+                  // Don't start a run while a later question is still open —
+                  // hold this answer and send it together once the last
+                  // outstanding visible question is actually answered.
+                  const hasLaterUnanswered = visibleMessages.some((other, otherIndex) =>
+                    otherIndex > msgIndex
+                    && other.role === 'agent'
+                    && (messageChoiceBlocks.get(other.id)?.length ?? 0) > 0
+                    && !isChoiceMessageAnswered(other.id, otherIndex),
+                  );
+                  if (hasLaterUnanswered) {
+                    setHeldChoiceAnswers((prev) => [
+                      ...prev.filter((held) => held.messageId !== msg.id),
+                      { messageId: msg.id, order, text },
+                    ]);
+                    return;
+                  }
+                  const combinedText = [
+                    ...heldChoiceAnswers,
+                    { messageId: msg.id, order, text },
+                  ]
+                    .sort((a, b) => a.order - b.order)
+                    .map((held) => held.text)
+                    .join('\n\n');
+                  setHeldChoiceAnswers([]);
+                  void sendMessageToAgent(combinedText, false);
                 }}
                 isRunning={isInteractionBusy}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
                 interviewLocked={isChatLocked}
-                alreadyAnswered={msgIndex < lastUserMsgIndex}
+                alreadyAnswered={isChoiceMessageAnswered(msg.id, msgIndex)}
                 fullWidth={msgIndex > lastUserMsgIndex}
                 anchorRef={msgIndex === visibleMessages.length - 1 ? activeQuestionRef : undefined}
               />
