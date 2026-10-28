@@ -34,7 +34,10 @@ describe('committed manifests', () => {
       const manifest = readCommitted<QualityManifest>(
         'quality/quality-manifest.json'
       );
-      expect(manifest.gates).toHaveLength(12);
+      expect(manifest.gates).toHaveLength(13);
+      expect(manifest.gates.map((gate) => gate.id)).toContain(
+        'docs-validation'
+      );
       expect(manifest.deferrals).toEqual([]);
     },
     TIMEOUT
