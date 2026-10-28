@@ -14,6 +14,9 @@
     "migrate:validate": "node scripts/validateMigrations.ts",
     "routes:check": "node scripts/checkRoutes.ts"
   },
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@opentelemetry/api": "catalog:",
     "@opentelemetry/context-async-hooks": "catalog:",
@@ -27,6 +30,7 @@
     "@opentelemetry/resources": "catalog:",
     "@opentelemetry/sdk-metrics": "catalog:",
     "@opentelemetry/sdk-trace": "catalog:",
+    "@project-scope/config": "workspace:*",
     "@project-scope/contracts": "workspace:*",
     "drizzle-orm": "catalog:",
     "express": "catalog:",
@@ -36,7 +40,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@project-scope/config": "workspace:*",
     "@types/express": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",

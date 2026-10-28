@@ -61,5 +61,8 @@ catalog:
   '@types/express': 5.0.6
   supertest: 7.3.1
   '@types/supertest': 7.2.1
+  secretlint: 13.1.0
+  '@secretlint/secretlint-rule-preset-recommend': 13.1.0
+  '@cyclonedx/cdxgen': 12.9.0
 
 onlyBuiltDependencies: []

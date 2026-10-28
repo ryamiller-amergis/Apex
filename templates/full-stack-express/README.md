@@ -169,6 +169,24 @@ The flag provider is an open decision. The extension point is the `createLocalFl
 | `db:up`            | Starts local PostgreSQL and waits until it is healthy                                               |
 | `db:down`          | Stops local PostgreSQL. The data volume stays                                                       |
 | `toolchain:check`  | Compares the catalog, the compatibility table, manifests, and `tsconfig.json` extends               |
+| `scan:secrets`     | Scans tracked files for secrets. Prints rule, file, and line, never the value                       |
+| `scan:vulns`       | Scans `pnpm-lock.yaml` with OSV-Scanner. Fails on high and critical advisories                      |
+| `scan:licenses`    | Checks production dependency licenses against the allowed list                                      |
+| `scan`             | Runs the three scans and prints every finding                                                       |
+| `sbom`             | Writes a CycloneDX SBOM of production dependencies                                                  |
+| `container:build`  | Builds the production image `project-service:local`                                                 |
+| `test:container`   | Proves the image. Exits 2 when Docker is not available                                              |
+
+## Supply chain and the production image
+
+The commands and the exception file are described in
+[docs/runbooks/supply-chain.md](docs/runbooks/supply-chain.md).
+
+`pnpm container:build` tags the image `project-service:local`. The process
+listens on port `3000` unless `PORT` is set. The image sets `NODE_ENV=production`
+and `CLIENT_DIST_DIR=/app/web` only. Pass `DATABASE_URL`, `AUTH_MODE`, and any
+telemetry variables at run time. Those are the names in `.env.example`. The
+image does not run migrations. Run `pnpm migrate` before sending traffic.
 
 ## API contract
 

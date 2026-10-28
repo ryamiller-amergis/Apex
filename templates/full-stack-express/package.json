@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm format:check && corepack pnpm openapi:check && corepack pnpm routes:check",
-    "test": "corepack pnpm -r run test && node --test \"scripts/__tests__/**/*.test.mjs\"",
+    "test": "corepack pnpm -r run test && node --test \"scripts/__tests__/**/*.test.mjs\" && corepack pnpm exec vitest run --config scripts/supply-chain/vitest.config.mjs",
     "dev": "corepack pnpm --parallel --filter \"./apps/*\" dev",
     "migrate": "corepack pnpm --filter ./apps/api run db:migrate",
     "seed": "corepack pnpm --filter ./apps/api run db:seed",
@@ -28,10 +28,28 @@
     "toolchain:check": "node scripts/check-toolchain.mjs",
     "openapi:generate": "corepack pnpm --filter @project-scope/contracts run openapi:generate",
     "openapi:check": "corepack pnpm --filter @project-scope/contracts run openapi:check",
-    "routes:check": "corepack pnpm --filter @project-scope/api run routes:check"
+    "routes:check": "corepack pnpm --filter @project-scope/api run routes:check",
+    "scan:secrets": "node scripts/supply-chain/scan-secrets.mjs",
+    "scan:vulns": "node scripts/supply-chain/scan-vulns.mjs",
+    "scan:licenses": "node scripts/supply-chain/scan-licenses.mjs",
+    "scan": "node scripts/supply-chain/scan.mjs",
+    "sbom": "node scripts/supply-chain/sbom.mjs",
+    "container:build": "node scripts/supply-chain/container-build.mjs",
+    "test:container": "node scripts/supply-chain/test-container.mjs"
+  },
+  "pnpm": {
+    "overrides": {
+      "body-parser": "2.4.0"
+    }
   },
   "devDependencies": {
+    "@cyclonedx/cdxgen": "catalog:",
+    "@secretlint/secretlint-rule-preset-recommend": "catalog:",
     "eslint": "catalog:",
-    "prettier": "catalog:"
+    "prettier": "catalog:",
+    "secretlint": "catalog:",
+    "testcontainers": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }
