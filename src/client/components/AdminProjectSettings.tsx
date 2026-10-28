@@ -29,6 +29,7 @@ import {
 import styles from './AdminProjectSettings.module.css';
 import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
 import { BuildProfileSection } from './BuildProfileSection';
+import { ProjectQuickLinksSettings } from './ProjectQuickLinksSettings';
 import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
 import type { UserWithRoles } from '../../shared/types/rbac';
 
@@ -3428,6 +3429,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         )}
 
         {formError && !edit && <p className={styles.formError}>{formError}</p>}
+
+        {!edit && selectedProject && (
+          <ProjectQuickLinksSettings project={selectedProject} />
+        )}
 
         {/* ── Foundation Skills (read-only) ────────────────────────────── */}
         {!edit && selectedProject && (
