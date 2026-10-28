@@ -189,6 +189,17 @@ describe('VT-31 — already approved (PBI-012 c2)', () => {
     expect(screen.queryByTestId('build-brief-error')).not.toBeInTheDocument();
   });
 
+  it('keeps a retry Approve when the brief was approved but planning did not start', async () => {
+    const user = userEvent.setup();
+    mockBriefQuery.mockReturnValue({ data: { ...brief, status: 'approved' }, isLoading: false });
+    mockApprove.error = new Error('The brief was approved, but planning did not start. Approve again to continue.');
+    render(<BuildBriefReview interviewId="iv-1" />);
+
+    expect(screen.getByTestId('build-brief-error')).toHaveTextContent('planning did not start');
+    await user.click(screen.getByTestId('build-brief-approve'));
+    expect(mockApprove.mutate).toHaveBeenCalledTimes(1);
+  });
+
   it('shows who approved and when', () => {
     setAnalysis({
       kind: 'ready',

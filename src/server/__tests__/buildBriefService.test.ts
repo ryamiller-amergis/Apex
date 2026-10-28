@@ -56,8 +56,10 @@ import { InterviewBriefError } from '../services/interviewBriefService';
 import {
   approveBuildBrief,
   BUILD_BRIEF_APPROVE_FAILED_MESSAGE,
+  BUILD_BRIEF_CHANGED_MESSAGE,
   BUILD_BRIEF_DRAFT_FAILED_MESSAGE,
   BUILD_BRIEF_NO_AC_MESSAGE,
+  BUILD_BRIEF_RESUME_FAILED_MESSAGE,
   BuildBriefError,
   draftBuildBrief,
   getBuildBriefAnalysis,
@@ -167,8 +169,16 @@ beforeEach(() => {
   (isPlatformAdmin as jest.Mock).mockImplementation(async (userId: string) => userId === 'platform-1');
   mockAppendEvent.mockResolvedValue({ inserted: true, event: null });
   mockGetBrief.mockResolvedValue(null);
-  mockSave.mockImplementation(async (input: { sections: InterviewBriefSections }) => brief({ sections: input.sections }));
+  mockSave.mockImplementation(async (input: SaveInput) => {
+    const saved = brief({ sections: input.sections });
+    await input.inTransaction?.(TX, saved);
+    return saved;
+  });
 });
+
+type TxHook = (tx: unknown, saved: InterviewBriefRecord) => Promise<void>;
+interface SaveInput { sections: InterviewBriefSections; expectedVersion?: number | null; inTransaction?: TxHook }
+const TX = { insert: (...args: unknown[]) => mockInsert(...args) };
 
 describe('VT-18 — draft (PBI-011 AC-0; PBI-013 AC-0)', () => {
   it('VT-18 saves draft v1 with numbered rows, decisions, classification and no token', async () => {
@@ -192,7 +202,8 @@ describe('VT-18 — draft (PBI-011 AC-0; PBI-013 AC-0)', () => {
     expect(saved.businessRules).toBe('BR-1: Members only');
     expect(upserts[0]).toMatchObject({ revisionNumber: 1, briefVersion: 1, classification: 'small' });
     expect((upserts[0].riskDecisions as BuildRiskDecision[])[0]).toMatchObject({ id: 'RD-1', rating: 'medium' });
-    expect(mockAppendEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'intake.brief_drafted' }));
+    expect(mockAppendEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'intake.brief_drafted' }), { executor: TX });
+    expect(mockSave.mock.calls[0][0].expectedVersion).toBeNull();
     const everything = JSON.stringify([mockSave.mock.calls, upserts, mockAppendEvent.mock.calls]);
     expect(everything).not.toContain(TOKEN);
   });
@@ -220,6 +231,49 @@ describe('VT-18 — draft (PBI-011 AC-0; PBI-013 AC-0)', () => {
     mockGetBrief.mockResolvedValue(brief());
     await expect(draftBuildBrief({ interviewId: 'iv-1', actorId: 'requester', mode: 'auto' })).resolves.toBeNull();
     expect(mockDraft).not.toHaveBeenCalled();
+  });
+
+  describe('concurrent drafts keep one run\'s sections and rows together', () => {
+    const draftReply = {
+      ...sections,
+      requirements: [{ kind: 'ac', text: 'Members can export' }],
+      riskCandidates: [],
+      estimatedTasks: 1,
+      needsMigration: false,
+    };
+    beforeEach(() => mockDraft.mockResolvedValue(draftReply));
+
+    it('writes revision 1 and the drafted event only inside the brief transaction', async () => {
+      mockSave.mockImplementation(async (input: SaveInput) => brief({ sections: input.sections }));
+      await draftBuildBrief({ interviewId: 'iv-1', actorId: 'requester', mode: 'manual' });
+      expect(upserts).toHaveLength(0);
+      expect(mockAppendEvent).not.toHaveBeenCalled();
+    });
+
+    it('passes the version read before the agent ran', async () => {
+      mockGetBrief.mockResolvedValue(brief({ version: 4 }));
+      await draftBuildBrief({ interviewId: 'iv-1', actorId: 'requester', mode: 'manual' });
+      expect(mockSave.mock.calls[0][0].expectedVersion).toBe(4);
+    });
+
+    it('a manual draft that lost the race returns 409 with the plain message', async () => {
+      mockSave.mockRejectedValue(new InterviewBriefError('The brief changed while it was being written.', 409));
+      const error = await draftBuildBrief({ interviewId: 'iv-1', actorId: 'requester', mode: 'manual' }).catch((err: unknown) => err);
+      expect((error as BuildBriefError).statusCode).toBe(409);
+      expect((error as BuildBriefError).message).toBe(BUILD_BRIEF_CHANGED_MESSAGE);
+    });
+
+    it('an automatic draft that lost the race stops quietly', async () => {
+      mockSave.mockRejectedValue(new InterviewBriefError('The brief changed while it was being written.', 409));
+      await expect(draftBuildBrief({ interviewId: 'iv-1', actorId: 'requester', mode: 'auto' })).resolves.toBeNull();
+    });
+
+    it('a failed revision write fails the whole draft', async () => {
+      mockInsert.mockImplementation(() => { throw new Error('revision write failed'); });
+      await expect(draftBuildBrief({ interviewId: 'iv-1', actorId: 'requester', mode: 'manual' }))
+        .rejects.toThrow('revision write failed');
+      expect(mockAppendEvent).not.toHaveBeenCalled();
+    });
   });
 
   it('PBI-011 AC-3 refuses a BA who is not the requester or an admin', async () => {
@@ -264,6 +318,27 @@ describe('VT-19 — edit keeps IDs (PBI-011 AC-2; PBI-012 AC-2)', () => {
     }).catch((err: unknown) => err);
     expect((error as BuildBriefError).statusCode).toBe(400);
   });
+
+  it('checks the version it read and writes the edit event inside the brief transaction', async () => {
+    withDraftRevision(2);
+    mockGetBrief.mockResolvedValue(brief({ version: 2 }));
+    await saveBuildBrief({ interviewId: 'iv-1', actorId: 'requester', sections, requirements: [{ id: 'AC-1', kind: 'ac', text: 'Members can export' }] });
+    expect(mockSave.mock.calls[0][0].expectedVersion).toBe(2);
+    expect(mockAppendEvent).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'intake.brief_edited' }), { executor: TX });
+  });
+
+  it('returns 409 with the plain message when a draft landed during the save', async () => {
+    withDraftRevision();
+    mockSave.mockRejectedValue(new InterviewBriefError('The brief changed while it was being written.', 409));
+    const error = await saveBuildBrief({
+      interviewId: 'iv-1',
+      actorId: 'requester',
+      sections,
+      requirements: [{ id: 'AC-1', kind: 'ac', text: 'Members can export' }],
+    }).catch((err: unknown) => err);
+    expect((error as BuildBriefError).statusCode).toBe(409);
+    expect((error as BuildBriefError).message).toBe(BUILD_BRIEF_CHANGED_MESSAGE);
+  });
 });
 
 describe('approve', () => {
@@ -272,9 +347,9 @@ describe('approve', () => {
     mockGetBrief.mockResolvedValue(brief({ sections: renderBriefSections(sections, storedRequirements) }));
   });
 
-  it('VT-13 / VT-15 Project Admin approval writes classification, approved version and onBehalfOf in the hook', async () => {
-    mockApprove.mockImplementation(async (input: { beforeResume: (b: InterviewBriefRecord) => Promise<void> }) => {
-      await input.beforeResume(brief({ status: 'approved', version: 2, approvedBy: 'pa-1', approvedAt: 'now' }));
+  it('VT-13 / VT-15 Project Admin approval writes classification, approved version and onBehalfOf in the approval transaction', async () => {
+    mockApprove.mockImplementation(async (input: { inTransaction: TxHook }) => {
+      await input.inTransaction(TX, brief({ status: 'approved', version: 2, approvedBy: 'pa-1', approvedAt: 'now' }));
       return { briefId: 'brief-1', version: 2, resumed: true, alreadyApproved: false };
     });
 
@@ -288,23 +363,17 @@ describe('approve', () => {
       actorUserId: 'pa-1',
       dedupeKey: 'brief_approved:brief-1:2',
       detail: expect.objectContaining({ onBehalfOf: 'requester' }),
-    }));
+    }), { executor: TX });
   });
 
-  it('VT-14 a repeat approval reuses the same event key so no second event is stored', async () => {
+  it('VT-14 a repeat approval writes no second event', async () => {
     mockGetBrief.mockResolvedValue(brief({ status: 'approved', version: 2, approvedBy: 'platform-1', approvedAt: 'then' }));
-    mockApprove.mockImplementation(async (input: { beforeResume: (b: InterviewBriefRecord) => Promise<void> }) => {
-      await input.beforeResume(brief({ status: 'approved', version: 2, approvedBy: 'platform-1', approvedAt: 'then' }));
-      return { briefId: 'brief-1', version: 2, resumed: false, alreadyApproved: true };
-    });
+    mockApprove.mockResolvedValue({ briefId: 'brief-1', version: 2, resumed: false, alreadyApproved: true });
 
     const result = await approveBuildBrief({ interviewId: 'iv-1', actorId: 'pa-1' });
 
     expect(result.alreadyApproved).toBe(true);
-    expect(mockAppendEvent).toHaveBeenCalledWith(expect.objectContaining({
-      actorUserId: 'platform-1',
-      dedupeKey: 'brief_approved:brief-1:2',
-    }));
+    expect(mockAppendEvent).not.toHaveBeenCalled();
   });
 
   it('VT-16 refuses approval with no acceptance criterion and does not approve', async () => {
@@ -324,6 +393,19 @@ describe('approve', () => {
     expect((error as BuildBriefError).statusCode).toBe(500);
     expect((error as BuildBriefError).message).toBe(BUILD_BRIEF_APPROVE_FAILED_MESSAGE);
     expect(mockAppendEvent).not.toHaveBeenCalled();
+  });
+
+  it('says planning did not start when the approval committed but the resume failed', async () => {
+    const draft = brief({ sections: renderBriefSections(sections, storedRequirements) });
+    mockGetBrief
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce({ ...draft, status: 'approved', version: 2, approvedBy: 'requester', approvedAt: 'now' });
+    mockApprove.mockRejectedValue(new Error('resume failed'));
+
+    const error = await approveBuildBrief({ interviewId: 'iv-1', actorId: 'requester' }).catch((err: unknown) => err);
+
+    expect((error as BuildBriefError).statusCode).toBe(500);
+    expect((error as BuildBriefError).message).toBe(BUILD_BRIEF_RESUME_FAILED_MESSAGE);
   });
 
   it('VT-23 passes a 4xx brief error through unchanged', async () => {

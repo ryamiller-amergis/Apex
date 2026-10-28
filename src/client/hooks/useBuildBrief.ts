@@ -81,7 +81,7 @@ export function useSaveBuildBrief(interviewId: string) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => invalidate(interviewId),
+    onSettled: () => invalidate(interviewId),
   });
 }
 
@@ -97,6 +97,6 @@ export function useApproveBuildBrief(interviewId: string) {
   const invalidate = useInvalidateBuildBrief();
   return useMutation<ApproveBuildBriefResponse, Error, void>({
     mutationFn: () => apiFetch(`/api/interviews/${interviewId}/brief/approve`, { method: 'POST' }),
-    onSuccess: () => invalidate(interviewId),
+    onSettled: () => invalidate(interviewId),
   });
 }

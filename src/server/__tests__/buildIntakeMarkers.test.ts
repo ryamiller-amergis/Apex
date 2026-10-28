@@ -63,6 +63,18 @@ describe('FEAT-006 U1 — isBuildIntakeConfirmation', () => {
     expect(isBuildIntakeConfirmation([confirmPrompt], 'Answer: B — Change it')).toBe(false);
     expect(isBuildIntakeConfirmation([confirmPrompt], 'Q1 · Is this right?\nAnswer: B — Change it')).toBe(false);
     expect(isBuildIntakeConfirmation([confirmPrompt], 'Change the title\na lot')).toBe(false);
+  });
+
+  it('is false for an ordinary sentence that starts with "a" or "confirm", or a free-text pick', () => {
+    expect(isBuildIntakeConfirmation([confirmPrompt], 'a manager should approve it too')).toBe(false);
+    expect(isBuildIntakeConfirmation([confirmPrompt], 'Confirm it only works on mobile?')).toBe(false);
+    expect(isBuildIntakeConfirmation([confirmPrompt], 'Q1 · Is this right?\nAnswer: a few changes first')).toBe(false);
+    expect(isBuildIntakeConfirmation([confirmPrompt], 'Answer: A\nNotes: wait')).toBe(false);
+  });
+
+  it('accepts a bare "a." or "Confirm!" reply', () => {
+    expect(isBuildIntakeConfirmation([confirmPrompt], ' a. ')).toBe(true);
+    expect(isBuildIntakeConfirmation([confirmPrompt], 'Confirm!')).toBe(true);
     expect(isBuildIntakeConfirmation([confirmPrompt, { role: 'agent', text: 'What should change?' }], 'a')).toBe(false);
   });
 

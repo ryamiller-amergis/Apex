@@ -78,10 +78,10 @@ export function hasConfirmMarker(text: string): boolean {
   return text.includes(BUILD_INTAKE_CONFIRM_MARKER);
 }
 
-/** Picker replies read `Q1 · <question>\nAnswer: A — <option>`. */
-const PICKER_CONFIRM_RE = /^\s*answer:\s*a\b/im;
-/** A typed reply that starts with "a" or "confirm". */
-const TYPED_CONFIRM_RE = /^\s*(?:a|confirm)\b/i;
+/** Picker replies read `Q1 · <question>\nAnswer: A — <option>`; a free-text pick reads `Answer: <notes>`. */
+const PICKER_CONFIRM_RE = /^Answer: A — /m;
+/** A typed reply that is only "a" or "confirm". */
+const TYPED_CONFIRM_RE = /^\s*(?:a|confirm)\s*[.!]?\s*$/i;
 
 /** True when `answerText` picks "Confirm" on the latest visible agent message, which carries the confirm marker. */
 export function isBuildIntakeConfirmation(

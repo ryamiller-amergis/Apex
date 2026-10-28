@@ -187,6 +187,18 @@ export const BuildBriefReview: React.FC<BuildBriefReviewProps> = ({ interviewId 
                   : 'Approved.'}
             </p>
           )}
+          {approved && mayEdit && approve.error && (
+            <button
+              type="button"
+              className={styles.primary}
+              disabled={busy}
+              aria-label={approveLabel}
+              onClick={runApprove}
+              {...{ 'data-testid': 'build-brief-approve' }}
+            >
+              {approve.isPending ? 'Approving…' : approveLabel}
+            </button>
+          )}
           {!approved && analysis && !mayEdit && (
             <p className={styles.note} {...{ 'data-testid': 'build-brief-readonly-note' }}>
               You can read this brief. Only the requester or an admin can change or approve it.
