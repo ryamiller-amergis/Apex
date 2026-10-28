@@ -1,8 +1,14 @@
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
 import {
+  BOOKMARK_IMPORT_MAX_FILE_BYTES,
+  PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
   ProjectQuickLinkError,
   QUICK_LINKS_IMPORT_MAX_ITEMS,
+  QUICK_LINK_CATEGORY_MAX_LENGTH,
+  QUICK_LINK_LABEL_MAX_LENGTH,
+  QUICK_LINK_URL_MAX_LENGTH,
+  USER_QUICK_LINKS_LIMIT_MESSAGE,
   USER_QUICK_LINKS_MAX_PER_PROJECT,
 } from '../../shared/types/projectQuickLinks';
 
@@ -91,6 +97,32 @@ beforeEach(() => {
   mock.calls.length = 0;
   mock.results.length = 0;
   mock.errors.length = 0;
+});
+
+describe('limits', () => {
+  it('lets a user keep 1,000 personal links and import that many in one request', () => {
+    expect(USER_QUICK_LINKS_MAX_PER_PROJECT).toBe(1000);
+    expect(QUICK_LINKS_IMPORT_MAX_ITEMS).toBe(USER_QUICK_LINKS_MAX_PER_PROJECT);
+    expect(PROJECT_QUICK_LINKS_MAX_PER_PROJECT).toBe(200);
+    expect(BOOKMARK_IMPORT_MAX_FILE_BYTES).toBe(20 * 1024 * 1024);
+  });
+
+  it('keeps the worst-case import body under the 10 MB server limit', () => {
+    const worst = {
+      label: 'x'.repeat(QUICK_LINK_LABEL_MAX_LENGTH),
+      url: `https://${'a'.repeat(QUICK_LINK_URL_MAX_LENGTH - 8)}`,
+      category: 'c'.repeat(QUICK_LINK_CATEGORY_MAX_LENGTH),
+    };
+    const body = JSON.stringify({ items: Array.from({ length: QUICK_LINKS_IMPORT_MAX_ITEMS }, () => worst) });
+    expect(body.length).toBeLessThan(10 * 1024 * 1024);
+  });
+
+  it('states the personal cap in the limit message', async () => {
+    queue([{ value: USER_QUICK_LINKS_MAX_PER_PROJECT }]);
+    await expect(
+      createUserLink('alice', 'MaxView', { label: 'x', url: 'https://x.com' }),
+    ).rejects.toThrow('You can keep up to 1,000 personal links per project');
+  });
 });
 
 describe('ownership isolation', () => {
@@ -247,7 +279,7 @@ describe('importUserLinks', () => {
 
     expect(result.created).toBe(1);
     expect(result.rejected).toEqual([
-      expect.objectContaining({ index: 1, reason: expect.stringContaining(String(USER_QUICK_LINKS_MAX_PER_PROJECT)) }),
+      expect.objectContaining({ index: 1, reason: USER_QUICK_LINKS_LIMIT_MESSAGE }),
       expect.objectContaining({ index: 2 }),
     ]);
     const insert = mock.calls.find((c) => c.op === 'insert');

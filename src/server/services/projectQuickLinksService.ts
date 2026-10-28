@@ -1,8 +1,9 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { projectQuickLinks } from '../db/schema';
 import {
   ProjectQuickLinkError,
+  PROJECT_QUICK_LINKS_LIMIT_MESSAGE,
   PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
   type ImportQuickLinksResult,
   type CreateProjectQuickLinkInput,
@@ -69,6 +70,13 @@ export async function createLink(
     createdBy: actor,
     updatedBy: actor,
   };
+  const [existing] = await db
+    .select({ value: count() })
+    .from(projectQuickLinks)
+    .where(eq(projectQuickLinks.project, values.project));
+  if (Number(existing?.value ?? 0) >= PROJECT_QUICK_LINKS_MAX_PER_PROJECT) {
+    throw new ProjectQuickLinkError(PROJECT_QUICK_LINKS_LIMIT_MESSAGE, 'LIMIT_REACHED');
+  }
   const [row] = await db.insert(projectQuickLinks).values(values).returning();
   return toDto(row);
 }
@@ -156,7 +164,7 @@ export async function importLinks(
       items,
       existingRows.map((r) => r.url),
       PROJECT_QUICK_LINKS_MAX_PER_PROJECT,
-      `A project can have up to ${PROJECT_QUICK_LINKS_MAX_PER_PROJECT} shared links`,
+      PROJECT_QUICK_LINKS_LIMIT_MESSAGE,
     );
     if (plan.toInsert.length > 0) {
       await tx.insert(projectQuickLinks).values(

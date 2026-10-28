@@ -3,6 +3,7 @@ import { db } from '../db/drizzle';
 import { userQuickLinks } from '../db/schema';
 import {
   ProjectQuickLinkError,
+  USER_QUICK_LINKS_LIMIT_MESSAGE,
   USER_QUICK_LINKS_MAX_PER_PROJECT,
   type CreateUserQuickLinkInput,
   type ImportQuickLinksResult,
@@ -14,7 +15,6 @@ import { normalizeCategory, normalizeLabel, normalizeUrl } from './quickLinkVali
 
 type UserQuickLinkRow = typeof userQuickLinks.$inferSelect;
 
-const LIMIT_MESSAGE = `You can keep up to ${USER_QUICK_LINKS_MAX_PER_PROJECT} personal links per project`;
 const DUPLICATE_MESSAGE = 'You already have a link to this URL';
 
 function toDto(row: UserQuickLinkRow): UserQuickLink {
@@ -77,7 +77,7 @@ export async function createUserLink(
   };
   const existing = await countOwned(owner);
   if (existing >= USER_QUICK_LINKS_MAX_PER_PROJECT) {
-    throw new ProjectQuickLinkError(LIMIT_MESSAGE, 'LIMIT_REACHED');
+    throw new ProjectQuickLinkError(USER_QUICK_LINKS_LIMIT_MESSAGE, 'LIMIT_REACHED');
   }
   const [row] = await db
     .insert(userQuickLinks)
@@ -145,7 +145,7 @@ export async function importUserLinks(
       items,
       existingRows.map((r) => r.url),
       USER_QUICK_LINKS_MAX_PER_PROJECT,
-      LIMIT_MESSAGE,
+      USER_QUICK_LINKS_LIMIT_MESSAGE,
     );
 
     let created = 0;

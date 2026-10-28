@@ -30,6 +30,7 @@ import {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  selectWhere.mockResolvedValue([{ value: 0 }]);
 });
 
 describe('normalizeUrl', () => {
@@ -155,6 +156,31 @@ describe('createLink', () => {
 describe('reorderLinks', () => {
   it.each([[undefined], ['abc'], [[1, 2]], [['a', 'a']]])('rejects ids %p', async (ids) => {
     await expect(reorderLinks('MaxView', ids, 'user-1')).rejects.toBeInstanceOf(ProjectQuickLinkError);
+  });
+});
+
+describe('shared link cap on single adds and moves', () => {
+  it('refuses a new shared link once the project has the maximum', async () => {
+    selectWhere.mockResolvedValue([{ value: PROJECT_QUICK_LINKS_MAX_PER_PROJECT }]);
+
+    await expect(
+      createLink('MaxView', { label: 'One more', url: 'https://more.example.com' }, 'admin-1'),
+    ).rejects.toMatchObject({ code: 'LIMIT_REACHED', message: 'A project can have up to 200 shared links' });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('allows the last link under the cap', async () => {
+    selectWhere.mockResolvedValue([{ value: PROJECT_QUICK_LINKS_MAX_PER_PROJECT - 1 }]);
+    returning.mockResolvedValue([
+      {
+        id: 'l', project: 'MaxView', label: 'Last', url: 'https://last.example.com/', category: null, sortOrder: 0,
+        createdBy: 'admin-1', updatedBy: 'admin-1', createdAt: 'x', updatedAt: 'x',
+      },
+    ]);
+
+    await expect(
+      createLink('MaxView', { label: 'Last', url: 'https://last.example.com' }, 'admin-1'),
+    ).resolves.toMatchObject({ id: 'l' });
   });
 });
 
