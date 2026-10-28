@@ -13,6 +13,10 @@
       "types": "./vitest.d.ts",
       "default": "./vitest.mjs"
     },
+    "./testing": {
+      "types": "./testing.d.ts",
+      "default": "./testing.mjs"
+    },
     "./format-env-issues": {
       "types": "./format-env-issues.d.ts",
       "default": "./format-env-issues.mjs"

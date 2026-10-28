@@ -3,6 +3,7 @@ import jsxA11y from 'eslint-plugin-jsx-a11y';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+import noBrittleLocator from './eslint/no-brittle-locator.mjs';
 import noHardcodedColor from './eslint/no-hardcoded-color.mjs';
 
 const reactHooksConfig =
@@ -100,7 +101,13 @@ const persistenceBoundaries = [
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**'],
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      '**/playwright-report/**',
+      '**/test-results/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -124,6 +131,7 @@ export default tseslint.config(
     files: [
       'apps/api/**/*.ts',
       'apps/api/**/*.mjs',
+      'e2e/**/*.mjs',
       'scripts/**/*.mjs',
       'packages/config/**/*.mjs',
     ],
@@ -179,6 +187,17 @@ export default tseslint.config(
     },
     rules: {
       'design-tokens/no-hardcoded-color': 'error',
+    },
+  },
+  {
+    files: ['e2e/**/*.ts', 'apps/web/e2e/**/*.ts'],
+    plugins: {
+      'e2e-selectors': {
+        rules: { 'no-brittle-locator': noBrittleLocator },
+      },
+    },
+    rules: {
+      'e2e-selectors/no-brittle-locator': 'error',
     },
   }
 );
