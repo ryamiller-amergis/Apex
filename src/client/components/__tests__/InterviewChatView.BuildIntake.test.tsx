@@ -119,6 +119,23 @@ jest.mock('../../hooks/useBuilds', () => ({
   useBuildIntake: jest.fn(),
 }));
 
+function mockIdleMutation(): { mutate: jest.Mock; mutateAsync: jest.Mock; reset: jest.Mock; isPending: boolean; error: Error | null } {
+  return { mutate: jest.fn(), mutateAsync: jest.fn(), reset: jest.fn(), isPending: false, error: null };
+}
+const mockUseDraftBuildBrief = jest.fn(mockIdleMutation);
+jest.mock('../../hooks/useBuildBrief', () => ({
+  useBuildBriefRecord: jest.fn(() => ({ data: null, isLoading: false })),
+  useBuildBriefAnalysis: jest.fn(() => ({
+    data: { kind: 'missing', draftFailed: false },
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  })),
+  useSaveBuildBrief: jest.fn(mockIdleMutation),
+  useDraftBuildBrief: () => mockUseDraftBuildBrief(),
+  useApproveBuildBrief: jest.fn(mockIdleMutation),
+}));
+
 jest.mock('../LinkedContextPicker', () => ({ LinkedContextPicker: () => null }));
 jest.mock('../RunGroundingStatus', () => ({ RunGroundingStatus: () => null }));
 jest.mock('../../hooks/useGroundingResumeGate', () => ({
@@ -292,6 +309,35 @@ describe('FEAT-005 VT-19 build-intake chat variant', () => {
     expect(screen.getByTestId('interview-attach')).toBeInTheDocument();
     expect(screen.getByTestId('interview-linked-context-trigger')).toBeInTheDocument();
     expect(screen.getByTestId('interview-owner-chips')).toBeInTheDocument();
+  });
+});
+
+describe('FEAT-006 VT-27 build brief panel in the chat view (PBI-011 b)', () => {
+  afterEach(() => mockUseDraftBuildBrief.mockImplementation(mockIdleMutation));
+
+  it('renders BuildBriefReview, shows a draft error with retry, and keeps the composer', () => {
+    mockUseDraftBuildBrief.mockReturnValue({
+      ...mockIdleMutation(),
+      error: new Error('The brief could not be drafted. Try again, or keep chatting and draft it later.'),
+    });
+    render(wrap(<InterviewChatView />));
+
+    expect(screen.getByTestId('build-brief-review')).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-brief-form')).not.toBeInTheDocument();
+    expect(screen.getByTestId('build-brief-error')).toHaveTextContent('Try again');
+    expect(screen.getByTestId('build-brief-draft')).toBeEnabled();
+    expect(screen.getByTestId('interview-chat-composer')).toBeInTheDocument();
+  });
+
+  it('keeps InterviewBriefReview for a non-build playbook interview', () => {
+    (useInterview as jest.Mock).mockReturnValue({
+      data: makeIntakeInterview({ playbookProfileKey: null }),
+      isLoading: false,
+      isError: false,
+    });
+    render(wrap(<InterviewChatView />));
+
+    expect(screen.queryByTestId('build-brief-review')).not.toBeInTheDocument();
   });
 });
 

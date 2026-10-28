@@ -8,6 +8,7 @@ import { getUserPermissions } from './rbacService';
 import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { isBuildIntakeThread } from './buildIntakeThread';
+import { canActOnBuildIntakeInterview, isBuildIntakeInterview } from './buildIntakeAccess';
 
 export type ThreadAccess = 'owner' | 'read';
 
@@ -90,9 +91,7 @@ export async function isBuildIntakeParticipant(
   requesterUserId: string,
   project: string | null | undefined,
 ): Promise<boolean> {
-  if (userId === requesterUserId) return true;
-  if (await isPlatformAdmin(userId)) return true;
-  return Boolean(project) && isProjectAdmin(userId, project as string);
+  return canActOnBuildIntakeInterview(userId, { authorId: requesterUserId, project: project ?? null });
 }
 
 /**
@@ -177,9 +176,12 @@ async function canAnswerInterview(userId: string, interviewId: string): Promise<
       discoveryAssigneeId: true,
       deliveryAssigneeId: true,
       technicalAssigneeId: true,
+      playbookProfileKey: true,
     },
   });
   if (!row) return false;
+  // Section owners and phase assignees do not reach a build-intake interview.
+  if (isBuildIntakeInterview(row)) return canActOnBuildIntakeInterview(userId, row);
   if (
     row.authorId === userId
     || row.prdOwnerId === userId
