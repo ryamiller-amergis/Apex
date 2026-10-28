@@ -3,10 +3,6 @@
   scroll-margin-top: 24px;
 }
 
-.muted {
-  color: var(--text-muted);
-}
-
 .urlCell {
   max-width: 360px;
   overflow: hidden;

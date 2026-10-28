@@ -1,0 +1,83 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.newRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.control:focus,
+.control:-webkit-autofill {
+  outline: none;
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+  box-shadow: var(--glow-accent);
+}
+
+.control[aria-invalid='true'] {
+  border-color: var(--error-color);
+}
+
+.compact {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.switchButton {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent-color);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.switchButton:hover,
+.switchButton:focus-visible {
+  outline: none;
+  background: var(--bg-tertiary);
+}
+
+.error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--error-color);
+}

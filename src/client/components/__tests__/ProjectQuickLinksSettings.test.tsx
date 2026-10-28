@@ -19,6 +19,7 @@ function mutation(mutate: jest.Mock) {
 }
 
 jest.mock('../../hooks/useProjectQuickLinks', () => ({
+  ...jest.requireActual('../../hooks/useProjectQuickLinks'),
   useProjectQuickLinks: jest.fn(),
   useCreateProjectQuickLink: () => mutation(createMutate),
   useUpdateProjectQuickLink: () => mutation(updateMutate),
@@ -116,6 +117,45 @@ describe('ProjectQuickLinksSettings', () => {
     await waitFor(() =>
       expect(createMutate).toHaveBeenCalledWith(
         { label: 'SendGrid', url: 'https://app.sendgrid.com', category: 'Tools', sortOrder: 0 },
+        expect.any(Object),
+      ),
+    );
+  });
+
+  it('explains these are shared links and that personal links live in the header', () => {
+    mockUseProjectQuickLinks.mockReturnValue({ data: [], isLoading: false, isError: false });
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    expect(screen.getByTestId('quick-links-settings')).toHaveTextContent('Shared links that everyone in MaxView sees');
+    expect(screen.getByTestId('quick-links-empty')).toHaveTextContent(
+      'Links you add under “My links” in the header are private to you and don’t appear here.',
+    );
+  });
+
+  it('shows each category as a pill', () => {
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    expect(screen.getByTestId('quick-link-category-clerk')).toHaveTextContent('Tools');
+  });
+
+  it('offers existing project categories in the form, plus a new one', async () => {
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    fireEvent.click(screen.getByTestId('quick-links-add'));
+    const select = screen.getByTestId('quick-link-form-category') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.text)).toEqual([
+      'No category',
+      'Environments',
+      'Tools',
+      '+ New category…',
+    ]);
+
+    fireEvent.change(select, { target: { value: '__new_category__' } });
+    fireEvent.change(screen.getByTestId('quick-link-form-category-new'), { target: { value: 'Monitoring' } });
+    fireEvent.change(screen.getByTestId('quick-link-form-label'), { target: { value: 'Grafana' } });
+    fireEvent.change(screen.getByTestId('quick-link-form-url'), { target: { value: 'https://grafana.example.com' } });
+    fireEvent.click(screen.getByTestId('quick-link-form-save'));
+
+    await waitFor(() =>
+      expect(createMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ category: 'Monitoring' }),
         expect.any(Object),
       ),
     );

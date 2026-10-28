@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { ProjectQuickLink } from '../../shared/types/projectQuickLinks';
 import {
+  categoriesOf,
   useCreateProjectQuickLink,
   useDeleteProjectQuickLink,
   useProjectQuickLinks,
@@ -17,6 +18,8 @@ import {
   quickLinkUrlField,
 } from '../utils/quickLinkForm';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { CategoryPill, OTHER_CATEGORY_LABEL } from './QuickLinkCategory';
+import { QuickLinkCategoryField } from './QuickLinkCategoryField';
 import { DataGridFilterSelect, DataGridToolbar } from './DataGridToolbar';
 import { NumberStepper } from './NumberStepper';
 import gridStyles from './DataGrid.module.css';
@@ -129,22 +132,21 @@ const QuickLinkFormModal: React.FC<QuickLinkFormModalProps> = ({
         </div>
 
         <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="quick-link-category">Category (optional)</label>
-            <input
-              id="quick-link-category"
-              className={styles.input}
-              list="quick-link-category-options"
-              placeholder="e.g. Environments, Tools"
-              aria-invalid={Boolean(errors.category)}
-              {...register('category')}
-              {...{ 'data-testid': 'quick-link-form-category' }}
-            />
-            <datalist id="quick-link-category-options">
-              {categories.map((c) => <option key={c} value={c} />)}
-            </datalist>
-            {errors.category && <p className={styles.fieldError}>{errors.category.message}</p>}
-          </div>
+          <Controller
+            control={control}
+            name="category"
+            render={({ field }) => (
+              <QuickLinkCategoryField
+                id="quick-link-category"
+                label="Category (optional)"
+                value={field.value}
+                onChange={field.onChange}
+                options={categories}
+                error={errors.category?.message}
+                data-testid="quick-link-form-category"
+              />
+            )}
+          />
 
           <div className={styles.field}>
             <label className={styles.label} htmlFor="quick-link-sort-order">Sort order</label>
@@ -232,14 +234,14 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
   const links = useMemo(() => linksQuery.data ?? [], [linksQuery.data]);
 
   const categories = useMemo(
-    () => Array.from(new Set(links.map((l) => l.category).filter((c): c is string => Boolean(c)))),
+    () => categoriesOf(links),
     [links],
   );
 
   const categoryOptions = useMemo(
     () => [
       ...categories.map((c) => ({ label: c, value: c })),
-      ...(links.some((l) => !l.category) ? [{ label: 'Uncategorized', value: UNCATEGORIZED }] : []),
+      ...(links.some((l) => !l.category) ? [{ label: OTHER_CATEGORY_LABEL, value: UNCATEGORIZED }] : []),
     ],
     [categories, links],
   );
@@ -312,8 +314,8 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
 
   const hasFilter = Boolean(search.trim() || categoryFilter);
   const emptyMessage = links.length === 0
-    ? 'No quick links yet. Add links to environments and tools your team uses for this project.'
-    : 'No quick links match your search or filter.';
+    ? 'No shared links yet. Links you add under “My links” in the header are private to you and don’t appear here.'
+    : 'No shared links match your search or filter.';
 
   return (
     <section
@@ -326,7 +328,8 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
         <div>
           <h2 className={gridStyles.title}>Quick Links</h2>
           <p className={gridStyles.hint}>
-            Links shown in the header link menu for <strong>{project}</strong> only.
+            Shared links that everyone in <strong>{project}</strong> sees under &ldquo;Project links&rdquo; in
+            the header link menu. Personal links are private to each person and are managed from that menu.
           </p>
         </div>
         <div className={gridStyles.headerActions}>
@@ -400,7 +403,9 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
             <tbody>
               {filteredLinks.map((link) => (
                 <tr key={link.id} {...{ 'data-testid': `quick-link-row-${link.id}` }}>
-                  <td>{link.category ?? <span className={styles.muted}>Uncategorized</span>}</td>
+                  <td>
+                    <CategoryPill category={link.category} data-testid={`quick-link-category-${link.id}`} />
+                  </td>
                   <td>{link.label}</td>
                   <td className={styles.urlCell} title={link.url}>{link.url}</td>
                   <td>{link.sortOrder}</td>
