@@ -39,6 +39,7 @@ Rules that hold everywhere:
 | [Migrations runbook](docs/runbooks/migrations.md)                                        | You change the schema or apply migrations                              |
 | [Common failures runbook](docs/runbooks/common-failures.md)                              | Install, startup, or a command fails                                   |
 | [Supply-chain runbook](docs/runbooks/supply-chain.md)                                    | You run the scans, write an SBOM, or build the production image        |
+| [Platform Engineering handoff](docs/handoff.md)                                          | You review adoption: ownership, pipeline contracts, open decisions     |
 | [Agent index](docs/agent-index.txt)                                                      | You want every document as one plain-text list                         |
 
 Member guides with more detail:
@@ -51,9 +52,17 @@ Member guides with more detail:
 
 ## Skills
 
-Skills are step-by-step instructions an agent loads for one kind of task. Each skill is one folder under `.cursor/skills/` holding a `SKILL.md` file. The directory is reserved and holds no skill yet.
+Skills are step-by-step instructions an agent loads for one kind of task. Each skill is one folder under `.cursor/skills/` holding a `SKILL.md` file.
 
 When you add a skill, link its `SKILL.md` from this section and add its path to the [agent index](docs/agent-index.txt). `pnpm docs:check` reports a skill that is missing from either place.
+
+- [API contract](.cursor/skills/api-contract/SKILL.md) — adding or changing an HTTP endpoint
+- [UI standards](.cursor/skills/ui-standards/SKILL.md) — adding or changing a screen
+- [Planner](.cursor/skills/planner/SKILL.md) — turn a prompt into a plan from the module map and the manifests
+- [UI role](.cursor/skills/ui/SKILL.md) — build a screen from the design system and record evidence
+- [Developer](.cursor/skills/developer/SKILL.md) — implement a task with the required standards and gates
+- [QA](.cursor/skills/qa/SKILL.md) — report evidence for every quality gate
+- [Integration](.cursor/skills/integration/SKILL.md) — decide whether a build is ready for a pipeline
 
 ## Scripts
 

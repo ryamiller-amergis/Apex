@@ -21,3 +21,11 @@ docs/runbooks/local-setup.md  Clean checkout to a running local stack.
 docs/runbooks/migrations.md  Generate, validate, and apply schema migrations; ownership and rollback.
 docs/runbooks/common-failures.md  Install and startup errors with their fixes.
 docs/runbooks/supply-chain.md  Secret, vulnerability, and license scans, the SBOM, and the production image.
+docs/handoff.md  Platform Engineering adoption: ownership, pipeline contracts, placeholders, open decisions.
+.cursor/skills/api-contract/SKILL.md  Rules and steps for adding an endpoint so it matches the API contract.
+.cursor/skills/ui-standards/SKILL.md  Rules, screen steps, and the review checklist for the design system.
+.cursor/skills/planner/SKILL.md  Plan a prompt from the module map, the manifests, and recorded decisions.
+.cursor/skills/ui/SKILL.md  UI role skill. Loads UI standards, then records catalog, token, and state evidence.
+.cursor/skills/developer/SKILL.md  Implement a change with the required skills, a reviewed migration, and the gates.
+.cursor/skills/qa/SKILL.md  Run or review each quality gate and write an evidence report.
+.cursor/skills/integration/SKILL.md  Read the QA evidence and report whether the build is ready for a pipeline.

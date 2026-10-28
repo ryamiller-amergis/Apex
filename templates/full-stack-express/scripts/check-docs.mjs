@@ -18,6 +18,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { checkHandoffDocument } from './handoff-check.mjs';
 
 export const DEFAULT_CONFIG = 'docs/docs-check.config.json';
 const EXEMPT_MARKER = '<!-- docs-check-exempt -->';
@@ -416,6 +417,191 @@ function readWorkspaceMembers(fsView, workspaceFile) {
   return [...members].sort();
 }
 
+function readGateIds(fsView) {
+  const file = 'quality/quality-manifest.json';
+  if (!fsView.exists(file)) {
+    return null;
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fsView.read(file));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(manifest.gates)) {
+    return null;
+  }
+  return new Set(
+    manifest.gates
+      .map((gate) => (typeof gate?.id === 'string' ? gate.id : ''))
+      .filter((id) => id !== '')
+  );
+}
+
+function isSkillDocument(document) {
+  return (
+    document.startsWith('.cursor/skills/') && document.endsWith('/SKILL.md')
+  );
+}
+
+const ROLE_GATE_SKILLS = new Set([
+  '.cursor/skills/planner/SKILL.md',
+  '.cursor/skills/developer/SKILL.md',
+  '.cursor/skills/qa/SKILL.md',
+  '.cursor/skills/integration/SKILL.md',
+]);
+
+function sectionLines(lines, headings, title) {
+  const heading = headings.find(
+    (item) =>
+      item.level === 2 && item.text.toLowerCase() === title.toLowerCase()
+  );
+  if (!heading) {
+    return null;
+  }
+  const next = headings.find(
+    (item) => item.level <= 2 && item.line > heading.line
+  );
+  const end = next ? next.line - 1 : lines.length;
+  return lines.slice(heading.line, end).map((text, offset) => ({
+    text,
+    line: heading.line + offset + 1,
+  }));
+}
+
+function splitTableRow(text) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) {
+    return null;
+  }
+  return trimmed
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim().replace(/`/g, ''));
+}
+
+function isSeparatorRow(cells) {
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell));
+}
+
+/**
+ * Skills name one enforcer per rule: a gate id from the quality manifest,
+ * or the literal Review. A blank cell or an unknown gate fails the check.
+ */
+function checkSkillRuleTable(document, lines, headings, gateIds, add) {
+  if (!isSkillDocument(document)) {
+    return;
+  }
+  const body = sectionLines(lines, headings, 'Rules');
+  if (!body) {
+    return;
+  }
+  const rows = [];
+  for (const entry of body) {
+    const cells = splitTableRow(entry.text);
+    if (!cells) {
+      if (rows.length > 0) {
+        break;
+      }
+      continue;
+    }
+    rows.push({ cells, line: entry.line });
+  }
+  if (rows.length < 2) {
+    add({ rule: 'rule-table', document, subject: 'missing-table' });
+    return;
+  }
+  const [header, separator, ...data] = rows;
+  if (
+    header.cells.at(-1)?.toLowerCase() !== 'enforced by' ||
+    !isSeparatorRow(separator.cells)
+  ) {
+    add({
+      rule: 'rule-table',
+      document,
+      line: header.line,
+      subject: 'header',
+    });
+    return;
+  }
+  for (const row of data) {
+    if (isSeparatorRow(row.cells)) {
+      continue;
+    }
+    const id = row.cells[0] ?? '';
+    const enforcedBy = row.cells.at(-1) ?? '';
+    const subject = id === '' ? 'blank-id' : id;
+    if (enforcedBy === '') {
+      add({ rule: 'rule-table', document, line: row.line, subject });
+      continue;
+    }
+    if (gateIds && enforcedBy !== 'Review' && !gateIds.has(enforcedBy)) {
+      add({ rule: 'rule-table', document, line: row.line, subject });
+    }
+  }
+}
+
+/**
+ * Planner, developer, QA, and integration skills name gates in a column
+ * headed Gate or Gates. Each comma-separated token must be a manifest id.
+ * The literal none is allowed. The UI role skill has no such column.
+ */
+function checkRoleSkillGateColumn(document, lines, gateIds, add) {
+  if (!ROLE_GATE_SKILLS.has(document) || !gateIds) {
+    return;
+  }
+  let index = 0;
+  while (index < lines.length) {
+    if (!splitTableRow(lines[index])) {
+      index += 1;
+      continue;
+    }
+    const table = [];
+    while (index < lines.length) {
+      const cells = splitTableRow(lines[index]);
+      if (!cells) {
+        break;
+      }
+      table.push({ cells, line: index + 1 });
+      index += 1;
+    }
+    if (table.length < 3) {
+      continue;
+    }
+    const [header, separator, ...data] = table;
+    if (!isSeparatorRow(separator.cells)) {
+      continue;
+    }
+    const column = header.cells.findIndex((cell) => {
+      const name = cell.toLowerCase();
+      return name === 'gate' || name === 'gates';
+    });
+    if (column === -1) {
+      continue;
+    }
+    for (const row of data) {
+      if (isSeparatorRow(row.cells)) {
+        continue;
+      }
+      const raw = row.cells[column] ?? '';
+      const tokens = raw
+        .split(',')
+        .map((token) => token.trim())
+        .filter((token) => token !== '' && token.toLowerCase() !== 'none');
+      for (const token of tokens) {
+        if (!gateIds.has(token)) {
+          add({
+            rule: 'role-gates',
+            document,
+            line: row.line,
+            subject: token,
+          });
+        }
+      }
+    }
+  }
+}
+
 function checkModuleMap(fsView, moduleMap, add) {
   if (!fsView.exists(moduleMap.file)) {
     add({ rule: 'required-missing', document: moduleMap.file });
@@ -489,6 +675,7 @@ export function checkDocs({ root, config }) {
     ),
   }));
   const documents = fsView.filesMatching(config.documents);
+  const gateIds = readGateIds(fsView);
   let entryTargets = new Set();
 
   for (const document of documents) {
@@ -580,6 +767,9 @@ export function checkDocs({ root, config }) {
       }
     }
 
+    checkSkillRuleTable(document, lines, headings, gateIds, add);
+    checkRoleSkillGateColumn(document, lines, gateIds, add);
+
     if (forbiddenTerms.length > 0) {
       const exempt = originRanges(headings, config.originHeading, lines.length);
       lines.forEach((line, index) => {
@@ -647,6 +837,8 @@ export function checkDocs({ root, config }) {
   if (config.moduleMap) {
     checkModuleMap(fsView, config.moduleMap, add);
   }
+
+  checkHandoffDocument({ fsView, add, scanMarkdown });
 
   return { findings: sortFindings(findings), documentCount: documents.length };
 }

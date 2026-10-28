@@ -18,7 +18,8 @@
     "docs/adr/README.md",
     "docs/runbooks/local-setup.md",
     "docs/runbooks/migrations.md",
-    "docs/runbooks/common-failures.md"
+    "docs/runbooks/common-failures.md",
+    "docs/handoff.md"
   ],
   "requiredSections": [
     {
@@ -42,6 +43,46 @@
     {
       "match": "AGENTS.md",
       "headings": ["Start here", "Documentation map", "Skills", "Scripts"]
+    },
+    {
+      "match": ".cursor/skills/**/SKILL.md",
+      "headings": [
+        "When to use",
+        "Required references",
+        "Rules",
+        "Review checklist",
+        "Stop conditions"
+      ]
+    },
+    {
+      "match": ".cursor/skills/planner/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/ui/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/developer/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/qa/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/integration/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": "docs/handoff.md",
+      "headings": [
+        "What the Template Provides",
+        "Ownership",
+        "Contracts Platform Engineering Consumes",
+        "Replacement Placeholders",
+        "Unresolved Decision Register"
+      ]
     }
   ],
   "moduleMap": {

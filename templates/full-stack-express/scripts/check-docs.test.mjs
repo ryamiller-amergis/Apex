@@ -29,7 +29,8 @@ vi.mock('node:http', () => throwingModule());
 vi.mock('node:https', () => throwingModule());
 vi.mock('node:net', () => throwingModule());
 
-const { checkDocs, formatReport } = await import('./check-docs.mjs');
+const { checkDocs, formatReport, loadConfig } =
+  await import('./check-docs.mjs');
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const templateRoot = path.resolve(scriptsDir, '..');
@@ -657,6 +658,8 @@ describe('docs:check on the committed knowledge base', () => {
       'AGENTS.md',
       'README.md',
       'docs',
+      '.cursor',
+      'quality',
       'pnpm-workspace.yaml',
     ]) {
       cpSync(path.join(templateRoot, entry), path.join(root, entry), {
@@ -688,5 +691,756 @@ describe('docs:check on the committed knowledge base', () => {
     for (const line of added) {
       expect(line).toMatch(/(common|renamed)-failures\.md/);
     }
+  });
+
+  it('VT-01 removing Inputs from the planner skill names that heading', () => {
+    const root = copyKnowledgeBase();
+    const skillPath = path.join(root, '.cursor/skills/planner/SKILL.md');
+    const skill = readFileSync(skillPath, 'utf8').replace('## Inputs\n', '');
+    writeFileSync(skillPath, skill);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        'missing-section .cursor/skills/planner/SKILL.md Inputs',
+      ])
+    );
+  });
+
+  it('VT-04 an unknown id in the developer Gates column names the skill and the id', () => {
+    const root = copyKnowledgeBase();
+    const skillPath = path.join(root, '.cursor/skills/developer/SKILL.md');
+    const skill = readFileSync(skillPath, 'utf8').replace(
+      'openapi-drift',
+      'not-a-gate'
+    );
+    writeFileSync(skillPath, skill);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^role-gates \.cursor\/skills\/developer\/SKILL\.md:\d+ not-a-gate$/
+        ),
+      ])
+    );
+  });
+});
+
+const SKILL_HEADINGS = [
+  'When to use',
+  'Required references',
+  'Rules',
+  'Review checklist',
+  'Stop conditions',
+];
+
+function skillDocument(ruleRows) {
+  const table = [
+    '| ID | Rule | Enforced by |',
+    '| --- | --- | --- |',
+    ...ruleRows,
+  ].join('\n');
+  return [
+    '# Skill',
+    '',
+    ...SKILL_HEADINGS.flatMap((heading) => [
+      `## ${heading}`,
+      '',
+      heading === 'Rules' ? table : 'Text.',
+      '',
+    ]),
+  ].join('\n');
+}
+
+function skillFixture(
+  skillBody,
+  { indexLine = true, manifestGates = ['openapi-drift', 'lint'] } = {}
+) {
+  const agents = baseFiles()['AGENTS.md'].replace(
+    'None yet.',
+    'None yet.\n\n- [API contract](.cursor/skills/api-contract/SKILL.md)'
+  );
+  const index = [
+    baseFiles()['docs/agent-index.txt'].trimEnd(),
+    indexLine ? '.cursor/skills/api-contract/SKILL.md  API contract skill' : '',
+    '',
+  ].join('\n');
+  return fixture({
+    'docs/docs-check.config.json': configWith({
+      documents: ['AGENTS.md', 'docs/**/*.md', '.cursor/skills/**/SKILL.md'],
+      requiredSections: [
+        ...baseConfig.requiredSections,
+        {
+          match: '.cursor/skills/**/SKILL.md',
+          headings: SKILL_HEADINGS,
+        },
+      ],
+    }),
+    'AGENTS.md': agents,
+    'docs/agent-index.txt': index,
+    '.cursor/skills/api-contract/SKILL.md': skillBody,
+    'quality/quality-manifest.json': `${JSON.stringify({
+      gates: manifestGates.map((id) => ({ id })),
+    })}\n`,
+  });
+}
+
+describe('docs:check skill rule table', () => {
+  it('VT-03 a skill whose Enforced by cells are gate ids or Review exits 0', () => {
+    const root = skillFixture(
+      skillDocument([
+        '| API-R01 | Declare the route. | openapi-drift |',
+        '| API-R02 | Review the name. | Review |',
+      ])
+    );
+    const run = cli(root);
+    expect(run.status).toBe(0);
+    expect(findingLines(run)).toEqual([]);
+  });
+
+  it('VT-03 a blank Enforced by cell and an unknown gate name the skill and rule id', () => {
+    const root = skillFixture(
+      skillDocument([
+        '| API-R01 | Declare the route. |  |',
+        '| API-R02 | Name a missing gate. | not-a-gate |',
+      ])
+    );
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^rule-table \.cursor\/skills\/api-contract\/SKILL\.md:\d+ API-R01$/
+        ),
+        expect.stringMatching(
+          /^rule-table \.cursor\/skills\/api-contract\/SKILL\.md:\d+ API-R02$/
+        ),
+      ])
+    );
+  });
+
+  it('VT-02 removing a skill from the agent index names that skill', () => {
+    const root = skillFixture(
+      skillDocument(['| API-R01 | Declare the route. | Review |']),
+      { indexLine: false, manifestGates: [] }
+    );
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toContain(
+      'index-missing .cursor/skills/api-contract/SKILL.md'
+    );
+  });
+
+  it('VT-04 a renamed path cited by a skill names the skill and the path', () => {
+    const body = skillDocument([
+      '| API-R01 | Declare the route. | Review |',
+    ]).replace('Text.', 'See `docs/missing-reference.md`.');
+    const root = skillFixture(body, { manifestGates: [] });
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^stale-path \.cursor\/skills\/api-contract\/SKILL\.md:\d+ docs\/missing-reference\.md$/
+        ),
+      ])
+    );
+  });
+});
+
+describe('docs:check role skill gate column', () => {
+  function roleGateFixture(gatesCell, manifestGates = ['build', 'type-check']) {
+    const agents = baseFiles()['AGENTS.md'].replace(
+      'None yet.',
+      'None yet.\n\n- [Planner](.cursor/skills/planner/SKILL.md)'
+    );
+    const index = [
+      baseFiles()['docs/agent-index.txt'].trimEnd(),
+      '.cursor/skills/planner/SKILL.md  Planner skill',
+      '',
+    ].join('\n');
+    const body = [
+      '# Planner',
+      '',
+      '## Rules',
+      '',
+      '| ID | Rule | Enforced by |',
+      '| --- | --- | --- |',
+      '| PLN-R01 | Read the manifest. | Review |',
+      '',
+      '| Change | Gates |',
+      '| --- | --- |',
+      `| Endpoint | ${gatesCell} |`,
+      '',
+    ].join('\n');
+    return fixture({
+      'docs/docs-check.config.json': configWith({
+        documents: ['AGENTS.md', 'docs/**/*.md', '.cursor/skills/**/SKILL.md'],
+        requiredSections: [
+          ...baseConfig.requiredSections,
+          {
+            match: '.cursor/skills/**/SKILL.md',
+            headings: ['Rules'],
+          },
+        ],
+      }),
+      'AGENTS.md': agents,
+      'docs/agent-index.txt': index,
+      '.cursor/skills/planner/SKILL.md': body,
+      'quality/quality-manifest.json': `${JSON.stringify({
+        gates: manifestGates.map((id) => ({ id })),
+      })}\n`,
+    });
+  }
+
+  it('VT-04 known gate ids in a Gates column exit 0', () => {
+    const run = cli(roleGateFixture('build, type-check'));
+    expect(run.status).toBe(0);
+    expect(findingLines(run)).toEqual([]);
+  });
+
+  it('VT-04 an unknown gate id in a Gates column names the skill and the id', () => {
+    const run = cli(roleGateFixture('build, not-a-gate'));
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^role-gates \.cursor\/skills\/planner\/SKILL\.md:\d+ not-a-gate$/
+        ),
+      ])
+    );
+  });
+});
+
+describe('committed api-contract and ui-standards skills', () => {
+  const skillPaths = [
+    '.cursor/skills/api-contract/SKILL.md',
+    '.cursor/skills/ui-standards/SKILL.md',
+  ];
+
+  function readSkill(relative) {
+    return readFileSync(path.join(templateRoot, relative), 'utf8');
+  }
+
+  it('VT-01 TBI-035 DoD-3 TBI-036 DoD-3 both skills pass docs:check and are linked', () => {
+    const config = loadConfig(templateRoot);
+    const result = checkDocs({ root: templateRoot, config });
+    expect(result.findings).toEqual([]);
+    expect(result.documentCount).toBe(27);
+    const agents = readSkill('AGENTS.md');
+    const index = readSkill('docs/agent-index.txt');
+    for (const skillPath of skillPaths) {
+      expect(agents).toContain(`](${skillPath})`);
+      expect(index).toContain(skillPath);
+    }
+  });
+
+  it('TBI-035 DoD-0 DoD-1 DoD-2 the api-contract skill lists rules, steps, and the profile identifier ban', () => {
+    const skill = readSkill('.cursor/skills/api-contract/SKILL.md');
+    expect(skill).toMatch(/^## Adding an endpoint$/m);
+    for (let index = 1; index <= 15; index += 1) {
+      expect(skill).toContain(`API-R${String(index).padStart(2, '0')}`);
+    }
+    expect(skill).toMatch(/Enforced by/);
+    expect(skill).toMatch(/pnpm routes:check/);
+    expect(skill).toMatch(/is registered but has no contract/);
+    expect(skill).toMatch(/default(?:s)? to 20/);
+    expect(skill).toMatch(/100/);
+    expect(skill).toMatch(/400 Problem Details/);
+    expect(skill).toMatch(/another person's identifier/);
+    expect(skill).toMatch(/z\.strictObject/);
+    expect(skill).toMatch(/stack trace/);
+    expect(skill).toMatch(/pnpm test:contract/);
+    expect(skill).toMatch(/pnpm openapi:generate/);
+  });
+
+  it('TBI-036 DoD-0 DoD-1 DoD-2 PBI-034 the ui-standards skill lists rules, screen steps, and the profile patterns', () => {
+    const skill = readSkill('.cursor/skills/ui-standards/SKILL.md');
+    expect(skill).toMatch(/^## Adding a screen$/m);
+    for (let index = 1; index <= 12; index += 1) {
+      expect(skill).toContain(`UI-R${String(index).padStart(2, '0')}`);
+    }
+    expect(skill).toMatch(/profileTestIds/);
+    expect(skill).toMatch(/updateProfileBodySchema/);
+    expect(skill).toMatch(/useUpdateProfileMutation/);
+    expect(skill).toMatch(/invalidate/);
+    expect(skill).toMatch(/createAppQueryClient/);
+    expect(skill).toMatch(/design-tokens\/no-hardcoded-color/);
+    expect(skill).toMatch(/loading, empty, error, and loaded/i);
+    expect(skill).toMatch(/unlabeled field/);
+    expect(skill).toMatch(/hard-coded colour/);
+    expect(skill).toMatch(/catalog addition or replacement/);
+    expect(skill).toMatch(/missing empty or error state is a failure/i);
+    expect(skill).toMatch(/narrowest supported width/);
+    expect(skill).toMatch(/widest/);
+    expect(skill).toMatch(/focus order/);
+    expect(skill).toMatch(/below 600 px/);
+    expect(skill).toMatch(/1536 px/);
+  });
+
+  it('VT-18 skill files do not name the host product, a real identity, or host auth helpers', () => {
+    const banned = [
+      /Apex/i,
+      /Amergis/i,
+      /ai-pilot/i,
+      /ensureAuthenticated/,
+      /@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/,
+    ];
+    for (const skillPath of skillPaths) {
+      const skill = readSkill(skillPath);
+      for (const pattern of banned) {
+        expect(skill).not.toMatch(pattern);
+      }
+    }
+  });
+});
+
+describe('committed role skills', () => {
+  const roleSkills = [
+    '.cursor/skills/planner/SKILL.md',
+    '.cursor/skills/ui/SKILL.md',
+    '.cursor/skills/developer/SKILL.md',
+    '.cursor/skills/qa/SKILL.md',
+    '.cursor/skills/integration/SKILL.md',
+  ];
+
+  function readSkill(relative) {
+    return readFileSync(path.join(templateRoot, relative), 'utf8');
+  }
+
+  it('VT-02 TBI-037 to TBI-041 DoD-3 each role skill is linked from the entry point and the index', () => {
+    const agents = readSkill('AGENTS.md');
+    const index = readSkill('docs/agent-index.txt');
+    for (const skillPath of roleSkills) {
+      expect(agents).toContain(`](${skillPath})`);
+      expect(index).toContain(skillPath);
+    }
+    expect(agents).toContain('](docs/handoff.md)');
+    expect(index).toContain('docs/handoff.md');
+  });
+
+  it('VT-06 TBI-037 DoD-0 DoD-1 DoD-2 PBI-036 the planner skill states inputs, gates, NFR evidence, and stop conditions', () => {
+    const skill = readSkill('.cursor/skills/planner/SKILL.md');
+    expect(skill).toMatch(/^name: planner$/m);
+    expect(skill).toMatch(/^## Inputs$/m);
+    expect(skill).toMatch(/^## Outputs$/m);
+    expect(skill).toMatch(/^## Stop conditions$/m);
+    expect(skill).toMatch(/applicable gates/i);
+    expect(skill).toContain('quality/quality-manifest.json');
+    expect(skill).toMatch(/NFR evidence/);
+    expect(skill).toContain('quality/nfr-manifest.json');
+    expect(skill).toMatch(/real targets are missing/);
+    expect(skill).toMatch(/illustrative/);
+    expect(skill).toMatch(/Excluded work/);
+    expect(skill).toMatch(/owned by Platform Engineering/);
+    expect(skill).toMatch(/do not invent a role model/i);
+    expect(skill).toContain(
+      'docs/adr/0002-no-roles-or-permissions-in-the-template.md'
+    );
+    expect(skill).toMatch(/produces no plan|Produce no plan/);
+    expect(skill).toMatch(/handoff document is not linked from AGENTS.md/);
+    expect(skill).not.toMatch(/@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/);
+  });
+
+  it('VT-10 TBI-038 DoD-0 DoD-1 DoD-2 PBI-039 the UI role skill reads UI standards first and requires state evidence', () => {
+    const skill = readSkill('.cursor/skills/ui/SKILL.md');
+    expect(skill).toMatch(/^name: ui$/m);
+    expect(skill).toMatch(/^## Inputs$/m);
+    expect(skill).toMatch(/^## Outputs$/m);
+    expect(skill).toMatch(/^## Stop conditions$/m);
+    expect(skill).toMatch(/Read the UI standards skill first/);
+    expect(skill).toContain('.cursor/skills/ui-standards/SKILL.md');
+    expect(skill).toContain('docs/design-system.md');
+    expect(skill).toContain('docs/component-catalog.md');
+    expect(skill).toMatch(/Catalog components reused/);
+    expect(skill).toMatch(/Theme tokens used/);
+    expect(skill).toMatch(/loading, empty, error, and loaded/);
+    expect(skill).toMatch(/accessibility test/i);
+    expect(skill).toMatch(/catalog addition/);
+    expect(skill).toMatch(/one-off styled component/);
+    expect(skill).toMatch(/do not report the screen as done/i);
+    expect(skill).toMatch(/Name the state/);
+    expect(skill).toMatch(/missing reference/i);
+  });
+
+  it('VT-07 TBI-039 DoD-0 DoD-1 DoD-2 PBI-035 the developer skill loads the right skills and stops on a missing reference', () => {
+    const skill = readSkill('.cursor/skills/developer/SKILL.md');
+    expect(skill).toMatch(/^name: developer$/m);
+    expect(skill).toMatch(/before any code is written/);
+    expect(skill).toContain('.cursor/skills/api-contract/SKILL.md');
+    expect(skill).toContain('.cursor/skills/ui-standards/SKILL.md');
+    expect(skill).toMatch(
+      /does not require the API contract skill or the UI standards skill/
+    );
+    expect(skill).toMatch(/applicable quality gates|applicable gates/i);
+    expect(skill).toMatch(
+      /stop and report the missing reference instead of guessing/i
+    );
+    expect(skill).toMatch(/reviewed SQL migration/);
+    expect(skill).toContain('migration-validation');
+    expect(skill).toMatch(/hard-coded secret/);
+    expect(skill).toMatch(/synthetic value or an environment variable/);
+    expect(skill).toMatch(/^## Stop conditions$/m);
+  });
+
+  it('VT-08 TBI-040 DoD-0 DoD-1 DoD-2 PBI-037 the QA skill reports evidence and does not treat a deferral as passed', () => {
+    const skill = readSkill('.cursor/skills/qa/SKILL.md');
+    expect(skill).toMatch(/^name: qa$/m);
+    expect(skill).toMatch(/^## Inputs$/m);
+    expect(skill).toMatch(/^## Outputs$/m);
+    expect(skill).toMatch(/^## Stop conditions$/m);
+    expect(skill).toContain('quality/quality-manifest.json');
+    expect(skill).toContain('quality/nfr-manifest.json');
+    expect(skill).toMatch(/passed, failed, not verified, or manifest error/);
+    expect(skill).toMatch(/not verified/);
+    expect(skill).toMatch(/reason and the owner|Reason and owner/);
+    expect(skill).toMatch(/Never record it as passed/);
+    expect(skill).toMatch(
+      /verdict is verified only when every gate is passed|The verdict is `verified` only when every gate is `passed`/
+    );
+    expect(skill).toMatch(/manifest error/);
+    expect(skill).toMatch(/no target supplied/);
+    expect(skill).toMatch(/illustrative/);
+    expect(skill).not.toMatch(/@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/);
+  });
+
+  it('VT-09 TBI-041 DoD-0 DoD-1 DoD-2 PBI-038 the integration skill reports ready only with evidence', () => {
+    const skill = readSkill('.cursor/skills/integration/SKILL.md');
+    expect(skill).toMatch(/^name: integration$/m);
+    expect(skill).toMatch(/^## Inputs$/m);
+    expect(skill).toMatch(/^## Outputs$/m);
+    expect(skill).toMatch(/^## Stop conditions$/m);
+    expect(skill).toMatch(/ready/);
+    expect(skill).toMatch(/not ready/);
+    expect(skill).toMatch(/deferr/);
+    expect(skill).toMatch(/no evidence/);
+    expect(skill).toMatch(
+      /Do not claim readiness when any required gate lacks evidence/
+    );
+    expect(skill).toContain('AUTH_MODE');
+    expect(skill).toContain('NODE_ENV');
+    expect(skill).toMatch(/development adapter/);
+    expect(skill).toContain(
+      'docs/adr/0002-no-roles-or-permissions-in-the-template.md'
+    );
+    expect(skill).toMatch(/handoff document is not linked from AGENTS.md/);
+    expect(skill).toMatch(/Do not invent a handoff path/);
+    expect(skill).toMatch(/Do not run the pipeline/);
+    expect(skill).toMatch(/do not deploy/i);
+    expect(skill).not.toMatch(/@[A-Za-z0-9._%+-]+\.[A-Za-z]{2,}/);
+  });
+});
+
+const {
+  HANDOFF_DOCUMENT,
+  readEnvExampleKeys,
+  parseEndpointIdentifier,
+  openApiHasOperation,
+  resolveHandoffContract,
+} = await import('./handoff-check.mjs');
+
+const HANDOFF_HEADINGS = [
+  'What the Template Provides',
+  'Ownership',
+  'Contracts Platform Engineering Consumes',
+  'Replacement Placeholders',
+  'Unresolved Decision Register',
+];
+
+function minimalHandoffFixture(overrides = {}) {
+  const ownership = [
+    '| Area | Owner | What the template ships | What Platform Engineering does |',
+    '| --- | --- | --- | --- |',
+    '| AWS infrastructure | Platform Engineering | None | Owns cloud |',
+    '| CI/CD pipelines | Platform Engineering | Scripts only | Owns pipelines |',
+    '| Migration execution | Platform Engineering | Migrations | Runs in deploy |',
+    '| Deployment packaging — container definition | Template | Dockerfile | Consumes image |',
+    '| Deployment packaging — image publishing and deployment stages | Platform Engineering | None | Publishes |',
+    '| Repository governance | Platform Engineering | None | Adds governance |',
+  ].join('\n');
+  const contracts = [
+    '| Kind | Identifier | Purpose | Source in the template |',
+    '| --- | --- | --- | --- |',
+    '| script | setup | Install | package.json |',
+    '| manifest | quality/quality-manifest.json | Gates | quality/ |',
+    '| endpoint | GET /health/live | Live | OpenAPI |',
+    '| env | NODE_ENV | Env | .env.example |',
+    '| container | Dockerfile | Image | root |',
+  ].join('\n');
+  const placeholders = [
+    '| Placeholder | Meaning | Where it appears |',
+    '| --- | --- | --- |',
+    '| project-name | Name | README |',
+    '| @project-scope | Scope | package.json |',
+    '| project-service | Service | README |',
+    '| project_db | Database | compose.yaml |',
+  ].join('\n');
+  const register = [
+    '| Decision | Extension point | Template behavior until decided | Decision needed from Platform Engineering |',
+    '| --- | --- | --- | --- |',
+    '| Production identity provider | `apps/api/src/identity/adapter.ts` | Dev adapter | Choose IdP |',
+    '| RBAC | `apps/api/src/identity/authMiddleware.ts` | Auth only | Define RBAC |',
+    '| Data classification | `apps/api/src/persistence/schema.ts` | Unresolved classification; synthetic fixtures and identity redaction are engineering practice, not a classification | Assign level |',
+    '| NFR targets and test execution policy | `quality/nfr-manifest.json` | Illustrative targets | Set policy |',
+    '| Feature-flag provider | `apps/api/src/feature-flags/flag-evaluator.ts` | Local map | Choose provider |',
+  ].join('\n');
+  const handoff = [
+    '# Handoff',
+    '',
+    ...HANDOFF_HEADINGS.flatMap((heading) => {
+      if (heading === 'Ownership') {
+        return [`## ${heading}`, '', ownership, ''];
+      }
+      if (heading === 'Contracts Platform Engineering Consumes') {
+        return [`## ${heading}`, '', contracts, ''];
+      }
+      if (heading === 'Replacement Placeholders') {
+        return [`## ${heading}`, '', placeholders, ''];
+      }
+      if (heading === 'Unresolved Decision Register') {
+        return [`## ${heading}`, '', register, ''];
+      }
+      return [`## ${heading}`, '', 'Bullets.', ''];
+    }),
+  ].join('\n');
+  return fixture({
+    'docs/handoff.md': handoff,
+    'package.json': '{"scripts":{"setup":"x"}}\n',
+    '.env.example': 'NODE_ENV=development\n',
+    'quality/quality-manifest.json': '{"gates":[]}\n',
+    Dockerfile: 'FROM scratch\n',
+    'packages/contracts/openapi/openapi.json':
+      '{"paths":{"/health/live":{"get":{}}}}\n',
+    'apps/api/src/identity/adapter.ts': 'export {}\n',
+    'apps/api/src/identity/authMiddleware.ts': 'export {}\n',
+    'apps/api/src/persistence/schema.ts': 'export {}\n',
+    'apps/api/src/feature-flags/flag-evaluator.ts': 'export {}\n',
+    'quality/nfr-manifest.json': '{}\n',
+    'docs/docs-check.config.json': configWith({
+      documents: ['AGENTS.md', 'docs/**/*.md'],
+      requiredDocuments: [...baseConfig.requiredDocuments, 'docs/handoff.md'],
+      requiredSections: [
+        ...baseConfig.requiredSections,
+        { match: 'docs/handoff.md', headings: HANDOFF_HEADINGS },
+      ],
+    }),
+    'docs/agent-index.txt': `${baseFiles()['docs/agent-index.txt'].trimEnd()}\ndocs/handoff.md  Handoff\n`,
+    'AGENTS.md': `${baseFiles()['AGENTS.md']}\n[Handoff](docs/handoff.md)\n`,
+    ...overrides,
+  });
+}
+
+describe('handoff contract resolver', () => {
+  it('VT-04 resolves each contract kind and rejects a missing script', () => {
+    const fsView = {
+      exists: (path) =>
+        path === 'Dockerfile' || path === 'quality/quality-manifest.json',
+    };
+    const ctx = {
+      fsView,
+      scripts: { setup: 'x' },
+      envKeys: new Set(['NODE_ENV']),
+      openApi: { paths: { '/health/live': { get: {} } } },
+    };
+    expect(
+      resolveHandoffContract({ kind: 'script', identifier: 'setup', ...ctx })
+    ).toBe(true);
+    expect(
+      resolveHandoffContract({
+        kind: 'script',
+        identifier: 'no-such-script',
+        ...ctx,
+      })
+    ).toBe(false);
+    expect(
+      resolveHandoffContract({
+        kind: 'manifest',
+        identifier: 'quality/quality-manifest.json',
+        ...ctx,
+      })
+    ).toBe(true);
+    expect(
+      resolveHandoffContract({
+        kind: 'container',
+        identifier: 'Dockerfile',
+        ...ctx,
+      })
+    ).toBe(true);
+    expect(
+      resolveHandoffContract({ kind: 'env', identifier: 'NODE_ENV', ...ctx })
+    ).toBe(true);
+    const parsed = parseEndpointIdentifier('GET /health/live');
+    expect(parsed).toEqual({ method: 'GET', path: '/health/live' });
+    expect(openApiHasOperation(ctx.openApi, parsed.method, parsed.path)).toBe(
+      true
+    );
+  });
+
+  it('readEnvExampleKeys ignores comments and blank lines', () => {
+    const keys = readEnvExampleKeys(
+      '# comment\n\nPORT=1\nAUTH_MODE=development\n'
+    );
+    expect(keys).toEqual(new Set(['PORT', 'AUTH_MODE']));
+  });
+});
+
+describe('docs:check handoff fixtures', () => {
+  it('VT-01 VT-04 VT-07 VT-08 VT-09 a minimal handoff fixture exits 0', () => {
+    const run = cli(minimalHandoffFixture());
+    expect(run.status).toBe(0);
+    expect(findingLines(run)).toEqual([]);
+  });
+
+  it('VT-05 PBI-040 (b): a stale script identifier is reported', () => {
+    const root = minimalHandoffFixture();
+    const handoff = readFileSync(
+      path.join(root, HANDOFF_DOCUMENT),
+      'utf8'
+    ).replace('| script | setup |', '| script | no-such-script |');
+    writeFileSync(path.join(root, HANDOFF_DOCUMENT), handoff);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^handoff-contract docs\/handoff\.md:\d+ no-such-script$/
+        ),
+      ])
+    );
+  });
+
+  it('VT-06 PBI-040 (d): empty and invalid owners are reported', () => {
+    const root = minimalHandoffFixture();
+    let handoff = readFileSync(path.join(root, HANDOFF_DOCUMENT), 'utf8');
+    handoff = handoff.replace(
+      '| AWS infrastructure | Platform Engineering |',
+      '| AWS infrastructure |  |'
+    );
+    handoff = handoff.replace(
+      '| CI/CD pipelines | Platform Engineering |',
+      '| CI/CD pipelines | Someone |'
+    );
+    writeFileSync(path.join(root, HANDOFF_DOCUMENT), handoff);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    const lines = findingLines(run).filter((line) =>
+      line.startsWith('handoff-owner')
+    );
+    expect(lines.length).toBe(2);
+  });
+
+  it('VT-10 PBI-041 (b): a missing extension-point file is reported', () => {
+    const root = minimalHandoffFixture();
+    const handoff = readFileSync(
+      path.join(root, HANDOFF_DOCUMENT),
+      'utf8'
+    ).replace(
+      '`apps/api/src/identity/adapter.ts`',
+      '`apps/api/src/identity/missing.ts`'
+    );
+    writeFileSync(path.join(root, HANDOFF_DOCUMENT), handoff);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^handoff-extension docs\/handoff\.md:\d+/),
+      ])
+    );
+  });
+
+  it('VT-11 PBI-041 (d): an empty extension point is reported', () => {
+    const root = minimalHandoffFixture();
+    const handoff = readFileSync(
+      path.join(root, HANDOFF_DOCUMENT),
+      'utf8'
+    ).replace(
+      '| RBAC | `apps/api/src/identity/authMiddleware.ts` |',
+      '| RBAC |  |'
+    );
+    writeFileSync(path.join(root, HANDOFF_DOCUMENT), handoff);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^handoff-register docs\/handoff\.md:\d+ RBAC$/),
+      ])
+    );
+  });
+
+  it('VT-12 PBI-040 security NFR: a disallowed absolute host is reported', () => {
+    const root = minimalHandoffFixture();
+    const handoff = readFileSync(
+      path.join(root, HANDOFF_DOCUMENT),
+      'utf8'
+    ).replace('Bullets.', 'See https://git.internal.corp/x for nothing.');
+    writeFileSync(path.join(root, HANDOFF_DOCUMENT), handoff);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^handoff-url docs\/handoff\.md:\d+ git\.internal\.corp$/
+        ),
+      ])
+    );
+  });
+
+  it('VT-14 PBI-040 (b): a missing required heading is reported', () => {
+    const root = minimalHandoffFixture();
+    const handoff = readFileSync(
+      path.join(root, HANDOFF_DOCUMENT),
+      'utf8'
+    ).replace('## Ownership', '## Owns');
+    writeFileSync(path.join(root, HANDOFF_DOCUMENT), handoff);
+    const run = cli(root);
+    expect(run.status).toBe(1);
+    expect(findingLines(run)).toEqual(
+      expect.arrayContaining(['missing-section docs/handoff.md Ownership'])
+    );
+  });
+});
+
+describe('committed handoff document', () => {
+  it('VT-02 VT-03 VT-04 VT-07 VT-08 VT-09 the real handoff matches README placeholders and passes docs:check', () => {
+    const config = loadConfig(templateRoot);
+    const result = checkDocs({ root: templateRoot, config });
+    expect(result.findings).toEqual([]);
+    const handoff = readFileSync(
+      path.join(templateRoot, HANDOFF_DOCUMENT),
+      'utf8'
+    );
+    const readme = readFileSync(path.join(templateRoot, 'README.md'), 'utf8');
+    for (const token of [
+      'project-name',
+      '@project-scope',
+      'project-service',
+      'project_db',
+    ]) {
+      expect(handoff).toContain(token);
+      expect(readme).toContain(token);
+    }
+    for (const area of [
+      'AWS infrastructure',
+      'CI/CD pipelines',
+      'Migration execution',
+      'Deployment packaging',
+      'Repository governance',
+    ]) {
+      expect(handoff).toContain(area);
+    }
+    for (const decision of [
+      'Production identity provider',
+      'RBAC',
+      'Data classification',
+      'NFR targets and test execution policy',
+      'Feature-flag provider',
+    ]) {
+      expect(handoff).toContain(decision);
+    }
+    expect(handoff).toMatch(
+      /synthetic fixtures and identity redaction.*engineering practice, not a data classification/i
+    );
+    expect(handoff).not.toMatch(/classified as/i);
   });
 });
