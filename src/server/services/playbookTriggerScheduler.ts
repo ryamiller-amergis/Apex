@@ -8,6 +8,7 @@ import { playbookTriggerReceipts, playbookTriggerSubscriptions } from '../db/sch
 import {
   dispatchPlaybookTrigger,
   latestScheduleInstant,
+  pendingReceiptIsStale,
   storedPlaybookTriggerDispatch,
 } from './playbookTriggerDispatchService';
 import { renderPlaybookDedupeKey } from '../../shared/utils/playbookTriggerMapping';
@@ -45,10 +46,11 @@ export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
     }
 
     const retries = await db.select().from(playbookTriggerReceipts).where(
-      eq(playbookTriggerReceipts.status, 'retryable'),
+      inArray(playbookTriggerReceipts.status, ['retryable', 'pending']),
     );
     for (const receipt of retries) {
-      if (receipt.nextRetryAt && Date.parse(receipt.nextRetryAt) > now.getTime()) continue;
+      if (receipt.status === 'pending' && !pendingReceiptIsStale(receipt.updatedAt, now.getTime())) continue;
+      if (receipt.status === 'retryable' && receipt.nextRetryAt && Date.parse(receipt.nextRetryAt) > now.getTime()) continue;
       const payload = (receipt.payload ?? {}) as Record<string, unknown>;
       const stored = storedPlaybookTriggerDispatch(payload, receipt.source);
       await dispatchPlaybookTrigger({

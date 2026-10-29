@@ -175,14 +175,20 @@ export async function dispatchPlaybookTrigger(input: {
       eq(playbookTriggerReceipts.subscriptionId, subscription.id),
       eq(playbookTriggerReceipts.idempotencyKey, input.idempotencyKey),
     ));
-    if (!existing || existing.status !== 'retryable') {
+    const stalePending = existing?.status === 'pending' && pendingReceiptIsStale(existing.updatedAt);
+    if (!existing || (existing.status !== 'retryable' && !stalePending)) {
       recordPlaybookTriggerEvent('duplicate', {
         subscriptionId: subscription.id,
         idempotencyKey: input.idempotencyKey,
       });
       return { status: existing?.status ?? 'started', runId: existing?.runId ?? null, definitionVersionId: null, duplicate: true };
     }
-    if (existing.nextRetryAt && Date.parse(existing.nextRetryAt) > Date.now() && input.source !== 'replay') {
+    if (
+      existing.status === 'retryable'
+      && existing.nextRetryAt
+      && Date.parse(existing.nextRetryAt) > Date.now()
+      && input.source !== 'replay'
+    ) {
       return { status: 'retryable', runId: null, definitionVersionId: null, duplicate: true };
     }
     const claimed = await db.update(playbookTriggerReceipts).set({
@@ -190,7 +196,7 @@ export async function dispatchPlaybookTrigger(input: {
       updatedAt: new Date().toISOString(),
     }).where(and(
       eq(playbookTriggerReceipts.id, existing.id),
-      eq(playbookTriggerReceipts.status, 'retryable'),
+      eq(playbookTriggerReceipts.status, existing.status),
     )).returning({ id: playbookTriggerReceipts.id });
     if (!claimed[0]) {
       recordPlaybookTriggerEvent('duplicate', {
@@ -274,6 +280,14 @@ export async function dispatchPlaybookTrigger(input: {
     });
     return { status: dead ? 'dead_letter' : 'retryable', runId: null, definitionVersionId: null, duplicate: false };
   }
+}
+
+/** A pending receipt older than this is a crashed dispatch, not one still in flight. */
+export const STALE_PENDING_RECEIPT_MS = 2 * 60 * 1000;
+
+export function pendingReceiptIsStale(updatedAt: string, now = Date.now()): boolean {
+  const at = Date.parse(updatedAt);
+  return Number.isFinite(at) && now - at >= STALE_PENDING_RECEIPT_MS;
 }
 
 const ADO_WORK_ITEM_FIELDS = ['workItemId', 'workItemType', 'title', 'state'] as const;

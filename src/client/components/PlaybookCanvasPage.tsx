@@ -204,8 +204,9 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
   }, []);
 
   /**
-   * Adds suggested steps after the selected step, or after the rightmost step that leads nowhere,
-   * connected in order. Branch steps route by condition, so nothing is wired out of one.
+   * Adds suggested steps after the end of the selected step's line, or after the rightmost step
+   * that leads nowhere. A step that already has a successor is not given a second outbound edge.
+   * Branch steps route by condition, so nothing is wired out of one.
    */
   const applySuggestions = (suggestions: PlaybookStepSuggestion[]) => {
     if (!canAuthor || !suggestions.length) return;
@@ -213,13 +214,25 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     const leaves = graph.nodes.filter((node) => !graph.edges.some((edge) => edge.from === node.id));
     const anchor = graph.nodes.find((node) => node.id === selectedNodeId)
       ?? [...leaves].sort((a, b) => (positions[b.id]?.x ?? 0) - (positions[a.id]?.x ?? 0))[0];
-    const start = anchor && positions[anchor.id]
-      ? { x: positions[anchor.id].x + NEW_STEP_OFFSET_X, y: positions[anchor.id].y }
+    let end = anchor;
+    const seen = new Set<string>();
+    while (end && !seen.has(end.id)) {
+      seen.add(end.id);
+      const outbound = graph.edges.filter((edge) => edge.from === end.id);
+      if (end.parallel || end.stepType === 'branch' || outbound.length !== 1) break;
+      end = graph.nodes.find((node) => node.id === outbound[0].to) ?? end;
+    }
+    const canExtend = Boolean(
+      end && !end.parallel && end.stepType !== 'branch' && graph.edges.every((edge) => edge.from !== end.id),
+    );
+    const placedAt = canExtend && end ? end : anchor;
+    const start = placedAt && positions[placedAt.id]
+      ? { x: positions[placedAt.id].x + NEW_STEP_OFFSET_X, y: positions[placedAt.id].y }
       : { x: 80, y: 160 };
     const nodes: PlaybookGraph['nodes'] = [];
     const edges: PlaybookGraph['edges'] = [];
     const placed: PlaybookLayoutPositions = {};
-    let previous = anchor && anchor.stepType !== 'branch' ? anchor.id : null;
+    let previous = canExtend && end ? end.id : null;
     suggestions.forEach((suggestion, index) => {
       const id = newPlaybookNodeId(suggestion.stepType, [...ids, ...nodes.map((node) => node.id)]);
       nodes.push({

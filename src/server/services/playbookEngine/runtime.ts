@@ -315,32 +315,21 @@ function sharedJoinId(
 }
 
 /**
- * The linear steps a foreach or until repeats. A join, or a node with several inbound edges,
- * ends the body and stays outside the loop.
+ * The one step a foreach or until repeats. The step after it runs once, so a loop does not need a
+ * join in order to continue.
  */
 function linearLoopBody(
   graph: PlaybookGraph,
   startId: string
 ): { body: PlaybookGraphNode[]; after: PlaybookGraphNode | undefined } | null {
-  const body: PlaybookGraphNode[] = [];
-  let current = graph.nodes.find((node) => node.id === startId);
-  const seen = new Set<string>();
-  while (current && !seen.has(current.id)) {
-    const step = current;
-    if (step.stepType === 'join') return { body, after: step };
-    const inbound = graph.edges.filter((edge) => edge.to === step.id);
-    if (body.length > 0 && inbound.length > 1) return { body, after: step };
-    const outbound = graph.edges.filter((edge) => edge.from === step.id);
-    if (outbound.length > 1) return null;
-    body.push(step);
-    seen.add(step.id);
-    const next = outbound[0]
-      ? graph.nodes.find((node) => node.id === outbound[0].to)
-      : undefined;
-    if (!next) return { body, after: undefined };
-    current = next;
-  }
-  return { body, after: undefined };
+  const start = graph.nodes.find((node) => node.id === startId);
+  if (!start || start.stepType === 'join') return null;
+  const outbound = graph.edges.filter((edge) => edge.from === start.id);
+  if (outbound.length > 1) return null;
+  const next = outbound[0]
+    ? graph.nodes.find((node) => node.id === outbound[0].to)
+    : undefined;
+  return { body: [start], after: next };
 }
 
 function unrolledLoop(
@@ -369,10 +358,7 @@ function engineUntilConfig(
 ): Record<string, unknown> {
   const config = { ...(node.config ?? {}) };
   if (node.stepType !== 'until' || !unrolledLoop(graph, node)) return config;
-  const { index } = iterationIndex(engineStepId);
-  const configured = staticMaxIterations(node);
-  const cap = Math.min(configured, PLAYBOOK_GUARD_LIMITS.maxStepsPerRun);
-  config.iteration = index >= cap ? configured : index;
+  config.iteration = iterationIndex(engineStepId).index;
   return config;
 }
 
@@ -395,8 +381,12 @@ function chainWorkflow(
   while (node && !visited.has(node.id)) {
     if (stopBefore && node.id === stopBefore) return workflow;
     const current = node;
+    const loop = unrolledLoop(graph, current);
     visited.add(current.id);
-    workflow = workflow.then(stepById.get(current.id));
+    // An until check reads the body, so it runs after each pass rather than before the first one.
+    if (!(loop && current.stepType === 'until')) {
+      workflow = workflow.then(stepById.get(current.id));
+    }
     const outbound = graph.edges.filter((edge) => edge.from === current.id);
     if (current.parallel && outbound.length > 1) {
       const arms = outbound.map((edge) =>
@@ -476,7 +466,6 @@ function chainWorkflow(
         })
       );
     }
-    const loop = unrolledLoop(graph, current);
     if (loop) {
       for (let index = 0; index < loop.cap; index += 1) {
         for (const step of loop.body) {

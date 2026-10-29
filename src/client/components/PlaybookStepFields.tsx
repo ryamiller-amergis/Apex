@@ -379,9 +379,15 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
     },
     { value: 'manual', label: 'A specific work item', description: 'Always the same work item id' },
   ];
-  const mode = value === undefined
+  const inferredMode = value === undefined
     ? (allowAutomatic ? 'auto' : undefined)
     : typeof value === 'number' ? 'manual' : String(value);
+  const [mode, setMode] = useState<string | undefined>(inferredMode);
+  const [modeNodeId, setModeNodeId] = useState(node.id);
+  if (modeNodeId !== node.id) {
+    setModeNodeId(node.id);
+    setMode(inferredMode);
+  }
   const [manualText, setManualText] = useState(typeof value === 'number' ? String(value) : '');
   return (
     <>
@@ -393,9 +399,12 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
         icon={<Ticket size={14} />}
         disabled={disabled}
         onChange={(next) => {
+          setMode(next);
           if (next === 'auto' || next === undefined) onValue(undefined);
-          else if (next === 'manual') onValue(Number(manualText) > 0 ? Number(manualText) : 0);
-          else onValue(next);
+          else if (next === 'manual') {
+            const parsed = Number(manualText);
+            onValue(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined);
+          } else onValue(next);
         }}
         {...{ 'data-testid': "playbook-inspector-field-workItemId" }}
       />
@@ -410,7 +419,7 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
           onChange={(event) => {
             setManualText(event.target.value);
             const parsed = Number(event.target.value);
-            onValue(Number.isInteger(parsed) && parsed > 0 ? parsed : 0);
+            onValue(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined);
           }}
           {...{ 'data-testid': "playbook-inspector-field-workItemId-manual" }}
         />

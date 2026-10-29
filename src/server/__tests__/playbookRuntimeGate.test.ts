@@ -42,7 +42,7 @@ import {
   retryStepRunOnEngine,
   translate,
 } from '../services/playbookEngine/runtime';
-import { owningLoop } from '../services/playbookLoopCursor';
+import { owningLoop, preferredStepOutputs } from '../services/playbookLoopCursor';
 
 const context = {
   runId: 'run-1',
@@ -374,5 +374,49 @@ describe('loop translation repeats the body', () => {
   it('finds the foreach that owns a body step', () => {
     expect(owningLoop(looped, 'work#1')).toEqual({ loopId: 'loop', kind: 'foreach', index: 1 });
     expect(owningLoop(looped, 'after')).toBeNull();
+  });
+
+  it('repeats only the next step and runs the step after it once', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'loop', stepType: 'foreach', config: { items: ['a', 'b'], maxIterations: 2 } },
+        { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+        { id: 'after', stepType: 'notify', config: { title: 'After' } },
+      ],
+      edges: [
+        { from: 'loop', to: 'work' },
+        { from: 'work', to: 'after' },
+      ],
+    };
+    expect(translatedSteps(graph).map((step) => step.id)).toEqual(['loop', 'work', 'work#1', 'after']);
+    expect(owningLoop(graph, 'after')).toBeNull();
+  });
+
+  it('runs an until check after each body pass and stops at the cap', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'again', stepType: 'until', config: { done: false, iteration: 0, maxIterations: 2 } },
+        { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+        { id: 'after', stepType: 'notify', config: { title: 'After' } },
+      ],
+      edges: [
+        { from: 'again', to: 'work' },
+        { from: 'work', to: 'after' },
+      ],
+    };
+    expect(translatedSteps(graph).map((step) => step.id)).toEqual([
+      'work',
+      'again#1',
+      'work#1',
+      'again#2',
+      'after',
+    ]);
+  });
+
+  it('lets a later iteration output stand in for the base step id', () => {
+    expect(preferredStepOutputs([
+      { stepId: 'work', output: { reportMd: 'first' } },
+      { stepId: 'work#1', output: { reportMd: 'second' } },
+    ]).work).toEqual({ reportMd: 'second' });
   });
 });

@@ -1,7 +1,7 @@
 import { getStepTypeDescriptor } from '../services/playbookSteps/registry';
 import { assertGraphWithinGuards } from '../services/playbookGuardService';
 import { resolvePlaybookBindings } from '../services/playbookBindingResolver';
-import { evaluateJoin, assertForeachWithinCap } from '../services/playbookJoinPolicy';
+import { evaluateJoin, assertForeachWithinCap, assertUntilWithinCap } from '../services/playbookJoinPolicy';
 import {
   acceptPlaybookRecommendation,
   parsePlaybookRecommendation,
@@ -81,6 +81,11 @@ describe('playbook part 2', () => {
   it('stops foreach above maxIterations', () => {
     expect(() => assertForeachWithinCap(4, 3)).toThrow(/maxIterations 3/);
     expect(() => assertForeachWithinCap(3, 3)).not.toThrow();
+  });
+
+  it('stops an until at its cap and fails only past it', () => {
+    expect(() => assertUntilWithinCap(3, 3, false)).not.toThrow();
+    expect(() => assertUntilWithinCap(4, 3, false)).toThrow(/maxIterations 3/);
   });
 
   it('does not apply an unknown recommender step type', () => {

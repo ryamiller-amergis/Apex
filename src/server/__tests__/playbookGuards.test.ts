@@ -325,6 +325,28 @@ describe('Part 1 node contracts — explicit cross-step bindings', () => {
     }
   });
 
+  it('lets an until read the step it repeats', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        {
+          id: 'again',
+          stepType: 'until',
+          config: { done: '${steps.work.reportMd}', iteration: 0, maxIterations: 3 },
+        },
+        node('work', 'cursor-agent'),
+        node('after', 'notify'),
+      ],
+      edges: [
+        { from: 'again', to: 'work' },
+        { from: 'work', to: 'after' },
+      ],
+    };
+    expect(() => assertBindingsResolvable(graph)).not.toThrow();
+
+    graph.nodes[0].config = { done: '${steps.after.title}', iteration: 0, maxIterations: 3 };
+    expect(() => assertBindingsResolvable(graph)).toThrow(PlaybookGraphBindingError);
+  });
+
   it('refuses a published node contract newer than the registered adapter', () => {
     const graph: PlaybookGraph = {
       nodes: [{

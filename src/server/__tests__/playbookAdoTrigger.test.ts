@@ -3,7 +3,12 @@ import {
   adoWorkItemCreatedReceipt,
   readAdoWorkItemTypeFilter,
 } from '../services/playbookWebhookService';
-import { storedPlaybookTriggerDispatch, withAdoWorkItemRunInput } from '../services/playbookTriggerDispatchService';
+import {
+  pendingReceiptIsStale,
+  STALE_PENDING_RECEIPT_MS,
+  storedPlaybookTriggerDispatch,
+  withAdoWorkItemRunInput,
+} from '../services/playbookTriggerDispatchService';
 
 function created(type: string, id = 4821): Record<string, unknown> {
   return {
@@ -84,6 +89,12 @@ describe('Azure DevOps work item trigger', () => {
     expect(adoServiceHookAuthorized(secret, basic, undefined)).toBe(true);
     expect(adoServiceHookAuthorized(secret, undefined, secret)).toBe(true);
     expect(adoServiceHookAuthorized(secret, `Basic ${Buffer.from('apex:nope').toString('base64')}`, undefined)).toBe(false);
+  });
+
+  it('treats a pending receipt as reclaimable only after the in-flight window', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    expect(pendingReceiptIsStale(new Date(now - 1_000).toISOString(), now)).toBe(false);
+    expect(pendingReceiptIsStale(new Date(now - STALE_PENDING_RECEIPT_MS).toISOString(), now)).toBe(true);
   });
 
   it('reads the saved work item type', () => {

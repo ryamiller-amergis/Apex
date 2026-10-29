@@ -273,7 +273,8 @@ const FOREACH_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({
 });
 
 const UNTIL_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({
-  done: z.boolean(),
+  // A binding lets the check read the body step, which runs before each check.
+  done: z.union([z.boolean(), BINDING_STRING]),
   iteration: z.number().int().nonnegative(),
 });
 

@@ -41,5 +41,6 @@ export function assertForeachWithinCap(itemCount: number, maxIterations: number)
 }
 
 export function assertUntilWithinCap(iteration: number, maxIterations: number, done: boolean): void {
-  if (!done && iteration >= maxIterations) throw new PlaybookIterationCapError('until', maxIterations);
+  // Reaching the cap stops the loop. Only a count past the cap is an error.
+  if (!done && iteration > maxIterations) throw new PlaybookIterationCapError('until', maxIterations);
 }

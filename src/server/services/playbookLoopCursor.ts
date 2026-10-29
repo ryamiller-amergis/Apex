@@ -35,6 +35,8 @@ export function owningLoop(
     if (!previous || previous.stepType === 'join' || previous.parallel)
       return null;
     if (previous.stepType === 'foreach' || previous.stepType === 'until') {
+      const outbound = graph.edges.filter((edge) => edge.from === previous.id);
+      if (outbound.length !== 1 || outbound[0].to !== baseId) return null;
       return { loopId: previous.id, kind: previous.stepType, index };
     }
     cursor = previous.id;
@@ -60,6 +62,24 @@ async function readStepOutput(
   return row.output as Record<string, unknown>;
 }
 
+/** Latest iteration wins the base step id, so `${steps.work.field}` reads the current pass. */
+export function preferredStepOutputs(
+  rows: ReadonlyArray<{ stepId: string; output: Record<string, unknown> }>,
+): Record<string, Record<string, unknown>> {
+  const steps: Record<string, Record<string, unknown>> = {};
+  const latest = new Map<string, number>();
+  for (const row of rows) {
+    steps[row.stepId] = row.output;
+    const { baseId, index } = iterationIndex(row.stepId);
+    const known = latest.get(baseId);
+    if (known === undefined || index >= known) {
+      latest.set(baseId, index);
+      steps[baseId] = row.output;
+    }
+  }
+  return steps;
+}
+
 /**
  * True when this iteration is past the list, or a previous until already stopped.
  * The loop step itself always runs so it can record that decision.
@@ -74,7 +94,8 @@ export async function loopStepShouldSkip(
   if (node.stepType === 'until' && index > 0) {
     const previousId = index === 1 ? node.id : `${node.id}#${index - 1}`;
     const output = await readStepOutput(runId, previousId);
-    return output?.continue !== true;
+    if (!output) return false;
+    return output.continue !== true;
   }
   if (node.stepType === 'foreach' || node.stepType === 'until') return false;
   const owner = owningLoop(graph, engineStepId);

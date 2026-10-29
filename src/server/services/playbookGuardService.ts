@@ -273,7 +273,10 @@ export function assertBindingsResolvable(
           `source step "${binding.stepId}" is absent`
         );
       }
-      if (source.id === target.id || !canReach(graph, source.id, target.id)) {
+      const untilReadsItsBody = target.stepType === 'until'
+        && graph.edges.filter((edge) => edge.from === target.id).length === 1
+        && graph.edges.some((edge) => edge.from === target.id && edge.to === source.id);
+      if (!untilReadsItsBody && (source.id === target.id || !canReach(graph, source.id, target.id))) {
         throw new PlaybookGraphBindingError(
           target.id,
           binding.placeholder,
