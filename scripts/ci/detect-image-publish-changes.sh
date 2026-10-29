@@ -3,6 +3,9 @@
 # Writes GitHub Actions outputs:
 #   load_test_runner, ai_runs_worker, ai_runs_interactive, ai_runs_documents_v2,
 #   ai_runs_visual, ai_orchestrator, repo_read_service  (true|false)
+#   <name>_tag  src-<hash> fingerprint of everything the image copies in, at
+#               HEAD_SHA. Dev deploys use it as IMAGE_TAG so an image whose
+#               inputs are unchanged is reused from ACR instead of rebuilt.
 #
 # Required env:
 #   BASE_SHA
@@ -15,9 +18,19 @@ set -euo pipefail
 : "${HEAD_SHA:?HEAD_SHA is required}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
 
+# Every image copies package*.json plus all of dist/server and dist/shared
+# (built by tsconfig.server.json). The change trigger for some images is
+# narrower, but the reuse fingerprint must cover every image input or a
+# rebased branch can reuse an image built from older shared code.
+IMAGE_COMMON_INPUTS=(src/server/ src/shared/ package.json package-lock.json tsconfig.server.json)
+
+# detect <name> <runner dir> <publish script> [trigger paths...]
 detect() {
   local name="$1"
   shift
+  local digest
+  digest="$(git ls-tree -r "$HEAD_SHA" -- "$1" "$2" "${IMAGE_COMMON_INPUTS[@]}" | sha256sum | cut -c1-16)"
+  echo "${name}_tag=src-${digest}" >> "$GITHUB_OUTPUT"
   if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- "$@"; then
     echo "${name}=false" >> "$GITHUB_OUTPUT"
     echo "${name}: unchanged"
