@@ -173,8 +173,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return isSuperAdmin || can('work-board:view');
     }
     if (item.view === 'playbooks') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
-      return isSuperAdmin || can('playbooks:view');
+      return menuEnabledViews.includes('playbooks') && can('playbooks:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

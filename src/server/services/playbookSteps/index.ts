@@ -17,6 +17,10 @@ import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
 import { executeInterviewStep } from './interviewAdapter';
+import { executeApexActionStep } from './apexActionAdapter';
+import { executeCloudAgentStep } from './cloudAgentAdapter';
+import { executeJoinStep } from './joinAdapter';
+import { executeForeachStep, executeUntilStep } from './loopAdapters';
 import { getUserPermissions } from '../rbacService';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
@@ -36,6 +40,11 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   'ingest-artifact': executeIngestArtifactStep,
   branch: executeBranchStep,
   interview: executeInterviewStep,
+  'apex-action': executeApexActionStep,
+  'cloud-agent': executeCloudAgentStep,
+  join: executeJoinStep,
+  foreach: executeForeachStep,
+  until: executeUntilStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */

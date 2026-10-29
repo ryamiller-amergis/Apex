@@ -12,7 +12,6 @@ import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
 } from './playbookMcpCapabilityService';
-import { isAgentStepType } from './playbookSteps/registry';
 
 const RESOLVER_VERSION = 1;
 const CAPABILITY_LINE = /^playbook-capabilities:\s*\[([^\]]*)\]\s*$/m;
@@ -87,6 +86,9 @@ export function resolvePlaybookAgentRunPolicy(
   }
   const maximum = parsePlaybookSkillCapabilities(input.skillContent);
   const requested: PlaybookCapability[] = ['repository-read', 'network-read'];
+  // A Skill that names azure-cli is allowed to run Azure CLI in the worker shell.
+  // The shell stays closed for every other Skill.
+  if (maximum.includes('azure-cli')) requested.push('azure-cli');
   const excessive = requested.find((capability) => !maximum.includes(capability));
   if (excessive) {
     throw new PlaybookExecutionCapabilityError(
@@ -140,7 +142,8 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
 }): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
   const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = [];
   for (const node of input.graph.nodes) {
-    if (!isAgentStepType(node.stepType)) continue;
+    // Cloud-agent steps count toward the agent cap, but they do not load a repository Skill.
+    if (node.stepType !== 'cursor-agent') continue;
     const skillPath = typeof node.config?.skillPath === 'string' ? node.config.skillPath : '';
     const skillContent = await loadPlaybookSkillContent(skillPath);
     policies.push({

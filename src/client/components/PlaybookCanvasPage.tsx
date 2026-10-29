@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, FlaskConical, MousePointerClick, Rocket, Save, WandSparkles } from 'lucide-react';
+import { ArrowLeft, FlaskConical, MousePointerClick, Rocket, Save, Sparkles, WandSparkles } from 'lucide-react';
 import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -84,6 +84,10 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
   const [layoutDirty, setLayoutDirty] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [dryRunOpen, setDryRunOpen] = useState(false);
+  const [recommendOpen, setRecommendOpen] = useState(false);
+  const [recommendGoal, setRecommendGoal] = useState('');
+  const [recommendResult, setRecommendResult] = useState<string | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<Record<string, unknown> | null>(null);
   const [usage, setUsage] = useState<Record<string, number>>(readUsage);
   const [libraryCollapsed, setLibraryCollapsed] = useState(
     () => window.localStorage.getItem(LIBRARY_STORAGE_KEY) === 'true',
@@ -175,6 +179,54 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     setPositions(next);
     setLayoutDirty(true);
   }, []);
+
+  const askForStep = async () => {
+    setRecommendResult(null);
+    setPendingSuggestion(null);
+    const response = await fetch(
+      `/api/playbooks/definitions/${encodeURIComponent(definitionId)}/recommend?project=${encodeURIComponent(project)}`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, goal: recommendGoal }),
+      },
+    );
+    const body = await response.json() as { kind?: string; reason?: string; error?: string };
+    if (!response.ok) {
+      setRecommendResult(body.error ?? 'The suggestion could not be made.');
+      return;
+    }
+    setRecommendResult(body.reason ?? null);
+    if (body.kind === 'suggestion') setPendingSuggestion(body as Record<string, unknown>);
+  };
+
+  const acceptSuggestion = async () => {
+    const expectedDraftUpdatedAt = detail.data?.draft.updatedAt;
+    if (!pendingSuggestion || !expectedDraftUpdatedAt) return;
+    const response = await fetch(
+      `/api/playbooks/definitions/${encodeURIComponent(definitionId)}/recommend/accept?project=${encodeURIComponent(project)}`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project,
+          expectedDraftUpdatedAt,
+          suggestion: pendingSuggestion,
+        }),
+      },
+    );
+    const body = await response.json() as { error?: string; draft?: { graph?: PlaybookGraph; updatedAt?: string } };
+    if (!response.ok || !body.draft?.graph) {
+      setRecommendResult(body.error ?? 'The suggestion was not added.');
+      return;
+    }
+    setGraph(body.draft.graph);
+    if (body.draft.updatedAt) savedRevision.current = body.draft.updatedAt;
+    setPendingSuggestion(null);
+    setRecommendResult('Added to the draft.');
+  };
 
   const addStep = (stepType: string) => {
     if (!canAuthor) return;
@@ -330,6 +382,14 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
             <button
               type="button"
               className={styles.ghostButton}
+              onClick={() => setRecommendOpen((open) => !open)}
+              {...{ 'data-testid': 'playbook-canvas-recommend' }}
+            >
+              <Sparkles size={15} aria-hidden /> Suggest a step
+            </button>
+            <button
+              type="button"
+              className={styles.ghostButton}
               onClick={() => void onTidy()}
               title="Arrange steps automatically"
               {...{ 'data-testid': 'playbook-canvas-tidy' }}
@@ -368,6 +428,32 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
           </div>
         ) : null}
       </header>
+
+      {recommendOpen && canAuthor ? (
+        <form
+          data-testid="playbook-recommend-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void askForStep();
+          }}
+        >
+          <label>
+            Goal
+            <input
+              value={recommendGoal}
+              onChange={(event) => setRecommendGoal(event.target.value)}
+              data-testid="playbook-recommend-goal"
+            />
+          </label>
+          <button type="submit" data-testid="playbook-recommend-suggest">Suggest</button>
+          {pendingSuggestion ? (
+            <button type="button" onClick={() => void acceptSuggestion()} data-testid="playbook-recommend-accept">
+              Add to draft
+            </button>
+          ) : null}
+          {recommendResult ? <p>{recommendResult}</p> : null}
+        </form>
+      ) : null}
 
       <div className={styles.body}>
         {canAuthor ? (

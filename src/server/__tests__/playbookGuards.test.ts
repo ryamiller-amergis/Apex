@@ -406,6 +406,47 @@ describe('FEAT-008 VT-10..VT-14 (TBI-034) — a leaves-apex step needs a gate on
     expect(() => assertGraphWithinGuards(voluntarilyGated)).not.toThrow();
   });
 
+  it('permits a gate several steps upstream, as long as every path crosses it', () => {
+    // The self-healing shape: one approval covers both the step that files the work item and the
+    // cloud-agent step that follows it, because nothing between the gate and the cloud agent can
+    // act without that approval already having been given.
+    const graph: PlaybookGraph = {
+      nodes: [node('gate', 'approval-gate'), node('create', 'notify'), node('agent', 'cursor-agent')],
+      edges: [
+        { from: 'gate', to: 'create' },
+        { from: 'create', to: 'agent' },
+      ],
+    };
+
+    expect(findUngatedLeavesApexSteps(graph)).toEqual([]);
+  });
+
+  it('refuses an upstream gate on a join when the join also has an ungated arm', () => {
+    // The only legal way to converge two paths onto the same node is a join, so this is where a
+    // "one gated arm, one bypass arm" refusal actually arises once an upstream gate is allowed.
+    const graph: PlaybookGraph = {
+      nodes: [
+        node('gate', 'approval-gate'),
+        node('gated-arm', 'notify'),
+        node('bypass-arm', 'notify'),
+        {
+          id: 'joiner',
+          stepType: 'join',
+          config: { predecessors: ['gated-arm', 'bypass-arm'], policy: 'all' },
+        },
+        node('agent', 'cursor-agent'),
+      ],
+      edges: [
+        { from: 'gate', to: 'gated-arm' },
+        { from: 'gated-arm', to: 'joiner' },
+        { from: 'bypass-arm', to: 'joiner' },
+        { from: 'joiner', to: 'agent' },
+      ],
+    };
+
+    expect(findUngatedLeavesApexSteps(graph)).toEqual(['agent']);
+  });
+
   it('VT-14 (TBI-034 b): refuses a leaves-apex step reached by one gated and one bypass path', () => {
     const graph: PlaybookGraph = {
       nodes: [node('gate', 'approval-gate'), node('bypass', 'notify'), node('agent', 'cursor-agent')],

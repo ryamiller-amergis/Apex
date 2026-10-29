@@ -381,42 +381,15 @@ describe('AdminRoles — permissions modal', () => {
     });
   });
 
-  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-19 warns before save without selecting run', () => {
+  it('does not offer Playbook permission keys for role assignment', () => {
     render(<AdminRoles />);
     fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
 
-    fireEvent.click(screen.getByTestId('playbook-permission-playbooks-author'));
-
-    expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
-      'aria-live',
-      'polite',
-    );
-    expect(screen.getByTestId('playbook-permission-playbooks-run')).not.toBeChecked();
-    expect(screen.getByTestId('role-permissions-save')).toBeEnabled();
-  });
-
-  it('PBI-008 AC-0 / TBI-037 DoD-0 / VT-19 announces the saved warning and waits for acknowledgement', async () => {
-    const mutateAsync = jest.fn().mockResolvedValue(undefined);
-    (useUpdateRolePermissions as jest.Mock).mockReturnValue({
-      mutateAsync,
-      isPending: false,
-      error: null,
-    });
-
-    render(<AdminRoles />);
-    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
-    fireEvent.click(screen.getByTestId('playbook-permission-playbooks-author'));
-    fireEvent.click(screen.getByTestId('role-permissions-save'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
-        'role',
-        'alert',
-      );
-    });
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('role-permissions-warning-acknowledge'));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByText('playbooks:view')).not.toBeInTheDocument();
+    expect(screen.queryByText('playbooks:run')).not.toBeInTheDocument();
+    expect(screen.queryByText('playbooks:author')).not.toBeInTheDocument();
+    expect(screen.queryByText('playbooks:admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('playbooks')).not.toBeInTheDocument();
   });
 
   it('TBI-004 VT-18 lists workflow-evaluation keys and saves their ids', async () => {
@@ -493,15 +466,6 @@ describe('AdminRoles — permissions modal', () => {
     expect(screen.queryByTestId('workflow-evaluation-submit-without-view-warning')).not.toBeInTheDocument();
   });
 
-  it('PBI-008 AC-0 exposes all Playbook keys with visible purpose text', () => {
-    render(<AdminRoles />);
-    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
-
-    for (const key of ['view', 'run', 'author', 'admin']) {
-      expect(screen.getByTestId(`playbook-permission-playbooks-${key}`)).toBeInTheDocument();
-    }
-    expect(screen.getByText(/does not authorize the run's step effects/i)).toBeVisible();
-  });
 });
 
 // ── Members modal ──────────────────────────────────────────────────────────────
@@ -570,7 +534,7 @@ describe('AdminRoles — members modal', () => {
     );
   });
 
-  it('PBI-008 AC-0 / TBI-037 DoD-0 shows the project assignment warning', () => {
+  it('does not warn about Playbook permissions when assigning a project role', () => {
     const mutate = jest.fn((_variables, options) => {
       options.onSuccess({ ok: true });
     });
@@ -591,10 +555,7 @@ describe('AdminRoles — members modal', () => {
     });
     fireEvent.click(screen.getByTestId('project-role-assign'));
 
-    expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
-      'role',
-      'alert',
-    );
+    expect(screen.queryByTestId('playbook-author-without-run-warning')).not.toBeInTheDocument();
   });
 
   it('TBI-004 shows the members-dialog warning when the role can submit without view', () => {

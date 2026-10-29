@@ -61,7 +61,7 @@ async function seedPublishedDefinition(name: string): Promise<string> {
         id: 'draft',
         stepType: 'cursor-agent',
         config: {
-          skillPath: registry.PHASE_0_ALLOWED_AGENT_SKILLS[0],
+          skillPath: '.cursor/skills/app-knowledge/SKILL.md',
           prompt: 'Summarise the design docs',
         },
       },

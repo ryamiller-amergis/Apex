@@ -64,6 +64,43 @@ export function countAgentSteps(graph: PlaybookGraph): number {
   return graph.nodes.filter((node) => isAgentStepType(node.stepType)).length;
 }
 
+function loopCap(node: PlaybookGraph['nodes'][number]): number {
+  const raw = node.config?.maxIterations;
+  const cap = typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : 1;
+  return cap;
+}
+
+/**
+ * Agent turns a published graph can reach, counting every parallel arm and every
+ * iteration a foreach or until step is allowed to run.
+ */
+export function worstCaseAgentSteps(graph: PlaybookGraph): number {
+  const multiplied = new Set<string>();
+  let total = 0;
+  for (const loop of graph.nodes) {
+    if (loop.stepType !== 'foreach' && loop.stepType !== 'until') continue;
+    const cap = loopCap(loop);
+    const pending = graph.edges.filter((edge) => edge.from === loop.id).map((edge) => edge.to);
+    const seen = new Set<string>([loop.id]);
+    while (pending.length > 0) {
+      const current = pending.shift()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const node = graph.nodes.find((candidate) => candidate.id === current);
+      if (!node || node.stepType === 'join') continue;
+      if (isAgentStepType(node.stepType)) {
+        total += cap;
+        multiplied.add(node.id);
+      }
+      pending.push(...graph.edges.filter((edge) => edge.from === node.id).map((edge) => edge.to));
+    }
+  }
+  for (const node of graph.nodes) {
+    if (isAgentStepType(node.stepType) && !multiplied.has(node.id)) total += 1;
+  }
+  return total;
+}
+
 /** The widest set of outbound edges from any single node. One means a linear graph. */
 export function maxFanOut(graph: PlaybookGraph): number {
   const outbound = new Map<string, number>();
@@ -194,16 +231,6 @@ function isApprovalGate(descriptor: PlaybookStepTypeDescriptor | undefined): boo
   return descriptor?.canSuspend === true && descriptor.suspendReason === 'approval_gate';
 }
 
-function inboundEdges(graph: PlaybookGraph): Map<string, string[]> {
-  const inbound = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    const existing = inbound.get(edge.to);
-    if (existing) existing.push(edge.from);
-    else inbound.set(edge.to, [edge.from]);
-  }
-  return inbound;
-}
-
 function canReach(graph: PlaybookGraph, from: string, to: string): boolean {
   const pending = [from];
   const seen = new Set<string>();
@@ -253,6 +280,34 @@ export function assertBindingsResolvable(
           `source step "${binding.stepId}" is not a prior step`
         );
       }
+      if (binding.armStepId) {
+        if (source.stepType !== 'join' || source.config?.policy !== 'all') {
+          throw new PlaybookGraphBindingError(
+            target.id,
+            binding.placeholder,
+            `arm "${binding.armStepId}" is only readable from a join that waits for every arm`
+          );
+        }
+        const predecessors = source.config?.predecessors;
+        const waited = Array.isArray(predecessors) && predecessors.includes(binding.armStepId);
+        const arm = nodes.get(binding.armStepId);
+        if (!waited || !arm || !canReach(graph, arm.id, source.id)) {
+          throw new PlaybookGraphBindingError(
+            target.id,
+            binding.placeholder,
+            `arm "${binding.armStepId}" is not an arm this join waits for`
+          );
+        }
+        const armDescriptor = lookup(arm.stepType);
+        if (!armDescriptor || !outputHasField(armDescriptor, binding.field)) {
+          throw new PlaybookGraphBindingError(
+            target.id,
+            binding.placeholder,
+            `field "${binding.field}" is not declared by arm "${binding.armStepId}"`
+          );
+        }
+        continue;
+      }
       const descriptor = lookup(source.stepType);
       if (!descriptor || !outputHasField(descriptor, binding.field)) {
         throw new PlaybookGraphBindingError(
@@ -266,35 +321,71 @@ export function assertBindingsResolvable(
 }
 
 /**
- * Whether this node reaches outside Apex with something other than a gate in front of it.
+ * Every node reachable from a start node (nothing points into it) without the path crossing an
+ * approval gate.
  *
- * Edges, not array order. A graph whose nodes read gate-then-agent but whose edge skips the gate is
- * precisely the arrangement an order-based check waves through, and the step it lets run is the one
- * kind Apex cannot undo. An empty inbound set counts as ungated for the same reason: nothing can
- * precede a first step, so a first step can never be the one that leaves.
+ * A leaves-apex node outside this set has an approval gate somewhere on every path that reaches
+ * it — not necessarily as the step immediately before it. `gate → create-item → cloud-agent`
+ * protects the cloud-agent step the same way `gate → cloud-agent` would, because nothing between
+ * the gate and the cloud agent can act on its own; the create step runs deterministically from
+ * what the gate already approved. Reaching a gate consumes it for this traversal: once a path
+ * crosses one, that path stops contributing to the exposed set, so anything downstream of a gate
+ * is exposed again only if some other path reaches it without crossing a gate at all — which is
+ * exactly the one-gated-one-bypass case this rule still has to refuse.
+ *
+ * An empty inbound set makes a node a start by definition, so a first step is always exposed —
+ * nothing can precede it for a gate to have been on.
  */
+function nodesExposedWithoutGate(
+  graph: PlaybookGraph,
+  stepTypeById: Map<string, string>,
+  lookup: PlaybookStepDescriptorLookup
+): Set<string> {
+  const outbound = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const existing = outbound.get(edge.from);
+    if (existing) existing.push(edge.to);
+    else outbound.set(edge.from, [edge.to]);
+  }
+  const inboundCount = new Map<string, number>();
+  for (const node of graph.nodes) inboundCount.set(node.id, 0);
+  for (const edge of graph.edges) {
+    inboundCount.set(edge.to, (inboundCount.get(edge.to) ?? 0) + 1);
+  }
+
+  const exposed = new Set<string>();
+  const queue = graph.nodes
+    .filter((node) => (inboundCount.get(node.id) ?? 0) === 0)
+    .map((node) => node.id);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (exposed.has(current)) continue;
+    exposed.add(current);
+    if (isApprovalGate(lookup(stepTypeById.get(current) ?? ''))) continue;
+    for (const next of outbound.get(current) ?? []) {
+      if (!exposed.has(next)) queue.push(next);
+    }
+  }
+  return exposed;
+}
+
+/** Whether this node reaches outside Apex and sits in the exposed set computed above. */
 function isUngatedLeavesApexNode(
   node: PlaybookGraphNode,
-  inbound: Map<string, string[]>,
-  stepTypeById: Map<string, string>,
+  exposed: Set<string>,
   lookup: PlaybookStepDescriptorLookup
 ): boolean {
   // A server-verified read-only cursor profile does not leave Apex, despite the conservative
   // descriptor classification used for legacy/unknown agent configurations.
   if (isReadOnlyCursorAgentNode(node)) return false;
   if (lookup(node.stepType)?.sideEffect !== 'leaves-apex') return false;
-
-  const predecessors = inbound.get(node.id) ?? [];
-  if (predecessors.length === 0) return true;
-
-  // Every path in, not merely one of them. A predecessor naming an unresolvable type is not a gate.
-  return predecessors.some(
-    (predecessorId) => !isApprovalGate(lookup(stepTypeById.get(predecessorId) ?? ''))
-  );
+  return exposed.has(node.id);
 }
 
 /**
- * Every `leaves-apex` node in this graph that is not gated on all of its inbound edges, per TBI-034.
+ * Every `leaves-apex` node in this graph not protected by an approval gate somewhere upstream of
+ * it, per TBI-034.
  *
  * Pure, synchronous and network-free: it reads the graph it is handed and the descriptors the
  * lookup returns, and nothing else. It neither rewrites the graph nor inserts the missing gate —
@@ -305,11 +396,11 @@ export function findUngatedLeavesApexSteps(
   graph: PlaybookGraph,
   lookup: PlaybookStepDescriptorLookup = registryLookup
 ): string[] {
-  const inbound = inboundEdges(graph);
   const stepTypeById = new Map(graph.nodes.map((node) => [node.id, node.stepType]));
+  const exposed = nodesExposedWithoutGate(graph, stepTypeById, lookup);
 
   return graph.nodes
-    .filter((node) => isUngatedLeavesApexNode(node, inbound, stepTypeById, lookup))
+    .filter((node) => isUngatedLeavesApexNode(node, exposed, lookup))
     .map((node) => node.id);
 }
 
@@ -317,9 +408,10 @@ function ungatedViolation(nodeIds: string[]): PlaybookGuardViolationError {
   const named = nodeIds.map((nodeId) => `"${nodeId}"`).join(', ');
   return new PlaybookGuardViolationError(
     'ungated-leaves-apex',
-    `${nodeIds.length === 1 ? 'Step' : 'Steps'} ${named} act outside Apex, so every step that can ` +
-      'reach them must be an approval gate. Add a gate immediately before each one; a step that ' +
-      'leaves Apex cannot be the first step, because nothing precedes it.'
+    `${nodeIds.length === 1 ? 'Step' : 'Steps'} ${named} act outside Apex, so every path that ` +
+      'reaches them must cross an approval gate first. Add a gate upstream of each one, or route ' +
+      'every path into it through an existing gate; a step that leaves Apex cannot be the first ' +
+      'step, because nothing precedes it.'
   );
 }
 
@@ -344,7 +436,8 @@ export function assertStepGateSatisfied(
   }
 
   const stepTypeById = new Map(graph.nodes.map((candidate) => [candidate.id, candidate.stepType]));
-  if (isUngatedLeavesApexNode(node, inboundEdges(graph), stepTypeById, lookup)) {
+  const exposed = nodesExposedWithoutGate(graph, stepTypeById, lookup);
+  if (isUngatedLeavesApexNode(node, exposed, lookup)) {
     throw ungatedViolation([node.id]);
   }
 }
@@ -419,14 +512,17 @@ function assertGraphTopologyGuards(graph: PlaybookGraph): void {
 
   const invalidFanOut = graph.nodes.find((node) => {
     const outbound = graph.edges.filter((edge) => edge.from === node.id);
+    if (node.parallel) return outbound.length < 2 || outbound.length > 8;
     return outbound.length > (isBranchStepType(node.stepType) ? 2 : maxFanOutWidth);
   });
   if (invalidFanOut) {
     const fanOut = graph.edges.filter((edge) => edge.from === invalidFanOut.id).length;
     const step = `${invalidFanOut.stepType} step "${invalidFanOut.id}"`;
-    const message = isBranchStepType(invalidFanOut.stepType)
-      ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
-      : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
+    const message = invalidFanOut.parallel
+      ? `A parallel split needs 2 to 8 arms. The ${step} leads to ${fanOut}.`
+      : isBranchStepType(invalidFanOut.stepType)
+        ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
+        : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
     throw new PlaybookGuardViolationError('max-fan-out', message);
   }
 
@@ -434,11 +530,15 @@ function assertGraphTopologyGuards(graph: PlaybookGraph): void {
   for (const edge of graph.edges) {
     inboundCounts.set(edge.to, (inboundCounts.get(edge.to) ?? 0) + 1);
   }
-  const join = [...inboundCounts.entries()].find(([, count]) => count > 1);
+  const join = [...inboundCounts.entries()].find(([id, count]) => {
+    if (count <= 1) return false;
+    const node = graph.nodes.find((candidate) => candidate.id === id);
+    return node?.stepType !== 'join';
+  });
   if (join) {
     throw new PlaybookGuardViolationError(
       'join',
-      `Step "${join[0]}" has ${join[1]} inbound paths. Branch fan-out is supported, but joins are not.`
+      `Step "${join[0]}" has ${join[1]} inbound paths. Only a join step can receive more than one.`
     );
   }
 
@@ -493,7 +593,7 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
     );
   }
 
-  const agentSteps = countAgentSteps(graph);
+  const agentSteps = worstCaseAgentSteps(graph);
   if (agentSteps > maxAgentStepsPerRun) {
     throw new PlaybookGuardViolationError(
       'max-agent-steps',

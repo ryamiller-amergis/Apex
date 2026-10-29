@@ -1,15 +1,16 @@
 /**
  * Substitutes documented Playbook binding placeholders.
  *
- * Placeholders are data, not expressions. Only `input.<field>` and
- * `steps.<stepId>.<field>` are accepted. A string that is exactly one placeholder
- * is replaced with the bound value's original type; mixed strings stringify.
+ * Placeholders are data, not expressions. Only `input.<field>`,
+ * `steps.<stepId>.<field>`, and `steps.<joinId>.arms.<stepId>.<field>` are accepted.
+ * A string that is exactly one placeholder is replaced with the bound value's original type;
+ * mixed strings stringify.
  */
 
 export class PlaybookBindingError extends Error {
   constructor(placeholder: string) {
     super(
-      `Playbook binding "${placeholder}" is not one of input.<field> or steps.<stepId>.<field>.`
+      `Playbook binding "${placeholder}" is not one of input.<field>, steps.<stepId>.<field>, or steps.<joinId>.arms.<stepId>.<field>.`
     );
     this.name = 'PlaybookBindingError';
   }
@@ -24,13 +25,17 @@ export interface PlaybookStepBindingReference {
   placeholder: string;
   stepId: string;
   field: string;
+  /** Set when the path reads one arm of a join. `stepId` is the join. */
+  armStepId?: string;
 }
 
-const DOCUMENTED_PLACEHOLDER = /\$\{(?:input\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*)\}/;
+const DOCUMENTED_PLACEHOLDER = /\$\{(?:input\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.arms\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*)\}/;
 const EMBEDDED_PLACEHOLDER = /\$\{([^}]+)\}/g;
+const ARM_PLACEHOLDER = /\$\{steps\.([A-Za-z][A-Za-z0-9_-]*)\.arms\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)\}/g;
 const STEP_PLACEHOLDER = /\$\{steps\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)\}/g;
 const INPUT_PATH = /^[A-Za-z][A-Za-z0-9_]*$/;
 const STEP_PATH = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*$/;
+const ARM_PATH = /^([A-Za-z][A-Za-z0-9_-]*)\.arms\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)$/;
 
 export function configHasBindings(config: unknown): boolean {
   return DOCUMENTED_PLACEHOLDER.test(JSON.stringify(config));
@@ -42,6 +47,16 @@ export function collectStepBindingReferences(config: unknown): PlaybookStepBindi
 
   function visit(value: unknown): void {
     if (typeof value === 'string') {
+      const armMatches = [...value.matchAll(ARM_PLACEHOLDER)];
+      for (const match of armMatches) {
+        references.push({
+          placeholder: match[0],
+          stepId: match[1],
+          armStepId: match[2],
+          field: match[3],
+        });
+      }
+      if (armMatches.length > 0) return;
       for (const match of value.matchAll(STEP_PLACEHOLDER)) {
         references.push({
           placeholder: match[0],
@@ -96,6 +111,10 @@ function resolveString(value: string, context: PlaybookBindingContext): unknown 
       const bound = context.input[path];
       return bound == null ? '' : String(bound);
     }
+    if (namespace === 'steps' && ARM_PATH.test(path)) {
+      const bound = lookupArm(path, context);
+      return bound == null ? '' : String(bound);
+    }
     if (namespace === 'steps' && STEP_PATH.test(path)) {
       const [stepId, field] = path.split('.');
       const bound = context.steps[stepId]?.[field];
@@ -118,7 +137,18 @@ function lookup(
   }
 
   if (namespace !== 'steps') throw new PlaybookBindingError(placeholder);
+  if (ARM_PATH.test(path)) return lookupArm(path, context);
   if (!STEP_PATH.test(path)) throw new PlaybookBindingError(placeholder);
   const [stepId, field] = path.split('.');
   return context.steps[stepId]?.[field];
+}
+
+function lookupArm(path: string, context: PlaybookBindingContext): unknown {
+  const match = ARM_PATH.exec(path);
+  if (!match) return undefined;
+  const arms = context.steps[match[1]]?.arms;
+  if (!arms || typeof arms !== 'object' || Array.isArray(arms)) return undefined;
+  const arm = (arms as Record<string, unknown>)[match[2]];
+  if (!arm || typeof arm !== 'object' || Array.isArray(arm)) return undefined;
+  return (arm as Record<string, unknown>)[match[3]];
 }

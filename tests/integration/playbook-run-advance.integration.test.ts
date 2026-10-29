@@ -362,7 +362,7 @@ describe('an agent step completing advances the run, through the real terminal-e
         id: 'ask',
         stepType: 'cursor-agent',
         config: {
-          skillPath: registry.PHASE_0_ALLOWED_AGENT_SKILLS[0],
+          skillPath: '.cursor/skills/app-knowledge/SKILL.md',
           prompt: 'Summarise the design docs',
         },
       },

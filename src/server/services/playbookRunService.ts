@@ -182,6 +182,8 @@ export interface StartRunResult {
 
 export interface StartRunInput extends StartRunRequest {
   initiatorUserId: string;
+  triggerSubscriptionId?: string;
+  triggerReceiptId?: string;
 }
 
 export async function startRun(input: StartRunInput): Promise<StartRunResult> {
@@ -217,6 +219,8 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
       initiatorUserId: input.initiatorUserId,
       status: 'running',
       runInput: input.runInput ?? null,
+      ...(input.triggerSubscriptionId ? { triggerSubscriptionId: input.triggerSubscriptionId } : {}),
+      ...(input.triggerReceiptId ? { triggerReceiptId: input.triggerReceiptId } : {}),
     })
     .returning();
 

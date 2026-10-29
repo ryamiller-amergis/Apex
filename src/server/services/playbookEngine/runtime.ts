@@ -196,6 +196,21 @@ function findResumePath(
     visited.add(current.id);
     if (current.id === stepId) return [...nestedWorkflowIds, current.id];
     const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    if (current.parallel && outbound.length > 1) {
+      for (const edge of outbound) {
+        const target = graph.nodes.find((candidate) => candidate.id === edge.to);
+        const found = findResumePath(
+          graph,
+          runId,
+          target,
+          stepId,
+          nestedWorkflowIds,
+          new Set(visited),
+        );
+        if (found) return found;
+      }
+      return null;
+    }
     if (isBranchStepType(current.stepType) && outbound.length > 0) {
       for (const edge of outbound) {
         const target = graph.nodes.find((n) => n.id === edge.to);
@@ -240,6 +255,17 @@ function chainWorkflow(
     visited.add(current.id);
     workflow = workflow.then(stepById.get(current.id));
     const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    if (current.parallel && outbound.length > 1) {
+      workflow = workflow.parallel(outbound.map((edge) => stepById.get(edge.to)));
+      const nextIds = outbound.map((edge) =>
+        graph.edges.find((candidate) => candidate.from === edge.to)?.to);
+      const joinId = nextIds[0];
+      if (joinId && nextIds.every((id) => id === joinId)) {
+        node = graph.nodes.find((candidate) => candidate.id === joinId);
+        continue;
+      }
+      return workflow;
+    }
     if (isBranchStepType(current.stepType) && outbound.length > 0) {
       return workflow.branch(outbound.map((edge) => {
         const target = graph.nodes.find((n) => n.id === edge.to);

@@ -45,6 +45,11 @@ async function loadPermissions(req: Request): Promise<Set<string>> {
   return perms;
 }
 
+/** Playbook routes use the module gate, including for a platform admin. */
+function checksPlaybookModule(keys: string[]): boolean {
+  return keys.some((key) => key.startsWith('playbooks:'));
+}
+
 export function requirePermission(...keys: string[]): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -52,7 +57,7 @@ export function requirePermission(...keys: string[]): RequestHandler {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
-      if (isSuperAdminRequest(req)) {
+      if (isSuperAdminRequest(req) && !checksPlaybookModule(keys)) {
         next();
         return;
       }
@@ -75,7 +80,7 @@ export function requireAnyPermission(...keys: string[]): RequestHandler {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    if (isSuperAdminRequest(req)) {
+    if (isSuperAdminRequest(req) && !checksPlaybookModule(keys)) {
       next();
       return;
     }

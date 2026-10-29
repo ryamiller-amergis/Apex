@@ -395,7 +395,8 @@ function App() {
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
     menuConfigReady &&
-    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+    effectiveEnabledViews.includes('playbooks') &&
+    can('playbooks:view');
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches

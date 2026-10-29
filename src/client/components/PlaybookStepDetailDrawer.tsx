@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import type { PlaybookStepRun, PlaybookSuspensionDetail } from '../../shared/types/playbook';
 import { usePlaybookStepOutput } from '../hooks/usePlaybookRuns';
+import { useCloudAgentActivityStream } from '../hooks/useDevWorkbench';
 import { absoluteTime, stepStatusLabel } from './playbookStatusFormat';
 import { PlaybookSuspensionDetail as SuspensionDetail } from './PlaybookSuspensionDetail';
 import styles from './PlaybookStepDetailDrawer.module.css';
@@ -13,6 +14,27 @@ interface PlaybookStepDetailDrawerProps {
   suspension?: PlaybookSuspensionDetail | null;
   onClose: () => void;
   'data-testid'?: string;
+}
+
+function CloudAgentStepActivity({ step }: { step: PlaybookStepRun }) {
+  const show = step.stepType === 'cloud-agent' && Boolean(step.agentRunId);
+  const activity = useCloudAgentActivityStream(
+    show ? step.resumeToken : null,
+    show ? step.agentRunId : null,
+    show,
+  );
+  if (!show) return null;
+  return (
+    <section>
+      <h3>Cloud agent activity</h3>
+      {activity.error ? <p role="alert">{activity.error}</p> : null}
+      <ul>
+        {activity.events.map((event) => (
+          <li key={event.id}>{event.title}{event.detail ? ` — ${event.detail}` : ''}</li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 export const PlaybookStepDetailDrawer: React.FC<PlaybookStepDetailDrawerProps> = ({
@@ -53,6 +75,9 @@ export const PlaybookStepDetailDrawer: React.FC<PlaybookStepDetailDrawerProps> =
             <p className={styles.meta}>
               {step.stepType} · {stepStatusLabel(step.status)}
             </p>
+            {step.stepType === 'apex-action' && step.inputInline && typeof step.inputInline.operation === 'string' ? (
+              <p>Operation {step.inputInline.operation}</p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -77,6 +102,8 @@ export const PlaybookStepDetailDrawer: React.FC<PlaybookStepDetailDrawerProps> =
           <h3>Resolved input</h3>
           <pre className={styles.code}>{JSON.stringify(step.inputInline ?? {}, null, 2)}</pre>
         </section>
+
+        <CloudAgentStepActivity step={step} />
 
         <section className={styles.section}>
           <h3>Output summary</h3>

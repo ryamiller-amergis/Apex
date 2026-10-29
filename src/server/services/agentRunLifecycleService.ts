@@ -865,6 +865,28 @@ export async function markTerminal(
     deactivateGrounding: input.deactivateGrounding ?? deactivateTerminalGrounding,
   });
 
+  if (latest.lane === 'cloud-agent' && latest.projectId) {
+    try {
+      const finished = await db.query.agentRuns.findFirst({
+        where: eq(agentRuns.id, runId),
+        columns: { cloudPrUrl: true, requestedByUserId: true },
+      });
+      const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
+      await publishPlaybookApexEvent({
+        project: latest.projectId,
+        type: 'cloud-agent.run-finished',
+        entityId: runId,
+        actorUserId: finished?.requestedByUserId ?? null,
+        data: {
+          status: input.status,
+          pullRequestUrl: finished?.cloudPrUrl ?? null,
+        },
+      });
+    } catch (error) {
+      console.error('[playbook-event] cloud-agent.run-finished', error);
+    }
+  }
+
   if (
     latest.lane === 'background'
     && (fromStatus === 'dispatched' || fromStatus === 'running')

@@ -2,8 +2,8 @@
  * The step-type registry contract.
  *
  * TBI-016 (Phase 0) owns the first four groups: VT-01 (a suspendable type with no deadline is
- * rejected), VT-02 (the three production types register with their deadlines), the Skill allow-list
- * and VT-04 (the registry is the only declaration site). VT-03 — that a malformed descriptor fails
+ * rejected), VT-02 (the three production types register with their deadlines), and VT-04 (the
+ * registry is the only declaration site). VT-03 — that a malformed descriptor fails
  * at *startup* rather than first use — needs a booting app, so it lives in the integration suite.
  *
  * TBI-032 and TBI-033 (FEAT-008) own the groups after those: every step type declares Zod input and
@@ -21,7 +21,6 @@ import type {
 import {
   APPROVAL_GATE_DEADLINE_MS,
   CURSOR_AGENT_DEADLINE_MS,
-  PHASE_0_ALLOWED_AGENT_SKILLS,
   PRODUCTION_STEP_TYPES,
   PlaybookStepTypeError,
   UnknownPlaybookStepTypeError,
@@ -123,12 +122,17 @@ describe('TBI-016 VT-01 — a suspendable step type must declare a deadline', ()
 describe('TBI-016 VT-02 — the three production step types', () => {
   it('registers the Phase 1 and production adapter step types', () => {
     expect(listStepTypeDescriptors().map((d) => d.stepType).sort()).toEqual([
+      'apex-action',
       'approval-gate',
       'branch',
+      'cloud-agent',
       'cursor-agent',
+      'foreach',
       'ingest-artifact',
       'interview',
+      'join',
       'notify',
+      'until',
     ]);
   });
 
@@ -175,41 +179,19 @@ describe('TBI-016 VT-02 — the three production step types', () => {
   });
 });
 
-describe('the Skill allow-list', () => {
-  it('permits a Skill on the list and refuses everything else', () => {
+describe('Skill paths', () => {
+  it('lets a cursor-agent step name any Skill, including the investigation Skill', () => {
     expect(() =>
-      assertSkillAllowed('cursor-agent', PHASE_0_ALLOWED_AGENT_SKILLS[0])
-    ).not.toThrow();
-
-    expect(() => assertSkillAllowed('cursor-agent', '.cursor/skills/build-test-push/SKILL.md')).toThrow(
-      /may not run Skill/
-    );
-  });
-
-  it('accepts the leading-slash form project settings store, and nothing looser', () => {
-    expect(() =>
-      assertSkillAllowed('cursor-agent', '/.cursor/skills/design-doc-validation/SKILL.md')
+      assertSkillAllowed('cursor-agent', '.cursor/skills/maxview-incident-investigation/SKILL.md')
     ).not.toThrow();
     expect(() =>
-      assertSkillAllowed('cursor-agent', '//.cursor/skills/design-doc-validation/SKILL.md')
-    ).toThrow(/may not run Skill/);
-    expect(() =>
-      assertSkillAllowed('cursor-agent', '/.cursor/skills/design-spec-review/SKILL.md')
-    ).toThrow(/may not run Skill/);
+      assertSkillAllowed('cursor-agent', '.cursor/skills/build-test-push/SKILL.md')
+    ).not.toThrow();
   });
 
-  it('default-denies: a step type naming no Skills permits none', () => {
-    expect(() => assertSkillAllowed('notify', '.cursor/skills/app-knowledge/SKILL.md')).toThrow(
-      /no Skills/
-    );
-  });
-
-  it('names a Skill that actually exists in the repo', () => {
-    // An allow-list entry with a typo would default-deny everything at demo time, which is the
-    // worst moment to discover it.
-    for (const skillPath of PHASE_0_ALLOWED_AGENT_SKILLS) {
-      expect(fs.existsSync(path.resolve(REPO_ROOT, skillPath))).toBe(true);
-    }
+  it('does not restrict a step type that keeps no Skill list', () => {
+    expect(() => assertSkillAllowed('notify', '.cursor/skills/app-knowledge/SKILL.md')).not.toThrow();
+    expect(getStepTypeDescriptor('cursor-agent').allowedSkillPaths).toBeUndefined();
   });
 });
 
@@ -245,6 +227,7 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           file !== 'src/server/services/designDocValidationPlaybookService.ts' &&
           file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
           file !== 'src/server/services/playbookReconciliationService.ts' &&
+          file !== 'src/server/services/playbookRecommenderService.ts' &&
           // Display names for the canvas library. The registry remains the declaration.
           file !== 'src/client/components/playbookStepCatalog.ts'
       )

@@ -219,7 +219,7 @@ async function startRunMissingItsTerminalEvent(): Promise<{
             id: 'work',
             stepType: 'cursor-agent',
             config: {
-              skillPath: registry.PHASE_0_ALLOWED_AGENT_SKILLS[0],
+              skillPath: '.cursor/skills/app-knowledge/SKILL.md',
               prompt: 'Do the thing',
             },
           },

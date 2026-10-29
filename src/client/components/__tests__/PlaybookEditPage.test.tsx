@@ -13,6 +13,14 @@ jest.mock('../../hooks/usePlaybookDefinitions', () => ({
   usePlaybookDefinition: (...args: unknown[]) => mockUseDefinition(...args),
 }));
 
+jest.mock('../PlaybookTemplateUpdateBanner', () => ({
+  PlaybookTemplateUpdateBanner: () => <div data-testid="template-update-banner" />,
+}));
+
+jest.mock('../PlaybookTriggersPanel', () => ({
+  PlaybookTriggersPanel: () => <div data-testid="playbook-triggers-panel" />,
+}));
+
 jest.mock('../PlaybookDraftEditor', () => ({
   PlaybookDraftEditor: () => <div data-testid="draft-editor">Draft editor</div>,
 }));

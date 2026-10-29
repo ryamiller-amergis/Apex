@@ -50,6 +50,21 @@ describe('Playbook execution capability policy', () => {
     expect(JSON.stringify(policy)).not.toMatch(/token|secret|credential/i);
   });
 
+  it('includes azure-cli when the Skill declares it', () => {
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'investigate',
+      skillPath: 'skill.md',
+      skillContent: skill.replace(
+        'playbook-capabilities: [repository-read, network-read]',
+        'playbook-capabilities: [repository-read, network-read, azure-cli]',
+      ),
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+    });
+
+    expect(policy.capabilities).toEqual(['repository-read', 'network-read', 'azure-cli']);
+  });
+
   it('refuses a profile or Skill that is broader or narrower than required', () => {
     expect(() =>
       resolvePlaybookAgentRunPolicy({

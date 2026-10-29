@@ -3393,6 +3393,8 @@ export const playbookRuns = pgTable('playbook_runs', {
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  triggerSubscriptionId: uuid('trigger_subscription_id'),
+  triggerReceiptId: uuid('trigger_receipt_id'),
 }, (t) => ({
   projectStartedIdx: index('idx_playbook_runs_project_started').on(t.project, t.startedAt),
   projectStatusIdx: index('idx_playbook_runs_project_status').on(t.project, t.status),
@@ -3403,6 +3405,56 @@ export const playbookRuns = pgTable('playbook_runs', {
   ),
   stepCountCheck: check('playbook_runs_step_count_check', sql`${t.stepCount} >= 0`),
   agentStepCountCheck: check('playbook_runs_agent_step_count_check', sql`${t.agentStepCount} >= 0`),
+}));
+
+export const playbookTriggerSubscriptions = pgTable('playbook_trigger_subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => playbookDefinitions.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  kind: text('kind').notNull(),
+  scheduleHour: integer('schedule_hour'),
+  scheduleMinute: integer('schedule_minute'),
+  eventType: text('event_type'),
+  eventFilter: jsonb('event_filter').$type<Record<string, unknown> | null>(),
+  versionPolicy: text('version_policy').notNull().default('current_published'),
+  pinnedVersionId: uuid('pinned_version_id')
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'restrict' }),
+  initiatorUserId: text('initiator_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  runInputTemplate: jsonb('run_input_template').$type<Record<string, unknown>>().notNull().default({}),
+  inputMapping: jsonb('input_mapping').$type<unknown[]>().notNull().default([]),
+  concurrencyPolicy: text('concurrency_policy').notNull().default('skip_if_active'),
+  dedupeKeyTemplate: text('dedupe_key_template').notNull(),
+  publicId: text('public_id'),
+  webhookSecret: text('webhook_secret'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  definitionIdx: index('idx_playbook_trigger_subscriptions_definition').on(t.definitionId, t.enabled),
+}));
+
+export const playbookTriggerReceipts = pgTable('playbook_trigger_receipts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  subscriptionId: uuid('subscription_id').notNull()
+    .references(() => playbookTriggerSubscriptions.id, { onDelete: 'cascade' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  source: text('source').notNull(),
+  payloadHash: text('payload_hash').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  status: text('status').notNull(),
+  runId: uuid('run_id').references(() => playbookRuns.id, { onDelete: 'set null' }),
+  attempts: integer('attempts').notNull().default(0),
+  nextRetryAt: timestamp('next_retry_at', { withTimezone: true, mode: 'string' }),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUq: unique('uq_playbook_trigger_receipts_idempotency').on(t.subscriptionId, t.idempotencyKey),
+  retryIdx: index('idx_playbook_trigger_receipts_retry').on(t.nextRetryAt),
 }));
 
 export const playbookStepRuns = pgTable('playbook_step_runs', {

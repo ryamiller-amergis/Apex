@@ -1,0 +1,30 @@
+{
+  "templates": [
+    {
+      "templateKey": "core-interview",
+      "templateVersion": 1,
+      "displayName": "Core interview",
+      "summary": "One human-led interview. The profile key comes from the run input.",
+      "category": "interview",
+      "tags": ["interview"],
+      "graphFile": "interview.json",
+      "requiredFlags": ["playbook-interview-step"],
+      "requiredPermissions": ["playbooks:author", "playbooks:run"],
+      "installPolicy": "one-per-project",
+      "estimatedCostBand": "low"
+    },
+    {
+      "templateKey": "design-doc-validation",
+      "templateVersion": 1,
+      "displayName": "Design doc validation",
+      "summary": "Score a design doc, ingest the scorecard, and either ask for approval or notify the owner.",
+      "category": "review",
+      "tags": ["design-doc", "validation"],
+      "graphFile": "design-doc-validation.json",
+      "requiredFlags": [],
+      "requiredPermissions": ["playbooks:author", "playbooks:run"],
+      "installPolicy": "one-per-project",
+      "estimatedCostBand": "medium"
+    }
+  ]
+}

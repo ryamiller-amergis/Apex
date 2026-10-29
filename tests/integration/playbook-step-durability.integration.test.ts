@@ -72,10 +72,6 @@ function executeStepThenKill(stepRunId: string, runId: string): Promise<string> 
     import { executeCursorAgentStep } from '${path
       .join(REPO_ROOT, 'src/server/services/playbookSteps/cursorAgentAdapter')
       .replace(/\\/g, '/')}';
-    import { PHASE_0_ALLOWED_AGENT_SKILLS } from '${path
-      .join(REPO_ROOT, 'src/server/services/playbookSteps/registry')
-      .replace(/\\/g, '/')}';
-
     async function main() {
       const outcome = await executeCursorAgentStep({
         runId: '${runId}',
@@ -85,7 +81,7 @@ function executeStepThenKill(stepRunId: string, runId: string): Promise<string> 
         project: 'Apex',
         initiatorUserId: '${INITIATOR}',
         config: {
-          skillPath: PHASE_0_ALLOWED_AGENT_SKILLS[0],
+          skillPath: '.cursor/skills/app-knowledge/SKILL.md',
           prompt: 'Summarise the design docs',
         },
       });
