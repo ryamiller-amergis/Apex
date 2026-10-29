@@ -5,11 +5,12 @@ import { ViewSkeleton } from './ViewSkeleton';
 import styles from './BuildIntakeChatRoute.module.css';
 
 interface BuildIntakeChatRouteProps {
+  project: string;
   buildId: string;
 }
 
-export const BuildIntakeChatRoute: React.FC<BuildIntakeChatRouteProps> = ({ buildId }) => {
-  const { data: intake, isLoading, isError, refetch } = useBuildIntake(buildId);
+export const BuildIntakeChatRoute: React.FC<BuildIntakeChatRouteProps> = ({ project, buildId }) => {
+  const { data: intake, isLoading, isError, refetch } = useBuildIntake(project, buildId);
 
   let content: React.ReactNode;
   if (isLoading) {

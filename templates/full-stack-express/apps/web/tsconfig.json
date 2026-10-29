@@ -1,0 +1,14 @@
+{
+  "extends": "@project-scope/config/tsconfig.react.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "e2e/**/*.ts",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
+}

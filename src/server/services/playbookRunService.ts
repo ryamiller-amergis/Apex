@@ -182,6 +182,8 @@ export interface StartRunResult {
 
 export interface StartRunInput extends StartRunRequest {
   initiatorUserId: string;
+  /** Runs after the run row exists and before the first step, which may look the run up. */
+  onRunCreated?: (runId: string) => Promise<void>;
 }
 
 export async function startRun(input: StartRunInput): Promise<StartRunResult> {
@@ -219,6 +221,8 @@ export async function startRun(input: StartRunInput): Promise<StartRunResult> {
       runInput: input.runInput ?? null,
     })
     .returning();
+
+  await input.onRunCreated?.(run.id);
 
   /*
    * The engine takes over here. It drives forward until a step parks or the graph ends, which is
