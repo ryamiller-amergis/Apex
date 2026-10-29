@@ -652,6 +652,380 @@
   background: color-mix(in srgb, var(--error-color) 10%, transparent);
 }
 
+/* ── Suggest and triggers ───────────────────────────────────── */
+
+.popoverAnchor {
+  position: relative;
+}
+
+.suggestButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2rem;
+  padding: 0 0.8rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent-color) 16%, transparent),
+    color-mix(in srgb, var(--accent-teal) 12%, transparent)
+  );
+  color: var(--accent-color);
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.suggestButton:hover,
+.suggestButtonActive {
+  border-color: var(--accent-color);
+  box-shadow: var(--glow-accent);
+}
+
+.countBadge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--on-accent);
+  background: var(--success-color);
+}
+
+.countBadgeEmpty {
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 18%, transparent);
+}
+
+.drawer.triggersDrawer {
+  width: min(440px, calc(100% - 1.5rem));
+}
+
+/* ── Inspector sizing ───────────────────────────────────────── */
+
+.inspector .inspectorBody {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.inspectorCollapsed {
+  max-height: none;
+}
+
+.resizeHandle {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.resizeHandle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 3px;
+  height: 36px;
+  border-radius: 2px;
+  background: var(--border-color-light);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.15s ease;
+}
+
+.inspector:hover .resizeHandle::after,
+.resizeHandle:focus-visible::after {
+  opacity: 1;
+}
+
+.resizeHandle:focus-visible {
+  outline: none;
+}
+
+/* ── Reads card and data chips ──────────────────────────────── */
+
+.readsCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 30%, var(--border-color));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
+}
+
+.readsTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--accent-color);
+}
+
+.readsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readsItem {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  color: var(--text-primary);
+}
+
+.readsState {
+  flex: none;
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--success-color);
+}
+
+.readsItemInvalid .readsState {
+  color: var(--error-color);
+}
+
+.bindingText {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.bindingBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.bindingChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.12rem 0.25rem 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+
+.bindingChipInvalid {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+}
+
+.bindingChipRemove {
+  display: grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.bindingChipRemove:hover {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.bindingInsert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  border: 1px dashed var(--border-color-light);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bindingInsert:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.bindingMenu {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  max-height: 260px;
+  padding: 0.35rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: 0 14px 32px var(--shadow-md);
+}
+
+.bindingMenuGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.35rem;
+}
+
+.bindingMenuSource {
+  flex-basis: 100%;
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.bindingMenuItem {
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.bindingMenuItem:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+/* ── Step-specific fields ───────────────────────────────────── */
+
+.inlineFields {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.unitSelect {
+  width: auto;
+  flex: none;
+}
+
+.infoCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--step-tint) 10%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.infoCard svg {
+  flex: none;
+  margin-top: 0.1rem;
+  color: var(--step-tint);
+}
+
+.choiceCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.4rem;
+}
+
+.choiceCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.choiceCard svg {
+  flex: none;
+  margin-top: 0.1rem;
+}
+
+.choiceCardActive {
+  border-color: var(--step-tint);
+  background: color-mix(in srgb, var(--step-tint) 10%, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+
+.choiceCardActive svg {
+  color: var(--step-tint);
+}
+
+.choiceText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.choiceTitle {
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.choiceDescription {
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.moreSettings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.moreSettings summary {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.moreSettings[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+.moreSettings > :not(summary) + :not(summary) {
+  margin-top: 0.6rem;
+}
+
 /* ── Test-run drawer ────────────────────────────────────────── */
 
 .drawer {

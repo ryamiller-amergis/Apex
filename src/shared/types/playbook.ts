@@ -183,6 +183,20 @@ export interface PlaybookStepTypePaletteItem {
   inputJsonSchema: Record<string, unknown>;
   outputJsonSchema: Record<string, unknown>;
   canSuspend: boolean;
+  /** False for step types only Apex places (interview, build); existing graphs still render them. */
+  addable: boolean;
+}
+
+/** A Skill an Agent task step can run, from `GET /api/playbooks/skills`. */
+export interface PlaybookSkillOption {
+  /** Repository-relative path stored in the step's `skillPath`. */
+  path: string;
+  name: string;
+  description: string;
+  /** Null when the frontmatter does not declare `playbook-capabilities`. */
+  capabilities: string[] | null;
+  runnable: boolean;
+  unavailableReason?: string;
 }
 
 export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch' | 'capability';
@@ -295,6 +309,33 @@ export interface PlaybookStepRun {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type PlaybookStepActivityKind = 'prompt' | 'tool' | 'thinking' | 'message' | 'status' | 'error';
+
+/** One line in a step's live log, oldest first. */
+export interface PlaybookStepActivityEntry {
+  id: string;
+  kind: PlaybookStepActivityKind;
+  title: string;
+  detail?: string;
+  at: string;
+}
+
+/** What `GET /runs/:runId/steps/:stepRunId/activity` returns for a running or finished step. */
+export interface PlaybookStepActivity {
+  stepRunId: string;
+  status: PlaybookStepRunStatus;
+  agentRun: {
+    status: string;
+    phase: string | null;
+    label: string | null;
+    queuedAt: string | null;
+    startedAt: string | null;
+    progressAt: string | null;
+    lastError: string | null;
+  } | null;
+  entries: PlaybookStepActivityEntry[];
 }
 
 export interface PlaybookStepBlobRef {

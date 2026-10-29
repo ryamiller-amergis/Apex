@@ -266,6 +266,38 @@
   color: var(--text-muted);
 }
 
+.liveWatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+  height: 2rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.liveWatch:hover {
+  box-shadow: var(--glow-accent);
+}
+
+.liveDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent-color);
+  animation: liveDot 1.2s ease-in-out infinite;
+}
+
+@keyframes liveDot {
+  50% { opacity: 0.3; }
+}
+
 .liveFrame {
   height: 52vh;
   min-height: 360px;

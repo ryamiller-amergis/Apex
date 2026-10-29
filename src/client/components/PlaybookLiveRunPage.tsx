@@ -20,6 +20,7 @@ import { PlaybookRunActions } from './PlaybookRunActions';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import { PlaybookStepDetailDrawer } from './PlaybookStepDetailDrawer';
+import { stepMeta } from './playbookStepCatalog';
 import styles from './PlaybookCanvas.module.css';
 
 const EMPTY_GRAPH: PlaybookGraph = { nodes: [], edges: [] };
@@ -82,6 +83,9 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const graph = graphQuery.data?.graph ?? EMPTY_GRAPH;
   const positions = tidiedPositions ?? layoutQuery.data?.positions ?? {};
   const selectedStep = run.data.steps.find((step) => step.id === selectedStepRunId) ?? null;
+  const activeStep = [...run.data.steps]
+    .reverse()
+    .find((step) => step.status === 'running' || step.status === 'suspended');
 
   return (
     <div className={styles.livePage} {...{ 'data-testid': 'playbook-live-run-page' }}>
@@ -101,6 +105,18 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             {relativeTime(run.data.startedAt)} by {run.data.initiatorUserId}
           </p>
         </div>
+        {activeStep ? (
+          <button
+            type="button"
+            className={styles.liveWatch}
+            onClick={() => setSelectedStepRunId(activeStep.id)}
+            {...{ 'data-testid': "playbook-live-run-watch" }}
+          >
+            <span className={styles.liveDot} aria-hidden />
+            {activeStep.status === 'suspended' ? 'Waiting on' : 'Running'} {stepMeta(activeStep.stepType).title}
+            {' · '}View log
+          </button>
+        ) : null}
       </header>
 
       <div className={styles.liveFrame}>
@@ -127,9 +143,11 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
           project={project}
           runId={runId}
           step={selectedStep}
+          steps={run.data.steps}
+          onSelectStep={setSelectedStepRunId}
           suspension={run.data.suspension}
           onClose={() => setSelectedStepRunId(null)}
-          data-testid="playbook-live-step-detail"
+          {...{ 'data-testid': "playbook-live-step-detail" }}
         />
       ) : null}
 

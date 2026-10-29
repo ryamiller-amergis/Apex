@@ -26,4 +26,10 @@ describe('listPlaybookStepPaletteItems', () => {
       expect(item.requiredPermissions.length).toBeGreaterThan(0);
     }
   });
+
+  it('keeps interview and build out of the library', () => {
+    const items = listPlaybookStepPaletteItems();
+    const notAddable = items.filter((item) => !item.addable).map((item) => item.stepType).sort();
+    expect(notAddable).toEqual(['build', 'interview']);
+  });
 });

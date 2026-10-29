@@ -232,7 +232,11 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           file !== 'src/server/services/playbookReconciliationService.ts' &&
           file !== 'src/server/services/playbookRecommenderService.ts' &&
           // Display names for the canvas library. The registry remains the declaration.
-          file !== 'src/client/components/playbookStepCatalog.ts'
+          file !== 'src/client/components/playbookStepCatalog.ts' &&
+          // Per-type settings forms and run logs. They read a step's shape; they do not declare one.
+          file !== 'src/client/components/PlaybookStepFields.tsx' &&
+          file !== 'src/client/components/PlaybookStepDetailDrawer.tsx' &&
+          file !== 'src/server/services/playbookStepActivityService.ts'
       )
       .filter((file) => {
         const code = stripComments(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'));

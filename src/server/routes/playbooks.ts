@@ -28,10 +28,12 @@ import {
   assertCanvasConnection,
 } from '../services/playbookGuardService';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
 import {
   PlaybookRecommendationError,
   acceptPlaybookRecommendation,
-  recommendPlaybookStep,
+  recommendPlaybookSteps,
 } from '../services/playbookRecommenderService';
 import {
   getVersionLayout,
@@ -411,13 +413,13 @@ router.post(
       res.status(400).json({ error: 'goal is required' });
       return;
     }
-    const suggestion = recommendPlaybookStep(goal);
+    const plan = recommendPlaybookSteps(goal);
     console.info('[playbook-recommender]', JSON.stringify({
-      event: suggestion.kind === 'suggestion' ? 'suggest' : 'gap',
+      event: plan.kind === 'suggestions' ? 'suggest' : 'gap',
       definitionId: req.params.definitionId,
-      stepType: suggestion.kind === 'suggestion' ? suggestion.stepType : null,
+      stepTypes: plan.kind === 'suggestions' ? plan.suggestions.map((item) => item.stepType) : [],
     }));
-    res.json(suggestion);
+    res.json(plan);
   },
 );
 
@@ -634,6 +636,14 @@ router.get(
   requirePermission('playbooks:view'),
   async (_req: Request, res: Response): Promise<void> => {
     res.json({ items: listPlaybookStepPaletteItems() });
+  },
+);
+
+router.get(
+  '/skills',
+  requirePermission('playbooks:author'),
+  async (_req: Request, res: Response): Promise<void> => {
+    res.json({ skills: await listPlaybookSkillOptions() });
   },
 );
 
@@ -882,6 +892,23 @@ router.get(
       }
       throw error;
     }
+  }
+);
+
+router.get(
+  '/runs/:runId/steps/:stepRunId/activity',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const activity = await getPlaybookStepActivity({
+      project: resolveRequestProject(req)!,
+      runId: req.params.runId,
+      stepRunId: req.params.stepRunId,
+    });
+    if (!activity) {
+      res.status(404).json({ error: 'No such Playbook step in this project.' });
+      return;
+    }
+    res.json(activity);
   }
 );
 

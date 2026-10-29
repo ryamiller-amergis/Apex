@@ -232,10 +232,15 @@ const BINDING_STRING = z.string().regex(
   /^\$\{(?:input\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*)\}$/,
 );
 
+/**
+ * Every work item field is optional. Without `workItemId` the step uses the nearest earlier step
+ * that produced one, then the run input's `workItemId` (an Azure DevOps trigger sets it). Without
+ * type or state the step reads them from Azure DevOps.
+ */
 const CLOUD_AGENT_INPUT_SCHEMA = z.object({
-  workItemId: z.union([z.number().int().positive(), BINDING_STRING]),
-  workItemType: z.string().min(1),
-  state: z.string().min(1),
+  workItemId: z.union([z.number().int().positive(), BINDING_STRING]).optional(),
+  workItemType: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
   tags: z.string().optional(),
   prompt: z.string().optional(),
   deadlineMs: z.number().positive().optional(),
@@ -302,7 +307,7 @@ export function apexActionParameterSchema(operation: string): z.ZodTypeAny {
   }
   if (operation === 'post-ado-comment') {
     return z.object({
-      workItemId: z.number().int().positive(),
+      workItemId: z.union([z.number().int().positive(), BINDING_STRING]),
       text: z.string().min(1),
     });
   }
