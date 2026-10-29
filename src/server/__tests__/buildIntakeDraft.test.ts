@@ -43,7 +43,7 @@ const draft = {
 const mainThread = {
   id: 'thread-main',
   status: 'idle',
-  kickoff: { project: 'Apex', repo: 'org/target', skillRepo: 'org/skills' },
+  kickoff: { project: 'Apex', repo: 'org/target', skillRepo: 'org/skills', branch: 'feature/skills', skillProvider: 'ado' },
   messages: [
     { id: 'u1', role: 'user', text: 'Add an export button', ts: '1' },
     { id: 'h1', role: 'user', text: 'HIDDEN CONTEXT', ts: '2', hidden: true },
@@ -75,7 +75,12 @@ it('PBI-011 AC-0 drafts with the profile skill and returns rows, candidates and 
   await expect(draftBuildIntakeBrief({ interviewId: 'interview-1' })).resolves.toEqual(draft);
   expect(mockCreateThread).toHaveBeenCalledWith(
     'requester',
-    expect.objectContaining({ skillPath: '.cursor/skills/build-intake/SKILL.md', skillRepo: 'org/skills' }),
+    expect.objectContaining({
+      skillPath: '.cursor/skills/build-intake/SKILL.md',
+      skillRepo: 'org/skills',
+      branch: 'feature/skills',
+      skillProvider: 'ado',
+    }),
     { skipAutoKickoff: true },
   );
   const prompt = mockSendMessage.mock.calls[0][1] as string;

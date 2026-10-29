@@ -879,6 +879,8 @@ export async function draftBuildIntakeBrief(input: {
     skillPath: snapshot?.skillPath ?? mainKickoff?.skillPath ?? BRIEF_DRAFT_SKILL_PATH,
     ...(mainKickoff?.skillRepo ? { skillRepo: mainKickoff.skillRepo } : {}),
     ...(mainKickoff?.skillBranch ? { skillBranch: mainKickoff.skillBranch } : {}),
+    ...(mainKickoff?.branch ? { branch: mainKickoff.branch } : {}),
+    ...(mainKickoff?.skillProvider ? { skillProvider: mainKickoff.skillProvider } : {}),
     ...(snapshot?.model ? { model: snapshot.model } : {}),
     ...(snapshot?.effort ? { effort: snapshot.effort } : {}),
     ...(interview.skillSettingsId ? { skillSettingsId: interview.skillSettingsId } : {}),
