@@ -54,7 +54,7 @@ async function requesterCanRun(build: QueuedBuild): Promise<boolean> {
 async function launch(build: QueuedBuild): Promise<void> {
   try {
     const published = await ensurePublished(build.project, build.requestedByUserId);
-    const run = await startRun({
+    await startRun({
       project: build.project,
       definitionId: published.definitionId,
       initiatorUserId: build.requestedByUserId,
@@ -63,8 +63,8 @@ async function launch(build: QueuedBuild): Promise<void> {
         prompt: build.prompt,
         skillSettingsId: build.skillSettingsId,
       },
+      onRunCreated: (runId) => linkPlaybookRun(build.id, runId),
     });
-    await linkPlaybookRun(build.id, run.runId);
     await writeBuildEvent({
       buildRunId: build.id,
       eventType: 'build.promoted',

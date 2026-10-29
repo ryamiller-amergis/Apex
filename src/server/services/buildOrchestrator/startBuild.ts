@@ -54,6 +54,7 @@ export interface StartBuildDeps {
     definitionId: string;
     initiatorUserId: string;
     runInput: Record<string, unknown>;
+    onRunCreated: (runId: string) => Promise<void>;
   }) => Promise<{ runId: string }>;
   findReplay: typeof findBuildByClientRequest;
   admit: typeof admitBuild;
@@ -173,8 +174,8 @@ export async function startBuild(
         prompt,
         skillSettingsId: settings.id,
       },
+      onRunCreated: (runId) => deps.linkPlaybookRun(admitted.build.id, runId),
     });
-    await deps.linkPlaybookRun(admitted.build.id, run.runId);
     admitted.build.playbookRunId = run.runId;
     await deps.writeEvent(eventInput(admitted.build, 'build.started', 'Build started', model ?? null));
     deps.track('build.start.accepted', { status: 'intake' });
