@@ -128,16 +128,20 @@ roll_app() {
     --query properties.template.containers[0].image \
     -o tsv)"
   previous_image="${previous_image//$'\r'/}"
+  # A failed health wait leaves the image on the template, so a matching image
+  # still has to pass verify_health before the rollout counts as done.
+  local updated=false
   if [[ "$previous_image" == "$IMAGE" ]]; then
-    echo "${app} already runs ${IMAGE}; skipping update."
-    return 0
+    echo "${app} already runs ${IMAGE}; skipping update and verifying health."
+  else
+    echo "Updating Container App ${app} → ${IMAGE}..."
+    az containerapp update \
+      --name "$app" \
+      --resource-group "$AI_RUNS_RESOURCE_GROUP" \
+      --image "$IMAGE" \
+      >/dev/null
+    updated=true
   fi
-  echo "Updating Container App ${app} → ${IMAGE}..."
-  az containerapp update \
-    --name "$app" \
-    --resource-group "$AI_RUNS_RESOURCE_GROUP" \
-    --image "$IMAGE" \
-    >/dev/null
   local revision
   revision="$(az containerapp show \
     --name "$app" \
@@ -149,7 +153,9 @@ roll_app() {
     require_probe_health=true
   fi
   verify_health "$app" "$revision" "$require_probe_health"
-  echo "Rollback ${app}: az containerapp update -g '${AI_RUNS_RESOURCE_GROUP}' -n '${app}' --image '${previous_image}'"
+  if [[ "$updated" == "true" ]]; then
+    echo "Rollback ${app}: az containerapp update -g '${AI_RUNS_RESOURCE_GROUP}' -n '${app}' --image '${previous_image}'"
+  fi
 }
 
 # PARALLEL_ROLLOUT=true rolls every target at once; otherwise one at a time,

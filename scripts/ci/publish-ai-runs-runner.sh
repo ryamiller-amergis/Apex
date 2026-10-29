@@ -63,17 +63,17 @@ fi
 # which breaks workspaceRef resolution (/workspaces/grounding/<digest>).
 MOUNT_PATH="${AI_RUNS_WORKSPACE_MOUNT_PATH:-/home/data/ai-pilot/workspaces}"
 
-# The mount re-assert below only guards against drift from an image update.
+# A matching image skips only the image update. The mount re-assert still runs:
+# an earlier run may have updated the image and then failed before repairing it.
 if already_running job "$AI_RUNS_CONTAINER_APP_JOB_NAME" "$AI_RUNS_RESOURCE_GROUP" "$IMAGE"; then
-  echo "${AI_RUNS_CONTAINER_APP_JOB_NAME} already runs ${IMAGE}; skipping update."
-  exit 0
+  echo "${AI_RUNS_CONTAINER_APP_JOB_NAME} already runs ${IMAGE}; skipping image update."
+else
+  echo "Updating Container Apps Job ${AI_RUNS_CONTAINER_APP_JOB_NAME} → ${IMAGE}..."
+  az containerapp job update \
+    --name "$AI_RUNS_CONTAINER_APP_JOB_NAME" \
+    --resource-group "$AI_RUNS_RESOURCE_GROUP" \
+    --image "$IMAGE"
 fi
-
-echo "Updating Container Apps Job ${AI_RUNS_CONTAINER_APP_JOB_NAME} → ${IMAGE}..."
-az containerapp job update \
-  --name "$AI_RUNS_CONTAINER_APP_JOB_NAME" \
-  --resource-group "$AI_RUNS_RESOURCE_GROUP" \
-  --image "$IMAGE"
 
 echo "Re-asserting Azure Files mount path ${MOUNT_PATH}..."
 JOB_YAML="$(mktemp)"
