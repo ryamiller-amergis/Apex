@@ -8,6 +8,7 @@ import { playbookTriggerReceipts, playbookTriggerSubscriptions } from '../db/sch
 import {
   dispatchPlaybookTrigger,
   latestScheduleInstant,
+  storedPlaybookTriggerDispatch,
 } from './playbookTriggerDispatchService';
 import { renderPlaybookDedupeKey } from '../../shared/utils/playbookTriggerMapping';
 
@@ -48,17 +49,13 @@ export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
     );
     for (const receipt of retries) {
       if (receipt.nextRetryAt && Date.parse(receipt.nextRetryAt) > now.getTime()) continue;
-      const payload = receipt.payload ?? {};
+      const payload = (receipt.payload ?? {}) as Record<string, unknown>;
+      const stored = storedPlaybookTriggerDispatch(payload, receipt.source);
       await dispatchPlaybookTrigger({
         subscriptionId: receipt.subscriptionId,
-        source: 'replay',
+        source: stored.source,
         idempotencyKey: receipt.idempotencyKey,
-        event: {
-          entityId: String(payload.entityId ?? ''),
-          actorUserId: typeof payload.actorUserId === 'string' ? payload.actorUserId : null,
-          data: {},
-        },
-        payload,
+        event: stored.event,
       });
     }
   } finally {

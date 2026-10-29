@@ -22,6 +22,42 @@ import { getUserPermissions } from './rbacService';
 import { playbookSpendPolicyService } from './playbookSpendPolicyService';
 import { startRun } from './playbookRunService';
 
+const TRIGGER_SOURCES = ['schedule', 'apex_event', 'manual', 'replay', 'webhook', 'azure_devops'] as const;
+type TriggerSource = (typeof TRIGGER_SOURCES)[number];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Rebuilds the event a receipt stored, including the work-item fields a retry has to keep.
+ * New receipts store `{ source, entityId, actorUserId, data }`. Older Azure DevOps receipts
+ * stored the work-item fields themselves, so those use the receipt row's source.
+ */
+export function storedPlaybookTriggerDispatch(
+  payload: Record<string, unknown>,
+  fallbackSource?: string,
+): {
+  source: TriggerSource;
+  event: PlaybookTriggerEventView;
+} {
+  const nested = isRecord(payload.data) ? payload.data : null;
+  const raw = typeof payload.source === 'string' ? payload.source : fallbackSource ?? 'replay';
+  const source = (TRIGGER_SOURCES as readonly string[]).includes(raw) ? raw as TriggerSource : 'replay';
+  return {
+    source,
+    event: {
+      entityId: String(payload.entityId ?? dataWorkItemId(nested ?? payload)),
+      actorUserId: typeof payload.actorUserId === 'string' ? payload.actorUserId : null,
+      data: nested ?? (typeof payload.source === 'string' ? {} : payload),
+    },
+  };
+}
+
+function dataWorkItemId(data: Record<string, unknown>): string {
+  return data.workItemId === undefined ? '' : String(data.workItemId);
+}
+
 const MAX_ATTEMPTS = 5;
 const RETRY_MS = 5 * 60_000;
 const LIVE = ['running', 'suspended'] as const;
@@ -79,11 +115,15 @@ async function markReceipt(
 }
 
 export async function testPlaybookTrigger(input: {
+  project: string;
   subscriptionId: string;
   event: PlaybookTriggerEventView;
 }): Promise<{ ok: true; runInput: Record<string, unknown> } | { ok: false; error: string }> {
   const subscription = await db.query.playbookTriggerSubscriptions.findFirst({
-    where: eq(playbookTriggerSubscriptions.id, input.subscriptionId),
+    where: and(
+      eq(playbookTriggerSubscriptions.id, input.subscriptionId),
+      eq(playbookTriggerSubscriptions.project, input.project),
+    ),
   });
   if (!subscription) return { ok: false, error: 'Trigger not found.' };
   try {
@@ -104,20 +144,20 @@ export async function testPlaybookTrigger(input: {
 
 export async function dispatchPlaybookTrigger(input: {
   subscriptionId: string;
-  source: 'schedule' | 'apex_event' | 'manual' | 'replay' | 'webhook' | 'azure_devops';
+  source: TriggerSource;
   idempotencyKey: string;
   event: PlaybookTriggerEventView;
-  payload?: Record<string, unknown>;
 }): Promise<{ status: string; runId: string | null; definitionVersionId: string | null; duplicate: boolean }> {
   const subscription = await db.query.playbookTriggerSubscriptions.findFirst({
     where: eq(playbookTriggerSubscriptions.id, input.subscriptionId),
   });
   if (!subscription) return { status: 'skipped', runId: null, definitionVersionId: null, duplicate: false };
 
-  const payload = input.payload ?? {
+  const payload = {
     source: input.source,
     entityId: input.event.entityId,
     actorUserId: input.event.actorUserId,
+    data: input.event.data,
   };
   const inserted = await db.insert(playbookTriggerReceipts).values({
     subscriptionId: subscription.id,
@@ -135,7 +175,7 @@ export async function dispatchPlaybookTrigger(input: {
       eq(playbookTriggerReceipts.subscriptionId, subscription.id),
       eq(playbookTriggerReceipts.idempotencyKey, input.idempotencyKey),
     ));
-    if (!existing || (existing.status !== 'retryable' && existing.status !== 'pending')) {
+    if (!existing || existing.status !== 'retryable') {
       recordPlaybookTriggerEvent('duplicate', {
         subscriptionId: subscription.id,
         idempotencyKey: input.idempotencyKey,
@@ -144,6 +184,20 @@ export async function dispatchPlaybookTrigger(input: {
     }
     if (existing.nextRetryAt && Date.parse(existing.nextRetryAt) > Date.now() && input.source !== 'replay') {
       return { status: 'retryable', runId: null, definitionVersionId: null, duplicate: true };
+    }
+    const claimed = await db.update(playbookTriggerReceipts).set({
+      status: 'pending',
+      updatedAt: new Date().toISOString(),
+    }).where(and(
+      eq(playbookTriggerReceipts.id, existing.id),
+      eq(playbookTriggerReceipts.status, 'retryable'),
+    )).returning({ id: playbookTriggerReceipts.id });
+    if (!claimed[0]) {
+      recordPlaybookTriggerEvent('duplicate', {
+        subscriptionId: subscription.id,
+        idempotencyKey: input.idempotencyKey,
+      });
+      return { status: 'pending', runId: existing.runId ?? null, definitionVersionId: null, duplicate: true };
     }
     receiptId = existing.id;
   } else {

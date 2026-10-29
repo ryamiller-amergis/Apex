@@ -4,7 +4,11 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { playbookTriggerSubscriptions } from '../db/schema';
+import {
+  playbookDefinitionVersions,
+  playbookRuns,
+  playbookTriggerSubscriptions,
+} from '../db/schema';
 import {
   producedPlaybookApexEventTypes,
   renderPlaybookDedupeKey,
@@ -35,11 +39,20 @@ export async function publishPlaybookApexEvent(
     eq(playbookTriggerSubscriptions.enabled, true),
   ));
 
+  let sourceDefinitionId: string | null = null;
+  if (event.sourceRunId) {
+    const [sourceRun] = await db.select({
+      definitionId: playbookDefinitionVersions.definitionId,
+    }).from(playbookRuns).innerJoin(
+      playbookDefinitionVersions,
+      eq(playbookRuns.definitionVersionId, playbookDefinitionVersions.id),
+    ).where(eq(playbookRuns.id, event.sourceRunId)).limit(1);
+    sourceDefinitionId = sourceRun?.definitionId ?? null;
+  }
+
   const started: Array<{ runId: string; definitionVersionId: string }> = [];
   for (const subscription of subscriptions) {
-    if (event.sourceRunId && event.data.playbookRunId === event.sourceRunId) {
-      continue;
-    }
+    if (sourceDefinitionId && subscription.definitionId === sourceDefinitionId) continue;
     const idempotencyKey = renderPlaybookDedupeKey(subscription.dedupeKeyTemplate, {
       'event.type': event.type,
       'event.entityId': event.entityId,
@@ -52,12 +65,10 @@ export async function publishPlaybookApexEvent(
       event: {
         entityId: event.entityId,
         actorUserId: event.actorUserId,
-        data: event.data,
-      },
-      payload: {
-        type: event.type,
-        entityId: event.entityId,
-        actorUserId: event.actorUserId,
+        data: {
+          ...event.data,
+          ...(event.sourceRunId ? { playbookRunId: event.sourceRunId } : {}),
+        },
       },
     });
     if (result.runId && result.definitionVersionId) {

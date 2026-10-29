@@ -119,7 +119,6 @@ export async function acceptExternalPlaybookTrigger(input: {
       actorUserId: null,
       data: ado?.data ?? { deliveryId: idempotencyKey },
     },
-    payload: ado?.data ?? { deliveryId: idempotencyKey },
   });
   return { status: 202, body: { status: result.status, duplicate: result.duplicate } };
 }

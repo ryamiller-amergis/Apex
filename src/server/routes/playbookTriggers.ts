@@ -17,6 +17,7 @@ import {
 import {
   dispatchPlaybookTrigger,
   recordPlaybookTriggerEvent,
+  storedPlaybookTriggerDispatch,
   testPlaybookTrigger,
 } from '../services/playbookTriggerDispatchService';
 import { db } from '../db/drizzle';
@@ -126,6 +127,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const body = (req.body ?? {}) as { entityId?: unknown; actorUserId?: unknown; data?: unknown };
     const result = await testPlaybookTrigger({
+      project: resolveRequestProject(req)!,
       subscriptionId: req.params.triggerId,
       event: {
         entityId: typeof body.entityId === 'string' ? body.entityId : 'test',
@@ -133,6 +135,10 @@ router.post(
         data: body.data && typeof body.data === 'object' ? body.data as Record<string, unknown> : {},
       },
     });
+    if (!result.ok && result.error === 'Trigger not found.') {
+      res.status(404).json({ error: result.error });
+      return;
+    }
     res.json(result);
   },
 );
@@ -167,7 +173,12 @@ router.get(
   '/:triggerId/receipts',
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
-    res.json({ receipts: await listPlaybookTriggerReceipts(req.params.triggerId) });
+    const receipts = await listPlaybookTriggerReceipts(resolveRequestProject(req)!, req.params.triggerId);
+    if (!receipts) {
+      res.status(404).json({ error: 'Trigger not found.' });
+      return;
+    }
+    res.json({ receipts });
   },
 );
 
@@ -175,6 +186,14 @@ router.post(
   '/:triggerId/receipts/:receiptId/replay',
   requirePermission('playbooks:triggers:manage'),
   async (req: Request, res: Response): Promise<void> => {
+    const [subscription] = await db.select({ id: playbookTriggerSubscriptions.id }).from(playbookTriggerSubscriptions).where(and(
+      eq(playbookTriggerSubscriptions.id, req.params.triggerId),
+      eq(playbookTriggerSubscriptions.project, resolveRequestProject(req)!),
+    ));
+    if (!subscription) {
+      res.status(404).json({ error: 'Trigger not found.' });
+      return;
+    }
     const [receipt] = await db.select().from(playbookTriggerReceipts).where(and(
       eq(playbookTriggerReceipts.id, req.params.receiptId),
       eq(playbookTriggerReceipts.subscriptionId, req.params.triggerId),
@@ -189,17 +208,13 @@ router.post(
       updatedAt: new Date().toISOString(),
     }).where(eq(playbookTriggerReceipts.id, receipt.id));
     recordPlaybookTriggerEvent('replay', { receiptId: receipt.id, subscriptionId: receipt.subscriptionId });
-    const payload = receipt.payload ?? {};
+    const payload = (receipt.payload ?? {}) as Record<string, unknown>;
+    const stored = storedPlaybookTriggerDispatch(payload, receipt.source);
     res.json(await dispatchPlaybookTrigger({
       subscriptionId: receipt.subscriptionId,
-      source: 'replay',
+      source: stored.source,
       idempotencyKey: receipt.idempotencyKey,
-      event: {
-        entityId: String(payload.entityId ?? ''),
-        actorUserId: typeof payload.actorUserId === 'string' ? payload.actorUserId : null,
-        data: {},
-      },
-      payload,
+      event: stored.event,
     }));
   },
 );

@@ -91,7 +91,14 @@ export async function listPlaybookTriggers(project: string, definitionId: string
   return rows.map((row) => presentTrigger(row, false));
 }
 
-export async function listPlaybookTriggerReceipts(subscriptionId: string) {
+export async function listPlaybookTriggerReceipts(project: string, subscriptionId: string) {
+  const [subscription] = await db.select({ id: playbookTriggerSubscriptions.id })
+    .from(playbookTriggerSubscriptions)
+    .where(and(
+      eq(playbookTriggerSubscriptions.id, subscriptionId),
+      eq(playbookTriggerSubscriptions.project, project),
+    ));
+  if (!subscription) return null;
   return db.select().from(playbookTriggerReceipts).where(
     eq(playbookTriggerReceipts.subscriptionId, subscriptionId),
   ).orderBy(desc(playbookTriggerReceipts.createdAt)).limit(50);

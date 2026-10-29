@@ -274,6 +274,8 @@ const UNTIL_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({
 
 const LOOP_OUTPUT_SCHEMA = z.object({
   iterations: z.number().int().nonnegative(),
+  /** False once an until condition is met. Absent on foreach, which uses `iterations`. */
+  continue: z.boolean().optional(),
 });
 
 export function apexActionParameterSchema(operation: string): z.ZodTypeAny {

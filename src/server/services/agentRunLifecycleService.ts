@@ -9,7 +9,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import { db } from '../db/drizzle';
-import { agentRuns } from '../db/schema';
+import { agentRuns, playbookStepRuns } from '../db/schema';
 import {
   AGENT_RUN_TERMINAL_STATUSES,
   isAgentRunTerminalReason,
@@ -871,15 +871,24 @@ export async function markTerminal(
         where: eq(agentRuns.id, runId),
         columns: { cloudPrUrl: true, requestedByUserId: true },
       });
+      const findOwner = db.query.playbookStepRuns?.findFirst;
+      const owner = findOwner
+        ? await findOwner({
+          where: eq(playbookStepRuns.agentRunId, runId),
+          columns: { runId: true },
+        })
+        : undefined;
       const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
       await publishPlaybookApexEvent({
         project: latest.projectId,
         type: 'cloud-agent.run-finished',
         entityId: runId,
         actorUserId: finished?.requestedByUserId ?? null,
+        ...(owner?.runId ? { sourceRunId: owner.runId } : {}),
         data: {
           status: input.status,
           pullRequestUrl: finished?.cloudPrUrl ?? null,
+          ...(owner?.runId ? { playbookRunId: owner.runId } : {}),
         },
       });
     } catch (error) {

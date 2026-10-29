@@ -27,7 +27,16 @@ import {
 } from '../playbookGuardService';
 import { isBranchStepType } from '../playbookSteps/registry';
 import { resolveRunStepConfig } from '../playbookStepBindings';
-import type { PlaybookGraph, PlaybookGraphNode } from '../../../shared/types/playbook';
+import {
+  exposeForeachItem,
+  iterationIndex,
+  loopStepShouldSkip,
+} from '../playbookLoopCursor';
+import {
+  PLAYBOOK_GUARD_LIMITS,
+  type PlaybookGraph,
+  type PlaybookGraphNode,
+} from '../../../shared/types/playbook';
 
 /**
  * Loads an engine package through the real module loader.
@@ -160,7 +169,7 @@ export function armWorkflowId(runId: string, armStartId: string): string {
 
 function armNeedsNesting(
   graph: PlaybookGraph,
-  start: PlaybookGraphNode | undefined,
+  start: PlaybookGraphNode | undefined
 ): boolean {
   if (!start) return false;
   const outbound = graph.edges.filter((edge) => edge.from === start.id);
@@ -175,11 +184,20 @@ function armNeedsNesting(
 export function engineResumeStep(
   graph: PlaybookGraph,
   runId: string,
-  stepId: string,
+  stepId: string
 ): string | string[] {
-  const found = findResumePath(graph, runId, startNode(graph), stepId, [], new Set());
-  if (!found || found.length <= 1) return stepId;
-  return found;
+  const { baseId, index } = iterationIndex(stepId);
+  const found = findResumePath(
+    graph,
+    runId,
+    startNode(graph),
+    baseId,
+    [],
+    new Set()
+  );
+  if (!found || found.length <= 1) return index > 0 ? stepId : baseId;
+  if (index === 0) return found;
+  return [...found.slice(0, -1), stepId];
 }
 
 function findResumePath(
@@ -189,27 +207,46 @@ function findResumePath(
   stepId: string,
   nestedWorkflowIds: string[],
   visited: Set<string>,
+  stopBefore?: string
 ): string[] | null {
   let node = start;
   while (node && !visited.has(node.id)) {
+    if (stopBefore && node.id === stopBefore) return null;
     const current = node;
     visited.add(current.id);
     if (current.id === stepId) return [...nestedWorkflowIds, current.id];
     const outbound = graph.edges.filter((edge) => edge.from === current.id);
     if (current.parallel && outbound.length > 1) {
-      for (const edge of outbound) {
-        const target = graph.nodes.find((candidate) => candidate.id === edge.to);
+      const arms = outbound.map((edge) =>
+        armUntilJoin(
+          graph,
+          graph.nodes.find((candidate) => candidate.id === edge.to)
+        )
+      );
+      const joinId = sharedJoinId(arms);
+      const nestArms = arms.some((arm) => arm.nodes.length > 1);
+      for (let index = 0; index < outbound.length; index += 1) {
+        const edge = outbound[index];
+        const target = graph.nodes.find(
+          (candidate) => candidate.id === edge.to
+        );
+        const nested = nestArms
+          ? [...nestedWorkflowIds, armWorkflowId(runId, edge.to)]
+          : nestedWorkflowIds;
         const found = findResumePath(
           graph,
           runId,
           target,
           stepId,
-          nestedWorkflowIds,
+          nested,
           new Set(visited),
+          joinId
         );
         if (found) return found;
       }
-      return null;
+      if (!joinId) return null;
+      node = graph.nodes.find((candidate) => candidate.id === joinId);
+      continue;
     }
     if (isBranchStepType(current.stepType) && outbound.length > 0) {
       for (const edge of outbound) {
@@ -223,7 +260,7 @@ function findResumePath(
           target,
           stepId,
           nested,
-          new Set(visited),
+          new Set(visited)
         );
         if (found) return found;
       }
@@ -233,6 +270,108 @@ function findResumePath(
     node = next ? graph.nodes.find((n) => n.id === next.to) : undefined;
   }
   return null;
+}
+
+function staticMaxIterations(node: PlaybookGraphNode): number {
+  const raw = node.config?.maxIterations;
+  return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : 1;
+}
+
+/** Nodes from `start` up to, but not including, a join or a node with more than one inbound edge. */
+function armUntilJoin(
+  graph: PlaybookGraph,
+  start: PlaybookGraphNode | undefined
+): { nodes: PlaybookGraphNode[]; next: string | undefined } {
+  const nodes: PlaybookGraphNode[] = [];
+  let current = start;
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    if (outbound.length !== 1) {
+      nodes.push(current);
+      return { nodes, next: undefined };
+    }
+    const nextId = outbound[0].to;
+    const next = graph.nodes.find((node) => node.id === nextId);
+    const inbound = graph.edges.filter((edge) => edge.to === nextId);
+    if (next?.stepType === 'join' || inbound.length > 1) {
+      nodes.push(current);
+      return { nodes, next: nextId };
+    }
+    nodes.push(current);
+    seen.add(current.id);
+    current = next;
+  }
+  return { nodes, next: undefined };
+}
+
+function sharedJoinId(
+  arms: Array<{ next: string | undefined }>
+): string | undefined {
+  const joinId = arms[0]?.next;
+  if (!joinId || !arms.every((arm) => arm.next === joinId)) return undefined;
+  return joinId;
+}
+
+/**
+ * The linear steps a foreach or until repeats. A join, or a node with several inbound edges,
+ * ends the body and stays outside the loop.
+ */
+function linearLoopBody(
+  graph: PlaybookGraph,
+  startId: string
+): { body: PlaybookGraphNode[]; after: PlaybookGraphNode | undefined } | null {
+  const body: PlaybookGraphNode[] = [];
+  let current = graph.nodes.find((node) => node.id === startId);
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    if (current.stepType === 'join') return { body, after: current };
+    const inbound = graph.edges.filter((edge) => edge.to === current.id);
+    if (body.length > 0 && inbound.length > 1) return { body, after: current };
+    const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    if (outbound.length > 1) return null;
+    body.push(current);
+    seen.add(current.id);
+    const next = outbound[0]
+      ? graph.nodes.find((node) => node.id === outbound[0].to)
+      : undefined;
+    if (!next) return { body, after: undefined };
+    current = next;
+  }
+  return { body, after: undefined };
+}
+
+function unrolledLoop(
+  graph: PlaybookGraph,
+  node: PlaybookGraphNode
+): {
+  cap: number;
+  body: PlaybookGraphNode[];
+  after: PlaybookGraphNode | undefined;
+} | null {
+  if (node.stepType !== 'foreach' && node.stepType !== 'until') return null;
+  const configured = staticMaxIterations(node);
+  const cap = Math.min(configured, PLAYBOOK_GUARD_LIMITS.maxStepsPerRun);
+  if (cap <= 1) return null;
+  const outbound = graph.edges.filter((edge) => edge.from === node.id);
+  if (outbound.length !== 1) return null;
+  const region = linearLoopBody(graph, outbound[0].to);
+  if (!region || region.body.length === 0) return null;
+  return { cap, body: region.body, after: region.after };
+}
+
+function engineUntilConfig(
+  graph: PlaybookGraph,
+  node: PlaybookGraphNode,
+  engineStepId: string
+): Record<string, unknown> {
+  const config = { ...(node.config ?? {}) };
+  if (node.stepType !== 'until' || !unrolledLoop(graph, node)) return config;
+  const { index } = iterationIndex(engineStepId);
+  const configured = staticMaxIterations(node);
+  const cap = Math.min(configured, PLAYBOOK_GUARD_LIMITS.maxStepsPerRun);
+  config.iteration = index >= cap ? configured : index;
+  return config;
 }
 
 /**
@@ -248,50 +387,107 @@ function chainWorkflow(
   modules: EngineModules,
   runId: string,
   visited: Set<string>,
+  stopBefore?: string
 ): any {
   let node = start;
   while (node && !visited.has(node.id)) {
+    if (stopBefore && node.id === stopBefore) return workflow;
     const current = node;
     visited.add(current.id);
     workflow = workflow.then(stepById.get(current.id));
     const outbound = graph.edges.filter((edge) => edge.from === current.id);
     if (current.parallel && outbound.length > 1) {
-      workflow = workflow.parallel(outbound.map((edge) => stepById.get(edge.to)));
-      const nextIds = outbound.map((edge) =>
-        graph.edges.find((candidate) => candidate.from === edge.to)?.to);
-      const joinId = nextIds[0];
-      if (joinId && nextIds.every((id) => id === joinId)) {
+      const arms = outbound.map((edge) =>
+        armUntilJoin(
+          graph,
+          graph.nodes.find((candidate) => candidate.id === edge.to)
+        )
+      );
+      const joinId = sharedJoinId(arms);
+      const nestArms = arms.some((arm) => arm.nodes.length > 1);
+      workflow = workflow.parallel(
+        outbound.map((edge) => {
+          const target = graph.nodes.find(
+            (candidate) => candidate.id === edge.to
+          );
+          if (!nestArms || !target) return stepById.get(edge.to);
+          const armVisited = new Set(visited);
+          const nested = modules.createWorkflow({
+            id: armWorkflowId(runId, edge.to),
+            inputSchema: z.any(),
+            outputSchema: z.any(),
+          });
+          const built = chainWorkflow(
+            nested,
+            target,
+            graph,
+            stepById,
+            modules,
+            runId,
+            armVisited,
+            joinId
+          ).commit();
+          for (const id of armVisited) visited.add(id);
+          return built;
+        })
+      );
+      if (!nestArms) {
+        for (const arm of arms) {
+          for (const step of arm.nodes) visited.add(step.id);
+        }
+      }
+      if (joinId) {
         node = graph.nodes.find((candidate) => candidate.id === joinId);
         continue;
       }
       return workflow;
     }
     if (isBranchStepType(current.stepType) && outbound.length > 0) {
-      return workflow.branch(outbound.map((edge) => {
-        const target = graph.nodes.find((n) => n.id === edge.to);
-        const condition = async ({ inputData }: { inputData: Record<string, unknown> }) =>
-          inputData.continuation === edge.condition;
-        if (!armNeedsNesting(graph, target)) {
-          return [condition, stepById.get(edge.to)];
+      return workflow.branch(
+        outbound.map((edge) => {
+          const target = graph.nodes.find((n) => n.id === edge.to);
+          const condition = async ({
+            inputData,
+          }: {
+            inputData: Record<string, unknown>;
+          }) => inputData.continuation === edge.condition;
+          if (!armNeedsNesting(graph, target)) {
+            return [condition, stepById.get(edge.to)];
+          }
+          const arm = modules.createWorkflow({
+            id: armWorkflowId(runId, edge.to),
+            inputSchema: z.any(),
+            outputSchema: z.any(),
+          });
+          return [
+            condition,
+            chainWorkflow(
+              arm,
+              target,
+              graph,
+              stepById,
+              modules,
+              runId,
+              new Set(visited)
+            ).commit(),
+          ];
+        })
+      );
+    }
+    const loop = unrolledLoop(graph, current);
+    if (loop) {
+      for (let index = 0; index < loop.cap; index += 1) {
+        for (const step of loop.body) {
+          const stepId = index === 0 ? step.id : `${step.id}#${index}`;
+          visited.add(step.id);
+          workflow = workflow.then(stepById.get(stepId));
         }
-        const arm = modules.createWorkflow({
-          id: armWorkflowId(runId, edge.to),
-          inputSchema: z.any(),
-          outputSchema: z.any(),
-        });
-        return [
-          condition,
-          chainWorkflow(
-            arm,
-            target,
-            graph,
-            stepById,
-            modules,
-            runId,
-            new Set(visited),
-          ).commit(),
-        ];
-      }));
+        if (current.stepType === 'until') {
+          workflow = workflow.then(stepById.get(`${current.id}#${index + 1}`));
+        }
+      }
+      node = loop.after;
+      continue;
     }
     const next = outbound[0];
     node = next ? graph.nodes.find((n) => n.id === next.to) : undefined;
@@ -324,10 +520,9 @@ export function translate(
 ) {
   const { createWorkflow, createStep } = modules;
 
-  const stepById = new Map(graph.nodes.map((node) => [
-    node.id,
+  const createApexStep = (node: PlaybookGraphNode, engineStepId: string) =>
     createStep({
-      id: node.id,
+      id: engineStepId,
       inputSchema: z.any(),
       resumeSchema: z.any(),
       suspendSchema: z.any(),
@@ -339,11 +534,33 @@ export function translate(
          * and those are the single place a suspended step completes. Writing it again here would
          * put that transition in two places and make one of them wrong eventually.
          */
-        if (resumeData) return { stepId: node.id };
-        const boundConfig = await resolveRunStepConfig(context.runId, node.config ?? {});
+        if (resumeData) return { stepId: engineStepId };
+        if (
+          await loopStepShouldSkip(context.runId, graph, node, engineStepId)
+        ) {
+          if (iterationIndex(engineStepId).index === 0) {
+            const skipped = await beginStepRun({
+              runId: context.runId,
+              stepId: engineStepId,
+              stepType: node.stepType,
+              inputInline: { skipped: true },
+            });
+            await completeStepRunIfOpen({
+              stepRunId: skipped.id,
+              output: { skipped: true },
+            });
+          }
+          return { stepId: engineStepId, skipped: true };
+        }
+        await exposeForeachItem(context.runId, graph, engineStepId);
+        const stepConfig = engineUntilConfig(graph, node, engineStepId);
+        const boundConfig = await resolveRunStepConfig(
+          context.runId,
+          stepConfig
+        );
         const stepRun = await beginStepRun({
           runId: context.runId,
-          stepId: node.id,
+          stepId: engineStepId,
           stepType: node.stepType,
           inputInline: boundConfig,
         });
@@ -361,12 +578,15 @@ export function translate(
               stepRunId: stepRun.id,
               reason: error.message,
             });
-            return suspend({ stepId: node.id });
+            return suspend({ stepId: engineStepId });
           }
 
           await failStepRun({
             stepRunId: stepRun.id,
-            reason: error instanceof Error ? error.message : `Step ${node.id} failed`,
+            reason:
+              error instanceof Error
+                ? error.message
+                : `Step ${engineStepId} failed`,
           });
           throw error;
         }
@@ -381,18 +601,21 @@ export function translate(
           outcome = await executeStep({
             runId: context.runId,
             stepRunId: stepRun.id,
-            stepId: node.id,
+            stepId: engineStepId,
             stepType: node.stepType,
             project: context.project,
             initiatorUserId: context.initiatorUserId,
-            config: node.config ?? {},
+            config: stepConfig,
             graph,
           });
         } catch (error) {
           if (error instanceof PlaybookRunTerminatedError) throw error;
           await failStepRun({
             stepRunId: stepRun.id,
-            reason: error instanceof Error ? error.message : `Step ${node.id} failed`,
+            reason:
+              error instanceof Error
+                ? error.message
+                : `Step ${engineStepId} failed`,
           });
           // Rethrown so Mastra stops the chain too. Apex's run row is failed by the caller.
           throw error;
@@ -403,20 +626,50 @@ export function translate(
          * agent run id. Mastra is told to park so that its notion of position matches Apex's.
          */
         if (outcome.kind === 'suspended') {
-          const s = await suspend({ stepId: node.id });
+          const s = await suspend({ stepId: engineStepId });
           return s;
         }
 
         // Conditional because adapters own their status writes; this is the backstop for one that
         // reports completion without having recorded it.
-        await completeStepRunIfOpen({ stepRunId: stepRun.id, output: outcome.output });
+        await completeStepRunIfOpen({
+          stepRunId: stepRun.id,
+          output: outcome.output,
+        });
         if (outcome.output?.outcome === 'stale') {
           throw new PlaybookRunTerminatedError();
         }
-        return { stepId: node.id, ...(outcome.output ?? {}) };
+        return { stepId: engineStepId, ...(outcome.output ?? {}) };
       },
-    }),
-  ]));
+    });
+
+  const stepById = new Map(
+    graph.nodes.map((node) => [node.id, createApexStep(node, node.id)])
+  );
+  for (const node of graph.nodes) {
+    const loop = unrolledLoop(graph, node);
+    if (!loop) continue;
+    for (let index = 1; index < loop.cap; index += 1) {
+      for (const step of loop.body) {
+        stepById.set(
+          `${step.id}#${index}`,
+          createApexStep(step, `${step.id}#${index}`)
+        );
+      }
+      if (node.stepType === 'until') {
+        stepById.set(
+          `${node.id}#${index}`,
+          createApexStep(node, `${node.id}#${index}`)
+        );
+      }
+    }
+    if (node.stepType === 'until') {
+      stepById.set(
+        `${node.id}#${loop.cap}`,
+        createApexStep(node, `${node.id}#${loop.cap}`)
+      );
+    }
+  }
 
   const workflow = createWorkflow({
     id: `apex-playbook-${context.runId}`,
@@ -430,7 +683,7 @@ export function translate(
     stepById,
     modules,
     context.runId,
-    new Set(),
+    new Set()
   ).commit();
 }
 
@@ -552,9 +805,14 @@ export async function retryStepRunOnEngine(
   stepRunId: string,
   stepId: string
 ): Promise<EngineOutcome> {
-  const node = graph.nodes.find((candidate) => candidate.id === stepId);
+  const node = graph.nodes.find(
+    (candidate) => candidate.id === iterationIndex(stepId).baseId
+  );
   if (!node) {
-    return { endedAs: 'failed', error: new Error(`No graph node "${stepId}" to retry.`) };
+    return {
+      endedAs: 'failed',
+      error: new Error(`No graph node "${stepId}" to retry.`),
+    };
   }
 
   try {
@@ -564,23 +822,23 @@ export async function retryStepRunOnEngine(
     const outcome = await executeStep({
       runId: context.runId,
       stepRunId,
-      stepId: node.id,
+      stepId,
       stepType: node.stepType,
       project: context.project,
       initiatorUserId: context.initiatorUserId,
-      config: node.config ?? {},
+      config: engineUntilConfig(graph, node, stepId),
       graph,
     });
 
     if (outcome.kind === 'suspended') {
-      return { endedAs: 'suspended', suspendedStepId: node.id };
+      return { endedAs: 'suspended', suspendedStepId: stepId };
     }
 
     await completeStepRunIfOpen({ stepRunId, output: outcome.output });
     if (outcome.output?.outcome === 'stale') {
       throw new PlaybookRunTerminatedError();
     }
-    return resumeRunOnEngine(graph, context, node.id);
+    return resumeRunOnEngine(graph, context, stepId);
   } catch (error) {
     if (error instanceof Error && error.name === 'PlaybookRunTerminatedError') {
       return { endedAs: 'completed' };

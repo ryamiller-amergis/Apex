@@ -44,7 +44,10 @@ export async function executeUntilStep(
     await failStepRun({ stepRunId: context.stepRunId, reason });
     throw error;
   }
-  const output = parseStepOutput('until', { iterations: config.iteration });
+  const output = parseStepOutput('until', {
+    iterations: config.iteration,
+    continue: !config.done && config.iteration < config.maxIterations,
+  });
   await completeStepRun({ stepRunId: context.stepRunId, output });
   return { kind: 'completed', output };
 }

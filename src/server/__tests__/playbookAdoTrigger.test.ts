@@ -3,7 +3,7 @@ import {
   adoWorkItemCreatedReceipt,
   readAdoWorkItemTypeFilter,
 } from '../services/playbookWebhookService';
-import { withAdoWorkItemRunInput } from '../services/playbookTriggerDispatchService';
+import { storedPlaybookTriggerDispatch, withAdoWorkItemRunInput } from '../services/playbookTriggerDispatchService';
 
 function created(type: string, id = 4821): Record<string, unknown> {
   return {
@@ -43,6 +43,35 @@ describe('Azure DevOps work item trigger', () => {
       ...created('Production Bug'),
       eventType: 'workitem.updated',
     }, 'Production Bug')).toBe('skip');
+  });
+
+  it('keeps the work item fields when a receipt is retried', () => {
+    const stored = storedPlaybookTriggerDispatch({
+      source: 'azure_devops',
+      entityId: '4821',
+      actorUserId: null,
+      data: {
+        workItemId: 4821,
+        workItemType: 'Production Bug',
+        title: 'Checkout fails after deploy',
+        state: 'New',
+      },
+    });
+    const legacy = storedPlaybookTriggerDispatch({
+      workItemId: 4821,
+      workItemType: 'Production Bug',
+      title: 'Checkout fails after deploy',
+      state: 'New',
+    }, 'azure_devops');
+    expect(stored.source).toBe('azure_devops');
+    expect(withAdoWorkItemRunInput(stored.source, {}, stored.event.data)).toMatchObject({
+      workItemId: 4821,
+      workItemType: 'Production Bug',
+    });
+    expect(withAdoWorkItemRunInput(legacy.source, {}, legacy.event.data)).toMatchObject({
+      workItemId: 4821,
+      workItemType: 'Production Bug',
+    });
   });
 
   it('leaves webhook and schedule run input alone', () => {
