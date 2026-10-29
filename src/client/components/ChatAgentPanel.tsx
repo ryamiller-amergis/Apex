@@ -22,6 +22,7 @@ import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { BrandLogo } from './BrandLogo';
+import { BuildAgentHomePill } from './BuildAgentHomePill';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
@@ -997,6 +998,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 >
                   {quickSkillPills.length > 0 && <h3>Skills</h3>}
                   <div className={styles.pillRow}>
+                    <BuildAgentHomePill project={selectedProject} />
                     {quickSkillPills.map((pill) => (
                       <button
                         key={pill.skillPath}

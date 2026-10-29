@@ -13,12 +13,15 @@ const mockValues = jest.fn(() => ({
 const mockInsert = jest.fn(() => ({ values: mockValues }));
 const mockUpdate = jest.fn(() => ({ set: mockSet }));
 const mockSelect = jest.fn(() => ({ from: () => ({ where: mockWhere }) }));
+const mockDeleteWhere = jest.fn().mockResolvedValue(undefined);
+const mockDelete = jest.fn(() => ({ where: mockDeleteWhere }));
 const mockTransaction = jest.fn(
   async (fn: (tx: unknown) => Promise<unknown>) => {
     const tx = {
       select: mockSelect,
       update: mockUpdate,
       insert: mockInsert,
+      delete: mockDelete,
     };
     return fn(tx);
   },
@@ -57,6 +60,7 @@ jest.mock('../services/featureFlagService', () => ({
 }));
 
 import { upsertSkillConfig } from '../services/projectSettingsService';
+import { projectSkillWorkflowSettings } from '../db/schema';
 
 describe('projectSettingsService repository checkout invalidation', () => {
   beforeEach(() => {
@@ -184,5 +188,56 @@ describe('projectSettingsService repository checkout invalidation', () => {
     )[0];
     expect(setArg.defaultModel).toBe('gpt-5');
     expect(setArg.repositoryCheckoutStatus).toBeUndefined();
+  });
+
+  it('VT-06b: a workflow-only model edit mirrors the workflow row and leaves checkout status alone', async () => {
+    mockLimit.mockResolvedValueOnce([
+      {
+        id: 'cfg-1',
+        skillProvider: 'ado',
+        skillRepo: 'AI-Pilot',
+        skillBranch: 'main',
+        isDefault: true,
+        project: 'Apex',
+        repositoryCheckoutStatus: 'ready',
+        repositoryCheckoutSha: 'abc',
+      },
+    ]);
+    mockReturning.mockResolvedValueOnce([
+      {
+        id: 'cfg-1',
+        project: 'Apex',
+        friendlyName: 'Default',
+        skillProvider: 'ado',
+        skillRepo: 'AI-Pilot',
+        skillBranch: 'main',
+        isDefault: true,
+        interviewModel: 'gpt-5',
+        repositoryCheckoutStatus: 'ready',
+        repositoryCheckoutSha: 'abc',
+      },
+    ]);
+
+    await upsertSkillConfig({
+      id: 'cfg-1',
+      project: 'Apex',
+      friendlyName: 'Default',
+      skillRepo: 'AI-Pilot',
+      skillBranch: 'main',
+      skillProvider: 'ado',
+      interviewModel: 'gpt-5',
+    });
+
+    const setArg = (
+      mockSet.mock.calls[0] as unknown as [Record<string, unknown>]
+    )[0];
+    expect(setArg.repositoryCheckoutStatus).toBeUndefined();
+    expect(mockInsert).toHaveBeenCalledWith(projectSkillWorkflowSettings);
+    expect(mockValues).toHaveBeenCalledWith([
+      expect.objectContaining({ settingsId: 'cfg-1', workflow: 'interview', model: 'gpt-5' }),
+    ]);
+    expect(mockValues).not.toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ repositoryCheckoutStatus: expect.anything() })]),
+    );
   });
 });

@@ -39,6 +39,15 @@ import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
+import { autoDraftBuildBriefForThread } from '../services/buildBriefService';
+import { prepareBuildIntakeTurn } from '../services/buildIntakeService';
+import { isBuildIntakeThread } from '../services/buildIntakeThread';
+import { isBuildFromPromptEnabled } from '../services/buildAccessService';
+import {
+  BUILD_FLAG_DISABLED_CODE,
+  BUILD_INTAKE_ATTACHMENTS_MESSAGE,
+  BUILD_INTAKE_PAUSED_MESSAGE,
+} from '../../shared/types/buildAccess';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
 import {
   replayRunEventPage,
@@ -746,6 +755,26 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
 
   const thread = (req as ThreadRequest).thread!;
   const requesterUserId = getUserId(req);
+  const buildIntake = isBuildIntakeThread(thread);
+  if (buildIntake) {
+    const buildsEnabled = await isBuildFromPromptEnabled({
+      userId: requesterUserId,
+      project: thread.kickoff.project,
+    });
+    // @feature-flag:build-from-prompt start winner=enabled
+    if (!buildsEnabled) {
+      // @feature-flag:build-from-prompt disabled-start
+      return res.status(403).json({ error: BUILD_INTAKE_PAUSED_MESSAGE, code: BUILD_FLAG_DISABLED_CODE });
+      // @feature-flag:build-from-prompt disabled-end
+    }
+    // @feature-flag:build-from-prompt enabled-start
+    // Enabled projects accept build-intake messages.
+    // @feature-flag:build-from-prompt enabled-end
+    // @feature-flag:build-from-prompt end
+    if (attachments.length > 0) {
+      return res.status(400).json({ error: BUILD_INTAKE_ATTACHMENTS_MESSAGE });
+    }
+  }
 
   let releaseAdoWriteTurn = () => {};
   let durableToolGrant:
@@ -804,7 +833,23 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   let internalContext: string | undefined;
-  if (isMultiAgentAssistedThread(thread)) {
+  let draftBriefAfterSend = false;
+  if (buildIntake) {
+    try {
+      const prepared = await prepareBuildIntakeTurn({
+        threadId,
+        messageText: body.text ?? '',
+        turnId: body.turnId ?? '',
+      });
+      internalContext = prepared.internalContext;
+      draftBriefAfterSend = prepared.confirmed;
+    } catch (err: unknown) {
+      console.error(
+        `[chat] build intake preparation failed for thread ${threadId}:`,
+        err instanceof Error ? err.name : 'UnknownError',
+      );
+    }
+  } else if (isMultiAgentAssistedThread(thread)) {
     try {
       const prepared = await prepareAutonomousInterviewTurn({
         mainThreadId: threadId,
@@ -839,6 +884,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         ...(internalContext ? { internalContext } : {}),
       },
     );
+    if (draftBriefAfterSend) void autoDraftBuildBriefForThread(threadId);
     if (submission?.route === 'durable') {
       releaseAdoWriteTurn();
       const accepted = submission.response;

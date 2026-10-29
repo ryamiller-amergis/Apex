@@ -194,6 +194,23 @@ const INTERVIEW_INPUT_SCHEMA = z.object({
       'must be from 1 hour through 14 days'
     )
     .optional(),
+  openingMessage: z.string().refine((value) => value.trim().length > 0, 'must be nonblank').optional(),
+  skillSettingsId: z.string().refine((value) => value.trim().length > 0, 'must be nonblank').optional(),
+});
+
+/** A build can sit through several revisions plus requester wait. Not overridable. */
+export const BUILD_STEP_DEADLINE_MS = INTERVIEW_MAX_DEADLINE_MS;
+
+const BUILD_INPUT_SCHEMA = z.object({
+  buildRunId: z.string().min(1),
+  briefId: z.string().min(1),
+  interviewId: z.string().min(1),
+});
+
+const BUILD_OUTPUT_SCHEMA = z.object({
+  buildRunId: z.string().min(1),
+  status: z.enum(['accepted', 'cancelled', 'failed']),
+  pullRequestUrl: z.string().min(1).optional(),
 });
 
 const INTERVIEW_OUTPUT_SCHEMA = z.object({
@@ -287,6 +304,20 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     requiredPermissions: ['playbooks:run'],
     inputSchema: INTERVIEW_INPUT_SCHEMA,
     outputSchema: INTERVIEW_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'build',
+    schemaVersion: 1,
+    canSuspend: true,
+    defaultDeadlineMs: BUILD_STEP_DEADLINE_MS,
+    deadlineOverridable: false,
+    suspendReason: 'build',
+    isAgentStep: false,
+    // Writes Apex rows and parks. Cursor and Azure DevOps run from a later dispatcher.
+    sideEffect: 'writes-apex',
+    requiredPermissions: ['builds:run'],
+    inputSchema: BUILD_INPUT_SCHEMA,
+    outputSchema: BUILD_OUTPUT_SCHEMA,
   },
 ];
 
@@ -589,9 +620,11 @@ export function assertSkillAllowed(stepType: string, skillPath: string): void {
  * The named three are a boot assertion, not a constraint on the registry — `createStepTypeRegistry`
  * stays generic so a fourth type can be registered by a caller without editing anything here.
  */
-export function validateStepTypeRegistry(): void {
-  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch', 'interview'];
-  const missing = expected.filter((stepType) => !stepTypeRegistry.has(stepType));
+export function validateStepTypeRegistry(
+  registry: { has(stepType: string): boolean } = stepTypeRegistry,
+): void {
+  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch', 'interview', 'build'];
+  const missing = expected.filter((stepType) => !registry.has(stepType));
 
   if (missing.length > 0) {
     throw new PlaybookStepTypeError(

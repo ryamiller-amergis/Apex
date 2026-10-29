@@ -118,3 +118,67 @@ describe('repoWorkspaceService Azure Files ownership handling', () => {
     }
   });
 });
+
+describe('repoWorkspaceService clone retry', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    mockGit.mockReset();
+    delete process.env.WEBSITE_SITE_NAME;
+    delete process.env.WEBSITE_INSTANCE_ID;
+  });
+
+  it('retries the clone once when a concurrent repack removed a pack mid-copy', async () => {
+    const materializeWorkspaceFromCache = await loadMaterialize();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-workspace-retry-'));
+    const workspaceDir = path.join(root, 'workspace');
+    let clones = 0;
+    mockGit.mockImplementation(async (args: string[]) => {
+      if (args.includes('clone') && ++clones === 1) {
+        throw new Error('fatal: packfile objects/pack/pack-1.pack cannot be accessed');
+      }
+      return '';
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(materializeWorkspaceFromCache(
+        path.join(root, 'cache.git'),
+        workspaceDir,
+        'main',
+        'https://example.invalid/apex.git',
+        { retryDelayMs: 0 },
+      )).resolves.toBeUndefined();
+
+      expect(clones).toBe(2);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('phase=materialize-retry'));
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('gives up after the second failed clone', async () => {
+    const materializeWorkspaceFromCache = await loadMaterialize();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-workspace-retry-'));
+    mockGit.mockRejectedValue(new Error('Remote branch missing not found'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(materializeWorkspaceFromCache(
+        path.join(root, 'cache.git'),
+        path.join(root, 'workspace'),
+        'missing',
+        'https://example.invalid/apex.git',
+        { retryDelayMs: 0 },
+      )).rejects.toThrow('not found');
+      expect(mockGit.mock.calls.filter(([args]) => (args as string[]).includes('clone'))).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

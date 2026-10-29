@@ -3,6 +3,7 @@ import type {
   ModuleApprovalModes,
   ReviewerDocumentType,
 } from './approvals';
+import type { BuildProfile } from './build';
 import type { EffortLevel } from './effort';
 import type { GroupWithMembers } from './groups';
 
@@ -242,6 +243,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
    * catalog migration.
    */
   prototypeDesignSystemPath?: string | null;
+  /** Saved through `PUT /api/admin/project-settings/:id/build-profile` only. */
+  buildProfile?: BuildProfile | null;
+  buildProfileUpdatedAt?: string | null;
+  buildProfileUpdatedBy?: string | null;
   /**
    * Optional path within the project's repo to a screen-inventory markdown file used in
    * EXTEND mode. When null, EXTEND falls back gracefully.

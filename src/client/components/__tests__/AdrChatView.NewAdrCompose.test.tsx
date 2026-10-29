@@ -21,9 +21,10 @@ jest.mock('../../hooks/useGroundingResumeGate', () => ({
     error: null,
   }),
 }));
+const mockNavigate = jest.fn();
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
-  useNavigate: () => jest.fn(),
+  useNavigate: () => mockNavigate,
 }));
 
 const startChat = jest.fn();
@@ -165,17 +166,16 @@ describe('NewAdrCompose', () => {
       reviewerIds: ['reviewer-1'],
       title: 'Choose event transport',
     })));
-    expect(global.fetch).toHaveBeenCalledWith(
-      '/api/chat/threads/thread-1/messages',
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/adr/adr-1',
       expect.objectContaining({
-        body: expect.stringContaining('"constraints.txt"'),
+        state: expect.objectContaining({
+          kickoffPrompt: 'Compare queue and event-stream options.',
+          kickoffAttachments: expect.arrayContaining([
+            expect.objectContaining({ name: 'constraints.txt' }),
+          ]),
+        }),
       }),
-    );
-    const messageCall = (global.fetch as jest.Mock).mock.calls.find((call) =>
-      String(call[0]).includes('/api/chat/threads/thread-1/messages'),
-    );
-    expect(JSON.parse(messageCall![1].body).turnId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
     expect(clearAttachments).toHaveBeenCalled();
     expect(mockUseReviewerAvailability).toHaveBeenCalledWith('Apex', 'adr');
@@ -297,5 +297,76 @@ describe('NewAdrCompose', () => {
       /project administrator must clone/i,
     );
     expect(createAdr).not.toHaveBeenCalled();
+  });
+
+  it('shows the ADR chat shell and navigates before the kickoff message POST finishes', async () => {
+    let releaseStart: (value: { threadId: string }) => void = () => {};
+    let releaseMessages: ((value: { ok: boolean; json: () => Promise<{ ok: boolean }> }) => void) | undefined;
+    startChat.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseStart = resolve;
+      }),
+    );
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      if (String(url).includes('/messages')) {
+        return new Promise((resolve) => {
+          releaseMessages = resolve;
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/adr/new']}>
+          <AdrChatView />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Choose event transport' } });
+    fireEvent.change(screen.getByPlaceholderText(/describe what is being built/i), {
+      target: { value: 'Compare queue and event-stream options.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start ADR' }));
+    expect(screen.getByTestId('adr-compose-title')).toBeInTheDocument();
+    expect(screen.queryByTestId('adr-preparation-state')).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm reviewers' }));
+
+    try {
+      await waitFor(() => {
+        expect(screen.getByTestId('adr-preparation-state')).toHaveTextContent(
+          /Preparing your ADR interview/i,
+        );
+      });
+      expect(screen.getByText('Compare queue and event-stream options.')).toBeInTheDocument();
+      expect(screen.queryByTestId('adr-compose-title')).not.toBeInTheDocument();
+      expect(mockNavigate).not.toHaveBeenCalledWith(
+        '/adr/adr-1',
+        expect.anything(),
+      );
+
+      releaseStart({ threadId: 'thread-1' });
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith(
+          '/adr/adr-1',
+          expect.objectContaining({
+            state: expect.objectContaining({
+              kickoffPrompt: 'Compare queue and event-stream options.',
+            }),
+          }),
+        );
+      });
+      expect(screen.getByTestId('adr-preparation-state')).toBeInTheDocument();
+      expect(screen.queryByTestId('adr-compose-title')).not.toBeInTheDocument();
+    } finally {
+      releaseStart({ threadId: 'thread-1' });
+      releaseMessages?.({ ok: true, json: async () => ({ ok: true }) });
+    }
   });
 });

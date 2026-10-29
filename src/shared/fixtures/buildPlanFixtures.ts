@@ -125,10 +125,33 @@ export const validDeltaPlan = {
   delta: { baseRevisionNumber: 1, carriedOverTaskKeys: ['kept-task'] },
 };
 
+export const validJustifiedPlan = {
+  classification: 'small' as const,
+  tasks: [
+    {
+      key: 'new-widget',
+      role: 'implementer' as const,
+      blockers: [],
+      ownedFiles: ['src/new-widget.ts'],
+      reuse: [],
+      reuseJustification: {
+        searches: ['widget helper'],
+        conclusion: 'Nothing reusable exists',
+      },
+      runMode: 'own_agent' as const,
+      covers: ['AC-1'],
+    },
+  ],
+  tests: validSmallPlan.tests,
+  riskConstraints: [],
+  contextNotesPath: 'docs/context-notes.md',
+};
+
 export const validBuildPlans = [
   { id: 'valid-small', plan: validSmallPlan },
   { id: 'valid-full', plan: validFullPlan },
   { id: 'valid-delta', plan: validDeltaPlan },
+  { id: 'valid-justified', plan: validJustifiedPlan },
 ] as const;
 
 export interface BuildPlanInvalidFixture {

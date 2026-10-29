@@ -59,6 +59,8 @@ export interface ChatAttachmentMeta {
 export interface ChatThreadKickoff {
   project: string;
   repo: string;
+  /** Repository the skill is read from when it is not `repo` (the grounding repository). */
+  skillRepo?: string;
   branch?: string;
   /** Branch to fetch skills from (defaults to `branch` if not set) */
   skillBranch?: string;

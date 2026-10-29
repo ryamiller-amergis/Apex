@@ -34,6 +34,7 @@ import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
+import { BUILD_FROM_PROMPT_FLAG } from '../shared/types/featureFlags';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
 import {
@@ -122,6 +123,14 @@ const LoadTestRunDetailView = lazy(() =>
 const LoadTestsRouteGuard = lazy(() =>
   import('./components/LoadTestsRouteGuard').then((m) => ({ default: m.LoadTestsRouteGuard })),
 );
+const BuildsRouteGuard = lazy(() =>
+  import('./components/BuildsRouteGuard').then((m) => ({ default: m.BuildsRouteGuard })),
+);
+const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
+const NewBuildForm = lazy(() => import('./components/NewBuildForm').then((m) => ({ default: m.NewBuildForm })));
+const BuildIntakeChatRoute = lazy(() =>
+  import('./components/BuildIntakeChatRoute').then((m) => ({ default: m.BuildIntakeChatRoute })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -193,7 +202,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'mcp-servers' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -241,6 +250,8 @@ function App() {
                     ? 'load-tests'
                     : location.pathname.startsWith('/diagrams')
                     ? 'diagrams'
+                    : location.pathname === '/builds' || location.pathname.startsWith('/builds/')
+                    ? 'builds'
                     : location.pathname === '/mcp-servers' || location.pathname.startsWith('/mcp-servers/')
                     ? 'mcp-servers'
                     : 'not-found';
@@ -375,6 +386,9 @@ function App() {
         || streamAlignedProject !== selectedProject
       )
     );
+  const buildsEnabled = !homeFlagsLoading && homeFlags[BUILD_FROM_PROMPT_FLAG] === true;
+  const buildIntakeBuildId = /^\/builds\/([^/]+)\/intake\/?$/.exec(location.pathname)?.[1];
+  const isBuildIntakePath = buildIntakeBuildId !== undefined;
   const mcpServersEnabled =
     !homeFlagsLoading && homeFlags['mcp-servers'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
@@ -1010,6 +1024,8 @@ function App() {
             onNavigateLoadTests={() => navigateAwayFromHome('/load-tests')}
             onNavigateDiagrams={() => navigateAwayFromHome('/diagrams')}
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
+            onNavigateBuilds={() => navigateAwayFromHome('/builds')}
+            buildsEnabled={buildsEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
@@ -1067,6 +1083,8 @@ function App() {
             onNavigateWorkBoard={() => navigateAwayFromHome('/work-board')}
             workBoardEnabled={workBoardEnabled}
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
+            onNavigateBuilds={() => navigateAwayFromHome('/builds')}
+            buildsEnabled={buildsEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -1510,6 +1528,35 @@ function App() {
                   }
                   return <PlaybooksManagePage project={selectedProject} />;
                 })()}
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'builds' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <BuildsRouteGuard
+                  can={can}
+                  isSuperAdmin={isSuperAdmin}
+                  enabledViews={effectiveEnabledViews}
+                  flagEnabled={buildsEnabled || isBuildIntakePath}
+                  isLoading={homeFlagsLoading || !menuConfigReady || !permissionsLoaded}
+                  fallbackPath={resolveAccessibleRoute({
+                    canAccessHome,
+                    can,
+                    isSuperAdmin,
+                    enabledViews: effectiveEnabledViews,
+                    selectedProject,
+                    isInAnyGroup,
+                  })}
+                >
+                  {isBuildIntakePath ? (
+                    <BuildIntakeChatRoute buildId={buildIntakeBuildId} />
+                  ) : location.pathname === '/builds/new' ? (
+                    // data-testid-exempt — NewBuildForm owns its new-build-form root id; no data-testid prop
+                    <NewBuildForm project={selectedProject} />
+                  ) : (
+                    <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
+                  )}
+                </BuildsRouteGuard>
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (

@@ -22,10 +22,12 @@ import {
 } from '../../shared/types/build';
 import * as schema from '../db/schema';
 
-const TABLES_SQL = fs.readFileSync(
-  path.resolve(process.cwd(), 'migrations/20261023143900_a1a4_build-from-prompt-tables.sql'),
-  'utf8',
-);
+const TABLES_SQL = [
+  'migrations/20261023143900_a1a4_build-from-prompt-tables.sql',
+  'migrations/20261026210000_f4b1_build-start-queue.sql',
+]
+  .map((file) => fs.readFileSync(path.resolve(process.cwd(), file), 'utf8').split(/^--\s*Down Migration/im)[0])
+  .join('\n');
 const AGENT_SQL = fs.readFileSync(
   path.resolve(process.cwd(), 'migrations/20261023144000_c3d8_build-from-prompt-agent-runs.sql'),
   'utf8',
@@ -41,7 +43,7 @@ const BUILD_TABLES: PgTable[] = [
 ];
 
 function sqlNames(source: string, pattern: RegExp): string[] {
-  return [...source.matchAll(pattern)].map((match) => match[1]);
+  return [...new Set([...source.matchAll(pattern)].map((match) => match[1]))];
 }
 
 describe('VT-08 Drizzle matches the build migrations', () => {

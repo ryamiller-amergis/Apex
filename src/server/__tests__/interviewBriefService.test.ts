@@ -36,6 +36,7 @@ import { interviewBriefRevisions, interviewBriefs, interviews } from '../db/sche
 import {
   approveInterviewBrief,
   formatInterviewBriefForPrd,
+  InterviewBriefError,
   saveInterviewBrief,
 } from '../services/interviewBriefService';
 
@@ -332,6 +333,7 @@ describe('VT-BRIEF-5 — approving a draft resumes the Playbook when the step mo
       approvedAt: NOW,
       unresolvedCount: 2,
       resumed: true,
+      alreadyApproved: false,
       output: {
         interviewId: 'interview-1',
         briefId: 'brief-1',
@@ -445,6 +447,7 @@ describe('VT-BRIEF-6 — a second approval is the same version', () => {
       approvedAt: '2026-10-07T15:00:00.000Z',
       unresolvedCount: 2,
       resumed: false,
+      alreadyApproved: true,
       output: {
         interviewId: 'interview-1',
         briefId: 'brief-1',
@@ -510,5 +513,120 @@ describe('VT-BRIEF-7 — an ordinary interview approves without a Playbook resum
     expect(result.output.unresolvedCount).toBe(sections.unresolvedItems.length);
     expect(mockResumeStepRun).not.toHaveBeenCalled();
     expect(mockAdvanceRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-15 — inTransaction runs inside the approval transaction, before the step resumes (FEAT-006 A11)', () => {
+  const draft = {
+    id: 'brief-1',
+    interviewId: 'interview-1',
+    status: 'draft',
+    version: 2,
+    sections,
+    approvedBy: null,
+    approvedAt: null,
+  };
+
+  beforeEach(() => {
+    installDb({
+      interviews: [linkedInterview],
+      interview_briefs: [draft],
+      playbook_step_runs: [{ stepId: 'interview-node' }],
+    });
+  });
+
+  it('VT-15 calls the hook with the transaction and the approved version before resumeStepRun', async () => {
+    const order: string[] = [];
+    let inTransaction = false;
+    const runTransaction = mockTransaction.getMockImplementation()!;
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      inTransaction = true;
+      try { return await runTransaction(fn); } finally { inTransaction = false; }
+    });
+    mockResumeStepRun.mockImplementation(async () => { order.push('resume'); return true; });
+    const hook = jest.fn(async () => { order.push(inTransaction ? 'hook-in-tx' : 'hook-outside'); });
+
+    const result = await approveInterviewBrief({ interviewId: 'interview-1', approvedBy: 'user-pa', inTransaction: hook });
+
+    expect(hook).toHaveBeenCalledWith(
+      expect.objectContaining({ insert: expect.any(Function) }),
+      expect.objectContaining({ status: 'approved', version: 3, approvedBy: 'user-pa' }),
+    );
+    expect(order).toEqual(['hook-in-tx', 'resume']);
+    expect(result.alreadyApproved).toBe(false);
+  });
+
+  it('VT-15 fails the approval and leaves the step suspended when the hook throws', async () => {
+    const hook = jest.fn(async () => { throw new Error('revision write failed'); });
+
+    await expect(approveInterviewBrief({ interviewId: 'interview-1', approvedBy: 'user-pa', inTransaction: hook }))
+      .rejects.toThrow('revision write failed');
+    expect(mockResumeStepRun).not.toHaveBeenCalled();
+  });
+
+  it('does not call the hook for an already approved brief', async () => {
+    installDb({
+      interviews: [linkedInterview],
+      interview_briefs: [{ ...draft, status: 'approved', approvedBy: 'user-1', approvedAt: NOW }],
+      playbook_step_runs: [{ stepId: 'interview-node' }],
+    });
+    const hook = jest.fn(async () => undefined);
+
+    const result = await approveInterviewBrief({ interviewId: 'interview-1', approvedBy: 'user-pa', inTransaction: hook });
+
+    expect(result.alreadyApproved).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+  });
+});
+
+describe('FEAT-006 — saveInterviewBrief version check and in-transaction hook', () => {
+  const draft = {
+    id: 'brief-1',
+    interviewId: 'interview-1',
+    status: 'draft',
+    version: 2,
+    sections,
+    approvedBy: null,
+    approvedAt: null,
+  };
+
+  it('refuses with 409 and writes nothing when the version changed', async () => {
+    installDb({ interviews: [linkedInterview], interview_briefs: [draft], playbook_step_runs: [] });
+
+    const error = await saveInterviewBrief({ interviewId: 'interview-1', sections, savedBy: 'user-1', expectedVersion: 1 })
+      .catch((err: unknown) => err);
+
+    expect((error as InterviewBriefError).statusCode).toBe(409);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 when a brief appeared after the caller read none', async () => {
+    installDb({ interviews: [linkedInterview], interview_briefs: [draft], playbook_step_runs: [] });
+
+    const error = await saveInterviewBrief({ interviewId: 'interview-1', sections, savedBy: 'user-1', expectedVersion: null })
+      .catch((err: unknown) => err);
+
+    expect((error as InterviewBriefError).statusCode).toBe(409);
+  });
+
+  it('turns a lost first-insert race into a 409', async () => {
+    mockTransaction.mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+    const error = await saveInterviewBrief({ interviewId: 'interview-1', sections, savedBy: 'user-1', expectedVersion: null })
+      .catch((err: unknown) => err);
+
+    expect((error as InterviewBriefError).statusCode).toBe(409);
+  });
+
+  it('runs the hook inside the save transaction with the saved version', async () => {
+    installDb({ interviews: [linkedInterview], interview_briefs: [draft], playbook_step_runs: [] });
+    const hook = jest.fn(async () => undefined);
+
+    await saveInterviewBrief({ interviewId: 'interview-1', sections, savedBy: 'user-1', expectedVersion: 2, inTransaction: hook });
+
+    expect(hook).toHaveBeenCalledWith(
+      expect.objectContaining({ insert: expect.any(Function) }),
+      expect.objectContaining({ version: 3, status: 'draft' }),
+    );
   });
 });
