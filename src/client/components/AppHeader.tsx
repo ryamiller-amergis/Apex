@@ -4,6 +4,7 @@ import { BrandLogo } from './BrandLogo';
 import { FeatureRequestFab } from './FeatureRequestFab';
 import { FeatureRequestModal } from './FeatureRequestModal';
 import { NotificationBell } from './NotificationBell';
+import { QuickLinksMenu } from './QuickLinksMenu';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { canAccessMyWork } from '../utils/canAccessMyWork';
@@ -279,6 +280,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </select>
           </div>
         )}
+        <QuickLinksMenu
+          project={selectedProject}
+          hidden={hideProjectChrome}
+          canManage={can('quick-links:manage')}
+          canOpenSettings={can('quick-links:manage') && can('admin:roles')}
+          canAddPersonal={can('quick-links:personal')}
+          data-testid="app-header-quick-links"
+        />
         {can('notifications:view') && <NotificationBell />}
         {/* data-testid-exempt — pre-existing UserMenu; FEAT-006 Help lives on Apex Fab */}
         <UserMenu

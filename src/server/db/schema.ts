@@ -3527,6 +3527,44 @@ export const mcpServers = pgTable('mcp_servers', {
   projectIdx: index('idx_mcp_servers_project').on(t.project),
 }));
 
+export const projectQuickLinks = pgTable('project_quick_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  label: text('label').notNull(),
+  url: text('url').notNull(),
+  category: text('category'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdBy: text('created_by'),
+  updatedBy: text('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectIdx: index('idx_project_quick_links_project').on(t.project),
+  labelNotBlankCheck: check('project_quick_links_label_not_blank', sql`length(btrim(${t.label})) > 0`),
+  urlHttpCheck: check('project_quick_links_url_http', sql`${t.url} ~* '^https?://'`),
+}));
+
+export const userQuickLinks = pgTable('user_quick_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  label: text('label').notNull(),
+  url: text('url').notNull(),
+  category: text('category'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userProjectIdx: index('idx_user_quick_links_user_project').on(t.userId, t.project),
+  userProjectUrlKey: unique('user_quick_links_user_project_url_key').on(t.userId, t.project, t.url),
+  labelNotBlankCheck: check('user_quick_links_label_not_blank', sql`length(btrim(${t.label})) > 0`),
+  urlHttpCheck: check('user_quick_links_url_http', sql`${t.url} ~* '^https?://'`),
+}));
+
+export const userQuickLinksRelations = relations(userQuickLinks, ({ one }) => ({
+  user: one(appUsers, { fields: [userQuickLinks.userId], references: [appUsers.oid] }),
+}));
+
 export const workflowEvaluationDefinitions = pgTable('workflow_evaluation_definitions', {
   id: uuid('id').primaryKey().defaultRandom(),
   processKey: text('process_key').notNull(),

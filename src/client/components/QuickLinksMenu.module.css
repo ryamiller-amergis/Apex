@@ -1,0 +1,420 @@
+.wrapper {
+  position: relative;
+}
+
+.trigger {
+  height: 38px;
+  width: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--accent-color) 5%, var(--bg-primary));
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.trigger:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-primary));
+}
+
+.trigger:active {
+  transform: translateY(0);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  box-shadow: var(--glow-accent);
+}
+
+.triggerOpen {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-primary));
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── Panel ─────────────────────────────────────────────── */
+
+.menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 1000;
+  width: max-content;
+  min-width: 360px;
+  max-width: min(420px, calc(100vw - 24px));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+}
+
+.menuList:focus {
+  outline: none;
+}
+
+.menuList {
+  padding-top: 4px;
+}
+
+.searchBar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.searchIcon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+  box-shadow: var(--glow-accent);
+}
+
+.noMatches {
+  margin: 16px 12px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.showAll {
+  display: block;
+  margin: 2px 12px 6px 56px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-color);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.showAll:hover,
+.showAll:focus-visible {
+  outline: none;
+  background: var(--bg-secondary);
+}
+
+.section {
+  padding: 4px 8px 8px;
+}
+
+.section + .section {
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+}
+
+.sectionHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px 6px;
+}
+
+.sectionTitle {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sectionHint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.category {
+  padding-bottom: 4px;
+}
+
+.category + .category {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-color);
+}
+
+.empty {
+  margin: 4px 12px 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.inlineAction {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-color);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.inlineAction:hover,
+.inlineAction:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+/* ── Rows ──────────────────────────────────────────────── */
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+  transition: all 0.2s ease;
+}
+
+.row:hover,
+.row:focus-within {
+  background: var(--bg-secondary);
+}
+
+.rowLink {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.rowLink:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rowLabel,
+.rowHost {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowLabel {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.rowHost {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.rowExternal {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+.row:hover .rowExternal,
+.rowLink:focus-visible .rowExternal {
+  opacity: 1;
+}
+
+.rowEditable:hover .rowExternal,
+.rowEditable:focus-within .rowExternal {
+  opacity: 0;
+}
+
+.rowActions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  padding-left: 16px;
+  background: linear-gradient(to right, transparent, var(--bg-secondary) 16px);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+
+.row:hover .rowActions,
+.row:focus-within .rowActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rowAction {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.rowAction:hover,
+.rowAction:focus-visible {
+  outline: none;
+  background: var(--bg-tertiary);
+  color: var(--accent-color);
+}
+
+.rowActionDanger:hover,
+.rowActionDanger:focus-visible {
+  color: var(--error-color);
+}
+
+.actionIcon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* ── Footer ────────────────────────────────────────────── */
+
+.footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.footerButton {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.footerButton:hover,
+.footerButton:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  box-shadow: var(--glow-accent);
+}
+
+/* ── Toast ─────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--success-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  font-size: 0.9rem;
+}
+
+.toastDismiss {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.toastDismiss:hover,
+.toastDismiss:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  .trigger {
+    height: 44px;
+    width: 44px;
+  }
+
+  .menu {
+    min-width: 0;
+    width: calc(100vw - 24px);
+  }
+
+  .rowActions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
