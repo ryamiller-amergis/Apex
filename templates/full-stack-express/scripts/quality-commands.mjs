@@ -1,0 +1,16 @@
+export const qualityCommands = [
+  { id: 'build', script: 'build' },
+  { id: 'typecheck', script: 'typecheck' },
+  { id: 'lint', script: 'lint' },
+  { id: 'format', script: 'format:check' },
+  { id: 'openapi', script: 'openapi:check' },
+  { id: 'migrations', script: 'migrate:validate' },
+  { id: 'unit', script: 'test:unit' },
+  { id: 'component', script: 'test:component' },
+  { id: 'coverage', script: 'test:coverage' },
+  { id: 'api', script: 'test:api' },
+  { id: 'integration', script: 'test:integration' },
+  { id: 'contract', script: 'test:contract' },
+  { id: 'e2e', script: 'test:e2e' },
+  { id: 'a11y', script: 'test:a11y' },
+];
