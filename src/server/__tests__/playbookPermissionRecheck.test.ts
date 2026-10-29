@@ -17,6 +17,11 @@ const executeIngestArtifact = jest.fn();
 const executeBranch = jest.fn();
 const executeInterview = jest.fn();
 const executeBuild = jest.fn();
+const executeApexAction = jest.fn();
+const executeCloudAgent = jest.fn();
+const executeJoin = jest.fn();
+const executeForeach = jest.fn();
+const executeUntil = jest.fn();
 const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
@@ -49,6 +54,23 @@ jest.mock('../services/playbookSteps/interviewAdapter', () => ({
 
 jest.mock('../services/playbookSteps/buildAdapter', () => ({
   executeBuildStep: (...args: unknown[]) => executeBuild(...args),
+}));
+
+jest.mock('../services/playbookSteps/apexActionAdapter', () => ({
+  executeApexActionStep: (...args: unknown[]) => executeApexAction(...args),
+}));
+
+jest.mock('../services/playbookSteps/cloudAgentAdapter', () => ({
+  executeCloudAgentStep: (...args: unknown[]) => executeCloudAgent(...args),
+}));
+
+jest.mock('../services/playbookSteps/joinAdapter', () => ({
+  executeJoinStep: (...args: unknown[]) => executeJoin(...args),
+}));
+
+jest.mock('../services/playbookSteps/loopAdapters', () => ({
+  executeForeachStep: (...args: unknown[]) => executeForeach(...args),
+  executeUntilStep: (...args: unknown[]) => executeUntil(...args),
 }));
 
 jest.mock('../services/featureFlagService', () => ({
@@ -92,6 +114,28 @@ function context(stepType: string): PlaybookStepExecutionContext {
       briefId: 'brief-1',
       interviewId: 'interview-1',
     },
+    'apex-action': {
+      operation: 'create-work-item',
+      parameters: { workItemType: 'Bug', title: 'Fix the report', description: 'The total is wrong.' },
+    },
+    'cloud-agent': {
+      workItemId: 1,
+      workItemType: 'Bug',
+      state: 'New',
+    },
+    join: {
+      predecessors: ['left', 'right'],
+      policy: 'all',
+    },
+    foreach: {
+      maxIterations: 1,
+      items: [],
+    },
+    until: {
+      maxIterations: 1,
+      done: true,
+      iteration: 0,
+    },
   };
   return {
     runId: 'run-1',
@@ -119,6 +163,11 @@ beforeEach(() => {
   executeBranch.mockResolvedValue({ kind: 'completed', output: {} });
   executeInterview.mockResolvedValue({ kind: 'suspended' });
   executeBuild.mockResolvedValue({ kind: 'suspended' });
+  executeApexAction.mockResolvedValue({ kind: 'completed', output: {} });
+  executeCloudAgent.mockResolvedValue({ kind: 'suspended' });
+  executeJoin.mockResolvedValue({ kind: 'completed', output: {} });
+  executeForeach.mockResolvedValue({ kind: 'completed', output: {} });
+  executeUntil.mockResolvedValue({ kind: 'completed', output: {} });
   isFeatureEnabled.mockResolvedValue(true);
 });
 

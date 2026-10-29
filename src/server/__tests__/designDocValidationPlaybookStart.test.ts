@@ -47,6 +47,9 @@ jest.mock('../services/playbookDefinitionService', () => ({
   createDefinition: jest.fn(),
   publishDraft: jest.fn(),
 }));
+jest.mock('../services/playbookApexEventService', () => ({
+  publishPlaybookApexEvent: jest.fn(async () => ({ started: [] })),
+}));
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn(),
   resolveSkillConfig: (...args: unknown[]) => resolveSkillConfig(...args),

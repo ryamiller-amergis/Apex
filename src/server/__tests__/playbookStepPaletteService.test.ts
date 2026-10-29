@@ -5,7 +5,20 @@ describe('listPlaybookStepPaletteItems', () => {
     const items = listPlaybookStepPaletteItems();
     const stepTypes = items.map((item) => item.stepType).sort();
     expect(stepTypes).toEqual(
-      ['approval-gate', 'branch', 'build', 'cursor-agent', 'ingest-artifact', 'interview', 'notify'].sort()
+      [
+        'apex-action',
+        'approval-gate',
+        'branch',
+        'build',
+        'cloud-agent',
+        'cursor-agent',
+        'foreach',
+        'ingest-artifact',
+        'interview',
+        'join',
+        'notify',
+        'until',
+      ].sort()
     );
     for (const item of items) {
       expect(item.inputJsonSchema).toBeTruthy();

@@ -45,9 +45,13 @@ async function loadPermissions(req: Request): Promise<Set<string>> {
   return perms;
 }
 
-/** Playbook routes use the module gate, including for a platform admin. */
+/**
+ * A check made only of Playbook keys uses the module gate, including for a
+ * platform admin. A route that also requires another permission, such as
+ * starting a build, still lets a platform admin through.
+ */
 function checksPlaybookModule(keys: string[]): boolean {
-  return keys.some((key) => key.startsWith('playbooks:'));
+  return keys.length > 0 && keys.every((key) => key.startsWith('playbooks:'));
 }
 
 export function requirePermission(...keys: string[]): RequestHandler {
