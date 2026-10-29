@@ -136,6 +136,13 @@ jobs:
       ai_runs_visual: ${{ steps.detect.outputs.ai_runs_visual }}
       ai_orchestrator: ${{ steps.detect.outputs.ai_orchestrator }}
       repo_read_service: ${{ steps.detect.outputs.repo_read_service }}
+      load_test_runner_tag: ${{ steps.detect.outputs.load_test_runner_tag }}
+      ai_runs_worker_tag: ${{ steps.detect.outputs.ai_runs_worker_tag }}
+      ai_runs_interactive_tag: ${{ steps.detect.outputs.ai_runs_interactive_tag }}
+      ai_runs_documents_v2_tag: ${{ steps.detect.outputs.ai_runs_documents_v2_tag }}
+      ai_runs_visual_tag: ${{ steps.detect.outputs.ai_runs_visual_tag }}
+      ai_orchestrator_tag: ${{ steps.detect.outputs.ai_orchestrator_tag }}
+      repo_read_service_tag: ${{ steps.detect.outputs.repo_read_service_tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -161,6 +168,12 @@ jobs:
       # Shared app-scrum-dev: only one quick deploy at a time.
       group: quick-dev-deploy
       cancel-in-progress: true
+    # Image tags are source fingerprints from detect-runner-changes, so a push
+    # that leaves an image's inputs untouched reuses the image already in ACR.
+    env:
+      REUSE_EXISTING_IMAGE: 'true'
+      IMAGE_BUILD_CACHE: 'true'
+      PARALLEL_ROLLOUT: 'true'
 
     steps:
       - name: Checkout code
@@ -441,7 +454,7 @@ jobs:
           LT_ACR_NAME: ${{ vars.LT_ACR_NAME }}
           LT_CONTAINER_APP_JOB_NAME: ${{ vars.LT_CONTAINER_APP_JOB_NAME }}
           LT_RESOURCE_GROUP: ${{ vars.LT_RESOURCE_GROUP || 'rg-scrum-dev' }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.load_test_runner_tag }}
         run: bash scripts/ci/publish-lt-k6-runner.sh
 
       # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
@@ -456,7 +469,7 @@ jobs:
           AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_RUNS_RUNNER_IMAGE_REPO: ${{ vars.AI_RUNS_RUNNER_IMAGE_REPO }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.ai_runs_worker_tag }}
         run: bash scripts/ci/publish-ai-runs-runner.sh
 
       # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
@@ -473,7 +486,7 @@ jobs:
           AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.ai_runs_interactive_tag }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Publish AI orchestrator image
@@ -485,7 +498,7 @@ jobs:
           AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_CONTAINER_APP_NAME || 'ca-apex-ai-orchestrator-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.ai_orchestrator_tag }}
         run: bash scripts/ci/publish-ai-orchestrator.sh
 
       - name: Publish AI-runs V2 document worker image
@@ -496,7 +509,7 @@ jobs:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME || 'ca-apex-ai-runs-documents-v2-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.ai_runs_documents_v2_tag }}
         run: bash scripts/ci/publish-ai-runs-documents-v2.sh
 
       - name: Publish AI-runs V2 visual worker image
@@ -507,20 +520,22 @@ jobs:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           AI_RUNS_VISUAL_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_VISUAL_CONTAINER_APP_NAME || 'ca-apex-ai-runs-visual-v2-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.ai_runs_visual_tag }}
         run: bash scripts/ci/publish-ai-runs-visual.sh
 
       # Stage 3 repo-read service. The script exits cleanly when the Container
       # App name is unset or Terraform has not applied enable_repo_read_service,
       # so this stays green until the service is provisioned.
       - name: Publish repo-read service image
-        if: hashFiles('runners/repo-read-service/Dockerfile') != ''
+        if: >-
+          needs.detect-runner-changes.outputs.repo_read_service == 'true' &&
+          hashFiles('runners/repo-read-service/Dockerfile') != ''
         env:
           AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
           REPO_READ_SERVICE_CONTAINER_APP_NAME: ${{ vars.REPO_READ_SERVICE_CONTAINER_APP_NAME }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           REPO_READ_SERVICE_IMAGE_REPO: ${{ vars.REPO_READ_SERVICE_IMAGE_REPO }}
-          IMAGE_TAG: ${{ steps.deployed.outputs.sha }}
+          IMAGE_TAG: ${{ needs.detect-runner-changes.outputs.repo_read_service_tag }}
         run: bash scripts/ci/publish-repo-read-service.sh
 
       - name: Azure logout

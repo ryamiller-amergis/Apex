@@ -13,6 +13,7 @@
 #   SKIP_JOB_UPDATE                  Push only when "true"
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/image-publish-lib.sh"
 
 if [[ -z "${AI_RUNS_ACR_NAME:-}" ]]; then
   echo "Skipping AI-runs runner publish: AI_RUNS_ACR_NAME is not set."
@@ -46,17 +47,11 @@ fi
 
 LOGIN_SERVER="$(az acr show --name "$AI_RUNS_ACR_NAME" --query loginServer -o tsv)"
 IMAGE="${LOGIN_SERVER}/${REPO}:${TAG}"
-IMAGE_LATEST="${LOGIN_SERVER}/${REPO}:latest"
 
 echo "Logging in to ACR ${AI_RUNS_ACR_NAME}..."
 az acr login --name "$AI_RUNS_ACR_NAME"
 
-echo "Building ${IMAGE}..."
-docker build -f "$DOCKERFILE" -t "$IMAGE" -t "$IMAGE_LATEST" .
-
-echo "Pushing ${IMAGE} and ${IMAGE_LATEST}..."
-docker push "$IMAGE"
-docker push "$IMAGE_LATEST"
+publish_image "$AI_RUNS_ACR_NAME" "$LOGIN_SERVER" "$REPO" "$TAG" "$DOCKERFILE"
 
 if [[ "$SKIP_JOB_UPDATE" == "true" ]]; then
   echo "SKIP_JOB_UPDATE=true — image pushed; Job not updated."
@@ -67,6 +62,12 @@ fi
 # Image-only updates have drifted this path to the data-root parent before,
 # which breaks workspaceRef resolution (/workspaces/grounding/<digest>).
 MOUNT_PATH="${AI_RUNS_WORKSPACE_MOUNT_PATH:-/home/data/ai-pilot/workspaces}"
+
+# The mount re-assert below only guards against drift from an image update.
+if already_running job "$AI_RUNS_CONTAINER_APP_JOB_NAME" "$AI_RUNS_RESOURCE_GROUP" "$IMAGE"; then
+  echo "${AI_RUNS_CONTAINER_APP_JOB_NAME} already runs ${IMAGE}; skipping update."
+  exit 0
+fi
 
 echo "Updating Container Apps Job ${AI_RUNS_CONTAINER_APP_JOB_NAME} → ${IMAGE}..."
 az containerapp job update \
