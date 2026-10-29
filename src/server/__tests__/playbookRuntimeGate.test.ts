@@ -392,6 +392,17 @@ describe('loop translation repeats the body', () => {
     expect(owningLoop(graph, 'after')).toBeNull();
   });
 
+  it('checks a one-pass until after its body', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'again', stepType: 'until', config: { done: false, iteration: 0, maxIterations: 1 } },
+        { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+      ],
+      edges: [{ from: 'again', to: 'work' }],
+    };
+    expect(translatedSteps(graph).map((step) => step.id)).toEqual(['work', 'again#1']);
+  });
+
   it('runs an until check after each body pass and stops at the cap', () => {
     const graph: PlaybookGraph = {
       nodes: [

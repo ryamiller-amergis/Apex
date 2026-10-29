@@ -343,7 +343,9 @@ function unrolledLoop(
   if (node.stepType !== 'foreach' && node.stepType !== 'until') return null;
   const configured = staticMaxIterations(node);
   const cap = Math.min(configured, PLAYBOOK_GUARD_LIMITS.maxStepsPerRun);
-  if (cap <= 1) return null;
+  // A single foreach pass needs no copies. An until of one still checks after its body.
+  if (node.stepType === 'foreach' && cap <= 1) return null;
+  if (cap < 1) return null;
   const outbound = graph.edges.filter((edge) => edge.from === node.id);
   if (outbound.length !== 1) return null;
   const region = linearLoopBody(graph, outbound[0].to);

@@ -175,8 +175,9 @@ export async function dispatchPlaybookTrigger(input: {
       eq(playbookTriggerReceipts.subscriptionId, subscription.id),
       eq(playbookTriggerReceipts.idempotencyKey, input.idempotencyKey),
     ));
-    const stalePending = existing?.status === 'pending' && pendingReceiptIsStale(existing.updatedAt);
-    if (!existing || (existing.status !== 'retryable' && !stalePending)) {
+    const crashed = (existing?.status === 'pending' || existing?.status === 'dispatching')
+      && pendingReceiptIsStale(existing.updatedAt);
+    if (!existing || (existing.status !== 'retryable' && !crashed)) {
       recordPlaybookTriggerEvent('duplicate', {
         subscriptionId: subscription.id,
         idempotencyKey: input.idempotencyKey,
@@ -192,11 +193,12 @@ export async function dispatchPlaybookTrigger(input: {
       return { status: 'retryable', runId: null, definitionVersionId: null, duplicate: true };
     }
     const claimed = await db.update(playbookTriggerReceipts).set({
-      status: 'pending',
+      status: 'dispatching',
       updatedAt: new Date().toISOString(),
     }).where(and(
       eq(playbookTriggerReceipts.id, existing.id),
       eq(playbookTriggerReceipts.status, existing.status),
+      eq(playbookTriggerReceipts.updatedAt, existing.updatedAt),
     )).returning({ id: playbookTriggerReceipts.id });
     if (!claimed[0]) {
       recordPlaybookTriggerEvent('duplicate', {
@@ -208,6 +210,10 @@ export async function dispatchPlaybookTrigger(input: {
     receiptId = existing.id;
   } else {
     receiptId = inserted[0].id;
+    await db.update(playbookTriggerReceipts).set({
+      status: 'dispatching',
+      updatedAt: new Date().toISOString(),
+    }).where(eq(playbookTriggerReceipts.id, receiptId));
   }
 
   if (!subscription.enabled) {
@@ -282,8 +288,12 @@ export async function dispatchPlaybookTrigger(input: {
   }
 }
 
-/** A pending receipt older than this is a crashed dispatch, not one still in flight. */
-export const STALE_PENDING_RECEIPT_MS = 2 * 60 * 1000;
+/**
+ * A pending or dispatching receipt older than this is a crashed dispatch.
+ * A live dispatch moves to `dispatching` and refreshes this clock before it starts a run,
+ * so a sweep cannot claim the same receipt while that start is still going.
+ */
+export const STALE_PENDING_RECEIPT_MS = 15 * 60 * 1000;
 
 export function pendingReceiptIsStale(updatedAt: string, now = Date.now()): boolean {
   const at = Date.parse(updatedAt);

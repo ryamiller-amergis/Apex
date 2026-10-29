@@ -87,6 +87,7 @@ export async function executeCloudAgentStep(
 ): Promise<PlaybookStepOutcome> {
   const config = parseStepInput<{
     workItemId?: number;
+    workItemSource?: 'automatic' | 'manual';
     workItemType?: string;
     state?: string;
     tags?: string;
@@ -94,7 +95,13 @@ export async function executeCloudAgentStep(
   }>(STEP_TYPE, context.config);
   const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs);
   try {
-    const workItemId = positiveInteger(config.workItemId) ?? await inferWorkItemId(context);
+    const explicitId = positiveInteger(config.workItemId);
+    if (!explicitId && config.workItemSource === 'manual') {
+      throw new CloudAgentEligibilityError(
+        'This step is set to a specific work item, but no work item id was entered.',
+      );
+    }
+    const workItemId = explicitId ?? await inferWorkItemId(context);
     if (!workItemId) {
       throw new CloudAgentEligibilityError(
         'No work item to work on: no earlier step produced a work item id and the run input has none.',

@@ -346,11 +346,25 @@ const WORK_ITEM_TYPES = ['Bug', 'Production Bug', 'Product Backlog Item', 'Techn
 /** Where a step gets its work item: automatic, an earlier step, the trigger, or a fixed id. */
 const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
   value: unknown;
+  /** Persisted choice. `manual` with no id must not be read as automatic. */
+  source?: unknown;
   allowAutomatic: boolean;
   onValue: (value: unknown) => void;
+  onSource?: (source: 'manual' | undefined) => void;
+  /** Writes the id and the manual/automatic choice in one update. */
+  onCommit?: (next: { value: unknown; source: 'manual' | undefined }) => void;
   'data-testid'?: string;
 }> = (props) => {
-  const { node, value, allowAutomatic, onValue, disabled, priorNodeIds, allNodes, paletteItems } = props;
+  const {
+    node, value, source, allowAutomatic, onValue, onSource, onCommit, disabled, priorNodeIds, allNodes, paletteItems,
+  } = props;
+  const commit = (nextValue: unknown, nextSource: 'manual' | undefined) => {
+    if (onCommit) onCommit({ value: nextValue, source: nextSource });
+    else {
+      onSource?.(nextSource);
+      onValue(nextValue);
+    }
+  };
   const producers = priorNodeIds
     .map((id) => allNodes.find((candidate) => candidate.id === id))
     .filter((candidate): candidate is PlaybookGraphNode => Boolean(
@@ -379,9 +393,11 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
     },
     { value: 'manual', label: 'A specific work item', description: 'Always the same work item id' },
   ];
-  const inferredMode = value === undefined
-    ? (allowAutomatic ? 'auto' : undefined)
-    : typeof value === 'number' ? 'manual' : String(value);
+  const inferredMode = source === 'manual' || typeof value === 'number'
+    ? 'manual'
+    : value === undefined
+      ? (allowAutomatic ? 'auto' : undefined)
+      : String(value);
   const [mode, setMode] = useState<string | undefined>(inferredMode);
   const [modeNodeId, setModeNodeId] = useState(node.id);
   if (modeNodeId !== node.id) {
@@ -400,11 +416,11 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
         disabled={disabled}
         onChange={(next) => {
           setMode(next);
-          if (next === 'auto' || next === undefined) onValue(undefined);
+          if (next === 'auto' || next === undefined) commit(undefined, undefined);
           else if (next === 'manual') {
             const parsed = Number(manualText);
-            onValue(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined);
-          } else onValue(next);
+            commit(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined, 'manual');
+          } else commit(next, undefined);
         }}
         {...{ 'data-testid': "playbook-inspector-field-workItemId" }}
       />
@@ -419,7 +435,7 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
           onChange={(event) => {
             setManualText(event.target.value);
             const parsed = Number(event.target.value);
-            onValue(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined);
+            commit(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined, 'manual');
           }}
           {...{ 'data-testid': "playbook-inspector-field-workItemId-manual" }}
         />
@@ -429,7 +445,7 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
 };
 
 const CloudAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
-  const { node, config, disabled, setField, bindings, referencesFor } = props;
+  const { node, config, disabled, setField, setConfig, bindings, referencesFor } = props;
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
   const overridden = Boolean(config.workItemType || config.state || config.tags);
   return (
@@ -443,8 +459,17 @@ const CloudAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
         <WorkItemSourceField
           {...props}
           value={config.workItemId}
+          source={config.workItemSource}
           allowAutomatic
           onValue={(value) => setField('workItemId', value)}
+          onCommit={({ value, source }) => {
+            const next = { ...config };
+            if (value === undefined) delete next.workItemId;
+            else next.workItemId = value;
+            if (source === undefined) delete next.workItemSource;
+            else next.workItemSource = source;
+            setConfig(next);
+          }}
           {...{ 'data-testid': `playbook-work-item-source-${node.id}` }}
         />
       </Field>
@@ -672,7 +697,7 @@ export const STEP_FIELD_RENDERERS: Record<string, {
     Component: ApexActionFields,
   },
   'cloud-agent': {
-    handledKeys: ['workItemId', 'workItemType', 'state', 'tags', 'prompt', 'deadlineMs'],
+    handledKeys: ['workItemId', 'workItemSource', 'workItemType', 'state', 'tags', 'prompt', 'deadlineMs'],
     Component: CloudAgentFields,
   },
 };

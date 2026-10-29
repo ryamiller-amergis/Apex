@@ -109,7 +109,9 @@ export async function loopStepShouldSkip(
   const untilId =
     owner.index === 0 ? owner.loopId : `${owner.loopId}#${owner.index}`;
   const output = await readStepOutput(runId, untilId);
-  return output?.continue !== true;
+  // The first pass has no earlier check. A missing row means run the body.
+  if (!output) return false;
+  return output.continue !== true;
 }
 
 /** Puts the current list element on the foreach output so later bindings can read it. */

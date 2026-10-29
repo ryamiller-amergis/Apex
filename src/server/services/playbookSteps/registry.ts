@@ -239,6 +239,8 @@ const BINDING_STRING = z.string().regex(
  */
 const CLOUD_AGENT_INPUT_SCHEMA = z.object({
   workItemId: z.union([z.number().int().positive(), BINDING_STRING]).optional(),
+  /** Set when the author asked for a specific id. Absent means the step may infer one. */
+  workItemSource: z.enum(['automatic', 'manual']).optional(),
   workItemType: z.string().min(1).optional(),
   state: z.string().min(1).optional(),
   tags: z.string().optional(),
