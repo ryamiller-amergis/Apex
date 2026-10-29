@@ -5,7 +5,7 @@ import {
 import type { StartBuildResponse } from '../../../shared/types/build';
 import type { ProjectSkillConfig } from '../../../shared/types/projectSettings';
 import { preflightRefusalSummary } from '../../../shared/types/buildPreflight';
-import type { FrozenBuildRunConfig, PreflightRefusal, PreflightResult } from '../../../shared/types/buildPreflight';
+import type { FrozenBuildRunConfig, PreflightResult } from '../../../shared/types/buildPreflight';
 import { isBuildFromPromptEnabled, isBuildPairAllowed } from '../buildAccessService';
 import { runPreflight } from '../buildPreflight';
 import { fetchAvailableModels } from '../modelsService';
@@ -302,10 +302,6 @@ type AdmissionQueueReason = 'project_limit' | 'platform_limit' | null;
 export function refusalOf(error: unknown): { status: number; body: Record<string, unknown> } | null {
   if (!(error instanceof BuildStartError)) return null;
   const body: Record<string, unknown> = { error: error.message, code: error.code };
-  if (error.refusals) body.refusals = error.refusals.map(refusalText);
+  if (error.refusals) body.refusals = error.refusals.map((refusal) => refusal.message);
   return { status: error.status, body };
-}
-
-function refusalText(refusal: PreflightRefusal): string {
-  return `${refusal.message} ${refusal.fixerLabel} can fix this.`;
 }
