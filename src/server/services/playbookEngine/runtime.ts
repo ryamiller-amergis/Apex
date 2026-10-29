@@ -286,20 +286,21 @@ function armUntilJoin(
   let current = start;
   const seen = new Set<string>();
   while (current && !seen.has(current.id)) {
-    const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    const step = current;
+    const outbound = graph.edges.filter((edge) => edge.from === step.id);
     if (outbound.length !== 1) {
-      nodes.push(current);
+      nodes.push(step);
       return { nodes, next: undefined };
     }
     const nextId = outbound[0].to;
     const next = graph.nodes.find((node) => node.id === nextId);
     const inbound = graph.edges.filter((edge) => edge.to === nextId);
     if (next?.stepType === 'join' || inbound.length > 1) {
-      nodes.push(current);
+      nodes.push(step);
       return { nodes, next: nextId };
     }
-    nodes.push(current);
-    seen.add(current.id);
+    nodes.push(step);
+    seen.add(step.id);
     current = next;
   }
   return { nodes, next: undefined };
@@ -325,13 +326,14 @@ function linearLoopBody(
   let current = graph.nodes.find((node) => node.id === startId);
   const seen = new Set<string>();
   while (current && !seen.has(current.id)) {
-    if (current.stepType === 'join') return { body, after: current };
-    const inbound = graph.edges.filter((edge) => edge.to === current.id);
-    if (body.length > 0 && inbound.length > 1) return { body, after: current };
-    const outbound = graph.edges.filter((edge) => edge.from === current.id);
+    const step = current;
+    if (step.stepType === 'join') return { body, after: step };
+    const inbound = graph.edges.filter((edge) => edge.to === step.id);
+    if (body.length > 0 && inbound.length > 1) return { body, after: step };
+    const outbound = graph.edges.filter((edge) => edge.from === step.id);
     if (outbound.length > 1) return null;
-    body.push(current);
-    seen.add(current.id);
+    body.push(step);
+    seen.add(step.id);
     const next = outbound[0]
       ? graph.nodes.find((node) => node.id === outbound[0].to)
       : undefined;
