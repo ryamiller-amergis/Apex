@@ -94,7 +94,8 @@ export async function loopStepShouldSkip(
   if (node.stepType === 'until' && index > 0) {
     const previousId = index === 1 ? node.id : `${node.id}#${index - 1}`;
     const output = await readStepOutput(runId, previousId);
-    if (!output) return false;
+    // The first check has no earlier row. A later check with no row means the loop already stopped.
+    if (!output) return index > 1;
     return output.continue !== true;
   }
   if (node.stepType === 'foreach' || node.stepType === 'until') return false;
@@ -109,8 +110,8 @@ export async function loopStepShouldSkip(
   const untilId =
     owner.index === 0 ? owner.loopId : `${owner.loopId}#${owner.index}`;
   const output = await readStepOutput(runId, untilId);
-  // The first pass has no earlier check. A missing row means run the body.
-  if (!output) return false;
+  // The first pass has no earlier check. A later pass with no row means the loop already stopped.
+  if (!output) return owner.index > 0;
   return output.continue !== true;
 }
 

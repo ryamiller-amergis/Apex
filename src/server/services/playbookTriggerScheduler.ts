@@ -34,7 +34,7 @@ export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
       const [existing] = await db.select({ id: playbookTriggerReceipts.id }).from(playbookTriggerReceipts).where(and(
         eq(playbookTriggerReceipts.subscriptionId, subscription.id),
         eq(playbookTriggerReceipts.idempotencyKey, idempotencyKey),
-        inArray(playbookTriggerReceipts.status, ['started', 'skipped', 'failed', 'dead_letter', 'pending', 'dispatching']),
+        inArray(playbookTriggerReceipts.status, ['started', 'skipped', 'failed', 'dead_letter', 'pending']),
       ));
       if (existing) continue;
       await dispatchPlaybookTrigger({
@@ -46,13 +46,10 @@ export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
     }
 
     const retries = await db.select().from(playbookTriggerReceipts).where(
-      inArray(playbookTriggerReceipts.status, ['retryable', 'pending', 'dispatching']),
+      inArray(playbookTriggerReceipts.status, ['retryable', 'pending']),
     );
     for (const receipt of retries) {
-      if (
-        (receipt.status === 'pending' || receipt.status === 'dispatching')
-        && !pendingReceiptIsStale(receipt.updatedAt, now.getTime())
-      ) continue;
+      if (receipt.status === 'pending' && !pendingReceiptIsStale(receipt.updatedAt, now.getTime())) continue;
       if (receipt.status === 'retryable' && receipt.nextRetryAt && Date.parse(receipt.nextRetryAt) > now.getTime()) continue;
       const payload = (receipt.payload ?? {}) as Record<string, unknown>;
       const stored = storedPlaybookTriggerDispatch(payload, receipt.source);

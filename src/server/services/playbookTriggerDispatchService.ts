@@ -175,8 +175,7 @@ export async function dispatchPlaybookTrigger(input: {
       eq(playbookTriggerReceipts.subscriptionId, subscription.id),
       eq(playbookTriggerReceipts.idempotencyKey, input.idempotencyKey),
     ));
-    const crashed = (existing?.status === 'pending' || existing?.status === 'dispatching')
-      && pendingReceiptIsStale(existing.updatedAt);
+    const crashed = existing?.status === 'pending' && pendingReceiptIsStale(existing.updatedAt);
     if (!existing || (existing.status !== 'retryable' && !crashed)) {
       recordPlaybookTriggerEvent('duplicate', {
         subscriptionId: subscription.id,
@@ -193,7 +192,7 @@ export async function dispatchPlaybookTrigger(input: {
       return { status: 'retryable', runId: null, definitionVersionId: null, duplicate: true };
     }
     const claimed = await db.update(playbookTriggerReceipts).set({
-      status: 'dispatching',
+      status: 'pending',
       updatedAt: new Date().toISOString(),
     }).where(and(
       eq(playbookTriggerReceipts.id, existing.id),
@@ -210,10 +209,18 @@ export async function dispatchPlaybookTrigger(input: {
     receiptId = existing.id;
   } else {
     receiptId = inserted[0].id;
-    await db.update(playbookTriggerReceipts).set({
-      status: 'dispatching',
-      updatedAt: new Date().toISOString(),
-    }).where(eq(playbookTriggerReceipts.id, receiptId));
+  }
+
+  // Refresh the clock now, before the run starts. A sweep can claim this receipt only
+  // when this timestamp is still the one it read, so a live start is not started twice.
+  const owned = await db.update(playbookTriggerReceipts).set({
+    updatedAt: new Date().toISOString(),
+  }).where(and(
+    eq(playbookTriggerReceipts.id, receiptId),
+    eq(playbookTriggerReceipts.status, 'pending'),
+  )).returning({ id: playbookTriggerReceipts.id });
+  if (!owned[0]) {
+    return { status: 'pending', runId: null, definitionVersionId: null, duplicate: true };
   }
 
   if (!subscription.enabled) {
@@ -289,9 +296,9 @@ export async function dispatchPlaybookTrigger(input: {
 }
 
 /**
- * A pending or dispatching receipt older than this is a crashed dispatch.
- * A live dispatch moves to `dispatching` and refreshes this clock before it starts a run,
- * so a sweep cannot claim the same receipt while that start is still going.
+ * A pending receipt older than this is a crashed dispatch.
+ * A live dispatch refreshes `updatedAt` before it starts a run, and a reclaim
+ * matches that exact timestamp, so a sweep cannot start the same receipt twice.
  */
 export const STALE_PENDING_RECEIPT_MS = 15 * 60 * 1000;
 
