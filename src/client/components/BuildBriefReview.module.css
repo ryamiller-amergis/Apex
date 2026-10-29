@@ -1,4 +1,7 @@
 .panel {
+  flex-shrink: 0;
+  max-height: 60vh;
+  overflow-y: auto;
   margin: 16px 24px;
   padding: 20px;
   background: var(--bg-secondary);
@@ -112,11 +115,18 @@
   cursor: default;
 }
 
+/* Pinned to the panel's bottom edge; the negative offset cancels the panel's 20px padding. */
 .actions {
+  position: sticky;
+  bottom: -20px;
   display: flex;
   justify-content: flex-end;
   grid-column: 1 / -1;
   gap: 8px;
+  margin: 0 -20px -20px;
+  padding: 12px 20px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
 }
 
 .primary,
