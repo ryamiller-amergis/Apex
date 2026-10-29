@@ -1,11 +1,20 @@
 /**
  * Loads the source-controlled Playbook template manifest.
  * A file that fails validation fails the process that imports this module.
+ * Graphs are imported, not read from disk: tsc emits imported JSON into dist/ and skips loose files.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import type { PlaybookGraph } from '../../shared/types/playbook';
 import type { PlaybookTemplateCatalogEntry } from '../../shared/types/playbookTemplates';
+import catalogFile from '../playbookTemplates/catalog.json';
+import interviewTemplate from '../playbookTemplates/interview.json';
+import designDocValidationTemplate from '../playbookTemplates/design-doc-validation.json';
+import buildFromPromptTemplate from '../playbookTemplates/build-from-prompt.json';
+
+const GRAPH_SOURCES: Record<string, unknown> = {
+  'interview.json': interviewTemplate,
+  'design-doc-validation.json': designDocValidationTemplate,
+  'build-from-prompt.json': buildFromPromptTemplate,
+};
 
 export class PlaybookTemplateCatalogError extends Error {
   constructor(message: string) {
@@ -20,12 +29,7 @@ export interface ShippedPlaybookTemplate extends PlaybookTemplateCatalogEntry {
   graph: PlaybookGraph;
 }
 
-const TEMPLATE_DIR = path.join(__dirname, '..', 'playbookTemplates');
 const COST_BANDS = new Set(['low', 'medium', 'high']);
-
-function readJson(filePath: string): unknown {
-  return JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
-}
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -90,13 +94,13 @@ function validateEntry(raw: unknown, index: number): PlaybookTemplateCatalogEntr
 }
 
 function loadGraphFile(entry: PlaybookTemplateCatalogEntry): ShippedPlaybookTemplate {
-  const filePath = path.join(TEMPLATE_DIR, entry.graphFile);
-  if (!fs.existsSync(filePath)) {
+  const source = GRAPH_SOURCES[entry.graphFile];
+  if (!source) {
     throw new PlaybookTemplateCatalogError(
       `${entry.templateKey} graph file ${entry.graphFile} was not found.`,
     );
   }
-  const parsed = asRecord(readJson(filePath), entry.graphFile);
+  const parsed = asRecord(source, entry.graphFile);
   if (parsed.templateKey !== entry.templateKey) {
     throw new PlaybookTemplateCatalogError(
       `${entry.graphFile} does not declare templateKey ${entry.templateKey}.`,
@@ -123,7 +127,7 @@ function loadGraphFile(entry: PlaybookTemplateCatalogEntry): ShippedPlaybookTemp
 }
 
 function loadCatalog(): ShippedPlaybookTemplate[] {
-  const manifest = asRecord(readJson(path.join(TEMPLATE_DIR, 'catalog.json')), 'catalog.json');
+  const manifest = asRecord(catalogFile, 'catalog.json');
   if (!Array.isArray(manifest.templates) || manifest.templates.length === 0) {
     throw new PlaybookTemplateCatalogError('catalog.json must list at least one template.');
   }

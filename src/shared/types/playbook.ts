@@ -122,7 +122,7 @@ export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
 export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
 
 /** Why a run is parked. Every kind resumes through the same path, per BR-008. */
-export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview';
+export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview' | 'build';
 
 // ── Definition graph ──────────────────────────────────────────────────────────
 
@@ -513,6 +513,22 @@ export interface InterviewStepConfig {
    */
   profileKey: string;
   deadlineMs?: number;
+  /** First message to the intake agent. Absent means the historical "Begin." */
+  openingMessage?: string;
+  /** Project skill settings row. Absent means the project's default repository. */
+  skillSettingsId?: string;
+}
+
+export interface BuildStepConfig {
+  buildRunId: string;
+  briefId: string;
+  interviewId: string;
+}
+
+export interface BuildStepOutput {
+  buildRunId: string;
+  status: 'accepted' | 'cancelled' | 'failed';
+  pullRequestUrl?: string;
 }
 
 /** Profile fields copied onto the interview when the step starts. Later settings edits do not change it. */

@@ -1,6 +1,7 @@
 export const WORK_BOARD_FLAG = 'work-board';
 export const WORKFLOW_HUMAN_EVALUATION_FLAG = 'workflow-human-evaluation';
 export const MY_WORK_CLOUD_AGENT_FLAG = 'my-work-cloud-agent';
+export const BUILD_FROM_PROMPT_FLAG = 'build-from-prompt';
 
 export type FlagLifecycle = 'active' | 'stale' | 'archived';
 

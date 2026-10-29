@@ -41,6 +41,23 @@ export interface ApproveInterviewBriefResult {
   unresolvedCount: number;
   output: InterviewStepOutput;
   resumed: boolean;
+  /** True when the brief was already approved before this call. */
+  alreadyApproved: boolean;
+}
+
+export type BriefTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Runs inside the save or approval transaction. A throw rolls the whole write back. */
+export type BriefWriteHook = (tx: BriefTransaction, brief: InterviewBriefRecord) => Promise<void>;
+
+export const BRIEF_CHANGED_MESSAGE = 'The brief changed while it was being written.';
+
+const UNIQUE_VIOLATION = '23505';
+
+function isUniqueViolation(error: unknown): boolean {
+  const code = (error as { code?: unknown; cause?: { code?: unknown } } | null)?.code
+    ?? (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return code === UNIQUE_VIOLATION;
 }
 
 type BriefRow = {
@@ -192,11 +209,18 @@ export async function saveInterviewBrief(input: {
   interviewId: string;
   sections: InterviewBriefSections;
   savedBy: string;
+  /** The version the caller read, or null for "no brief yet". A mismatch throws a 409 and writes nothing. */
+  expectedVersion?: number | null;
+  inTransaction?: BriefWriteHook;
 }): Promise<InterviewBriefRecord> {
   const sections = parseInterviewBriefSections(input.sections);
   const interview = await loadInterview(input.interviewId);
   const existing = await loadBrief(interview.id);
   const now = new Date().toISOString();
+  const checkVersion = input.expectedVersion !== undefined;
+  if (checkVersion && (existing?.version ?? null) !== input.expectedVersion) {
+    throw new InterviewBriefError(BRIEF_CHANGED_MESSAGE, 409);
+  }
 
   if (!existing) {
     const created = await db.transaction(async (tx) => {
@@ -232,7 +256,12 @@ export async function saveInterviewBrief(input: {
         createdAt: now,
       });
 
+      await input.inTransaction?.(tx, toRecord(brief));
       return brief;
+    }).catch((error: unknown) => {
+      // Two first saves race on uq_interview_briefs_interview.
+      if (isUniqueViolation(error)) throw new InterviewBriefError(BRIEF_CHANGED_MESSAGE, 409);
+      throw error;
     });
 
     return toRecord(created);
@@ -268,6 +297,7 @@ export async function saveInterviewBrief(input: {
       });
 
     if (!brief) {
+      if (checkVersion) throw new InterviewBriefError(BRIEF_CHANGED_MESSAGE, 409);
       throw new InterviewBriefError('The brief changed during save.');
     }
 
@@ -281,6 +311,7 @@ export async function saveInterviewBrief(input: {
       createdAt: now,
     });
 
+    await input.inTransaction?.(tx, toRecord(brief));
     return brief;
   });
 
@@ -291,6 +322,7 @@ function approvalResult(
   brief: BriefRow,
   interviewId: string,
   resumed: boolean,
+  alreadyApproved: boolean,
 ): ApproveInterviewBriefResult {
   const sections = parseInterviewBriefSections(brief.sections);
   const count = unresolvedCount(sections);
@@ -315,14 +347,16 @@ function approvalResult(
     unresolvedCount: count,
     output,
     resumed,
+    alreadyApproved,
   };
 }
 
 async function resumeApprovedBrief(
   interview: InterviewLink,
   brief: BriefRow,
+  alreadyApproved: boolean,
 ): Promise<ApproveInterviewBriefResult> {
-  const base = approvalResult(brief, interview.id, false);
+  const base = approvalResult(brief, interview.id, false, alreadyApproved);
   if (!interview.playbookRunId || !interview.playbookStepRunId) return base;
 
   const moved = await resumeStepRun({
@@ -342,6 +376,8 @@ async function resumeApprovedBrief(
 export async function approveInterviewBrief(input: {
   interviewId: string;
   approvedBy: string;
+  /** Runs only when this call approves the draft, inside the approval transaction. */
+  inTransaction?: BriefWriteHook;
 }): Promise<ApproveInterviewBriefResult> {
   const interview = await loadInterview(input.interviewId);
   const existing = await loadBrief(interview.id);
@@ -351,7 +387,7 @@ export async function approveInterviewBrief(input: {
 
   const sections = parseInterviewBriefSections(existing.sections);
   if (existing.status === 'approved') {
-    return resumeApprovedBrief(interview, { ...existing, sections });
+    return resumeApprovedBrief(interview, { ...existing, sections }, true);
   }
 
   const approvedAt = new Date().toISOString();
@@ -400,13 +436,14 @@ export async function approveInterviewBrief(input: {
       .set({ status: 'complete', updatedAt: approvedAt })
       .where(eq(interviews.id, interview.id));
 
+    await input.inTransaction?.(tx, toRecord(brief));
     return brief;
   });
 
   if (!approved) {
     const concurrent = await loadBrief(interview.id);
     if (concurrent?.status === 'approved') {
-      return resumeApprovedBrief(interview, concurrent);
+      return resumeApprovedBrief(interview, concurrent, true);
     }
     throw new InterviewBriefError('The brief was no longer a draft.');
   }
@@ -429,5 +466,5 @@ export async function approveInterviewBrief(input: {
     console.error('[playbook-event] interview.brief-completed', error);
   }
 
-  return resumeApprovedBrief(interview, approved);
+  return resumeApprovedBrief(interview, approved, false);
 }

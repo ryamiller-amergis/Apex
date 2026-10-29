@@ -17,7 +17,11 @@ import {
   appRolePermissions,
   appRoles,
   appUserProjectRoles,
+  appUserRoles,
   chatThreads,
+  featureFlagRules,
+  featureFlags,
+  mcpServers,
   designDocs,
   designPrototypes,
   documentApproverAssignments,
@@ -30,11 +34,17 @@ import {
   projectApprovers,
   projectMenuSettings,
   projectSkillSettings,
+  projectSkillWorkflowSettings,
   reviewComments,
   testCases,
 } from '../db/schema';
-import type { MenuItemKey } from '../../shared/types/menuSettings';
+import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
+import { clerkTicketFetchStub, setMcpServerFetchStub } from '../services/mcpServerFetchStub';
 import type { ValidationScorecard } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
+import { legacyWorkflowFields } from '../../shared/constants/projectSkillWorkflows';
+import { saveWorkflowSettings } from '../services/projectSkillWorkflowSettings';
 
 const router = express.Router();
 
@@ -43,6 +53,8 @@ const E2E_ASSIGNED_BY = 'e2e-setup';
 
 /** Modules that inherit the legacy `approvalMode` payload; `adr` is always seeded as `any_one`. */
 const LEGACY_APPROVAL_MODE_MODULES = ['prd', 'design_doc', 'design_prototype', 'test_case'] as const;
+
+const LEGACY_WORKFLOW_FIELDS = new Set<string>(legacyWorkflowFields());
 
 function e2eTitle(title: string): string {
   return title.startsWith(E2E_PREFIX) ? title : `${E2E_PREFIX} ${title}`;
@@ -89,7 +101,9 @@ function defaultScorecard(score: number, threshold = 90): ValidationScorecard {
 router.post('/reset', async (_req, res) => {
   try {
     await db.delete(playbookDefinitions).where(like(playbookDefinitions.name, `${E2E_PREFIX}%`));
+    await db.delete(mcpServers).where(like(mcpServers.name, `${E2E_PREFIX}%`));
     await db.delete(appRoles).where(like(appRoles.name, `${E2E_PREFIX}%`));
+    setMcpServerFetchStub(null);
 
     await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
     await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
@@ -853,6 +867,9 @@ router.post('/seed/project-settings', async (req, res) => {
       designPrototypeApprovers,
       testCaseApprovers,
       adrApprovers,
+      defaultModel,
+      defaultEffort,
+      legacyWorkflowValues = {},
     } = req.body as {
       project: string;
       friendlyName?: string;
@@ -876,6 +893,39 @@ router.post('/seed/project-settings', async (req, res) => {
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
       adrApprovers?: string[];
+      defaultModel?: string | null;
+      defaultEffort?: EffortLevel | null;
+      /**
+       * Flat per-workflow values written to the legacy columns only, the way
+       * app code from before project_skill_workflow_settings saved them.
+       */
+      legacyWorkflowValues?: Partial<Record<keyof ProjectSkillConfig, unknown>>;
+    };
+
+    const unknownLegacyFields = Object.keys(legacyWorkflowValues).filter(
+      (field) => !LEGACY_WORKFLOW_FIELDS.has(field),
+    );
+    if (unknownLegacyFields.length > 0) {
+      res.status(400).json({
+        error: `legacyWorkflowValues accepts only legacy workflow fields; got ${unknownLegacyFields.join(', ')}`,
+      });
+      return;
+    }
+    const parentColumns = {
+      ...(defaultModel !== undefined && { defaultModel }),
+      ...(defaultEffort !== undefined && { defaultEffort }),
+    };
+    const workflowPatch: Partial<Record<keyof ProjectSkillConfig, unknown>> = {
+      ...legacyWorkflowValues,
+      ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
+      ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
+      ...(prdValidationScoreThreshold !== undefined && { prdValidationScoreThreshold }),
+      ...(designDocValidationScoreThreshold !== undefined && { designDocValidationScoreThreshold }),
+      ...(interviewSkillPath !== undefined && { interviewSkillPath }),
+      ...(prdSkillPath !== undefined && { prdSkillPath }),
+      ...(designDocSkillPath !== undefined && { designDocSkillPath }),
+      ...(designPrototypeSkillPath !== undefined && { designPrototypeSkillPath }),
+      ...(testCaseSkillPath !== undefined && { testCaseSkillPath }),
     };
 
     const prefixedName = e2eTitle(friendlyName);
@@ -898,19 +948,9 @@ router.post('/seed/project-settings', async (req, res) => {
         .set({
           ...(approvalMode !== undefined && { approvalMode }),
           ...(prototypeStageEnabled !== undefined && { prototypeStageEnabled }),
-          ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
-          ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
-          ...(prdValidationScoreThreshold !== undefined && { prdValidationScoreThreshold }),
-          ...(designDocValidationScoreThreshold !== undefined && {
-            designDocValidationScoreThreshold,
-          }),
-          ...(interviewSkillPath !== undefined && { interviewSkillPath }),
-          ...(prdSkillPath !== undefined && { prdSkillPath }),
-          ...(designDocSkillPath !== undefined && { designDocSkillPath }),
-          ...(designPrototypeSkillPath !== undefined && { designPrototypeSkillPath }),
-          ...(testCaseSkillPath !== undefined && { testCaseSkillPath }),
           ...(updatedBy !== undefined && { updatedBy }),
           ...(isDefault ? { isDefault: true } : {}),
+          ...parentColumns,
           updatedAt: sql`now()`,
         })
         .where(eq(projectSkillSettings.id, existing[0].id))
@@ -935,16 +975,8 @@ router.post('/seed/project-settings', async (req, res) => {
           isDefault,
           approvalMode: approvalMode ?? 'any_one',
           prototypeStageEnabled: prototypeStageEnabled ?? true,
-          prdValidationSkillPath: prdValidationSkillPath ?? null,
-          designDocValidationSkillPath: designDocValidationSkillPath ?? null,
-          prdValidationScoreThreshold: prdValidationScoreThreshold ?? 90,
-          designDocValidationScoreThreshold: designDocValidationScoreThreshold ?? 90,
-          interviewSkillPath: interviewSkillPath ?? null,
-          prdSkillPath: prdSkillPath ?? null,
-          designDocSkillPath: designDocSkillPath ?? null,
-          designPrototypeSkillPath: designPrototypeSkillPath ?? null,
-          testCaseSkillPath: testCaseSkillPath ?? null,
           updatedBy: updatedBy ?? 'e2e',
+          ...parentColumns,
         })
         .returning();
       row = inserted;
@@ -975,25 +1007,23 @@ router.post('/seed/project-settings', async (req, res) => {
           set: { mode: sql`excluded.mode`, updatedAt: sql`now()` },
         });
     }
-    if (designDocValidationSkillPath !== undefined) {
-      await db
-        .update(projectSkillSettings)
-        .set({
-          designDocValidationSkillPath,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(projectSkillSettings.project, project));
-      row = { ...row, designDocValidationSkillPath };
+    const workflowNow = new Date().toISOString();
+    if (Object.keys(workflowPatch).length > 0) {
+      await saveWorkflowSettings(db, row.id, workflowPatch, workflowNow);
     }
-    if (prdValidationSkillPath !== undefined) {
-      await db
-        .update(projectSkillSettings)
-        .set({
-          prdValidationSkillPath,
-          updatedAt: sql`now()`,
-        })
+    if (designDocValidationSkillPath !== undefined || prdValidationSkillPath !== undefined) {
+      const projectRows = await db
+        .select({ id: projectSkillSettings.id })
+        .from(projectSkillSettings)
         .where(eq(projectSkillSettings.project, project));
-      row = { ...row, prdValidationSkillPath };
+      const propagated: Partial<Record<keyof ProjectSkillConfig, unknown>> = {
+        ...(designDocValidationSkillPath !== undefined && { designDocValidationSkillPath }),
+        ...(prdValidationSkillPath !== undefined && { prdValidationSkillPath }),
+      };
+      for (const projectRow of projectRows) {
+        if (projectRow.id === row.id) continue;
+        await saveWorkflowSettings(db, projectRow.id, propagated, workflowNow);
+      }
     }
 
     const poolEntries: Array<{ documentType: string; userIds: string[] }> = [
@@ -1047,6 +1077,63 @@ router.post('/seed/project-settings', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/project-settings failed: ${message}` });
+  }
+});
+
+// Read the per-workflow child rows for one settings row, so specs can check the
+// dual write without a database client.
+router.get('/inspect/project-skill-workflow-settings', async (req, res) => {
+  try {
+    const settingsId = typeof req.query.settingsId === 'string' ? req.query.settingsId : '';
+    if (!settingsId) {
+      res.status(400).json({ error: 'settingsId is required' });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(projectSkillWorkflowSettings)
+      .where(eq(projectSkillWorkflowSettings.settingsId, settingsId));
+    rows.sort((a, b) => a.workflow.localeCompare(b.workflow));
+    res.json({ rows });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E inspect failed: ${message}` });
+  }
+});
+
+// Grant a user a global copy of the built-in admin role. Admin > Project Settings
+// fetches without X-Apex-Project, so a project-scoped role would not apply.
+// Reset removes the copy by its [E2E] name, cascading the grant.
+router.post('/seed/admin-role', async (req, res) => {
+  try {
+    const { userId } = req.body as { userId: string };
+    const [admin] = await db.select().from(appRoles).where(eq(appRoles.name, 'admin')).limit(1);
+    if (!admin) {
+      res.status(500).json({ error: 'admin role is missing' });
+      return;
+    }
+    const adminLinks = await db
+      .select({ permissionId: appRolePermissions.permissionId })
+      .from(appRolePermissions)
+      .where(eq(appRolePermissions.roleId, admin.id));
+    const [role] = await db
+      .insert(appRoles)
+      .values({
+        name: `${E2E_PREFIX} admin ${userId.slice(-8)}`,
+        description: 'E2E copy of the admin role',
+        isDefault: false,
+      })
+      .returning();
+    if (adminLinks.length > 0) {
+      await db.insert(appRolePermissions).values(
+        adminLinks.map((link) => ({ roleId: role.id, permissionId: link.permissionId })),
+      );
+    }
+    await db.insert(appUserRoles).values({ userId, roleId: role.id, assignedBy: 'e2e' });
+    res.json({ ok: true, roleId: role.id });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/admin-role failed: ${message}` });
   }
 });
 
@@ -1106,6 +1193,94 @@ router.post('/seed/menu-settings', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/menu-settings failed: ${message}` });
+  }
+});
+
+router.post('/seed/mcp-servers-provider-stub', (_req, res) => {
+  setMcpServerFetchStub(clerkTicketFetchStub);
+  res.json({ ok: true });
+});
+
+router.post('/seed/mcp-servers-access', async (req, res) => {
+  try {
+    const { enabled, projects, grants } = req.body as {
+      enabled: boolean;
+      projects: string[];
+      grants: Array<{ userId: string; project: string; permissions: string[] }>;
+    };
+    const [flag] = await db.select().from(featureFlags).where(eq(featureFlags.key, 'mcp-servers'));
+    if (!flag) {
+      res.status(500).json({ error: 'mcp-servers feature flag is not seeded' });
+      return;
+    }
+    await db.update(featureFlags).set({ enabled, updatedAt: new Date().toISOString() }).where(eq(featureFlags.id, flag.id));
+    await db.delete(featureFlagRules).where(eq(featureFlagRules.flagId, flag.id));
+    if (!enabled) {
+      if (projects?.length) {
+        await db.delete(projectMenuSettings).where(inArray(projectMenuSettings.project, projects));
+      }
+      setMcpServerFetchStub(null);
+      res.json({ ok: true });
+      return;
+    }
+    for (const project of projects) {
+      await db.insert(featureFlagRules).values({
+        flagId: flag.id,
+        type: 'project',
+        value: project,
+        createdBy: 'e2e',
+      });
+      const enabledViews: MenuItemKey[] = [...DEFAULT_ENABLED_MENU_VIEWS, 'mcp-servers'];
+      await db
+        .insert(projectMenuSettings)
+        .values({ project, enabledViews })
+        .onConflictDoUpdate({
+          target: projectMenuSettings.project,
+          set: { enabledViews },
+        });
+    }
+    const [member] = await db.select().from(appRoles).where(eq(appRoles.name, 'member'));
+    if (!member) {
+      res.status(500).json({ error: 'member role is missing' });
+      return;
+    }
+    const memberLinks = await db
+      .select({ permissionId: appRolePermissions.permissionId })
+      .from(appRolePermissions)
+      .where(eq(appRolePermissions.roleId, member.id));
+    for (const grant of grants) {
+      const extras = await db
+        .select()
+        .from(appPermissions)
+        .where(inArray(appPermissions.key, grant.permissions));
+      if (extras.length !== grant.permissions.length) {
+        res.status(500).json({ error: `missing permissions: ${grant.permissions.join(', ')}` });
+        return;
+      }
+      const roleName = `${E2E_PREFIX} mcp-servers ${grant.project} ${grant.permissions.join('+')} ${grant.userId.slice(-8)}`;
+      const [role] = await db.insert(appRoles).values({
+        name: roleName,
+        description: 'E2E project MCP Servers access',
+        isDefault: false,
+      }).returning();
+      const permissionIds = new Set([
+        ...memberLinks.map((link) => link.permissionId),
+        ...extras.map((permission) => permission.id),
+      ]);
+      await db.insert(appRolePermissions).values(
+        [...permissionIds].map((permissionId) => ({ roleId: role.id, permissionId })),
+      );
+      await db.insert(appUserProjectRoles).values({
+        userId: grant.userId,
+        project: grant.project,
+        roleId: role.id,
+        assignedBy: 'e2e',
+      });
+    }
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/mcp-servers-access failed: ${message}` });
   }
 });
 

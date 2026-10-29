@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { useAppShell } from '../hooks/useAppShell';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatThread, useSkillRepos, useStartChat } from '../hooks/useChatThreads';
-import type { ChatMessage } from '../../shared/types/chat';
+import type { ChatAttachment, ChatMessage } from '../../shared/types/chat';
 import { effortLabel } from '../../shared/utils/effort';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { useAvailableModels, useGlobalDefaultModel, useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
@@ -51,7 +51,7 @@ import {
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
-import { createChatTurnId } from '../utils/chatTurnId';
+import { choiceBlocksAnsweredByLaterMessages } from '../utils/choiceAnswerMatching';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
 import { ApexLoader } from './ApexLoader';
@@ -66,6 +66,13 @@ function formatElapsed(milliseconds: number): string {
 
 type AdrKickoffLocationState = {
   kickoffPrompt?: string;
+  kickoffAttachments?: ChatAttachment[];
+  kickoffModel?: string;
+};
+
+type AdrComposeHandoff = {
+  title: string;
+  prompt: string;
 };
 
 const NewAdrCompose: React.FC = () => {
@@ -74,8 +81,10 @@ const NewAdrCompose: React.FC = () => {
   const [model, setModel] = useState(DEFAULT_MODEL_ID);
   const [error, setError] = useState<string | null>(null);
   const [showReviewerModal, setShowReviewerModal] = useState(false);
+  const [handoff, setHandoff] = useState<AdrComposeHandoff | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const creatingRef = useRef(false);
   const { selectedProject, selectedSkillSettingsId, authenticatedUser } = useAppShell();
   const navigate = useNavigate();
   const { data: skillConfig } = useProjectSkillConfig(selectedProject || null, selectedSkillSettingsId);
@@ -103,7 +112,6 @@ const NewAdrCompose: React.FC = () => {
     ?? repos.find((candidate) => candidate.name === repo)?.defaultBranch
     ?? 'main';
   const pending = startChat.isPending || createAdr.isPending;
-  const queryClient = useQueryClient();
 
   useEffect(() => {
     titleInputRef.current?.focus();
@@ -114,7 +122,7 @@ const NewAdrCompose: React.FC = () => {
   }, [skillConfig?.adrModel, globalDefault?.value]);
 
   const handleCreateAdr = useCallback(async (reviewerIds: string[]) => {
-    if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
+    if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending || creatingRef.current) return;
     if (!repoReadiness.isReady) {
       setShowReviewerModal(false);
       setError(repoReadiness.message ?? PROJECT_REPOSITORY_NOT_READY_MESSAGE);
@@ -122,6 +130,11 @@ const NewAdrCompose: React.FC = () => {
     }
     setError(null);
     const kickoffPrompt = input.trim() || 'Please use the attached files as context.';
+    const kickoffAttachments = attachments;
+    const kickoffModel = model;
+    creatingRef.current = true;
+    setShowReviewerModal(false);
+    setHandoff({ title: title.trim(), prompt: kickoffPrompt });
     try {
       const thread = await startChat.mutateAsync({
         kickoff: {
@@ -144,28 +157,21 @@ const NewAdrCompose: React.FC = () => {
         skillSettingsId: skillConfig?.id,
         reviewerIds,
       });
-      const response = await fetch(`/api/chat/threads/${thread.threadId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          turnId: createChatTurnId(),
-          text: kickoffPrompt,
-          attachments,
-          model,
-        }),
-      });
-      if (!response.ok) throw new Error('Failed to start the ADR interview');
       clearAttachments();
-      await queryClient.invalidateQueries({ queryKey: ['chat-thread', thread.threadId] });
       navigate(`/adr/${adr.adrId}`, {
-        state: { kickoffPrompt } satisfies AdrKickoffLocationState,
+        state: {
+          kickoffPrompt,
+          kickoffAttachments,
+          kickoffModel,
+        } satisfies AdrKickoffLocationState,
       });
     } catch (caught) {
+      creatingRef.current = false;
+      setHandoff(null);
       setShowReviewerModal(false);
       setError(caught instanceof Error ? caught.message : 'Failed to start ADR');
     }
-  }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate, queryClient, repoReadiness.isReady, repoReadiness.message]);
+  }, [title, input, attachments, repo, pending, startChat, selectedProject, branch, skillConfig, model, createAdr, clearAttachments, navigate, repoReadiness.isReady, repoReadiness.message]);
 
   const handleStart = useCallback(() => {
     if (!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending) return;
@@ -200,6 +206,43 @@ const NewAdrCompose: React.FC = () => {
     if (event.target.files) void addFiles(event.target.files);
     event.target.value = '';
   }, [addFiles]);
+
+  if (handoff) {
+    return (
+      <div className={styles.container}>
+        <div className={styles.header}>
+          <div className={styles.headerLeft}>
+            <button
+              className={styles.backBtn}
+              onClick={() => navigate('/adr')}
+              type="button"
+              {...{ 'data-testid': 'adr-compose-back' }}
+            >
+              ← Back
+            </button>
+            <div className={styles.titleBlock}>
+              <h1 className={styles.title}>{handoff.title}</h1>
+            </div>
+          </div>
+        </div>
+        <div className={styles.messages}>
+          <div className={styles.messageList}>
+            <div className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>{handoff.prompt}</div>
+            <div
+              className={styles.preparationState}
+              {...{ 'data-testid': 'adr-preparation-state' }}
+            >
+              <ApexLoader size={72} />
+              <h2 className={styles.preparationTitle}>Preparing your ADR interview</h2>
+              <p className={styles.preparationDetail} role="status" aria-live="polite">
+                Setting up the workspace and repository context so your ADR interview starts grounded…
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.composeContainer}>
@@ -384,8 +427,14 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const kickoffFromNav = (location.state as AdrKickoffLocationState | null)?.kickoffPrompt?.trim() || null;
+  const queryClient = useQueryClient();
+  const kickoffFromState = (location.state as AdrKickoffLocationState | null) ?? null;
+  const kickoffFromNav = kickoffFromState?.kickoffPrompt?.trim() || null;
   const [seededKickoffPrompt, setSeededKickoffPrompt] = useState<string | null>(kickoffFromNav);
+  const [kickoffAttachments] = useState<ChatAttachment[]>(kickoffFromState?.kickoffAttachments ?? []);
+  const [kickoffModel] = useState<string | null>(kickoffFromState?.kickoffModel ?? null);
+  const [kickoffSendFailed, setKickoffSendFailed] = useState(false);
+  const kickoffSentRef = useRef(false);
   const { can, userId, isSuperAdmin } = useAppShell();
   const { data: adr, isLoading, isError } = useAdr(id);
   const { data: reviewConfig } = useProjectSkillConfig(adr?.project);
@@ -407,11 +456,17 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
     enablePreparationState: adr?.status === 'in_progress',
+    afterSend: () => {
+      const threadId = adr?.chatThreadId;
+      if (!threadId) return;
+      return queryClient.invalidateQueries({ queryKey: ['chat-thread', threadId] });
+    },
   });
   const {
     messages,
     visibleMessages: sessionVisibleMessages,
     streamingText,
+    thinkingText,
     progressLabel,
     progressPhase,
     toolProgress,
@@ -440,15 +495,44 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   const assignReviewers = useAssignAdrReviewers(id);
   const fixWithAi = useFixAdrWithAi(id);
   const fixCommentWithAi = useFixAdrCommentWithAi(id);
-  const isRunning = session.isRunning || thread?.status === 'running';
+  const visibleMessages = useMemo(() => {
+    const filtered = sessionVisibleMessages.filter(
+      (message) => message.toolName !== '_reasoning' && message.toolName !== '_thinking',
+    );
+    if (!seededKickoffPrompt) return filtered;
+    const hasKickoffEcho = filtered.some(
+      (message) => message.role === 'user' && message.text === seededKickoffPrompt,
+    );
+    if (hasKickoffEcho) return filtered;
+    const seed: ChatMessage = {
+      id: 'adr-seeded-kickoff',
+      role: 'user',
+      text: seededKickoffPrompt,
+      ts: new Date().toISOString(),
+    };
+    return [...filtered, seed];
+  }, [sessionVisibleMessages, seededKickoffPrompt]);
+  const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
+  const agentReplySettled = lastVisibleRole === 'agent' && !streamingText && !thinkingText;
+  const isRunning = session.isRunning || (thread?.status === 'running' && !agentReplySettled);
   const isInteractionBusy = session.isInteractionBusy || isRunning;
+  const kickoffFailed = Boolean(
+    seededKickoffPrompt
+    && !session.isSending
+    && !session.isAwaitingAgentResponse
+    && (session.sendError || kickoffSendFailed),
+  );
   const resumeGate = useGroundingResumeGate(
     'adr',
     id,
     adr?.project ?? null,
     isRunning,
   );
-  const isAgentProcessing = isRunning || session.isSending || session.isAwaitingAgentResponse;
+  const isAgentProcessing = kickoffFailed
+    ? false
+    : isRunning || session.isSending || session.isAwaitingAgentResponse;
+  const composerBusy = kickoffFailed ? false : isInteractionBusy;
+  const composerRunning = kickoffFailed ? false : isRunning;
   const isAuthor = adr?.authorId === userId;
   const chatLocked = !isAuthor || adr?.status !== 'in_progress';
 
@@ -456,6 +540,48 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     if (!kickoffFromNav) return;
     navigate(location.pathname, { replace: true, state: {} });
   }, [kickoffFromNav, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (session.sendError) setError(session.sendError);
+  }, [session.sendError]);
+
+  useEffect(() => {
+    if (!seededKickoffPrompt) {
+      setKickoffSendFailed(false);
+      return;
+    }
+    if (session.sendError) setKickoffSendFailed(true);
+  }, [seededKickoffPrompt, session.sendError]);
+
+  useEffect(() => {
+    if (kickoffSentRef.current || !seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
+    const alreadyPersisted = messages.some(
+      (message) => message.role === 'user' && message.text === seededKickoffPrompt,
+    );
+    if (alreadyPersisted) {
+      kickoffSentRef.current = true;
+      return;
+    }
+    kickoffSentRef.current = true;
+    void session.send(seededKickoffPrompt, {
+      model: kickoffModel ?? model,
+      ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
+      duringPreparation: true,
+    }).then((sent) => {
+      if (!sent) kickoffSentRef.current = false;
+    }).catch(() => {
+      kickoffSentRef.current = false;
+    });
+  }, [
+    adr?.chatThreadId,
+    chatLocked,
+    kickoffAttachments,
+    kickoffModel,
+    messages,
+    model,
+    seededKickoffPrompt,
+    session,
+  ]);
 
   useEffect(() => {
     if (adr?.model) setModel(adr.model);
@@ -513,16 +639,40 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [adr?.status]);
 
   const send = useCallback(async (text: string) => {
-    if (!adr || isInteractionBusy || chatLocked || resumeGate.composerBlocked) return;
+    if (!adr || chatLocked || resumeGate.composerBlocked) return;
+    if (!kickoffFailed && isInteractionBusy) return;
     if (!text.trim() && attachments.length === 0) return;
     const payload = text.trim();
     const pendingAttachments = attachments;
     setInput('');
     clearAttachments();
     setError(null);
-    await session.send(payload, { model, attachments: pendingAttachments });
-    if (session.sendError) setError(session.sendError);
-  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, model, resumeGate.composerBlocked, session]);
+    if (kickoffFailed) {
+      kickoffSentRef.current = true;
+      setSeededKickoffPrompt(payload || null);
+    }
+    await session.send(payload, {
+      model,
+      attachments: pendingAttachments,
+      ...(kickoffFailed ? { duringPreparation: true } : {}),
+    });
+  }, [adr, attachments, chatLocked, clearAttachments, isInteractionBusy, kickoffFailed, model, resumeGate.composerBlocked, session]);
+
+  const retryKickoff = useCallback(() => {
+    if (!seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
+    kickoffSentRef.current = true;
+    setError(null);
+    session.clearSendError();
+    void session.send(seededKickoffPrompt, {
+      model: kickoffModel ?? model,
+      ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
+      duringPreparation: true,
+    }).then((sent) => {
+      if (!sent) kickoffSentRef.current = false;
+    }).catch(() => {
+      kickoffSentRef.current = false;
+    });
+  }, [adr?.chatThreadId, chatLocked, kickoffAttachments, kickoffModel, model, seededKickoffPrompt, session]);
 
   const cancelActiveRun = useCallback(async () => {
     setError(null);
@@ -534,31 +684,13 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     event.target.value = '';
   }, [addFiles]);
 
-  const visibleMessages = useMemo(() => {
-    const filtered = sessionVisibleMessages.filter(
-      (message) => message.toolName !== '_reasoning' && message.toolName !== '_thinking',
-    );
-    if (!seededKickoffPrompt) return filtered;
-    const hasKickoffEcho = filtered.some(
-      (message) => message.role === 'user' && message.text === seededKickoffPrompt,
-    );
-    if (hasKickoffEcho) return filtered;
-    const seed: ChatMessage = {
-      id: 'adr-seeded-kickoff',
-      role: 'user',
-      text: seededKickoffPrompt,
-      ts: new Date().toISOString(),
-    };
-    return [...filtered, seed];
-  }, [sessionVisibleMessages, seededKickoffPrompt]);
-
   useEffect(() => {
-    if (!seededKickoffPrompt) return;
+    if (!seededKickoffPrompt || session.sendError || session.isSending) return;
     const hasKickoffEcho = sessionVisibleMessages.some(
       (message) => message.role === 'user' && message.text === seededKickoffPrompt,
     );
     if (hasKickoffEcho) setSeededKickoffPrompt(null);
-  }, [seededKickoffPrompt, sessionVisibleMessages]);
+  }, [seededKickoffPrompt, session.isSending, session.sendError, sessionVisibleMessages]);
 
   if (isLoading) {
     return (
@@ -598,7 +730,8 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     : `${assignments.filter((assignment) => assignment.status === 'approved').length}/${assignments.length} reviewer approvals`;
 
   const awaitingFirstAgentReply = Boolean(
-    adr.status === 'in_progress'
+    !kickoffFailed
+    && adr.status === 'in_progress'
     && !streamingText
     && !visibleMessages.some((message) => message.role === 'agent')
     && (
@@ -612,19 +745,32 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   );
   const showPreparationState = awaitingFirstAgentReply;
 
-  let lastUserIndex = -1;
-  visibleMessages.forEach((message, index) => {
-    if (message.role === 'user') lastUserIndex = index;
-  });
   let runningQCount = 0;
   const messageQOffsets = new Map<string, number>();
+  const messageChoiceBlocks = new Map<string, ChoiceBlock[]>();
   for (const message of visibleMessages) {
     if (message.role === 'agent') {
       messageQOffsets.set(message.id, runningQCount);
       const parts = parseAgentMessage(message.text);
-      runningQCount += parts.filter((part): part is ChoiceBlock => part.type === 'choices').length;
+      const blocks = parts.filter((part): part is ChoiceBlock => part.type === 'choices');
+      messageChoiceBlocks.set(message.id, blocks);
+      runningQCount += blocks.length;
     }
   }
+
+  // An agent message's choice block is answered only once a *later* user
+  // message actually quotes its question text (via `formatChoiceAnswers`'s
+  // `Q{n} · {question}` line) — a later reply merely existing is not enough,
+  // since it may answer a different, more recently asked question.
+  const isChoiceMessageAnswered = (candidateId: string, candidateIndex: number): boolean => {
+    const blocks = messageChoiceBlocks.get(candidateId);
+    if (!blocks || blocks.length === 0) return false;
+    const laterUserTexts = visibleMessages
+      .slice(candidateIndex + 1)
+      .filter((message) => message.role === 'user')
+      .map((message) => message.text);
+    return choiceBlocksAnsweredByLaterMessages(blocks, laterUserTexts);
+  };
   const generationStartedAt = Date.parse(adr.updatedAt);
   const generationElapsed = Number.isFinite(generationStartedAt)
     ? formatElapsed(generationNow - generationStartedAt)
@@ -782,10 +928,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           )}
         </div>
       </div>
-      {error && (
+      {(error || kickoffFailed) && (
         <div className={styles.sendError}>
-          <span>{error}</span>
-          {error.toLowerCase().includes('already running') && (
+          {error && <span>{error}</span>}
+          {error?.toLowerCase().includes('already running') && (
             <button
               type="button"
               className={styles.sendErrorDismiss}
@@ -796,15 +942,30 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               Stop
             </button>
           )}
-          <button
-            type="button"
-            className={styles.sendErrorDismiss}
-            onClick={() => setError(null)}
-            aria-label="Dismiss"
-            {...{ 'data-testid': 'adr-error-dismiss-btn' }}
-          >
-            ×
-          </button>
+          {kickoffFailed && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => retryKickoff()}
+              {...{ 'data-testid': 'adr-kickoff-retry' }}
+            >
+              Retry
+            </button>
+          )}
+          {error && (
+            <button
+              type="button"
+              className={styles.sendErrorDismiss}
+              onClick={() => {
+                setError(null);
+                session.clearSendError();
+              }}
+              aria-label="Dismiss"
+              {...{ 'data-testid': 'adr-error-dismiss-btn' }}
+            >
+              ×
+            </button>
+          )}
         </div>
       )}
       {adr.content && (
@@ -909,7 +1070,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                     isRunning={isInteractionBusy}
                     questionOffset={messageQOffsets.get(message.id) ?? 0}
                     interviewLocked={chatLocked}
-                    alreadyAnswered={index < lastUserIndex}
+                    alreadyAnswered={isChoiceMessageAnswered(message.id, index)}
                   />
                 );
               }
@@ -1025,10 +1186,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           onChange={setInput}
           onSend={() => void send(input)}
           onCancel={() => void cancelActiveRun()}
-          disabled={isInteractionBusy || resumeGate.composerBlocked}
-          isRunning={isRunning}
-          isSending={session.isSending}
-          isBusy={isInteractionBusy}
+          disabled={composerBusy || resumeGate.composerBlocked}
+          isRunning={composerRunning}
+          isSending={kickoffFailed ? false : session.isSending}
+          isBusy={composerBusy}
           isCancelling={session.isCancelling}
           placeholder={showPreparationState
             ? 'Preparing the workspace…'
@@ -1060,7 +1221,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
               className={styles.fileInput}
               onChange={handleAttachmentChange}
-              disabled={isInteractionBusy}
+              disabled={composerBusy}
             />
           )}
         />

@@ -13,6 +13,8 @@ import {
   getDevEnvAllowlistView,
   removeDevEnvAllowlistEntry,
 } from '../services/devEnvAllowlistService';
+import * as buildAccessService from '../services/buildAccessService';
+import { BuildAccessError } from '../services/buildAccessService';
 
 jest.mock('../services/userProjectAssignmentService', () => ({
   bulkSetProjectAssignments: jest.fn(),
@@ -57,6 +59,22 @@ jest.mock('../services/devEnvAllowlistService', () => {
   };
 });
 
+jest.mock('../services/buildAccessService', () => {
+  class BuildAccessError extends Error {
+    constructor(public readonly kind: string, message: string) {
+      super(message);
+      this.name = 'BuildAccessError';
+    }
+  }
+  return {
+    BuildAccessError,
+    listBuildAllowlist: jest.fn(),
+    listCandidateRepositories: jest.fn(),
+    addBuildAllowlistEntry: jest.fn(),
+    removeBuildAllowlistEntry: jest.fn(),
+  };
+});
+
 jest.mock('../services/featureFlagService', () => ({
   listFlags: jest.fn(),
   getFlag: jest.fn(),
@@ -81,6 +99,7 @@ const mockRequireSuperAdmin = requireSuperAdmin as jest.Mock;
 const mockGetDevEnvAllowlistView = getDevEnvAllowlistView as jest.MockedFunction<typeof getDevEnvAllowlistView>;
 const mockAddDevEnvAllowlistEntry = addDevEnvAllowlistEntry as jest.MockedFunction<typeof addDevEnvAllowlistEntry>;
 const mockRemoveDevEnvAllowlistEntry = removeDevEnvAllowlistEntry as jest.MockedFunction<typeof removeDevEnvAllowlistEntry>;
+const mockBuildAccess = buildAccessService as jest.Mocked<typeof buildAccessService>;
 
 function buildApp(userProfile: Record<string, unknown> = { oid: 'super-admin', displayName: 'Platform Admin' }) {
   const app = express();
@@ -470,6 +489,25 @@ describe('platformAdminRouter', () => {
       expect(res.body.enabledViews).toContain('diagrams');
     });
 
+    it('FEAT-002 VT-14: accepts builds as a valid menu item key', async () => {
+      mockMenuSettings.upsertMenuConfig.mockResolvedValue({
+        project: 'Apex',
+        enabledViews: ['builds'],
+        updatedBy: 'Platform Admin',
+      });
+
+      const ok = await request(buildApp({ oid: 'admin-oid', displayName: 'Platform Admin' }))
+        .put('/api/platform-admin/menu-settings/Apex')
+        .send({ enabledViews: ['builds'] });
+      expect(ok.status).toBe(200);
+      expect(mockMenuSettings.upsertMenuConfig).toHaveBeenCalledWith('Apex', ['builds'], 'Platform Admin');
+
+      const bad = await request(buildApp())
+        .put('/api/platform-admin/menu-settings/Apex')
+        .send({ enabledViews: ['not-a-key'] });
+      expect(bad.status).toBe(400);
+    });
+
     it('PBI-001 AC-1 / VT-07: persistence failure leaves prior enabledViews unchanged', async () => {
       mockMenuSettings.upsertMenuConfig.mockRejectedValue(new Error('db down'));
 
@@ -541,6 +579,130 @@ describe('platformAdminRouter', () => {
       expect(mockRemoveDevEnvAllowlistEntry).toHaveBeenCalledWith(
         '11111111-1111-1111-1111-111111111111',
       );
+    });
+  });
+
+  describe('build allow-list (FEAT-002 PBI-002)', () => {
+    const entryId = '22222222-2222-2222-2222-222222222222';
+    const entry = {
+      id: entryId,
+      project: 'Apex',
+      repository: 'Apex',
+      createdBy: 'Platform Admin',
+      createdAt: '2026-10-23T12:00:00.000Z',
+    };
+
+    it('VT-02 adds a pair with the acting user and then lists it', async () => {
+      mockBuildAccess.addBuildAllowlistEntry.mockResolvedValue(entry);
+      mockBuildAccess.listBuildAllowlist.mockResolvedValue([entry]);
+
+      const post = await request(buildApp({ oid: 'admin-oid', displayName: 'Platform Admin' }))
+        .post('/api/platform-admin/build-allowlist')
+        .send({ project: 'Apex', repository: 'apex' });
+      expect(post.status).toBe(201);
+      expect(post.body).toEqual(entry);
+      expect(mockBuildAccess.addBuildAllowlistEntry).toHaveBeenCalledWith({
+        project: 'Apex',
+        repository: 'apex',
+        actor: { id: 'admin-oid', label: 'Platform Admin' },
+      });
+
+      const get = await request(buildApp()).get('/api/platform-admin/build-allowlist');
+      expect(get.status).toBe(200);
+      expect(get.body).toEqual({ entries: [entry] });
+    });
+
+    it('VT-03 maps INVALID to 400 and DUPLICATE to 409 with the plain message', async () => {
+      mockBuildAccess.addBuildAllowlistEntry.mockRejectedValueOnce(
+        new BuildAccessError('INVALID', 'That repository is not configured for this project.'),
+      );
+      const invalid = await request(buildApp())
+        .post('/api/platform-admin/build-allowlist')
+        .send({ project: 'Apex', repository: 'Other' });
+      expect(invalid.status).toBe(400);
+      expect(invalid.body).toEqual({ error: 'That repository is not configured for this project.' });
+
+      mockBuildAccess.addBuildAllowlistEntry.mockRejectedValueOnce(
+        new BuildAccessError('DUPLICATE', 'That repository is already approved for builds in this project.'),
+      );
+      const dup = await request(buildApp())
+        .post('/api/platform-admin/build-allowlist')
+        .send({ project: 'Apex', repository: 'Apex' });
+      expect(dup.status).toBe(409);
+    });
+
+    it('passes non-string input through as blank so the service refuses it', async () => {
+      mockBuildAccess.addBuildAllowlistEntry.mockRejectedValueOnce(
+        new BuildAccessError('INVALID', 'Choose a project and a repository.'),
+      );
+      const res = await request(buildApp())
+        .post('/api/platform-admin/build-allowlist')
+        .send({ project: 7, repository: null });
+      expect(res.status).toBe(400);
+      expect(mockBuildAccess.addBuildAllowlistEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ project: '', repository: '' }),
+      );
+    });
+
+    it('returns 500 for unexpected service errors', async () => {
+      mockBuildAccess.addBuildAllowlistEntry.mockRejectedValueOnce(new Error('db down'));
+      const res = await request(buildApp())
+        .post('/api/platform-admin/build-allowlist')
+        .send({ project: 'Apex', repository: 'Apex' });
+      expect(res.status).toBe(500);
+    });
+
+    it('removes a pair with the acting user; maps NOT_FOUND to 404 and INVALID to 400', async () => {
+      mockBuildAccess.removeBuildAllowlistEntry.mockResolvedValueOnce(undefined);
+      const ok = await request(buildApp({ oid: 'admin-oid', displayName: 'Platform Admin' }))
+        .delete(`/api/platform-admin/build-allowlist/${entryId}`);
+      expect(ok.status).toBe(204);
+      expect(mockBuildAccess.removeBuildAllowlistEntry).toHaveBeenCalledWith(entryId, {
+        id: 'admin-oid',
+        label: 'Platform Admin',
+      });
+
+      mockBuildAccess.removeBuildAllowlistEntry.mockRejectedValueOnce(
+        new BuildAccessError('NOT_FOUND', 'That approved repository no longer exists.'),
+      );
+      const missing = await request(buildApp()).delete(`/api/platform-admin/build-allowlist/${entryId}`);
+      expect(missing.status).toBe(404);
+
+      mockBuildAccess.removeBuildAllowlistEntry.mockRejectedValueOnce(
+        new BuildAccessError('INVALID', 'That approved repository id is not valid.'),
+      );
+      const bad = await request(buildApp()).delete('/api/platform-admin/build-allowlist/nope');
+      expect(bad.status).toBe(400);
+    });
+
+    it('lists candidate repositories for a project and requires the project', async () => {
+      mockBuildAccess.listCandidateRepositories.mockResolvedValue(['Apex', 'org/web']);
+      const ok = await request(buildApp()).get('/api/platform-admin/build-allowlist/repositories?project=Apex');
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual({ repositories: ['Apex', 'org/web'] });
+      expect(mockBuildAccess.listCandidateRepositories).toHaveBeenCalledWith('Apex');
+
+      const blank = await request(buildApp()).get('/api/platform-admin/build-allowlist/repositories?project=%20');
+      expect(blank.status).toBe(400);
+    });
+
+    it('VT-05 a Project Admin who is not a super admin gets 403 and nothing changes', async () => {
+      const refuse = (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+        res.status(403).json({ error: 'Forbidden' });
+      };
+      const app = buildApp({ oid: 'project-admin', displayName: 'Project Admin' });
+
+      mockRequireSuperAdmin.mockImplementationOnce(refuse);
+      const get = await request(app).get('/api/platform-admin/build-allowlist');
+      mockRequireSuperAdmin.mockImplementationOnce(refuse);
+      const post = await request(app).post('/api/platform-admin/build-allowlist').send({ project: 'Apex', repository: 'Apex' });
+      mockRequireSuperAdmin.mockImplementationOnce(refuse);
+      const del = await request(app).delete(`/api/platform-admin/build-allowlist/${entryId}`);
+
+      expect([get.status, post.status, del.status]).toEqual([403, 403, 403]);
+      expect(mockBuildAccess.listBuildAllowlist).not.toHaveBeenCalled();
+      expect(mockBuildAccess.addBuildAllowlistEntry).not.toHaveBeenCalled();
+      expect(mockBuildAccess.removeBuildAllowlistEntry).not.toHaveBeenCalled();
     });
   });
 });

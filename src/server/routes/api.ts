@@ -87,6 +87,26 @@ export function isPublicHealthPath(path: string): boolean {
   return publicHealthPaths.has(path);
 }
 
+const sessionFreeFullPaths = new Set(['/api/telemetry-config', '/api/messages']);
+const sessionFreeFullPrefixes = [
+  '/api/internal/load-test-runs',
+  '/api/internal/ai-runs',
+  '/api/internal/foundation-skills',
+  '/api/public',
+];
+
+/**
+ * True for requests that never read the session: health probes, telemetry
+ * config, the Teams bot endpoint, and the runner/CLI/public-API callbacks.
+ * Takes the full request path (including `/api`), as seen by `app.use(fn)`.
+ * Skipping the session middleware keeps these requests off the session store.
+ */
+export function shouldSkipSessionMiddleware(fullPath: string): boolean {
+  if (sessionFreeFullPaths.has(fullPath)) return true;
+  if (fullPath.startsWith('/api/') && isPublicHealthPath(fullPath.slice('/api'.length))) return true;
+  return sessionFreeFullPrefixes.some((prefix) => fullPath.startsWith(prefix));
+}
+
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
 router.use('/playbooks', playbooksRouter);

@@ -159,6 +159,26 @@ export async function migrateDown(connectionString: string, count: number): Prom
   );
 }
 
+/**
+ * How many applied migrations `down` must undo so that `migrationName` is the last one rolled
+ * back. `down N` undoes the last N rows in `run_on, id` order, so a test that hard-codes N breaks
+ * as soon as any newer migration (a changelog version sync, for example) lands after its own.
+ */
+export async function migrationsFrom(connectionString: string, migrationName: string): Promise<number> {
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ name: string }>(
+      'SELECT name FROM pgmigrations ORDER BY run_on, id'
+    );
+    const index = rows.findIndex((row) => row.name === migrationName);
+    if (index === -1) throw new Error(`Migration "${migrationName}" has not been applied.`);
+    return rows.length - index;
+  } finally {
+    await client.end();
+  }
+}
+
 const SCRATCH_NAME = /^apex_scratch_[a-z0-9]+_\d+_\d+$/;
 
 async function dropDatabase(base: URL, databaseName: string): Promise<void> {

@@ -39,11 +39,15 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
+| `builds:view` | builds | admin, member, viewer |
+| `builds:run` | builds | admin, member |
 | `calendar:view` | calendar | admin, member |
 | `chat:create` | chat | admin, member |
 | `chat:view` | chat | admin, member |
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |
+| `mcp-servers:view` | mcp-servers | *(no default roles — assign explicitly)* |
+| `mcp-servers:manage` | mcp-servers | *(no default roles — assign explicitly)* |
 | `cost:view` | cost | admin, viewer |
 | `diagram:view` | diagram | admin, member, viewer |
 | `diagram:create` | diagram | admin, member |

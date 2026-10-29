@@ -268,6 +268,7 @@ export function useChatStream(
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
+  const streamTrimOffsetRef = useRef(0);
   const pendingOffsetTokensRef = useRef<
     Map<number, { text: string; key: string }>
   >(new Map());
@@ -351,6 +352,7 @@ export function useChatStream(
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
+    streamTrimOffsetRef.current = 0;
     pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
@@ -462,7 +464,9 @@ export function useChatStream(
           ) {
             // Legacy tokens without offsets continue append-only.
             streamBufferRef.current += tokenEvent.text;
-            setStreamingText(streamBufferRef.current);
+            setStreamingText(
+              streamBufferRef.current.slice(streamTrimOffsetRef.current)
+            );
           } else {
             const current = streamBufferRef.current;
             const currentLen = current.length;
@@ -512,7 +516,9 @@ export function useChatStream(
                 drained = true;
               }
             }
-            setStreamingText(streamBufferRef.current);
+            setStreamingText(
+              streamBufferRef.current.slice(streamTrimOffsetRef.current)
+            );
           }
           setIsRetrying(false);
           setRetryReason(null);
@@ -524,6 +530,7 @@ export function useChatStream(
           const messageEvent = event as SseMessageEvent;
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
@@ -542,6 +549,8 @@ export function useChatStream(
         }
         case 'tool_call': {
           setLastProgressAt(Date.now());
+          streamTrimOffsetRef.current = streamBufferRef.current.length;
+          setStreamingText('');
           setThinkingText('');
           setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
@@ -582,6 +591,10 @@ export function useChatStream(
         case 'tool_status': {
           const toolStatusEvent = event as SseToolStatusEvent;
           setLastProgressAt(Date.now());
+          if (toolStatusEvent.status === 'running') {
+            streamTrimOffsetRef.current = streamBufferRef.current.length;
+            setStreamingText('');
+          }
           setToolProgress((prev) => {
             const existing = prev.findIndex(
               (t) => t.callId === toolStatusEvent.callId
@@ -711,6 +724,7 @@ export function useChatStream(
         case 'done': {
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
@@ -880,6 +894,7 @@ export function useChatStream(
           setStatus(mappedStatus);
           clearPollTimer();
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);

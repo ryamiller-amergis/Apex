@@ -35,6 +35,8 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   diagrams: 'diagram:view',
   'work-board': 'work-board:view',
   playbooks: 'playbooks:view',
+  builds: 'builds:view',
+  'mcp-servers': 'mcp-servers:view',
 };
 
 export interface RestrictedUserAccess {

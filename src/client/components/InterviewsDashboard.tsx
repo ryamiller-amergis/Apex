@@ -955,13 +955,17 @@ export const InterviewsDashboard: React.FC = () => {
           itemName={pendingDeleteInterview.title}
           description="Are you sure you want to permanently delete the interview"
           isPending={deleteInterview.isPending}
+          error={deleteInterview.error?.message}
           {...{ 'data-testid': 'delete-interview-modal' }}
           onConfirm={() => {
             deleteInterview.mutate(pendingDeleteInterview.id, {
               onSuccess: () => setPendingDeleteInterview(null),
             });
           }}
-          onCancel={() => setPendingDeleteInterview(null)}
+          onCancel={() => {
+            deleteInterview.reset();
+            setPendingDeleteInterview(null);
+          }}
         />
       )}
 

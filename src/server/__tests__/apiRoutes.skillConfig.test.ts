@@ -425,6 +425,32 @@ describe('GET /api/skill-config', () => {
     expect(res.body.quickMcpPills[0]).not.toHaveProperty('allowedGroupIds');
   });
 
+  it('keeps the flat shape: no nested workflow settings reach the client', async () => {
+    mockGetSkillConfig.mockResolvedValue({
+      project: 'MaxView',
+      skillRepo: 'org/MaxView',
+      skillBranch: 'main',
+      adrInterviewSkillPath: '.cursor/skills/adr-interview/SKILL.md',
+      adrModel: 'claude-opus-4-6',
+      adrEffort: 'high',
+      prdModel: 'composer-2',
+      prdEffort: 'low',
+      workflowSettings: [{ workflow: 'prd', model: 'composer-2', effort: 'low' }],
+    });
+
+    const res = await request(buildApp()).get('/api/skill-config?project=MaxView');
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('workflowSettings');
+    expect(res.body).toMatchObject({
+      adrInterviewSkillPath: '.cursor/skills/adr-interview/SKILL.md',
+      adrModel: 'claude-opus-4-6',
+      adrEffort: 'high',
+      prdModel: 'composer-2',
+      prdEffort: 'low',
+    });
+  });
+
   it('calls getSkillConfig with the project name from the query', async () => {
     mockGetSkillConfig.mockResolvedValue(null);
 

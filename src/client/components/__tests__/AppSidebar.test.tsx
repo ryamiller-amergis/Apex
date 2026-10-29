@@ -359,11 +359,46 @@ describe('AppSidebar — Playbooks visibility', () => {
   });
 });
 
+describe('AppSidebar — Builds visibility (FEAT-002 VT-06)', () => {
+  const canView = (key: string) => key === 'builds:view';
+
+  it('PBI-003 AC-0 renders Builds when flag, menu and builds:view all hold, and click navigates', () => {
+    const onNavigateBuilds = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={canView}
+        menuEnabledViews={['builds']}
+        buildsEnabled
+        onNavigateBuilds={onNavigateBuilds}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('nav-item-builds'));
+    expect(onNavigateBuilds).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['flag off', { can: canView, menuEnabledViews: ['builds'], buildsEnabled: false }],
+    ['menu excludes builds', { can: canView, menuEnabledViews: [] as string[], buildsEnabled: true }],
+    ['no builds:view', { can: () => false, menuEnabledViews: ['builds'], buildsEnabled: true }],
+  ])('hides Builds when %s', (_label, props) => {
+    render(<AppSidebar {...baseProps} {...props} onNavigateBuilds={jest.fn()} />);
+    expect(screen.queryByTestId('nav-item-builds')).not.toBeInTheDocument();
+  });
+
+  it('a super admin needs only the flag', () => {
+    const { rerender } = render(<AppSidebar {...baseProps} isSuperAdmin buildsEnabled onNavigateBuilds={jest.fn()} />);
+    expect(screen.getByTestId('nav-item-builds')).toBeInTheDocument();
+    rerender(<AppSidebar {...baseProps} isSuperAdmin buildsEnabled={false} onNavigateBuilds={jest.fn()} />);
+    expect(screen.queryByTestId('nav-item-builds')).not.toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — grouped sections', () => {
   const allViews = [
     'calendar', 'planning', 'cloudcost', 'backlog', 'adr',
     'my-work', 'standup', 'ui-lab', 'feature-requests',
-    'ai-cost', 'design-module', 'load-tests', 'diagrams',
+    'ai-cost', 'design-module', 'load-tests', 'diagrams', 'builds',
   ];
   const superAdminProps = {
     ...baseProps,
@@ -410,6 +445,60 @@ describe('AppSidebar — grouped sections', () => {
     expect(screen.queryByText('Build')).not.toBeInTheDocument();
     expect(screen.queryByText('Delivery')).not.toBeInTheDocument();
     expect(screen.queryByText('Tools')).not.toBeInTheDocument();
+  });
+});
+
+describe('AppSidebar — integrations nav (SC-1)', () => {
+  it('SC-1 hides Integrations when the flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled={false}
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations when the project menu omits it', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['calendar']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 hides Integrations without mcp-servers:view', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={() => false}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-mcp-servers')).not.toBeInTheDocument();
+  });
+
+  it('SC-1 shows Integrations when the flag, menu, and view permission are on', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'mcp-servers:view'}
+        menuEnabledViews={['mcp-servers']}
+        mcpServersEnabled
+        onNavigateMcpServers={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId('nav-item-mcp-servers')).toBeInTheDocument();
   });
 });
 

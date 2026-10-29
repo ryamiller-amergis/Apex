@@ -23,10 +23,13 @@ import {
   createScratchDatabase,
   migrateDown,
   migrateUp,
+  migrationsFrom,
   ScratchDatabase,
 } from './support/scratch-db';
 
 const MIGRATE_TIMEOUT = 600_000;
+const TABLES_MIGRATION = '20261023143900_a1a4_build-from-prompt-tables';
+const LINK_MIGRATION = '20261023144000_c3d8_build-from-prompt-agent-runs';
 const USER_OID = 'feat001-build-user';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const CONTACTS = JSON.stringify([{ userId: 'u', displayName: 'Dev', email: 'dev@example.com' }]);
@@ -177,8 +180,11 @@ describe('VT-01 build tables exist with the contracted shape', () => {
     const byName = Object.fromEntries(rules.map((row) => [row.constraint_name, row.delete_rule]));
     expect(byName.fk_build_preview_leases_run).toBe('CASCADE');
     expect(byName.fk_agent_runs_build_task).toBe('SET NULL');
+    // FEAT-004: deleting a project skill settings row clears the link instead of blocking the delete.
+    expect(byName.fk_build_runs_skill_settings).toBe('SET NULL');
+    const notRestrict = new Set(['fk_build_preview_leases_run', 'fk_agent_runs_build_task', 'fk_build_runs_skill_settings']);
     for (const [name, rule] of Object.entries(byName)) {
-      if (name === 'fk_build_preview_leases_run' || name === 'fk_agent_runs_build_task') continue;
+      if (notRestrict.has(name)) continue;
       if (!name.startsWith('fk_build_')) continue;
       expect(rule).toBe('RESTRICT');
     }
@@ -505,7 +511,10 @@ describe('VT-04 and VT-07 agent run link and rollback', () => {
     const linkClient = new pg.Client({ connectionString: linkScratch.connectionString });
     await linkClient.connect();
     try {
-      await migrateDown(linkScratch.connectionString, 1);
+      await migrateDown(
+        linkScratch.connectionString,
+        await migrationsFrom(linkScratch.connectionString, LINK_MIGRATION),
+      );
       await linkClient.query(
         `INSERT INTO app_users (oid, display_name) VALUES ($1, 'link') ON CONFLICT (oid) DO NOTHING`,
         [USER_OID],
@@ -589,7 +598,10 @@ describe('VT-04 and VT-07 agent run link and rollback', () => {
     const downClient = new pg.Client({ connectionString: downScratch.connectionString });
     await downClient.connect();
     try {
-      await migrateDown(downScratch.connectionString, 2);
+      await migrateDown(
+        downScratch.connectionString,
+        await migrationsFrom(downScratch.connectionString, TABLES_MIGRATION),
+      );
       const tables = await downClient.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables
          WHERE table_schema = 'public' AND table_name = ANY($1)`,

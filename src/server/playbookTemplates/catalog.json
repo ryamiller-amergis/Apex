@@ -25,6 +25,19 @@
       "requiredPermissions": ["playbooks:author", "playbooks:run"],
       "installPolicy": "one-per-project",
       "estimatedCostBand": "medium"
+    },
+    {
+      "templateKey": "build-from-prompt",
+      "templateVersion": 1,
+      "displayName": "Build from prompt",
+      "summary": "A human-led intake interview, then the build step that parks until the build finishes.",
+      "category": "build",
+      "tags": ["build"],
+      "graphFile": "build-from-prompt.json",
+      "requiredFlags": ["build-from-prompt"],
+      "requiredPermissions": ["playbooks:author", "builds:run"],
+      "installPolicy": "one-per-project",
+      "estimatedCostBand": "medium"
     }
   ]
 }
