@@ -14,6 +14,7 @@ import { BUILD_REQUIREMENT_KINDS, BUILD_RISK_CATEGORIES, BUILD_RISK_RATINGS } fr
 import { db } from '../db/drizzle';
 import { interviewSpecialistReviews, interviews } from '../db/schema';
 import { createThread, getThread, hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
+import { propagatePipelineGrounding } from './runGroundingService';
 
 const REQUIREMENTS_SKILL_PATH = '.cursor/skills/interview-requirements-review/SKILL.md';
 const PRODUCT_SKILL_PATH = '.cursor/skills/interview-product-analyst/SKILL.md';
@@ -848,6 +849,28 @@ export class BuildIntakeDraftError extends Error {
 }
 
 /**
+ * Pins the drafter chat to the commit the interview read. A chat with no pinned commit refreshes
+ * the shared repository cache first, and that refresh can wait out the draft timeout.
+ */
+async function inheritInterviewGrounding(
+  interview: { chatThreadId: string; project: string; authorId: string },
+  threadId: string,
+): Promise<void> {
+  try {
+    await propagatePipelineGrounding(
+      { runType: 'chat', runId: interview.chatThreadId, project: interview.project },
+      { runType: 'chat', runId: threadId, project: interview.project },
+      interview.authorId,
+      { deferMaterialization: true },
+    );
+  } catch (error) {
+    console.warn(
+      `[build-brief] grounding propagation unavailable error=${error instanceof Error ? error.name : 'Error'}`,
+    );
+  }
+}
+
+/**
  * Drafts a build-intake brief with the profile's own skill: the eight sections plus requirement
  * rows, risk candidates and a task estimate. Times out after 60 seconds by default.
  */
@@ -888,6 +911,7 @@ export async function draftBuildIntakeBrief(input: {
 
   try {
     const specialist = await createThread(interview.authorId, kickoff, { skipAutoKickoff: true });
+    await inheritInterviewGrounding(interview, specialist.id);
     await sendMessage(
       specialist.id,
       `Draft the build brief from this confirmed intake transcript:\n\n${transcript}`,
