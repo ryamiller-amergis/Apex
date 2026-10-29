@@ -15,6 +15,7 @@
 #   SKIP_APP_UPDATE                Push only when "true"
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/image-publish-lib.sh"
 
 if [[ -z "${AI_RUNS_ACR_NAME:-}" ]]; then
   echo "Skipping repo-read service publish: AI_RUNS_ACR_NAME is not set."
@@ -54,17 +55,11 @@ fi
 
 LOGIN_SERVER="$(az acr show --name "$AI_RUNS_ACR_NAME" --query loginServer -o tsv)"
 IMAGE="${LOGIN_SERVER}/${REPO}:${TAG}"
-IMAGE_LATEST="${LOGIN_SERVER}/${REPO}:latest"
 
 echo "Logging in to ACR ${AI_RUNS_ACR_NAME}..."
 az acr login --name "$AI_RUNS_ACR_NAME"
 
-echo "Building ${IMAGE}..."
-docker build -f "$DOCKERFILE" -t "$IMAGE" -t "$IMAGE_LATEST" .
-
-echo "Pushing ${IMAGE} and ${IMAGE_LATEST}..."
-docker push "$IMAGE"
-docker push "$IMAGE_LATEST"
+publish_image "$AI_RUNS_ACR_NAME" "$LOGIN_SERVER" "$REPO" "$TAG" "$DOCKERFILE"
 
 if [[ "$SKIP_APP_UPDATE" == "true" ]]; then
   echo "SKIP_APP_UPDATE=true — image pushed; Container App not updated."
@@ -78,6 +73,11 @@ if ! az containerapp show \
   --name "$REPO_READ_SERVICE_CONTAINER_APP_NAME" \
   --resource-group "$AI_RUNS_RESOURCE_GROUP" &>/dev/null; then
   echo "Image pushed. Skipping Container App update: '${REPO_READ_SERVICE_CONTAINER_APP_NAME}' not found in '${AI_RUNS_RESOURCE_GROUP}' (apply Terraform enable_repo_read_service first)."
+  exit 0
+fi
+
+if already_running app "$REPO_READ_SERVICE_CONTAINER_APP_NAME" "$AI_RUNS_RESOURCE_GROUP" "$IMAGE"; then
+  echo "${REPO_READ_SERVICE_CONTAINER_APP_NAME} already runs ${IMAGE}; skipping update."
   exit 0
 fi
 
