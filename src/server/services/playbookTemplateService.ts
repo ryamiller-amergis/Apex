@@ -6,13 +6,13 @@
  * It does not publish, and it does not rewrite a definition that already has
  * history.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import type { PlaybookDefinitionDetail, PlaybookGraph } from '../../shared/types/playbook';
 import { db } from '../db/drizzle';
 import { playbookDefinitions } from '../db/schema';
 import { createDefinition, getDefinitionDetail } from './playbookDefinitionService';
+import buildFromPromptTemplate from '../playbookTemplates/build-from-prompt.json';
+import interviewTemplate from '../playbookTemplates/interview.json';
 
 export const CORE_INTERVIEW_TEMPLATE_KEY = 'core-interview';
 
@@ -49,9 +49,10 @@ export class PlaybookTemplateAlreadyPublishedError extends Error {
   }
 }
 
-const TEMPLATE_FILES: Record<string, string> = {
-  [CORE_INTERVIEW_TEMPLATE_KEY]: 'interview.json',
-  'build-from-prompt': 'build-from-prompt.json',
+/** Imported, not read from disk: `tsc` emits imported JSON into `dist/` but skips loose files. */
+const TEMPLATE_SOURCES: Record<string, { fileName: string; source: unknown }> = {
+  [CORE_INTERVIEW_TEMPLATE_KEY]: { fileName: 'interview.json', source: interviewTemplate },
+  'build-from-prompt': { fileName: 'build-from-prompt.json', source: buildFromPromptTemplate },
 };
 
 function isUniqueViolation(error: unknown): boolean {
@@ -64,11 +65,11 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 function loadShippedTemplate(templateKey: string): ShippedPlaybookTemplate {
-  const fileName = TEMPLATE_FILES[templateKey];
-  if (!fileName) throw new PlaybookTemplateNotFoundError(templateKey);
+  const entry = TEMPLATE_SOURCES[templateKey];
+  if (!entry) throw new PlaybookTemplateNotFoundError(templateKey);
 
-  const filePath = path.join(__dirname, '..', 'playbookTemplates', fileName);
-  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<ShippedPlaybookTemplate>;
+  const { fileName } = entry;
+  const parsed = structuredClone(entry.source) as Partial<ShippedPlaybookTemplate>;
   if (parsed.templateKey !== templateKey) {
     throw new PlaybookTemplateInvalidError(
       `Shipped template file ${fileName} does not declare templateKey ${templateKey}.`,
