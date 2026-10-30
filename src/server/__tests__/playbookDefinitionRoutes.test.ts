@@ -31,6 +31,7 @@ const getDefinitionDetail = jest.fn();
 const updateDraft = jest.fn();
 const publishDraft = jest.fn();
 const deprecateVersion = jest.fn();
+const deleteDefinition = jest.fn();
 jest.mock('../services/playbookDefinitionService', () => ({
   ...jest.requireActual('../services/playbookDefinitionService'),
   listDefinitions: (...args: unknown[]) => listDefinitions(...args),
@@ -39,6 +40,7 @@ jest.mock('../services/playbookDefinitionService', () => ({
   updateDraft: (...args: unknown[]) => updateDraft(...args),
   publishDraft: (...args: unknown[]) => publishDraft(...args),
   deprecateVersion: (...args: unknown[]) => deprecateVersion(...args),
+  deleteDefinition: (...args: unknown[]) => deleteDefinition(...args),
 }));
 
 const dryRunPlaybookDraft = jest.fn();
@@ -56,6 +58,7 @@ import express from 'express';
 import request from 'supertest';
 import playbooksRouter from '../routes/playbooks';
 import {
+  PlaybookDefinitionBusyError,
   PlaybookDefinitionNotFoundError,
   PlaybookDraftConflictError,
   PlaybookVersionNotFoundError,
@@ -107,6 +110,7 @@ beforeEach(() => {
   updateDraft.mockResolvedValue(SERVICE_RESULT);
   publishDraft.mockResolvedValue({ publishedVersion: { id: 'version-1' } });
   deprecateVersion.mockResolvedValue({ version: { id: 'version-1', status: 'deprecated' } });
+  deleteDefinition.mockResolvedValue(undefined);
 });
 
 describe('FEAT-007 S5 happy-path forwarding', () => {
@@ -182,6 +186,15 @@ describe('FEAT-007 S5 happy-path forwarding', () => {
     });
   });
 
+  it('deletes a same-project playbook with playbooks:author', async () => {
+    const res = await request(buildApp())
+      .delete('/api/playbooks/definitions/def-1')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(204);
+    expect(deleteDefinition).toHaveBeenCalledWith(PROJECT, 'def-1');
+  });
+
   it('TBI-030 DoD-3 deprecates the named same-definition version', async () => {
     const res = await request(buildApp())
       .post('/api/playbooks/definitions/def-1/versions/version-1/deprecate')
@@ -208,6 +221,17 @@ describe('PBI-006 AC-4 / VT-05 and TBI-036 — real permission middleware', () =
     expect(res.status).toBe(403);
     expect(res.body.missing).toEqual(['playbooks:author']);
     expect(publishDraft).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 and does not delete when the caller lacks playbooks:author', async () => {
+    grantIn(PROJECT, 'playbooks:view');
+
+    const res = await request(buildApp())
+      .delete('/api/playbooks/definitions/def-1')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(403);
+    expect(deleteDefinition).not.toHaveBeenCalled();
   });
 
   it('allows author mutations without view but denies definition reads', async () => {
@@ -320,6 +344,17 @@ describe('TBI-031 AC-2 / VT-13 and lifecycle error mapping', () => {
       .send({ project: PROJECT });
 
     expect(res.status).toBe(409);
+  });
+
+  it('maps a playbook that still has a run in progress to 409', async () => {
+    deleteDefinition.mockRejectedValue(new PlaybookDefinitionBusyError('def-1'));
+
+    const res = await request(buildApp())
+      .delete('/api/playbooks/definitions/def-1')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/run in progress/);
   });
 
   it('maps a duplicate definition name to 409', async () => {

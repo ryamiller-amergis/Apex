@@ -4,11 +4,11 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, PenLine, Play } from 'lucide-react';
+import { ArrowLeft, PenLine, Play, Trash2 } from 'lucide-react';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
 import { playbookAuthorGraphsMatch } from '../../shared/utils/playbookGraph';
 import { useAppShell } from '../hooks/useAppShell';
-import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
+import { useDeletePlaybookDefinition, usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
@@ -162,9 +162,12 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const detail = usePlaybookDefinition(project, definitionId);
   const runs = usePlaybookRuns(project);
   const start = useStartPlaybookRun(project, definitionId);
+  const remove = useDeletePlaybookDefinition(project);
   const publishedVersionId = detail.data?.currentPublishedVersionId ?? null;
   const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, true);
   const [runError, setRunError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const definitionRuns = useMemo(
     () => (runs.data?.runs ?? []).filter((run) => run.definitionId === definitionId),
@@ -192,6 +195,17 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
       && !playbookAuthorGraphsMatch(publishedGraph.data!.graph, data.draft.graph)
     : data.draft.graph.nodes.length > 0;
   const truncated = runs.data ? runs.data.total > runs.data.runs.length : false;
+
+  const removePlaybook = async () => {
+    setDeleteError(null);
+    try {
+      await remove.mutateAsync(definitionId);
+      navigate('/playbooks');
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete the playbook.');
+      setConfirmingDelete(false);
+    }
+  };
 
   const runNow = async () => {
     setRunError(null);
@@ -243,22 +257,51 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
           </p>
         </div>
         <div className={styles.headerActions}>
-          {canAuthor ? (
-            <Link
-              to={`/playbooks/${definitionId}/edit`}
-              className={styles.secondaryButton}
-              data-testid="playbook-dashboard-edit"
-            >
-              <PenLine size={15} aria-hidden /> Edit
-            </Link>
-          ) : null}
-          <Link
-            to={`/playbooks/definitions/${definitionId}`}
-            className={styles.secondaryButton}
-            {...{ 'data-testid': 'playbook-open-canvas' }}
-          >
-            <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
-          </Link>
+          {canAuthor && confirmingDelete ? (
+            <>
+              <button
+                type="button"
+                className={styles.dangerButton}
+                disabled={remove.isPending}
+                onClick={() => void removePlaybook()}
+                {...{ 'data-testid': 'playbook-dashboard-delete-confirm' }}
+              >
+                <Trash2 size={15} aria-hidden /> {remove.isPending ? 'Deleting…' : 'Delete this playbook'}
+              </button>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={remove.isPending}
+                onClick={() => setConfirmingDelete(false)}
+                {...{ 'data-testid': 'playbook-dashboard-delete-cancel' }}
+              >
+                Keep it
+              </button>
+            </>
+          ) : (
+            <>
+              {canAuthor ? (
+                <button
+                  type="button"
+                  className={styles.dangerButton}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setConfirmingDelete(true);
+                  }}
+                  {...{ 'data-testid': 'playbook-dashboard-delete' }}
+                >
+                  <Trash2 size={15} aria-hidden /> Delete
+                </button>
+              ) : null}
+              <Link
+                to={`/playbooks/definitions/${definitionId}`}
+                className={styles.secondaryButton}
+                {...{ 'data-testid': 'playbook-open-canvas' }}
+              >
+                <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
+              </Link>
+            </>
+          )}
           {canRun ? (
             <button
               type="button"
@@ -273,7 +316,13 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
           ) : null}
         </div>
       </header>
+      {confirmingDelete ? (
+        <p className={styles.errorBanner} role="status">
+          Delete {data.definition.name}? Its draft, published versions, and finished runs are removed. This cannot be undone.
+        </p>
+      ) : null}
       {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
+      {deleteError ? <p className={styles.errorBanner} role="alert">{deleteError}</p> : null}
 
       <dl className={styles.tiles} {...{ 'data-testid': 'playbook-dashboard-stats' }}>
         {tiles.map((tile) => (

@@ -41,6 +41,7 @@ import {
 } from '../services/playbookVersionLayoutService';
 import {
   PlaybookDefinitionNotFoundError as PlaybookLifecycleDefinitionNotFoundError,
+  PlaybookDefinitionBusyError,
   PlaybookDraftConflictError,
   PlaybookDraftNotFoundError,
   PlaybookVersionImmutableError,
@@ -48,6 +49,7 @@ import {
   PlaybookVersionNotFoundError,
   PlaybookVersionTransitionError,
   createDefinition,
+  deleteDefinition,
   deprecateVersion,
   getDefinitionDetail,
   getVersionGraph,
@@ -219,6 +221,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
     error instanceof PlaybookTemplateAlreadyPublishedError ||
+    error instanceof PlaybookDefinitionBusyError ||
     isUniqueViolation(error)
   ) {
     res.status(409).json({
@@ -518,6 +521,20 @@ router.get(
     const project = resolveRequestProject(req)!;
     try {
       res.json(await getDefinitionDetail(project, req.params.definitionId));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.delete(
+  '/definitions/:definitionId',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    try {
+      await deleteDefinition(project, req.params.definitionId);
+      res.status(204).end();
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
