@@ -13,6 +13,7 @@
 #   SKIP_JOB_UPDATE           If "true", push only (do not update the job)
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/image-publish-lib.sh"
 
 if [[ -z "${LT_ACR_NAME:-}" ]]; then
   echo "Skipping load-test runner publish: LT_ACR_NAME is not set."
@@ -39,20 +40,19 @@ fi
 
 LOGIN_SERVER="$(az acr show --name "$LT_ACR_NAME" --query loginServer -o tsv)"
 IMAGE="${LOGIN_SERVER}/${REPO}:${TAG}"
-IMAGE_LATEST="${LOGIN_SERVER}/${REPO}:latest"
 
 echo "Logging in to ACR ${LT_ACR_NAME}..."
 az acr login --name "$LT_ACR_NAME"
 
-echo "Building ${IMAGE}..."
-docker build -f runners/load-test-k6/Dockerfile -t "$IMAGE" -t "$IMAGE_LATEST" .
-
-echo "Pushing ${IMAGE} and ${IMAGE_LATEST}..."
-docker push "$IMAGE"
-docker push "$IMAGE_LATEST"
+publish_image "$LT_ACR_NAME" "$LOGIN_SERVER" "$REPO" "$TAG" runners/load-test-k6/Dockerfile
 
 if [[ "$SKIP_JOB_UPDATE" == "true" ]]; then
   echo "SKIP_JOB_UPDATE=true — image pushed; job not updated."
+  exit 0
+fi
+
+if already_running job "$LT_CONTAINER_APP_JOB_NAME" "$LT_RESOURCE_GROUP" "$IMAGE"; then
+  echo "${LT_CONTAINER_APP_JOB_NAME} already runs ${IMAGE}; skipping update."
   exit 0
 fi
 
