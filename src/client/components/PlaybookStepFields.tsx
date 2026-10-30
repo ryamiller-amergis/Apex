@@ -131,7 +131,7 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
     description: skill.description,
     badges: skill.capabilities ?? [],
     disabled: !skill.runnable,
-    disabledReason: 'Not enabled for Playbooks: its frontmatter does not declare playbook-capabilities.',
+    ...(skill.unavailableReason ? { disabledReason: skill.unavailableReason } : {}),
   }));
   const modelOptions: PlaybookPickerOption[] = (models.data?.models ?? []).map((model) => ({
     value: model.id,

@@ -23,14 +23,11 @@ export class PlaybookExecutionCapabilityError extends Error {
   }
 }
 
-export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCapability[] {
+/** Declared capabilities, or null when the Skill does not list any. A missing list does not block a run. */
+export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCapability[] | null {
   const frontmatter = skillContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   const line = frontmatter?.[1].match(CAPABILITY_LINE);
-  if (!line) {
-    throw new PlaybookExecutionCapabilityError(
-      'The Skill frontmatter must declare playbook-capabilities.'
-    );
-  }
+  if (!line) return null;
   const capabilities = line[1]
     .split(',')
     .map((value) => value.trim())
@@ -84,17 +81,11 @@ export function resolvePlaybookAgentRunPolicy(
   if (profile.mode !== 'read') {
     throw new PlaybookMcpCapabilityError(input.nodeId, executionProfile, profile.mode);
   }
-  const maximum = parsePlaybookSkillCapabilities(input.skillContent);
+  const declared = parsePlaybookSkillCapabilities(input.skillContent);
   const requested: PlaybookCapability[] = ['repository-read', 'network-read'];
   // A Skill that names azure-cli is allowed to run Azure CLI in the worker shell.
-  // The shell stays closed for every other Skill.
-  if (maximum.includes('azure-cli')) requested.push('azure-cli');
-  const excessive = requested.find((capability) => !maximum.includes(capability));
-  if (excessive) {
-    throw new PlaybookExecutionCapabilityError(
-      `Skill "${input.skillPath}" does not permit required capability "${excessive}".`
-    );
-  }
+  // The shell stays closed for every other Skill, including one with no capability list.
+  if (declared?.includes('azure-cli')) requested.push('azure-cli');
 
   const provider =
     input.provider === 'ado'

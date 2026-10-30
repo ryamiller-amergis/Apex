@@ -195,6 +195,7 @@ export interface PlaybookSkillOption {
   description: string;
   /** Null when the frontmatter does not declare `playbook-capabilities`. */
   capabilities: string[] | null;
+  /** False only when the capability list names something Apex does not recognize. */
   runnable: boolean;
   unavailableReason?: string;
 }

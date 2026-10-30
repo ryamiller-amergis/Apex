@@ -1,7 +1,7 @@
 /**
  * Skills an Agent task step can name. Agent task loads Skill files from the Apex repository, so
- * the list is `.cursor/skills/<name>/SKILL.md` there. A Skill runs from a Playbook only when its
- * frontmatter declares `playbook-capabilities`; the others are listed so authors see why.
+ * the list is `.cursor/skills/<name>/SKILL.md` there. Every Skill can run. A capability list is
+ * optional and only adds extras such as Azure CLI. An unknown capability name stays unavailable.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -48,7 +48,7 @@ export function describePlaybookSkill(relativePath: string, content: string): Pl
     name: frontmatterValue(frontmatter, 'name') || folder,
     description: frontmatterValue(frontmatter, 'description'),
     capabilities,
-    runnable: capabilities !== null,
+    runnable: unavailableReason === undefined,
     ...(unavailableReason ? { unavailableReason } : {}),
   };
 }

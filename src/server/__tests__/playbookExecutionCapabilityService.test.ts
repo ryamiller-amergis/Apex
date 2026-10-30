@@ -18,9 +18,22 @@ describe('Playbook execution capability policy', () => {
       'repository-read',
       'network-read',
     ]);
+    expect(parsePlaybookSkillCapabilities('---\nname: x\n---\n')).toBeNull();
     expect(() =>
       parsePlaybookSkillCapabilities(skill.replace('network-read', 'teleport'))
     ).toThrow(PlaybookExecutionCapabilityError);
+  });
+
+  it('runs a Skill that does not declare playbook-capabilities', () => {
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'draft',
+      skillPath: 'skill.md',
+      skillContent: '---\nname: x\ndescription: Y\n---\n',
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+    });
+
+    expect(policy.capabilities).toEqual(['repository-read', 'network-read']);
   });
 
   it('freezes a read-only policy without credentials', () => {
@@ -65,7 +78,7 @@ describe('Playbook execution capability policy', () => {
     expect(policy.capabilities).toEqual(['repository-read', 'network-read', 'azure-cli']);
   });
 
-  it('refuses a profile or Skill that is broader or narrower than required', () => {
+  it('refuses a profile that is not read-only', () => {
     expect(() =>
       resolvePlaybookAgentRunPolicy({
         nodeId: 'draft',
@@ -75,15 +88,17 @@ describe('Playbook execution capability policy', () => {
         enforce: true,
       })
     ).toThrow(/read-only/i);
+  });
 
-    expect(() =>
-      resolvePlaybookAgentRunPolicy({
-        nodeId: 'draft',
-        skillPath: 'skill.md',
-        skillContent: skill.replace(', network-read', ''),
-        mcpProfile: 'repository-read-only',
-        enforce: true,
-      })
-    ).toThrow(/network-read/);
+  it('still runs a Skill that declares only some capabilities', () => {
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'draft',
+      skillPath: 'skill.md',
+      skillContent: skill.replace(', network-read', ''),
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+    });
+
+    expect(policy.capabilities).toEqual(['repository-read', 'network-read']);
   });
 });

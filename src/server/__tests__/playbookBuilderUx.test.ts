@@ -69,10 +69,11 @@ describe('describePlaybookSkill', () => {
     });
   });
 
-  it('marks a Skill without playbook-capabilities as not runnable', () => {
+  it('keeps a Skill runnable when it does not declare playbook-capabilities', () => {
     const skill = describePlaybookSkill('.cursor/skills/x/SKILL.md', '---\nname: x\ndescription: Y\n---\n');
-    expect(skill.runnable).toBe(false);
-    expect(skill.unavailableReason).toMatch(/playbook-capabilities/);
+    expect(skill.runnable).toBe(true);
+    expect(skill.capabilities).toBeNull();
+    expect(skill.unavailableReason).toBeUndefined();
   });
 });
 
