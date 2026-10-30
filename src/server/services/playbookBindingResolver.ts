@@ -8,9 +8,10 @@
  */
 
 export class PlaybookBindingError extends Error {
-  constructor(placeholder: string) {
+  constructor(placeholder: string, detail?: string) {
     super(
-      `Playbook binding "${placeholder}" is not one of input.<field>, steps.<stepId>.<field>, or steps.<joinId>.arms.<stepId>.<field>.`
+      detail ??
+        `Playbook binding "${placeholder}" is not one of input.<field>, steps.<stepId>.<field>, or steps.<joinId>.arms.<stepId>.<field>.`
     );
     this.name = 'PlaybookBindingError';
   }
@@ -140,7 +141,17 @@ function lookup(
   if (ARM_PATH.test(path)) return lookupArm(path, context);
   if (!STEP_PATH.test(path)) throw new PlaybookBindingError(placeholder);
   const [stepId, field] = path.split('.');
-  return context.steps[stepId]?.[field];
+  const output = context.steps[stepId];
+  const bound = output?.[field];
+  if (bound == null) {
+    throw new PlaybookBindingError(
+      placeholder,
+      output
+        ? `Playbook binding "${placeholder}" is empty because step ${stepId} did not produce ${field}.`
+        : `Playbook binding "${placeholder}" is empty because step ${stepId} has no output.`,
+    );
+  }
+  return bound;
 }
 
 function lookupArm(path: string, context: PlaybookBindingContext): unknown {

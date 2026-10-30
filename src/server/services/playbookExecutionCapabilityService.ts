@@ -46,7 +46,9 @@ export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCa
 /** Graphs saved before the skill moved still name the old path. */
 const MOVED_SKILL_PATHS: Record<string, string> = {
   '.cursor/skills/maxview-incident-investigation/SKILL.md':
-    'playbook-skills/maxview-incident-investigation/SKILL.md',
+    'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+  'playbook-skills/maxview-incident-investigation/SKILL.md':
+    'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
 };
 
 function playbookContentRoots(): string[] {

@@ -324,6 +324,27 @@
       ],
       "dependsOn": [],
       "supportingOwners": {}
+    },
+    {
+      "name": "maxview-incident-investigation",
+      "summary": "Read-only investigation of a MaxView incident from telemetry, code, and deployment evidence.",
+      "tier": "apex-only",
+      "scanScope": "targeted",
+      "foundationFiles": [
+        "SKILL.md",
+        "INVESTIGATION_GUIDE.md",
+        "RESOURCE_CATALOG.md"
+      ],
+      "adapterFiles": [
+        "SKILL.md",
+        "apex-skill.json",
+        "recipe.json"
+      ],
+      "dependsOn": [],
+      "supportingOwners": {
+        "INVESTIGATION_GUIDE.md": "foundation",
+        "RESOURCE_CATALOG.md": "foundation"
+      }
     }
   ]
 }

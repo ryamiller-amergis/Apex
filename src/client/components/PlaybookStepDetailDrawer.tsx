@@ -174,10 +174,16 @@ const LogDetail: React.FC<{ kind: PlaybookStepActivityKind; detail: string }> = 
   );
 };
 
-export const LogConsole: React.FC<{ entries: readonly PlaybookStepActivityEntry[]; live: boolean; startedAt: string | null }> = ({
+export const LogConsole: React.FC<{
+  entries: readonly PlaybookStepActivityEntry[];
+  live: boolean;
+  startedAt: string | null;
+  showKindFilters?: boolean;
+}> = ({
   entries,
   live,
   startedAt,
+  showKindFilters = true,
 }) => {
   const ref = useRef<HTMLOListElement>(null);
   const [follow, setFollow] = useState(true);
@@ -199,6 +205,7 @@ export const LogConsole: React.FC<{ entries: readonly PlaybookStepActivityEntry[
   return (
     <div className={styles.console}>
       <div className={styles.consoleBar}>
+        {showKindFilters ? (
         <div className={styles.filters} role="group" aria-label="Filter log">
           {LOG_FILTERS.map((item) => (
             <button
@@ -214,6 +221,7 @@ export const LogConsole: React.FC<{ entries: readonly PlaybookStepActivityEntry[
             </button>
           ))}
         </div>
+        ) : null}
         {live ? (
           <label className={styles.follow}>
             <input
@@ -366,7 +374,12 @@ export const StepLog: React.FC<{
       ) : null}
       {activity.isError ? <p className={styles.error}>The live log could not be loaded.</p> : null}
       {cloud.error ? <p className={styles.error}>{cloud.error}</p> : null}
-      <LogConsole entries={entries} live={live} startedAt={step.startedAt} />
+      <LogConsole
+        entries={entries}
+        live={live}
+        startedAt={step.startedAt}
+        showKindFilters={isAgent || isCloud}
+      />
     </div>
   );
 };
@@ -404,6 +417,13 @@ export const StepDetails: React.FC<{
         <pre className={styles.code}>{JSON.stringify(step.inputInline ?? {}, null, 2)}</pre>
       </section>
 
+      {typeof step.outputInline?.reportMd === 'string' && step.outputInline.reportMd.trim() ? (
+        <section className={styles.section}>
+          <h3>Report</h3>
+          <pre className={styles.report}>{step.outputInline.reportMd}</pre>
+        </section>
+      ) : null}
+
       <section className={styles.section}>
         <h3>Output summary</h3>
         <pre className={styles.code}>{JSON.stringify(step.outputInline ?? {}, null, 2)}</pre>
@@ -437,6 +457,13 @@ export const StepDetails: React.FC<{
         ) : null}
         {output.isError ? (
           <p className={styles.error}>Full output is unavailable or the output feature is disabled.</p>
+        ) : null}
+        {output.data && typeof output.data.reportMd === 'string' && output.data.reportMd.trim()
+          && output.data.reportMd !== step.outputInline?.reportMd ? (
+          <>
+            <h3>Report</h3>
+            <pre className={styles.report}>{output.data.reportMd}</pre>
+          </>
         ) : null}
         {output.data ? (
           <>

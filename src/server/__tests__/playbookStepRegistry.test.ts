@@ -184,7 +184,7 @@ describe('TBI-016 VT-02 — the three production step types', () => {
 describe('Skill paths', () => {
   it('lets a cursor-agent step name any Skill, including the investigation Skill', () => {
     expect(() =>
-      assertSkillAllowed('cursor-agent', 'playbook-skills/maxview-incident-investigation/SKILL.md')
+      assertSkillAllowed('cursor-agent', 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md')
     ).not.toThrow();
     expect(() =>
       assertSkillAllowed('cursor-agent', '.cursor/skills/build-test-push/SKILL.md')

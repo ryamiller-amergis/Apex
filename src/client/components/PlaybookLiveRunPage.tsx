@@ -172,6 +172,9 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             runId={runId}
             step={panelStep}
             suspension={run.data.suspension}
+            report={run.data.steps
+              .map((candidate) => candidate.outputInline?.reportMd)
+              .find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? null}
             expanded={panelExpanded}
             onExpandedChange={setPanelExpanded}
             onClose={() => {

@@ -30,6 +30,77 @@
   height: min(72%, 40rem);
 }
 
+.decision {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.75rem 0.9rem 0;
+}
+
+.decisionLead,
+.decisionMissing,
+.decisionError {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.decisionMissing,
+.decisionError {
+  color: var(--text-muted);
+}
+
+.decisionError {
+  color: var(--error-color);
+}
+
+.decisionReport {
+  overflow: auto;
+  max-height: 10rem;
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.decisionActions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.approve,
+.reject {
+  height: 2rem;
+  padding: 0 0.85rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.approve {
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.reject {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.approve:disabled,
+.reject:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @keyframes rise {
   from { transform: translate(-50%, 12px); opacity: 0; }
   to { transform: translate(-50%, 0); opacity: 1; }

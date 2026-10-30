@@ -665,6 +665,14 @@ export function createDocumentExecute(
         ),
         signal,
       );
+      const reply = result.text.trim();
+      if (reply) {
+        files.push({
+          path: `${ARTIFACT_OUTPUT_PREFIX}agent-reply.md`,
+          content: Buffer.from(reply, 'utf8'),
+          contentType: 'text/markdown; charset=utf-8',
+        });
+      }
       return {
         files,
         durationMs: Math.max(0, now() - startedAt),

@@ -226,10 +226,12 @@ const APEX_ACTION_INPUT_SCHEMA = z.object({
 }).superRefine((value, ctx) => {
   const parsed = apexActionParameterSchema(value.operation).safeParse(value.parameters);
   if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path.length ? `${issue.path.join('.')}: ` : '';
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: parsed.error.issues[0]?.message ?? 'Check the action parameters.',
-      path: ['parameters'],
+      message: issue ? `${field}${issue.message}` : 'Check the action parameters.',
+      path: ['parameters', ...(issue?.path ?? [])],
     });
   }
 });

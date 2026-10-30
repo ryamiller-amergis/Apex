@@ -1,7 +1,6 @@
 /**
- * Skills an Agent task step can name. The list is `playbook-skills/<name>/SKILL.md`, a folder the
- * deploy package copies onto the server. Cursor skills under `.cursor/skills` are not in that
- * package, so they are not offered here. A capability list is optional and only adds extras such
+ * Skills an Agent task step can name. The list is `foundation-skills/foundation/<name>/SKILL.md`,
+ * the same folder end users install from. A capability list is optional and only adds extras such
  * as Azure CLI. An unknown capability name stays unavailable.
  */
 import fs from 'node:fs/promises';
@@ -12,10 +11,10 @@ import {
   PlaybookExecutionCapabilityError,
 } from './playbookExecutionCapabilityService';
 
-const SKILLS_DIR = 'playbook-skills';
+const SKILLS_DIR = path.join('foundation-skills', 'foundation');
 const CACHE_TTL_MS = 60 * 1000;
 
-/** Where a deployed or local process may find `playbook-skills`. */
+/** Where a deployed or local process may find `foundation-skills/foundation`. */
 export async function resolvePlaybookSkillsDir(): Promise<string | null> {
   const candidates = [
     path.resolve(process.cwd(), SKILLS_DIR),
@@ -85,7 +84,7 @@ export async function listPlaybookSkillOptions(): Promise<PlaybookSkillOption[]>
   }
   const skills: PlaybookSkillOption[] = [];
   for (const folder of entries) {
-    const relativePath = `${SKILLS_DIR}/${folder}/SKILL.md`;
+    const relativePath = `${SKILLS_DIR.split(path.sep).join('/')}/${folder}/SKILL.md`;
     try {
       const content = await fs.readFile(path.join(root, folder, 'SKILL.md'), 'utf8');
       skills.push(describePlaybookSkill(relativePath, content));

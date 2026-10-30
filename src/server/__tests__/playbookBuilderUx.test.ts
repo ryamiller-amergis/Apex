@@ -5,7 +5,7 @@ import { recommendPlaybookSteps } from '../services/playbookRecommenderService';
 import { ancestorsNearestFirst } from '../services/playbookSteps/cloudAgentAdapter';
 import { describePlaybookSkill, listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
 import { loadPlaybookSkillContent } from '../services/playbookExecutionCapabilityService';
-import { threadActivityEntries } from '../services/playbookStepActivityService';
+import { runEventActivityEntries, threadActivityEntries } from '../services/playbookStepActivityService';
 import { getStepTypeDescriptor } from '../services/playbookSteps/registry';
 
 describe('recommendPlaybookSteps', () => {
@@ -70,10 +70,11 @@ describe('describePlaybookSkill', () => {
     });
   });
 
-  it('lists the MaxView investigation Skill from playbook-skills', async () => {
+  it('lists foundation skills, including the MaxView investigation Skill', async () => {
     const skills = await listPlaybookSkillOptions();
+    expect(skills.length).toBeGreaterThan(1);
     expect(skills.map((skill) => skill.path)).toContain(
-      'playbook-skills/maxview-incident-investigation/SKILL.md',
+      'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
     );
     const moved = await loadPlaybookSkillContent(
       '.cursor/skills/maxview-incident-investigation/SKILL.md',
@@ -86,6 +87,29 @@ describe('describePlaybookSkill', () => {
     expect(skill.runnable).toBe(true);
     expect(skill.capabilities).toBeNull();
     expect(skill.unavailableReason).toBeUndefined();
+  });
+});
+
+describe('runEventActivityEntries', () => {
+  it('turns stored worker events into tool and status lines', () => {
+    const entries = runEventActivityEntries([
+      {
+        eventId: '1',
+        detail: 'preparing',
+        event: { type: 'phase', phase: 'workspace', status: 'running' },
+        at: 't1',
+      },
+      {
+        eventId: '2',
+        detail: 'Shell started',
+        event: { type: 'tool_call', toolName: 'Shell', input: { command: 'az account show' } },
+        at: 't2',
+      },
+    ]);
+    expect(entries.map((entry) => [entry.kind, entry.title, entry.detail])).toEqual([
+      ['status', 'preparing', undefined],
+      ['tool', 'Shell', 'az account show'],
+    ]);
   });
 });
 

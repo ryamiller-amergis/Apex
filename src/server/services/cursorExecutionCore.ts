@@ -444,7 +444,12 @@ export function summarizeCursorToolInput(input: unknown): unknown {
         args: summarizeCursorToolInput(obj.args),
       };
     }
-    return { keys: Object.keys(obj).slice(0, 20) };
+    const kept: Record<string, string> = {};
+    for (const key of ['command', 'cmd', 'path', 'target_file', 'file', 'query', 'pattern', 'url']) {
+      const value = obj[key];
+      if (typeof value === 'string' && value.trim()) kept[key] = value.trim().slice(0, 500);
+    }
+    return { ...kept, keys: Object.keys(obj).slice(0, 20) };
   }
   return { type: typeof input };
 }

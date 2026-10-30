@@ -3,9 +3,9 @@
  * (tool calls, reasoning, replies). Thread messages are written as the agent works, so polling
  * this shows progress while the step is still running.
  */
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns } from '../db/schema';
+import { agentRunEvents, agentRuns } from '../db/schema';
 import type { ChatMessage } from '../../shared/types/chat';
 import type {
   PlaybookStepActivity,
@@ -31,6 +31,53 @@ function toolDetail(input: Record<string, unknown> | undefined): string | undefi
   }
   const json = JSON.stringify(input);
   return json === '{}' ? undefined : clip(json);
+}
+
+/** Progress the document worker stored while the agent ran. The chat thread is empty for that lane. */
+export function runEventActivityEntries(
+  rows: ReadonlyArray<{ eventId: string; detail: string | null; event: unknown; at: string }>,
+): PlaybookStepActivityEntry[] {
+  const entries: PlaybookStepActivityEntry[] = [];
+  for (const row of rows) {
+    const event = row.event && typeof row.event === 'object'
+      ? row.event as Record<string, unknown>
+      : {};
+    const type = typeof event.type === 'string' ? event.type : '';
+    if (type === 'tool_call' || type === 'tool_status') {
+      const input = event.input && typeof event.input === 'object'
+        ? event.input as Record<string, unknown>
+        : event.args && typeof event.args === 'object'
+          ? event.args as Record<string, unknown>
+          : undefined;
+      const keysOnly = input && Object.keys(input).every((key) => key === 'keys');
+      entries.push({
+        id: row.eventId,
+        kind: 'tool',
+        title: typeof event.toolName === 'string' && event.toolName ? event.toolName : 'Tool',
+        detail: (keysOnly ? undefined : toolDetail(input)) ?? (row.detail ? clip(row.detail) : undefined),
+        at: row.at,
+      });
+      continue;
+    }
+    if (type === 'thinking') {
+      const text = typeof event.text === 'string' ? event.text : row.detail;
+      if (!text?.trim()) continue;
+      entries.push({ id: row.eventId, kind: 'thinking', title: 'Thinking', detail: clip(text), at: row.at });
+      continue;
+    }
+    if (type === 'error') {
+      const text = typeof event.error === 'string' ? event.error : row.detail;
+      if (!text?.trim()) continue;
+      entries.push({ id: row.eventId, kind: 'error', title: 'Error', detail: clip(text), at: row.at });
+      continue;
+    }
+    if (row.detail?.trim()) {
+      const title = clip(row.detail);
+      if (entries.at(-1)?.title === title) continue;
+      entries.push({ id: row.eventId, kind: 'status', title, at: row.at });
+    }
+  }
+  return entries.slice(-MAX_ENTRIES);
 }
 
 export function threadActivityEntries(messages: readonly ChatMessage[]): PlaybookStepActivityEntry[] {
@@ -98,7 +145,23 @@ export async function getPlaybookStepActivity(input: {
     lastError: agentRun.lastError ?? null,
   };
   const thread = await getThread(agentRun.threadId);
-  activity.entries = threadActivityEntries(thread?.messages ?? []);
+  const fromThread = threadActivityEntries(thread?.messages ?? []);
+  if (fromThread.length > 0) {
+    activity.entries = fromThread;
+  } else {
+    const events = await db
+      .select({
+        eventId: agentRunEvents.eventId,
+        detail: agentRunEvents.detail,
+        event: agentRunEvents.event,
+        at: agentRunEvents.eventTimestamp,
+      })
+      .from(agentRunEvents)
+      .where(eq(agentRunEvents.runId, step.agentRunId))
+      .orderBy(asc(agentRunEvents.sequence))
+      .limit(MAX_ENTRIES);
+    activity.entries = runEventActivityEntries(events);
+  }
   if (agentRun.lastError) {
     activity.entries.push({
       id: `${step.agentRunId}-error`,

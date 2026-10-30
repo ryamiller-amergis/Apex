@@ -9,7 +9,7 @@ import type {
   PlaybookStepRun,
   PlaybookSuspensionDetail,
 } from '../../shared/types/playbook';
-import { usePlaybookStepActivity } from '../hooks/usePlaybookRuns';
+import { usePlaybookGateDecision, usePlaybookStepActivity } from '../hooks/usePlaybookRuns';
 import { stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import {
@@ -28,6 +28,8 @@ interface PlaybookLiveStepPanelProps {
   runId: string;
   step: PlaybookStepRun;
   suspension?: PlaybookSuspensionDetail | null;
+  /** The agent report this approval is about, when an earlier step saved one. */
+  report?: string | null;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onClose: () => void;
@@ -39,6 +41,7 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   runId,
   step,
   suspension,
+  report = null,
   expanded,
   onExpandedChange,
   onClose,
@@ -53,6 +56,11 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const activity = usePlaybookStepActivity(project, runId, isAgent ? step.id : null, live);
   const nowDoing = live ? activity.data?.agentRun?.label ?? null : null;
   const failure = stepFailureReason(step);
+  const deciding = step.stepType === 'approval-gate'
+    && step.status === 'suspended'
+    && suspension?.stepId === step.stepId
+    && suspension.reason === 'approval_gate';
+  const decision = usePlaybookGateDecision(project, runId, step.id);
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -139,6 +147,41 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
               </button>
             ))}
           </div>
+          {deciding ? (
+            <div className={styles.decision} {...{ 'data-testid': 'playbook-live-step-decision' }}>
+              <p className={styles.decisionLead}>
+                Approve to let the next step run, or reject to stop this run.
+              </p>
+              {report ? <pre className={styles.decisionReport}>{report}</pre> : (
+                <p className={styles.decisionMissing}>
+                  The agent step did not save a report, so there is nothing here to read. Open the agent step and check its log.
+                </p>
+              )}
+              <div className={styles.decisionActions}>
+                <button
+                  type="button"
+                  className={styles.approve}
+                  disabled={decision.isPending}
+                  onClick={() => decision.mutate({ decision: 'approved' })}
+                  {...{ 'data-testid': 'playbook-live-step-approve' }}
+                >
+                  {decision.isPending ? 'Saving…' : 'Approve'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.reject}
+                  disabled={decision.isPending}
+                  onClick={() => decision.mutate({ decision: 'rejected' })}
+                  {...{ 'data-testid': 'playbook-live-step-reject' }}
+                >
+                  Reject
+                </button>
+              </div>
+              {decision.isError ? (
+                <p className={styles.decisionError} role="alert">{decision.error.message}</p>
+              ) : null}
+            </div>
+          ) : null}
           <div className={styles.body}>
             {tab === 'log' ? (
               <StepLog key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
