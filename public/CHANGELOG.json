@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.40.0",
+    "date": "2026-10-29",
+    "title": "Brainstorm Sessions",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Start a Brainstorm session from Agent Home and explore an idea in open chat with a collaborator that adapts to your role and goal"
+      },
+      {
+        "type": "feature",
+        "description": "Browse every Brainstorm session in your project at /brainstorm and read a teammate's session; only its creator can reply"
+      },
+      {
+        "type": "feature",
+        "description": "A collaborator reply that fails is marked with a short reason, and the session's creator can retry it"
+      }
+    ]
+  },
+  {
     "version": "1.39.2",
     "date": "2026-10-26",
     "title": "Repository Cache Disk Usage",

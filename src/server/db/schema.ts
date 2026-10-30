@@ -4,6 +4,21 @@ import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
 import type {
+  BrainstormFailureCode,
+  BrainstormMessageRole,
+  BrainstormMessageStatus,
+  BrainstormSessionState,
+} from '../../shared/types/brainstorm';
+import type { BrainstormCatalogStatus, BrainstormSourceKind, BrainstormSourceState } from '../../shared/types/brainstormSources';
+import type {
+  BrainstormActionKind,
+  BrainstormArtifactFailureCode,
+  BrainstormArtifactOrigin,
+  BrainstormArtifactType,
+  BrainstormHandoffState,
+  BrainstormTargetModule,
+} from '../../shared/types/brainstormArtifact';
+import type {
   OverlayTextBox,
   PageManifestEntry,
   PdfConversionStatus,
@@ -3959,4 +3974,275 @@ export const buildEventsRelations = relations(buildEvents, ({ one }) => ({
   run: one(buildRuns, { fields: [buildEvents.buildRunId], references: [buildRuns.id] }),
   revision: one(buildRevisions, { fields: [buildEvents.buildRevisionId], references: [buildRevisions.id] }),
   actor: one(appUsers, { fields: [buildEvents.actorUserId], references: [appUsers.oid] }),
+}));
+
+// ── Brainstorm (FEAT-001) ─────────────────────────────────────────────────────
+
+export const brainstormSessions = pgTable('brainstorm_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  creatorId: text('creator_id').notNull(),
+  state: text('state').$type<BrainstormSessionState>().notNull().default('active'),
+  model: text('model').notNull(),
+  title: text('title'),
+  artifactType: text('artifact_type'),
+  chatThreadId: uuid('chat_thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  endedAt: timestamp('ended_at', { withTimezone: true, mode: 'string' }),
+  failureReason: text('failure_reason'),
+  version: integer('version').notNull().default(1),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  stateCheck: check('brainstorm_sessions_state_check', sql`${t.state} IN ('active', 'ended', 'failed')`),
+  versionCheck: check('brainstorm_sessions_version_check', sql`${t.version} >= 1`),
+  chatThreadUq: uniqueIndex('uq_brainstorm_sessions_chat_thread').on(t.chatThreadId),
+  projectActivityIdx: index('idx_brainstorm_sessions_project_activity').on(t.project, t.lastActivityAt.desc()),
+  projectCreatorIdx: index('idx_brainstorm_sessions_project_creator').on(t.project, t.creatorId),
+  activeActivityIdx: index('idx_brainstorm_sessions_active_activity')
+    .on(t.lastActivityAt)
+    .where(sql`${t.state} = 'active'`),
+}));
+
+export const brainstormMessages = pgTable('brainstorm_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  role: text('role').$type<BrainstormMessageRole>().notNull(),
+  content: text('content').notNull().default(''),
+  status: text('status').$type<BrainstormMessageStatus>().notNull(),
+  turnId: uuid('turn_id').notNull(),
+  runId: uuid('run_id'),
+  failureCode: text('failure_code').$type<BrainstormFailureCode>(),
+  failureSummary: text('failure_summary'),
+  retryOfMessageId: uuid('retry_of_message_id').references((): AnyPgColumn => brainstormMessages.id, { onDelete: 'set null' }),
+  supersededByMessageId: uuid('superseded_by_message_id').references((): AnyPgColumn => brainstormMessages.id, { onDelete: 'set null' }),
+  artifactFailureCode: text('artifact_failure_code').$type<BrainstormArtifactFailureCode>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  roleCheck: check('brainstorm_messages_role_check', sql`${t.role} IN ('user', 'assistant')`),
+  statusCheck: check(
+    'brainstorm_messages_status_check',
+    sql`${t.status} IN ('streaming', 'completed', 'failed', 'cancelled')`,
+  ),
+  failureCodeCheck: check(
+    'brainstorm_messages_failure_code_check',
+    sql`${t.failureCode} IS NULL OR ${t.failureCode} IN ('run_not_started', 'model_error', 'deadline_exceeded', 'worker_refused_spec', 'cancelled', 'unknown')`,
+  ),
+  sessionCreatedIdx: index('idx_brainstorm_messages_session_created').on(t.sessionId, t.createdAt),
+  sessionTurnRoleUq: uniqueIndex('uq_brainstorm_messages_session_turn_role')
+    .on(t.sessionId, t.turnId, t.role)
+    .where(sql`${t.retryOfMessageId} IS NULL`),
+  oneStreamingUq: uniqueIndex('uq_brainstorm_messages_one_streaming')
+    .on(t.sessionId)
+    .where(sql`${t.role} = 'assistant' AND ${t.status} = 'streaming'`),
+  runIdx: index('idx_brainstorm_messages_run').on(t.runId).where(sql`${t.runId} IS NOT NULL`),
+}));
+
+/** Per-project clone limits. A missing row uses the App Service default. */
+export const brainstormProjectLimits = pgTable('brainstorm_project_limits', {
+  project: text('project').primaryKey(),
+  workspaceByteCap: bigint('max_workspace_bytes', { mode: 'number' }).notNull(),
+  concurrentCloneCap: integer('max_concurrent_clones').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  bytesCheck: check('brainstorm_project_limits_bytes_check', sql`${t.workspaceByteCap} > 0`),
+  clonesCheck: check('brainstorm_project_limits_clones_check', sql`${t.concurrentCloneCap} > 0`),
+}));
+
+/** Repositories an administrator added for Brainstorm. The clone URL has no credentials. */
+export const brainstormRepositories = pgTable('brainstorm_repositories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  displayName: text('display_name').notNull(),
+  cloneUrl: text('clone_url').notNull(),
+  branch: text('branch').notNull(),
+  status: text('status').$type<BrainstormCatalogStatus>().notNull().default('not_cloned'),
+  commitSha: text('commit_sha'),
+  error: text('error'),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusCheck: check(
+    'brainstorm_repositories_status_check',
+    sql`${t.status} IN ('not_cloned', 'cloning', 'ready', 'failed')`,
+  ),
+  urlBranchUq: uniqueIndex('uq_brainstorm_repositories_url_branch').on(t.project, t.cloneUrl, t.branch),
+  projectIdx: index('idx_brainstorm_repositories_project').on(t.project),
+}));
+
+/** Source metadata only. File content and credentials are never stored here. */
+export const brainstormSources = pgTable('brainstorm_sources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  kind: text('kind').$type<BrainstormSourceKind>().notNull(),
+  displayName: text('display_name').notNull(),
+  cloneUrl: text('clone_url'),
+  requestedRevision: text('requested_revision'),
+  resolvedSha: text('resolved_sha'),
+  workspaceState: text('workspace_state').$type<BrainstormSourceState>().notNull().default('preparing'),
+  refId: text('ref_id'),
+  reasonCode: text('reason_code'),
+  reasonText: text('reason_text'),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }),
+  workspaceRemovedAt: timestamp('workspace_removed_at', { withTimezone: true, mode: 'string' }),
+  groundingProvider: text('grounding_provider').$type<'github' | 'ado'>(),
+  groundingProject: text('grounding_project'),
+  groundingRepository: text('grounding_repository'),
+  mcpReadOnlyToolCount: integer('mcp_read_only_tool_count'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  stateCheck: check(
+    'brainstorm_sources_state_check',
+    sql`${t.workspaceState} IN ('preparing', 'ready', 'failed', 'cleaned', 'restoring', 'unavailable', 'removing', 'removed')`,
+  ),
+  sessionIdx: index('idx_brainstorm_sources_session').on(t.sessionId),
+  projectSessionIdx: index('idx_brainstorm_sources_project_session').on(t.project, t.sessionId),
+  stateUpdatedIdx: index('idx_brainstorm_sources_state_updated').on(t.workspaceState, t.updatedAt),
+}));
+
+export const brainstormArtifacts = pgTable('brainstorm_artifacts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  artifactType: text('artifact_type').$type<BrainstormArtifactType>(),
+  markdown: text('markdown').notNull().default(''),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  versionCheck: check('brainstorm_artifacts_version_check', sql`${t.version} >= 1`),
+  typeCheck: check(
+    'brainstorm_artifacts_type_check',
+    sql`${t.artifactType} IS NULL OR ${t.artifactType} IN ('adr', 'technical_design', 'implementation_plan', 'discovery_brief')`,
+  ),
+  sessionUq: uniqueIndex('uq_brainstorm_artifacts_session').on(t.sessionId),
+}));
+
+/** Append-only. Only `checkpoint_name` changes after insert, once, from null. */
+export const brainstormArtifactVersions = pgTable('brainstorm_artifact_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  artifactId: uuid('artifact_id').notNull().references(() => brainstormArtifacts.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  sequence: integer('sequence').notNull(),
+  markdown: text('markdown').notNull(),
+  changeOrigin: text('change_origin').$type<BrainstormArtifactOrigin>().notNull(),
+  checkpointName: text('checkpoint_name'),
+  authorId: text('author_id'),
+  artifactType: text('artifact_type').$type<BrainstormArtifactType>(),
+  runId: uuid('run_id'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sequenceUq: uniqueIndex('uq_brainstorm_artifact_versions_sequence').on(t.artifactId, t.sequence),
+  originCheck: check(
+    'brainstorm_artifact_versions_origin_check',
+    sql`${t.changeOrigin} IN ('ai_change', 'type_switch', 'rollback')`,
+  ),
+  checkpointLengthCheck: check(
+    'brainstorm_artifact_versions_checkpoint_length_check',
+    sql`${t.checkpointName} IS NULL OR char_length(${t.checkpointName}) BETWEEN 1 AND 80`,
+  ),
+  checkpointUq: uniqueIndex('uq_brainstorm_artifact_versions_checkpoint')
+    .on(t.artifactId, sql`lower(${t.checkpointName})`)
+    .where(sql`${t.checkpointName} IS NOT NULL`),
+  runIdx: index('idx_brainstorm_artifact_versions_run')
+    .on(t.artifactId, t.runId)
+    .where(sql`${t.runId} IS NOT NULL`),
+}));
+
+export const brainstormCitations = pgTable('brainstorm_citations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  messageId: uuid('message_id').references(() => brainstormMessages.id, { onDelete: 'cascade' }),
+  sourceId: uuid('source_id').references(() => brainstormSources.id, { onDelete: 'set null' }),
+  pathOrTool: text('path_or_tool').notNull(),
+  pinnedRevision: text('pinned_revision'),
+  claimText: text('claim_text').notNull(),
+  sourceKind: text('source_kind').$type<BrainstormSourceKind>(),
+  sourceName: text('source_name'),
+  path: text('path'),
+  mcpServerName: text('mcp_server_name'),
+  mcpToolId: text('mcp_tool_id'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionIdx: index('idx_brainstorm_citations_session').on(t.sessionId),
+  messageIdx: index('idx_brainstorm_citations_message').on(t.messageId),
+}));
+
+export const brainstormActions = pgTable('brainstorm_actions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  actionKind: text('action_kind').$type<BrainstormActionKind>().notNull(),
+  targetModule: text('target_module').$type<BrainstormTargetModule>().notNull(),
+  state: text('state').$type<BrainstormHandoffState>().notNull().default('previewed'),
+  previewSnapshot: jsonb('preview_snapshot').$type<Record<string, unknown>>().notNull().default({}),
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true, mode: 'string' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  resultRef: text('result_ref'),
+  artifactVersion: integer('artifact_version'),
+  targetThreadId: uuid('target_thread_id'),
+  claimToken: uuid('claim_token'),
+  failureCode: text('failure_code'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUq: uniqueIndex('uq_brainstorm_actions_idempotency').on(t.idempotencyKey),
+  sessionIdx: index('idx_brainstorm_actions_session').on(t.sessionId),
+  stateCheck: check(
+    'brainstorm_actions_state_check',
+    sql`${t.state} IN ('previewed', 'executing', 'completed', 'failed')`,
+  ),
+  kindCheck: check(
+    'brainstorm_actions_kind_check',
+    sql`${t.actionKind} IN ('keep_standalone', 'start_workflow', 'create_direct')`,
+  ),
+  livePerVersionUq: uniqueIndex('uq_brainstorm_actions_live_per_version')
+    .on(t.sessionId, t.actionKind, t.artifactVersion)
+    .where(sql`${t.state} <> 'failed'`),
+}));
+
+export const brainstormSessionsRelations = relations(brainstormSessions, ({ one, many }) => ({
+  chatThread: one(chatThreads, { fields: [brainstormSessions.chatThreadId], references: [chatThreads.id] }),
+  messages: many(brainstormMessages),
+  sources: many(brainstormSources),
+  artifacts: many(brainstormArtifacts),
+  citations: many(brainstormCitations),
+  actions: many(brainstormActions),
+}));
+
+export const brainstormMessagesRelations = relations(brainstormMessages, ({ one, many }) => ({
+  session: one(brainstormSessions, { fields: [brainstormMessages.sessionId], references: [brainstormSessions.id] }),
+  citations: many(brainstormCitations),
+}));
+
+export const brainstormSourcesRelations = relations(brainstormSources, ({ one }) => ({
+  session: one(brainstormSessions, { fields: [brainstormSources.sessionId], references: [brainstormSessions.id] }),
+}));
+
+export const brainstormArtifactsRelations = relations(brainstormArtifacts, ({ one, many }) => ({
+  session: one(brainstormSessions, { fields: [brainstormArtifacts.sessionId], references: [brainstormSessions.id] }),
+  versions: many(brainstormArtifactVersions),
+}));
+
+export const brainstormArtifactVersionsRelations = relations(brainstormArtifactVersions, ({ one }) => ({
+  artifact: one(brainstormArtifacts, { fields: [brainstormArtifactVersions.artifactId], references: [brainstormArtifacts.id] }),
+}));
+
+export const brainstormCitationsRelations = relations(brainstormCitations, ({ one }) => ({
+  session: one(brainstormSessions, { fields: [brainstormCitations.sessionId], references: [brainstormSessions.id] }),
+  message: one(brainstormMessages, { fields: [brainstormCitations.messageId], references: [brainstormMessages.id] }),
+  source: one(brainstormSources, { fields: [brainstormCitations.sourceId], references: [brainstormSources.id] }),
+}));
+
+export const brainstormActionsRelations = relations(brainstormActions, ({ one }) => ({
+  session: one(brainstormSessions, { fields: [brainstormActions.sessionId], references: [brainstormSessions.id] }),
 }));

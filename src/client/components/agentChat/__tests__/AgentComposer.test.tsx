@@ -35,7 +35,8 @@ describe('AgentComposer', () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
-  it('renders attach, mic, and model controls when provided', () => {
+  it('renders attach, mic, and model controls when provided and opens the model popover menu with icons and subtitles', () => {
+    const onModelChange = jest.fn();
     render(
       <AgentComposer
         value=""
@@ -48,8 +49,11 @@ describe('AgentComposer', () => {
           onToggle: jest.fn(),
         }}
         model="composer-2"
-        models={[{ id: 'composer-2', displayName: 'Composer 2' }]}
-        onModelChange={jest.fn()}
+        models={[
+          { id: 'composer-2', displayName: 'Composer 2' },
+          { id: 'gemini-4-argon-medium', displayName: 'Gemini 4 Argon Medium' },
+        ]}
+        onModelChange={onModelChange}
         testIdPrefix="demo"
       />,
     );
@@ -57,5 +61,19 @@ describe('AgentComposer', () => {
     expect(screen.getByTestId('demo-attach')).toBeInTheDocument();
     expect(screen.getByTestId('demo-microphone')).toBeInTheDocument();
     expect(screen.getByTestId('demo-model')).toHaveValue('composer-2');
+    expect(screen.getByTestId('demo-model-trigger')).toHaveTextContent('Composer 2');
+
+    fireEvent.click(screen.getByTestId('demo-model-trigger'));
+    expect(screen.getByTestId('demo-model-menu')).toBeInTheDocument();
+    expect(screen.getByTestId('demo-model-option-composer-2')).toHaveTextContent(
+      'Fast multi-step reasoning and codebase synthesis',
+    );
+    expect(screen.getByTestId('demo-model-option-gemini-4-argon-medium')).toHaveTextContent(
+      'Broad context synthesis and multimodal exploration',
+    );
+
+    fireEvent.click(screen.getByTestId('demo-model-option-gemini-4-argon-medium'));
+    expect(onModelChange).toHaveBeenCalledWith('gemini-4-argon-medium');
+    expect(screen.queryByTestId('demo-model-menu')).not.toBeInTheDocument();
   });
 });

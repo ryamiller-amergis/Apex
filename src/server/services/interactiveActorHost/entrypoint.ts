@@ -61,6 +61,8 @@ import {
 } from './interactiveSessionActor';
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
+import { mountBrainstormSources } from './brainstormSourceMount';
+import { defaultRunGit } from '../grounding/bundleCheckout';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
   createActorInvocationStallTracker,
@@ -468,6 +470,16 @@ export async function main(): Promise<void> {
         .catch(() => {});
       // The repository is already on disk (worktree) or read remotely through
       // `reader`; only attachments are written here.
+      await mountBrainstormSources({
+        sources: bootstrap.specification.brainstorm?.sources,
+        destination,
+        signal,
+        runGit: async (args, cwd) => {
+          await defaultRunGit(cwd ? ['-C', cwd, ...args] : args, { signal });
+        },
+        checkout: (grounding, sourceDestination, sourceSignal) =>
+          repositoryCheckout.checkout(grounding, sourceDestination, sourceSignal),
+      });
       await materializeInteractiveWorkspace({
         reader: null,
         destination,
@@ -498,6 +510,9 @@ export async function main(): Promise<void> {
     },
     uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {
       const collected = await collectInteractiveArtifacts(workspacePath);
+      // A turn with no workspace outputs still has to finish. Blob is only
+      // needed when there is a file to store.
+      if (collected.length === 0) return undefined;
       const container = artifactContainerName();
       const uploader = createArtifactUploader({
         target: {

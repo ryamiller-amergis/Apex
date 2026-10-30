@@ -55,6 +55,9 @@ interface AppSidebarProps {
   onNavigateBuilds?: () => void;
   /** `build-from-prompt` evaluated for this user and project. */
   buildsEnabled?: boolean;
+  onNavigateBrainstorm?: () => void;
+  /** Brainstorm stays hidden until its flag and the project menu are both on. */
+  brainstormEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   /** MCP Servers stays hidden until the project flag and menu are both on. */
   mcpServersEnabled?: boolean;
@@ -179,6 +182,13 @@ const IconPlaybooks: React.FC = () => (
   </svg>
 );
 
+const IconBrainstorm: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 3a5 5 0 00-2 9.6V14h4v-1.4A5 5 0 0010 3z" />
+    <path d="M8.5 16.5h3" />
+  </svg>
+);
+
 const IconBuilds: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M7 6l-4 4 4 4M13 6l4 4-4 4M11 4l-2 12" />
@@ -247,6 +257,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePlaybooks,
   onNavigateBuilds,
   buildsEnabled = false,
+  onNavigateBrainstorm,
+  brainstormEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -260,6 +272,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       id: 'build',
       label: 'Build',
       items: [
+        { label: 'Brainstorm', view: 'brainstorm', icon: <IconBrainstorm />, permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
         { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
         { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
@@ -320,6 +333,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     }
     if (item.view === 'builds') {
       return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
+    }
+    if (item.view === 'brainstorm') {
+      if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
+      return isSuperAdmin || can('brainstorm:view');
     }
     if (item.view === 'playbooks') {
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;

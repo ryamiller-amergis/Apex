@@ -19,6 +19,7 @@ import {
   isDurableInteractiveTurnSpecification,
   isDurableUserIdentity,
 } from '../../shared/types/durableInteractiveTurn';
+import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { db } from '../db/drizzle';
 import {
   notifyOutbox,
@@ -109,6 +110,7 @@ export type RetryDurableInteractiveRunInput = Readonly<{
   userId: string;
   refreshedToolGrant: FrozenInteractiveToolGrant | null;
   refreshedDeadlines: InteractiveDeadlinePolicy;
+  refreshedBrainstormArtifact?: FrozenBrainstormArtifact;
 }>;
 
 export type RetryDurableInteractiveRunResult =
@@ -214,15 +216,19 @@ function isActiveAttemptStatus(status: string): boolean {
   );
 }
 
-function cloneSpecificationForRetry(
+export function cloneSpecificationForRetry(
   previous: DurableInteractiveTurnSpecification,
   refreshedToolGrant: FrozenInteractiveToolGrant | null,
   refreshedDeadlines: InteractiveDeadlinePolicy,
+  refreshedBrainstormArtifact?: FrozenBrainstormArtifact,
 ): DurableInteractiveTurnSpecification {
   return {
     ...previous,
     toolGrant: refreshedToolGrant,
     deadlines: refreshedDeadlines,
+    ...(previous.brainstorm && refreshedBrainstormArtifact
+      ? { brainstorm: { ...previous.brainstorm, artifact: refreshedBrainstormArtifact } }
+      : {}),
   };
 }
 
@@ -803,6 +809,7 @@ export function createDurableInteractiveTurnRepository(options?: {
           previousSpec,
           input.refreshedToolGrant,
           input.refreshedDeadlines,
+          input.refreshedBrainstormArtifact,
         );
 
         await executor.execute(sql`

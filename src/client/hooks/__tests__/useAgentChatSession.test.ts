@@ -650,6 +650,21 @@ describe('useAgentChatSession', () => {
     expect(mockClearRetryableRunId).toHaveBeenCalledTimes(1);
   });
 
+  it('retryFailedRun uses retryEndpoint and an explicit run id when given', async () => {
+    const retryEndpoint = jest.fn((runId: string) => `/api/brainstorm/sessions/s-1/runs/${runId}/retry?project=Apex`);
+    const { result } = renderHook(() => useAgentChatSession('thread-1', { retryEndpoint }));
+
+    await act(async () => {
+      await result.current.retryFailedRun('60000000-0000-4000-8000-000000000001');
+    });
+
+    expect(retryEndpoint).toHaveBeenCalledWith('60000000-0000-4000-8000-000000000001');
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/brainstorm/sessions/s-1/runs/60000000-0000-4000-8000-000000000001/retry?project=Apex',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+    );
+  });
+
   it('keeps retryableRunId when retry POST is non-OK', async () => {
     currentStreamReturn = {
       ...mockStreamReturn,

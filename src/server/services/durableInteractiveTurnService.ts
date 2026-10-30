@@ -8,9 +8,11 @@ import type {
 } from '../../shared/types/chat';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
+import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
 import type {
   DurableInteractiveTurnSpecification,
+  FrozenBrainstormTurn,
   FrozenGuidedInterview,
   FrozenInteractiveMcpDescriptor,
   FrozenInteractiveToolGrant,
@@ -176,6 +178,8 @@ export type AdmitDurableInteractiveTurnInput = Readonly<{
   toolGrant?: DurableInteractiveToolGrantInput;
   /** Specialist findings for the model prompt. The visible user message stays `text`. */
   internalContext?: string;
+  /** Required for, and only for, workflow class `brainstorm`. */
+  brainstorm?: FrozenBrainstormTurn;
 }>;
 
 export type RetryDurableInteractiveTurnInput = Readonly<{
@@ -183,6 +187,8 @@ export type RetryDurableInteractiveTurnInput = Readonly<{
   runId: string;
   userId: string;
   toolGrant?: DurableInteractiveToolGrantInput;
+  /** Brainstorm retries re-freeze the artifact so the retried change builds on the current version. */
+  refreshedBrainstormArtifact?: FrozenBrainstormArtifact;
 }>;
 
 export type DurableInteractiveRetrySource = Readonly<{
@@ -952,6 +958,7 @@ export function workflowUsesMaxview(
 ): boolean {
   switch (workflowClass) {
     case 'adr':
+    case 'brainstorm':
       return false;
     case 'interview':
     case 'home-chat':
@@ -974,6 +981,7 @@ export function workflowAllowsRepositorySearch(
 ): boolean {
   switch (workflowClass) {
     case 'interview':
+    case 'brainstorm':
       return false;
     case 'adr':
     case 'home-chat':
@@ -1452,8 +1460,10 @@ export function createDurableInteractiveTurnService(
       // workspace, and so its warm agent, the same across the product phase.
       const requiresRepositoryPreparation =
         skillNeedsRepository && !groundInBackground;
-      // An MCP connection chat answers from that server alone.
-      const skipRepositoryGrounding = thread.kickoff.assistantType === 'mcp-server';
+      // An MCP connection chat answers from that server alone. Brainstorm has no
+      // repository until Source-Backed Exploration attaches one.
+      const skipRepositoryGrounding =
+        thread.kickoff.assistantType === 'mcp-server' || input.workflowClass === 'brainstorm';
 
       const immutableAttachments = [];
       for (
@@ -1684,15 +1694,20 @@ export function createDurableInteractiveTurnService(
         },
         transcript,
         grounding,
-        mcpServers: frozenMcpDescriptors(
-          thread,
-          hasAdoCapability,
-          maxviewEnabled,
-          grounding,
-        ).filter(
-          (descriptor) =>
-            !productPhaseInterview || descriptor.serverName !== 'ado-skills',
-        ),
+        mcpServers: [
+          ...frozenMcpDescriptors(
+            thread,
+            hasAdoCapability,
+            maxviewEnabled,
+            grounding,
+          ).filter(
+            (descriptor) =>
+              !productPhaseInterview || descriptor.serverName !== 'ado-skills',
+          ),
+          ...(input.brainstorm
+            ? [{ kind: 'internal-proxy', serverName: 'brainstorm-artifact', enableRepoBrowse: false } as const]
+            : []),
+        ],
         toolGrant,
         currentPrompt: preparedCurrentPrompt,
         recreationPrompt: recreationPrompt({
@@ -1703,6 +1718,7 @@ export function createDurableInteractiveTurnService(
         }),
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
+        ...(input.brainstorm ? { brainstorm: input.brainstorm } : {}),
       };
       const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({
@@ -1841,6 +1857,9 @@ export function createDurableInteractiveTurnService(
         userId: input.userId,
         refreshedToolGrant,
         refreshedDeadlines,
+        ...(input.refreshedBrainstormArtifact
+          ? { refreshedBrainstormArtifact: input.refreshedBrainstormArtifact }
+          : {}),
       });
 
       switch (retried.status) {

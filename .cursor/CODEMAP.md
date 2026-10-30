@@ -15,9 +15,9 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `tests/e2e/`: Playwright. `tests/e2e/specs/`, `tests/e2e/pages/` (page objects), `tests/e2e/support/` (auth capture), `tests/e2e/data/` (seed/reset, hand-written).
 - `tests/integration/`: `*.integration.test.ts`, run with `jest.config.integration.js`.
 - `foundation-skills/`: packaged skills library (`foundation-skills/catalog.json`, `foundation-skills/foundation/`, `foundation-skills/adapters/`); published by `.github/workflows/publish-apex-skills.yml`. `foundation-skills/starters/react-mui-express/` = build starter templates, copied by hand.
-- `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`.
+- `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`. Local Dapr components: `runners/ai-runs-interactive/dapr/`.
 - `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
-- `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), changelog, dev→prod migration.
+- `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), local Redis, interactive host, and orchestrator (`scripts/dev/ensure-local-redis.mjs`, `scripts/dev/ensure-local-dapr.mjs`, `scripts/dev/run-interactive-host.mjs`, `scripts/dev/run-ai-orchestrator.mjs`), changelog, dev→prod migration.
 - `design-docs/`: feature design docs. `docs/`: setup and ops (auth, Azure cost, release, security).
 - `public/`: static assets; `public/CHANGELOG.json` is the release record.
 - `pr-description.md`: pull request description skeleton. My Work fills the Work items line; the cursor pool worker copies it for the agent.
@@ -32,7 +32,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `src/server/routes/`: one router per area, e.g. `src/server/routes/builds.ts`, `src/server/routes/featureRequests.ts`, `src/server/routes/interviews.ts`,
   `src/server/routes/notifications.ts`, `src/server/routes/platformAdmin.ts`, `src/server/routes/walkthroughs.ts`.
   `src/server/routes/auth.ts` needs permission to edit.
-- `src/server/services/`: business logic, `<area>Service.ts`. `src/server/services/buildPreflight/` = build preflight checks (`runPreflight`). `src/server/services/buildOrchestrator/` = start, queue admission, and the build Playbook seam. `src/server/services/buildPlanning/` = plan validator, planner prompt, and the planning repair loop (`validateBuildPlan`, `startPlanning`). `.cursor/skills/build-planner/SKILL.md` is the planner skill.
+- `src/server/services/`: business logic, `<area>Service.ts`. `src/server/services/brainstorm/` = Brainstorm source clones, citations, and cleanup. `src/server/services/brainstormArtifactVersionStore.ts` = Brainstorm artifact versions; `src/server/services/brainstormHandoffEngine.ts` = Brainstorm next actions and handoffs; `src/server/services/brainstormRepositoryCatalog.ts` = Brainstorm repositories an administrator clones. `src/server/services/buildPreflight/` = build preflight checks (`runPreflight`). `src/server/services/buildOrchestrator/` = start, queue admission, and the build Playbook seam. `src/server/services/buildPlanning/` = plan validator, planner prompt, and the planning repair loop (`validateBuildPlan`, `startPlanning`). `.cursor/skills/build-planner/SKILL.md` is the planner skill.
 - `src/server/db/drizzle.ts`, `src/server/db/schema.ts` (large; search it, don't read it whole).
 - `src/server/middleware/`: `src/server/middleware/auth.ts`, `src/server/middleware/rbac.ts`, `src/server/middleware/publicApiKeyAuth.ts`,
   `src/server/middleware/aiRunnerAuth.ts`, `src/server/middleware/loadTestRunnerAuth.ts`, observability capture.
@@ -53,7 +53,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 
 ## src/shared
 
-- `src/shared/types/`: types shared by client and server (`src/shared/types/menuSettings.ts` = nav items and visibility, `src/shared/types/build.ts` = build contract, `src/shared/types/buildPreflight.ts` = Build profile and preflight contract). `src/shared/buildPlanSchema.ts` is the build-plan shape check; `src/shared/buildProfileSchema.ts` validates the Build profile.
+- `src/shared/types/`: types shared by client and server (`src/shared/types/menuSettings.ts` = nav items and visibility, `src/shared/types/build.ts` = build contract, `src/shared/types/buildPreflight.ts` = Build profile and preflight contract, `src/shared/types/brainstorm.ts` = Brainstorm session contract, `src/shared/types/brainstormSources.ts` = Brainstorm source and citation contract, `src/shared/types/brainstormArtifact.ts` = Brainstorm artifact, version and handoff contract). `src/shared/buildPlanSchema.ts` is the build-plan shape check; `src/shared/buildProfileSchema.ts` validates the Build profile.
 - `src/shared/fixtures/`: shared test fixtures (`src/shared/fixtures/buildPlanFixtures.ts`, `src/shared/fixtures/preflightRefusalFixture.ts`).
 - `src/shared/walkthroughRoutes.ts`, `src/shared/walkthroughAnchors.ts`, `src/shared/skillPaths.ts`, `src/shared/utils/`,
   `src/shared/constants/`, `src/shared/config/`.

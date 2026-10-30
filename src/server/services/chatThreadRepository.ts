@@ -169,6 +169,7 @@ export async function listThreadsByUser(
     eq(chatThreads.userId, userId),
     sql`NOT EXISTS (SELECT 1 FROM interviews WHERE interviews.chat_thread_id = ${chatThreads.id})`,
     sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
+    sql`NOT EXISTS (SELECT 1 FROM brainstorm_sessions WHERE brainstorm_sessions.chat_thread_id = ${chatThreads.id})`,
   ];
 
   if (opts?.project) {
@@ -253,6 +254,9 @@ export async function searchThreads(
         )
         AND NOT EXISTS (
           SELECT 1 FROM prds WHERE prds.chat_thread_id = t.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM brainstorm_sessions WHERE brainstorm_sessions.chat_thread_id = t.id
         )
         ${projectFilter}
         ${flaggedFilter}

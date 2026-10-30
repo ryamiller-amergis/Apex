@@ -80,27 +80,62 @@ export class LocalCheckoutReader implements RepoReader {
       if (!query.trim()) return [];
       return this.controlled(async () => {
         const root = await this.resolveCheckoutRoot();
-        let output: string;
-        try {
-          output = await git(
-            safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
-            {
-              cwd: root,
-              timeout: 10_000,
-              maxBuffer: 2 * 1024 * 1024,
-            },
-          );
-        } catch (error) {
-          if (error instanceof Error && /exit code 1$/i.test(error.message)) return [];
-          throw error;
+        const maxResults = boundedSearchLimit(limit);
+        const hasGitRoot = await fs.stat(path.join(root, '.git')).then(() => true, () => false);
+        if (hasGitRoot) {
+          try {
+            const output = await git(
+              safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
+              {
+                cwd: root,
+                timeout: 10_000,
+                maxBuffer: 2 * 1024 * 1024,
+              },
+            );
+            return this.shapeSearchResults(output, maxResults);
+          } catch (error) {
+            if (error instanceof Error && /exit code 1$/i.test(error.message)) return [];
+            throw error;
+          }
         }
-
-        return this.shapeSearchResults(output, boundedSearchLimit(limit));
+        // Un-grounded workspaces (e.g. Brainstorm) have mounted git repos under `sources/<id>`.
+        const sourcesDir = path.join(root, 'sources');
+        const entries = await fs.readdir(sourcesDir).catch(() => [] as string[]);
+        if (entries.length === 0) return [];
+        const combined: RepoCodeSearchResult[] = [];
+        for (const entry of entries) {
+          if (combined.length >= maxResults) break;
+          const sourceRoot = await fs.realpath(path.join(sourcesDir, entry)).catch(() => null);
+          if (!sourceRoot) continue;
+          try {
+            const sourceOut = await git(
+              safeArgs(sourceRoot, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
+              {
+                cwd: sourceRoot,
+                timeout: 10_000,
+                maxBuffer: 2 * 1024 * 1024,
+              },
+            );
+            const shaped = this.shapeSearchResults(
+              sourceOut,
+              maxResults - combined.length,
+              `sources/${entry}`,
+            );
+            combined.push(...shaped);
+          } catch (sourceErr) {
+            if (sourceErr instanceof Error && /exit code 1$/i.test(sourceErr.message)) continue;
+          }
+        }
+        return combined;
       });
     });
   }
 
-  private shapeSearchResults(output: string, limit: number): RepoCodeSearchResult[] {
+  private shapeSearchResults(
+    output: string,
+    limit: number,
+    pathPrefix?: string,
+  ): RepoCodeSearchResult[] {
     const byPath = new Map<string, RepoCodeSearchResult>();
 
     for (const line of output.split(/\r?\n/)) {
@@ -108,7 +143,8 @@ export class LocalCheckoutReader implements RepoReader {
       const match = /^(.+?):(\d+):(.*)$/.exec(line);
       if (!match) continue;
 
-      const repoPath = match[1].replace(/\\/g, '/').replace(/^\.\//, '');
+      const rawPath = match[1].replace(/\\/g, '/').replace(/^\.\//, '');
+      const repoPath = pathPrefix ? `${pathPrefix}/${rawPath}` : rawPath;
       let result = byPath.get(repoPath);
       if (!result) {
         if (byPath.size >= limit) continue;
@@ -173,8 +209,29 @@ export class LocalCheckoutReader implements RepoReader {
   }> {
     const normalized = this.validateRequestedPath(requestedPath);
     const root = await this.resolveCheckoutRoot();
-    const target = await fs.realpath(path.join(root, normalized.platformPath));
-    const relative = path.relative(root, target);
+    const joined = path.resolve(root, normalized.platformPath);
+    const joinedRelative = path.relative(root, joined);
+
+    if (
+      joinedRelative === '..'
+      || joinedRelative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(joinedRelative)
+    ) {
+      throw new RepoReaderError('ACCESS_DENIED', ACCESS_DENIED_MESSAGE, false);
+    }
+
+    // Mounted Brainstorm sources sit under `sources/<sourceId>` inside the
+    // thread workspace (which may be a directory junction on Windows). Keep
+    // realpath confinement inside that mounted source root when present, or
+    // inside the checkout root otherwise.
+    const segments = normalized.portablePath.split('/');
+    const mountedSourceRoot =
+      segments[0] === 'sources' && segments[1]
+        ? await fs.realpath(path.join(root, 'sources', segments[1])).catch(() => null)
+        : null;
+    const confinementRoot = mountedSourceRoot ?? root;
+    const target = await fs.realpath(joined);
+    const relative = path.relative(confinementRoot, target);
 
     if (
       relative === '..'

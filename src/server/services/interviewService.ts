@@ -35,9 +35,7 @@ function httpStatusError(message: string, status: number): Error {
 
 function assertValidInterviewStatus(status: string): asserts status is InterviewStatus {
   if (!VALID_INTERVIEW_STATUSES.includes(status as InterviewStatus)) {
-    const err = new Error(`Invalid interview status: ${status}`);
-    (err as any).status = 400;
-    throw err;
+    throw httpStatusError(`Invalid interview status: ${status}`, 400);
   }
 }
 
@@ -128,6 +126,16 @@ function playbookInterviewColumns(opts: {
     playbookProfileKey: profileKey,
     playbookProfileSnapshot: snapshot,
   };
+}
+
+/** The interview attached to a chat thread, if any. */
+export async function findInterviewIdByThread(chatThreadId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: interviews.id })
+    .from(interviews)
+    .where(eq(interviews.chatThreadId, chatThreadId))
+    .limit(1);
+  return row?.id ?? null;
 }
 
 export async function createInterview(opts: {
@@ -463,9 +471,7 @@ export async function updateInterviewStatus(
 
   const row = await db.query.interviews.findFirst({ where: eq(interviews.id, id) });
   if (!row) {
-    const err = new Error('Interview not found');
-    (err as any).status = 404;
-    throw err;
+    throw httpStatusError('Interview not found', 404);
   }
   if (newStatus === 'complete') {
     const allowed = await canCompleteInterviewAndGeneratePrd(requestingUserId, row);
@@ -474,9 +480,7 @@ export async function updateInterviewStatus(
       throw httpStatusError(INTERVIEW_COMPLETE_INVALID_STATUS_MESSAGE, 409);
     }
   } else if (row.authorId !== requestingUserId) {
-    const err = new Error('Only the author can change interview status');
-    (err as any).status = 403;
-    throw err;
+    throw httpStatusError('Only the author can change interview status', 403);
   }
 
   const transitionAt = new Date().toISOString();
@@ -515,14 +519,10 @@ export async function updateInterviewTitle(
 ): Promise<void> {
   const row = await db.query.interviews.findFirst({ where: eq(interviews.id, id) });
   if (!row) {
-    const err = new Error('Interview not found');
-    (err as any).status = 404;
-    throw err;
+    throw httpStatusError('Interview not found', 404);
   }
   if (row.authorId !== requestingUserId) {
-    const err = new Error('Only the author can rename the interview');
-    (err as any).status = 403;
-    throw err;
+    throw httpStatusError('Only the author can rename the interview', 403);
   }
 
   await db
@@ -560,18 +560,14 @@ export async function updateInterviewPhaseAssignments(
 ): Promise<void> {
   const row = await db.query.interviews.findFirst({ where: eq(interviews.id, id) });
   if (!row) {
-    const err = new Error('Interview not found');
-    (err as any).status = 404;
-    throw err;
+    throw httpStatusError('Interview not found', 404);
   }
 
   const allowed = row.authorId === requestingUserId
     || await isPlatformAdmin(requestingUserId)
     || await isProjectAdmin(requestingUserId, row.project);
   if (!allowed) {
-    const err = new Error('Only the interview owner, a project admin, or a platform admin can assign phases');
-    (err as any).status = 403;
-    throw err;
+    throw httpStatusError('Only the interview owner, a project admin, or a platform admin can assign phases', 403);
   }
 
   const next = {
@@ -596,9 +592,7 @@ export async function updateInterviewPhaseAssignments(
     .map((key) => next[key])
     .find((assigneeId) => assigneeId && !activeUserIds.has(assigneeId));
   if (invalidAssignee) {
-    const err = new Error('Phase assignees must be active users in this project');
-    (err as any).status = 400;
-    throw err;
+    throw httpStatusError('Phase assignees must be active users in this project', 400);
   }
 
   const updates: Partial<typeof next> & { updatedAt: string } = {
@@ -644,14 +638,10 @@ export async function updateInterviewPhaseAssignments(
 export async function deleteInterview(id: string, requestingUserId: string): Promise<void> {
   const row = await db.query.interviews.findFirst({ where: eq(interviews.id, id) });
   if (!row) {
-    const err = new Error('Interview not found');
-    (err as any).status = 404;
-    throw err;
+    throw httpStatusError('Interview not found', 404);
   }
   if (row.authorId !== requestingUserId) {
-    const err = new Error('Only the author can delete the interview');
-    (err as any).status = 403;
-    throw err;
+    throw httpStatusError('Only the author can delete the interview', 403);
   }
   await cancelRun(row.chatThreadId);
   await db.delete(interviews).where(eq(interviews.id, id));

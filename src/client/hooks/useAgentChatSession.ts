@@ -14,6 +14,7 @@ import type {
 } from './useChatStream';
 import { friendlyChatErrorMessage, friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { createChatTurnId } from '../utils/chatTurnId';
+import type { ThreadStreamTransport } from '../utils/threadEventStream';
 
 function mapSendErrorMessage(raw: string): string {
   return friendlyChatErrorMessage(raw);
@@ -62,6 +63,12 @@ export interface AgentChatSessionOptions {
   cancelEndpoint?: string;
 
   /**
+   * Override the endpoint used for retrying a failed run.
+   * Defaults to `/api/chat/threads/${threadId}/runs/${runId}/retry`.
+   */
+  retryEndpoint?: (runId: string) => string;
+
+  /**
    * Filter applied to messages before computing "visible" messages.
    * If omitted, hidden "Begin." prompts are filtered by default.
    */
@@ -78,11 +85,15 @@ export interface AgentChatSessionOptions {
 
   /** Generates the idempotency identity once per user send attempt. */
   createTurnId?: () => string;
+
+  /** Force the live event transport. Omit to keep the shared auto choice. */
+  streamTransport?: ThreadStreamTransport;
 }
 
 export interface SendOptions {
   attachments?: ChatAttachment[];
   model?: string;
+  mode?: string;
   skill?: ChatTurnSkill;
   /**
    * Send the opening prompt while the empty-thread preparation state is the
@@ -127,8 +138,11 @@ export interface AgentChatSession {
   // --- Actions ---
   send: (text: string, opts?: SendOptions) => Promise<boolean>;
   retryLast: () => void;
-  /** Retry a failed durable run by identity — never resends text. */
-  retryFailedRun: () => Promise<void>;
+  /**
+   * Retry a failed durable run by identity — never resends text. Uses
+   * `runId` when given, otherwise the run id carried by the stream.
+   */
+  retryFailedRun: (runId?: string) => Promise<void>;
   /** Failed durable run ID from the stream, if the terminal error carried one. */
   retryableRunId: string | null;
   cancel: () => Promise<void>;
@@ -172,10 +186,12 @@ export function useAgentChatSession(
     afterSend,
     sendEndpoint,
     cancelEndpoint,
+    retryEndpoint,
     visibleMessageFilter = DEFAULT_VISIBLE_FILTER,
     enablePreparationState = false,
     initialActiveRunId,
     createTurnId = createChatTurnId,
+    streamTransport,
   } = options;
 
   // --- useChatStream (the SSE subscription) ---
@@ -183,6 +199,7 @@ export function useAgentChatSession(
     initialMessages,
     initialStatus,
     initialPrdReady,
+    streamTransport,
   });
 
   const {
@@ -350,6 +367,16 @@ export function useAgentChatSession(
     setAdmissionPhase(null);
   }, [progressPhase]);
 
+  // Clear the queued/dispatched admission state as soon as the agent emits
+  // thinking, tool activity, or tokens — even if the HTTP send response
+  // resolved after the first live event.
+  useEffect(() => {
+    if (!admissionPhase) return;
+    if (thinkingText || streamingText || toolProgress.length > 0) {
+      setAdmissionPhase(null);
+    }
+  }, [admissionPhase, streamingText, thinkingText, toolProgress.length]);
+
   const effectiveProgressPhase: AgentRunPhase | null =
     progressPhase ?? admissionPhase;
   const effectiveProgressLabel =
@@ -450,6 +477,7 @@ export function useAgentChatSession(
           turnId,
           text,
           ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.mode ? { mode: opts.mode } : {}),
           ...(opts.skill ? { skill: opts.skill } : {}),
           ...(opts.attachments?.length
             ? { attachments: opts.attachments }
@@ -495,7 +523,16 @@ export function useAgentChatSession(
             accepted?.status === 'queued' ||
             accepted?.status === 'dispatched'
           ) {
-            setAdmissionPhase(accepted.status);
+            setAdmissionPhase((current) => {
+              if (
+                progressPhase &&
+                progressPhase !== 'queued' &&
+                progressPhase !== 'dispatched'
+              ) {
+                return null;
+              }
+              return current ?? (accepted.status as 'queued' | 'dispatched');
+            });
           }
         } catch {
           // Legacy `{ ok: true }` responses have no durable phase.
@@ -519,6 +556,7 @@ export function useAgentChatSession(
         setIsSending(false);
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- send callback intentionally omits transient progressPhase
     [
       locked,
       threadId,
@@ -550,18 +588,20 @@ export function useAgentChatSession(
   }, [locked, threadId, isInteractionBusy, visibleMessages, send]);
 
   // --- Retry failed durable run by identity (no text / optimistic message) ---
-  const retryFailedRun = useCallback(async () => {
+  const retryFailedRun = useCallback(async (runIdOverride?: string) => {
     if (locked || !threadId || isInteractionBusy) return;
-    if (!retryableRunId) return;
+    const runId = runIdOverride ?? retryableRunId;
+    if (!runId) return;
 
     setSendError(null);
     setIsStopConfirmed(false);
     setIsSending(true);
     beginAwaitingAgentResponse();
-    const runId = retryableRunId;
 
     try {
-      const endpoint = `/api/chat/threads/${threadId}/runs/${runId}/retry`;
+      const endpoint = retryEndpoint
+        ? retryEndpoint(runId)
+        : `/api/chat/threads/${threadId}/runs/${runId}/retry`;
       let res: Response | null = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
@@ -625,6 +665,7 @@ export function useAgentChatSession(
     threadId,
     isInteractionBusy,
     retryableRunId,
+    retryEndpoint,
     beginAwaitingAgentResponse,
     clearRetryableRunId,
     afterSend,
