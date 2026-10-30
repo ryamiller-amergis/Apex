@@ -158,7 +158,9 @@ async function describeMcpSource(project: string, connectionId: string, userId: 
   if (tools.length === 0) {
     return { ok: false as const, status: 422, code: 'MCP_NO_READ_TOOLS', error: 'No read-only tools available' };
   }
-  return { ok: true as const, displayName: tools[0]?.summary || 'MCP server', readOnlyToolCount: tools.length };
+  const servers = await listMcpServers(project);
+  const server = servers.find((item) => item.id === connectionId);
+  return { ok: true as const, displayName: server?.name || 'MCP server', readOnlyToolCount: tools.length };
 }
 
 async function loadSourceOptions(
