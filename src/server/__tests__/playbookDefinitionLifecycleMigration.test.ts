@@ -61,14 +61,15 @@ describe('FEAT-007 S2 — playbook definition lifecycle migration (TBI-030 / TBI
     );
   });
 
-  it('VT-09 / TBI-030 (d) — retains restrict FK semantics and exposes no hard-delete API', () => {
+  it('VT-09 / TBI-030 (d) — retains restrict FK semantics and deletes only whole, idle playbooks', () => {
     expect(upSql).not.toMatch(/ON\s+DELETE\s+CASCADE/i);
     expect(upSql).not.toMatch(/DROP\s+CONSTRAINT[\s\S]*definition_version/i);
     expect(downSql).not.toMatch(/DELETE\s+FROM\s+playbook_definition_versions/i);
 
     const service = fs.readFileSync(definitionServicePath, 'utf8');
-    expect(service).not.toMatch(/export\s+(?:async\s+)?function\s+delete(?:Version|Definition)\b/);
+    expect(service).not.toMatch(/export\s+(?:async\s+)?function\s+deleteVersion\b/);
     expect(service).not.toMatch(/export\s+(?:async\s+)?function\s+hardDelete\w*\b/);
+    expect(service).toMatch(/export\s+async\s+function\s+deleteDefinition\b[\s\S]*throw new PlaybookDefinitionBusyError/);
   });
 
   it('reversible down drops index and additive columns without deleting backfilled drafts', () => {
