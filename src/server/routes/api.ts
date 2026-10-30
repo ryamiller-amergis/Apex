@@ -368,6 +368,25 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/workitems/search - Search for work items by query
+// Must stay above /workitems/:id, which would otherwise match "search" as an ID.
+router.get('/workitems/search', async (req: Request, res: Response) => {
+  try {
+    const { query, type, project, areaPath } = req.query as { query?: string; type?: string; project?: string; areaPath?: string };
+    
+    if (!query) {
+      return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const workItems = await adoService.searchWorkItems(query, type);
+    res.json(workItems);
+  } catch (error: any) {
+    console.error('Error searching work items:', error);
+    res.status(500).json({ error: 'Failed to search work items' });
+  }
+});
+
 // GET /api/workitems/:id - Fetch a single work item by ID
 router.get('/workitems/:id', async (req: Request, res: Response) => {
   try {
@@ -410,23 +429,6 @@ router.get('/pr-review-tag-trends', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/workitems/search - Search for work items by query
-router.get('/workitems/search', async (req: Request, res: Response) => {
-  try {
-    const { query, type, project, areaPath } = req.query as { query?: string; type?: string; project?: string; areaPath?: string };
-    
-    if (!query) {
-      return res.status(400).json({ error: 'Query parameter is required' });
-    }
-
-    const adoService = new AzureDevOpsService(project, areaPath);
-    const workItems = await adoService.searchWorkItems(query, type);
-    res.json(workItems);
-  } catch (error: any) {
-    console.error('Error searching work items:', error);
-    res.status(500).json({ error: 'Failed to search work items' });
-  }
-});
 
 // PATCH /api/workitems/:id/due-date - Update due date for a work item
 router.patch('/workitems/:id/due-date', async (req: Request, res: Response) => {
