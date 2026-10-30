@@ -761,6 +761,16 @@ describe('durable interactive turn repository retry', () => {
     expect(harness.attemptInsertCount).toBe(0);
   });
 
+  it('retries a cancelled v2 run', async () => {
+    const harness = retryHarness({ runStatus: 'cancelled', attemptStatus: 'cancelled' });
+    await expect(harness.repository.retry(retryInput())).resolves.toMatchObject({
+      runId: FAILED_RUN_ID,
+      turnId: TURN_ID,
+      status: 'queued',
+    });
+    expect(harness.attemptInsertCount).toBe(1);
+  });
+
   it('rejects non-v2 transport as not retryable', async () => {
     const harness = retryHarness({ transport: 'legacy-in-process' });
     await expect(harness.repository.retry(retryInput())).resolves.toEqual({

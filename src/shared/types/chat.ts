@@ -21,7 +21,8 @@ export type AgentModuleId =
   | 'calendarAssistant'
   | 'loadTestGeneration'
   | 'designModule'
-  | 'designModuleScoping';
+  | 'designModuleScoping'
+  | 'brainstorm';
 
 export interface ChatMessage {
   id: string;

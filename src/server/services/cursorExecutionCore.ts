@@ -18,7 +18,7 @@ export type CursorStreamEvent =
       type: 'assistant';
       message: { content: CursorAssistantBlock[] };
     }
-  | { type: 'thinking'; thinking_duration_ms?: number }
+  | { type: 'thinking'; text?: string; thinking_duration_ms?: number }
   | {
       type: 'tool_call';
       name?: string;
@@ -430,6 +430,42 @@ export function createCursorRunEventEnvelope(input: {
   };
 }
 
+const TOOL_TARGET_KEYS = [
+  'path',
+  'file_path',
+  'file',
+  'target_file',
+  'target_directory',
+  'targetDirectory',
+  'glob',
+  'glob_pattern',
+  'globPattern',
+  'pattern',
+  'query',
+  'search_term',
+  'description',
+  'command',
+];
+
+const SHELL_ENV_RE =
+  /(?:GITHUB_TOKEN|GITHUB_PAT|GH_SKILL_TOKEN|ADO_PAT|CURSOR_API_KEY|REDIS_URL|DATABASE_URL|Authorization|Bearer|Basic\s+[A-Za-z0-9+/=]+)/i;
+
+function cursorToolTarget(input: Record<string, unknown>): string | undefined {
+  for (const key of TOOL_TARGET_KEYS) {
+    const value = input[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.replace(/\s+/g, ' ').trim();
+    if (!trimmed) continue;
+    if (key === 'command') {
+      if (SHELL_ENV_RE.test(trimmed)) continue;
+      return trimmed.length > 96 ? `${trimmed.slice(0, 96)}…` : trimmed;
+    }
+    if (trimmed.length > 160) continue;
+    return trimmed;
+  }
+  return undefined;
+}
+
 export function summarizeCursorToolInput(input: unknown): unknown {
   if (input === null || input === undefined) return undefined;
   if (Array.isArray(input)) return { itemCount: input.length };
@@ -444,7 +480,11 @@ export function summarizeCursorToolInput(input: unknown): unknown {
         args: summarizeCursorToolInput(obj.args),
       };
     }
-    return { keys: Object.keys(obj).slice(0, 20) };
+    const target = cursorToolTarget(obj);
+    return {
+      keys: Object.keys(obj).slice(0, 20),
+      ...(target ? { target } : {}),
+    };
   }
   return { type: typeof input };
 }
@@ -725,6 +765,7 @@ export async function executeCursorExecutionCore(
       } else if (event.type === 'thinking') {
         const thinkingEvent = event as {
           type: 'thinking';
+          text?: string;
           thinking_duration_ms?: number;
         };
         const firstFragment = thinkingPhase.observe({
@@ -734,7 +775,12 @@ export async function executeCursorExecutionCore(
           firstFragment,
           durationMs: thinkingEvent.thinking_duration_ms,
         });
-        if (firstFragment) {
+        const realText = typeof thinkingEvent.text === 'string' && thinkingEvent.text.trim()
+          ? thinkingEvent.text.trim()
+          : '';
+        if (realText) {
+          await publish({ type: 'thinking', text: realText });
+        } else if (firstFragment) {
           await publish({ type: 'thinking', text: 'Analyzing' });
         }
         await hooks.onHeartbeat?.();

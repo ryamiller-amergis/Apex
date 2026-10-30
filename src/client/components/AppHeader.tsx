@@ -24,7 +24,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -66,6 +66,8 @@ interface AppHeaderProps {
   onNavigateBuilds?: () => void;
   /** `build-from-prompt` evaluated for this user and project. */
   buildsEnabled?: boolean;
+  onNavigateBrainstorm?: () => void;
+  brainstormEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   mcpServersEnabled?: boolean;
   onNavigateAdmin: () => void;
@@ -111,6 +113,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigatePlaybooks,
   onNavigateBuilds,
   buildsEnabled = false,
+  onNavigateBrainstorm,
+  brainstormEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -147,6 +151,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Planning', view: 'planning', permission: 'planning:view', onNavigate: onNavigatePlanning },
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'AI Cost Analytics', view: 'ai-cost', permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
+    { label: 'Brainstorm', view: 'brainstorm', permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
@@ -186,6 +191,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     }
     if (item.view === 'builds') {
       return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
+    }
+    if (item.view === 'brainstorm') {
+      if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
+      return isSuperAdmin || can('brainstorm:view');
     }
     if (item.view === 'playbooks') {
       if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;

@@ -31,7 +31,8 @@ export type InteractiveWorkflowClass =
   | 'adr'
   | 'home-chat'
   | 'ask-apex'
-  | 'assistant';
+  | 'assistant'
+  | 'brainstorm';
 
 export const INTERACTIVE_WORKFLOW_CLASSES: readonly InteractiveWorkflowClass[] = [
   'interview',
@@ -39,6 +40,7 @@ export const INTERACTIVE_WORKFLOW_CLASSES: readonly InteractiveWorkflowClass[] =
   'home-chat',
   'ask-apex',
   'assistant',
+  'brainstorm',
 ] as const;
 
 /** Which warm-capacity band an admitted activation consumed. */

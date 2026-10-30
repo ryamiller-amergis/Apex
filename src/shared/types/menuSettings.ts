@@ -15,7 +15,8 @@ export type MenuItemKey =
   | 'work-board'
   | 'playbooks'
   | 'builds'
-  | 'mcp-servers';
+  | 'mcp-servers'
+  | 'brainstorm';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -35,6 +36,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'playbooks', label: 'Playbooks' },
   { key: 'builds', label: 'Builds' },
   { key: 'mcp-servers', label: 'MCP Servers' },
+  { key: 'brainstorm', label: 'Brainstorm' },
 ];
 
 /** All configurable menu keys (includes opt-in-only keys such as Diagrams). */

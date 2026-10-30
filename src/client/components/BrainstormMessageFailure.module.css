@@ -1,0 +1,41 @@
+.failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.badge {
+  padding: 2px 8px;
+  border: 1px solid var(--error-color);
+  border-radius: 999px;
+  color: var(--error-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.summary {
+  flex: 1 1 auto;
+}
+
+.retry {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.retry:hover:not(:disabled),
+.retry:focus-visible {
+  border-color: var(--accent-color);
+}
+
+.retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

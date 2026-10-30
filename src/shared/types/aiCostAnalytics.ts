@@ -26,6 +26,7 @@ export type AiFeature =
   | 'ai-cost-insights'
   | 'calendar-work-item-assistant'
   | 'adr'
+  | 'brainstorm'
   | 'other';
 
 export interface RecordUsageInput {

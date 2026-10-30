@@ -71,7 +71,10 @@ import {
   mcpServerTurnRequiresToolUse,
 } from '../../shared/types/mcpServers';
 import { resetMcpTurnCallBudget } from '../mcp/mcpServers/server';
-import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
+import type {
+  FrozenBrainstormTurn,
+  InteractiveTurnAcceptedResponse,
+} from '../../shared/types/durableInteractiveTurn';
 import {
   interactiveWorkflowRouter,
   legacyInteractiveWorkflowRouter,
@@ -4021,6 +4024,7 @@ export function resolveInteractiveWorkflowClass(
   state: ThreadState
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
+  if (state.thread.kickoff.agentModule === 'brainstorm') return 'brainstorm';
   const assistantType = state.thread.kickoff.assistantType;
   if (assistantType === 'prd' || assistantType === 'design-doc') {
     return 'assistant';
@@ -4090,6 +4094,8 @@ export type InteractiveSendOptions = Readonly<{
   requesterUserId?: string;
   toolGrant?: DurableInteractiveToolGrantInput;
   onLegacySettled?: () => void;
+  /** Brainstorm turn context. A Brainstorm turn runs on V2 only and never in-process. */
+  brainstorm?: FrozenBrainstormTurn;
 }>;
 
 type LegacyChatSendOptions = Pick<
@@ -6491,6 +6497,12 @@ function forgetThread(threadId: string): void {
   durableTerminalWatches.get(threadId)?.();
 }
 
+/** Hides a message in the in-memory thread copy. The caller updates Postgres. */
+export function hideLiveThreadMessage(threadId: string, messageId: string): void {
+  const message = threads.get(threadId)?.thread.messages.find((entry) => entry.id === messageId);
+  if (message) message.hidden = true;
+}
+
 function reflectDurableAdmission(
   state: ThreadState,
   text: string,
@@ -6610,6 +6622,9 @@ export async function sendMessage(
     workflowClass,
     threadId,
     runLegacy: async () => {
+      if (options?.brainstorm || workflowClass === 'brainstorm') {
+        throw Object.assign(new Error('transport_unavailable'), { status: 409 });
+      }
       if (
         legacyCompletion === 'detach' &&
         state.thread.status === 'running'
@@ -6670,6 +6685,7 @@ export async function sendMessage(
         turnSkill: options?.turnSkill,
         toolGrant: options?.toolGrant,
         internalContext: options?.internalContext,
+        ...(options?.brainstorm ? { brainstorm: options.brainstorm } : {}),
       });
     },
   });

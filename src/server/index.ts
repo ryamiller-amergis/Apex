@@ -18,6 +18,7 @@ import chatRoutes from './routes/chat';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
 import adrRoutes from './routes/adr';
+import brainstormRoutes from './routes/brainstorm';
 import notificationRoutes from './routes/notifications';
 import reviewCommentRoutes from './routes/reviewComments';
 import deploymentOutcomesRouter from './routes/deploymentOutcomes';
@@ -58,7 +59,7 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
-import { startReaper, stopReaper } from './services/agentRunReaperService';
+import { startReaper } from './services/agentRunReaperService';
 import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
@@ -71,7 +72,7 @@ import {
   startPlaybookStepOutputCleanup,
   stopPlaybookStepOutputCleanup,
 } from './services/playbookStepOutputCleanupScheduler';
-import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
+import { initPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
   shutdownInteractiveLiveBus,
@@ -90,6 +91,7 @@ import { apiKeyExpiryNotificationScheduler } from './services/apiKeyExpiryNotifi
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { workBoardScheduler } from './services/workBoardScheduler';
+import { startBrainstormCleanupScheduler, stopBrainstormCleanupScheduler } from './services/brainstorm/cleanupScheduler';
 import buildsRoutes from './routes/builds';
 import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
@@ -263,6 +265,7 @@ app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
 app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
 app.use('/api/adr', ensureAuthenticated, adrRoutes);
+app.use('/api/brainstorm', ensureAuthenticated, brainstormRoutes);
 app.use('/api/notifications', ensureAuthenticated, notificationRoutes);
 app.use('/api/design-prototypes', ensureAuthenticated, designPrototypeRoutes);
 app.use('/api/design-plans', ensureAuthenticated, designPlanRoutes);
@@ -331,7 +334,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Global error-handling middleware — sends unhandled errors to App Insights
-app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error & { status?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   captureServerError(req, err, res);
   if (telemetryClient) {
     telemetryClient.trackException({
@@ -476,6 +479,10 @@ const server = app.listen(PORT, () => {
 
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
+
+  startBrainstormCleanupScheduler();
+  server.once('close', stopBrainstormCleanupScheduler);
+  console.log('Brainstorm cleanup scheduler started');
 
   startBuildQueueScheduler();
   server.once('close', stopBuildQueueScheduler);

@@ -265,6 +265,20 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  brainstorm: {
+    pageEntries: [
+      {
+        component: 'src/client/components/BrainstormSessionsPage.tsx',
+        routePattern: '/brainstorm',
+        suggestedRoute: '/brainstorm',
+      },
+      {
+        component: 'src/client/components/BrainstormWorkspace.tsx',
+        routePattern: '/brainstorm/:sessionId',
+        suggestedRoute: '/brainstorm',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

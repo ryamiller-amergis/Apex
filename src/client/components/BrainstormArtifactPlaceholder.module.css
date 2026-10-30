@@ -1,0 +1,37 @@
+.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  height: 100%;
+  padding: 24px;
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.text {
+  margin: 0;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.pulse {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
