@@ -2638,19 +2638,23 @@ export class AzureDevOpsService {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
       const hasTypeFilter = !!typeFilter && typeFilter !== 'All';
+      const defaultTypes = ['Epic', 'Feature', 'Product Backlog Item', 'Technical Backlog Item', 'Bug'];
       const fields = [
         'System.Id',
         'System.Title',
         'System.State',
         'System.AssignedTo',
         'System.WorkItemType',
+        'System.TeamProject',
+        'System.AreaPath',
       ];
 
       let workItems: Awaited<ReturnType<typeof witApi.getWorkItems>>;
       const trimmedQuery = query.trim().replace(/^#/, '');
 
       if (/^\d+$/.test(trimmedQuery)) {
-        // Work item IDs are unique across the organization, so an exact ID skips the project and area filters.
+        // Keep ID results inside the project and area tree that findReleaseAssignments checks,
+        // otherwise linking cannot detect an existing release assignment elsewhere.
         const found = await witApi.getWorkItems(
           [parseInt(trimmedQuery, 10)],
           fields,
@@ -2658,9 +2662,17 @@ export class AzureDevOpsService {
           undefined,
           WorkItemErrorPolicy.Omit
         );
-        workItems = (found ?? []).filter(
-          (wi) => wi?.fields && (!hasTypeFilter || wi.fields['System.WorkItemType'] === typeFilter)
-        );
+        const project = this.project.toLowerCase();
+        const areaPath = this.areaPath?.toLowerCase();
+        workItems = (found ?? []).filter((wi) => {
+          if (!wi?.fields) return false;
+          const type = wi.fields['System.WorkItemType'];
+          const itemArea = String(wi.fields['System.AreaPath'] ?? '').toLowerCase();
+          const inProject = String(wi.fields['System.TeamProject'] ?? '').toLowerCase() === project;
+          const inArea = !areaPath || itemArea === areaPath || itemArea.startsWith(`${areaPath}\\`);
+          const typeMatches = hasTypeFilter ? type === typeFilter : defaultTypes.includes(type);
+          return inProject && inArea && typeMatches;
+        });
       } else {
         const escape = (value: string) => value.replace(/'/g, "''");
         let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${escape(this.project)}'`;
@@ -2672,7 +2684,7 @@ export class AzureDevOpsService {
         if (hasTypeFilter) {
           wiql += ` AND [System.WorkItemType] = '${escape(typeFilter!)}'`;
         } else {
-          wiql += ` AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
+          wiql += ` AND (${defaultTypes.map((t) => `[System.WorkItemType] = '${t}'`).join(' OR ')})`;
         }
 
         const escapedQuery = escape(query);

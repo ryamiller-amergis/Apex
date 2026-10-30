@@ -1134,11 +1134,13 @@ describe('AzureDevOpsService', () => {
         'System.State': 'Active',
         'System.AssignedTo': { displayName: 'Dev One' },
         'System.WorkItemType': 'Product Backlog Item',
+        'System.TeamProject': 'Apex',
+        'System.AreaPath': 'Apex\\Team\\Child',
       },
     };
 
     it('looks up a numeric query directly by ID without a WIQL query', async () => {
-      const service = new AzureDevOpsService();
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
       mockWitApi.getWorkItems.mockResolvedValue([pbi]);
 
       const result = await service.searchWorkItems(' 59642 ', 'All');
@@ -1163,13 +1165,21 @@ describe('AzureDevOpsService', () => {
     });
 
     it('returns no results when the ID does not exist or does not match the chosen type', async () => {
-      const service = new AzureDevOpsService();
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
 
       mockWitApi.getWorkItems.mockResolvedValueOnce([null]);
       expect(await service.searchWorkItems('99999999', 'All')).toEqual([]);
 
       mockWitApi.getWorkItems.mockResolvedValueOnce([pbi]);
       expect(await service.searchWorkItems('59642', 'Bug')).toEqual([]);
+    });
+
+    it('excludes an ID result outside the project or area tree', async () => {
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      expect(await new AzureDevOpsService('Other', 'Other\\Team').searchWorkItems('59642', 'All')).toEqual([]);
+      expect(await new AzureDevOpsService('Apex', 'Apex\\Teammates').searchWorkItems('59642', 'All')).toEqual([]);
+      expect(await new AzureDevOpsService('Apex', 'Apex\\Team\\Child').searchWorkItems('59642', 'All')).toHaveLength(1);
     });
 
     it('searches text under the area path and escapes single quotes', async () => {
