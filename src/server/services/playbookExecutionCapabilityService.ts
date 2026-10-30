@@ -81,6 +81,40 @@ export async function loadPlaybookSkillContent(skillPath: string): Promise<strin
   );
 }
 
+const SKILL_COMPANION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/;
+const SKILL_COMPANION_MAX_BYTES = 200_000;
+
+/** Markdown files that sit beside SKILL.md, such as a resource catalog. */
+export async function loadPlaybookSkillCompanions(
+  skillPath: string,
+): Promise<Array<{ path: string; content: string }>> {
+  const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
+  const directory = path.posix.dirname(relativePath);
+  if (!directory || directory === '.' || directory.split('/').includes('..')) return [];
+
+  for (const root of playbookContentRoots()) {
+    const absoluteDir = path.resolve(root, directory);
+    if (absoluteDir !== root && !absoluteDir.startsWith(`${root}${path.sep}`)) continue;
+    let names: string[];
+    try {
+      names = await fs.readdir(absoluteDir);
+    } catch {
+      continue;
+    }
+    const companions: Array<{ path: string; content: string }> = [];
+    for (const name of names.sort()) {
+      if (name === 'SKILL.md' || !SKILL_COMPANION_NAME.test(name)) continue;
+      const filePath = path.join(absoluteDir, name);
+      const metadata = await fs.stat(filePath);
+      if (!metadata.isFile() || metadata.size > SKILL_COMPANION_MAX_BYTES) continue;
+      companions.push({ path: name, content: await fs.readFile(filePath, 'utf8') });
+    }
+    return companions;
+  }
+  return [];
+}
+
 export interface ResolvePlaybookAgentRunPolicyInput {
   nodeId: string;
   skillPath: string;

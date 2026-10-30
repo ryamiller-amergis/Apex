@@ -312,6 +312,13 @@ async function prepareDocumentWorkspace(
       flag: 'wx',
       mode: 0o600,
     });
+    for (const companion of specification.skillCompanions ?? []) {
+      await fs.writeFile(
+        path.join(path.dirname(frozenSkillPath), companion.path),
+        companion.content,
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+      );
+    }
     if (signal.aborted) throw abortError();
     await writeScratchInputs(specification, workspacePath, signal);
     if (signal.aborted) throw abortError();
@@ -411,6 +418,12 @@ function executionSnapshot(
     specification.skillContent,
     '',
     'The skill above is the immutable version selected for this run. Follow it exactly and do not load another version.',
+    ...(specification.skillCompanions ?? []).flatMap((companion) => [
+      '',
+      `# Companion file: ${companion.path}`,
+      'This file is also written next to the frozen SKILL.md.',
+      companion.content,
+    ]),
   ].join('\n');
   return {
     prompt,

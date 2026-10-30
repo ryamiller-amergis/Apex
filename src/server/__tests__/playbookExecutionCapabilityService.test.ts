@@ -1,5 +1,6 @@
 import {
   PlaybookExecutionCapabilityError,
+  loadPlaybookSkillCompanions,
   parsePlaybookSkillCapabilities,
   resolvePlaybookAgentRunPolicy,
 } from '../services/playbookExecutionCapabilityService';
@@ -13,6 +14,16 @@ playbook-capabilities: [repository-read, network-read]
 `;
 
 describe('Playbook execution capability policy', () => {
+  it('loads the markdown files that sit beside a Skill', async () => {
+    const companions = await loadPlaybookSkillCompanions(
+      'playbook-skills/maxview-incident-investigation/SKILL.md',
+    );
+    expect(companions.map((file) => file.path).sort()).toEqual([
+      'INVESTIGATION_GUIDE.md',
+      'RESOURCE_CATALOG.md',
+    ]);
+  });
+
   it('parses the closed capability declaration', () => {
     expect(parsePlaybookSkillCapabilities(skill)).toEqual([
       'repository-read',
