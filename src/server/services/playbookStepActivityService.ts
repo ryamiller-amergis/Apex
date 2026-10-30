@@ -73,7 +73,8 @@ export function runEventActivityEntries(
     }
     if (row.detail?.trim()) {
       const title = clip(row.detail);
-      if (entries.at(-1)?.title === title) continue;
+      const previous = entries[entries.length - 1];
+      if (previous?.title === title) continue;
       entries.push({ id: row.eventId, kind: 'status', title, at: row.at });
     }
   }

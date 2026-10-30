@@ -102,7 +102,7 @@ describe('TBI-004 shared Cursor execution core', () => {
           toolName: 'npm test',
           callId: 'call-1',
           status: 'completed',
-          args: { keys: ['command'] },
+          args: { command: 'npm test', keys: ['command'] },
           result: 'Completed with 7 characters of output',
         },
       }),
