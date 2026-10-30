@@ -3,7 +3,8 @@ jest.mock('../services/playbookRunProjectionService', () => ({ getRun: jest.fn()
 
 import { recommendPlaybookSteps } from '../services/playbookRecommenderService';
 import { ancestorsNearestFirst } from '../services/playbookSteps/cloudAgentAdapter';
-import { describePlaybookSkill } from '../services/playbookSkillCatalogService';
+import { describePlaybookSkill, listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { loadPlaybookSkillContent } from '../services/playbookExecutionCapabilityService';
 import { threadActivityEntries } from '../services/playbookStepActivityService';
 import { getStepTypeDescriptor } from '../services/playbookSteps/registry';
 
@@ -67,6 +68,17 @@ describe('describePlaybookSkill', () => {
       capabilities: ['repository-read'],
       runnable: true,
     });
+  });
+
+  it('lists the MaxView investigation Skill from playbook-skills', async () => {
+    const skills = await listPlaybookSkillOptions();
+    expect(skills.map((skill) => skill.path)).toContain(
+      'playbook-skills/maxview-incident-investigation/SKILL.md',
+    );
+    const moved = await loadPlaybookSkillContent(
+      '.cursor/skills/maxview-incident-investigation/SKILL.md',
+    );
+    expect(moved).toContain('name: maxview-incident-investigation');
   });
 
   it('keeps a Skill runnable when it does not declare playbook-capabilities', () => {

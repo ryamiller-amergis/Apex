@@ -1,7 +1,8 @@
 /**
- * Skills an Agent task step can name. Agent task loads Skill files from the Apex repository, so
- * the list is `.cursor/skills/<name>/SKILL.md` there. Every Skill can run. A capability list is
- * optional and only adds extras such as Azure CLI. An unknown capability name stays unavailable.
+ * Skills an Agent task step can name. The list is `playbook-skills/<name>/SKILL.md`, a folder the
+ * deploy package copies onto the server. Cursor skills under `.cursor/skills` are not in that
+ * package, so they are not offered here. A capability list is optional and only adds extras such
+ * as Azure CLI. An unknown capability name stays unavailable.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -11,8 +12,25 @@ import {
   PlaybookExecutionCapabilityError,
 } from './playbookExecutionCapabilityService';
 
-const SKILLS_DIR = path.join('.cursor', 'skills');
+const SKILLS_DIR = 'playbook-skills';
 const CACHE_TTL_MS = 60 * 1000;
+
+/** Where a deployed or local process may find `playbook-skills`. */
+export async function resolvePlaybookSkillsDir(): Promise<string | null> {
+  const candidates = [
+    path.resolve(process.cwd(), SKILLS_DIR),
+    path.resolve(__dirname, '..', '..', '..', SKILLS_DIR),
+    path.resolve(__dirname, '..', '..', SKILLS_DIR),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if ((await fs.stat(candidate)).isDirectory()) return candidate;
+    } catch {
+      // This layout does not have the folder. Try the next one.
+    }
+  }
+  return null;
+}
 
 let cache: { expiresAt: number; skills: PlaybookSkillOption[] } | null = null;
 
@@ -55,7 +73,8 @@ export function describePlaybookSkill(relativePath: string, content: string): Pl
 
 export async function listPlaybookSkillOptions(): Promise<PlaybookSkillOption[]> {
   if (cache && cache.expiresAt > Date.now()) return cache.skills;
-  const root = path.resolve(process.cwd(), SKILLS_DIR);
+  const root = await resolvePlaybookSkillsDir();
+  if (!root) return [];
   let entries: string[] = [];
   try {
     entries = (await fs.readdir(root, { withFileTypes: true }))
@@ -66,7 +85,7 @@ export async function listPlaybookSkillOptions(): Promise<PlaybookSkillOption[]>
   }
   const skills: PlaybookSkillOption[] = [];
   for (const folder of entries) {
-    const relativePath = [SKILLS_DIR, folder, 'SKILL.md'].join('/').replace(/\\/g, '/');
+    const relativePath = `${SKILLS_DIR}/${folder}/SKILL.md`;
     try {
       const content = await fs.readFile(path.join(root, folder, 'SKILL.md'), 'utf8');
       skills.push(describePlaybookSkill(relativePath, content));

@@ -44,7 +44,7 @@ const READ_ONLY_PROFILE = 'repository-read-only';
 
 function agentSkill(goal: string): string {
   if (/incident|outage|production|error|exception|self[- ]?heal/i.test(goal)) {
-    return '.cursor/skills/maxview-incident-investigation/SKILL.md';
+    return 'playbook-skills/maxview-incident-investigation/SKILL.md';
   }
   if (/design doc|design document|tech spec/i.test(goal)) {
     return '.cursor/skills/design-doc-validation/SKILL.md';

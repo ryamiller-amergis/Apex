@@ -43,20 +43,40 @@ export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCa
   return [...new Set(capabilities)] as PlaybookCapability[];
 }
 
+/** Graphs saved before the skill moved still name the old path. */
+const MOVED_SKILL_PATHS: Record<string, string> = {
+  '.cursor/skills/maxview-incident-investigation/SKILL.md':
+    'playbook-skills/maxview-incident-investigation/SKILL.md',
+};
+
+function playbookContentRoots(): string[] {
+  return [
+    path.resolve(process.cwd()),
+    path.resolve(__dirname, '..', '..', '..'),
+    path.resolve(__dirname, '..', '..'),
+  ];
+}
+
 export async function loadPlaybookSkillContent(skillPath: string): Promise<string> {
-  const repoRoot = path.resolve(process.cwd());
-  const relativePath = skillPath.replace(/^[/\\]+/, '');
-  const absolutePath = path.resolve(repoRoot, relativePath);
-  if (absolutePath !== repoRoot && !absolutePath.startsWith(`${repoRoot}${path.sep}`)) {
-    throw new PlaybookExecutionCapabilityError('The Skill path leaves the Apex repository.');
+  const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
+  const tried = new Set<string>();
+  for (const root of playbookContentRoots()) {
+    const absolutePath = path.resolve(root, relativePath);
+    if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
+      throw new PlaybookExecutionCapabilityError('The Skill path leaves the Apex repository.');
+    }
+    if (tried.has(absolutePath)) continue;
+    tried.add(absolutePath);
+    try {
+      return await fs.readFile(absolutePath, 'utf8');
+    } catch {
+      // This layout does not have the file. Try the next root.
+    }
   }
-  try {
-    return await fs.readFile(absolutePath, 'utf8');
-  } catch {
-    throw new PlaybookExecutionCapabilityError(
-      `The Playbook Skill "${relativePath}" could not be read to resolve its capability policy.`
-    );
-  }
+  throw new PlaybookExecutionCapabilityError(
+    `The Playbook Skill "${relativePath}" could not be read to resolve its capability policy.`
+  );
 }
 
 export interface ResolvePlaybookAgentRunPolicyInput {

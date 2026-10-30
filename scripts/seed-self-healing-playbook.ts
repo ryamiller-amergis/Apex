@@ -17,7 +17,7 @@ import { createPlaybookTrigger } from '../src/server/services/playbookTriggerSub
 import type { PlaybookGraph } from '../src/shared/types/playbook';
 import { seedDefinition, type DemoDefinition } from './seed-playbook-demos';
 
-const SKILL_PATH = '.cursor/skills/maxview-incident-investigation/SKILL.md';
+const SKILL_PATH = 'playbook-skills/maxview-incident-investigation/SKILL.md';
 const TRIGGER_NAME = 'Nightly at 01:00 UTC';
 
 export const SELF_HEALING_PLAYBOOK: DemoDefinition = {

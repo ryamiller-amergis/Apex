@@ -379,6 +379,9 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
           cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
+          # Agent task Skills. The picker reads playbook-skills/ from the server.
+          cp -r playbook-skills deploy/playbook-skills
+          cp -r playbook-skills deploy/dist/playbook-skills
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 

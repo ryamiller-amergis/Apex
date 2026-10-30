@@ -138,7 +138,7 @@ describe('VT-09 — enqueue, correlate, suspend', () => {
 
   it('does not refuse the investigation Skill for being unnamed by a list', async () => {
     await executeCursorAgentStep(
-      context({ skillPath: '.cursor/skills/maxview-incident-investigation/SKILL.md' })
+      context({ skillPath: 'playbook-skills/maxview-incident-investigation/SKILL.md' })
     ).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).not.toMatch(/may not run Skill/);
