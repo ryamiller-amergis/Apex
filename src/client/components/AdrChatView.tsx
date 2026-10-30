@@ -571,7 +571,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
       duringPreparation: true,
     }).then((sent) => {
-      if (!sent) kickoffSentRef.current = false;
+      if (!sent && !session.sendRejectedRef.current) kickoffSentRef.current = false;
     }).catch(() => {
       kickoffSentRef.current = false;
     });
@@ -671,7 +671,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
       duringPreparation: true,
     }).then((sent) => {
-      if (!sent) kickoffSentRef.current = false;
+      if (!sent && !session.sendRejectedRef.current) kickoffSentRef.current = false;
     }).catch(() => {
       kickoffSentRef.current = false;
     });

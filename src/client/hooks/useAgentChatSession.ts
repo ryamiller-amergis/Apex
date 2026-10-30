@@ -145,6 +145,11 @@ export interface AgentChatSession {
   retryFailedRun: (runId?: string) => Promise<void>;
   /** Failed durable run ID from the stream, if the terminal error carried one. */
   retryableRunId: string | null;
+  /**
+   * True after send returns false because the request was rejected.
+   * Stays false when send returns early and never leaves the browser.
+   */
+  sendRejectedRef: { current: boolean };
   cancel: () => Promise<void>;
 
   // --- Errors ---
@@ -230,6 +235,7 @@ export function useAgentChatSession(
   const [isStopConfirmed, setIsStopConfirmed] = useState(false);
   const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const sendRejectedRef = useRef(false);
   const [optimisticUserMessage, setOptimisticUserMessage] =
     useState<ChatMessage | null>(null);
   /** Immediate Queued/Dispatched from the 202 acceptance before stream events. */
@@ -445,6 +451,7 @@ export function useAgentChatSession(
         if (result === false) return false;
       }
 
+      sendRejectedRef.current = false;
       setSendError(null);
       setIsStopConfirmed(false);
       setIsSending(true);
@@ -512,6 +519,7 @@ export function useAgentChatSession(
           setSendError(msg);
           setOptimisticUserMessage(null);
           clearAwaitingAgentResponse();
+          sendRejectedRef.current = true;
           return false;
         }
 
@@ -551,6 +559,7 @@ export function useAgentChatSession(
         setSendError(msg);
         setOptimisticUserMessage(null);
         clearAwaitingAgentResponse();
+        sendRejectedRef.current = true;
         return false;
       } finally {
         setIsSending(false);
@@ -756,5 +765,6 @@ export function useAgentChatSession(
     // Errors
     sendError,
     clearSendError,
+    sendRejectedRef,
   };
 }
