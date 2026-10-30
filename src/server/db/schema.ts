@@ -125,6 +125,7 @@ import type {
   BuildVerificationKind,
   BuildVerificationStatus,
 } from '../../shared/types/build';
+import type { BuildLaunchSnapshot } from '../../shared/types/buildLaunchSnapshot';
 import type {
   DiagramShareAccess,
   ExcalidrawScene,
@@ -1985,6 +1986,8 @@ export const agentRuns = pgTable('agent_runs', {
   clientTurnHash: text('client_turn_hash'),
   devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
   buildTaskId: uuid('build_task_id').references((): AnyPgColumn => buildTasks.id, { onDelete: 'set null' }),
+  /** Frozen launch input for one build task attempt. Write-once (trigger). */
+  buildLaunchSnapshot: jsonb('build_launch_snapshot').$type<BuildLaunchSnapshot>(),
   workflowClass: text('workflow_class').$type<AgentRunWorkflowClass>(),
   cloudAgentIdentity: text('cloud_agent_identity'),
   cloudAgentManaged: boolean('cloud_agent_managed').notNull().default(false),
@@ -2074,6 +2077,10 @@ export const agentRuns = pgTable('agent_runs', {
   buildTaskClassCheck: check(
     'agent_runs_build_task_class_check',
     sql`${t.buildTaskId} IS NULL OR ${t.workflowClass} = 'build-task'`,
+  ),
+  buildLaunchSnapshotTaskCheck: check(
+    'agent_runs_build_launch_snapshot_task_check',
+    sql`${t.buildLaunchSnapshot} IS NULL OR ${t.buildTaskId} IS NOT NULL`,
   ),
   oneLivePerBuildTask: uniqueIndex('uq_agent_runs_one_live_per_build_task')
     .on(t.buildTaskId)
