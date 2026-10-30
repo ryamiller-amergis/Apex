@@ -138,6 +138,14 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
             await deps.consumer.complete(message.lockToken);
             metrics.increment('orchestrator.result.attempt_replaced');
             return 'processed';
+          case 'run_terminal':
+            // The run already ended (usually a user cancel), and whatever
+            // ended it ran the terminal effects. Leave its header alone.
+            await deps.consumer.complete(message.lockToken);
+            metrics.increment('orchestrator.result.lost_attempt_closed', {
+              runStatus: replacement.runStatus,
+            });
+            return 'processed';
           case 'fence_mismatch':
           case 'not_found':
           case 'illegal_transition':

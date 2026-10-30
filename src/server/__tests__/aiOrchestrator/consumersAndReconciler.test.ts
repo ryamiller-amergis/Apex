@@ -381,6 +381,22 @@ describe('resultConsumer', () => {
       expect(outcomes).toEqual(['complete:lock-lost']);
     });
 
+    it('acknowledges a worker_lost result for a cancelled run without touching it', async () => {
+      const replaceLostAttempt = jest.fn().mockResolvedValue({
+        status: 'run_terminal',
+        lostAttemptId: 'attempt-1',
+        runStatus: 'cancelled',
+      });
+      const transitionAttempt = jest.fn();
+      const { handler, outcomes, applyTerminalRunEffects } =
+        lostResultConsumer({ replaceLostAttempt, transitionAttempt });
+
+      await expect(handler.processOnce()).resolves.toBe('processed');
+      expect(transitionAttempt).not.toHaveBeenCalled();
+      expect(applyTerminalRunEffects).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(['complete:lock-lost']);
+    });
+
     it('dead-letters a worker_lost result with a stale fence', async () => {
       const replaceLostAttempt = jest.fn().mockResolvedValue({
         status: 'fence_mismatch',

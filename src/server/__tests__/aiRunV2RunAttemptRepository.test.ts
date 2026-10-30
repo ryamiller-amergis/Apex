@@ -609,6 +609,7 @@ describe('AI-run V2 run attempt repository', () => {
       const execute = jest
         .fn()
         .mockResolvedValueOnce([lostAttempt])
+        .mockResolvedValueOnce([{ status: 'running' }])
         .mockResolvedValueOnce([retryContext(1)])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([
@@ -679,6 +680,7 @@ describe('AI-run V2 run attempt repository', () => {
       const execute = jest
         .fn()
         .mockResolvedValueOnce([lostAttempt])
+        .mockResolvedValueOnce([{ status: 'running' }])
         .mockResolvedValueOnce([retryContext(AI_RUN_V2_MAX_ATTEMPTS)]);
       const repo = createRunAttemptRepository({
         runInTransaction: async (work) => work({ execute }),
@@ -693,13 +695,47 @@ describe('AI-run V2 run attempt repository', () => {
         status: 'attempts_exhausted',
         attemptCount: AI_RUN_V2_MAX_ATTEMPTS,
       });
-      expect(execute).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenCalledTimes(3);
     });
+
+    it.each(['cancelled', 'completed'] as const)(
+      'fails the lost attempt and leaves a %s header alone',
+      async (runStatus) => {
+        const execute = jest
+          .fn()
+          .mockResolvedValueOnce([lostAttempt])
+          .mockResolvedValueOnce([{ status: runStatus }])
+          .mockResolvedValue([]);
+        const repo = createRunAttemptRepository({
+          runInTransaction: async (work) => work({ execute }),
+        });
+
+        await expect(
+          repo.replaceLostAttempt({
+            attemptId: 'attempt-1',
+            expectedDispatchMessageId: 'dispatch-1',
+          }),
+        ).resolves.toEqual({
+          status: 'run_terminal',
+          lostAttemptId: 'attempt-1',
+          runStatus,
+        });
+        const statements = execute.mock.calls.map(([query]) => sqlText(query));
+        expect(statements).toHaveLength(3);
+        expect(statements[2]).toContain('UPDATE ai_run_attempts');
+        expect(statements[2]).toContain('worker_lost');
+        expect(statements.some((text) => text.includes('UPDATE agent_runs')))
+          .toBe(false);
+        expect(statements.some((text) => text.includes('ai_run_outbox')))
+          .toBe(false);
+      },
+    );
 
     it('writes nothing once the run deadline has passed', async () => {
       const execute = jest
         .fn()
         .mockResolvedValueOnce([lostAttempt])
+        .mockResolvedValueOnce([{ status: 'running' }])
         .mockResolvedValueOnce([retryContext(1, true)]);
       const repo = createRunAttemptRepository({
         runInTransaction: async (work) => work({ execute }),
@@ -711,7 +747,7 @@ describe('AI-run V2 run attempt repository', () => {
           expectedDispatchMessageId: 'dispatch-1',
         }),
       ).resolves.toEqual({ status: 'deadline_elapsed' });
-      expect(execute).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenCalledTimes(3);
     });
 
     it('refuses a stale dispatch fence', async () => {

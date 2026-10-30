@@ -132,6 +132,11 @@ export type ReplaceLostAttemptResult =
       dispatchMessageId: string;
       outboxId: string | null;
     }
+  | {
+      status: 'run_terminal';
+      lostAttemptId: string;
+      runStatus: 'completed' | 'cancelled';
+    }
   | { status: 'attempts_exhausted'; attemptCount: number }
   | { status: 'deadline_elapsed' }
   | { status: 'retry_context_missing' }
@@ -203,8 +208,9 @@ export type RunAttemptRepository = {
   /**
    * Fails a lost attempt and dispatches its replacement in one transaction.
    * The run header goes straight to `dispatched`, never through `failed`, so
-   * nothing reading the header sees the run as over. Every outcome other than
-   * `replaced` writes nothing.
+   * nothing reading the header sees the run as over. If the header is already
+   * completed or cancelled, the lost attempt is failed and the header is left
+   * as it is (`run_terminal`). Every other outcome writes nothing.
    */
   replaceLostAttempt(
     input: ReplaceLostAttemptInput,
@@ -1214,6 +1220,32 @@ export function createRunAttemptRepository(options?: {
             status: 'illegal_transition',
             from: existing.status,
             to: 'failed',
+          };
+        }
+
+        const headerResult = await executor.execute(sql`
+          SELECT status
+          FROM agent_runs
+          WHERE id = ${existing.run_id}
+          FOR UPDATE
+        `);
+        const headerStatus = resultRows<{ status: string }>(headerResult)[0]
+          ?.status;
+        if (headerStatus === 'completed' || headerStatus === 'cancelled') {
+          await executor.execute(sql`
+            UPDATE ai_run_attempts
+            SET
+              status = 'failed',
+              artifact_status = COALESCE(${input.artifactStatus ?? null}, artifact_status),
+              failure_category = 'worker_lost',
+              failure_detail = ${input.failureDetail ?? null},
+              updated_at = now()
+            WHERE id = ${existing.id}
+          `);
+          return {
+            status: 'run_terminal',
+            lostAttemptId: existing.id,
+            runStatus: headerStatus,
           };
         }
 
