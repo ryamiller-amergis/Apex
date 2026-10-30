@@ -297,6 +297,40 @@ describe('BrainstormChatPanel (VT-29)', () => {
     expect(refetch).toHaveBeenCalled();
   });
 
+  it('restores the draft and attachments when send is not accepted', async () => {
+    const send = jest.fn().mockResolvedValue(false);
+    const refetch = jest.fn().mockResolvedValue(undefined);
+    chatHook.mockReturnValue(chat({ send }));
+    messagesHook.mockReturnValue(messages([], refetch));
+    render(<BrainstormChatPanel project="Apex" session={session} />);
+
+    const input = screen.getByTestId('brainstorm-composer-input');
+    fireEvent.change(input, { target: { value: 'Keep this draft' } });
+    const pngFile = new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' });
+    await act(async () => {
+      fireEvent.paste(input, {
+        clipboardData: {
+          items: [
+            {
+              kind: 'file',
+              type: 'image/png',
+              getAsFile: () => pngFile,
+            },
+          ],
+          files: [pngFile],
+        },
+      });
+    });
+    expect(await screen.findByTestId('brainstorm-composer-attachments')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('brainstorm-composer-send'));
+    });
+    expect(send).toHaveBeenCalled();
+    expect(screen.getByTestId('brainstorm-composer-input')).toHaveValue('Keep this draft');
+    expect(screen.getByTestId('brainstorm-composer-attachments')).toBeInTheDocument();
+  });
+
   it('renders the expandable mode picker with icons and subtitles and sets the mode for the next message without auto-triggering a turn', async () => {
     switchTypeMutateAsync.mockClear();
     const send = jest.fn().mockResolvedValue(true);

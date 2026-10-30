@@ -14,6 +14,7 @@ import type {
 import {
   BRAINSTORM_ARTIFACT_TYPE_LABELS,
   BRAINSTORM_UPDATE_ARTIFACT_TOOL,
+  isBrainstormArtifactType,
   type BrainstormTurnIntent,
   type FrozenBrainstormArtifact,
 } from '../../shared/types/brainstormArtifact';
@@ -573,7 +574,6 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
       intent?: BrainstormTurnIntent;
     }): Promise<BrainstormTurnAcceptedResponse> {
       const { session, userId, turnId, text, model, mode, attachments } = input;
-      const intent: BrainstormTurnIntent = input.intent ?? { kind: 'chat' };
       if (!(await deps.isV2TransportEnabled(userId, session.project))) {
         throw new BrainstormError('transport_unavailable', 409);
       }
@@ -592,6 +592,10 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
           deps.prepareTurnContext(session),
           deps.loadArtifact(session),
         ]);
+        const intent: BrainstormTurnIntent = input.intent
+          ?? (mode && isBrainstormArtifactType(mode) && mode !== artifact.type
+            ? { kind: 'type_switch', targetType: mode }
+            : { kind: 'chat' });
         const brainstorm: FrozenBrainstormTurn = {
           sessionId: session.id,
           creatorContext,

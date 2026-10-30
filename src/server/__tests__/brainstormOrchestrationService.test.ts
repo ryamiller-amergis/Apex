@@ -194,6 +194,45 @@ describe('brainstormOrchestrationService.runTurn', () => {
     expect(sent.internalContext).toContain('switched the artifact type to Technical design');
   });
 
+  it('freezes a type-switch when composer mode differs from the current artifact type', async () => {
+    const deps = makeDeps({
+      loadArtifact: jest.fn().mockResolvedValue({ type: null, version: 0, markdown: '' }),
+    });
+    await createBrainstormOrchestrationService(deps).runTurn({
+      session,
+      userId: 'creator',
+      turnId: TURN_ID,
+      text: 'Draft an ADR',
+      mode: 'adr',
+    });
+    const sent = deps.sendTurn.mock.calls[0][0];
+    expect(sent.brainstorm.intent).toEqual({ kind: 'type_switch', targetType: 'adr' });
+    expect(sent.internalContext).toContain('switched the artifact type to ADR');
+  });
+
+  it('keeps chat intent when composer mode matches the current type or is Explore', async () => {
+    const deps = makeDeps();
+    const service = createBrainstormOrchestrationService(deps);
+    await service.runTurn({
+      session,
+      userId: 'creator',
+      turnId: TURN_ID,
+      text: 'Tighten the consequences',
+      mode: 'adr',
+    });
+    expect(deps.sendTurn.mock.calls[0][0].brainstorm.intent).toEqual({ kind: 'chat' });
+
+    deps.sendTurn.mockClear();
+    await service.runTurn({
+      session,
+      userId: 'creator',
+      turnId: TURN_ID,
+      text: 'What should we consider?',
+      mode: 'explore',
+    });
+    expect(deps.sendTurn.mock.calls[0][0].brainstorm.intent).toEqual({ kind: 'chat' });
+  });
+
   it('marks the open row failed when the artifact context cannot load', async () => {
     const deps = makeDeps({ loadArtifact: jest.fn().mockRejectedValue(new Error('db down')) });
     await expect(

@@ -512,7 +512,7 @@ export function useAgentChatSession(
           setSendError(msg);
           setOptimisticUserMessage(null);
           clearAwaitingAgentResponse();
-          return true;
+          return false;
         }
 
         try {
@@ -551,7 +551,7 @@ export function useAgentChatSession(
         setSendError(msg);
         setOptimisticUserMessage(null);
         clearAwaitingAgentResponse();
-        return true;
+        return false;
       } finally {
         setIsSending(false);
       }

@@ -66,11 +66,26 @@ export function retryUnlessClientError(failureCount: number, error: unknown): bo
   return failureCount < 2;
 }
 
+/** Matches the GET /sessions `limit` cap so the locally paged grid can see every row. */
+const BRAINSTORM_SESSION_LIST_PAGE = 200;
+
 export function useBrainstormSessions(project: string) {
   return useQuery({
     queryKey: brainstormKeys.list(project),
     enabled: Boolean(project),
-    queryFn: () => apiFetch<BrainstormSessionListResponse>(brainstormPath(project)),
+    queryFn: async () => {
+      const sessions: BrainstormSessionListResponse['sessions'] = [];
+      let total = 0;
+      do {
+        const page = await apiFetch<BrainstormSessionListResponse>(
+          `${brainstormPath(project)}&limit=${BRAINSTORM_SESSION_LIST_PAGE}&offset=${sessions.length}`,
+        );
+        total = page.total;
+        if (page.sessions.length === 0) break;
+        sessions.push(...page.sessions);
+      } while (sessions.length < total);
+      return { sessions, total };
+    },
     retry: retryUnlessClientError,
   });
 }

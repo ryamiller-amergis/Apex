@@ -330,11 +330,27 @@ describe('useAgentChatSession', () => {
 
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
+    let sent = true;
     await act(async () => {
-      await result.current.send('Hello');
+      sent = await result.current.send('Hello');
     });
 
+    expect(sent).toBe(false);
     expect(result.current.sendError).toBe('Rate limited');
+  });
+
+  it('returns false when send hits a transport error', async () => {
+    (global.fetch as jest.Mock).mockRejectedValue(new TypeError('network interrupted'));
+
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    let sent = true;
+    await act(async () => {
+      sent = await result.current.send('Hello');
+    });
+
+    expect(sent).toBe(false);
+    expect(result.current.sendError).toBe('network interrupted');
   });
 
   it('clearSendError clears the error', async () => {

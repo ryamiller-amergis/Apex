@@ -627,6 +627,7 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
   const handleSend = async () => {
     if (!canSend) return;
     const outgoingAttachments = [...attachments];
+    const previousDraft = draft;
     const text = trimmed || 'Please use the attached files as additional context.';
     speech.stop();
     setPendingText(text);
@@ -637,8 +638,12 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
         mode: composerMode,
         ...(outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {}),
       });
-      if (sent && outgoingAttachments.length > 0) {
-        clearAttachments();
+      if (sent) {
+        if (outgoingAttachments.length > 0) {
+          clearAttachments();
+        }
+      } else {
+        setDraft(previousDraft);
       }
       await refetch();
     } finally {
