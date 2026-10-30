@@ -4,6 +4,7 @@ import type { BuildSuspendReason } from '../../../shared/types/build';
 export const DISPATCH_EVENT_TYPES = {
   taskLaunched: 'task.launched',
   taskLaunchDeferred: 'task.launch_deferred',
+  taskLaunchLost: 'task.launch_lost',
   taskCompleted: 'task.completed',
   taskFailed: 'task.failed',
   taskRequeued: 'task.requeued',

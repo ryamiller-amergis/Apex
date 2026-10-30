@@ -55,24 +55,27 @@ async function seedRun(options: { status?: string; parallelismCap?: number; susp
 }
 
 async function seedTask(revisionId: string, key: string, status: string, blockers: string[] = [],
-  options: { launched?: boolean; branch?: string } = {}): Promise<string> {
+  options: { launched?: boolean; branch?: string; startedMsAgo?: number } = {}): Promise<string> {
   const [row] = await query<{ id: string }>(
     `INSERT INTO build_tasks (build_revision_id, task_key, role, depends_on, run_mode, status, started_at, branch_name)
-     VALUES ($1, $2, 'implementer', $3::jsonb, 'own_agent', $4, $5, $6) RETURNING id`,
+     VALUES ($1, $2, 'implementer', $3::jsonb, 'own_agent', $4, now() - $5::interval, $6) RETURNING id`,
     [revisionId, key, JSON.stringify(blockers), status,
-      options.launched || status === 'running' || status === 'merged' ? new Date(Date.now() - 60_000).toISOString() : null,
+      options.launched || status === 'running' || status === 'merged' ? `${options.startedMsAgo ?? 60_000} milliseconds` : null,
       options.branch ?? null],
   );
   return row.id;
 }
 
-async function seedAgentRun(taskId: string, status: string): Promise<string> {
+async function seedAgentRun(taskId: string, status: string,
+  options: { startedMsAgo?: number; cursorIds?: boolean } = {}): Promise<string> {
+  const ids = options.cursorIds ?? true;
   const [row] = await query<{ id: string }>(
     `INSERT INTO agent_runs (thread_id, status, project_id, lane, owner_instance, build_task_id, workflow_class,
        cloud_agent_identity, dispatch_message_id, timeout_at, started_at)
-     VALUES ($1, $2, 'Apex', 'cloud-agent', 'apex-build-agent', $3, 'build-task', 'bc-1', 'msg-1', $4, now())
+     VALUES ($1, $2, 'Apex', 'cloud-agent', 'apex-build-agent', $3, 'build-task', $4, $5, $6, now() - $7::interval)
      RETURNING id`,
-    [`build-task:${taskId}`, status, taskId, FUTURE],
+    [`build-task:${taskId}`, status, taskId, ids ? 'bc-1' : null, ids ? 'msg-1' : null, FUTURE,
+      `${options.startedMsAgo ?? 0} milliseconds`],
   );
   return row.id;
 }
@@ -281,6 +284,70 @@ describe('VT-19 resume after the flag comes back (dispatcher half)', () => {
       ['b', 'running', 2, `${taskBranchName(runId, 'b')}-2`],
       ['c', 'running', 2, `${taskBranchName(runId, 'c')}-2`],
     ]);
+  });
+});
+
+describe('launch lost to a crash between claim and launch', () => {
+  const LONG_AGO = 10 * 60_000;
+
+  it('resets stale claims with no usable agent run and relaunches them; a recent claim is left alone', async () => {
+    const { runId, revisionId } = await seedRun();
+    const a = await seedTask(revisionId, 'a', 'running', [], { startedMsAgo: LONG_AGO });
+    const b = await seedTask(revisionId, 'b', 'running', [], { startedMsAgo: LONG_AGO });
+    await seedTask(revisionId, 'c', 'running');
+    const stuck = await seedAgentRun(b, 'queued', { cursorIds: false });
+    const svc = services();
+
+    await expect(svc.reconcile()).resolves.toMatchObject({ launchesRecovered: 2, errors: 0 });
+
+    expect(svc.cancelAgent.mock.calls.map(([row]) => row.id)).toEqual([stuck]);
+    expect(svc.launches.map((request) => request.tasks[0].id).sort()).toEqual([a, b].sort());
+    expect((await taskRows(revisionId)).map((row) => [row.task_key, row.status, row.attempt])).toEqual([
+      ['a', 'running', 2], ['b', 'running', 2], ['c', 'running', 1],
+    ]);
+    const lost = await query(
+      `SELECT 1 FROM build_events WHERE build_run_id = $1 AND event_type = 'task.launch_lost'`, [runId]);
+    expect(lost).toHaveLength(2);
+    const [revision] = await query<{ repair_attempts: number }>(
+      `SELECT repair_attempts FROM build_revisions WHERE id = $1`, [revisionId]);
+    expect(revision.repair_attempts).toBe(0);
+  });
+
+  it('does not apply a finished agent run from an earlier attempt to the current one', async () => {
+    const { revisionId } = await seedRun();
+    const a = await seedTask(revisionId, 'a', 'running', [], { startedMsAgo: LONG_AGO });
+    await seedAgentRun(a, 'completed', { startedMsAgo: 2 * LONG_AGO });
+    const svc = services();
+
+    await svc.reconcile();
+
+    expect(svc.requestMerge).not.toHaveBeenCalled();
+    expect((await taskRows(revisionId)).map((row) => [row.status, row.attempt])).toEqual([['running', 2]]);
+  });
+});
+
+describe('run lock', () => {
+  it('a suspend waits for a completion decision that holds the run lock', async () => {
+    const { runId } = await seedRun();
+    const store = storeModule.createDrizzleDispatchStore();
+    let release!: () => void;
+    let acquired!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const lockTaken = new Promise<void>((resolve) => { acquired = resolve; });
+    const decision = store.withRunLock(runId, async () => {
+      acquired();
+      await held;
+    });
+    await lockTaken;
+
+    const suspend = store.suspend(runId, 'flag_disabled');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const [during] = await query<{ status: string }>(`SELECT status FROM build_runs WHERE id = $1`, [runId]);
+    release();
+    await decision;
+
+    await expect(suspend).resolves.toBe(true);
+    expect(during.status).toBe('building');
   });
 });
 

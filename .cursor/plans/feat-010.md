@@ -24,11 +24,18 @@ Context pack: `.ai-pilot/local-dev/feat-010/`. Skill: dev-orchestrator (local mo
 
 ## Tests
 - `src/server/__tests__/buildDispatcher.test.ts`, `buildDispatchLaunchGuard.test.ts`, `buildDispatchFlow.test.ts`, `buildReconciliationScheduler.test.ts`, `buildFlagRouteAccess.test.ts`
-- `tests/integration/build-dispatch.integration.test.ts` (VT-10, 15, 16, 17, 19)
+- `tests/integration/build-dispatch.integration.test.ts` (VT-10, 15, 16, 17, 19, lost-launch recovery, run lock)
 
 ## Status
-- [x] S1–S9 done. tsc server clean; 120 related unit tests pass; 6 integration tests pass on local Postgres; ESLint 0 errors; codemap check OK.
-- Not committed or pushed.
+- [x] S1–S9 done. Pushed; PR #265 open.
+- [x] Bugbot fixes on PR #265:
+  - Completion decisions re-read the run and task under the run lock (`withRunLock`), which `suspend` and `claim` also take. Merge and the failure policy run after the lock.
+  - The sweep resets heads claimed over `LAUNCH_GRACE_MS` (5 min) ago that have no agent run since the claim, or only a queued one without Cursor IDs. It writes `task.launch_lost` and uses no repair attempt.
+  - `claim` stamps `started_at` with the database clock, so `currentAgentRunForTask` can compare it with `agent_runs.started_at`.
+
+## Rules for port implementers
+- `mayReportDone` runs under the run lock and must not suspend the run.
+- `requestMerge` must ignore repeats and must not merge into a run that is no longer building.
 
 ## Open follow-ups (other features)
 - FEAT-011: call `registerBuildDispatchPorts({ buildCandidate, mayReportDone })`. Until then every launch suspends the run with `configuration`.

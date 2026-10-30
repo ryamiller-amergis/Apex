@@ -5,7 +5,7 @@
 import { isAgentRunTerminalStatus } from '../../../shared/types/agentRunLifecycle';
 import type { CloudAgentRunObservation } from '../cursorCloudAgentClient';
 import { DISPATCH_EVENT_TYPES } from './dispatchEvents';
-import type { DispatchStore, DispatchTaskRow } from './dispatchStore';
+import { canObserveAgentRun, type DispatchStore, type DispatchTaskRow } from './dispatchStore';
 import type { TaskFailurePolicy } from './taskFailure';
 
 export type CompletionOutcome =
@@ -30,9 +30,9 @@ export interface CompletionDeps {
   store: DispatchStore;
   observe: (target: CloudAgentTarget) => Promise<CloudAgentRunObservation>;
   markTerminal: (agentRunId: string, status: TerminalStatus, dispatchMessageId: string | null) => Promise<void>;
-  /** True when every task in the unit has red evidence, green evidence, and a test reference. */
+  /** True when every task in the unit has red evidence, green evidence, and a test reference. Runs under the run lock, so it must not suspend. */
   mayReportDone: (input: { buildRunId: string; taskIds: string[] }) => Promise<boolean>;
-  /** Must ignore a repeat for a task already merged. */
+  /** Must ignore a repeat for a task already merged, and must not merge into a run that is no longer building. */
   requestMerge: (input: { buildRunId: string; headTaskId: string; taskIds: string[] }) => Promise<void>;
   failTask: TaskFailurePolicy;
   dispatchNext: (buildRunId: string) => Promise<unknown>;
@@ -69,35 +69,25 @@ function unitMembers(head: DispatchTaskRow, tasks: DispatchTaskRow[]): DispatchT
   return tasks.filter((task) => (task.chainHeadKey ?? task.key) === (head.chainHeadKey ?? head.key));
 }
 
+type Decision =
+  | { kind: 'done'; outcome: CompletionOutcome }
+  | { kind: 'merge'; buildRunId: string; headTaskId: string; taskIds: string[]; inserted: boolean }
+  | { kind: 'fail'; buildRunId: string; revisionId: string; headKey: string; taskIds: string[] };
+
 export function createCompletionHandler(deps: CompletionDeps): (input: { agentRunId: string }) => Promise<CompletionOutcome> {
   const { store } = deps;
+  const done = (outcome: CompletionOutcome): Decision => ({ kind: 'done', outcome });
 
-  const apply = async (agentRunId: string): Promise<CompletionOutcome> => {
-    const agentRun = await store.loadAgentRun(agentRunId);
-    if (!agentRun) return 'ignored_unknown_run';
-    const context = await store.loadTaskContext(agentRun.buildTaskId);
-    if (!context) return 'ignored_unknown_run';
+  /** Reads the run and task fresh under the run lock, so a suspend cannot land between the read and the write. */
+  const decide = async (agentRunId: string, taskId: string, status: TerminalStatus): Promise<Decision> => {
+    const context = await store.loadTaskContext(taskId);
+    if (!context) return done('ignored_unknown_run');
     const run = await store.loadRun(context.buildRunId);
-    if (!run) return 'ignored_unknown_run';
+    if (!run) return done('ignored_unknown_run');
 
-    let status: TerminalStatus;
-    if (isAgentRunTerminalStatus(agentRun.status)) {
-      status = agentRun.status;
-    } else {
-      if (!agentRun.projectId || !agentRun.cloudAgentIdentity || !agentRun.dispatchMessageId) return 'not_settled';
-      const observed = await deps.observe({
-        project: agentRun.projectId,
-        cloudAgentId: agentRun.cloudAgentIdentity,
-        cursorRunId: agentRun.dispatchMessageId,
-      });
-      if (!observed.settled) return 'not_settled';
-      status = terminalStatusFromObservation(observed.status);
-      await deps.markTerminal(agentRunId, status, agentRun.dispatchMessageId);
-    }
-
-    const latest = await store.latestAgentRunForTask(context.task.id);
-    if (latest?.id !== agentRunId) return 'ignored_superseded';
-    if (run.status === 'accepted' || run.status === 'cancelled' || run.status === 'failed') return 'recorded_only';
+    const current = await store.currentAgentRunForTask(context.task.id);
+    if (current?.id !== agentRunId) return done('ignored_superseded');
+    if (run.status === 'accepted' || run.status === 'cancelled' || run.status === 'failed') return done('recorded_only');
 
     const members = unitMembers(context.task, await store.loadPlanTasks(context.revisionId));
     const memberIds = members.map((task) => task.id);
@@ -114,11 +104,11 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
         correlation: { kind: 'agent_run', id: agentRunId },
         dedupeKey,
       });
-      return 'discarded';
+      return done('discarded');
     }
 
-    if (context.task.status === 'merged') return 'already_applied';
-    if (context.task.status !== 'running') return 'ignored_superseded';
+    if (context.task.status === 'merged') return done('already_applied');
+    if (context.task.status !== 'running') return done('ignored_superseded');
 
     if (status === 'completed' && await deps.mayReportDone({ buildRunId: run.id, taskIds: memberIds })) {
       const inserted = await store.appendEvent({
@@ -130,21 +120,59 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
         correlation: { kind: 'agent_run', id: agentRunId },
         dedupeKey,
       });
-      await deps.requestMerge({ buildRunId: run.id, headTaskId: context.task.id, taskIds: memberIds });
-      return inserted ? 'finished' : 'already_applied';
+      return { kind: 'merge', buildRunId: run.id, headTaskId: context.task.id, taskIds: memberIds, inserted };
+    }
+    return { kind: 'fail', buildRunId: run.id, revisionId: context.revisionId, headKey: context.task.key, taskIds: memberIds };
+  };
+
+  const apply = async (agentRunId: string): Promise<CompletionOutcome> => {
+    const agentRun = await store.loadAgentRun(agentRunId);
+    if (!agentRun) return 'ignored_unknown_run';
+    const owner = await store.loadTaskContext(agentRun.buildTaskId);
+    if (!owner) return 'ignored_unknown_run';
+
+    let status: TerminalStatus;
+    if (isAgentRunTerminalStatus(agentRun.status)) {
+      status = agentRun.status;
+    } else {
+      if (!canObserveAgentRun(agentRun)) return 'not_settled';
+      const observed = await deps.observe({
+        project: agentRun.projectId,
+        cloudAgentId: agentRun.cloudAgentIdentity,
+        cursorRunId: agentRun.dispatchMessageId,
+      });
+      if (!observed.settled) return 'not_settled';
+      status = terminalStatusFromObservation(observed.status);
+      await deps.markTerminal(agentRunId, status, agentRun.dispatchMessageId);
     }
 
-    const result = await deps.failTask({
-      buildRunId: run.id,
-      revisionId: context.revisionId,
-      headKey: context.task.key,
-      taskIds: memberIds,
-      detail: failureDetail(status),
-      dedupeKey,
-    });
-    if (result === 'already_handled') return 'already_applied';
-    if (result === 'requeued') await deps.dispatchNext(run.id);
-    return 'failed';
+    const decision = await store.withRunLock(owner.buildRunId, () => decide(agentRunId, agentRun.buildTaskId, status));
+    switch (decision.kind) {
+      case 'done':
+        return decision.outcome;
+      case 'merge':
+        // Outside the lock: the merge is slow, and the completion it acts on is already recorded.
+        await deps.requestMerge({ buildRunId: decision.buildRunId, headTaskId: decision.headTaskId, taskIds: decision.taskIds });
+        return decision.inserted ? 'finished' : 'already_applied';
+      case 'fail': {
+        // Outside the lock because the policy may suspend. It only moves running tasks, so a reset since the decision makes it a no-op.
+        const result = await deps.failTask({
+          buildRunId: decision.buildRunId,
+          revisionId: decision.revisionId,
+          headKey: decision.headKey,
+          taskIds: decision.taskIds,
+          detail: failureDetail(status),
+          dedupeKey: `completion:${agentRunId}`,
+        });
+        if (result === 'already_handled') return 'already_applied';
+        if (result === 'requeued') await deps.dispatchNext(decision.buildRunId);
+        return 'failed';
+      }
+      default: {
+        const exhaustive: never = decision;
+        return exhaustive;
+      }
+    }
   };
 
   return async ({ agentRunId }) => {

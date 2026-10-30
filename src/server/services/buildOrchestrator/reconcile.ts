@@ -7,8 +7,18 @@ import { isAgentRunTerminalStatus } from '../../../shared/types/agentRunLifecycl
 import { BUILD_PLAN_TASK_ROLES } from '../../../shared/types/build';
 import type { CompletionOutcome } from './applyCompletion';
 import { DISPATCH_EVENT_TYPES } from './dispatchEvents';
-import { AGENT_STAGE_STATUSES, type BuildAgentRunRow, type DispatchRunRow, type DispatchStore } from './dispatchStore';
+import {
+  AGENT_STAGE_STATUSES,
+  canObserveAgentRun,
+  type BuildAgentRunRow,
+  type DispatchRunRow,
+  type DispatchStore,
+  type RunningHead,
+} from './dispatchStore';
 import type { BuildFlagState, GuardRun } from './launchGuard';
+
+/** How long a claimed task may go without a launched agent before the sweep treats the launch as lost. */
+export const LAUNCH_GRACE_MS = 5 * 60_000;
 
 export interface BuildSweepOutcome {
   startedAt: string;
@@ -17,6 +27,7 @@ export interface BuildSweepOutcome {
   skipped: boolean;
   flagSuspended: number;
   completionsApplied: number;
+  launchesRecovered: number;
   cancelRetries: number;
   dispatched: number;
   errors: number;
@@ -89,6 +100,31 @@ export function createBuildReconciler(deps: ReconcileDeps): () => Promise<BuildS
     await store.resetToReady(runningTaskIds);
   };
 
+  /**
+   * A claim commits before the launch, so a crash in between leaves a running task with no
+   * agent, or with a queued agent that never got its Cursor IDs. Neither will ever complete.
+   * The task goes back to ready without using a repair attempt.
+   */
+  const recoverLostLaunch = async (head: RunningHead): Promise<boolean> => {
+    const current = await store.currentAgentRunForTask(head.taskId);
+    if (current && (isAgentRunTerminalStatus(current.status) || canObserveAgentRun(current))) return false;
+    if (current) await deps.cancelAgent(current);
+    const taskIds = (await store.loadPlanTasks(head.revisionId))
+      .filter((task) => (task.chainHeadKey ?? task.key) === head.key)
+      .map((task) => task.id);
+    if (await store.resetToReady(taskIds) === 0) return false;
+    await store.appendEvent({
+      buildRunId: head.buildRunId,
+      buildRevisionId: head.revisionId,
+      eventType: DISPATCH_EVENT_TYPES.taskLaunchLost,
+      severity: 'warn',
+      message: `Apex stopped while starting task ${head.key}. It will start again.`,
+      detail: { taskKey: head.key, attempt: head.attempt },
+      dedupeKey: `launch_lost:${head.taskId}:${head.attempt}`,
+    });
+    return true;
+  };
+
   return async () => {
     const startedMs = now();
     const outcome: BuildSweepOutcome = {
@@ -97,6 +133,7 @@ export function createBuildReconciler(deps: ReconcileDeps): () => Promise<BuildS
       skipped: false,
       flagSuspended: 0,
       completionsApplied: 0,
+      launchesRecovered: 0,
       cancelRetries: 0,
       dispatched: 0,
       errors: 0,
@@ -127,6 +164,12 @@ export function createBuildReconciler(deps: ReconcileDeps): () => Promise<BuildS
         });
       }
 
+      for (const head of await store.listRunningHeadsClaimedBefore(LAUNCH_GRACE_MS)) {
+        await attempt(`launch recovery for ${head.taskId}`, async () => {
+          if (await recoverLostLaunch(head)) outcome.launchesRecovered += 1;
+        });
+      }
+
       for (const run of await store.listRunsSuspendedFor('flag_disabled')) {
         await attempt(`cancel retry for ${run.id}`, async () => {
           const { agentRuns } = await liveAgentRuns(run, false);
@@ -152,6 +195,7 @@ export function createBuildReconciler(deps: ReconcileDeps): () => Promise<BuildS
       durationMs: outcome.durationMs,
       flagSuspended: outcome.flagSuspended,
       completionsApplied: outcome.completionsApplied,
+      launchesRecovered: outcome.launchesRecovered,
       cancelRetries: outcome.cancelRetries,
       dispatched: outcome.dispatched,
       errors: outcome.errors,

@@ -12,6 +12,7 @@ const OUTCOME: BuildSweepOutcome = {
   skipped: false,
   flagSuspended: 0,
   completionsApplied: 0,
+  launchesRecovered: 0,
   cancelRetries: 0,
   dispatched: 0,
   errors: 0,

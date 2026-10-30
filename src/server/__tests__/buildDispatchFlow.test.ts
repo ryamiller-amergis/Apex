@@ -26,7 +26,8 @@ import {
 const RUN_ID = 'run-1';
 const REVISION_ID = 'rev-1';
 
-type MemoryTask = DispatchTaskRow & { revisionId: string; startedAt: string | null };
+/** `claimSeq` stands in for started_at: agent runs with a higher seq started after the claim. */
+type MemoryTask = DispatchTaskRow & { revisionId: string; startedAt: string | null; claimSeq: number; claimedAtMs: number };
 type MemoryAgentRun = BuildAgentRunRow & { seq: number };
 
 /** Follows the same conditional-update rules as the Drizzle store. */
@@ -37,6 +38,7 @@ class MemoryDispatchStore implements DispatchStore {
   events: AppendBuildEventInput[] = [];
   repairAttempts = new Map<string, number>();
   sweepLocked = false;
+  nowMs = 60 * 60_000;
   private seq = 0;
 
   addRun(overrides: Partial<DispatchRunRow> = {}): DispatchRunRow {
@@ -67,12 +69,14 @@ class MemoryDispatchStore implements DispatchStore {
       branchName: null,
       revisionId: REVISION_ID,
       startedAt: status === 'running' || status === 'merged' ? '2026-10-30T00:00:00.000Z' : null,
+      claimSeq: 0,
+      claimedAtMs: this.nowMs,
     };
     this.tasks.push(row);
     return row;
   }
 
-  addAgentRun(taskId: string, status = 'running'): string {
+  addAgentRun(taskId: string, status = 'running', withCursorIds = true): string {
     this.seq += 1;
     const id = `agent-${this.seq}`;
     this.agentRuns.push({
@@ -80,8 +84,8 @@ class MemoryDispatchStore implements DispatchStore {
       status,
       buildTaskId: taskId,
       projectId: 'Apex',
-      cloudAgentIdentity: `bc-${id}`,
-      dispatchMessageId: `msg-${id}`,
+      cloudAgentIdentity: withCursorIds ? `bc-${id}` : null,
+      dispatchMessageId: withCursorIds ? `msg-${id}` : null,
       seq: this.seq,
     });
     return id;
@@ -115,7 +119,7 @@ class MemoryDispatchStore implements DispatchStore {
   }
 
   private strip(row: MemoryTask): DispatchTaskRow {
-    const { revisionId: _revisionId, startedAt: _startedAt, ...rest } = row;
+    const { revisionId: _revisionId, startedAt: _startedAt, claimSeq: _claimSeq, claimedAtMs: _claimedAtMs, ...rest } = row;
     return { ...rest, blockers: [...rest.blockers] };
   }
 
@@ -154,6 +158,14 @@ class MemoryDispatchStore implements DispatchStore {
     return rows[0] ? this.strippedAgent(rows[0]) : null;
   }
 
+  async currentAgentRunForTask(taskId: string) {
+    const task = this.tasks.find((row) => row.id === taskId);
+    const rows = this.agentRuns
+      .filter((row) => row.buildTaskId === taskId && row.seq > (task?.claimSeq ?? 0))
+      .sort((a, b) => b.seq - a.seq);
+    return rows[0] ? this.strippedAgent(rows[0]) : null;
+  }
+
   async promote(taskIds: string[]) {
     this.move(taskIds, 'pending', 'ready');
   }
@@ -172,6 +184,8 @@ class MemoryDispatchStore implements DispatchStore {
       row.status = 'running';
       row.attempt = attempt;
       row.startedAt = '2026-10-30T01:00:00.000Z';
+      row.claimSeq = this.seq;
+      row.claimedAtMs = this.nowMs;
     }
     head.branchName = branchName;
     return { attempt, branchName };
@@ -229,10 +243,22 @@ class MemoryDispatchStore implements DispatchStore {
     for (const row of this.tasks) {
       if (row.status !== 'running' || (row.chainHeadKey ?? row.key) !== row.key) continue;
       if (row.role !== 'implementer' && row.role !== 'qa') continue;
-      const latest = await this.latestAgentRunForTask(row.id);
-      if (latest) ids.push(latest.id);
+      const current = await this.currentAgentRunForTask(row.id);
+      if (current) ids.push(current.id);
     }
     return ids;
+  }
+
+  async listRunningHeadsClaimedBefore(olderThanMs: number) {
+    return this.tasks
+      .filter((row) => row.status === 'running' && (row.role === 'implementer' || row.role === 'qa')
+        && (row.chainHeadKey ?? row.key) === row.key && row.claimedAtMs < this.nowMs - olderThanMs
+        && this.runs.get(RUN_ID)?.status === 'building')
+      .map((row) => ({ buildRunId: RUN_ID, revisionId: row.revisionId, taskId: row.id, key: row.key, attempt: row.attempt }));
+  }
+
+  async withRunLock<T>(_buildRunId: string, fn: () => Promise<T>) {
+    return fn();
   }
 
   async withSweepLock<T>(fn: () => Promise<T>) {
@@ -588,6 +614,33 @@ describe('applyAgentCompletion (TBI-019)', () => {
     expect(h.store.events).toHaveLength(0);
   });
 
+  it('a flag-off sweep that lands while Cursor is being asked wins: the result is discarded, not merged', async () => {
+    const h = harness();
+    const agentRunId = runningTask(h, 'running');
+    h.observe.mockImplementationOnce(async () => {
+      await h.store.suspend(RUN_ID, 'flag_disabled');
+      await h.store.resetToReady(['task-a']);
+      return { status: 'finished', prUrl: null, resultText: null, settled: true };
+    });
+
+    await expect(h.applyCompletion({ agentRunId })).resolves.toBe('discarded');
+
+    expect(h.requestMerge).not.toHaveBeenCalled();
+    expect(h.mayReportDone).not.toHaveBeenCalled();
+    expect(h.store.task('a').status).toBe('ready');
+  });
+
+  it('a result from an earlier attempt is ignored once the task has been claimed again', async () => {
+    const h = harness();
+    h.store.addRun();
+    h.store.addTask('a', 'running');
+    const earlier = h.store.addAgentRun('task-a', 'failed');
+    h.store.task('a').claimSeq = 99;
+
+    await expect(h.applyCompletion({ agentRunId: earlier })).resolves.toBe('ignored_superseded');
+    expect(h.store.events).toHaveLength(0);
+  });
+
   it('discards the result while the run is suspended for the flag', async () => {
     const h = harness();
     const agentRunId = runningTask(h);
@@ -720,6 +773,64 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
 
     expect(h.requestMerge).toHaveBeenCalledTimes(1);
     expect(h.launches.map((request) => request.unit.headKey)).toEqual(['c']);
+  });
+
+  describe('launch lost to a crash between claim and launch', () => {
+    function claimedLongAgo(h: ReturnType<typeof harness>, key = 'a') {
+      h.store.addRun({ parallelismCap: 1 });
+      const task = h.store.addTask(key, 'running');
+      task.claimedAtMs = 0;
+      return task;
+    }
+
+    it('a task with no agent run goes back to ready, without a repair attempt, and relaunches', async () => {
+      const h = harness();
+      claimedLongAgo(h);
+      h.store.addTask('b', 'ready');
+
+      const outcome = await h.reconcile();
+
+      expect(outcome.launchesRecovered).toBe(1);
+      expect(h.store.repairAttempts.get(REVISION_ID)).toBeUndefined();
+      expect(h.store.eventTypes()).toEqual(['task.launch_lost', 'task.launched']);
+      expect(h.launches.map((request) => [request.unit.headKey, request.attempt])).toEqual([['a', 2]]);
+    });
+
+    it('a queued agent run that never got its Cursor IDs is cancelled before the task is reset', async () => {
+      const h = harness();
+      claimedLongAgo(h);
+      const stuck = h.store.addAgentRun('task-a', 'queued', false);
+
+      await h.reconcile();
+
+      expect(h.cancelAgent.mock.calls.map(([agentRun]) => agentRun.id)).toEqual([stuck]);
+      expect(h.store.eventTypes()[0]).toBe('task.launch_lost');
+      expect(h.launches).toHaveLength(1);
+    });
+
+    it('an agent run from an earlier attempt does not count as this attempt\'s agent', async () => {
+      const h = harness();
+      const task = claimedLongAgo(h);
+      h.store.addAgentRun('task-a', 'failed');
+      task.claimSeq = 99;
+
+      await h.reconcile();
+
+      expect(h.store.eventTypes()).toEqual(['task.launch_lost', 'task.launched']);
+    });
+
+    it('leaves a recent claim and a live agent alone', async () => {
+      const h = harness();
+      const live = claimedLongAgo(h, 'b');
+      h.store.addAgentRun(live.id, 'running');
+      h.store.addTask('a', 'running');
+
+      const outcome = await h.reconcile();
+
+      expect(outcome.launchesRecovered).toBe(0);
+      expect([h.store.task('a').status, h.store.task('b').status]).toEqual(['running', 'running']);
+      expect(h.cancelAgent).not.toHaveBeenCalled();
+    });
   });
 
   it('skips the pass when another instance holds the sweep lock', async () => {

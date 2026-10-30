@@ -54,6 +54,23 @@ export interface BuildAgentRunRow {
   dispatchMessageId: string | null;
 }
 
+/** False while the launch has not recorded its Cursor IDs, so there is nothing to observe yet. */
+export function canObserveAgentRun(agentRun: BuildAgentRunRow): agentRun is BuildAgentRunRow & {
+  projectId: string;
+  cloudAgentIdentity: string;
+  dispatchMessageId: string;
+} {
+  return Boolean(agentRun.projectId && agentRun.cloudAgentIdentity && agentRun.dispatchMessageId);
+}
+
+export interface RunningHead {
+  buildRunId: string;
+  revisionId: string;
+  taskId: string;
+  key: string;
+  attempt: number;
+}
+
 export interface ClaimRequest {
   buildRunId: string;
   revisionId: string;
@@ -79,6 +96,8 @@ export interface DispatchStore {
   loadTaskContext(taskId: string): Promise<{ task: DispatchTaskRow; buildRunId: string; revisionId: string } | null>;
   loadAgentRun(agentRunId: string): Promise<BuildAgentRunRow | null>;
   latestAgentRunForTask(taskId: string): Promise<BuildAgentRunRow | null>;
+  /** Latest agent run started since the task's current claim. Runs from earlier attempts are not returned. */
+  currentAgentRunForTask(taskId: string): Promise<BuildAgentRunRow | null>;
   /** `pending` to `ready`. */
   promote(taskIds: string[]): Promise<void>;
   /** Locks the run, rechecks free slots, and moves every member from `ready` to `running`. */
@@ -90,13 +109,20 @@ export interface DispatchStore {
   /** `failed` to `ready`. */
   requeue(taskIds: string[]): Promise<number>;
   consumeRepairAttempt(revisionId: string): Promise<RepairAttemptResult>;
-  /** Suspends an active run and writes its timeline event. False when the run was not active. */
+  /**
+   * Suspends an active run and writes its timeline event. False when the run was not active.
+   * Takes the run lock, so it must not be called from inside `withRunLock`.
+   */
   suspend(buildRunId: string, reason: BuildSuspendReason): Promise<boolean>;
   appendEvent(input: AppendBuildEventInput): Promise<boolean>;
   listRuns(statuses: readonly BuildRunStatus[]): Promise<DispatchRunRow[]>;
   listRunsSuspendedFor(reason: BuildSuspendReason): Promise<DispatchRunRow[]>;
-  /** Most recent agent run of every running plan task that heads its unit. */
+  /** Current agent run of every running plan task that heads its unit. */
   listRunningHeadAgentRunIds(): Promise<string[]>;
+  /** Running plan heads of building runs whose claim is older than `olderThanMs`. */
+  listRunningHeadsClaimedBefore(olderThanMs: number): Promise<RunningHead[]>;
+  /** Runs `fn` while holding the run lock that `claim` and `suspend` also take. */
+  withRunLock<T>(buildRunId: string, fn: () => Promise<T>): Promise<T>;
   /** Runs `fn` while holding the sweep lock. Null when another instance holds it. */
   withSweepLock<T>(fn: () => Promise<T>): Promise<T | null>;
   loadUserEmail(userId: string): Promise<string | null>;
@@ -159,6 +185,12 @@ async function loadRunRows(where: SQL | undefined): Promise<DispatchRunRow[]> {
   return rows.map((row) => ({ ...row, suspendReason: row.suspendReason ?? null, revisionId: row.revisionId ?? null }));
 }
 
+function runLock(buildRunId: string): SQL {
+  return sql`SELECT pg_advisory_xact_lock(hashtext(${`apex_build_dispatch:${buildRunId}`}))`;
+}
+
+const isUnitHead = sql`(${buildTasks.chainHeadKey} IS NULL OR ${buildTasks.chainHeadKey} = ${buildTasks.taskKey})`;
+
 class ClaimLostError extends Error {}
 
 export function createDrizzleDispatchStore(): DispatchStore {
@@ -175,6 +207,15 @@ export function createDrizzleDispatchStore(): DispatchStore {
   const latestAgentRunForTask = async (taskId: string): Promise<BuildAgentRunRow | null> => {
     const [row] = await db.select(agentRunColumns).from(agentRuns)
       .where(eq(agentRuns.buildTaskId, taskId))
+      .orderBy(desc(agentRuns.startedAt), desc(agentRuns.id))
+      .limit(1);
+    return row ? toAgentRunRow(row) : null;
+  };
+
+  const currentAgentRunForTask = async (taskId: string): Promise<BuildAgentRunRow | null> => {
+    const [row] = await db.select(agentRunColumns).from(agentRuns)
+      .innerJoin(buildTasks, eq(buildTasks.id, agentRuns.buildTaskId))
+      .where(and(eq(agentRuns.buildTaskId, taskId), sql`${agentRuns.startedAt} >= ${buildTasks.startedAt}`))
       .orderBy(desc(agentRuns.startedAt), desc(agentRuns.id))
       .limit(1);
     return row ? toAgentRunRow(row) : null;
@@ -213,6 +254,7 @@ export function createDrizzleDispatchStore(): DispatchStore {
     },
 
     latestAgentRunForTask,
+    currentAgentRunForTask,
 
     async promote(taskIds) {
       await moveTasks(taskIds, 'pending', 'ready');
@@ -221,7 +263,7 @@ export function createDrizzleDispatchStore(): DispatchStore {
     async claim(request) {
       try {
         return await db.transaction(async (tx) => {
-          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`apex_build_dispatch:${request.buildRunId}`}))`);
+          await tx.execute(runLock(request.buildRunId));
           const [counted] = await tx
             .select({ running: countDistinct(sql`coalesce(${buildTasks.chainHeadKey}, ${buildTasks.taskKey})`) })
             .from(buildTasks)
@@ -240,8 +282,9 @@ export function createDrizzleDispatchStore(): DispatchStore {
           const branchName = `${taskBranchName(request.buildRunId, request.headKey)}-${attempt}`;
           const now = new Date().toISOString();
 
+          // Database clock, so it compares cleanly with agent_runs.started_at in currentAgentRunForTask.
           const claimed = await tx.update(buildTasks)
-            .set({ status: 'running', attempt, startedAt: now, completedAt: null, updatedAt: now })
+            .set({ status: 'running', attempt, startedAt: sql`now()`, completedAt: null, updatedAt: now })
             .where(and(inArray(buildTasks.id, request.taskIds), eq(buildTasks.status, 'ready')))
             .returning({ id: buildTasks.id });
           if (claimed.length !== request.taskIds.length) throw new ClaimLostError();
@@ -275,6 +318,7 @@ export function createDrizzleDispatchStore(): DispatchStore {
 
     async suspend(buildRunId, reason) {
       return db.transaction(async (tx) => {
+        await tx.execute(runLock(buildRunId));
         const rows = await tx.update(buildRuns)
           .set({
             status: 'suspended',
@@ -313,14 +357,45 @@ export function createDrizzleDispatchStore(): DispatchStore {
         .where(and(
           eq(buildTasks.status, 'running'),
           inArray(buildTasks.role, PLAN_ROLES),
-          sql`(${buildTasks.chainHeadKey} IS NULL OR ${buildTasks.chainHeadKey} = ${buildTasks.taskKey})`,
+          isUnitHead,
         ));
       const ids: string[] = [];
       for (const head of heads) {
-        const latest = await latestAgentRunForTask(head.id);
-        if (latest) ids.push(latest.id);
+        const current = await currentAgentRunForTask(head.id);
+        if (current) ids.push(current.id);
       }
       return ids;
+    },
+
+    async listRunningHeadsClaimedBefore(olderThanMs) {
+      return db
+        .select({
+          buildRunId: buildRuns.id,
+          revisionId: buildTasks.buildRevisionId,
+          taskId: buildTasks.id,
+          key: buildTasks.taskKey,
+          attempt: buildTasks.attempt,
+        })
+        .from(buildTasks)
+        .innerJoin(buildRevisions, eq(buildRevisions.id, buildTasks.buildRevisionId))
+        .innerJoin(buildRuns, and(
+          eq(buildRuns.id, buildRevisions.buildRunId),
+          eq(buildRuns.currentRevisionNumber, buildRevisions.revisionNumber),
+        ))
+        .where(and(
+          eq(buildRuns.status, 'building'),
+          eq(buildTasks.status, 'running'),
+          inArray(buildTasks.role, PLAN_ROLES),
+          isUnitHead,
+          sql`${buildTasks.startedAt} < now() - ${`${olderThanMs} milliseconds`}::interval`,
+        ));
+    },
+
+    async withRunLock(buildRunId, fn) {
+      return db.transaction(async (tx) => {
+        await tx.execute(runLock(buildRunId));
+        return fn();
+      });
     },
 
     async withSweepLock(fn) {
