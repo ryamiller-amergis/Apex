@@ -1174,12 +1174,23 @@ describe('AzureDevOpsService', () => {
       expect(await service.searchWorkItems('59642', 'Bug')).toEqual([]);
     });
 
-    it('excludes an ID result outside the project or area tree', async () => {
+    it('finds an ID in any area of the project but not in another project', async () => {
       mockWitApi.getWorkItems.mockResolvedValue([pbi]);
 
       expect(await new AzureDevOpsService('Other', 'Other\\Team').searchWorkItems('59642', 'All')).toEqual([]);
-      expect(await new AzureDevOpsService('Apex', 'Apex\\Teammates').searchWorkItems('59642', 'All')).toEqual([]);
-      expect(await new AzureDevOpsService('Apex', 'Apex\\Team\\Child').searchWorkItems('59642', 'All')).toHaveLength(1);
+      expect(await new AzureDevOpsService('Apex', 'Apex\\Teammates').searchWorkItems('59642', 'All')).toHaveLength(1);
+    });
+
+    it('checks release assignments across the whole project, not just the area', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+      const linksSpy = jest
+        .spyOn(service, 'queryWorkItemLinksByWiql')
+        .mockResolvedValue([{ sourceId: 58140, targetId: 59642 }] as any);
+
+      expect(await service.findReleaseAssignments([59642])).toEqual({ 59642: [58140] });
+      const wiql = linksSpy.mock.calls[0][0];
+      expect(wiql).toContain("[Source].[System.TeamProject] = 'Apex'");
+      expect(wiql).not.toContain('AreaPath');
     });
 
     it('searches text under the area path and escapes single quotes', async () => {

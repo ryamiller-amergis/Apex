@@ -2646,15 +2646,14 @@ export class AzureDevOpsService {
         'System.AssignedTo',
         'System.WorkItemType',
         'System.TeamProject',
-        'System.AreaPath',
       ];
 
       let workItems: Awaited<ReturnType<typeof witApi.getWorkItems>>;
       const trimmedQuery = query.trim().replace(/^#/, '');
 
       if (/^\d+$/.test(trimmedQuery)) {
-        // Keep ID results inside the project and area tree that findReleaseAssignments checks,
-        // otherwise linking cannot detect an existing release assignment elsewhere.
+        // Any area in the project is allowed; findReleaseAssignments checks release epics project-wide
+        // so linking still detects an existing assignment outside the selected area.
         const found = await witApi.getWorkItems(
           [parseInt(trimmedQuery, 10)],
           fields,
@@ -2663,15 +2662,12 @@ export class AzureDevOpsService {
           WorkItemErrorPolicy.Omit
         );
         const project = this.project.toLowerCase();
-        const areaPath = this.areaPath?.toLowerCase();
         workItems = (found ?? []).filter((wi) => {
           if (!wi?.fields) return false;
           const type = wi.fields['System.WorkItemType'];
-          const itemArea = String(wi.fields['System.AreaPath'] ?? '').toLowerCase();
           const inProject = String(wi.fields['System.TeamProject'] ?? '').toLowerCase() === project;
-          const inArea = !areaPath || itemArea === areaPath || itemArea.startsWith(`${areaPath}\\`);
           const typeMatches = hasTypeFilter ? type === typeFilter : defaultTypes.includes(type);
-          return inProject && inArea && typeMatches;
+          return inProject && typeMatches;
         });
       } else {
         const escape = (value: string) => value.replace(/'/g, "''");
@@ -2886,16 +2882,14 @@ export class AzureDevOpsService {
 
   /**
    * Find release Epics currently related to each requested work item.
+   * Searches the whole project, not just the selected area, because the
+   * link search can return items from any area in the project.
    */
   async findReleaseAssignments(workItemIds: number[]): Promise<Record<number, number[]>> {
     const uniqueIds = [...new Set(workItemIds)].filter((id) => Number.isInteger(id) && id > 0);
     if (uniqueIds.length === 0) return {};
 
     const escapedProject = this.project.replace(/'/g, "''");
-    const escapedAreaPath = this.areaPath?.replace(/'/g, "''");
-    const areaClause = escapedAreaPath
-      ? ` AND [Source].[System.AreaPath] UNDER '${escapedAreaPath}'`
-      : '';
     const wiql = `
       SELECT [System.Id]
       FROM WorkItemLinks
@@ -2903,7 +2897,6 @@ export class AzureDevOpsService {
         [Source].[System.TeamProject] = '${escapedProject}'
         AND [Source].[System.WorkItemType] = 'Epic'
         AND [Source].[System.Tags] CONTAINS 'ReleaseVersion'
-        ${areaClause}
       )
       AND [System.Links.LinkType] = 'System.LinkTypes.Related'
       AND [Target].[System.Id] IN (${uniqueIds.join(', ')})
