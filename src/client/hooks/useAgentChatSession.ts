@@ -372,10 +372,10 @@ export function useAgentChatSession(
   // resolved after the first live event.
   useEffect(() => {
     if (!admissionPhase) return;
-    if (thinkingText || streamingText || toolProgress.length > 0) {
+    if (thinkingText || streamingText || (toolProgress?.length ?? 0) > 0) {
       setAdmissionPhase(null);
     }
-  }, [admissionPhase, streamingText, thinkingText, toolProgress.length]);
+  }, [admissionPhase, streamingText, thinkingText, toolProgress?.length]);
 
   const effectiveProgressPhase: AgentRunPhase | null =
     progressPhase ?? admissionPhase;

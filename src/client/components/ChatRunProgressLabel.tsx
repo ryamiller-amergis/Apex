@@ -22,9 +22,7 @@ export const ChatRunProgressLabel: React.FC<ChatRunProgressLabelProps> = ({
   progressPhase,
   toolProgress,
 }) => {
-  const waiting =
-    (progressPhase === 'queued' || progressPhase === 'dispatched') &&
-    toolProgress.length === 0;
+  const waiting = progressPhase === 'queued' || progressPhase === 'dispatched';
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [now, setNow] = useState(startedAt);
   const [wasWaiting, setWasWaiting] = useState(waiting);

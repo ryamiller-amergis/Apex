@@ -554,6 +554,9 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [seededKickoffPrompt, session.sendError]);
 
   useEffect(() => {
+    // A failed POST sets sendError and waits for Retry. Resetting the sent
+    // flag on that false return must not start another request.
+    if (session.sendError) return;
     if (kickoffSentRef.current || !seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
     const alreadyPersisted = messages.some(
       (message) => message.role === 'user' && message.text === seededKickoffPrompt,
