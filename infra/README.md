@@ -702,6 +702,12 @@ After apply, mirror `ai_runs_interactive_redis_hostname`,
 Service live-bus settings, and set `AI_RUNS_INTERACTIVE_DISPATCH_URL` to the
 `ai_runs_interactive_app_fqdn` HTTPS endpoint.
 
+The interactive image includes PowerShell for project-owned operational skills.
+CAB scripts call the Apex web app at `/api/internal/cab-release/ado`. `ADO_PAT`
+stays on the web app. The container authenticates with the runner credential
+it already uses for callbacks. `REPO_READ_SERVICE_TOKEN` is the repo-read
+callback and is not an Azure DevOps credential.
+
 ### Clustering policy (live-stream correctness)
 
 `ai_runs_interactive_managed_redis_clustering_policy` controls how the Managed

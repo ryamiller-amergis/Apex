@@ -80,6 +80,7 @@ import {
   durableInteractiveTurnService,
   type DurableInteractiveToolGrantInput,
 } from './durableInteractiveTurnService';
+import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import {
   fetchAvailableModels,
   fetchModelParameters,
@@ -6610,6 +6611,16 @@ export async function sendMessage(
     workflowClass,
     threadId,
     runLegacy: async () => {
+      // The legacy path can run the agent inside the web app. CAB release
+      // turns run only on the interactive container.
+      if (
+        isCabReleaseSkillPath(state.thread.kickoff.skillPath) ||
+        isCabReleaseSkillPath(options?.turnSkill?.path)
+      ) {
+        throw Object.assign(new Error('INTERACTIVE_V2_REQUIRED'), {
+          status: 422,
+        });
+      }
       if (
         legacyCompletion === 'detach' &&
         state.thread.status === 'running'
