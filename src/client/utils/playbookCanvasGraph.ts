@@ -1,4 +1,5 @@
 import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/playbook';
+import { defaultPlaybookConnectorConfig } from '../../shared/types/playbookConnectors';
 
 export type PlaybookFlowNodeData = {
   stepType: string;
@@ -23,6 +24,15 @@ export type PlaybookFlowEdge = {
 };
 
 const NODE_TYPE = 'playbookStep';
+const CONNECTOR_NODE_TYPE = 'playbookConnector';
+
+export function flowNodeType(stepType: string): string {
+  return stepType === 'connector' ? CONNECTOR_NODE_TYPE : NODE_TYPE;
+}
+
+export function initialStepConfig(stepType: string): Record<string, unknown> {
+  return stepType === 'connector' ? defaultPlaybookConnectorConfig() : {};
+}
 
 export function graphToFlow(
   graph: PlaybookGraph,
@@ -33,7 +43,7 @@ export function graphToFlow(
     const position = positions[node.id] ?? { x: 40 + (index % 4) * 340, y: 40 + Math.floor(index / 4) * 140 };
     return {
       id: node.id,
-      type: NODE_TYPE,
+      type: flowNodeType(node.stepType),
       position,
       data: {
         stepType: node.stepType,

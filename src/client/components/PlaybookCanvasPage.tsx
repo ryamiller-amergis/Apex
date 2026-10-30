@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, FlaskConical, MousePointerClick, Rocket, Save, WandSparkles } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  ArrowLeft,
+  CalendarClock,
+  FlaskConical,
+  MousePointerClick,
+  Rocket,
+  Save,
+  Sparkles,
+  WandSparkles,
+  X,
+} from 'lucide-react';
 import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -16,11 +27,13 @@ import {
   useValidatePlaybookConnection,
 } from '../hooks/usePlaybookCanvas';
 import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLayout';
-import { newPlaybookNodeId, syncBranchEdges } from '../utils/playbookCanvasGraph';
+import { initialStepConfig, newPlaybookNodeId, syncBranchEdges } from '../utils/playbookCanvasGraph';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import { PlaybookDryRunPanel } from './PlaybookDryRunPanel';
 import { PlaybookStepInspector } from './PlaybookStepInspector';
 import { PlaybookStepLibrary } from './PlaybookStepLibrary';
+import { PlaybookSuggestPopover, type PlaybookStepSuggestion } from './PlaybookSuggestPopover';
+import { PlaybookTriggersPanel } from './PlaybookTriggersPanel';
 import styles from './PlaybookBuilder.module.css';
 
 const USAGE_STORAGE_KEY = 'apex.playbooks.stepUsage';
@@ -84,6 +97,20 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
   const [layoutDirty, setLayoutDirty] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [dryRunOpen, setDryRunOpen] = useState(false);
+  const [recommendOpen, setRecommendOpen] = useState(false);
+  const [triggersOpen, setTriggersOpen] = useState(false);
+  const triggers = useQuery<{ triggers: Array<{ id: string; enabled: boolean }> }>({
+    queryKey: ['playbook-triggers', project, definitionId],
+    queryFn: async () => {
+      const response = await fetch(
+        `/api/playbooks/triggers?project=${encodeURIComponent(project)}&definitionId=${encodeURIComponent(definitionId)}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+      return response.json();
+    },
+  });
+  const activeTriggerCount = (triggers.data?.triggers ?? []).filter((trigger) => trigger.enabled).length;
   const [usage, setUsage] = useState<Record<string, number>>(readUsage);
   const [libraryCollapsed, setLibraryCollapsed] = useState(
     () => window.localStorage.getItem(LIBRARY_STORAGE_KEY) === 'true',
@@ -176,6 +203,61 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     setLayoutDirty(true);
   }, []);
 
+  /**
+   * Adds suggested steps after the end of the selected step's line, or after the rightmost step
+   * that leads nowhere. A step that already has a successor is not given a second outbound edge.
+   * Branch steps route by condition, so nothing is wired out of one.
+   */
+  const applySuggestions = (suggestions: PlaybookStepSuggestion[]) => {
+    if (!canAuthor || !suggestions.length) return;
+    const ids = graph.nodes.map((node) => node.id);
+    const leaves = graph.nodes.filter((node) => !graph.edges.some((edge) => edge.from === node.id));
+    const anchor = graph.nodes.find((node) => node.id === selectedNodeId)
+      ?? [...leaves].sort((a, b) => (positions[b.id]?.x ?? 0) - (positions[a.id]?.x ?? 0))[0];
+    let end = anchor;
+    const seen = new Set<string>();
+    while (end && !seen.has(end.id)) {
+      seen.add(end.id);
+      const outbound = graph.edges.filter((edge) => edge.from === end.id);
+      if (end.parallel || end.stepType === 'branch' || outbound.length !== 1) break;
+      end = graph.nodes.find((node) => node.id === outbound[0].to) ?? end;
+    }
+    const canExtend = Boolean(
+      end && !end.parallel && end.stepType !== 'branch' && graph.edges.every((edge) => edge.from !== end.id),
+    );
+    const placedAt = canExtend && end ? end : anchor;
+    const start = placedAt && positions[placedAt.id]
+      ? { x: positions[placedAt.id].x + NEW_STEP_OFFSET_X, y: positions[placedAt.id].y }
+      : { x: 80, y: 160 };
+    const nodes: PlaybookGraph['nodes'] = [];
+    const edges: PlaybookGraph['edges'] = [];
+    const placed: PlaybookLayoutPositions = {};
+    let previous = canExtend && end ? end.id : null;
+    suggestions.forEach((suggestion, index) => {
+      const id = newPlaybookNodeId(suggestion.stepType, [...ids, ...nodes.map((node) => node.id)]);
+      nodes.push({
+        id,
+        stepType: suggestion.stepType,
+        ...(Object.keys(suggestion.config).length ? { config: suggestion.config } : {}),
+      });
+      placed[id] = { x: start.x + index * NEW_STEP_OFFSET_X, y: start.y };
+      if (previous) edges.push({ from: previous, to: id });
+      previous = id;
+    });
+    setGraph((current) => ({ nodes: [...current.nodes, ...nodes], edges: [...current.edges, ...edges] }));
+    setPositions((current) => ({ ...current, ...placed }));
+    setLayoutDirty(true);
+    recordUsage(nodes.map((node) => node.stepType));
+    setRecommendOpen(false);
+    setTriggersOpen(false);
+    setDryRunOpen(false);
+    setSelectedNodeId(nodes[nodes.length - 1].id);
+    setToast({
+      tone: 'success',
+      text: nodes.length === 1 ? 'Step added. Review it, then save.' : `${nodes.length} steps added. Review them, then save.`,
+    });
+  };
+
   const addStep = (stepType: string) => {
     if (!canAuthor) return;
     const id = newPlaybookNodeId(stepType, graph.nodes.map((node) => node.id));
@@ -188,10 +270,15 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
       ? { x: rightmost.x + NEW_STEP_OFFSET_X, y: rightmost.y }
       : { x: 80, y: 160 };
     setPositions((current) => ({ ...current, [id]: position }));
-    setGraph((current) => ({ ...current, nodes: [...current.nodes, { id, stepType }] }));
+    const config = initialStepConfig(stepType);
+    setGraph((current) => ({
+      ...current,
+      nodes: [...current.nodes, { id, stepType, ...(Object.keys(config).length ? { config } : {}) }],
+    }));
     setLayoutDirty(true);
     recordUsage([stepType]);
     setDryRunOpen(false);
+    setTriggersOpen(false);
     setSelectedNodeId(id);
   };
 
@@ -327,6 +414,45 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
 
         {canAuthor ? (
           <div className={styles.actions}>
+            <div className={styles.popoverAnchor}>
+              <button
+                type="button"
+                className={`${styles.suggestButton} ${recommendOpen ? styles.suggestButtonActive : ''}`}
+                aria-expanded={recommendOpen}
+                onClick={() => setRecommendOpen((open) => !open)}
+                {...{ 'data-testid': 'playbook-canvas-recommend' }}
+              >
+                <Sparkles size={15} aria-hidden /> Suggest steps
+              </button>
+              {recommendOpen ? (
+                <PlaybookSuggestPopover
+                  project={project}
+                  definitionId={definitionId}
+                  onApply={applySuggestions}
+                  onClose={() => setRecommendOpen(false)}
+                  {...{ 'data-testid': 'playbook-recommend-form' }}
+                />
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className={`${styles.ghostButton} ${triggersOpen ? styles.ghostButtonActive : ''}`}
+              aria-pressed={triggersOpen}
+              onClick={() => {
+                setTriggersOpen((open) => !open);
+                setDryRunOpen(false);
+              }}
+              title={activeTriggerCount ? `${activeTriggerCount} active trigger(s)` : 'No trigger: this Playbook runs only when started by hand'}
+              {...{ 'data-testid': 'playbook-canvas-triggers' }}
+            >
+              <CalendarClock size={15} aria-hidden /> Triggers
+              <span
+                className={`${styles.countBadge} ${activeTriggerCount ? '' : styles.countBadgeEmpty}`}
+                {...{ 'data-testid': 'playbook-canvas-trigger-count' }}
+              >
+                {triggers.isSuccess ? activeTriggerCount : '·'}
+              </span>
+            </button>
             <button
               type="button"
               className={styles.ghostButton}
@@ -340,7 +466,10 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               type="button"
               className={`${styles.ghostButton} ${dryRunOpen ? styles.ghostButtonActive : ''}`}
               aria-pressed={dryRunOpen}
-              onClick={() => setDryRunOpen((open) => !open)}
+              onClick={() => {
+                setDryRunOpen((open) => !open);
+                setTriggersOpen(false);
+              }}
               {...{ 'data-testid': 'playbook-canvas-test-run' }}
             >
               <FlaskConical size={15} aria-hidden /> Test run
@@ -395,7 +524,10 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
             selectedNodeId={selectedNodeId}
             onSelectNode={(nodeId) => {
               setSelectedNodeId(nodeId);
-              if (nodeId) setDryRunOpen(false);
+              if (nodeId) {
+                setDryRunOpen(false);
+                setTriggersOpen(false);
+              }
             }}
             onGraphChange={handleGraphChange}
             onPositionsChange={handlePositionsChange}
@@ -415,7 +547,35 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
             </div>
           ) : null}
 
-          {dryRunOpen && canAuthor ? (
+          {triggersOpen ? (
+            <aside className={`${styles.drawer} ${styles.triggersDrawer}`} aria-label="Triggers" {...{ 'data-testid': 'playbook-canvas-triggers-drawer' }}>
+              <header className={styles.drawerHeader}>
+                <CalendarClock size={16} aria-hidden className={styles.drawerIcon} />
+                <h2 className={styles.drawerTitle}>Triggers</h2>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  onClick={() => setTriggersOpen(false)}
+                  aria-label="Close triggers"
+                  {...{ 'data-testid': 'playbook-canvas-triggers-close' }}
+                >
+                  <X size={16} aria-hidden />
+                </button>
+              </header>
+              {!detail.data.currentPublishedVersionId ? (
+                <p className={styles.drawerLead}>
+                  Triggers start the published version. Publish this draft before a trigger can run it.
+                </p>
+              ) : null}
+              <PlaybookTriggersPanel
+                project={project}
+                definitionId={definitionId}
+                canManage={canAuthor}
+                showHeading={false}
+                {...{ 'data-testid': 'playbook-triggers' }}
+              />
+            </aside>
+          ) : dryRunOpen && canAuthor ? (
             <PlaybookDryRunPanel
               project={project}
               definitionId={definitionId}
@@ -426,12 +586,14 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
                 setSelectedNodeId(nodeId);
               }}
               onClose={() => setDryRunOpen(false)}
-              data-testid="playbook-dry-run-panel"
+              {...{ 'data-testid': "playbook-dry-run-panel" }}
             />
           ) : selectedNode ? (
             <PlaybookStepInspector
               key={selectedNode.id}
+              project={project}
               node={selectedNode}
+              nextNodeIds={graph.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => edge.to)}
               paletteItem={palette.data?.items.find((item) => item.stepType === selectedNode.stepType)}
               otherNodeIds={graph.nodes.map((node) => node.id).filter((id) => id !== selectedNode.id)}
               priorNodeIds={priorNodeIds(graph, selectedNode.id)}
@@ -441,7 +603,7 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               onChange={updateNodeConfig}
               onDelete={() => deleteStep(selectedNode.id)}
               onClose={() => setSelectedNodeId(null)}
-              data-testid="playbook-step-inspector"
+              {...{ 'data-testid': "playbook-step-inspector" }}
             />
           ) : null}
 

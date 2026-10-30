@@ -45,6 +45,15 @@ async function loadPermissions(req: Request): Promise<Set<string>> {
   return perms;
 }
 
+/**
+ * A check made only of Playbook keys uses the module gate, including for a
+ * platform admin. A route that also requires another permission, such as
+ * starting a build, still lets a platform admin through.
+ */
+function checksPlaybookModule(keys: string[]): boolean {
+  return keys.length > 0 && keys.every((key) => key.startsWith('playbooks:'));
+}
+
 export function requirePermission(...keys: string[]): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -52,7 +61,7 @@ export function requirePermission(...keys: string[]): RequestHandler {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
-      if (isSuperAdminRequest(req)) {
+      if (isSuperAdminRequest(req) && !checksPlaybookModule(keys)) {
         next();
         return;
       }
@@ -75,7 +84,7 @@ export function requireAnyPermission(...keys: string[]): RequestHandler {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    if (isSuperAdminRequest(req)) {
+    if (isSuperAdminRequest(req) && !checksPlaybookModule(keys)) {
       next();
       return;
     }

@@ -20,6 +20,7 @@ import type {
   RetryPlaybookStepResponse,
   PlaybookGateDetail,
   PlaybookRunFilter,
+  PlaybookStepActivity,
   StartRunResult,
 } from '../../shared/types/playbook';
 
@@ -164,6 +165,27 @@ export function usePlaybookStepOutput(
           + `/output?project=${encodeURIComponent(project!)}&part=full`
       ),
     enabled: Boolean(project && runId && stepRunId && enabled),
+    retry: false,
+  });
+}
+
+/** A step's live log. Polls while the step is still working. */
+export function usePlaybookStepActivity(
+  project: string | undefined,
+  runId: string | null,
+  stepRunId: string | null,
+  live: boolean,
+) {
+  return useQuery<PlaybookStepActivity>({
+    queryKey: ['playbook-step-activity', project, runId, stepRunId],
+    queryFn: () =>
+      apiFetch<PlaybookStepActivity>(
+        `/api/playbooks/runs/${encodeURIComponent(runId!)}`
+          + `/steps/${encodeURIComponent(stepRunId!)}`
+          + `/activity?project=${encodeURIComponent(project!)}`
+      ),
+    enabled: Boolean(project && runId && stepRunId),
+    refetchInterval: live ? 3000 : false,
     retry: false,
   });
 }

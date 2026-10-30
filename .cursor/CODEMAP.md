@@ -15,6 +15,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `tests/e2e/`: Playwright. `tests/e2e/specs/`, `tests/e2e/pages/` (page objects), `tests/e2e/support/` (auth capture), `tests/e2e/data/` (seed/reset, hand-written).
 - `tests/integration/`: `*.integration.test.ts`, run with `jest.config.integration.js`.
 - `foundation-skills/`: packaged skills library (`foundation-skills/catalog.json`, `foundation-skills/foundation/`, `foundation-skills/adapters/`); published by `.github/workflows/publish-apex-skills.yml`. `foundation-skills/starters/react-mui-express/` = build starter templates, copied by hand.
+- `foundation-skills/foundation/`: Skills an Agent task can run. The picker reads this folder; deploy copies it with the server build.
 - `templates/full-stack-express/`: isolated pnpm workspace starter (own lockfile and toolchain; not part of the Apex root workspace).
 - `templates/full-stack-express/apps/api/src/persistence/`: the starter's own `app_users` table (UUID key) and store; unrelated to Apex's `app_users` in `src/server/db/schema.ts`.
 - `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`.
@@ -41,7 +42,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `src/server/mcp/`: MCP servers Apex exposes: `src/server/mcp/ado/`, `src/server/mcp/github/`, `src/server/mcp/maxview/`,
   `src/server/mcp/calendarAssistant/`, `src/server/mcp/mcpServers/`, `src/server/mcp/board/`.
 - `src/server/utils/` (`src/server/utils/dataDir.ts` = persistent data root), `src/server/skills/`, `src/server/assets/`, `src/server/types/`.
-- `src/server/playbookTemplates/`: shipped Playbook templates (`src/server/playbookTemplates/interview.json`, `src/server/playbookTemplates/build-from-prompt.json`).
+- `src/server/playbookTemplates/`: shipped Playbook templates (`src/server/playbookTemplates/catalog.json`, `src/server/playbookTemplates/interview.json`, `src/server/playbookTemplates/design-doc-validation.json`, `src/server/playbookTemplates/build-from-prompt.json`).
 - `src/server/__tests__/`: all server unit tests, one flat folder.
 
 ## src/client (React)

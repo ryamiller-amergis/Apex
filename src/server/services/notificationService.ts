@@ -8,7 +8,7 @@ import type {
   NotificationType,
   NotificationSseEvent,
 } from '../../shared/types/notification';
-import { sendTeamsNotification } from './teamsBotService';
+import { deliverPlaybookTeamsMessage } from './playbookConnectorRegistry';
 import { writeSseEvent } from '../utils/sseResponse';
 
 // ── SSE Connection Manager ────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ export async function createNotification(
     });
   }
 
-  sendTeamsNotification(userId, notification).catch(() => {});
+  void deliverPlaybookTeamsMessage(userId, notification);
 
   return notification;
 }

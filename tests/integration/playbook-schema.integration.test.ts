@@ -140,6 +140,8 @@ describe('VT-01 — migrations create the documented shape', () => {
       'started_at',
       'status',
       'step_count',
+      'trigger_receipt_id',
+      'trigger_subscription_id',
       'updated_at',
       'version_pin_reason',
     ]);
@@ -488,7 +490,7 @@ describe('VT-10 — the reconciliation sweep uses the expires_at partial index',
 });
 
 describe('VT-18 — the playbooks permission seed', () => {
-  it('seeds all four keys under the playbooks category with the run-authority wording', async () => {
+  it('seeds the Playbook keys under the playbooks category with the run-authority wording', async () => {
     const rows = await query<{ key: string; category: string; description: string }>(
       `SELECT key, category, description FROM app_permissions
        WHERE key LIKE 'playbooks:%' ORDER BY key`
@@ -498,6 +500,7 @@ describe('VT-18 — the playbooks permission seed', () => {
       'playbooks:admin',
       'playbooks:author',
       'playbooks:run',
+      'playbooks:triggers:manage',
       'playbooks:view',
     ]);
     for (const row of rows) expect(row.category).toBe('playbooks');
@@ -506,7 +509,7 @@ describe('VT-18 — the playbooks permission seed', () => {
     );
   });
 
-  it('grants the four keys to exactly their documented default roles', async () => {
+  it('grants the Playbook keys to exactly their documented default roles', async () => {
     const rows = await query<{ name: string; key: string }>(
       `SELECT r.name, p.key
        FROM app_role_permissions rp
@@ -519,6 +522,7 @@ describe('VT-18 — the playbooks permission seed', () => {
     expect(rows).toEqual([
       { name: 'admin', key: 'playbooks:admin' },
       { name: 'admin', key: 'playbooks:run' },
+      { name: 'admin', key: 'playbooks:triggers:manage' },
       { name: 'admin', key: 'playbooks:view' },
       { name: 'member', key: 'playbooks:run' },
       { name: 'member', key: 'playbooks:view' },
@@ -684,6 +688,8 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     // Interview migrations landed after the Playbook window and reference those tables.
     // Reverse them before the windowed rollback, or playbook_step_runs cannot be dropped.
     for (const file of [
+      '20261026180000_playbook-external-triggers.sql',
+      '20261026170000_playbook-internal-triggers.sql',
       '20261023144000_c3d8_build-from-prompt-agent-runs.sql',
       '20261023143900_a1a4_build-from-prompt-tables.sql',
       '20261007143000_playbook-interview-template.sql',

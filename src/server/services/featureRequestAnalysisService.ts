@@ -294,6 +294,24 @@ export function startWatcher(
         aiRationale: result.rationale,
       });
       console.log(`[featureRequestAnalysis] Analysis synced — priority=${result.priority} risk=${result.risk} (requestId=${requestId})`);
+      try {
+        const request = await db.query.featureRequests.findFirst({
+          where: eq(featureRequests.id, requestId),
+          columns: { sourceProject: true, submittedBy: true },
+        });
+        if (request) {
+          const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
+          await publishPlaybookApexEvent({
+            project: request.sourceProject,
+            type: 'feature-request.triaged',
+            entityId: requestId,
+            actorUserId: request.submittedBy,
+            data: { priority: result.priority, risk: result.risk },
+          });
+        }
+      } catch (eventError) {
+        console.error(`[featureRequestAnalysis] Failed to publish feature-request.triaged (requestId=${requestId})`, eventError);
+      }
       cleanupWorkspace(threadId);
     } catch (err) {
       console.error(`[featureRequestAnalysis] Failed to parse/sync output (requestId=${requestId})`, err);

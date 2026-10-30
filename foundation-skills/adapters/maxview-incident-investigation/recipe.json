@@ -1,0 +1,9 @@
+{
+  "skill": "maxview-incident-investigation",
+  "scanScope": "targeted",
+  "targetedGlobs": ["package.json"],
+  "detectors": ["stack"],
+  "capFiles": 20,
+  "capMs": 15000,
+  "slots": {}
+}

@@ -1,0 +1,24 @@
+.banner {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-secondary);
+}
+
+.banner h2 {
+  margin: 0 0 0.4rem;
+}
+
+.compare pre {
+  max-height: 16rem;
+  overflow: auto;
+  font-size: 0.75rem;
+}
+
+.confirm {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0.6rem 0;
+}

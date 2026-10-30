@@ -25,6 +25,7 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 }));
 
 import pg from 'pg';
+import { getSuperAdminEmails } from '../../src/server/utils/superAdmin';
 import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
 
 type RunServiceModule = typeof import('../../src/server/services/playbookRunService');
@@ -139,6 +140,8 @@ async function grantStepPermissions(userOid: string, stepTypes: string[]): Promi
      ON CONFLICT DO NOTHING`,
     [userOid, PROJECT, role.id]
   );
+  // Role grants no longer admit a Playbook step. A platform admin does, when the menu includes Playbooks.
+  await query('UPDATE app_users SET email = $2 WHERE oid = $1', [userOid, getSuperAdminEmails()[0]]);
 }
 
 beforeAll(async () => {
@@ -362,7 +365,7 @@ describe('an agent step completing advances the run, through the real terminal-e
         id: 'ask',
         stepType: 'cursor-agent',
         config: {
-          skillPath: registry.PHASE_0_ALLOWED_AGENT_SKILLS[0],
+          skillPath: '.cursor/skills/app-knowledge/SKILL.md',
           prompt: 'Summarise the design docs',
         },
       },

@@ -269,8 +269,11 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
   revision_mode                = "Single"
 
   identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.ai_platform_v2["document"].id]
+    type = "UserAssigned"
+    identity_ids = [
+      azurerm_user_assigned_identity.ai_platform_v2["document"].id,
+      local.ai_runs_insights_reader_id,
+    ]
   }
 
   registry {
@@ -334,6 +337,10 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.ai_platform_v2["document"].client_id
+      }
+      env {
+        name  = "AZURE_INSIGHTS_CLIENT_ID"
+        value = local.ai_runs_insights_reader_client_id
       }
       env {
         name  = "AZURE_TENANT_ID"

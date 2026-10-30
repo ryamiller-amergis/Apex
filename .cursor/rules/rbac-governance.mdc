@@ -69,10 +69,11 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
-| `playbooks:view` | playbooks | admin, member, viewer |
-| `playbooks:run` | playbooks | admin, member |
-| `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |
-| `playbooks:admin` | playbooks | admin |
+| `playbooks:view` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:run` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:author` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:admin` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:triggers:manage` | playbooks | platform admin, and Playbooks is enabled for the project |
 | `prds:review` | prds | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |

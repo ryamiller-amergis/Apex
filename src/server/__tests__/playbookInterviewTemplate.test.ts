@@ -89,6 +89,8 @@ import { publishDraft } from '../services/playbookDefinitionService';
 import { playbookVersionLayouts } from '../db/schema';
 import {
   PlaybookTemplateAlreadyPublishedError,
+  PlaybookTemplateConfirmationRequiredError,
+  applyPlaybookTemplate,
   installPlaybookTemplate,
 } from '../services/playbookTemplateService';
 
@@ -498,5 +500,63 @@ describe('VT-TEMPLATE-7 — publish-time interview profile keys', () => {
     expect(result.publishedVersion.id).toBe('published-notify');
     expect(resolveSkillConfig).not.toHaveBeenCalled();
     expect(committedWrites).toHaveLength(2);
+  });
+});
+
+describe('template apply replaces the draft and leaves published history', () => {
+  it('refuses to replace a draft without confirmation', async () => {
+    await expect(applyPlaybookTemplate({
+      project: 'Project A',
+      definitionId: 'def-a',
+      templateKey: 'design-doc-validation',
+      templateVersion: 1,
+      expectedDraftUpdatedAt: REVISION,
+      confirmed: false,
+      actorUserId: AUTHOR,
+    })).rejects.toBeInstanceOf(PlaybookTemplateConfirmationRequiredError);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('writes the shipped graph onto the draft and does not publish', async () => {
+    const publishedGraph = {
+      nodes: [{ id: 'old', stepType: 'notify', config: { title: 'Old' } }],
+      edges: [],
+    };
+    const definition = {
+      ...definitionRow('Project A', 'def-doc'),
+      name: 'Design doc validation',
+      templateKey: 'design-doc-validation',
+      templateVersion: 1,
+    };
+    const draft = draftRow('def-doc', publishedGraph);
+    const published = {
+      ...draftRow('def-doc', publishedGraph),
+      id: 'published-doc',
+      status: 'published' as const,
+      versionNumber: 1,
+    };
+    selectResults.push(
+      [definition],
+      [draft],
+      [{ ...definition, templateVersion: 1 }],
+      [draft, published],
+    );
+    updateResults.push([{ id: draft.id }], [{ id: definition.id }]);
+
+    const applied = await applyPlaybookTemplate({
+      project: 'Project A',
+      definitionId: 'def-doc',
+      templateKey: 'design-doc-validation',
+      templateVersion: 1,
+      expectedDraftUpdatedAt: REVISION,
+      confirmed: true,
+      actorUserId: AUTHOR,
+    });
+
+    expect(published.graph).toEqual(publishedGraph);
+    expect(committedWrites.some((write) => (write.values as { status?: string }).status === 'published')).toBe(false);
+    const draftWrite = committedWrites.find((write) => (write.values as { graph?: unknown }).graph);
+    expect((draftWrite?.values as { graph: { nodes: Array<{ id: string }> } }).graph.nodes[0].id).toBe('score');
+    expect(applied.currentPublishedVersionId).toBe('published-doc');
   });
 });

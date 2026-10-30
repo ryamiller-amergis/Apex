@@ -96,6 +96,22 @@ it('restricts the worker and supplies the Skill only when enforcement is on', as
   expect(send).toHaveBeenCalledWith(`${skillContent}\n\n---\n\nRun the check`);
 });
 
+it('leaves the shell available when the Skill declared azure-cli', async () => {
+  mockAgent();
+
+  await createLocalCursorExecution({
+    ...snapshot,
+    skillSha256,
+    playbookAgentPolicy: {
+      ...policy,
+      capabilities: ['repository-read', 'network-read', 'azure-cli'],
+    },
+  });
+
+  const local = jest.mocked(Agent.create).mock.calls[0][0].local;
+  expect(local?.sandboxOptions).toBeUndefined();
+});
+
 it('does not prepend Skill content the V2 prompt already carries', async () => {
   const { send } = mockAgent();
   const prompt = `# Frozen execution skill\n\n${skillContent}\n\n---\n\nRun the check`;

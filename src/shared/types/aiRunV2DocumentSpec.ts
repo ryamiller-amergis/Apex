@@ -38,6 +38,8 @@ export type AiRunV2DocumentSpecification = Readonly<{
   skillPath: string;
   skillContent: string;
   skillSha256: string;
+  /** Markdown files that sit next to SKILL.md. The worker writes them beside the frozen skill. */
+  skillCompanions?: ReadonlyArray<AiRunV2DocumentScratchInput>;
   workflowClass: BackgroundWorkflowClass;
   projectId: string;
   threadId: string;
@@ -155,6 +157,28 @@ function isSkillProvider(value: unknown): value is SkillProvider {
   return value === 'ado' || value === 'github';
 }
 
+const SKILL_COMPANION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/;
+
+function isSkillCompanionList(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') return false;
+    const companion = raw as Record<string, unknown>;
+    if (
+      typeof companion.path !== 'string'
+      || companion.path === 'SKILL.md'
+      || !SKILL_COMPANION_NAME.test(companion.path)
+      || seen.has(companion.path)
+    ) {
+      return false;
+    }
+    if (typeof companion.content !== 'string') return false;
+    seen.add(companion.path);
+  }
+  return true;
+}
+
 export function isAiRunV2DocumentSpecification(
   value: unknown,
 ): value is AiRunV2DocumentSpecification {
@@ -170,6 +194,12 @@ export function isAiRunV2DocumentSpecification(
   if (
     typeof candidate.skillSha256 !== 'string'
     || !/^[a-f0-9]{64}$/i.test(candidate.skillSha256)
+  ) {
+    return false;
+  }
+  if (
+    candidate.skillCompanions !== undefined
+    && !isSkillCompanionList(candidate.skillCompanions)
   ) {
     return false;
   }

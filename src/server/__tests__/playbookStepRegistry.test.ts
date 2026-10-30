@@ -2,8 +2,8 @@
  * The step-type registry contract.
  *
  * TBI-016 (Phase 0) owns the first four groups: VT-01 (a suspendable type with no deadline is
- * rejected), VT-02 (the three production types register with their deadlines), the Skill allow-list
- * and VT-04 (the registry is the only declaration site). VT-03 — that a malformed descriptor fails
+ * rejected), VT-02 (the three production types register with their deadlines), and VT-04 (the
+ * registry is the only declaration site). VT-03 — that a malformed descriptor fails
  * at *startup* rather than first use — needs a booting app, so it lives in the integration suite.
  *
  * TBI-032 and TBI-033 (FEAT-008) own the groups after those: every step type declares Zod input and
@@ -21,7 +21,6 @@ import type {
 import {
   APPROVAL_GATE_DEADLINE_MS,
   CURSOR_AGENT_DEADLINE_MS,
-  PHASE_0_ALLOWED_AGENT_SKILLS,
   PRODUCTION_STEP_TYPES,
   PlaybookStepTypeError,
   UnknownPlaybookStepTypeError,
@@ -123,13 +122,19 @@ describe('TBI-016 VT-01 — a suspendable step type must declare a deadline', ()
 describe('TBI-016 VT-02 — the three production step types', () => {
   it('registers the Phase 1 and production adapter step types', () => {
     expect(listStepTypeDescriptors().map((d) => d.stepType).sort()).toEqual([
+      'apex-action',
       'approval-gate',
       'branch',
       'build',
+      'cloud-agent',
+      'connector',
       'cursor-agent',
+      'foreach',
       'ingest-artifact',
       'interview',
+      'join',
       'notify',
+      'until',
     ]);
   });
 
@@ -176,41 +181,19 @@ describe('TBI-016 VT-02 — the three production step types', () => {
   });
 });
 
-describe('the Skill allow-list', () => {
-  it('permits a Skill on the list and refuses everything else', () => {
+describe('Skill paths', () => {
+  it('lets a cursor-agent step name any Skill, including the investigation Skill', () => {
     expect(() =>
-      assertSkillAllowed('cursor-agent', PHASE_0_ALLOWED_AGENT_SKILLS[0])
-    ).not.toThrow();
-
-    expect(() => assertSkillAllowed('cursor-agent', '.cursor/skills/build-test-push/SKILL.md')).toThrow(
-      /may not run Skill/
-    );
-  });
-
-  it('accepts the leading-slash form project settings store, and nothing looser', () => {
-    expect(() =>
-      assertSkillAllowed('cursor-agent', '/.cursor/skills/design-doc-validation/SKILL.md')
+      assertSkillAllowed('cursor-agent', 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md')
     ).not.toThrow();
     expect(() =>
-      assertSkillAllowed('cursor-agent', '//.cursor/skills/design-doc-validation/SKILL.md')
-    ).toThrow(/may not run Skill/);
-    expect(() =>
-      assertSkillAllowed('cursor-agent', '/.cursor/skills/design-spec-review/SKILL.md')
-    ).toThrow(/may not run Skill/);
+      assertSkillAllowed('cursor-agent', '.cursor/skills/build-test-push/SKILL.md')
+    ).not.toThrow();
   });
 
-  it('default-denies: a step type naming no Skills permits none', () => {
-    expect(() => assertSkillAllowed('notify', '.cursor/skills/app-knowledge/SKILL.md')).toThrow(
-      /no Skills/
-    );
-  });
-
-  it('names a Skill that actually exists in the repo', () => {
-    // An allow-list entry with a typo would default-deny everything at demo time, which is the
-    // worst moment to discover it.
-    for (const skillPath of PHASE_0_ALLOWED_AGENT_SKILLS) {
-      expect(fs.existsSync(path.resolve(REPO_ROOT, skillPath))).toBe(true);
-    }
+  it('does not restrict a step type that keeps no Skill list', () => {
+    expect(() => assertSkillAllowed('notify', '.cursor/skills/app-knowledge/SKILL.md')).not.toThrow();
+    expect(getStepTypeDescriptor('cursor-agent').allowedSkillPaths).toBeUndefined();
   });
 });
 
@@ -245,9 +228,18 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           file !== 'src/server/routes/e2eSetup.ts' &&
           file !== 'src/server/services/designDocValidationPlaybookService.ts' &&
           file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
+          // Only a cursor-agent node loads a repository Skill. Cloud-agent steps are agent steps too.
+          file !== 'src/server/services/playbookExecutionCapabilityService.ts' &&
           file !== 'src/server/services/playbookReconciliationService.ts' &&
+          file !== 'src/server/services/playbookRecommenderService.ts' &&
           // Display names for the canvas library. The registry remains the declaration.
-          file !== 'src/client/components/playbookStepCatalog.ts'
+          file !== 'src/client/components/playbookStepCatalog.ts' &&
+          // Per-type settings forms and run logs, including the live run panel.
+          // They read a step's shape; they do not declare one.
+          file !== 'src/client/components/PlaybookStepFields.tsx' &&
+          file !== 'src/client/components/PlaybookStepDetailDrawer.tsx' &&
+          file !== 'src/client/components/PlaybookLiveStepPanel.tsx' &&
+          file !== 'src/server/services/playbookStepActivityService.ts'
       )
       .filter((file) => {
         const code = stripComments(fs.readFileSync(path.join(REPO_ROOT, file), 'utf8'));
@@ -293,7 +285,11 @@ describe('FEAT-008 VT-01 (TBI-032 a, d) — every step type declares inspectable
     const source = fs.readFileSync(REGISTRY_SOURCE, 'utf8');
     const specifiers = [...source.matchAll(/from '([^']+)'/g)].map((match) => match[1]);
 
-    expect([...new Set(specifiers)].sort()).toEqual(['../../../shared/types/playbook', 'zod']);
+    expect([...new Set(specifiers)].sort()).toEqual([
+      '../../../shared/types/playbook',
+      '../../../shared/types/playbookConnectors',
+      'zod',
+    ]);
   });
 });
 

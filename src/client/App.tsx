@@ -424,7 +424,8 @@ function App() {
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
     menuConfigReady &&
-    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+    effectiveEnabledViews.includes('playbooks') &&
+    can('playbooks:view');
   const canAccessMcpServers =
     mcpServersEnabled &&
     menuConfigReady &&

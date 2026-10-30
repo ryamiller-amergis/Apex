@@ -34,7 +34,7 @@ jest.mock('../db/drizzle', () => {
         appUserRoles: { findMany: jest.fn() },
         appUserProjectRoles: { findMany: jest.fn() },
         appRoles: { findFirst: jest.fn(), findMany: jest.fn() },
-        appUsers: { findMany: jest.fn() },
+        appUsers: { findMany: jest.fn(), findFirst: jest.fn() },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -50,6 +50,11 @@ jest.mock('../services/changelogService', () => ({
   resolveCurrentChangelogVersion: jest.fn().mockResolvedValue('1.0.0'),
 }));
 
+jest.mock('../services/menuSettingsService', () => ({
+  getMenuConfig: jest.fn().mockResolvedValue(null),
+}));
+
+import { getMenuConfig } from '../services/menuSettingsService';
 import {
   getUserPermissions,
   getUserRoleNames,
@@ -587,6 +592,66 @@ describe('getUserPermissions (project-aware)', () => {
 
     expect(perms.has('admin:roles')).toBe(true);
     expect(mockDb.query.appUserProjectRoles.findMany).not.toHaveBeenCalled();
+  });
+
+  it('grants every Playbook permission to a platform admin when the project menu includes Playbooks', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      { role: viewerRole },
+    ]);
+    mockDb.query.appUsers.findFirst.mockResolvedValue({ email: 'matalbot@amergis.com' });
+
+    const perms = await getUserPermissions('user-1', 'ProjectX');
+
+    expect(perms.has('cost:view')).toBe(true);
+    expect(perms.has('playbooks:view')).toBe(true);
+    expect(perms.has('playbooks:run')).toBe(true);
+    expect(perms.has('playbooks:author')).toBe(true);
+    expect(perms.has('playbooks:admin')).toBe(true);
+    expect(perms.has('playbooks:triggers:manage')).toBe(true);
+  });
+
+  it('ignores Playbook keys granted by a role', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      {
+        role: {
+          ...viewerRole,
+          rolePermissions: [
+            ...viewerRole.rolePermissions,
+            { permission: { key: 'playbooks:view' } },
+            { permission: { key: 'playbooks:run' } },
+            { permission: { key: 'playbooks:author' } },
+          ],
+        },
+      },
+    ]);
+    mockDb.query.appUsers.findFirst.mockResolvedValue({ email: 'member@amergis.com' });
+
+    const perms = await getUserPermissions('user-1', 'ProjectX');
+
+    expect(perms.has('cost:view')).toBe(true);
+    expect(perms.has('playbooks:view')).toBe(false);
+    expect(perms.has('playbooks:run')).toBe(false);
+    expect(perms.has('playbooks:author')).toBe(false);
+  });
+
+  it('withholds Playbook keys from a platform admin when the project menu omits Playbooks', async () => {
+    mockDb.query.appUserProjectRoles.findMany.mockResolvedValue([
+      { role: viewerRole },
+    ]);
+    mockDb.query.appUsers.findFirst.mockResolvedValue({ email: 'matalbot@amergis.com' });
+    (getMenuConfig as jest.Mock).mockResolvedValueOnce({
+      project: 'ProjectX',
+      enabledViews: ['calendar'],
+    });
+
+    const perms = await getUserPermissions('user-1', 'ProjectX');
+
+    expect(perms.has('cost:view')).toBe(true);
+    expect(perms.has('playbooks:view')).toBe(false);
+    expect(perms.has('playbooks:run')).toBe(false);
+    expect(perms.has('playbooks:author')).toBe(false);
+    expect(perms.has('playbooks:admin')).toBe(false);
+    expect(perms.has('playbooks:triggers:manage')).toBe(false);
   });
 });
 

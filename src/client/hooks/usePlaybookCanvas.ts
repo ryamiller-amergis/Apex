@@ -3,6 +3,7 @@ import type {
   PlaybookDryRunResult,
   PlaybookGraph,
   PlaybookLayoutPositions,
+  PlaybookSkillOption,
   PlaybookStepTypePaletteItem,
   PlaybookVersionLayout,
 } from '../../shared/types/playbook';
@@ -25,6 +26,15 @@ export function usePlaybookStepPalette(project: string | undefined, enabled: boo
     queryKey: ['playbook-step-palette', project],
     queryFn: () => apiRequest(`/api/playbooks/step-types?project=${encodeURIComponent(project!)}`),
     enabled: Boolean(project && enabled),
+    staleTime: 60_000,
+  });
+}
+
+export function usePlaybookSkills(project: string | undefined) {
+  return useQuery<{ skills: PlaybookSkillOption[] }>({
+    queryKey: ['playbook-skills', project],
+    queryFn: () => apiRequest(`/api/playbooks/skills?project=${encodeURIComponent(project!)}`),
+    enabled: Boolean(project),
     staleTime: 60_000,
   });
 }

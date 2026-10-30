@@ -100,11 +100,14 @@ export async function createLocalCursorExecution(
   const nativeReadsAllowed =
     policy?.enforcement !== 'enforce'
     || policy.localAgent.customTools === 'native-read-only';
+  // The sandbox blocks the shell. A Skill that declared azure-cli needs that shell
+  // for `az`. Repository writes stay refused by the policy check above.
+  const shellAllowed = Boolean(enforcing && policy?.capabilities.includes('azure-cli'));
 
   const local = {
     cwd: snapshot.workspaceRef,
     settingSources: enforcing ? [] : ['project'],
-    ...(enforcing ? { sandboxOptions: { enabled: true } } : {}),
+    ...(enforcing && !shellAllowed ? { sandboxOptions: { enabled: true } } : {}),
     ...(checkout && nativeReadsAllowed ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 

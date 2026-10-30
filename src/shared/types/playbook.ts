@@ -144,6 +144,11 @@ export interface PlaybookGraphNode {
   /** Frozen execution policy for an agent node on an immutable published version. */
   agentPolicy?: PlaybookAgentRunPolicy;
   config?: Record<string, unknown>;
+  /**
+   * When true, every outbound edge starts. A branch still chooses one arm.
+   * Only a `join` step may receive those arms.
+   */
+  parallel?: boolean;
 }
 
 export interface PlaybookGraphEdge {
@@ -178,6 +183,21 @@ export interface PlaybookStepTypePaletteItem {
   inputJsonSchema: Record<string, unknown>;
   outputJsonSchema: Record<string, unknown>;
   canSuspend: boolean;
+  /** False for step types only Apex places (interview, build); existing graphs still render them. */
+  addable: boolean;
+}
+
+/** A Skill an Agent task step can run, from `GET /api/playbooks/skills`. */
+export interface PlaybookSkillOption {
+  /** Repository-relative path stored in the step's `skillPath`. */
+  path: string;
+  name: string;
+  description: string;
+  /** Null when the frontmatter does not declare `playbook-capabilities`. */
+  capabilities: string[] | null;
+  /** False only when the capability list names something Apex does not recognize. */
+  runnable: boolean;
+  unavailableReason?: string;
 }
 
 export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch' | 'capability';
@@ -292,6 +312,33 @@ export interface PlaybookStepRun {
   updatedAt: string;
 }
 
+export type PlaybookStepActivityKind = 'prompt' | 'tool' | 'thinking' | 'message' | 'status' | 'error';
+
+/** One line in a step's live log, oldest first. */
+export interface PlaybookStepActivityEntry {
+  id: string;
+  kind: PlaybookStepActivityKind;
+  title: string;
+  detail?: string;
+  at: string;
+}
+
+/** What `GET /runs/:runId/steps/:stepRunId/activity` returns for a running or finished step. */
+export interface PlaybookStepActivity {
+  stepRunId: string;
+  status: PlaybookStepRunStatus;
+  agentRun: {
+    status: string;
+    phase: string | null;
+    label: string | null;
+    queuedAt: string | null;
+    startedAt: string | null;
+    progressAt: string | null;
+    lastError: string | null;
+  } | null;
+  entries: PlaybookStepActivityEntry[];
+}
+
 export interface PlaybookStepBlobRef {
   schemaVersion: 1;
   container: string;
@@ -377,26 +424,18 @@ interface PlaybookStepTypeDescriptorBase {
   /** Version of the input/output contract. Increment only for a breaking contract change. */
   schemaVersion: number;
   /**
-   * Skill paths this step type may run. Empty or absent means the step type runs no Skill.
+   * Skill paths this step type may run, when the type keeps a list.
    *
-   * Phase 0's enforcement of the PRD's read-only-Skill rule, and narrower than that rule sounds:
-   * it constrains *which* Skills may be named, not what they are able to do. Apex has no read-only
-   * capability model — `ExecutionSnapshot.skillPath` is a bare path and nothing reads SKILL.md
-   * frontmatter — so a real check is not available to build against. Recorded as a gap for
-   * FEAT-008 in `design-docs/playbook-epic-1-phase-0.plan.md`.
-   *
-   * Optional rather than modelled per step type because exactly one Phase 0 type runs a Skill, and
-   * a per-type config union for a single case is a layer nobody reads.
+   * Absent means the step type does not restrict the path. An empty list refuses every Skill.
    */
   allowedSkillPaths?: readonly string[];
 
   /**
    * Whether this type counts against the per-definition agent-step cap.
    *
-   * Explicit rather than derived from `allowedSkillPaths`, which happens to identify the same
-   * single type today. A future type could run a Skill without being an agent turn, or be one
-   * without naming a Skill, and a guard that silently stopped counting would be discovered by an
-   * unexpected bill rather than by a test.
+   * Explicit rather than derived from whether the step names a Skill. A type can run a Skill
+   * without being an agent turn, or be one without naming a Skill, and a guard that silently
+   * stopped counting would be discovered by an unexpected bill rather than by a test.
    */
   isAgentStep: boolean;
 
@@ -473,7 +512,7 @@ export type PlaybookStepTypeDescriptor =
 // what actually validates a stored node config; these interfaces mirror it and nothing more.
 
 export interface CursorAgentStepConfig {
-  /** Checked against the descriptor's `allowedSkillPaths` before anything is enqueued. */
+  /** Repo-relative Skill path. Loaded before the agent run is enqueued. */
   skillPath: string;
   prompt: string;
   model?: string;

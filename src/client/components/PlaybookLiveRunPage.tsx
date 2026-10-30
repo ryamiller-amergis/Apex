@@ -15,11 +15,11 @@ import {
   usePlaybookVersionLayout,
 } from '../hooks/usePlaybookCanvas';
 import { usePlaybookStepPalette } from '../hooks/usePlaybookCanvas';
-import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
-import { PlaybookStepDetailDrawer } from './PlaybookStepDetailDrawer';
+import { PlaybookLiveStepPanel } from './PlaybookLiveStepPanel';
+import { stepMeta } from './playbookStepCatalog';
 import styles from './PlaybookCanvas.module.css';
 
 const EMPTY_GRAPH: PlaybookGraph = { nodes: [], edges: [] };
@@ -40,6 +40,8 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const palette = usePlaybookStepPalette(project, true);
   const [tidiedPositions, setTidiedPositions] = useState<PlaybookLayoutPositions | null>(null);
   const [selectedStepRunId, setSelectedStepRunId] = useState<string | null>(null);
+  const [panelExpanded, setPanelExpanded] = useState(false);
+  const [panelDismissed, setPanelDismissed] = useState(false);
 
   const stepLabels = useMemo(() => {
     const map: Record<string, string> = {};
@@ -82,6 +84,21 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
   const graph = graphQuery.data?.graph ?? EMPTY_GRAPH;
   const positions = tidiedPositions ?? layoutQuery.data?.positions ?? {};
   const selectedStep = run.data.steps.find((step) => step.id === selectedStepRunId) ?? null;
+  const activeStep = [...run.data.steps]
+    .reverse()
+    .find((step) => step.status === 'running' || step.status === 'suspended');
+  const retryableStep = run.data.steps.find(
+    (step) => step.stepId === run.data.currentStepId && step.status === 'failed_retryable',
+  );
+  // With nothing picked, the panel follows whatever needs attention: the running step, or the one
+  // that failed and can be retried.
+  const panelStep = selectedStep ?? (panelDismissed ? null : activeStep ?? retryableStep ?? null);
+
+  const openStep = (stepRunId: string, expand: boolean) => {
+    setSelectedStepRunId(stepRunId);
+    setPanelDismissed(false);
+    if (expand) setPanelExpanded(true);
+  };
 
   return (
     <div className={styles.livePage} {...{ 'data-testid': 'playbook-live-run-page' }}>
@@ -101,7 +118,28 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             {relativeTime(run.data.startedAt)} by {run.data.initiatorUserId}
           </p>
         </div>
+        <div className={styles.liveToolbar}>
+          {activeStep ? (
+            <button
+              type="button"
+              className={styles.liveWatch}
+              onClick={() => openStep(activeStep.id, true)}
+              {...{ 'data-testid': "playbook-live-run-watch" }}
+            >
+              <span className={styles.liveDot} aria-hidden />
+              {activeStep.status === 'suspended' ? 'Waiting on' : 'Running'} {stepMeta(activeStep.stepType).title}
+              {' · '}View log
+            </button>
+          ) : null}
+          <PlaybookRunActions run={run.data} variant="toolbar" />
+        </div>
       </header>
+
+      <PlaybookGateReviewPanel
+        project={project}
+        run={run.data}
+        {...{ 'data-testid': 'playbook-gate-review-panel' }}
+      />
 
       <div className={styles.liveFrame}>
         {graphQuery.isPending ? (
@@ -113,38 +151,40 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             stepLabels={stepLabels}
             readOnly
             stepStatusByNodeId={stepStatusByNodeId}
-            selectedNodeId={selectedStep?.stepId ?? null}
+            selectedNodeId={panelStep?.stepId ?? null}
             onSelectNode={(nodeId) => {
-              const step = run.data.steps.find((candidate) => candidate.stepId === nodeId);
-              setSelectedStepRunId(step?.id ?? null);
+              const step = nodeId
+                ? run.data.steps.find((candidate) => candidate.stepId === nodeId)
+                : undefined;
+              if (step) {
+                openStep(step.id, false);
+              } else if (nodeId === null) {
+                setPanelExpanded(false);
+              }
             }}
           />
         )}
+        {panelStep ? (
+          <PlaybookLiveStepPanel
+            key={panelStep.id}
+            {...{ 'data-testid': 'playbook-live-step-panel' }}
+            project={project}
+            runId={runId}
+            step={panelStep}
+            suspension={run.data.suspension}
+            report={run.data.steps
+              .map((candidate) => candidate.outputInline?.reportMd)
+              .find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? null}
+            expanded={panelExpanded}
+            onExpandedChange={setPanelExpanded}
+            onClose={() => {
+              setSelectedStepRunId(null);
+              setPanelDismissed(true);
+              setPanelExpanded(false);
+            }}
+          />
+        ) : null}
       </div>
-
-      {selectedStep ? (
-        <PlaybookStepDetailDrawer
-          project={project}
-          runId={runId}
-          step={selectedStep}
-          suspension={run.data.suspension}
-          onClose={() => setSelectedStepRunId(null)}
-          data-testid="playbook-live-step-detail"
-        />
-      ) : null}
-
-      <section className={styles.liveSection}>
-        <PlaybookRunStepList
-          run={run.data}
-          id={`playbook-live-steps-${runId}`}
-        />
-        <PlaybookGateReviewPanel
-          project={project}
-          run={run.data}
-          {...{ 'data-testid': 'playbook-gate-review-panel' }}
-        />
-        <PlaybookRunActions run={run.data} />
-      </section>
     </div>
   );
 };
