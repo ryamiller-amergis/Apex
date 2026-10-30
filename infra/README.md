@@ -54,9 +54,9 @@ RBAC defaults to least-privilege per container (or queue). The shared Apex App S
    - Copy App Service `GITHUB_ORG` / `GITHUB_TOKEN` into `github_org` / `github_token` so GitHub projects (including Apex) can be cloned by the repo-read Container App
    - Customize resource names if needed
 
-4. **Initialize Terraform**:
+4. **Initialize Terraform** against the dev remote state (see [Environments and remote state](#environments-and-remote-state)):
    ```bash
-   terraform init
+   terraform init -reconfigure -backend-config=backend/dev.hcl
    ```
 
 5. **Review the plan**:
@@ -69,23 +69,38 @@ RBAC defaults to least-privilege per container (or queue). The shared Apex App S
    terraform apply
    ```
 
-## Workspaces and environments
+## Environments and remote state
 
-Dev and prod share the same `main.tf` and `variables.tf`, but use **separate Terraform workspaces**, **tfvars files**, **Azure subscriptions**, and **state files**. Always confirm all three before running `plan` or `apply`.
+Dev and prod share the same `.tf` files but use separate **state keys**, **tfvars files**, and **Azure subscriptions**. State lives in Azure Storage, not on a laptop. Terraform workspaces are no longer used: the backend config file you pass to `terraform init` selects the environment.
 
 | | Dev (lower) | Production |
 |---|-------------|------------|
-| **Terraform workspace** | `default` | `prd` |
+| **Backend config** | `backend/dev.hcl` | `backend/prd.hcl` |
+| **State blob** | `tfstate/dev.tfstate` in the dev state account | `tfstate/prd.tfstate` in the prod state account |
 | **Variables file** | `terraform.tfvars` (auto-loaded) | `terraform.prd.tfvars` (pass with `-var-file`) |
 | **Azure subscription** | `MSS-DevTest` | `MSS-Production` |
-| **State file** | `terraform.tfstate.d/default/terraform.tfstate` | `terraform.tfstate.d/prd/terraform.tfstate` |
 
 `variables.tf` only defines variable names and defaults — it does not select an environment. Unset variables in `terraform.tfvars` use defaults (e.g. `B1` plan, no staging slot). Prod-only settings (P1v3, zone redundancy, staging slot, separate app resource group) belong in `terraform.prd.tfvars` only.
+
+### Remote state
+
+- **One state storage account per subscription** (`stapextfstatedev`, `stapextfstateprd` by default; names are globally unique, so yours may carry a suffix), each in its own resource group (`rg-apex-tfstate-dev`, `rg-apex-tfstate-prd`) and a private `tfstate` container. The state account is created by `scripts/bootstrap-tfstate.sh`, not by this module, so destroying the stack cannot delete its own state.
+- **Locking**: the azurerm backend takes a blob lease on the state file for every `plan` and `apply`. A second run waits or fails with a lock error instead of overwriting state. If a crashed run leaves a lease behind, confirm nobody is running Terraform, then `terraform force-unlock <lock-id>`.
+- **Auth**: Azure AD only (`use_azuread_auth = true`; shared keys are disabled on the account). Your `az login` identity needs `Storage Blob Data Contributor` on the state account. No keys or SAS tokens are stored anywhere.
+- **Recovery**: blob versioning and 30-day blob and container soft delete are on, so an earlier state version can be restored from the portal.
+- `.terraform.lock.hcl` is committed so everyone, and later the pipeline, uses the same provider versions. Run `terraform init -upgrade` only on purpose, and commit the resulting lock file.
+
+Point your checkout at an environment (re-run whenever you switch):
+
+```bash
+cd infra
+terraform init -reconfigure -backend-config=backend/dev.hcl   # or backend/prd.hcl
+```
 
 ### Check where you are
 
 ```bash
-terraform workspace show
+grep -E 'storage_account_name|key' .terraform/terraform.tfstate   # backend this checkout uses
 az account show --query "{subscription:name}" -o table
 ```
 
@@ -94,9 +109,8 @@ az account show --query "{subscription:name}" -o table
 ```bash
 az account set --subscription "MSS-DevTest"
 cd infra
-terraform workspace select default
+terraform init -reconfigure -backend-config=backend/dev.hcl
 terraform plan    # loads terraform.tfvars automatically
-terraform apply
 ```
 
 ### Production
@@ -104,51 +118,82 @@ terraform apply
 ```bash
 az account set --subscription "MSS-Production"
 cd infra
-terraform workspace select prd
-terraform plan  -var-file="terraform.prd.tfvars"
-terraform apply -var-file="terraform.prd.tfvars"
+terraform init -reconfigure -backend-config=backend/prd.hcl
+terraform plan -var-file="terraform.prd.tfvars"
 ```
 
-Create the `prd` workspace once:
+### One-time bootstrap (per subscription)
+
+Someone who can create resource groups and assign roles in the subscription runs:
 
 ```bash
-terraform workspace new prd
+az login
+infra/scripts/bootstrap-tfstate.sh dev <dev-subscription-id> eastus   # prd: ... prd <prd-subscription-id> eastus
 ```
 
-List all workspaces:
+The script creates the resource group, the StorageV2 account (public blob access off, TLS 1.2 minimum, shared keys off, versioning and soft delete on), and the private `tfstate` container, and grants the caller `Storage Blob Data Contributor`. Set `TFSTATE_SKU=Standard_ZRS` for zone-redundant storage, and pass a resource group and account name as the 4th and 5th arguments if the defaults are taken. It prints the values to copy into `backend/<env>.hcl`; commit that file (it holds no secrets). Grant `Storage Blob Data Contributor` on the account to every other person who runs `plan`.
+
+### One-time migration from local state
+
+Do this once per environment, by the person who holds that environment's local state, with nobody else running Terraform. **Back up first.** Prod is currently one apply ahead of dev; that is expected and is not drift.
+
+**Dev** (local `default` workspace, `infra/terraform.tfstate`):
 
 ```bash
-terraform workspace list
-#   default
-# * prd
-```
-
-The `*` marks the active workspace.
-
-### Switch back to dev after prod work
-
-```bash
-terraform workspace select default
+cd infra
+terraform workspace show                       # must print: default
+cp terraform.tfstate ~/apex-dev-backup.tfstate
+git pull                                       # brings in the backend block and backend/dev.hcl
 az account set --subscription "MSS-DevTest"
+terraform init -migrate-state -backend-config=backend/dev.hcl   # answer "yes" to copy state
+terraform plan -var-file=terraform.tfvars
 ```
 
-### Rules of thumb
+`scripts/dev-aiv2-tf.sh` still selects a separate local `dev-aiv2` workspace. This runbook does not move it; leave that workspace's local state in place until it gets its own state key.
 
-- **Never** run `terraform apply -var-file="terraform.prd.tfvars"` on the `default` workspace — it will plan to destroy dev and recreate prod resources in dev state.
-- **Never** reuse a saved plan file (`terraform.prd.tfplan`) after state changes — run `plan` again first.
-- **Always** run `terraform plan` before `apply` and confirm the workspace, subscription, and destroy count.
-- After changing only `variables.tf`, dev is unaffected until you apply on `default` with `terraform.tfvars`.
+The only changes the plan should show are the resources prod received in its most recent apply. Anything else means dev state and the code disagree; stop and investigate before applying.
+
+**Prod** (local `prd` workspace, `infra/terraform.tfstate.d/prd/terraform.tfstate`):
+
+```bash
+cd infra
+# BEFORE pulling the backend change:
+terraform workspace select prd
+terraform state pull > ~/apex-prd-backup.tfstate
+
+git pull                                       # brings in the backend block and backend/prd.hcl
+az account set --subscription "MSS-Production"
+terraform init -reconfigure -backend-config=backend/prd.hcl     # default workspace on the new backend
+terraform state push ~/apex-prd-backup.tfstate
+terraform plan -var-file=terraform.prd.tfvars                   # must show: No changes
+```
+
+Prod pushes rather than migrates to leave workspaces behind. `-migrate-state` from the `prd` workspace would copy it into a workspace of the same name, and the azurerm backend stores non-default workspaces as `<key>env:<workspace>`, so state would land in `prd.tfstateenv:prd` instead of `prd.tfstate`. Pushing into the new backend's default workspace writes exactly `prd.tfstate`.
+
+**Afterwards**, once both plans are confirmed:
+
+- Delete local state: `terraform.tfstate`, `terraform.tfstate.backup`, and `terraform.tfstate.d/`. Keep the backup files outside the repo for a few weeks.
+- Stop using `terraform workspace`; switch environments with `terraform init -reconfigure -backend-config=...` instead.
+
+### Team rules
+
+- Everyone can `plan` against shared state, for either environment they have access to.
+- Once the GitHub Actions pipeline exists, `apply` runs there. Local `apply` is break-glass only, and the person doing it tells the team first.
+- **Never** commit `*.tfvars` (other than `terraform.tfvars.example`) or state files. Both are gitignored.
+- **Never** run `plan` or `apply` with `terraform.prd.tfvars` while initialized against `backend/dev.hcl`, or the reverse — Terraform would plan to destroy one environment and recreate it as the other. Check the backend and subscription first.
+- **Never** reuse a saved plan file after state changes — run `plan` again. Delete stray `*.tfplan` files when you are done with them.
+- **Always** run `terraform plan` before `apply` and confirm the backend, subscription, and destroy count.
 
 ## Production (first-time stand-up)
 
-Dev and prod **must not share state**. See [Workspaces and environments](#workspaces-and-environments) for day-to-day navigation.
+Dev and prod **must not share state**. See [Environments and remote state](#environments-and-remote-state) for day-to-day navigation.
 
 1. **Create `terraform.prd.tfvars`** (copy from `terraform.tfvars` and update resource names, `environment = "prd"`, redirect URL, and prod-specific secrets). This file is gitignored.
 
-2. **Switch to prod** (subscription + workspace):
+2. **Switch to prod** (subscription + backend):
    ```bash
    az account set --subscription "MSS-Production"
-   terraform workspace select prd   # or: terraform workspace new prd
+   terraform init -reconfigure -backend-config=backend/prd.hcl
    ```
 
 3. **Plan and verify** — greenfield stand-up must show **only creates**, zero destroys:
@@ -215,7 +260,7 @@ outside Terraform rather than changed through tfvars.
 
 ### Shared async storage
 
-The shared Blob account is created in every Terraform workspace. PDF assembly has moved to DocHub; the `pdf-artifacts` container is **kept** in `blob_containers` so apply does not destroy existing blobs. Purge it in a later change after operators confirm it is unused. Job delivery for remaining Apex async work uses the **Postgres queue** — Terraform does **not** provision Service Bus for PDF.
+The shared Blob account is created in every environment. PDF assembly has moved to DocHub; the `pdf-artifacts` container is **kept** in `blob_containers` so apply does not destroy existing blobs. Purge it in a later change after operators confirm it is unused. Job delivery for remaining Apex async work uses the **Postgres queue** — Terraform does **not** provision Service Bus for PDF.
 
 **Do not** grant account-wide Blob Contributor “for PDF”; that role assignment lived in `pdf-processing.tf` and has been removed.
 
@@ -233,7 +278,7 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 | `PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` output | Playbook step-output store |
 | `PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME` | `playbook_step_output_blob_container_name` output | Playbook step-output store |
 
-`playbook-step-outputs` stores private JSON for Playbook steps whose output exceeds the inline limit. The Apex App Service identity, and a distinct staging-slot identity when enabled, receive `Storage Blob Data Contributor` only on that container. The application falls back to `GROUNDING_BLOB_ACCOUNT_NAME` or `PDF_BLOB_ACCOUNT_NAME` when the explicit account setting has not yet been deployed, because all three name the same shared account. A daily in-process sweep verifies referenced objects and deletes only unreferenced objects older than one hour. Apply this change in each Terraform workspace before Playbook steps spill large output there.
+`playbook-step-outputs` stores private JSON for Playbook steps whose output exceeds the inline limit. The Apex App Service identity, and a distinct staging-slot identity when enabled, receive `Storage Blob Data Contributor` only on that container. The application falls back to `GROUNDING_BLOB_ACCOUNT_NAME` or `PDF_BLOB_ACCOUNT_NAME` when the explicit account setting has not yet been deployed, because all three name the same shared account. A daily in-process sweep verifies referenced objects and deletes only unreferenced objects older than one hour. Apply this change in each environment before Playbook steps spill large output there.
 
 ### Repository grounding bundles
 
@@ -273,7 +318,7 @@ provisioning is intentionally two-stage:
 
 #### Non-prod verification
 
-After confirming the `default` workspace and `MSS-DevTest` subscription:
+After initializing against `backend/dev.hcl` and confirming the `MSS-DevTest` subscription:
 
 ```bash
 terraform fmt -check
@@ -477,7 +522,7 @@ still overwrite the live job image on the next deploy.
 
 ### Non-prod verification (load-test module)
 
-After confirming `default` workspace and `MSS-DevTest` subscription:
+After initializing against `backend/dev.hcl` and confirming the `MSS-DevTest` subscription:
 
 ```bash
 terraform fmt -check
@@ -668,7 +713,7 @@ required.
 
 ### Activation
 
-Use the dev workspace and `terraform.tfvars`, or the production workspace and
+Use `backend/dev.hcl` and `terraform.tfvars`, or `backend/prd.hcl` and
 `terraform.prd.tfvars`:
 
 ```hcl
@@ -991,11 +1036,11 @@ To change the App Service tier, set `app_service_plan_sku` in the environment's 
 
 ```bash
 # Dev
-terraform workspace select default
+terraform init -reconfigure -backend-config=backend/dev.hcl
 terraform apply
 
 # Prod
-terraform workspace select prd
+terraform init -reconfigure -backend-config=backend/prd.hcl
 terraform apply -var-file="terraform.prd.tfvars"
 ```
 
@@ -1007,23 +1052,23 @@ Approximate monthly costs (East US):
 
 ## Cleanup
 
-To destroy all resources in the **active** workspace:
+To destroy all resources in the environment this checkout is initialized against:
 
 ```bash
 # Dev
-terraform workspace select default
 az account set --subscription "MSS-DevTest"
+terraform init -reconfigure -backend-config=backend/dev.hcl
 terraform destroy
 
 # Prod
-terraform workspace select prd
+terraform init -reconfigure -backend-config=backend/prd.hcl
 az account set --subscription "MSS-Production"
 terraform destroy -var-file="terraform.prd.tfvars"
 ```
 
 ## Security Notes
 
-- `terraform.tfvars` and `terraform.prd.tfvars` are excluded from git (see `.gitignore`)
+- `terraform.tfvars`, `terraform.prd.tfvars`, and local state files are excluded from git (see `.gitignore`)
 - Never commit sensitive values (PATs, keys) to version control
 - Rotate PAT tokens regularly
 - Use Azure Key Vault for production secrets
@@ -1037,10 +1082,9 @@ terraform destroy -var-file="terraform.prd.tfvars"
 - Ensure all environment variables are set
 
 **Issue**: Terraform state conflicts or wrong environment targeted
-- Run `terraform workspace show` and `az account show` before every apply
-- Dev and prod use separate workspaces — see [Workspaces and environments](#workspaces-and-environments)
-- Use remote state (Azure Storage) for team collaboration
-- Lock state during operations
+- Check the backend (`.terraform/terraform.tfstate`) and `az account show` before every apply
+- Dev and prod use separate state keys and backend configs — see [Environments and remote state](#environments-and-remote-state)
+- A state lock error means another run holds the blob lease; wait for it, or `terraform force-unlock` only after confirming nobody is running
 
 **Issue**: `Saved plan is stale`
 - Re-run `terraform plan` (and `-var-file` for prod) after any state change; do not reuse old `.tfplan` files
