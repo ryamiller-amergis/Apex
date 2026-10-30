@@ -1125,4 +1125,66 @@ describe('AzureDevOpsService', () => {
       expect(mockGitApi.createPullRequestLabel).not.toHaveBeenCalled();
     });
   });
+
+  describe('searchWorkItems', () => {
+    const pbi = {
+      id: 59642,
+      fields: {
+        'System.Title': 'Release item',
+        'System.State': 'Active',
+        'System.AssignedTo': { displayName: 'Dev One' },
+        'System.WorkItemType': 'Product Backlog Item',
+      },
+    };
+
+    it('looks up a numeric query directly by ID without a WIQL query', async () => {
+      const service = new AzureDevOpsService();
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      const result = await service.searchWorkItems(' 59642 ', 'All');
+
+      expect(mockWitApi.queryByWiql).not.toHaveBeenCalled();
+      expect(mockWitApi.getWorkItems).toHaveBeenCalledWith(
+        [59642],
+        expect.arrayContaining(['System.Title', 'System.WorkItemType']),
+        undefined,
+        undefined,
+        2,
+      );
+      expect(result).toEqual([
+        expect.objectContaining({
+          id: 59642,
+          title: 'Release item',
+          state: 'Active',
+          assignedTo: 'Dev One',
+          workItemType: 'Product Backlog Item',
+        }),
+      ]);
+    });
+
+    it('returns no results when the ID does not exist or does not match the chosen type', async () => {
+      const service = new AzureDevOpsService();
+
+      mockWitApi.getWorkItems.mockResolvedValueOnce([null]);
+      expect(await service.searchWorkItems('99999999', 'All')).toEqual([]);
+
+      mockWitApi.getWorkItems.mockResolvedValueOnce([pbi]);
+      expect(await service.searchWorkItems('59642', 'Bug')).toEqual([]);
+    });
+
+    it('searches text under the area path and escapes single quotes', async () => {
+      const service = new AzureDevOpsService("Team's Project", "Team's Project\\Area");
+      mockWitApi.queryByWiql.mockResolvedValue({ workItems: [{ id: 59642 }] });
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      const result = await service.searchWorkItems("can't link", "Dev's Type");
+
+      const wiql: string = mockWitApi.queryByWiql.mock.calls[0][0].query;
+      expect(wiql).toContain("[System.TeamProject] = 'Team''s Project'");
+      expect(wiql).toContain("[System.AreaPath] UNDER 'Team''s Project\\Area'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Dev''s Type'");
+      expect(wiql).toContain("[System.Title] CONTAINS 'can''t link'");
+      expect(result).toHaveLength(1);
+    });
+  });
 });

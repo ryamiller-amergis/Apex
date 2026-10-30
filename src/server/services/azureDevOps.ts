@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
-import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
+import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
@@ -2637,42 +2637,7 @@ export class AzureDevOpsService {
   async searchWorkItems(query: string, typeFilter?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
-
-      // Build WIQL query
-      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}'`;
-
-      if (this.areaPath) {
-        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
-      }
-
-      // Filter by work item type if specified
-      if (typeFilter && typeFilter !== 'All') {
-        wiql += ` AND [System.WorkItemType] = '${typeFilter}'`;
-      } else {
-        wiql += ` AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
-      }
-
-      // Search by ID or title/description
-      const numericQuery = parseInt(query, 10);
-      if (!isNaN(numericQuery)) {
-        wiql += ` AND [System.Id] = ${numericQuery}`;
-      } else {
-        wiql += ` AND ([System.Title] CONTAINS '${query}' OR [System.Description] CONTAINS '${query}')`;
-      }
-
-      wiql += ' ORDER BY [System.ChangedDate] DESC';
-
-      const queryResult = await witApi.queryByWiql(
-        { query: wiql },
-        { project: this.project }
-      );
-
-      if (!queryResult.workItems || queryResult.workItems.length === 0) {
-        return [];
-      }
-
-      const ids = queryResult.workItems.map((wi) => wi.id!).slice(0, 50); // Limit to 50 results
-
+      const hasTypeFilter = !!typeFilter && typeFilter !== 'All';
       const fields = [
         'System.Id',
         'System.Title',
@@ -2681,7 +2646,51 @@ export class AzureDevOpsService {
         'System.WorkItemType',
       ];
 
-      const workItems = await witApi.getWorkItems(ids, fields);
+      let workItems: Awaited<ReturnType<typeof witApi.getWorkItems>>;
+      const trimmedQuery = query.trim().replace(/^#/, '');
+
+      if (/^\d+$/.test(trimmedQuery)) {
+        // Work item IDs are unique across the organization, so an exact ID skips the project and area filters.
+        const found = await witApi.getWorkItems(
+          [parseInt(trimmedQuery, 10)],
+          fields,
+          undefined,
+          undefined,
+          WorkItemErrorPolicy.Omit
+        );
+        workItems = (found ?? []).filter(
+          (wi) => wi?.fields && (!hasTypeFilter || wi.fields['System.WorkItemType'] === typeFilter)
+        );
+      } else {
+        const escape = (value: string) => value.replace(/'/g, "''");
+        let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${escape(this.project)}'`;
+
+        if (this.areaPath) {
+          wiql += ` AND [System.AreaPath] UNDER '${escape(this.areaPath)}'`;
+        }
+
+        if (hasTypeFilter) {
+          wiql += ` AND [System.WorkItemType] = '${escape(typeFilter!)}'`;
+        } else {
+          wiql += ` AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
+        }
+
+        const escapedQuery = escape(query);
+        wiql += ` AND ([System.Title] CONTAINS '${escapedQuery}' OR [System.Description] CONTAINS '${escapedQuery}')`;
+        wiql += ' ORDER BY [System.ChangedDate] DESC';
+
+        const queryResult = await witApi.queryByWiql(
+          { query: wiql },
+          { project: this.project }
+        );
+
+        if (!queryResult.workItems || queryResult.workItems.length === 0) {
+          return [];
+        }
+
+        const ids = queryResult.workItems.map((wi) => wi.id!).slice(0, 50); // Limit to 50 results
+        workItems = await witApi.getWorkItems(ids, fields);
+      }
 
       return workItems.map((wi) => ({
         id: wi.id!,
@@ -2873,7 +2882,7 @@ export class AzureDevOpsService {
     const escapedProject = this.project.replace(/'/g, "''");
     const escapedAreaPath = this.areaPath?.replace(/'/g, "''");
     const areaClause = escapedAreaPath
-      ? ` AND [Source].[System.AreaPath] = '${escapedAreaPath}'`
+      ? ` AND [Source].[System.AreaPath] UNDER '${escapedAreaPath}'`
       : '';
     const wiql = `
       SELECT [System.Id]
