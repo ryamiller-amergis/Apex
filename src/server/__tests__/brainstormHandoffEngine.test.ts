@@ -494,6 +494,13 @@ describe('VT-33: interrupted confirmation', () => {
     const pending = await engine.confirm(session, 'creator', { handoffId: preview.handoffId, idempotencyKey: preview.idempotencyKey });
     expect(pending).toEqual({ handoffId: preview.handoffId, state: 'executing' });
 
+    const replayed = await engine.preview(session, 'creator', { actionId: 'create-adr', expectedVersion: 3 });
+    expect(replayed).toMatchObject({
+      handoffId: preview.handoffId,
+      idempotencyKey: preview.idempotencyKey,
+      state: 'previewed',
+    });
+
     state.clock = new Date(state.clock.getTime() + 61_000);
     const done = await engine.confirm(session, 'creator', { handoffId: preview.handoffId, idempotencyKey: preview.idempotencyKey });
     expect(done).toMatchObject({ state: 'completed', resultRef: { id: 'adr-1' }, replayed: false });

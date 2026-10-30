@@ -697,8 +697,8 @@ export function createDurableInteractiveTurnRepository(options?: {
 
         if (
           lockedRun.transport_version !== 'dapr-actor-v2' ||
-          lockedRun.status !== 'failed' ||
-          latestAttempt.status !== 'failed' ||
+          (lockedRun.status !== 'failed' && lockedRun.status !== 'cancelled') ||
+          (latestAttempt.status !== 'failed' && latestAttempt.status !== 'cancelled') ||
           !lockedRun.client_turn_id
         ) {
           return { status: 'not_retryable' };

@@ -42,7 +42,7 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
   const hasContent = artifact.version > 0 && artifact.markdown.trim().length > 0;
 
   const start = (action: BrainstormActionDto) => {
-    if (action.state !== 'available') return;
+    if (action.state !== 'available' && action.state !== 'in_progress') return;
     if (action.id === 'keep-standalone') {
       setKeepError(null);
       keep.mutate(
@@ -116,7 +116,7 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
       <ul className={styles.list}>
         {list.map((action) => {
           const reasonId = `brainstorm-action-reason-${sessionId}-${action.id}`;
-          const unavailable = action.state !== 'available';
+          const clickable = action.state === 'available' || action.state === 'in_progress';
           return (
             <li key={action.id} className={styles.row} {...{ 'data-testid': `brainstorm-action-${action.id}` }}>
               <div className={styles.rowText}>
@@ -139,8 +139,8 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
               ) : (
                 <button
                   type="button"
-                  className={`${styles.button} ${action.state === 'available' ? styles.primary : ''}`}
-                  aria-disabled={unavailable || undefined}
+                  className={`${styles.button} ${clickable ? styles.primary : ''}`}
+                  aria-disabled={!clickable || undefined}
                   aria-describedby={action.state === 'unavailable' && action.reasons.length > 0 ? reasonId : undefined}
                   disabled={action.id === 'keep-standalone' && keep.isPending}
                   onClick={() => start(action)}

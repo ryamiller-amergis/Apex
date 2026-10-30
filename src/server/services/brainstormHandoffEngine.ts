@@ -397,10 +397,16 @@ export function createHandoffEngine(deps: HandoffEngineDeps) {
         throw new BrainstormHandoffError('ARTIFACT_VERSION_CONFLICT', 409, { currentVersion: artifact.version });
       }
       const action = listed.actions.find((item) => item.id === target.id);
-      if (!action || action.state !== 'available' || !capabilities || !artifact.type) throw unavailable(action);
+      if (!action || !capabilities || !artifact.type) throw unavailable(action);
 
       const existing = await persistence.findLive(session.id, target.kind, artifact.version);
-      if (existing?.state === 'previewed' && existing.previewSnapshot.preview) return previewDto(existing);
+      if (
+        existing?.previewSnapshot.preview &&
+        (existing.state === 'previewed' || existing.state === 'executing')
+      ) {
+        return previewDto(existing);
+      }
+      if (action.state !== 'available') throw unavailable(action);
 
       const outline = outlineArtifact(artifact.markdown);
       const plan = target.plan(outline, artifact.type, capabilities);

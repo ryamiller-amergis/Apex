@@ -637,7 +637,7 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
     },
 
     /**
-     * Retries the latest failed, unsuperseded assistant row by run identity.
+     * Retries the latest failed or cancelled, unsuperseded assistant row by run identity.
      * A repeated retry of the same run returns the replacement already made.
      */
     async retryFailedTurn(input: {
@@ -647,7 +647,9 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
     }): Promise<BrainstormTurnAcceptedResponse> {
       const { session, userId, runId } = input;
       const failed = await deps.ledger.findAssistantByRun(session.id, runId);
-      if (!failed || failed.status !== 'failed') throw new BrainstormError('not_retryable', 409);
+      if (!failed || (failed.status !== 'failed' && failed.status !== 'cancelled')) {
+        throw new BrainstormError('not_retryable', 409);
+      }
 
       if (failed.supersededByMessageId) {
         const replacement = await deps.ledger.findMessage(session.id, failed.supersededByMessageId);

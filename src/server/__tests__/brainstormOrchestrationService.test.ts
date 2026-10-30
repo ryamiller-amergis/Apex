@@ -334,6 +334,26 @@ describe('brainstormOrchestrationService.retryFailedTurn', () => {
     expect(result).toMatchObject({ runId: RETRY_RUN_ID, messageId: 'm-retry' });
   });
 
+  it('retries the latest cancelled row by run identity and links the replacement', async () => {
+    const cancelled = row({ id: 'm-cancelled', status: 'cancelled', runId: RUN_ID, failureCode: 'cancelled' });
+    const deps = makeDeps();
+    deps.ledger.findAssistantByRun.mockResolvedValue(cancelled);
+    deps.ledger.latestAssistantRow.mockResolvedValue(cancelled);
+    const result = await createBrainstormOrchestrationService(deps).retryFailedTurn({
+      session,
+      userId: 'creator',
+      runId: RUN_ID,
+    });
+    expect(deps.retryRun).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      runId: RUN_ID,
+      userId: 'creator',
+      refreshedBrainstormArtifact: ARTIFACT_V3,
+    });
+    expect(deps.ledger.openRetryRow).toHaveBeenCalledWith({ failed: cancelled, runId: RETRY_RUN_ID });
+    expect(result).toMatchObject({ runId: RETRY_RUN_ID, messageId: 'm-retry' });
+  });
+
   it('returns the first retry when the same run is retried again', async () => {
     const deps = makeDeps();
     deps.ledger.findAssistantByRun.mockResolvedValue({ ...failed, supersededByMessageId: 'm-retry' });

@@ -425,4 +425,9 @@ describe('retryableBrainstormMessage', () => {
     expect(retryableBrainstormMessage([failed, msg({ id: 'a-2', status: 'completed' })])).toBeNull();
     expect(retryableBrainstormMessage([{ ...failed, runId: null }])).toBeNull();
   });
+
+  it('returns a stopped collaborator reply that still has a run id', () => {
+    const cancelled = msg({ id: 'a-stop', status: 'cancelled', runId: 'run-stop' });
+    expect(retryableBrainstormMessage([cancelled])).toBe(cancelled);
+  });
 });
