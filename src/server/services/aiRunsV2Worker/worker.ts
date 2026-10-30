@@ -113,6 +113,16 @@ function failureCategoryFor(error: unknown): AiRunV2FailureCategory {
   return 'internal_error';
 }
 
+/** A platform DOMException is not always an `Error` instance, so match by name. */
+function isShutdownAbort(error: unknown, shutdownReason: unknown): boolean {
+  if (shutdownReason !== undefined && error === shutdownReason) return true;
+  return (
+    typeof error === 'object'
+    && error !== null
+    && (error as { name?: unknown }).name === 'AbortError'
+  );
+}
+
 function executionAbortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason;
   const error = new Error('Execution deadline elapsed');
@@ -300,7 +310,9 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
       const usage =
         error instanceof CursorExecutionWaitError ? error.usage : undefined;
       const lostToShutdown =
-        deps.reportShutdownAsWorkerLost === true && abortedForShutdown;
+        deps.reportShutdownAsWorkerLost === true
+        && abortedForShutdown
+        && isShutdownAbort(error, shutdownSignal?.reason);
       await results.publishTerminal({
         status: 'failed',
         artifactStatus: 'failed',

@@ -568,6 +568,7 @@ describe('V2 worker run loop', () => {
     function abortingWorker(options: {
       reportShutdownAsWorkerLost?: boolean;
       abort: 'shutdown' | 'deadline';
+      rejectWith?: Error;
     }) {
       const { bus, calls } = fakeBus(command());
       const stopExecution = new AbortController();
@@ -578,6 +579,10 @@ describe('V2 worker run loop', () => {
             signal.addEventListener(
               'abort',
               () => {
+                if (options.rejectWith) {
+                  reject(options.rejectWith);
+                  return;
+                }
                 const error = new Error(
                   signal.reason instanceof Error
                     ? signal.reason.message
@@ -615,6 +620,23 @@ describe('V2 worker run loop', () => {
           status: 'failed',
           failureCategory: 'worker_lost',
           detail: WORKER_SHUTDOWN_DETAIL,
+        }),
+      ]);
+    });
+
+    it('keeps internal_error for a non-abort error thrown after shutdown', async () => {
+      const { worker, calls } = abortingWorker({
+        reportShutdownAsWorkerLost: true,
+        abort: 'shutdown',
+        rejectWith: new Error('boom'),
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'internal_error',
+          detail: 'boom',
         }),
       ]);
     });
