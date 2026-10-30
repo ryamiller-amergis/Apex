@@ -5,6 +5,7 @@
 import { AzureDevOpsService } from '../azureDevOps';
 import { reviewDesignDoc } from '../designDocService';
 import { reviewPrd } from '../prdService';
+import { markdownToAdoHtml } from './adoDescriptionHtml';
 import { apexActionParameterSchema } from './registry';
 import { parseStepInput, parseStepOutput } from './descriptorValidation';
 import { completeStepRun, type PlaybookStepExecutionContext, type PlaybookStepOutcome } from './stepRuns';
@@ -49,10 +50,14 @@ async function runApexAction(
   }
   if (operation === 'create-work-item') {
     const body = parameters as { workItemType: string; title: string; description: string };
+    const html = markdownToAdoHtml(body.description);
+    // Description is the field a PBI, TBI, or Feature shows. A Bug form shows Repro Steps instead.
+    const isBug = body.workItemType.trim().toLowerCase() === 'bug';
     const created = await new AzureDevOpsService(context.project).createWorkItemForPrd({
       type: body.workItemType,
       title: body.title,
-      description: body.description,
+      description: html,
+      reproStepsHtml: isBug ? html : undefined,
     });
     return {
       summary: `Created Azure DevOps ${body.workItemType} ${created.id}.`,
