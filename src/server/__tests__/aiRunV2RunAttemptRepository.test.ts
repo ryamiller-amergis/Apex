@@ -1,4 +1,7 @@
-import { AI_RUN_V2_SCHEMA_VERSION } from '../../shared/types/aiRunV2';
+import {
+  AI_RUN_V2_MAX_ATTEMPTS,
+  AI_RUN_V2_SCHEMA_VERSION,
+} from '../../shared/types/aiRunV2';
 import {
   createRunAttemptRepository,
   type CreateDispatchedV2RunInput,
@@ -578,6 +581,208 @@ describe('AI-run V2 run attempt repository', () => {
       ).resolves.toBe(expectedState);
     },
   );
+
+  describe('replaceLostAttempt', () => {
+    const lostAttempt = {
+      id: 'attempt-1',
+      run_id: 'run-1',
+      status: 'running',
+      dispatch_message_id: 'dispatch-1',
+    };
+
+    function retryContext(attemptCount: number, deadlineElapsed = false) {
+      return {
+        workload_lane: 'document',
+        capacity_class: 'batch',
+        spec_ref: specRef,
+        attempt_count: attemptCount,
+        deadline_elapsed: deadlineElapsed,
+      };
+    }
+
+    function sqlText(query: unknown): string {
+      return boundStrings(query).join(' ');
+    }
+
+    it('fails the lost attempt and dispatches the next one in one transaction', async () => {
+      let transactionCount = 0;
+      const execute = jest
+        .fn()
+        .mockResolvedValueOnce([lostAttempt])
+        .mockResolvedValueOnce([retryContext(1)])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            id: 'run-1',
+            status: 'running',
+            transport_version: 'servicebus-blob-v2',
+            timeout_at: new Date('2026-09-18T13:00:00.000Z'),
+          },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ max_attempt: 1 }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            id: 'outbox-2',
+            idempotency_key: 'attempt-2:dispatch',
+            kind: 'dispatch_command',
+            run_id: 'run-1',
+            attempt_id: 'attempt-2',
+            payload: {},
+            available_at: new Date('2026-09-18T12:00:00.000Z'),
+            publish_attempts: 0,
+            created_at: new Date('2026-09-18T12:00:00.000Z'),
+          },
+        ])
+        .mockResolvedValue([]);
+      const repo = createRunAttemptRepository({
+        runInTransaction: async (work) => {
+          transactionCount += 1;
+          return work({ execute });
+        },
+      });
+
+      const replaced = await repo.replaceLostAttempt({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+        artifactStatus: 'failed',
+        failureDetail: 'worker shut down before the run finished',
+      });
+
+      expect(replaced).toMatchObject({
+        status: 'replaced',
+        lostAttemptId: 'attempt-1',
+        attemptNumber: 2,
+        outboxId: 'outbox-2',
+      });
+      expect(transactionCount).toBe(1);
+      const statements = execute.mock.calls.map(([query]) => sqlText(query));
+      const attemptUpdate = statements.find((text) =>
+        text.includes('UPDATE ai_run_attempts'));
+      expect(attemptUpdate).toContain('worker_lost');
+      expect(attemptUpdate).toContain("status = 'failed'");
+      const headerUpdates = statements.filter((text) =>
+        text.includes('UPDATE agent_runs'));
+      expect(headerUpdates).toHaveLength(1);
+      expect(headerUpdates[0]).toContain("status = 'dispatched'");
+      expect(statements.some((text) => text.includes('terminal_reason')))
+        .toBe(false);
+      expect(
+        statements.some((text) =>
+          text.includes('"deadlineAt":"2026-09-18T13:00:00.000Z"')),
+      ).toBe(true);
+    });
+
+    it('writes nothing once the run has used its attempts', async () => {
+      const execute = jest
+        .fn()
+        .mockResolvedValueOnce([lostAttempt])
+        .mockResolvedValueOnce([retryContext(AI_RUN_V2_MAX_ATTEMPTS)]);
+      const repo = createRunAttemptRepository({
+        runInTransaction: async (work) => work({ execute }),
+      });
+
+      await expect(
+        repo.replaceLostAttempt({
+          attemptId: 'attempt-1',
+          expectedDispatchMessageId: 'dispatch-1',
+        }),
+      ).resolves.toEqual({
+        status: 'attempts_exhausted',
+        attemptCount: AI_RUN_V2_MAX_ATTEMPTS,
+      });
+      expect(execute).toHaveBeenCalledTimes(2);
+    });
+
+    it('writes nothing once the run deadline has passed', async () => {
+      const execute = jest
+        .fn()
+        .mockResolvedValueOnce([lostAttempt])
+        .mockResolvedValueOnce([retryContext(1, true)]);
+      const repo = createRunAttemptRepository({
+        runInTransaction: async (work) => work({ execute }),
+      });
+
+      await expect(
+        repo.replaceLostAttempt({
+          attemptId: 'attempt-1',
+          expectedDispatchMessageId: 'dispatch-1',
+        }),
+      ).resolves.toEqual({ status: 'deadline_elapsed' });
+      expect(execute).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses a stale dispatch fence', async () => {
+      const execute = jest.fn().mockResolvedValueOnce([lostAttempt]);
+      const repo = createRunAttemptRepository({
+        runInTransaction: async (work) => work({ execute }),
+      });
+
+      await expect(
+        repo.replaceLostAttempt({
+          attemptId: 'attempt-1',
+          expectedDispatchMessageId: 'dispatch-stale',
+        }),
+      ).resolves.toEqual({ status: 'fence_mismatch' });
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats late messages from the replaced attempt as already terminal', async () => {
+      const replacedAttempt = { ...lostAttempt, status: 'failed' };
+      const execute = jest
+        .fn()
+        .mockResolvedValueOnce([replacedAttempt])
+        .mockResolvedValueOnce([replacedAttempt])
+        .mockResolvedValueOnce([
+          {
+            ...replacedAttempt,
+            last_checkpoint_sequence: 4,
+            thread_id: 'thread-1',
+          },
+        ]);
+      const repo = createRunAttemptRepository({
+        runInTransaction: async (work) => work({ execute }),
+      });
+
+      await expect(
+        repo.replaceLostAttempt({
+          attemptId: 'attempt-1',
+          expectedDispatchMessageId: 'dispatch-1',
+        }),
+      ).resolves.toEqual({
+        status: 'illegal_transition',
+        from: 'failed',
+        to: 'failed',
+      });
+      await expect(
+        repo.transitionAttempt({
+          attemptId: 'attempt-1',
+          expectedDispatchMessageId: 'dispatch-1',
+          to: 'completed',
+        }),
+      ).resolves.toEqual({
+        status: 'illegal_transition',
+        from: 'failed',
+        to: 'completed',
+      });
+      await expect(
+        repo.acceptCheckpoint({
+          schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+          eventId: 'evt-late',
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          dispatchMessageId: 'dispatch-1',
+          timestamp: '2026-09-18T12:00:00.000Z',
+          kind: 'heartbeat',
+          checkpointSequence: 5,
+        }),
+      ).resolves.toEqual({ status: 'stale_sequence', lastCheckpointSequence: 4 });
+      expect(execute).toHaveBeenCalledTimes(3);
+    });
+  });
 
   it('distinguishes missing interactive attempts from stale fences', async () => {
     const missingExecute = jest.fn().mockResolvedValueOnce([]);
