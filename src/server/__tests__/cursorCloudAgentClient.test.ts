@@ -35,6 +35,7 @@ jest.mock('../services/repoCacheService', () => ({
 
 import {
   buildCloudRepoUrl,
+  CloudAgentLaunchRefusedError,
   cancelCursorCloudAgentRun,
   getCloudAgentRun,
   launchCloudAgent,
@@ -293,6 +294,128 @@ describe('cursorCloudAgentClient', () => {
     expect(observed.status).toBe('finished');
     expect(observed.noChanges).toBe(true);
     expect(observed.settled).toBe(true);
+  });
+
+  describe('build launches and the required model (TBI-016, PBI-019)', () => {
+    const myWorkInput = {
+      project: 'MaxView',
+      prompt: 'Implement the work item',
+      model: 'composer-2.5',
+      skillProvider: 'ado' as const,
+      skillRepo: 'MaxView',
+      skillBranch: 'development',
+      workItemTitle: 'Document Management',
+    };
+    const buildInput = {
+      project: 'MaxView',
+      prompt: 'Build task t1',
+      model: 'composer-2.5',
+      skillProvider: 'ado' as const,
+      skillRepo: 'MaxView',
+      workItemTitle: 'run-1/t1',
+      build: { startingBranch: 'build/run-1', branchName: 'build/run-1/t1', openPullRequest: false },
+    };
+    let previousKey: string | undefined;
+
+    beforeEach(() => {
+      previousKey = process.env.CURSOR_USER_LEVEL_API_KEY;
+      process.env.CURSOR_USER_LEVEL_API_KEY = 'user-key';
+      mockCreate.mockReset();
+      mockSend.mockReset();
+      mockDispose.mockReset();
+      mockDispose.mockResolvedValue(undefined);
+      mockSend.mockImplementation(async () => ({ id: `run-${mockSend.mock.calls.length}` }));
+      mockCreate.mockImplementation(async () => ({
+        agentId: `bc-${mockCreate.mock.calls.length}`,
+        send: mockSend,
+        [Symbol.asyncDispose]: mockDispose,
+      }));
+    });
+
+    afterEach(() => {
+      if (previousKey === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previousKey;
+    });
+
+    it('VT-02 / DoD-0: starts a build agent from its starting branch with no pull request and names its branch', async () => {
+      await launchCloudAgent(buildInput);
+
+      expect(mockCreate).toHaveBeenCalledWith({
+        apiKey: 'user-key',
+        model: { id: 'composer-2.5' },
+        name: 'run-1/t1',
+        cloud: {
+          repos: [{ url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView', startingRef: 'build/run-1' }],
+          autoCreatePR: false,
+        },
+      });
+      expect(mockSend).toHaveBeenCalledWith(
+        'Build task t1\n\nWork on branch `build/run-1/t1` and no other branch.',
+      );
+    });
+
+    it.each([
+      ['My Work', '', true],
+      ['My Work', '   ', true],
+      ['My Work', undefined, true],
+      ['build', '', false],
+      ['build', '   ', false],
+      ['build', undefined, false],
+    ])('VT-03 / DoD-1 / AC-1: refuses a %s launch with model %p before any SDK call', async (_label, model, myWork) => {
+      delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      const input = { ...(myWork ? myWorkInput : buildInput), model } as unknown as Parameters<typeof launchCloudAgent>[0];
+
+      const attempt = launchCloudAgent(input);
+
+      await expect(attempt).rejects.toBeInstanceOf(CloudAgentLaunchRefusedError);
+      await expect(attempt).rejects.toMatchObject({
+        code: 'model_required',
+        message: 'Cloud Agent launch refused: no model was given.',
+      });
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it('VT-04 / AC-3: refuses a build launch that asks for a pull request', async () => {
+      const attempt = launchCloudAgent({
+        ...buildInput,
+        build: { ...buildInput.build, openPullRequest: true },
+      });
+
+      await expect(attempt).rejects.toMatchObject({ code: 'build_pull_request_forbidden' });
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a blank starting branch', { ...buildInput, build: { ...buildInput.build, startingBranch: ' ' } }, 'build_options_invalid'],
+      ['a blank branch name', { ...buildInput, build: { ...buildInput.build, branchName: '' } }, 'build_options_invalid'],
+      ['a skill branch as well', { ...buildInput, skillBranch: 'development' }, 'starting_branch_ambiguous'],
+    ])('VT-05 / DoD-0: refuses a build launch with %s', async (_label, input, code) => {
+      const attempt = launchCloudAgent(input as unknown as Parameters<typeof launchCloudAgent>[0]);
+
+      await expect(attempt).rejects.toMatchObject({ code });
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it('VT-06 / AC-0 / AC-2 / DoD-2 / DoD-3: My Work and build launches at once each keep their own branch and pull request setting', async () => {
+      await Promise.all([launchCloudAgent(myWorkInput), launchCloudAgent(buildInput)]);
+
+      const payloads = mockCreate.mock.calls.map(([payload]) => payload as {
+        name: string;
+        cloud: { repos: Array<{ startingRef: string }>; autoCreatePR: boolean };
+      });
+      const myWork = payloads.find((payload) => payload.name === 'Document Management');
+      const build = payloads.find((payload) => payload.name === 'run-1/t1');
+      expect(myWork?.cloud).toEqual({
+        repos: [{ url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView', startingRef: 'development' }],
+        autoCreatePR: true,
+      });
+      expect(build?.cloud).toEqual({
+        repos: [{ url: 'https://dev.azure.com/amergis/MaxView/_git/MaxView', startingRef: 'build/run-1' }],
+        autoCreatePR: false,
+      });
+      expect(mockSend).toHaveBeenCalledWith('Implement the work item');
+      expect(mockSend).toHaveBeenCalledWith(expect.stringContaining('build/run-1/t1'));
+    });
   });
 
   // it('reads a live container execution through the container adapter', async () => {
