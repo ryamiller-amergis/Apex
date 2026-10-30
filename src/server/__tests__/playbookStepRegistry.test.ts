@@ -127,6 +127,7 @@ describe('TBI-016 VT-02 — the three production step types', () => {
       'branch',
       'build',
       'cloud-agent',
+      'connector',
       'cursor-agent',
       'foreach',
       'ingest-artifact',
@@ -282,7 +283,11 @@ describe('FEAT-008 VT-01 (TBI-032 a, d) — every step type declares inspectable
     const source = fs.readFileSync(REGISTRY_SOURCE, 'utf8');
     const specifiers = [...source.matchAll(/from '([^']+)'/g)].map((match) => match[1]);
 
-    expect([...new Set(specifiers)].sort()).toEqual(['../../../shared/types/playbook', 'zod']);
+    expect([...new Set(specifiers)].sort()).toEqual([
+      '../../../shared/types/playbook',
+      '../../../shared/types/playbookConnectors',
+      'zod',
+    ]);
   });
 });
 

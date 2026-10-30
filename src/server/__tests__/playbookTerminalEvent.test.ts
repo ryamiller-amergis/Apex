@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 
 const selectWhere = jest.fn();
+const findAgentRun = jest.fn();
 const resumeStepRun = jest.fn();
 const failStepRun = jest.fn();
 const advanceRun = jest.fn();
@@ -22,6 +23,7 @@ jest.mock('../db', () => ({ __esModule: true, default: { end: jest.fn(), on: jes
 jest.mock('../db/drizzle', () => ({
   db: {
     select: () => ({ from: () => ({ where: () => ({ limit: () => selectWhere() }) }) }),
+    query: { agentRuns: { findFirst: (...a: unknown[]) => findAgentRun(...a) } },
   },
 }));
 
@@ -138,6 +140,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   stepIs('suspended');
   resumeStepRun.mockResolvedValue(true);
+  findAgentRun.mockResolvedValue(undefined);
   failStepRun.mockResolvedValue(undefined);
   advanceRun.mockResolvedValue({ advanced: true, stepsStarted: 1 });
 });
@@ -276,6 +279,18 @@ describe('VT-02 — a terminal failure event fails the step', () => {
       retryable: true,
       reason: expect.stringContaining(status),
     });
+  });
+
+  it("names the agent run's own error, so the step says why it failed", async () => {
+    findAgentRun.mockResolvedValue({
+      lastError: 'Playbook agent run referenced an invalid frozen capability policy',
+    });
+
+    await handleTerminalAgentRunEvent(event('failed'));
+
+    expect(failStepRun).toHaveBeenCalledWith(expect.objectContaining({
+      reason: `Agent run ${AGENT_RUN_ID} ended as failed: Playbook agent run referenced an invalid frozen capability policy`,
+    }));
   });
 });
 

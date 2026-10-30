@@ -22,6 +22,7 @@ const executeCloudAgent = jest.fn();
 const executeJoin = jest.fn();
 const executeForeach = jest.fn();
 const executeUntil = jest.fn();
+const executeConnector = jest.fn();
 const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
@@ -71,6 +72,10 @@ jest.mock('../services/playbookSteps/joinAdapter', () => ({
 jest.mock('../services/playbookSteps/loopAdapters', () => ({
   executeForeachStep: (...args: unknown[]) => executeForeach(...args),
   executeUntilStep: (...args: unknown[]) => executeUntil(...args),
+}));
+
+jest.mock('../services/playbookSteps/connectorAdapter', () => ({
+  executeConnectorStep: (...args: unknown[]) => executeConnector(...args),
 }));
 
 jest.mock('../services/featureFlagService', () => ({
@@ -135,6 +140,10 @@ function context(stepType: string): PlaybookStepExecutionContext {
       maxIterations: 1,
       done: true,
       iteration: 0,
+    },
+    connector: {
+      integration: 'teams',
+      operation: 'send-message',
     },
   };
   return {

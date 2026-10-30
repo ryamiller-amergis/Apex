@@ -9,6 +9,7 @@ import {
   Bell,
   Bot,
   Box,
+  Cable,
   Cloud,
   FileInput,
   GitBranch,
@@ -22,8 +23,9 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { PlaybookGraph, PlaybookGraphNode } from '../../shared/types/playbook';
+import { connectorSummary } from '../../shared/types/playbookConnectors';
 
-export type PlaybookStepGroup = 'AI' | 'People' | 'Logic' | 'Messaging' | 'Data' | 'Other';
+export type PlaybookStepGroup = 'AI' | 'People' | 'Logic' | 'Messaging' | 'Data' | 'Connectors' | 'Other';
 
 export interface PlaybookStepMeta {
   stepType: string;
@@ -39,6 +41,7 @@ export const PLAYBOOK_STEP_GROUP_ORDER: readonly PlaybookStepGroup[] = [
   'Logic',
   'Data',
   'Messaging',
+  'Connectors',
   'Other',
 ];
 
@@ -49,6 +52,7 @@ export const PLAYBOOK_STEP_GROUP_LABELS: Record<PlaybookStepGroup, string> = {
   Logic: 'Flow',
   Data: 'Actions',
   Messaging: 'Messaging',
+  Connectors: 'Connectors',
   Other: 'Other',
 };
 
@@ -128,6 +132,12 @@ const KNOWN_STEPS: Record<string, Omit<PlaybookStepMeta, 'stepType'>> = {
     group: 'Messaging',
     icon: Bell,
   },
+  connector: {
+    title: 'Connector',
+    description: 'Name the system that sits between two steps. Teams, Azure DevOps, and Azure today.',
+    group: 'Connectors',
+    icon: Cable,
+  },
 };
 
 export function stepMeta(stepType: string): PlaybookStepMeta {
@@ -163,6 +173,8 @@ export function stepDisplayName(node: Pick<PlaybookGraphNode, 'id' | 'stepType'>
 /** The most telling config value for a node, for its second line on the canvas. */
 export function nodeSummary(node: Pick<PlaybookGraphNode, 'config'>): string {
   const config = node.config ?? {};
+  const connector = connectorSummary(config);
+  if (connector) return truncate(connector, 44);
   for (const key of ['title', 'subject', 'prompt', 'profileKey', 'skillPath', 'documentType']) {
     const value = config[key];
     if (typeof value === 'string' && value.trim()) return truncate(value.trim(), 44);

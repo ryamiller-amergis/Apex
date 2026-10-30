@@ -39,14 +39,6 @@ export function usePlaybookSkills(project: string | undefined) {
   });
 }
 
-export function useAvailableModels() {
-  return useQuery<{ models: Array<{ id: string; displayName: string }> }>({
-    queryKey: ['available-models'],
-    queryFn: () => apiRequest('/api/available-models'),
-    staleTime: 5 * 60_000,
-  });
-}
-
 export function usePlaybookVersionLayout(
   project: string | undefined,
   definitionId: string | null,

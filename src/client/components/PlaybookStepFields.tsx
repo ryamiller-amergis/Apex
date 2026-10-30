@@ -16,7 +16,13 @@ import {
   Users,
 } from 'lucide-react';
 import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
-import { useAvailableModels, usePlaybookSkills } from '../hooks/usePlaybookCanvas';
+import {
+  PLAYBOOK_CONNECTORS,
+  playbookConnector,
+  playbookConnectorOperation,
+} from '../../shared/types/playbookConnectors';
+import { usePlaybookSkills } from '../hooks/usePlaybookCanvas';
+import { useAvailableModels } from '../hooks/useProjectSkillConfig';
 import {
   nearestProducer,
   type PlaybookBindingOption,
@@ -133,7 +139,7 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
     disabled: !skill.runnable,
     ...(skill.unavailableReason ? { disabledReason: skill.unavailableReason } : {}),
   }));
-  const modelOptions: PlaybookPickerOption[] = (models.data?.models ?? []).map((model) => ({
+  const modelOptions: PlaybookPickerOption[] = (models.data ?? []).map((model) => ({
     value: model.id,
     label: model.displayName,
     description: model.id,
@@ -680,6 +686,103 @@ const ApexActionFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   );
 };
 
+const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
+  node,
+  config,
+  disabled,
+  bindings,
+  referencesFor,
+  setConfig,
+}) => {
+  const integrationId = typeof config.integration === 'string' ? config.integration : PLAYBOOK_CONNECTORS[0].id;
+  const connector = playbookConnector(integrationId) ?? PLAYBOOK_CONNECTORS[0];
+  const operationId = typeof config.operation === 'string' ? config.operation : connector.operations[0].id;
+  const operation = playbookConnectorOperation(connector.id, operationId) ?? connector.operations[0];
+  const parameters = config.parameters && typeof config.parameters === 'object' && !Array.isArray(config.parameters)
+    ? config.parameters as Record<string, unknown>
+    : {};
+  const integrationOptions: PlaybookPickerOption[] = PLAYBOOK_CONNECTORS.map((item) => ({
+    value: item.id,
+    label: item.label,
+    description: item.description,
+  }));
+  const operationOptions: PlaybookPickerOption[] = connector.operations.map((item) => ({
+    value: item.id,
+    label: item.label,
+    description: item.description,
+  }));
+  return (
+    <>
+      <Field
+        label="Integration"
+        htmlFor={`${node.id}-integration`}
+        required
+        hint="The system this connector names. A run records the choice and does not call the system yet."
+        {...{ 'data-testid': `playbook-field-${node.id}-integration` }}
+      >
+        <PlaybookOptionPicker
+          id={`${node.id}-integration`}
+          value={connector.id}
+          options={integrationOptions}
+          placeholder="Choose an integration"
+          searchPlaceholder="Search integrations"
+          disabled={disabled}
+          onChange={(value) => {
+            const next = playbookConnector(value) ?? PLAYBOOK_CONNECTORS[0];
+            setConfig({ integration: next.id, operation: next.operations[0].id, parameters: {} });
+          }}
+          {...{ 'data-testid': 'playbook-inspector-field-integration' }}
+        />
+      </Field>
+      <Field
+        label="Action"
+        htmlFor={`${node.id}-operation`}
+        required
+        {...{ 'data-testid': `playbook-field-${node.id}-operation` }}
+      >
+        <PlaybookOptionPicker
+          id={`${node.id}-operation`}
+          value={operation.id}
+          options={operationOptions}
+          placeholder="Choose an action"
+          searchPlaceholder="Search actions"
+          disabled={disabled}
+          onChange={(value) => setConfig({ ...config, operation: value, parameters: {} })}
+          {...{ 'data-testid': 'playbook-inspector-field-operation' }}
+        />
+      </Field>
+      {operation.fields.map((field) => {
+        const value = typeof parameters[field.key] === 'string' ? parameters[field.key] as string : '';
+        return (
+          <Field
+            key={field.key}
+            label={field.label}
+            htmlFor={`${node.id}-${field.key}`}
+            hint={field.hint}
+            {...{ 'data-testid': `playbook-field-${node.id}-${field.key}` }}
+          >
+            <PlaybookBindingText
+              id={`${node.id}-${field.key}`}
+              value={value}
+              multiline={field.multiline}
+              disabled={disabled}
+              bindings={bindings}
+              references={referencesFor(value)}
+              onChange={(next) => setConfig({
+                ...config,
+                integration: connector.id,
+                operation: operation.id,
+                parameters: { ...parameters, [field.key]: next },
+              })}
+              {...{ 'data-testid': `playbook-inspector-field-${field.key}` }}
+            />
+          </Field>
+        );
+      })}
+    </>
+  );
+};
+
 export const STEP_FIELD_RENDERERS: Record<string, {
   handledKeys: readonly string[];
   Component: React.FC<PlaybookStepFieldsProps>;
@@ -699,5 +802,9 @@ export const STEP_FIELD_RENDERERS: Record<string, {
   'cloud-agent': {
     handledKeys: ['workItemId', 'workItemSource', 'workItemType', 'state', 'tags', 'prompt', 'deadlineMs'],
     Component: CloudAgentFields,
+  },
+  connector: {
+    handledKeys: ['integration', 'operation', 'parameters'],
+    Component: ConnectorFields,
   },
 };

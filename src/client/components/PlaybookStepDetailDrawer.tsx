@@ -46,7 +46,16 @@ interface PlaybookStepDetailDrawerProps {
   'data-testid'?: string;
 }
 
-const LIVE_STATUSES: readonly PlaybookStepRunStatus[] = ['pending', 'running', 'suspended'];
+export const LIVE_STATUSES: readonly PlaybookStepRunStatus[] = ['pending', 'running', 'suspended'];
+
+const FAILED_STATUSES: readonly PlaybookStepRunStatus[] = ['failed', 'failed_retryable', 'expired'];
+
+/** The reason a failed step recorded, when it recorded one. */
+export function stepFailureReason(step: PlaybookStepRun): string | null {
+  if (!FAILED_STATUSES.includes(step.status)) return null;
+  const error = step.outputInline?.error;
+  return typeof error === 'string' && error.trim() ? error.trim() : null;
+}
 
 const STATUS_ICONS: Record<PlaybookStepRunStatus, LucideIcon> = {
   pending: CircleDashed,
@@ -68,7 +77,7 @@ const ENTRY_ICONS: Record<PlaybookStepActivityKind, LucideIcon> = {
   error: CircleX,
 };
 
-function StatusIcon({ status, size = 14 }: { status: PlaybookStepRunStatus; size?: number }) {
+export function StatusIcon({ status, size = 14 }: { status: PlaybookStepRunStatus; size?: number }) {
   const Icon = STATUS_ICONS[status];
   return (
     <Icon
@@ -80,7 +89,7 @@ function StatusIcon({ status, size = 14 }: { status: PlaybookStepRunStatus; size
   );
 }
 
-function duration(fromIso: string | null, toIso: string | null, now: number): string {
+export function duration(fromIso: string | null, toIso: string | null, now: number): string {
   if (!fromIso) return '';
   const ms = Math.max(0, (toIso ? Date.parse(toIso) : now) - Date.parse(fromIso));
   const seconds = Math.floor(ms / 1000);
@@ -97,7 +106,7 @@ function clockTime(iso: string): string {
     : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function useNow(live: boolean): number {
+export function useNow(live: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!live) return undefined;
@@ -132,62 +141,136 @@ function lifecycleEntries(step: PlaybookStepRun, suspension: PlaybookSuspensionD
   return entries;
 }
 
-const LogConsole: React.FC<{ entries: readonly PlaybookStepActivityEntry[]; live: boolean; startedAt: string | null }> = ({
+type LogFilter = 'all' | 'message' | 'tool' | 'thinking';
+
+const LOG_FILTERS: ReadonlyArray<{ value: LogFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'message', label: 'Replies' },
+  { value: 'tool', label: 'Tools' },
+  { value: 'thinking', label: 'Thinking' },
+];
+
+const LONG_DETAIL_CHARS = 280;
+
+const LogDetail: React.FC<{ kind: PlaybookStepActivityKind; detail: string }> = ({ kind, detail }) => {
+  const long = detail.length > LONG_DETAIL_CHARS || detail.split('\n').length > 5;
+  const [open, setOpen] = useState(!long || kind === 'error');
+  return (
+    <div className={styles.entryDetailWrap}>
+      <div className={`${styles.entryDetail} ${open ? '' : styles.entryDetailClamped}`} data-kind={kind}>
+        {detail}
+      </div>
+      {long && kind !== 'error' ? (
+        <button
+          type="button"
+          className={styles.entryMore}
+          onClick={() => setOpen((value) => !value)}
+          {...{ 'data-testid': 'playbook-step-log-more' }}
+        >
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
+export const LogConsole: React.FC<{ entries: readonly PlaybookStepActivityEntry[]; live: boolean; startedAt: string | null }> = ({
   entries,
   live,
   startedAt,
 }) => {
   const ref = useRef<HTMLOListElement>(null);
   const [follow, setFollow] = useState(true);
+  const [filter, setFilter] = useState<LogFilter>('all');
+  const shown = useMemo(
+    () => (filter === 'all' ? entries : entries.filter((entry) => entry.kind === filter || entry.kind === 'error')),
+    [entries, filter],
+  );
+  const counts = useMemo(() => {
+    const result: Record<LogFilter, number> = { all: entries.length, message: 0, tool: 0, thinking: 0 };
+    for (const entry of entries) {
+      if (entry.kind === 'message' || entry.kind === 'tool' || entry.kind === 'thinking') result[entry.kind] += 1;
+    }
+    return result;
+  }, [entries]);
   useEffect(() => {
     if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [entries.length, follow]);
+  }, [shown.length, follow]);
   return (
     <div className={styles.console}>
       <div className={styles.consoleBar}>
-        <span>{entries.length} {entries.length === 1 ? 'line' : 'lines'}</span>
+        <div className={styles.filters} role="group" aria-label="Filter log">
+          {LOG_FILTERS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              className={`${styles.filter} ${filter === item.value ? styles.filterActive : ''}`}
+              aria-pressed={filter === item.value}
+              onClick={() => setFilter(item.value)}
+              {...{ 'data-testid': `playbook-step-log-filter-${item.value}` }}
+            >
+              {item.label}
+              <span className={styles.filterCount}>{counts[item.value]}</span>
+            </button>
+          ))}
+        </div>
         {live ? (
           <label className={styles.follow}>
             <input
               type="checkbox"
+              className={styles.followInput}
               checked={follow}
               onChange={(event) => setFollow(event.target.checked)}
               {...{ 'data-testid': "playbook-step-log-follow" }}
             />
+            <span className={styles.followTrack} aria-hidden />
             Follow
           </label>
         ) : null}
       </div>
       <ol
         ref={ref}
-        className={styles.consoleLines}
+        className={styles.timeline}
         onScroll={(event) => {
           const el = event.currentTarget;
           setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < 24);
         }}
         {...{ 'data-testid': "playbook-step-log" }}
       >
-        {entries.length === 0 ? (
-          <li className={styles.consoleEmpty}>{live ? 'Waiting for the first output…' : 'Nothing was logged.'}</li>
+        {shown.length === 0 ? (
+          <li className={styles.consoleEmpty}>
+            {live ? 'Waiting for the first output…' : filter === 'all' ? 'Nothing was logged.' : 'No entries of this kind.'}
+          </li>
         ) : null}
-        {entries.map((entry) => {
+        {shown.map((entry) => {
           const Icon = ENTRY_ICONS[entry.kind];
           return (
-            <li key={entry.id} className={styles.line} data-kind={entry.kind}>
-              <span className={styles.lineTime} title={entry.at ? absoluteTime(entry.at) : undefined}>
-                {!entry.at ? '' : startedAt ? `+${duration(startedAt, entry.at, Date.parse(entry.at))}` : clockTime(entry.at)}
+            <li key={entry.id} className={styles.entry} data-kind={entry.kind}>
+              <span className={styles.entryDot} aria-hidden>
+                <Icon size={12} />
               </span>
-              <Icon size={13} aria-hidden className={styles.lineIcon} />
-              <span className={styles.lineBody}>
-                <span className={styles.lineTitle}>{entry.title}</span>
-                {entry.detail ? <span className={styles.lineDetail}>{entry.detail}</span> : null}
-              </span>
+              <div className={styles.entryBody}>
+                <div className={styles.entryHead}>
+                  <span className={styles.entryTitle}>{entry.title}</span>
+                  {entry.at ? (
+                    <time className={styles.entryTime} dateTime={entry.at} title={absoluteTime(entry.at)}>
+                      {startedAt ? `+${duration(startedAt, entry.at, Date.parse(entry.at))}` : clockTime(entry.at)}
+                    </time>
+                  ) : null}
+                </div>
+                {entry.detail ? <LogDetail kind={entry.kind} detail={entry.detail} /> : null}
+              </div>
             </li>
           );
         })}
         {live ? (
-          <li className={styles.cursorLine} aria-hidden>
-            <span className={styles.cursorBlink} />
+          <li className={styles.entry} data-kind="live" aria-label="Still running">
+            <span className={styles.entryDot} aria-hidden>
+              <span className={styles.typing}><i /><i /><i /></span>
+            </span>
+            <div className={styles.entryBody}>
+              <span className={styles.entryLive}>Working</span>
+            </div>
           </li>
         ) : null}
       </ol>
@@ -208,7 +291,7 @@ function agentPhaseIndex(status: string | undefined, stepStatus: PlaybookStepRun
   return 2;
 }
 
-const StepLog: React.FC<{
+export const StepLog: React.FC<{
   project: string;
   runId: string;
   step: PlaybookStepRun;
@@ -247,9 +330,21 @@ const StepLog: React.FC<{
 
   const agentRun = activity.data?.agentRun;
   const phase = agentPhaseIndex(agentRun?.status, step.status);
+  const failure = stepFailureReason(step);
 
   return (
     <div className={styles.logPane}>
+      {failure ? (
+        <div className={styles.failure} role="alert" {...{ 'data-testid': 'playbook-step-failure' }}>
+          <CircleX size={16} aria-hidden className={styles.failureIcon} />
+          <div>
+            <p className={styles.failureTitle}>
+              {step.status === 'failed_retryable' ? 'This step failed. You can retry it.' : 'This step failed.'}
+            </p>
+            <p className={styles.failureText}>{failure}</p>
+          </div>
+        </div>
+      ) : null}
       {isAgent || isCloud ? (
         <ol className={styles.phases} aria-label="Progress">
           {AGENT_PHASES.map((item, index) => (
@@ -276,7 +371,7 @@ const StepLog: React.FC<{
   );
 };
 
-const StepDetails: React.FC<{
+export const StepDetails: React.FC<{
   project: string;
   runId: string;
   step: PlaybookStepRun;

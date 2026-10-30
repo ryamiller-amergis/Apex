@@ -403,6 +403,12 @@
 :is(.library, .rail) [data-group='Logic'], .inspector[data-group='Logic'] { --step-tint: var(--status-review); }
 :is(.library, .rail) [data-group='Messaging'], .inspector[data-group='Messaging'] { --step-tint: var(--success-color); }
 :is(.library, .rail) [data-group='Data'], .inspector[data-group='Data'] { --step-tint: var(--accent-teal); }
+:is(.library, .rail) [data-group='Connectors'], .inspector[data-group='Connectors'] { --step-tint: var(--accent-color); }
+
+:is(.library, .rail) [data-group='Connectors'] .stepGlyph {
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--step-tint) 55%, transparent);
+}
 
 .stepGlyph {
   display: grid;

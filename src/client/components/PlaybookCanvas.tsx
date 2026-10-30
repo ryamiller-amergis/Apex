@@ -20,8 +20,10 @@ import {
 } from '@xyflow/react';
 import type { PlaybookGraph, PlaybookLayoutPositions, PlaybookStepRunStatus } from '../../shared/types/playbook';
 import {
+  flowNodeType,
   flowToGraph,
   graphToFlow,
+  initialStepConfig,
   newPlaybookNodeId,
   positionsAfterDrag,
   positionsFromNodes,
@@ -61,6 +63,7 @@ function decorateEdges<T extends Edge>(edges: T[]): T[] {
 
 const nodeTypes = {
   playbookStep: PlaybookStepNode,
+  playbookConnector: PlaybookConnectorNode,
 };
 
 type PlaybookCanvasProps = {
@@ -75,6 +78,22 @@ type PlaybookCanvasProps = {
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string | null) => void;
 };
+
+function NodeRunStatus({ status }: { status: string | undefined }) {
+  if (!status) return null;
+  if (status === 'running') {
+    return (
+      <span className={styles.nodeRunning} role="status" aria-label="Running" {...{ 'data-status': status }}>
+        <i /><i /><i />
+      </span>
+    );
+  }
+  return (
+    <span className={styles.nodeStatus} {...{ 'data-status': status }}>
+      {stepStatusLabel(status as PlaybookStepRunStatus)}
+    </span>
+  );
+}
 
 function PlaybookStepNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeData>>) {
   const statusClass = data.runStatus ? styles[`status_${data.runStatus}`] : '';
@@ -95,11 +114,28 @@ function PlaybookStepNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeDat
         <span className={styles.nodeLabel}>{meta.title}</span>
         <span className={summary || subtitle !== data.label ? styles.nodeMeta : styles.nodeId}>{subtitle}</span>
       </span>
-      {data.runStatus ? (
-        <span className={styles.nodeStatus} {...{ 'data-status': data.runStatus }}>
-          {stepStatusLabel(data.runStatus as PlaybookStepRunStatus)}
-        </span>
-      ) : null}
+      <NodeRunStatus status={data.runStatus} />
+      <Handle className={styles.handle} type="source" position={Position.Right} isConnectable={!data.readOnly} />
+    </div>
+  );
+}
+
+function PlaybookConnectorNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeData>>) {
+  const statusClass = data.runStatus ? styles[`status_${data.runStatus}`] : '';
+  const meta = stepMeta(data.stepType);
+  const Icon = meta.icon;
+  const summary = nodeSummary({ config: data.config });
+  return (
+    <div
+      className={`${styles.connectorNode} ${selected ? styles.flowNodeSelected : ''} ${statusClass}`}
+      {...{ 'data-testid': `playbook-canvas-node-${data.stepType}`, 'data-group': meta.group }}
+    >
+      <Handle className={styles.handle} type="target" position={Position.Left} isConnectable={!data.readOnly} />
+      <span className={styles.connectorIcon} aria-hidden>
+        <Icon size={16} strokeWidth={2} />
+      </span>
+      <span className={styles.connectorLabel}>{summary || meta.title}</span>
+      <NodeRunStatus status={data.runStatus} />
       <Handle className={styles.handle} type="source" position={Position.Right} isConnectable={!data.readOnly} />
     </div>
   );
@@ -238,9 +274,9 @@ function PlaybookCanvasInner({
       const id = newPlaybookNodeId(stepType, nodes.map((node) => node.id));
       const newNode: Node<PlaybookFlowNodeData> = {
         id,
-        type: 'playbookStep',
+        type: flowNodeType(stepType),
         position,
-        data: { stepType, label: label || stepType, config: {}, readOnly: false },
+        data: { stepType, label: label || stepType, config: initialStepConfig(stepType), readOnly: false },
       };
       const nextNodes = [...nodes, newNode];
       setNodes(nextNodes);
@@ -318,7 +354,7 @@ function PlaybookCanvasInner({
         {...{ 'data-testid': 'playbook-canvas' }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} />
-        <Controls showInteractive={false} position="bottom-left" />
+        <Controls showInteractive={false} position={readOnly ? 'top-left' : 'bottom-left'} />
       </ReactFlow>
     </div>
   );

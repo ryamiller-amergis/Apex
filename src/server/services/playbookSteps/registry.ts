@@ -19,6 +19,7 @@
  * failure and not a run that dies on its third step.
  */
 import { z } from 'zod';
+import { PLAYBOOK_CONNECTOR_IDS } from '../../../shared/types/playbookConnectors';
 import { PLAYBOOK_STEP_SIDE_EFFECTS } from '../../../shared/types/playbook';
 import type {
   ApprovalGateStepConfig,
@@ -112,6 +113,19 @@ const APPROVAL_GATE_INPUT_SCHEMA = z.object({
 const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
   decision: z.enum(['approved', 'rejected']),
   decidedBy: z.string(),
+});
+
+const CONNECTOR_INPUT_SCHEMA = z.object({
+  integration: z.enum(PLAYBOOK_CONNECTOR_IDS),
+  operation: z.string().min(1),
+  parameters: z.record(z.string(), z.string()).optional(),
+});
+
+const CONNECTOR_OUTPUT_SCHEMA = z.object({
+  integration: z.string(),
+  operation: z.string(),
+  parameters: z.record(z.string(), z.string()).optional(),
+  recordedAt: READABLE_TIMESTAMP,
 });
 
 const NOTIFY_INPUT_SCHEMA = z.object({
@@ -387,6 +401,17 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     requiredPermissions: ['playbooks:run'],
     inputSchema: NOTIFY_INPUT_SCHEMA,
     outputSchema: NOTIFY_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'connector',
+    schemaVersion: 1,
+    canSuspend: false,
+    isAgentStep: false,
+    // Records the integration between two steps. It does not call that system.
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: CONNECTOR_INPUT_SCHEMA,
+    outputSchema: CONNECTOR_OUTPUT_SCHEMA,
   },
   {
     stepType: 'interview',
@@ -789,6 +814,7 @@ export function validateStepTypeRegistry(
     'cursor-agent',
     'approval-gate',
     'notify',
+    'connector',
     'ingest-artifact',
     'branch',
     'interview',

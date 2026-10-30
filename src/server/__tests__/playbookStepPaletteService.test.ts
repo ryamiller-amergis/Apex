@@ -11,6 +11,7 @@ describe('listPlaybookStepPaletteItems', () => {
         'branch',
         'build',
         'cloud-agent',
+        'connector',
         'cursor-agent',
         'foreach',
         'ingest-artifact',

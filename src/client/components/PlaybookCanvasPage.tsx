@@ -27,7 +27,7 @@ import {
   useValidatePlaybookConnection,
 } from '../hooks/usePlaybookCanvas';
 import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLayout';
-import { newPlaybookNodeId, syncBranchEdges } from '../utils/playbookCanvasGraph';
+import { initialStepConfig, newPlaybookNodeId, syncBranchEdges } from '../utils/playbookCanvasGraph';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import { PlaybookDryRunPanel } from './PlaybookDryRunPanel';
 import { PlaybookStepInspector } from './PlaybookStepInspector';
@@ -270,7 +270,11 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
       ? { x: rightmost.x + NEW_STEP_OFFSET_X, y: rightmost.y }
       : { x: 80, y: 160 };
     setPositions((current) => ({ ...current, [id]: position }));
-    setGraph((current) => ({ ...current, nodes: [...current.nodes, { id, stepType }] }));
+    const config = initialStepConfig(stepType);
+    setGraph((current) => ({
+      ...current,
+      nodes: [...current.nodes, { id, stepType, ...(Object.keys(config).length ? { config } : {}) }],
+    }));
     setLayoutDirty(true);
     recordUsage([stepType]);
     setDryRunOpen(false);

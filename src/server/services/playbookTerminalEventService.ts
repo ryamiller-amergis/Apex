@@ -152,10 +152,17 @@ export async function handleTerminalAgentRunEvent(
     return { handled: 'already-moved', stepRunId: step.id };
   }
 
+  const failedRun = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.id, event.runId),
+    columns: { lastError: true },
+  });
+  const cause = failedRun?.lastError?.trim() || event.detail?.trim();
   await failStepRun({
     stepRunId: step.id,
     retryable: true,
-    reason: `Agent run ${event.runId} ended as ${event.status}.`,
+    reason: cause
+      ? `Agent run ${event.runId} ended as ${event.status}: ${cause}`
+      : `Agent run ${event.runId} ended as ${event.status}.`,
   });
 
   return { handled: 'failed', stepRunId: step.id };

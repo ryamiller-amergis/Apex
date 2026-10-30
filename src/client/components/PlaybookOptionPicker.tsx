@@ -2,7 +2,8 @@
  * A searchable dropdown whose options carry a description and badges. Used where a plain select
  * would show only an opaque value, such as a Skill path or a model id.
  */
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search } from 'lucide-react';
 import styles from './PlaybookOptionPicker.module.css';
 
@@ -47,8 +48,16 @@ export const PlaybookOptionPicker: React.FC<PlaybookOptionPickerProps> = ({
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listId = useId();
+  const [box, setBox] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   const selected = options.find((option) => option.value === value);
   const filtered = useMemo(() => {
@@ -66,15 +75,49 @@ export const PlaybookOptionPicker: React.FC<PlaybookOptionPickerProps> = ({
     return rows;
   }, [emptyOption, options, query]);
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setBox(null);
+      return undefined;
+    }
+    const place = () => {
+      const trigger = rootRef.current?.querySelector('button');
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const gap = 6;
+      const below = window.innerHeight - rect.bottom - gap - 12;
+      const above = rect.top - gap - 12;
+      const openUp = below < 240 && above > below;
+      setBox({
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.max(160, Math.min(360, openUp ? above : below)),
+        ...(openUp
+          ? { bottom: window.innerHeight - rect.top + gap }
+          : { top: rect.bottom + gap }),
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  const placed = box !== null;
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || !placed) return undefined;
     searchRef.current?.focus();
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
     };
     window.addEventListener('pointerdown', onPointerDown);
     return () => window.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
+  }, [open, placed]);
 
   useEffect(() => {
     setActive(0);
@@ -136,8 +179,14 @@ export const PlaybookOptionPicker: React.FC<PlaybookOptionPickerProps> = ({
         <ChevronDown size={15} aria-hidden className={styles.chevron} />
       </button>
 
-      {open ? (
-        <div className={styles.popover} {...{ 'data-testid': `${testId}-popover` }}>
+      {open && box ? createPortal(
+        <div
+          ref={popoverRef}
+          className={styles.popover}
+          style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width, maxHeight: box.maxHeight }}
+          onKeyDown={onKeyDown}
+          {...{ 'data-testid': `${testId}-popover` }}
+        >
           <label className={styles.search}>
             <Search size={13} aria-hidden />
             <input
@@ -189,7 +238,8 @@ export const PlaybookOptionPicker: React.FC<PlaybookOptionPickerProps> = ({
               );
             })}
           </ul>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );
