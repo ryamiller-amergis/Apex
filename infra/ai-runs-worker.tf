@@ -12,6 +12,11 @@
 # Identity model:
 #   ai_runs_runner MI — Job executor: queue receive, Key Vault Secrets User,
 #                       AcrPull (apex-ai-runs images), AiRun.Runner (entra.tf)
+#   insights reader   — One identity, mi-apex-insights-reader-dev, on the job
+#                       and the V2 document worker. AZURE_INSIGHTS_CLIENT_ID
+#                       selects it. AZURE_CLIENT_ID stays the worker identity.
+#                       Prod attaches this same identity. MaxView role
+#                       assignments stay outside this module.
 #   Apex API MI       — App Service system identity: queue send only
 #
 # Naming: {type}-apex-ai-{environment} / caj-apex-ai-runs-{environment}
@@ -32,6 +37,14 @@ locals {
   ai_runs_data_dir = regex("^(.*)/[^/]+/?$", var.ai_runs_workspace_mount_path)[0]
 
   ai_runs_runner_principal_id = azurerm_user_assigned_identity.ai_runs_runner.principal_id
+  ai_runs_insights_reader_id = concat(
+    azurerm_user_assigned_identity.ai_runs_insights_reader[*].id,
+    data.azurerm_user_assigned_identity.ai_runs_insights_reader[*].id,
+  )[0]
+  ai_runs_insights_reader_client_id = concat(
+    azurerm_user_assigned_identity.ai_runs_insights_reader[*].client_id,
+    data.azurerm_user_assigned_identity.ai_runs_insights_reader[*].client_id,
+  )[0]
   ai_runs_key_vault_id = var.ai_runs_key_vault_id != null ? (
     var.ai_runs_key_vault_id
     ) : (
@@ -109,6 +122,24 @@ resource "azurerm_user_assigned_identity" "ai_runs_runner" {
   location            = local.app_service_location
   resource_group_name = local.app_resource_group_name
   tags                = merge(var.tags, { Environment = var.environment, Workload = "ai-runs" })
+}
+
+# One principal for MaxView reads. Dev state owns it. Every other environment
+# looks it up and attaches it, so apply does not create mi-apex-insights-reader-prd
+# and does not drop AZURE_INSIGHTS_CLIENT_ID.
+resource "azurerm_user_assigned_identity" "ai_runs_insights_reader" {
+  count               = var.environment == "dev" ? 1 : 0
+  name                = var.ai_runs_insights_reader_name
+  location            = var.ai_runs_insights_reader_location
+  resource_group_name = var.ai_runs_insights_reader_resource_group_name
+  tags                = merge(var.tags, { Environment = "dev", Workload = "ai-runs-insights-reader" })
+}
+
+data "azurerm_user_assigned_identity" "ai_runs_insights_reader" {
+  count               = var.environment == "dev" ? 0 : 1
+  provider            = azurerm.insights_reader
+  name                = var.ai_runs_insights_reader_name
+  resource_group_name = var.ai_runs_insights_reader_resource_group_name
 }
 
 # ---------------------------------------------------------------------------
@@ -242,8 +273,11 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
   replica_timeout_in_seconds = 3600
 
   identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.ai_runs_runner.id]
+    type = "UserAssigned"
+    identity_ids = [
+      azurerm_user_assigned_identity.ai_runs_runner.id,
+      local.ai_runs_insights_reader_id,
+    ]
   }
 
   registry {
@@ -331,6 +365,11 @@ resource "azurerm_container_app_job" "ai_runs_runner" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.ai_runs_runner.client_id
+      }
+
+      env {
+        name  = "AZURE_INSIGHTS_CLIENT_ID"
+        value = local.ai_runs_insights_reader_client_id
       }
 
       env {
