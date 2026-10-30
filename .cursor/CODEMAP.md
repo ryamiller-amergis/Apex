@@ -34,7 +34,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `src/server/routes/`: one router per area, e.g. `src/server/routes/builds.ts`, `src/server/routes/featureRequests.ts`, `src/server/routes/interviews.ts`,
   `src/server/routes/notifications.ts`, `src/server/routes/platformAdmin.ts`, `src/server/routes/walkthroughs.ts`.
   `src/server/routes/auth.ts` needs permission to edit.
-- `src/server/services/`: business logic, `<area>Service.ts`. `src/server/services/buildPreflight/` = build preflight checks (`runPreflight`). `src/server/services/buildOrchestrator/` = start, queue admission, and the build Playbook seam. `src/server/services/buildPlanning/` = plan validator, planner prompt, and the planning repair loop (`validateBuildPlan`, `startPlanning`). `.cursor/skills/build-planner/SKILL.md` is the planner skill.
+- `src/server/services/`: business logic, `<area>Service.ts`. `src/server/services/buildPreflight/` = build preflight checks (`runPreflight`). `src/server/services/buildOrchestrator/` = start, queue admission, the build Playbook seam, and the task dispatcher with its completion sweep (`dispatchNext`, `reconcileBuildRuns`; timer in `src/server/services/buildReconciliationScheduler.ts`). `src/server/services/buildPlanning/` = plan validator, planner prompt, and the planning repair loop (`validateBuildPlan`, `startPlanning`). `.cursor/skills/build-planner/SKILL.md` is the planner skill.
 - `src/server/db/drizzle.ts`, `src/server/db/schema.ts` (large; search it, don't read it whole).
 - `src/server/middleware/`: `src/server/middleware/auth.ts`, `src/server/middleware/rbac.ts`, `src/server/middleware/publicApiKeyAuth.ts`,
   `src/server/middleware/aiRunnerAuth.ts`, `src/server/middleware/loadTestRunnerAuth.ts`, observability capture.

@@ -92,6 +92,7 @@ import { groundingMaintenanceScheduler } from './services/groundingMaintenanceSc
 import { workBoardScheduler } from './services/workBoardScheduler';
 import buildsRoutes from './routes/builds';
 import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
+import { startBuildReconciliation, stopBuildReconciliation } from './services/buildReconciliationScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import {
   isInteractiveGatewayEnabled,
@@ -492,6 +493,8 @@ const server = app.listen(PORT, () => {
   // Playbook recovery always starts. A restart has to resume parked runs.
   void startPlaybookReconciliation();
   server.once('close', stopPlaybookReconciliation);
+  startBuildReconciliation();
+  server.once('close', stopBuildReconciliation);
   startPlaybookStepOutputCleanup();
   server.once('close', stopPlaybookStepOutputCleanup);
   startLoadTestRunReaper();
