@@ -23,6 +23,11 @@ jest.mock('../services/chatAgentService', () => ({
   isThreadIdle: (...args: unknown[]) => mockIsThreadIdle(...args),
 }));
 
+const mockPropagate = jest.fn();
+jest.mock('../services/runGroundingService', () => ({
+  propagatePipelineGrounding: (...args: unknown[]) => mockPropagate(...args),
+}));
+
 import { BuildIntakeDraftError, draftBuildIntakeBrief } from '../services/interviewOrchestratorService';
 
 const draft = {
@@ -43,7 +48,7 @@ const draft = {
 const mainThread = {
   id: 'thread-main',
   status: 'idle',
-  kickoff: { project: 'Apex', repo: 'org/target', skillRepo: 'org/skills' },
+  kickoff: { project: 'Apex', repo: 'org/target', skillRepo: 'org/skills', branch: 'feature/skills', skillProvider: 'ado' },
   messages: [
     { id: 'u1', role: 'user', text: 'Add an export button', ts: '1' },
     { id: 'h1', role: 'user', text: 'HIDDEN CONTEXT', ts: '2', hidden: true },
@@ -75,12 +80,45 @@ it('PBI-011 AC-0 drafts with the profile skill and returns rows, candidates and 
   await expect(draftBuildIntakeBrief({ interviewId: 'interview-1' })).resolves.toEqual(draft);
   expect(mockCreateThread).toHaveBeenCalledWith(
     'requester',
-    expect.objectContaining({ skillPath: '.cursor/skills/build-intake/SKILL.md', skillRepo: 'org/skills' }),
+    expect.objectContaining({
+      skillPath: '.cursor/skills/build-intake/SKILL.md',
+      skillRepo: 'org/skills',
+      branch: 'feature/skills',
+      skillProvider: 'ado',
+    }),
     { skipAutoKickoff: true },
   );
   const prompt = mockSendMessage.mock.calls[0][1] as string;
   expect(prompt).toMatch(/^Draft the build brief/);
   expect(prompt).not.toContain('HIDDEN CONTEXT');
+});
+
+it('pins the drafter chat to the interview grounding before sending the transcript', async () => {
+  mockIsThreadIdle.mockReturnValue(true);
+  mockGetThread
+    .mockResolvedValueOnce(mainThread)
+    .mockResolvedValueOnce({ id: 'specialist-1', status: 'idle', messages: [{ id: 'a2', role: 'agent', text: JSON.stringify(draft), ts: '4' }] });
+
+  await draftBuildIntakeBrief({ interviewId: 'interview-1' });
+
+  expect(mockPropagate).toHaveBeenCalledWith(
+    { runType: 'chat', runId: 'thread-main', project: 'Apex' },
+    { runType: 'chat', runId: 'specialist-1', project: 'Apex' },
+    'requester',
+    { deferMaterialization: true },
+  );
+  expect(mockPropagate.mock.invocationCallOrder[0]).toBeLessThan(mockSendMessage.mock.invocationCallOrder[0]);
+});
+
+it('still drafts when the grounding copy fails', async () => {
+  mockPropagate.mockRejectedValueOnce(new Error('grounding down'));
+  mockIsThreadIdle.mockReturnValue(true);
+  mockGetThread
+    .mockResolvedValueOnce(mainThread)
+    .mockResolvedValueOnce({ id: 'specialist-1', status: 'idle', messages: [{ id: 'a2', role: 'agent', text: JSON.stringify(draft), ts: '4' }] });
+
+  await expect(draftBuildIntakeBrief({ interviewId: 'interview-1' })).resolves.toEqual(draft);
+  expect(mockSendMessage).toHaveBeenCalledTimes(1);
 });
 
 it('VT-17 times out after the given limit with reason timeout', async () => {

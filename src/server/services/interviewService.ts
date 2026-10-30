@@ -1,6 +1,6 @@
 import { and, count, desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { interviews, prds } from '../db/schema';
+import { buildRuns, interviews, prds } from '../db/schema';
 import type { Interview, InterviewStatus, InterviewSummary, PrdSummary } from '../../shared/types/interview';
 import type { PrdStatus } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
@@ -642,6 +642,15 @@ export async function deleteInterview(id: string, requestingUserId: string): Pro
   }
   if (row.authorId !== requestingUserId) {
     throw httpStatusError('Only the author can delete the interview', 403);
+  }
+  const build = await db.query.buildRuns.findFirst({
+    where: eq(buildRuns.interviewId, id),
+    columns: { id: true },
+  });
+  if (build) {
+    const err = new Error('This interview belongs to a build. Cancel the build instead.');
+    (err as any).status = 409;
+    throw err;
   }
   await cancelRun(row.chatThreadId);
   await db.delete(interviews).where(eq(interviews.id, id));

@@ -82,6 +82,22 @@ describe('startBuild', () => {
     expect(harness.events[0].promptLength).toBe('Add a reports page'.length);
   });
 
+  it('links the build to its Playbook run before the first step runs', async () => {
+    const linked = new Map<string, string>();
+    const harness = deps({
+      linkPlaybookRun: async (buildRunId, playbookRunId) => {
+        linked.set(playbookRunId, buildRunId);
+      },
+      startRun: async ({ onRunCreated }) => {
+        await onRunCreated('run-1');
+        if (linked.get('run-1') !== 'build-1') throw new Error('intake could not find its build');
+        return { runId: 'run-1' };
+      },
+    });
+    const result = await startBuild(command(), harness);
+    expect(result).toMatchObject({ status: 'intake', playbookRunId: 'run-1' });
+  });
+
   it('VT-01 an unknown model is a 400 and does not run preflight', async () => {
     const harness = deps();
     await expect(startBuild(command({ model: 'nope' }), harness)).rejects.toMatchObject({ status: 400 });

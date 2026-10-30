@@ -15,6 +15,8 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `tests/e2e/`: Playwright. `tests/e2e/specs/`, `tests/e2e/pages/` (page objects), `tests/e2e/support/` (auth capture), `tests/e2e/data/` (seed/reset, hand-written).
 - `tests/integration/`: `*.integration.test.ts`, run with `jest.config.integration.js`.
 - `foundation-skills/`: packaged skills library (`foundation-skills/catalog.json`, `foundation-skills/foundation/`, `foundation-skills/adapters/`); published by `.github/workflows/publish-apex-skills.yml`. `foundation-skills/starters/react-mui-express/` = build starter templates, copied by hand.
+- `templates/full-stack-express/`: isolated pnpm workspace starter (own lockfile and toolchain; not part of the Apex root workspace).
+- `templates/full-stack-express/apps/api/src/persistence/`: the starter's own `app_users` table (UUID key) and store; unrelated to Apex's `app_users` in `src/server/db/schema.ts`.
 - `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`. Local Dapr components: `runners/ai-runs-interactive/dapr/`.
 - `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
 - `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), local Redis, interactive host, and orchestrator (`scripts/dev/ensure-local-redis.mjs`, `scripts/dev/ensure-local-dapr.mjs`, `scripts/dev/run-interactive-host.mjs`, `scripts/dev/run-ai-orchestrator.mjs`), changelog, dev→prod migration.

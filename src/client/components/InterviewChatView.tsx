@@ -2239,12 +2239,16 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           itemName={interview.title}
           description="Are you sure you want to permanently delete the interview"
           isPending={deleteInterview.isPending}
+          error={deleteInterview.error?.message}
           onConfirm={() => {
             deleteInterview.mutate(interview.id, {
               onSuccess: () => navigate('/backlog'),
             });
           }}
-          onCancel={() => setShowDeleteModal(false)}
+          onCancel={() => {
+            deleteInterview.reset();
+            setShowDeleteModal(false);
+          }}
           {...{ 'data-testid': 'interview-delete-modal' }}
         />
       )}

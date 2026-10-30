@@ -129,6 +129,9 @@ const BuildsRouteGuard = lazy(() =>
 );
 const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
 const NewBuildForm = lazy(() => import('./components/NewBuildForm').then((m) => ({ default: m.NewBuildForm })));
+const BuildRunView = lazy(() =>
+  import('./components/BuildRunView').then((m) => ({ default: m.BuildRunView })),
+);
 const BuildIntakeChatRoute = lazy(() =>
   import('./components/BuildIntakeChatRoute').then((m) => ({ default: m.BuildIntakeChatRoute })),
 );
@@ -399,6 +402,9 @@ function App() {
   const buildsEnabled = !homeFlagsLoading && homeFlags[BUILD_FROM_PROMPT_FLAG] === true;
   const buildIntakeBuildId = /^\/builds\/([^/]+)\/intake\/?$/.exec(location.pathname)?.[1];
   const isBuildIntakePath = buildIntakeBuildId !== undefined;
+  const buildRunMatch = isBuildIntakePath ? null : /^\/builds\/([^/]+)(?:\/([^/]+))?\/?$/.exec(location.pathname);
+  const buildRunId = buildRunMatch && buildRunMatch[1] !== 'new' ? buildRunMatch[1] : undefined;
+  const buildRunTab = buildRunMatch?.[2];
   const mcpServersEnabled =
     !homeFlagsLoading && homeFlags['mcp-servers'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
@@ -1563,7 +1569,7 @@ function App() {
                   can={can}
                   isSuperAdmin={isSuperAdmin}
                   enabledViews={effectiveEnabledViews}
-                  flagEnabled={buildsEnabled || isBuildIntakePath}
+                  flagEnabled={buildsEnabled || isBuildIntakePath || buildRunId !== undefined}
                   isLoading={homeFlagsLoading || !menuConfigReady || !permissionsLoaded}
                   fallbackPath={resolveAccessibleRoute({
                     canAccessHome,
@@ -1575,7 +1581,10 @@ function App() {
                   })}
                 >
                   {isBuildIntakePath ? (
-                    <BuildIntakeChatRoute buildId={buildIntakeBuildId} />
+                    <BuildIntakeChatRoute project={selectedProject} buildId={buildIntakeBuildId} />
+                  ) : buildRunId !== undefined ? (
+                    // data-testid-exempt — BuildRunView owns its build-run-view root id; no data-testid prop
+                    <BuildRunView project={selectedProject} buildId={buildRunId} tab={buildRunTab} />
                   ) : location.pathname === '/builds/new' ? (
                     // data-testid-exempt — NewBuildForm owns its new-build-form root id; no data-testid prop
                     <NewBuildForm project={selectedProject} />
