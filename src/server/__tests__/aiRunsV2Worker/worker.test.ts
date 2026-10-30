@@ -5,6 +5,7 @@ import {
   createV2Worker,
   JOB_PROGRESS_GRACE_MS,
   LOOP_PROGRESS_BUDGET_MS,
+  WORKER_SHUTDOWN_DETAIL,
 } from '../../services/aiRunsV2Worker/worker';
 import type { WorkerServiceBusClient } from '../../services/aiRunsV2Worker/serviceBusClient';
 
@@ -562,6 +563,88 @@ describe('V2 worker run loop', () => {
 
       await expect(worker.processOnce()).resolves.toBe('failed');
       expect(calls.results).toEqual([expect.objectContaining({ status: 'failed' })]);
+    });
+
+    function abortingWorker(options: {
+      reportShutdownAsWorkerLost?: boolean;
+      abort: 'shutdown' | 'deadline';
+    }) {
+      const { bus, calls } = fakeBus(command());
+      const stopExecution = new AbortController();
+      const worker = createV2Worker({
+        bus,
+        execute: ({ signal }) =>
+          new Promise((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                const error = new Error(
+                  signal.reason instanceof Error
+                    ? signal.reason.message
+                    : 'This operation was aborted',
+                );
+                error.name = 'AbortError';
+                reject(error);
+              },
+              { once: true },
+            );
+            if (options.abort === 'shutdown') stopExecution.abort();
+          }),
+        artifactContainer: 'ai-run-artifacts',
+        containerAppsExecutionId: 'exec-7',
+        specifications: specification,
+        deadlineMs: options.abort === 'deadline' ? 5 : 60_000,
+        signal: new AbortController().signal,
+        executionSignal: stopExecution.signal,
+        ...(options.reportShutdownAsWorkerLost === undefined
+          ? {}
+          : { reportShutdownAsWorkerLost: options.reportShutdownAsWorkerLost }),
+      });
+      return { worker, calls };
+    }
+
+    it('reports a shutdown abort as worker_lost when the lane opts in', async () => {
+      const { worker, calls } = abortingWorker({
+        reportShutdownAsWorkerLost: true,
+        abort: 'shutdown',
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'worker_lost',
+          detail: WORKER_SHUTDOWN_DETAIL,
+        }),
+      ]);
+    });
+
+    it('still reports the run deadline as progress_timeout when the lane opts in', async () => {
+      const { worker, calls } = abortingWorker({
+        reportShutdownAsWorkerLost: true,
+        abort: 'deadline',
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'progress_timeout',
+          detail: 'Execution deadline elapsed',
+        }),
+      ]);
+    });
+
+    it('reports a shutdown abort as progress_timeout when the lane does not opt in', async () => {
+      const { worker, calls } = abortingWorker({ abort: 'shutdown' });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'progress_timeout',
+        }),
+      ]);
     });
   });
 });
