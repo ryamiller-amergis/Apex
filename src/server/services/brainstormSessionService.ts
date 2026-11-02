@@ -62,6 +62,7 @@ async function defaultCreateThread(userId: string, project: string, model: strin
     skillRepo: repo || undefined,
     skillBranch: branch,
     skillPath: BRAINSTORM_SKILL_PATH,
+    skillPathIsAppDefault: true,
     skillSettingsId: skillConfig?.id,
     agentModule: 'brainstorm',
     model,
