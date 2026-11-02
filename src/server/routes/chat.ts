@@ -576,6 +576,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
       ? (!res.writableEnded && !res.destroyed && (() => {
           try {
             res.write(`id: ${eventId}\ndata: ${JSON.stringify(event)}\n\n`);
+            (res as Response & { flush?: () => void }).flush?.();
             return true;
           } catch {
             return false;
@@ -652,11 +653,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
   // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
-  // another worker's run are forwarded to this SSE connection.
+  // another worker's run are forwarded to this SSE connection. `sendEnvelope`
+  // deduplicates by `eventId`, so a local in-memory delivery will not be sent
+  // twice.
   unsubNotify = subscribeRunEvents(req.params.id, (envelope) => {
-    // The owner already delivered this envelope through its in-memory
-    // subscriber. PostgreSQL echoes are only for other workers.
-    if (!shouldForwardPgRunEvent(envelope)) return;
     queueOrSendEnvelope(envelope);
   });
 

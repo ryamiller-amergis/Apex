@@ -71,6 +71,10 @@ resource "azurerm_linux_web_app" "main" {
     # dependency endpoints are observed separately so a shared database outage
     # does not remove every application instance from rotation.
     health_check_path = "/api/health"
+    # Azure pings about once a minute. azurerm 3.63+ rejects
+    # WEBSITE_HEALTHCHECK_MAXPINGFAILURES in app_settings and writes this
+    # value into that setting. 2 replaces the platform default of 10.
+    health_check_eviction_time_in_min = 2
 
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
     # upgrade). Declared explicitly so a full apply never reverts the runtime
@@ -92,10 +96,6 @@ resource "azurerm_linux_web_app" "main" {
     "ENABLE_ORYX_BUILD"                   = "false"
     "WEBSITE_RUN_FROM_PACKAGE"            = "1"
     "WEBSITES_ENABLE_APP_SERVICE_STORAGE" = "true"
-
-    # Evict an unresponsive instance after 2 failed health pings instead of the
-    # default 10.
-    "WEBSITE_HEALTHCHECK_MAXPINGFAILURES" = "2"
 
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string

@@ -1,4 +1,8 @@
-import { normalizeMermaidBlocks, normalizeMermaidChart } from '../mermaidMarkdown';
+import {
+  extractMermaidChartFromCode,
+  normalizeMermaidBlocks,
+  normalizeMermaidChart,
+} from '../mermaidMarkdown';
 
 describe('mermaidMarkdown', () => {
   it('wraps bare Mermaid blocks in a mermaid code fence', () => {
@@ -169,5 +173,53 @@ describe('mermaidMarkdown', () => {
   it('does not escape semicolons in non-sequence diagrams', () => {
     const chart = 'flowchart TD\n  A["step; next"] --> B';
     expect(normalizeMermaidChart(chart)).toBe(chart);
+  });
+
+  it('rewrites flowchart-tagged code fences to mermaid fences', () => {
+    const markdown = [
+      '### Target architecture',
+      '',
+      '```flowchart',
+      'flowchart LR',
+      '  api["Dev Workbench API"] --> db[(PostgreSQL)]',
+      '```',
+    ].join('\n');
+
+    expect(normalizeMermaidBlocks(markdown)).toBe([
+      '### Target architecture',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  api["Dev Workbench API"] --> db[(PostgreSQL)]',
+      '```',
+    ].join('\n'));
+  });
+
+  it('preserves flowchart direction when placed on the opening code fence line', () => {
+    const markdown = [
+      '```flowchart LR',
+      '  subgraph apex_host [Apex App Service]',
+      '    api["Dev Workbench API"]',
+      '  end',
+      '```',
+    ].join('\n');
+
+    expect(normalizeMermaidBlocks(markdown)).toBe([
+      '```mermaid',
+      'flowchart LR',
+      '  subgraph apex_host [Apex App Service]',
+      '    api["Dev Workbench API"]',
+      '  end',
+      '```',
+    ].join('\n'));
+  });
+
+  it('extracts Mermaid chart source from mermaid, flowchart, and generic code blocks', () => {
+    const chart = 'flowchart LR\n  A --> B';
+    expect(extractMermaidChartFromCode('mermaid', chart)).toBe(chart);
+    expect(extractMermaidChartFromCode('flowchart', chart)).toBe(chart);
+    expect(extractMermaidChartFromCode('flowchart LR', '  A --> B')).toBe('flowchart LR\n  A --> B');
+    expect(extractMermaidChartFromCode(undefined, chart)).toBe(chart);
+    expect(extractMermaidChartFromCode('typescript', 'const x = 1;')).toBeNull();
   });
 });
