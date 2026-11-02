@@ -464,8 +464,16 @@ describe('listThreadsByUser', () => {
 
     await listThreadsByUser('user-1');
 
-    const where = new PgDialect().sqlToQuery(chain.where.mock.calls[0][0] as SQL).sql;
+    const query = new PgDialect().sqlToQuery(chain.where.mock.calls[0][0] as SQL);
+    const where = query.sql;
     expect(where).toContain('not (');
+    expect(where).toContain("bt.kickoff->>'freeformContext'");
+    expect(query.params).toEqual(expect.arrayContaining([
+      'document_operation: validation',
+      '# Design Doc Validation Context',
+      '# Test Case Generation Context',
+      '# Design Doc Generation — Single Feature',
+    ]));
     expect(where).toContain('prds.validation_thread_id');
     expect(where).toContain('design_docs.chat_thread_id');
     expect(where).toContain('design_docs.validation_thread_id');

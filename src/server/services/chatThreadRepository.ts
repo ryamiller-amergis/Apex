@@ -54,13 +54,35 @@ function resultRows<T>(result: unknown): T[] {
 }
 
 /**
+ * Kickoff headings written by background document jobs. A re-run moves the
+ * document's thread reference to a new thread, so earlier job threads are only
+ * recognizable by their kickoff.
+ */
+const BACKGROUND_WORKFLOW_KICKOFF_MARKERS = [
+  'document_operation: validation',
+  '# Design Doc Validation Context',
+  '# Test Case Generation Context',
+  '# Design Doc Generation — Single Feature',
+] as const;
+
+/**
  * Threads owned by a background document job. A user turn on one becomes the
  * thread's newest run, which hides the job's finished run from the V2 harvester
  * and lets the watcher give up on it.
  */
 function backgroundWorkflowThreadCondition(threadId: SQL): SQL {
+  const kickoffMarkers = sql.join(
+    BACKGROUND_WORKFLOW_KICKOFF_MARKERS.map(
+      (marker) => sql`strpos(coalesce(bt.kickoff->>'freeformContext', ''), ${marker}) > 0`,
+    ),
+    sql` OR `,
+  );
   return sql`(
-    EXISTS (SELECT 1 FROM prds WHERE prds.validation_thread_id = ${threadId})
+    EXISTS (
+      SELECT 1 FROM chat_threads bt
+      WHERE bt.id = ${threadId} AND (${kickoffMarkers})
+    )
+    OR EXISTS (SELECT 1 FROM prds WHERE prds.validation_thread_id = ${threadId})
     OR EXISTS (
       SELECT 1 FROM design_docs
       WHERE design_docs.chat_thread_id = ${threadId}
