@@ -4,6 +4,7 @@ import { and, eq, inArray, lt } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { devSessions } from '../db/schema';
 import { resolveDataRoot } from '../utils/dataDir';
+import { removeTree } from '../utils/removeTree';
 import { withRepoCacheLease } from './repoCacheLeaseService';
 
 const STALE_SETUP_MS = 2 * 60 * 60 * 1000;
@@ -86,7 +87,7 @@ const nodeFileSystem: DevWorkspaceCleanupFileSystem = {
   },
 
   async rm(directory) {
-    await fs.promises.rm(directory, { recursive: true, force: true });
+    await removeTree(directory);
   },
 };
 
