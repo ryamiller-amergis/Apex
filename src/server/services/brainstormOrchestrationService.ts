@@ -3,7 +3,6 @@ import { db } from '../db/drizzle';
 import { appUsers, userProfiles } from '../db/schema';
 import {
   BRAINSTORM_BIO_MAX_LENGTH,
-  BRAINSTORM_SKILL_NAME,
   BRAINSTORM_SKILL_PATH,
   type BrainstormTurnAcceptedResponse,
 } from '../../shared/types/brainstorm';
@@ -203,8 +202,33 @@ async function defaultIsV2TransportEnabled(userId: string, project: string): Pro
   return isFeatureEnabled('ai-runs-v2-transport', { userId, project, caller: 'brainstorm' }).catch(() => false);
 }
 
+/** Points an existing session at the Project Settings repository before the turn reads the skill. */
+async function stampBrainstormSkillKickoff(threadId: string): Promise<void> {
+  const { getThread, updateThreadKickoff } = await import('./chatAgentService');
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const thread = await getThread(threadId);
+  if (!thread) return;
+  const skillConfig = await resolveSkillConfig({
+    project: thread.kickoff.project,
+    settingsId: thread.kickoff.skillSettingsId ?? undefined,
+  });
+  const repo = skillConfig?.skillRepo?.trim() || thread.kickoff.skillRepo?.trim() || thread.kickoff.repo;
+  const branch = skillConfig?.skillBranch?.trim() || thread.kickoff.skillBranch?.trim() || thread.kickoff.branch || 'main';
+  const skillProvider = thread.kickoff.skillProvider ?? skillConfig?.skillProvider;
+  await updateThreadKickoff(threadId, {
+    repo: repo || '',
+    branch,
+    ...(skillProvider ? { skillProvider } : {}),
+    ...(repo ? { skillRepo: repo } : {}),
+    skillBranch: branch,
+    skillPath: BRAINSTORM_SKILL_PATH,
+    ...(skillConfig?.id ? { skillSettingsId: thread.kickoff.skillSettingsId ?? skillConfig.id } : {}),
+  });
+}
+
 async function defaultSendTurn(input: SendBrainstormTurnInput): Promise<InteractiveTurnAcceptedResponse> {
   const { sendMessage } = await import('./chatAgentService');
+  await stampBrainstormSkillKickoff(input.threadId);
   const submission = await sendMessage(
     input.threadId,
     input.text,
@@ -214,7 +238,6 @@ async function defaultSendTurn(input: SendBrainstormTurnInput): Promise<Interact
       turnId: input.turnId,
       turnIdPolicy: 'required',
       requesterUserId: input.userId,
-      turnSkill: { name: BRAINSTORM_SKILL_NAME, path: BRAINSTORM_SKILL_PATH },
       internalContext: input.internalContext,
       brainstorm: input.brainstorm,
       legacyCompletion: 'detach',

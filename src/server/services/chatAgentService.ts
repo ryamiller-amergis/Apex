@@ -3072,6 +3072,18 @@ export async function updateThreadKickoffTranscript(
   return true;
 }
 
+/** Merges kickoff fields and persists them before the next turn reads the thread. */
+export async function updateThreadKickoff(
+  threadId: string,
+  patch: Partial<ChatThreadKickoff>,
+): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  if (!state) return false;
+  state.thread.kickoff = { ...state.thread.kickoff, ...patch };
+  await pgUpsertThread(state.thread);
+  return true;
+}
+
 /**
  * Mark an in-memory thread as interview-backed, extending its idle timeout.
  * Call this after linking a thread to an interviews row so the longer timeout

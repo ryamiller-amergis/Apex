@@ -379,10 +379,6 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
           cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
-          # Brainstorm loads this built-in skill from the app disk. The deploy
-          # zip is that disk; the Project Settings checkout is not opened for it.
-          mkdir -p deploy/.cursor/skills
-          cp -r .cursor/skills/brainstorm deploy/.cursor/skills/brainstorm
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 

@@ -4,6 +4,7 @@ import { and, count, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { appUsers, brainstormSessions } from '../db/schema';
 import {
+  BRAINSTORM_SKILL_PATH,
   BRAINSTORM_TITLE_MAX_LENGTH,
   type BrainstormSessionDetail,
   type BrainstormSessionSummary,
@@ -47,8 +48,24 @@ async function defaultGetDefaultModel(): Promise<string> {
 
 async function defaultCreateThread(userId: string, project: string, model: string): Promise<{ id: string }> {
   const { createThread } = await import('./chatAgentService');
-  // No repository: Source-Backed Exploration attaches sources later.
-  return createThread(userId, { project, repo: '', agentModule: 'brainstorm', model }, { skipAutoKickoff: true });
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const skillConfig = await resolveSkillConfig({ project });
+  const repo = skillConfig?.skillRepo?.trim() ?? '';
+  const branch = skillConfig?.skillBranch?.trim() || 'main';
+  // Same coordinates an interview uses: the Project Settings repository, branch,
+  // and provider. The skill file in that repository is the Brainstorm skill.
+  return createThread(userId, {
+    project,
+    repo,
+    branch,
+    skillProvider: skillConfig?.skillProvider,
+    skillRepo: repo || undefined,
+    skillBranch: branch,
+    skillPath: BRAINSTORM_SKILL_PATH,
+    skillSettingsId: skillConfig?.id,
+    agentModule: 'brainstorm',
+    model,
+  }, { skipAutoKickoff: true });
 }
 
 async function defaultDeleteThread(threadId: string): Promise<void> {

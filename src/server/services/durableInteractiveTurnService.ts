@@ -1099,7 +1099,9 @@ async function defaultLoadSkill(
   if (hasSeparateSkillRepo(input.thread)) {
     pinnedReader = branchTipReader(input.thread);
   } else if (!input.grounding) {
-    if (!input.readBranchTip) {
+    // Brainstorm keeps its source checkouts separate from this turn, and still
+    // reads its skill from the Project Settings repository and branch.
+    if (!input.readBranchTip && input.thread.kickoff.agentModule !== 'brainstorm') {
       warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
       throw unavailableSkill();
     }
