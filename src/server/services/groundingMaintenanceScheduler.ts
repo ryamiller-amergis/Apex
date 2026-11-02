@@ -21,6 +21,7 @@ import {
 } from './grounding/sharedReadCheckoutService';
 import {
   nightlyIdleReGroundService,
+  type NightlyIdleReGroundOptions,
   type NightlyIdleReGroundResult,
 } from './nightlyIdleReGroundService';
 import {
@@ -28,6 +29,7 @@ import {
   type RepoCacheEvictionService,
 } from './repoCacheEvictionService';
 import { withRepoCacheLease } from './repoCacheLeaseService';
+import { isFlagEnabledForWholeProject } from './featureFlagService';
 import {
   createSingleFlight,
   stuckAfterForInterval,
@@ -43,15 +45,39 @@ const CLAIM_EXPIRY_HEADROOM_MS = 5_000;
  * would clone production's active repositories onto staging's disk. A swap
  * still hands staging production's old disk, so staging keeps evicting and
  * compacting what it inherits.
+ *
+ * `legacy-projects` (App Service) grounds only projects that are not wholly on
+ * `ai-runs-v2-transport`, because their mirrors live on App Service's own disk,
+ * and leaves the shared workspace share to repo-read. `v2-projects`
+ * (repo-read) grounds only projects wholly on V2 and cleans the shared
+ * workspace share; it never compacts mirrors it is serving. `disk-only`
+ * (staging, once repo-read owns the share) only compacts this host's own
+ * repo cache.
  */
-export type GroundingMaintenanceMode = 'full' | 'cleanup-only';
+export type GroundingMaintenanceMode =
+  | 'full'
+  | 'cleanup-only'
+  | 'disk-only'
+  | 'legacy-projects'
+  | 'v2-projects';
+
+const GROUNDING_MAINTENANCE_MODES: readonly GroundingMaintenanceMode[] = [
+  'full',
+  'cleanup-only',
+  'disk-only',
+  'legacy-projects',
+  'v2-projects',
+];
+
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 
 export function resolveGroundingMaintenanceMode(
   raw: string | undefined,
 ): GroundingMaintenanceMode {
   const value = raw?.trim().toLowerCase();
   if (!value) return 'full';
-  if (value === 'full' || value === 'cleanup-only') return value;
+  const mode = GROUNDING_MAINTENANCE_MODES.find((candidate) => candidate === value);
+  if (mode) return mode;
   console.warn(
     `[grounding-maintenance] unknown GROUNDING_MAINTENANCE_MODE="${raw}"; using full`,
   );
@@ -70,6 +96,12 @@ export function groundingMaintenanceClaimKey(
       return 'grounding-maintenance:sweep';
     case 'cleanup-only':
       return 'grounding-maintenance:sweep:cleanup-only';
+    case 'disk-only':
+      return 'grounding-maintenance:sweep:disk-only';
+    case 'legacy-projects':
+      return 'grounding-maintenance:sweep:legacy-projects';
+    case 'v2-projects':
+      return 'grounding-maintenance:sweep:v2-projects';
     default: {
       const unhandled: never = mode;
       throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
@@ -81,14 +113,94 @@ export function groundingMaintenanceClaimKey(
 function groundsRepositories(mode: GroundingMaintenanceMode): boolean {
   switch (mode) {
     case 'full':
+    case 'legacy-projects':
+    case 'v2-projects':
       return true;
     case 'cleanup-only':
+    case 'disk-only':
       return false;
     default: {
       const unhandled: never = mode;
       throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
     }
   }
+}
+
+/** Whether the mode evicts workspaces and shared checkouts on the workspace share. */
+function cleansWorkspaceShare(mode: GroundingMaintenanceMode): boolean {
+  switch (mode) {
+    case 'full':
+    case 'cleanup-only':
+    case 'v2-projects':
+      return true;
+    case 'disk-only':
+    case 'legacy-projects':
+      return false;
+    default: {
+      const unhandled: never = mode;
+      throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
+    }
+  }
+}
+
+/** Whether the mode evicts and compacts mirrors on this host's repo cache. */
+function evictsRepoCache(mode: GroundingMaintenanceMode): boolean {
+  switch (mode) {
+    case 'full':
+    case 'cleanup-only':
+    case 'disk-only':
+    case 'legacy-projects':
+      return true;
+    case 'v2-projects':
+      return false;
+    default: {
+      const unhandled: never = mode;
+      throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
+    }
+  }
+}
+
+export type ProjectFilter = (project: string) => Promise<boolean>;
+
+/**
+ * Decides per project whether this host grounds it. An unreadable flag keeps
+ * the project on App Service (`legacy-projects` includes it, `v2-projects`
+ * skips it), so no project loses its upkeep.
+ */
+export function createProjectFilter(
+  mode: GroundingMaintenanceMode,
+  isV2Project: ProjectFilter,
+): ProjectFilter | undefined {
+  switch (mode) {
+    case 'full':
+    case 'cleanup-only':
+    case 'disk-only':
+      return undefined;
+    case 'legacy-projects':
+    case 'v2-projects': {
+      const wantV2 = mode === 'v2-projects';
+      const decisions = new Map<string, Promise<boolean>>();
+      return (project) => {
+        let decision = decisions.get(project);
+        if (!decision) {
+          decision = isV2Project(project).then(
+            (onV2) => onV2 === wantV2,
+            () => !wantV2,
+          );
+          decisions.set(project, decision);
+        }
+        return decision;
+      };
+    }
+    default: {
+      const unhandled: never = mode;
+      throw new Error(`Unhandled grounding maintenance mode: ${String(unhandled)}`);
+    }
+  }
+}
+
+function defaultIsV2Project(project: string): Promise<boolean> {
+  return isFlagEnabledForWholeProject(V2_TRANSPORT_FLAG, project);
 }
 
 export interface GroundingMaintenanceSchedulerDependencies {
@@ -101,7 +213,7 @@ export interface GroundingMaintenanceSchedulerDependencies {
   >;
   stalenessService?: Pick<GroundingStalenessService, 'evaluateActive'>;
   nightlyIdleReGround?: {
-    runIfDue: () => Promise<NightlyIdleReGroundResult>;
+    runIfDue: (options?: NightlyIdleReGroundOptions) => Promise<NightlyIdleReGroundResult>;
   };
   subscribe?: (
     handler: GroundingActiveSetChangeHandler,
@@ -111,6 +223,8 @@ export interface GroundingMaintenanceSchedulerDependencies {
     leaseWindowMs: number,
     claimKey: string,
   ) => Promise<void>;
+  /** Whether a project is wholly on V2; defaults to the `ai-runs-v2-transport` flag. */
+  isV2Project?: ProjectFilter;
   startupDelayMs?: number;
   intervalMs?: number;
   /** Raw setting value; defaults to `GROUNDING_MAINTENANCE_MODE`. */
@@ -143,8 +257,9 @@ export class GroundingMaintenanceScheduler {
     'evaluateActive'
   >;
   private readonly nightlyIdleReGround: {
-    runIfDue: () => Promise<NightlyIdleReGroundResult>;
+    runIfDue: (options?: NightlyIdleReGroundOptions) => Promise<NightlyIdleReGroundResult>;
   };
+  private readonly isV2Project: ProjectFilter;
   private readonly subscribe: (
     handler: GroundingActiveSetChangeHandler,
   ) => () => void;
@@ -175,6 +290,7 @@ export class GroundingMaintenanceScheduler {
       dependencies.stalenessService ?? groundingStalenessService;
     this.nightlyIdleReGround =
       dependencies.nightlyIdleReGround ?? nightlyIdleReGroundService;
+    this.isV2Project = dependencies.isV2Project ?? defaultIsV2Project;
     this.subscribe =
       dependencies.subscribe ?? onGroundingActiveSetChanged;
     this.runLeaderSweep =
@@ -217,9 +333,13 @@ export class GroundingMaintenanceScheduler {
       return;
     }
     this.unsubscribe = this.subscribe((target: PreWarmTarget) => {
-      void this.preWarmService
-        .preWarm(target)
-        .then(() => this.stalenessService.evaluateActive(target))
+      const includeProject = createProjectFilter(this.mode, this.isV2Project);
+      void Promise.resolve(includeProject ? includeProject(target.project) : true)
+        .then(async (included) => {
+          if (!included) return;
+          await this.preWarmService.preWarm(target);
+          await this.stalenessService.evaluateActive(target);
+        })
         .catch(() => {
           console.warn('[grounding-maintenance] event pre-warm failed');
         });
@@ -263,18 +383,29 @@ export class GroundingMaintenanceScheduler {
             }
           };
           const grounds = groundsRepositories(this.mode);
+          const includeProject = createProjectFilter(this.mode, this.isV2Project);
           if (grounds) {
-            await runStep('pre-warm', () => this.preWarmService.sweep());
-            await runStep('staleness', () => this.stalenessService.evaluateActive());
+            await runStep('pre-warm', () => this.preWarmService.sweep({ includeProject }));
+            await runStep('staleness', () =>
+              this.stalenessService.evaluateActive(undefined, { includeProject }));
           }
-          await runStep('workspace-eviction', () => this.evictionService.evictIdle());
-          await runStep('shared-checkout-eviction', () => this.sharedReadCheckoutService.evictIdle());
+          if (cleansWorkspaceShare(this.mode)) {
+            await runStep('workspace-eviction', () => this.evictionService.evictIdle());
+            await runStep('shared-checkout-eviction', () => this.sharedReadCheckoutService.evictIdle());
+          }
           // Runs after the workspace sweeps so freed checkouts count against
           // the share before mirrors are considered for deletion. Also
           // compacts oversized mirrors.
-          await runStep('repo-cache-eviction', () => this.repoCacheEvictionService.evictOverBudget());
+          if (evictsRepoCache(this.mode)) {
+            await runStep('repo-cache-eviction', () => this.repoCacheEvictionService.evictOverBudget());
+          }
           if (grounds) {
-            await runStep('nightly-re-ground', () => this.nightlyIdleReGround.runIfDue());
+            // V2 chat hosts check out by commit themselves, so repo-read only re-pins.
+            await runStep('nightly-re-ground', () =>
+              this.nightlyIdleReGround.runIfDue({
+                includeProject,
+                materialize: this.mode !== 'v2-projects',
+              }));
           }
           if (failedSteps.length > 0) {
             throw new Error(`Grounding maintenance steps failed: ${failedSteps.join(', ')}`);

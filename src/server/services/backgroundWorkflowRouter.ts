@@ -733,6 +733,68 @@ export function createBackgroundWorkflowRouter(
       );
     }
 
+    // The V2 document worker checks out the grounded commit itself, so App
+    // Service neither reads its mirror nor prepares a checkout.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      try {
+        await clearGenerationOutput(prepared.threadWorkspacePath);
+      } catch {
+        return recover(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+      const v2Reason = 'v2-commit-only';
+      safeTrack(
+        'background.materialization.outcome',
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          route: 'worker',
+          reason: v2Reason,
+        },
+        { durationMs: Math.max(0, now() - preparationStartedAt) },
+      );
+      const v2ModelChoice = await resolveModelChoice(prepared.model, prepared.effort);
+      const v2Snapshot: ExecutionSnapshot = {
+        prompt: prepared.prompt,
+        model: v2ModelChoice.model,
+        effort: v2ModelChoice.effort,
+        workspaceRef: prepared.threadWorkspacePath,
+        groundedSha: prepared.targetGrounding.groundedSha,
+        repository: prepared.targetGrounding.repository,
+        workflowClass: input.workflowClass,
+        skillPath: prepared.skillPath,
+        projectId: prepared.projectId,
+        threadId: input.threadId,
+        ...(input.playbookAgentPolicy
+          ? { playbookAgentPolicy: input.playbookAgentPolicy }
+          : {}),
+      };
+      let v2RunId: string;
+      try {
+        v2RunId = await dispatch(v2Snapshot, prepared.targetGrounding);
+      } catch (error) {
+        return recover(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+          error,
+        );
+      }
+      routeDecision(input, 'worker', v2Reason);
+      return {
+        route: 'worker',
+        workspacePath: prepared.threadWorkspacePath,
+        runId: v2RunId,
+      };
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
+
     // PRD / design-doc / test-cases: prefer the bare mirror when the worker
     // can actually open it (same disk or HTTP). Else reuse the interview's
     // warm shared SHA tree. Thin writable cwd = thread workspace.

@@ -316,6 +316,36 @@ export async function isFeatureOperational(key: string): Promise<boolean> {
   return Boolean(flag?.enabled && flag.lifecycle !== 'archived');
 }
 
+/**
+ * True only when the flag is on for every user and caller in the project: an
+ * `everyone` or matching `project` rule, no `caller` rule, and any
+ * `environment` rule matching this host. User or group rules alone do not
+ * count, because other users in the project still take the flag-off path.
+ */
+export async function isFlagEnabledForWholeProject(
+  key: string,
+  project: string,
+): Promise<boolean> {
+  const flag = await db.query.featureFlags.findFirst({
+    where: eq(featureFlags.key, key),
+    with: { rules: true },
+  });
+  if (!flag?.enabled || flag.lifecycle === 'archived') return false;
+  if (flag.rules.some((rule) => rule.type === 'caller')) return false;
+  const environmentRules = flag.rules.filter((rule) => rule.type === 'environment');
+  if (
+    environmentRules.length > 0
+    && !environmentRules.some((rule) => rule.value === getAppEnvironment())
+  ) {
+    return false;
+  }
+  return flag.rules.some(
+    (rule) =>
+      rule.type === 'everyone'
+      || (rule.type === 'project' && rule.value === project),
+  );
+}
+
 export interface GroundingFlagContext {
   userId: string;
   project: string;

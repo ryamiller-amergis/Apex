@@ -75,6 +75,7 @@ export const SHARED_READ_LASTUSED_SUFFIX = '.lastused';
 
 /** Idle age (by last-use sidecar) after which an unreferenced tree is evicted. */
 export const SHARED_READ_IDLE_TTL_MS = 30 * 60 * 1000;
+export const SHARED_READ_RETAIN_HEARTBEAT_MS = 5 * 60 * 1000;
 
 /** Exact-commit fetch timeout when the pinned SHA is missing from the mirror. */
 export const SHARED_READ_EXACT_FETCH_TIMEOUT_MS = 5 * 60 * 1000;
@@ -379,9 +380,33 @@ export function createSharedReadCheckoutService(
     }
   };
 
+  // Eviction may run on another host (repo-read), which cannot see refCounts,
+  // so a held tree keeps its last-used sidecar fresher than the idle TTL.
+  let retainHeartbeat: NodeJS.Timeout | null = null;
+  const touchRetained = (): void => {
+    for (const digest of refCounts.keys()) {
+      void fsp
+        .writeFile(lastUsedPath(path.join(sharedRoot, digest)), String(now()), 'utf-8')
+        .catch(() => undefined);
+    }
+  };
+  const syncRetainHeartbeat = (): void => {
+    if (refCounts.size > 0 && !retainHeartbeat) {
+      retainHeartbeat = setInterval(touchRetained, SHARED_READ_RETAIN_HEARTBEAT_MS);
+      retainHeartbeat.unref?.();
+    } else if (refCounts.size === 0 && retainHeartbeat) {
+      clearInterval(retainHeartbeat);
+      retainHeartbeat = null;
+    }
+  };
+
   const retain = (identity: SharedReadCheckoutIdentity): void => {
     const digest = identityDigest(identity);
     refCounts.set(digest, (refCounts.get(digest) ?? 0) + 1);
+    void fsp
+      .writeFile(lastUsedPath(resolvePath(identity)), String(now()), 'utf-8')
+      .catch(() => undefined);
+    syncRetainHeartbeat();
   };
 
   const releaseRef = (identity: SharedReadCheckoutIdentity): void => {
@@ -389,6 +414,7 @@ export function createSharedReadCheckoutService(
     const next = (refCounts.get(digest) ?? 0) - 1;
     if (next <= 0) refCounts.delete(digest);
     else refCounts.set(digest, next);
+    syncRetainHeartbeat();
     // Count idle from the last release, not the last acquire.
     touchLastUsed(resolvePath(identity));
   };
