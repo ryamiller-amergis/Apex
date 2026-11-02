@@ -7,6 +7,8 @@ export type PlaybookFlowNodeData = {
   config: Record<string, unknown>;
   readOnly?: boolean;
   runStatus?: string;
+  /** Copied from the graph node so a canvas edit does not drop a parallel split. */
+  parallel?: boolean;
 };
 
 export type PlaybookFlowNode = {
@@ -49,6 +51,7 @@ export function graphToFlow(
         stepType: node.stepType,
         label: node.id,
         config: node.config ?? {},
+        ...(node.parallel ? { parallel: true } : {}),
       },
     };
   });
@@ -72,6 +75,7 @@ export function flowToGraph(
       id: node.id,
       stepType: node.data.stepType,
       ...(Object.keys(node.data.config).length ? { config: node.data.config } : {}),
+      ...(node.data.parallel ? { parallel: true } : {}),
     })),
     edges: edges.map((edge) => {
       const source = nodes.find((node) => node.id === edge.source);
