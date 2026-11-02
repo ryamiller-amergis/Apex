@@ -787,25 +787,57 @@ describe('commit-only grounding for whole-V2 projects', () => {
   });
 
   it.each([
-    ['repo-read is off for the caller', { isRepoReadServiceEnabled: jest.fn().mockResolvedValue(false) }],
-    ['the project is not wholly on V2', { isV2TransportProject: jest.fn().mockResolvedValue(false) }],
-    ['repo-read has no URL', { resolveRepoReadServiceUrl: () => undefined }],
-    ['a flag cannot be read', { isV2TransportProject: jest.fn().mockRejectedValue(new Error('db down')) }],
-  ])('uses this host mirror when %s', async (_label, overrides) => {
+    ['repo-read is off for the caller', { isRepoReadServiceEnabled: jest.fn().mockResolvedValue(false) }, 'repo-read-off'],
+    ['repo-read has no URL', { resolveRepoReadServiceUrl: () => undefined }, 'repo-read-url-missing'],
+    ['the V2 flag cannot be read', { isV2TransportProject: jest.fn().mockRejectedValue(new Error('db down')) }, 'v2-flag-check-failed'],
+    ['the repo-read flag cannot be read', { isRepoReadServiceEnabled: jest.fn().mockRejectedValue(new Error('db down')) }, 'repo-read-flag-check-failed'],
+  ])('uses this host mirror and reports it when %s', async (_label, overrides, reason) => {
     const deps = commitOnlyDeps(overrides as Partial<CallerGroundingDependencies>);
 
     await start(deps);
 
     expect(deps.ensureRepoCache).toHaveBeenCalled();
     expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.objectContaining({ project: 'Apex', caller: 'durable-interactive', reason }),
+    );
   });
 
-  it('uses this host mirror for callers without a sandbox', async () => {
+  it('uses this host mirror without reporting it when the project is not wholly on V2', async () => {
+    const deps = commitOnlyDeps({ isV2TransportProject: jest.fn().mockResolvedValue(false) });
+
+    await start(deps);
+
+    expect(deps.ensureRepoCache).toHaveBeenCalled();
+    expect(deps.trackEvent).not.toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.anything(),
+    );
+  });
+
+  it('uses this host mirror for callers without a sandbox and reports it', async () => {
     const deps = commitOnlyDeps();
 
     await start(deps, {});
 
     expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.objectContaining({ reason: 'no-sandbox' }),
+    );
+  });
+
+  it('reports a whole-V2 project whose caller has native-read off', async () => {
+    const deps = commitOnlyDeps({ isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(false) });
+
+    await start(deps);
+
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.objectContaining({ reason: 'native-read-off' }),
+    );
   });
 
   it('falls back to remote when the remote has no tip', async () => {

@@ -359,28 +359,43 @@ export function createCallerGroundingService(
   };
 
   // Reads for a whole-V2 project go through repo-read by commit, so this host
-  // only pins the commit and never touches its own mirror for it.
+  // only pins the commit and never touches its own mirror for it. A whole-V2
+  // project that still lands on this host's mirror emits why.
   const isCommitOnlyCaller = async (
-    input: StartCallerGroundingInput
+    input: StartCallerGroundingInput,
+    nativeReadEnabled: boolean
   ): Promise<boolean> => {
     const { isV2TransportProject, isRepoReadServiceEnabled } = dependencies;
-    if (!isV2TransportProject || !isRepoReadServiceEnabled) return false;
-    if (!input.sandboxCwd?.trim()) return false;
-    if (!(dependencies.resolveRepoReadServiceUrl ?? resolveRepoReadServiceUrl)()) {
+    if (!isV2TransportProject) return false;
+    const reportFallback = (reason: string): false => {
+      dependencies.trackEvent('grounding.v2_app_service_fallback', {
+        ...telemetryContext(input),
+        reason,
+      });
       return false;
+    };
+    let v2: boolean;
+    try {
+      v2 = await isV2TransportProject(input.run.project);
+    } catch {
+      return reportFallback('v2-flag-check-failed');
+    }
+    if (!v2) return false;
+    if (!nativeReadEnabled) return reportFallback('native-read-off');
+    if (!isRepoReadServiceEnabled) return reportFallback('repo-read-unavailable');
+    if (!input.sandboxCwd?.trim()) return reportFallback('no-sandbox');
+    if (!(dependencies.resolveRepoReadServiceUrl ?? resolveRepoReadServiceUrl)()) {
+      return reportFallback('repo-read-url-missing');
     }
     try {
-      const [v2, repoRead] = await Promise.all([
-        isV2TransportProject(input.run.project),
-        isRepoReadServiceEnabled({
-          userId: input.userId,
-          project: input.run.project,
-          caller: input.caller,
-        }),
-      ]);
-      return v2 && repoRead;
+      const repoRead = await isRepoReadServiceEnabled({
+        userId: input.userId,
+        project: input.run.project,
+        caller: input.caller,
+      });
+      return repoRead || reportFallback('repo-read-off');
     } catch {
-      return false;
+      return reportFallback('repo-read-flag-check-failed');
     }
   };
 
@@ -591,7 +606,7 @@ export function createCallerGroundingService(
       let fetchedCache:
         | { baseSha: string; mirrorHit?: boolean; cacheDir?: string }
         | undefined;
-      const commitOnly = nativeReadEnabled && (await isCommitOnlyCaller(input));
+      const commitOnly = await isCommitOnlyCaller(input, nativeReadEnabled);
 
       // Stage 6: native-read callers skip working trees once a bare mirror exists.
       // Cold start fetches the mirror first so the first visit can skip too.

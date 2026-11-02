@@ -56,8 +56,19 @@ Follow-ups (not safe for tonight; need design + dev soak):
 - [x] Tests (146), tsc, lint, repo-read entrypoint load all pass
 - Item 7 deferred: promotion is already change-gated, but chat hosts bundle all of `src/server/`, so any server change restarts them. Real fix is item 10.
 
+- [x] PR #267 deployed to dev (692a75f3). Dev Terraform state is not on this machine, so dev repo-read was updated with `az containerapp secret set` + `az containerapp update --yaml` (same shape as the Terraform). Revision `ca-apex-repo-read-dev--0000144` logs `grounding maintenance started (mode=v2-projects)` and does prewarm, staleness, bundle publish and both evictions for Apex and MaxView (45 share folders seen, all protected).
+- Dev findings: MaxView branch `tbi/55352-phase-3-service-now-cab-ticket` was deleted in ADO; pre-warm fails on it every sweep on both hosts (pre-existing, other targets still run). App Service's own MaxView@development mirror fails fetch with `bad object`; repo-read's copy is fine. A local orchestrator on host MSL-SD00F6QZ is running against dev and taking interactive runs.
+- Dev test 1 (MaxView PRD 8b0908b9, 18:09Z) failed `grounding-unavailable`: `callerGroundingService` first turn fetches App Service's own mirror to pin; dev App Service MaxView mirror lost a pack (879/964 refs missing, since 17:15Z) and can't re-clone (dev /home is 10 GB, guard needs 10 GB free). Fix 7515f4df: when grounding fails for a whole-V2 project with no pin, pin the `ls-remote` tip (event `grounding.v2_remote_tip_pin`). Follow-up: skip App Service mirror entirely for V2 runs.
+- 89625795: commit-only grounding. `callerGroundingService` for whole-V2 projects (+ `repo-read-service` flag, `REPO_READ_SERVICE_URL`, sandboxCwd, native-read) pins existing/ls-remote tip, profile has no mirror (reads via `RepoServiceReader`), no App Service bundle publish. Covers background runs AND durable chat admission (`durableInteractiveTurnService.defaultResolveGrounding`), which also used App Service's mirror and silently lost grounding when it broke.
+- Mirror damage cause (dev): pack deleted ~16:50Z, read-only idx/rev left, empty packed-refs; most likely a partial whole-mirror delete on SMB /home. Not proven: dev App Service sent no telemetry before 17:15Z; prod App Service sends no traces at all. Prod mirrors checked read-only via Kudu: 0 orphan packs, 240 GB free.
+- Flags checked read-only in both DBs (Kudu node query, 2026-11-02): Apex + MaxView have project rules for `ai-runs-v2-transport`, `native-read`, `repo-read-service`; `project-repository-checkout-readiness` is disabled in both envs. So prod takes commit-only.
+- Fallback event: `grounding.v2_app_service_fallback` (reason `v2-flag-check-failed` | `native-read-off` | `repo-read-unavailable` | `no-sandbox` | `repo-read-url-missing` | `repo-read-off` | `repo-read-flag-check-failed`) whenever a whole-V2 project lands on App Service's mirror. Interactive legacy on flag error is already `interactive.route.decision` reason `flag-evaluation-error`.
+- Ask Apex passes a per-session `sandboxCwd` (never created, `os.tmpdir()/ask-apex-sessions/<id>`), so it now takes commit-only too.
+- Known failing before this work: `repoCacheGitIntegration` › compactRepoCache times out at 5 s locally (same on base).
+- Dev watchers live in the agent store `dev-watch/` (`watch-appinsights.sh` → `appinsights.log`, `watch-containerlogs.sh` → `ca-*.log`).
+
 ## Next
-1. Commit, push, PR with `quick-dev-deploy`; check dev repo-read logs for `grounding maintenance started (mode=v2-projects)`.
+1. User tests on dev MaxView (PRD, design doc, test cases, chat, interview; non-V2 control). Then set dev App Service `GROUNDING_MAINTENANCE_MODE=legacy-projects` and re-test.
 2. Prod rollout tonight, in order:
    a. Merge, deploy (App Service still `full` — safe overlap; leases are per mode, so both may refresh V2 mirrors for one night).
    b. `terraform apply` for repo-read (user must ask explicitly).
