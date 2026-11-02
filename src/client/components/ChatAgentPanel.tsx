@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
@@ -23,6 +23,7 @@ import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { BrandLogo } from './BrandLogo';
 import { BuildAgentHomePill } from './BuildAgentHomePill';
+import { HOME_GUIDED_JOBS_SLOT_ID, notifyHomeGuidedJobsSlot } from './GuidedCloudJobs';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
@@ -786,6 +787,12 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   const showStartupTyping = isStartingConversation;
 
+  useLayoutEffect(() => {
+    if (!launchedFromHome || !isOpen) return undefined;
+    notifyHomeGuidedJobsSlot();
+    return () => notifyHomeGuidedJobsSlot();
+  }, [launchedFromHome, isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -852,6 +859,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             >
               {isFullWidth ? '⇥⇤' : '⇤⇥'}
             </button>
+          )}
+          {onSelectThread && launchedFromHome && (
+            <div id={HOME_GUIDED_JOBS_SLOT_ID} className={styles.homeJobsSlot} />
           )}
           {onSelectThread && (
             <button

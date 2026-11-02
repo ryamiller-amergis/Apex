@@ -26,6 +26,15 @@
   z-index: 3;
 }
 
+/* Hosts Report an issue beside History. Empty until that button docks here. */
+.homeJobsSlot:empty {
+  display: none;
+}
+
+.homeJobsSlot:not(:empty) {
+  display: contents;
+}
+
 .homeMergedBarMeta {
   display: inline-flex;
   align-items: center;
