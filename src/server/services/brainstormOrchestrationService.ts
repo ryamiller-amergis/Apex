@@ -557,6 +557,10 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
       } catch (err) {
         throw translateAdmissionError(err);
       }
+      // A repeat of a turn whose row already closed without a run must not attach a new run to it.
+      if (opened.existing && !opened.assistant.runId && opened.assistant.status !== 'streaming') {
+        throw new BrainstormError('not_retryable', 409);
+      }
 
       let response: InteractiveTurnAcceptedResponse;
       try {

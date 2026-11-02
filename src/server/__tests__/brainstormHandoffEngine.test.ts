@@ -158,9 +158,9 @@ function fakeServices() {
       records.interview.set(input.chatThreadId, id);
       return id;
     }),
-    createFeatureRequestFromPlan: jest.fn(async (input: { title: string }) => {
+    createFeatureRequestFromPlan: jest.fn(async (input: { id: string; title: string }) => {
       const id = `fr-${records['feature-request'].size + 1}`;
-      records['feature-request'].set(input.title, id);
+      records['feature-request'].set(input.id, id);
       return id;
     }),
     markInterviewThread: jest.fn(async () => {}),

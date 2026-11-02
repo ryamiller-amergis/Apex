@@ -5,6 +5,7 @@
  * permission, group and menu it needs, what the artifact must contain, what the
  * preview shows, and how to create the target record. A new target is one entry.
  */
+import { randomUUID } from 'node:crypto';
 import { AGENT_SKILL_ROOT, skillPathFor } from '../../shared/skillPaths';
 import {
   BRAINSTORM_ARTIFACT_TYPE_LABELS,
@@ -209,6 +210,7 @@ export interface TargetServices {
     skillSettingsId: string | null;
   }): Promise<string>;
   createFeatureRequestFromPlan?(input: {
+    id: string;
     userId: string;
     project: string;
     title: string;
@@ -377,7 +379,18 @@ export async function executeTarget(
     if (!services.createFeatureRequestFromPlan) {
       throw new Error('createFeatureRequestFromPlan is not configured');
     }
+    // The Feature Request id doubles as the probe key, stored before the record exists.
+    let requestId = input.threadId;
+    if (!requestId) {
+      requestId = randomUUID();
+      await input.storeThread(requestId);
+    }
+    const existing = await services.findRecordByThread('feature-request', requestId);
+    if (existing) {
+      return { resultRef: { module: 'feature-request', id: existing, link: target.link(existing) }, recovered: true };
+    }
     const id = await services.createFeatureRequestFromPlan({
+      id: requestId,
       userId: input.userId,
       project: input.project,
       title: input.plan.title,
