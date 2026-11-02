@@ -1,10 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
+
+const PRD_ASSISTANT_SUGGESTIONS = [
+  'Summarize the open review comments',
+  "What's missing before this PRD is ready for review?",
+  'Tighten the acceptance criteria for the weakest PBI',
+  'Add a test case for a PBI',
+] as const;
 
 export interface PrdAssistantPanelProps {
   prdId: string;
@@ -31,14 +36,22 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const skipAutoCreateRef = useRef(false);
 
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId);
-  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
+  const {
+    messages,
+    streamingText,
+    isRunning,
+    isSending,
+    showTypingIndicator,
+    progressLabel,
+    progressPhase,
+    toolProgress,
+  } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the PRD, generated test
@@ -109,10 +122,10 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     };
   }, [isDragging]);
 
-  // Auto-scroll to the latest message.
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, streamingText]);
+  const fillComposer = useCallback((prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -235,53 +248,23 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
             />
           )}
         >
-          <div className={styles.messages}>
-          <div className={styles.messageList}>
-            {isCreating && (
-              <div className={styles.initializing}>
-                <div className={styles.typingIndicator}>
-                  <span className={styles.typingDot} />
-                  <span className={styles.typingDot} />
-                  <span className={styles.typingDot} />
-                </div>
-                <span>Starting assistant…</span>
-              </div>
-            )}
-            {createError && (
-              <div className={styles.messageBubbleSystem}>{createError}</div>
-            )}
-            {visibleMessages.map((msg) => {
-              if (msg.role === 'system') {
-                return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
-              }
-              if (msg.role === 'user') {
-                return (
-                  <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>
-                    {msg.text}
-                  </div>
-                );
-              }
-              return (
-                <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                </div>
-              );
-            })}
-            {showTypingIndicator && (
-              <div className={styles.typingIndicator}>
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-              </div>
-            )}
-            {streamingText && (
-              <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-          </div>
+          <AssistantConversation
+            messages={visibleMessages}
+            streamingText={streamingText}
+            isWorking={showTypingIndicator}
+            isStarting={isCreating}
+            startError={createError}
+            progressLabel={progressLabel}
+            progressPhase={progressPhase}
+            toolProgress={toolProgress}
+            welcome={{
+              title: 'Ask about this PRD',
+              description: 'Apex can answer questions, edit the PRD or backlog, add test cases, and resolve review comments. Edits come back as a proposed change for the owner to accept.',
+              suggestions: PRD_ASSISTANT_SUGGESTIONS,
+              onSuggestion: threadId ? fillComposer : undefined,
+            }}
+            testIdPrefix="prd-assistant"
+          />
         </AgentPanelShell>
       </div>
     </>

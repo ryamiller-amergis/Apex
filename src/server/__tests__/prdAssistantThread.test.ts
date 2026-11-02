@@ -251,7 +251,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
     );
   });
 
-  it('passes skipAutoKickoff: true to createThread and kicks off via sendMessage', async () => {
+  it('passes skipAutoKickoff: true to createThread and starts no greeting run', async () => {
     mockGetPrd.mockResolvedValue({ ...basePrd, prdAssistantThreadId: null });
     mockGetComments.mockResolvedValue([]);
 
@@ -262,10 +262,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
       expect.any(Object),
       { skipAutoKickoff: true },
     );
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      'thread-new',
-      expect.stringContaining('Apex'),
-    );
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it('returns 404 when PRD is not found', async () => {
