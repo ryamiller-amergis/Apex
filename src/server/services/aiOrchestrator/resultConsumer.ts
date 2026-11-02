@@ -10,7 +10,10 @@ import {
   type AiRunV2Result,
 } from '../../../shared/types/aiRunV2';
 import { applyTerminalRunEffects as defaultTerminalEffects } from '../agentRunTerminalEffects';
-import type { RunAttemptRepository } from '../aiRunV2/runAttemptRepository';
+import type {
+  RunAttemptRepository,
+  TransitionAttemptResult,
+} from '../aiRunV2/runAttemptRepository';
 import { recordV2TerminalUsage as defaultRecordTerminalUsage } from '../aiRunV2/runUsageRecorder';
 import type { Clock, OrchestratorMetrics, QueueConsumer } from './ports';
 import { noopMetrics, systemClock } from './ports';
@@ -27,6 +30,8 @@ export type ResultConsumerDeps = Readonly<{
   /** Called at the start of every loop pass. */
   onProgress?: () => void;
 }>;
+
+type RefusedTransition = Exclude<TransitionAttemptResult, { status: 'ok' }>;
 
 export type ResultConsumer = {
   processOnce(): Promise<'processed' | 'idle' | 'poison'>;
@@ -74,7 +79,93 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
           ? 'internal_error'
           : undefined;
 
+    const settleRefused = async (
+      refusal: RefusedTransition,
+    ): Promise<'processed' | 'poison'> => {
+      switch (refusal.status) {
+        case 'fence_mismatch':
+          await deps.consumer.deadLetter(
+            message.lockToken,
+            'fence_mismatch',
+            'Stale dispatch fence on terminal result',
+          );
+          metrics.increment('orchestrator.result.fence_mismatch');
+          return 'poison';
+        case 'not_found':
+          await deps.consumer.complete(message.lockToken);
+          metrics.increment('orchestrator.result.not_found');
+          return 'processed';
+        case 'illegal_transition':
+          if (isAiRunV2ActiveAttemptStatus(refusal.from)) {
+            // The attempt is still live (its checkpoint may not have landed
+            // yet), so acknowledging would lose the result.
+            if (message.deliveryCount >= maxDelivery) {
+              await deps.consumer.deadLetter(
+                message.lockToken,
+                'illegal_transition',
+                `Cannot apply ${refusal.to} result to ${refusal.from} attempt`,
+              );
+              metrics.increment('orchestrator.result.illegal_transition');
+              return 'poison';
+            }
+            await deps.consumer.abandon(message.lockToken);
+            metrics.increment('orchestrator.result.retry');
+            return 'processed';
+          }
+          // Already terminal — treat as idempotent success.
+          await deps.consumer.complete(message.lockToken);
+          metrics.increment('orchestrator.result.idempotent');
+          return 'processed';
+        default: {
+          const unhandled: never = refusal;
+          throw new Error(`Unhandled refusal: ${String(unhandled)}`);
+        }
+      }
+    };
+
     try {
+      if (result.status === 'failed' && failureCategory === 'worker_lost') {
+        const replacement = await deps.attempts.replaceLostAttempt({
+          attemptId: result.attemptId,
+          expectedDispatchMessageId: result.dispatchMessageId,
+          artifactStatus: result.artifactStatus,
+          failureDetail: result.detail,
+        });
+        switch (replacement.status) {
+          case 'replaced':
+            // Usage is recorded only for the attempt that ends the run, so a
+            // replaced attempt never books a terminal `error` usage row.
+            await deps.consumer.complete(message.lockToken);
+            metrics.increment('orchestrator.result.attempt_replaced');
+            return 'processed';
+          case 'run_terminal':
+            // The run already ended (usually a user cancel), and whatever
+            // ended it ran the terminal effects. Leave its header alone.
+            await deps.consumer.complete(message.lockToken);
+            metrics.increment('orchestrator.result.lost_attempt_closed', {
+              runStatus: replacement.runStatus,
+            });
+            return 'processed';
+          case 'fence_mismatch':
+          case 'not_found':
+          case 'illegal_transition':
+            return settleRefused(replacement);
+          case 'attempts_exhausted':
+          case 'deadline_elapsed':
+          case 'retry_context_missing':
+            metrics.increment('orchestrator.result.replacement_skipped', {
+              reason: replacement.status,
+            });
+            break;
+          default: {
+            const unhandled: never = replacement;
+            throw new Error(
+              `Unhandled replacement outcome: ${String(unhandled)}`,
+            );
+          }
+        }
+      }
+
       const transition = await deps.attempts.transitionAttempt({
         attemptId: result.attemptId,
         expectedDispatchMessageId: result.dispatchMessageId,
@@ -85,41 +176,8 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
         manifestRef: result.manifestRef ?? null,
       });
 
-      if (transition.status === 'fence_mismatch') {
-        await deps.consumer.deadLetter(
-          message.lockToken,
-          'fence_mismatch',
-          'Stale dispatch fence on terminal result',
-        );
-        metrics.increment('orchestrator.result.fence_mismatch');
-        return 'poison';
-      }
-      if (transition.status === 'not_found') {
-        await deps.consumer.complete(message.lockToken);
-        metrics.increment('orchestrator.result.not_found');
-        return 'processed';
-      }
-      if (transition.status === 'illegal_transition') {
-        if (isAiRunV2ActiveAttemptStatus(transition.from)) {
-          // The attempt is still live (its checkpoint may not have landed
-          // yet), so acknowledging would lose the result.
-          if (message.deliveryCount >= maxDelivery) {
-            await deps.consumer.deadLetter(
-              message.lockToken,
-              'illegal_transition',
-              `Cannot apply ${transition.to} result to ${transition.from} attempt`,
-            );
-            metrics.increment('orchestrator.result.illegal_transition');
-            return 'poison';
-          }
-          await deps.consumer.abandon(message.lockToken);
-          metrics.increment('orchestrator.result.retry');
-          return 'processed';
-        }
-        // Already terminal — treat as idempotent success.
-        await deps.consumer.complete(message.lockToken);
-        metrics.increment('orchestrator.result.idempotent');
-        return 'processed';
+      if (transition.status !== 'ok') {
+        return settleRefused(transition);
       }
 
       await recordTerminalUsage(result);
