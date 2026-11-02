@@ -222,6 +222,7 @@ async function stampBrainstormSkillKickoff(threadId: string): Promise<void> {
     ...(repo ? { skillRepo: repo } : {}),
     skillBranch: branch,
     skillPath: BRAINSTORM_SKILL_PATH,
+    skillPathIsAppDefault: true,
     ...(skillConfig?.id ? { skillSettingsId: thread.kickoff.skillSettingsId ?? skillConfig.id } : {}),
   });
 }
