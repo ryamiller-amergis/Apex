@@ -70,7 +70,7 @@ import {
   startCloudAgentRun,
 } from '../services/cloudAgentService';
 import { fetchAvailableModels } from '../services/modelsService';
-import { parseCloudAgentLaunchIntent } from '../../shared/utils/cloudAgentLaunch';
+import { parseCloudAgentCustomPrompt, parseCloudAgentLaunchIntent } from '../../shared/utils/cloudAgentLaunch';
 import { CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import { startSseHeartbeat, writeSseEvent } from '../utils/sseResponse';
 import { listAssignedToUser } from '../services/featureRequestService';
@@ -908,6 +908,7 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       skillPath?: unknown;
       model?: unknown;
       customPrompt?: unknown;
+      followUp?: unknown;
     };
     const { workItemId, project } = body;
     if (!project || !workItemId) {
@@ -961,9 +962,21 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
     if (!adoUserToken) {
       console.warn('[cloud-agent] no developer Azure DevOps token; the pull request will be opened by the service account');
     }
+    const followUp = body.followUp === true;
+    if (followUp) {
+      const parsedFollowUp = parseCloudAgentCustomPrompt(body.customPrompt);
+      if (!parsedFollowUp.ok || !parsedFollowUp.customPrompt) {
+        res.status(400).json({
+          error: parsedFollowUp.ok
+            ? 'Describe the additional work for the cloud agent.'
+            : parsedFollowUp.error,
+        });
+        return;
+      }
+    }
     const launchChooser = await isFeatureEnabled(CLOUD_AGENT_GUIDED_LAUNCH_FLAG, { userId, project });
     const intent = parseCloudAgentLaunchIntent(body.intent);
-    if (launchChooser && !intent) {
+    if (launchChooser && !followUp && !intent) {
       res.status(400).json({ error: 'intent must be start, resume, or retry' });
       return;
     }
@@ -988,7 +1001,8 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
         tags: (fields['System.Tags'] ?? '') as string,
       },
       customPrompt: body.customPrompt,
-      ...(launchChooser ? {
+      followUp,
+      ...(launchChooser && !followUp ? {
         launchChooser: true,
         intent: intent ?? 'start',
         skillPath: typeof body.skillPath === 'string' ? body.skillPath : undefined,

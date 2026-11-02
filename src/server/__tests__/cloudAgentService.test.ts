@@ -65,6 +65,7 @@ jest.mock('../services/agentRunReaperService', () => ({
 }));
 jest.mock('../services/cursorCloudAgentClient', () => ({
   launchCloudAgent: jest.fn(),
+  resumeCloudAgent: jest.fn(),
   getCloudAgentRun: jest.fn(),
   streamCloudAgentRun: jest.fn(),
   cancelCursorCloudAgentRun: (...args: unknown[]) => mockVendorCancel(...args),
@@ -153,17 +154,19 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
     }).reason).toMatch(/Azure DevOps-configured projects/);
   });
 
-  it('reuses Start Development type and origin rules for non-admins', () => {
-    expect(evaluateCloudAgentEligibility({
-      flagEnabled: true,
-      project: 'MaxView',
-      item: { ...eligibleItem, workItemType: 'Bug' },
-      isSuperAdmin: false,
-      skillProvider: 'ado',
-      skillRepo: 'MaxView',
-      skillBranch: 'main',
-      hasLiveRun: false,
-    }).reason).toMatch(/only available on Features/);
+  it('allows a PBI, TBI, or Bug in a startable state', () => {
+    for (const workItemType of ['Product Backlog Item', 'Technical Backlog Item', 'Bug']) {
+      expect(evaluateCloudAgentEligibility({
+        flagEnabled: true,
+        project: 'MaxView',
+        item: { ...eligibleItem, workItemType, tags: '' },
+        isSuperAdmin: false,
+        skillProvider: 'ado',
+        skillRepo: 'MaxView',
+        skillBranch: 'main',
+        hasLiveRun: false,
+      })).toEqual({ allowed: true });
+    }
   });
 
   it('names the missing skillRepo field', () => {

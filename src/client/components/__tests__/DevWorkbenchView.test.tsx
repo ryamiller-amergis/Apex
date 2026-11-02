@@ -1435,6 +1435,65 @@ describe('filterAssignedWorkItems', () => {
   });
 });
 
+describe('stackAssignedWorkItems', () => {
+  const { stackAssignedWorkItems } = jest.requireActual('../DevWorkbenchView') as typeof import('../DevWorkbenchView');
+
+  const item = (
+    id: number,
+    workItemType: string,
+    parentId: number | null = null,
+    groupingOnly = false,
+  ) => ({
+    id,
+    title: `${workItemType} ${id}`,
+    workItemType,
+    state: 'New',
+    assignedTo: 'me',
+    project: 'MaxView',
+    parentId,
+    ...(groupingOnly ? { groupingOnly: true } : {}),
+  });
+
+  it('puts PBIs, TBIs, and bugs under their feature', () => {
+    const stacks = stackAssignedWorkItems([
+      item(10, 'Feature'),
+      item(11, 'Product Backlog Item', 10),
+      item(12, 'Technical Backlog Item', 10),
+      item(13, 'Bug', 10),
+      item(14, 'Bug'),
+    ]);
+
+    expect(stacks).toEqual([
+      {
+        feature: expect.objectContaining({ id: 10 }),
+        children: [
+          expect.objectContaining({ id: 11 }),
+          expect.objectContaining({ id: 12 }),
+          expect.objectContaining({ id: 13 }),
+        ],
+      },
+      {
+        feature: null,
+        children: [expect.objectContaining({ id: 14 })],
+      },
+    ]);
+  });
+
+  it('keeps a parent feature that is not assigned to you', () => {
+    const stacks = stackAssignedWorkItems([
+      item(21, 'Product Backlog Item', 20),
+      item(20, 'Feature', null, true),
+    ]);
+
+    expect(stacks).toEqual([
+      {
+        feature: expect.objectContaining({ id: 20, groupingOnly: true }),
+        children: [expect.objectContaining({ id: 21 })],
+      },
+    ]);
+  });
+});
+
 describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
   beforeEach(() => {
     jest.clearAllMocks();

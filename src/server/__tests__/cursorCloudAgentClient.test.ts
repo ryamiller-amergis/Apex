@@ -3,9 +3,12 @@ const mockSend = jest.fn();
 const mockDispose = jest.fn();
 const mockGetRun = jest.fn();
 
+const mockResume = jest.fn();
+
 jest.mock('@cursor/sdk', () => ({
   Agent: {
     create: (...args: unknown[]) => mockCreate(...args),
+    resume: (...args: unknown[]) => mockResume(...args),
     getRun: (...args: unknown[]) => mockGetRun(...args),
   },
 }));
@@ -39,6 +42,7 @@ import {
   getCloudAgentRun,
   launchCloudAgent,
   observeCloudRun,
+  resumeCloudAgent,
   sdkMessageToActivity,
   toCloudRepoUrl,
 } from '../services/cursorCloudAgentClient';
@@ -226,6 +230,34 @@ describe('cursorCloudAgentClient', () => {
         cursorRunId: 'run-1',
       });
       expect(cancel).toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
+      else process.env.CURSOR_USER_LEVEL_API_KEY = previous;
+    }
+  });
+
+  it('sends more work to the cloud agent that already exists', async () => {
+    const previous = process.env.CURSOR_USER_LEVEL_API_KEY;
+    process.env.CURSOR_USER_LEVEL_API_KEY = 'cursor-key';
+    mockDispose.mockResolvedValue(undefined);
+    mockSend.mockResolvedValue({ id: 'run-2' });
+    mockResume.mockResolvedValue({
+      agentId: 'bc-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: mockDispose,
+    });
+
+    try {
+      await expect(resumeCloudAgent({
+        cloudAgentId: 'bc-1',
+        prompt: 'Also cover the empty state.',
+      })).resolves.toEqual({
+        cloudAgentId: 'bc-1',
+        cursorRunId: 'run-2',
+        jobName: 'cursor-sdk',
+      });
+      expect(mockResume).toHaveBeenCalledWith('bc-1', { apiKey: 'cursor-key' });
+      expect(mockSend).toHaveBeenCalledWith('Also cover the empty state.');
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
       else process.env.CURSOR_USER_LEVEL_API_KEY = previous;

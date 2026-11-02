@@ -754,8 +754,12 @@ const CloudAgentEnabledRowAction: React.FC<{
   const cancelCloud = useCancelCloudAgentRun();
   const { flags } = useFeatureFlags(project);
   const launchChooser = flags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true;
-  const [chooserIntent, setChooserIntent] = useState<'start' | 'retry' | null>(null);
-  const launchOptions = useCloudAgentLaunchOptions(project, item.id, chooserIntent !== null);
+  const [chooserIntent, setChooserIntent] = useState<'start' | 'retry' | 'followup' | null>(null);
+  const launchOptions = useCloudAgentLaunchOptions(
+    project,
+    item.id,
+    chooserIntent === 'start' || chooserIntent === 'retry',
+  );
   const [startedSessionId, setStartedSessionId] = useState<string | null>(null);
   const [optimisticRun, setOptimisticRun] = useState<CloudAgentRunSummary | null>(null);
   const [cancelledRunId, setCancelledRunId] = useState<string | null>(null);
@@ -829,13 +833,17 @@ const CloudAgentEnabledRowAction: React.FC<{
     skillPath?: string;
     model?: string;
     customPrompt?: string;
+    followUp?: boolean;
   }) => {
     setActionError(null);
     try {
       const result = await startCloud.mutateAsync({
         workItemId: item.id,
         project,
-        ...(launchChooser ? {
+        ...(choice?.followUp ? {
+          followUp: true,
+          customPrompt: choice.customPrompt,
+        } : launchChooser ? {
           intent: choice?.intent ?? 'start',
           skillPath: choice?.skillPath,
           model: choice?.model,
@@ -850,8 +858,8 @@ const CloudAgentEnabledRowAction: React.FC<{
         cloudAgentId: null,
         branchName: null,
         createdAt: new Date().toISOString(),
-        prUrl: null,
-        prStatus: 'none',
+        prUrl: choice?.followUp ? (currentRun?.prUrl ?? null) : null,
+        prStatus: choice?.followUp ? (currentRun?.prStatus ?? 'none') : 'none',
         finishedWithoutPr: false,
         terminalReason: null,
         checkResults: null,
@@ -865,24 +873,32 @@ const CloudAgentEnabledRowAction: React.FC<{
     return true;
   };
 
+  const followUpDialog = chooserIntent === 'followup';
   const launchDialog = chooserIntent ? (
     <CloudAgentLaunchDialog
-      title={chooserIntent === 'retry' ? 'Retry cloud agent' : 'Start cloud agent'}
-      reason={launchOptions.data?.reason ?? ''}
+      title={followUpDialog ? 'More work' : chooserIntent === 'retry' ? 'Retry cloud agent' : 'Start cloud agent'}
+      requireTask={followUpDialog}
+      taskLabel="What else should the cloud agent do?"
+      emptyTaskMessage="Describe the additional work"
+      chooseSkillAndModel={!followUpDialog}
+      allowCustomPrompt={!followUpDialog}
+      reason={followUpDialog ? 'The cloud agent keeps the pull request and does this next.' : (launchOptions.data?.reason ?? '')}
       skills={launchOptions.data?.skills ?? []}
       models={launchOptions.data?.models ?? []}
       defaultSkillPath={
-        chooserIntent === 'retry'
-          ? (launchOptions.data?.priorSkillPath ?? launchOptions.data?.recommendedSkillPath ?? '')
-          : (launchOptions.data?.recommendedSkillPath ?? '')
+        followUpDialog
+          ? 'continue'
+          : chooserIntent === 'retry'
+            ? (launchOptions.data?.priorSkillPath ?? launchOptions.data?.recommendedSkillPath ?? '')
+            : (launchOptions.data?.recommendedSkillPath ?? '')
       }
       defaultModel={
-        chooserIntent === 'retry'
-          ? (launchOptions.data?.priorModel ?? launchOptions.data?.recommendedModel ?? '')
-          : (launchOptions.data?.recommendedModel ?? '')
+        followUpDialog
+          ? 'continue'
+          : chooserIntent === 'retry'
+            ? (launchOptions.data?.priorModel ?? launchOptions.data?.recommendedModel ?? '')
+            : (launchOptions.data?.recommendedModel ?? '')
       }
-      requireTask={false}
-      allowCustomPrompt
       defaultCustomPrompt={
         chooserIntent === 'retry' ? (launchOptions.data?.priorCustomPrompt ?? '') : ''
       }
@@ -893,10 +909,11 @@ const CloudAgentEnabledRowAction: React.FC<{
       onClose={() => setChooserIntent(null)}
       onConfirm={(value) => {
         void handleStartOrResume({
-          intent: chooserIntent,
+          intent: followUpDialog ? 'start' : chooserIntent,
           skillPath: value.skillPath,
           model: value.model,
-          customPrompt: value.customPrompt,
+          customPrompt: followUpDialog ? value.task : value.customPrompt,
+          followUp: followUpDialog,
         }).then((started) => {
           if (started) setChooserIntent(null);
         });
@@ -932,10 +949,11 @@ const CloudAgentEnabledRowAction: React.FC<{
               className={styles['cloud-reason-trigger']}
               aria-expanded={reasonPinned}
               aria-controls={reasonId}
+              title="Why can't I start this?"
               onClick={() => setReasonPinned((pinned) => !pinned)}
               {...{ 'data-testid': `my-work-cloud-reason-toggle-${item.id}` }}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
                 <path
                   d="M12 11v5M12 7.5v.5"
@@ -945,7 +963,7 @@ const CloudAgentEnabledRowAction: React.FC<{
                   strokeLinecap="round"
                 />
               </svg>
-              Why can&apos;t I start this?
+              <span className={styles['visually-hidden']}>Why can&apos;t I start this?</span>
             </button>
             <span
               id={reasonId}
@@ -962,6 +980,7 @@ const CloudAgentEnabledRowAction: React.FC<{
           type="button"
           disabled={!eligibility.allowed || startCloud.isPending}
           title={eligibility.allowed ? 'Start a Cloud Agent on this work item' : eligibility.reason}
+          aria-label={startCloud.isPending ? 'Starting cloud agent' : 'Start cloud agent'}
           aria-describedby={eligibility.allowed ? undefined : reasonId}
           onClick={() => {
             // @feature-flag:cloud-agent-guided-launch start winner=enabled
@@ -979,7 +998,7 @@ const CloudAgentEnabledRowAction: React.FC<{
           {...{ 'data-testid': 'my-work-start-cloud-dev-btn' }}
         >
           <span className={styles['cloud-button-icon']} aria-hidden="true">✦</span>
-          {startCloud.isPending ? 'Starting cloud agent…' : 'Start cloud agent'}
+          {startCloud.isPending ? 'Starting…' : 'Start cloud'}
         </button>
         {actionError ? (
           <span className={styles['cloud-run-error']} role="alert">
@@ -992,7 +1011,7 @@ const CloudAgentEnabledRowAction: React.FC<{
   }
 
   const prStatusLabel = prStatusText(currentRun);
-  const pullRequestUrl = currentRun.status === 'completed' ? currentRun.prUrl : null;
+  const pullRequestUrl = currentRun.prUrl;
 
   return (
     <>
@@ -1007,7 +1026,6 @@ const CloudAgentEnabledRowAction: React.FC<{
           >
             <span className={styles['cloud-status-dot']} aria-hidden="true" />
             <span className={styles['cloud-run-copy']} aria-live="polite">
-              <span className={styles['cloud-run-label']}>Cloud agent</span>
               <strong
                 className={styles['cloud-run-status']}
                 {...{ 'data-testid': `my-work-cloud-run-status-${item.id}` }}
@@ -1030,7 +1048,11 @@ const CloudAgentEnabledRowAction: React.FC<{
               </a>
             ) : null}
             {prStatusLabel ? (
-              <span className={styles['cloud-pr-status']} {...{ 'data-testid': 'my-work-row-pr-status' }}>
+              <span
+                className={styles['cloud-pr-status']}
+                data-pr-status={currentRun.prStatus}
+                {...{ 'data-testid': 'my-work-row-pr-status' }}
+              >
                 {prStatusLabel}
               </span>
             ) : null}
@@ -1060,7 +1082,17 @@ const CloudAgentEnabledRowAction: React.FC<{
               >
                 {cancelCloud.isPending ? 'Cancelling…' : 'Cancel'}
               </button>
-            ) : pullRequestUrl ? null : (
+            ) : pullRequestUrl ? (
+              <button
+                className={styles['cloud-resume-btn']}
+                type="button"
+                disabled={startCloud.isPending}
+                onClick={() => setChooserIntent('followup')}
+                {...{ 'data-testid': `my-work-more-work-${item.id}` }}
+              >
+                More work
+              </button>
+            ) : (
               <button
                 className={styles['cloud-resume-btn']}
                 type="button"
@@ -1288,6 +1320,7 @@ export function filterAssignedWorkItems(
   const idQuery = query.startsWith('#') ? query.slice(1) : query;
 
   return items.filter((item) => {
+    if (item.groupingOnly) return false;
     if (query) {
       const idText = String(item.id);
       const searchHit = item.title.toLowerCase().includes(query) || idText.includes(idQuery);
@@ -1296,6 +1329,67 @@ export function filterAssignedWorkItems(
     const run = options.cloudRunByWorkItemId?.get(item.id);
     return matchesAdoStatus(item, run, options.status) && matchesCloudRun(run, options.cloud);
   });
+}
+
+export interface AssignedWorkStack {
+  feature: AssignedWorkItem | null;
+  children: AssignedWorkItem[];
+}
+
+/**
+ * Feature on top, then the PBIs, TBIs, and bugs that belong to it.
+ * A parent pulled in only for the stack stays even when it is not assigned.
+ */
+export function stackAssignedWorkItems(items: AssignedWorkItem[]): AssignedWorkStack[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const featureIdFor = (item: AssignedWorkItem): number | null => {
+    if (item.workItemType === 'Feature') return item.id;
+    const seen = new Set<number>();
+    let parentId = item.parentId ?? null;
+    while (parentId != null && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = byId.get(parentId);
+      if (!parent) return null;
+      if (parent.workItemType === 'Feature') return parent.id;
+      parentId = parent.parentId ?? null;
+    }
+    return null;
+  };
+
+  const childrenByFeature = new Map<number, AssignedWorkItem[]>();
+  for (const item of items) {
+    if (item.groupingOnly || item.workItemType === 'Feature') continue;
+    const featureId = featureIdFor(item);
+    if (featureId == null) continue;
+    const children = childrenByFeature.get(featureId) ?? [];
+    children.push(item);
+    childrenByFeature.set(featureId, children);
+  }
+
+  const childIds = new Set<number>(
+    [...childrenByFeature.values()].flatMap((children) => children.map((child) => child.id)),
+  );
+  const emitted = new Set<number>();
+  const stacks: AssignedWorkStack[] = [];
+
+  for (const item of items) {
+    const featureId = item.workItemType === 'Feature' ? item.id : featureIdFor(item);
+    const feature = featureId == null ? null : byId.get(featureId);
+    if (feature?.workItemType === 'Feature') {
+      if (emitted.has(feature.id)) continue;
+      const children = childrenByFeature.get(feature.id) ?? [];
+      if (feature.groupingOnly && children.length === 0) continue;
+      if (!feature.groupingOnly && !items.includes(feature) && children.length === 0) continue;
+      emitted.add(feature.id);
+      stacks.push({ feature, children });
+      continue;
+    }
+    if (childIds.has(item.id) || emitted.has(item.id)) continue;
+    emitted.add(item.id);
+    stacks.push({ feature: null, children: [item] });
+  }
+
+  return stacks;
 }
 
 function featureCompleteKey(prdId: string, featureId: string): string {
@@ -1670,6 +1764,7 @@ const ApexBacklogView: React.FC<{
                                       disabled={startLocalFeature.isPending}
                                       type="button"
                                       title="Mark In Progress, download a context pack, and open Cursor or VS Code locally"
+                                      aria-label="Start Local Development"
                                       {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
                                     >
                                       <span className={styles['cloud-button-icon']} aria-hidden="true">
@@ -1678,7 +1773,7 @@ const ApexBacklogView: React.FC<{
                                           <path d="M8 21h8M12 17v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                                         </svg>
                                       </span>
-                                      Start Local Development
+                                      Start local
                                     </button>
                                   </>
                                 )}
@@ -1772,6 +1867,22 @@ export const DevWorkbenchView: React.FC = () => {
     cloudSessionByWorkItem,
     cloudAgentEnabled,
   ]);
+
+  const workItemStacks = useMemo(() => {
+    const visibleIds = new Set(visibleWorkItems.map((item) => item.id));
+    const byId = new Map(stableWorkItems.map((item) => [item.id, item]));
+    const keep = new Set<number>(visibleIds);
+    for (const id of visibleIds) {
+      const seen = new Set<number>();
+      let parentId = byId.get(id)?.parentId ?? null;
+      while (parentId != null && !seen.has(parentId)) {
+        seen.add(parentId);
+        keep.add(parentId);
+        parentId = byId.get(parentId)?.parentId ?? null;
+      }
+    }
+    return stackAssignedWorkItems(stableWorkItems.filter((item) => keep.has(item.id)));
+  }, [stableWorkItems, visibleWorkItems]);
 
   useEffect(() => {
     setAdoStatusFilter('all');
@@ -1954,51 +2065,78 @@ export const DevWorkbenchView: React.FC = () => {
             </div>
           ) : (
         <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
-          {visibleWorkItems.map((item) => {
-            const cloudSession = cloudSessionByWorkItem.get(item.id);
-            return (
-              <div key={item.id} className={styles.item}>
-                <div className={styles['item-info']}>
-                  <span className={styles['item-title']}>{item.title}</span>
-                  <div className={styles['item-meta']}>
-                    <span className={styles['item-id']}>#{item.id}</span>
-                    <span className={styles.badge}>{item.workItemType}</span>
-                    <span className={styles.badge}>{item.state}</span>
+          {workItemStacks.map((stack) => {
+            const rows = [
+              ...(stack.feature ? [{ item: stack.feature, depth: 0 }] : []),
+              ...stack.children.map((item) => ({ item, depth: 1 })),
+            ];
+            const stackKey = stack.feature?.id ?? stack.children[0]?.id;
+            const grouped = Boolean(stack.feature && stack.children.length > 0);
+            const body = rows.map(({ item, depth }) => {
+              const cloudSession = cloudSessionByWorkItem.get(item.id);
+              const role = grouped ? (depth > 0 ? 'child' : 'feature') : undefined;
+              return (
+                <div
+                  key={item.id}
+                  className={styles.item}
+                  data-role={role}
+                  data-depth={depth > 0 ? depth : undefined}
+                  {...{ 'data-testid': `my-work-work-item-${item.id}` }}
+                >
+                  <div className={styles['item-info']}>
+                    <span className={styles['item-title']}>{item.title}</span>
+                    <div className={styles['item-meta']}>
+                      <span className={styles['item-id']}>#{item.id}</span>
+                      <span className={styles.badge}>{item.workItemType}</span>
+                      <span className={styles.badge}>{item.state}</span>
+                      {item.groupingOnly ? <span className={styles.badge}>Parent feature</span> : null}
+                    </div>
                   </div>
+                  {item.groupingOnly ? null : (
+                    <div className={styles['item-actions']}>
+                      <button
+                        className={styles['local-dev-btn']}
+                        onClick={() =>
+                          setLocalDevTarget({
+                            kind: 'ado',
+                            project: selectedProject!,
+                            workItemId: item.id,
+                            title: item.title,
+                          })
+                        }
+                        type="button"
+                        title="Download a context pack and open Cursor or VS Code locally"
+                        aria-label="Start Local Development"
+                        {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
+                      >
+                        <span className={styles['cloud-button-icon']} aria-hidden="true">
+                          <svg width="13" height="13" viewBox="0 0 24 24">
+                            <rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+                            <path d="M8 21h8M12 17v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </span>
+                        Start local
+                      </button>
+                      <CloudAgentRowAction
+                        item={item}
+                        project={selectedProject!}
+                        activeSession={cloudSession}
+                        cloudStatusPending={cloudStatusPending}
+                        cloudStatusUnavailable={cloudStatusUnavailable}
+                      />
+                    </div>
+                  )}
                 </div>
-                <div className={styles['item-actions']}>
-                  <button
-                    className={styles['local-dev-btn']}
-                    onClick={() =>
-                      setLocalDevTarget({
-                        kind: 'ado',
-                        project: selectedProject!,
-                        workItemId: item.id,
-                        title: item.title,
-                      })
-                    }
-                    type="button"
-                    title="Download a context pack and open Cursor or VS Code locally"
-                    {...{ 'data-testid': 'my-work-start-local-dev-btn' }}
-                  >
-                    <span className={styles['cloud-button-icon']} aria-hidden="true">
-                      <svg width="13" height="13" viewBox="0 0 24 24">
-                        <rect x="3" y="4" width="18" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
-                        <path d="M8 21h8M12 17v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </span>
-                    Start Local Development
-                  </button>
-                  <CloudAgentRowAction
-                    item={item}
-                    project={selectedProject!}
-                    activeSession={cloudSession}
-                    cloudStatusPending={cloudStatusPending}
-                    cloudStatusUnavailable={cloudStatusUnavailable}
-                  />
+              );
+            });
+            if (stack.feature && stack.children.length > 0) {
+              return (
+                <div key={stackKey} className={styles.stack} {...{ 'data-testid': `my-work-work-item-stack-${stackKey}` }}>
+                  {body}
                 </div>
-              </div>
-            );
+              );
+            }
+            return <React.Fragment key={stackKey}>{body}</React.Fragment>;
           })}
             </div>
           )}

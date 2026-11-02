@@ -116,6 +116,8 @@ export interface ExecutionSnapshot {
     task?: string;
     /** Extra instructions the developer added when starting or retrying this run. */
     customPrompt?: string;
+    /** Existing Cursor cloud agent to continue, instead of creating a new one. */
+    resumeAgentId?: string;
     /** Small screenshots attached to a site report. */
     images?: Array<{ name: string; mimeType: string; data: string }>;
     /** Bug created for a site report. Kept off dev_sessions.work_item_id so the report stays listed. */

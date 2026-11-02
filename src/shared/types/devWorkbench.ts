@@ -10,6 +10,13 @@ export interface AssignedWorkItem {
   url?: string;
   /** Raw ADO System.Tags value (semicolon-separated). */
   tags?: string;
+  /** Azure DevOps parent. Child PBIs, TBIs, and Bugs point at their Feature. */
+  parentId?: number | null;
+  /**
+   * Parent Feature included so assigned children can stack under it.
+   * The signed-in user is not assigned to this row.
+   */
+  groupingOnly?: boolean;
   /** Server-derived Cloud Agent start eligibility. Absent when the flag is off. */
   cloudAgentEligibility?: CloudAgentEligibility;
 }
@@ -202,6 +209,8 @@ export interface StartCloudAgentRunRequest {
   workItemId: number;
   project: string;
   intent?: CloudAgentLaunchIntent;
+  /** Continue the cloud agent that already opened a pull request for this work item. */
+  followUp?: boolean;
   skillPath?: string;
   model?: string;
   /** Optional instructions added to the cloud agent prompt for this start or retry. */

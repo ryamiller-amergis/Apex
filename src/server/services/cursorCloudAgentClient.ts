@@ -204,6 +204,31 @@ export async function launchCloudAgent(
   }
 }
 
+/** Sends more work to the cloud agent that already opened the pull request. */
+export async function resumeCloudAgent(input: {
+  cloudAgentId: string;
+  prompt: string;
+}): Promise<LaunchCloudAgentResult> {
+  const agent = await Agent.resume(input.cloudAgentId, {
+    apiKey: cursorUserLevelApiKey(),
+  });
+  try {
+    const run = await agent.send(input.prompt);
+    return {
+      cloudAgentId: agent.agentId,
+      cursorRunId: run.id,
+      jobName: 'cursor-sdk',
+    };
+  } finally {
+    await agent[Symbol.asyncDispose]().catch((err) => {
+      console.warn(
+        '[cloud-agent] could not dispose the resumed Cursor agent handle',
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
+}
+
 export async function getCloudAgentRun(input: {
   project: string;
   cloudAgentId: string;

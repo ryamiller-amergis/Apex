@@ -16,6 +16,7 @@ import {
   SITE_ISSUE_BUG_TAGS,
   type SiteIssueImage,
   customPromptForCloudAgentLaunch,
+  parseCloudAgentCustomPrompt,
   guidedCloudJobById,
   injectCloudAgentCustomPrompt,
   recommendImplementationSkill,
@@ -27,7 +28,8 @@ import { skillNameFromPath } from '../../shared/skillPaths';
 import * as skillCatalog from './skillCatalogFacade';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import {
-  evaluateDevStartEligibility,
+  canStartDevelopment,
+  DEV_START_ALLOWED_STATES,
   isAppNativeRequirementsProject,
   type AssignedWorkItem,
   type CloudAgentEligibility,
@@ -62,6 +64,7 @@ import {
   cancelCursorCloudAgentRun,
   getCloudAgentRun,
   launchCloudAgent,
+  resumeCloudAgent,
   streamCloudAgentRun,
   type CloudAgentRunObservation,
   type LaunchCloudAgentResult,
@@ -160,6 +163,8 @@ export interface EvaluateCloudAgentEligibilityInput {
   skillRepo?: string | null;
   skillBranch?: string | null;
   hasLiveRun: boolean;
+  /** Follow-up after a pull request is already open. The work item may be In Pull Request. */
+  bypassWorkItemState?: boolean;
 }
 
 export function evaluateCloudAgentEligibility(
@@ -174,11 +179,11 @@ export function evaluateCloudAgentEligibility(
       reason: 'Cloud Development is only available on Azure DevOps-configured projects.',
     };
   }
-  const startEligibility = evaluateDevStartEligibility(input.item, {
-    isSuperAdmin: input.isSuperAdmin,
-  });
-  if (!startEligibility.allowed) {
-    return startEligibility;
+  if (!input.bypassWorkItemState && !canStartDevelopment(input.item.state)) {
+    return {
+      allowed: false,
+      reason: `Start Development is only available for ${DEV_START_ALLOWED_STATES.join(', ')} work items (current state: ${input.item.state || 'unknown'}).`,
+    };
   }
   const missingField = missingSkillField(input);
   if (missingField) {
@@ -338,6 +343,7 @@ export interface CloudAgentServiceDeps {
   isFeatureEnabled: typeof isFeatureEnabled;
   getSkillConfig: typeof getSkillConfig;
   launchCloudAgent: typeof launchCloudAgent;
+  resumeCloudAgent: typeof resumeCloudAgent;
   getCloudAgentRun: typeof getCloudAgentRun;
   streamCloudAgentRun: typeof streamCloudAgentRun;
   cancelCursorCloudAgentRun: typeof cancelCursorCloudAgentRun;
@@ -374,6 +380,7 @@ const defaultDeps: CloudAgentServiceDeps = {
   isFeatureEnabled,
   getSkillConfig,
   launchCloudAgent,
+  resumeCloudAgent,
   getCloudAgentRun,
   streamCloudAgentRun,
   cancelCursorCloudAgentRun,
@@ -531,6 +538,8 @@ export interface StartCloudAgentRunInput {
   model?: string;
   /** Text from the start dialog. Resume ignores this and reuses the saved prompt. */
   customPrompt?: unknown;
+  /** Continue the cloud agent that already opened this work item's pull request. */
+  followUp?: boolean;
   availableSkills?: CloudAgentSkillChoice[];
   allowedModelIds?: string[];
 }
@@ -554,6 +563,7 @@ export async function startCloudAgentRun(
     skillRepo: skillConfig?.skillRepo,
     skillBranch: skillConfig?.skillBranch,
     hasLiveRun: liveByWorkItem.has(input.workItemId),
+    bypassWorkItemState: input.followUp === true,
   });
   if (!eligibility.allowed) {
     if (liveByWorkItem.has(input.workItemId)) {
@@ -565,13 +575,14 @@ export async function startCloudAgentRun(
     throw new CloudAgentEligibilityError('Skill settings are incomplete: skillRepo is not set.');
   }
 
-  const customPrompt = await resolveCloudAgentCustomPrompt(input);
-  const launchSettings = input.launchChooser
+  const followUp = await resolveFollowUp(input);
+  const customPrompt = followUp ? followUp.prompt : await resolveCloudAgentCustomPrompt(input);
+  const launchSettings = input.launchChooser && !input.followUp
     ? await resolveChooserLaunch(input, skillConfig)
     : null;
 
   try {
-    await deps.prepareCloudAgentKickoff({
+    if (!input.followUp) await deps.prepareCloudAgentKickoff({
       project: input.project,
       workItemId: input.workItemId,
       workItemType: input.item.workItemType,
@@ -585,7 +596,7 @@ export async function startCloudAgentRun(
     );
   }
 
-  const started = await persistQueuedRun(input, skillConfig, deps, launchSettings, customPrompt);
+  const started = await persistQueuedRun(input, skillConfig, deps, launchSettings, customPrompt, followUp);
   if (input.adoUserToken) pendingCloudAgentUserTokens.set(started.runId, input.adoUserToken);
   if (await claimCloudAgentRun(started.runId)) {
     try {
@@ -1267,12 +1278,46 @@ async function resolveCloudAgentCustomPrompt(input: StartCloudAgentRunInput): Pr
   return resolved.customPrompt;
 }
 
+async function resolveFollowUp(
+  input: StartCloudAgentRunInput,
+): Promise<{ prompt: string; resumeAgentId: string } | null> {
+  if (!input.followUp) return null;
+  const parsed = parseCloudAgentCustomPrompt(input.customPrompt);
+  if (!parsed.ok) throw new CloudAgentLaunchError(parsed.error);
+  if (!parsed.customPrompt) {
+    throw new CloudAgentLaunchError('Describe the additional work for the cloud agent.');
+  }
+  const rows = await db
+    .select({ currentRunId: devSessions.currentRunId })
+    .from(devSessions)
+    .where(and(
+      eq(devSessions.authorId, input.userId),
+      eq(devSessions.project, input.project),
+      eq(devSessions.workItemId, input.workItemId),
+    ))
+    .orderBy(desc(devSessions.createdAt))
+    .limit(1);
+  const runId = rows[0]?.currentRunId;
+  const run = runId
+    ? await db.query.agentRuns.findFirst({ where: eq(agentRuns.id, runId) })
+    : null;
+  const resumeAgentId = run?.cloudAgentIdentity?.trim() || '';
+  if (!resumeAgentId) {
+    throw new CloudAgentLaunchError('This work item has no cloud agent to continue.');
+  }
+  return {
+    prompt: `Continue the existing cloud agent work on this pull request.\n\n${parsed.customPrompt}`,
+    resumeAgentId,
+  };
+}
+
 async function persistQueuedRun(
   input: StartCloudAgentRunInput,
   skillConfig: ProjectSkillConfig,
   deps: CloudAgentServiceDeps,
   launchSettings: { skillPath: string; model: string } | null = null,
   customPrompt: string | null = null,
+  followUp: { prompt: string; resumeAgentId: string } | null = null,
 ): Promise<PersistedCloudAgentRun> {
   const lockKey = `cloud-agent:${input.project}:${input.workItemId}:${input.userId}`;
   const nowIso = new Date().toISOString();
@@ -1331,8 +1376,10 @@ async function persistQueuedRun(
       }
 
       const sessionId = existing?.id ?? uuidv4();
-      const priorWork = formatLeftoverWorkForResumePrompt(existing?.leftoverWork);
-      const promptWithCustom = injectCloudAgentCustomPrompt(basePrompt, customPrompt);
+      const priorWork = followUp ? '' : formatLeftoverWorkForResumePrompt(existing?.leftoverWork);
+      const promptWithCustom = followUp
+        ? followUp.prompt
+        : injectCloudAgentCustomPrompt(basePrompt, customPrompt);
       const executionPrompt = priorWork
         ? `${promptWithCustom}\n\n${priorWork}`
         : promptWithCustom;
@@ -1376,6 +1423,7 @@ async function persistQueuedRun(
             initiatorEmail: input.initiatorEmail,
             ...(skillName ? { skillName } : {}),
             ...(customPrompt ? { customPrompt } : {}),
+            ...(followUp ? { resumeAgentId: followUp.resumeAgentId } : {}),
             ...(input.adoUserToken ? { userTokenInstance: cloudAgentInstanceId() } : {}),
           },
         },
@@ -1385,9 +1433,9 @@ async function persistQueuedRun(
         .update(devSessions)
         .set({
           currentRunId: runId,
-          currentRunPrUrl: null,
-          currentRunPrStatus: 'none',
-          branchName,
+          currentRunPrUrl: followUp ? (existing?.currentRunPrUrl ?? null) : null,
+          currentRunPrStatus: followUp ? (existing?.currentRunPrStatus ?? 'none') : 'none',
+          branchName: followUp ? (existing?.branchName ?? branchName) : branchName,
           status: 'in_progress',
           leftoverWork: null,
           updatedAt: nowIso,
@@ -1522,7 +1570,12 @@ async function launchClaimedCloudAgentRun(
 
   let launched: LaunchCloudAgentResult;
   try {
-    launched = await deps.launchCloudAgent({
+    launched = cloud.resumeAgentId
+      ? await deps.resumeCloudAgent({
+        cloudAgentId: cloud.resumeAgentId,
+        prompt: snapshot.prompt,
+      })
+      : await deps.launchCloudAgent({
       project: snapshot.projectId,
       prompt: snapshot.prompt,
       model: snapshot.model,
