@@ -30,7 +30,6 @@ import { git } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
 
 const STALE_CLONING_MS = 2 * 60 * 1000;
-const activeCloneIds = new Set<string>();
 
 export function parseCloneUrlGroundingIdentity(
   cloneUrl: string,
@@ -78,7 +77,6 @@ export function parseCloneUrlGroundingIdentity(
 
 function isStaleCloningRow(row: typeof brainstormRepositories.$inferSelect): boolean {
   if (row.status !== 'cloning') return false;
-  if (!activeCloneIds.has(row.id)) return true;
   const updatedMs = Date.parse(row.updatedAt);
   return Number.isFinite(updatedMs) && Date.now() - updatedMs > STALE_CLONING_MS;
 }
@@ -151,7 +149,7 @@ export async function listBrainstormRepositories(project: string): Promise<Brain
     .orderBy(asc(brainstormRepositories.displayName));
   for (const row of rows) {
     if (isStaleCloningRow(row)) {
-      void beginClone(project, row.id, { forceReclaim: true }).catch(() => {});
+      void beginClone(project, row.id).catch(() => {});
     }
   }
   return rows.map(toDto);
@@ -223,7 +221,6 @@ export async function addBrainstormRepository(input: {
 async function beginClone(
   project: string,
   id: string,
-  options?: { forceReclaim?: boolean },
 ): Promise<BrainstormCatalogRepositoryDto | null> {
   const existingRow = await db
     .select()
@@ -232,7 +229,7 @@ async function beginClone(
     .limit(1)
     .then((rows) => rows[0] ?? null);
   if (!existingRow) return null;
-  const reclaimable = options?.forceReclaim || isStaleCloningRow(existingRow);
+  const reclaimable = isStaleCloningRow(existingRow);
   const [claimed] = await db
     .update(brainstormRepositories)
     .set({ status: 'cloning', error: null, updatedAt: new Date().toISOString() })
@@ -241,6 +238,8 @@ async function beginClone(
         ? and(
             eq(brainstormRepositories.id, id),
             eq(brainstormRepositories.project, project),
+            eq(brainstormRepositories.status, 'cloning'),
+            eq(brainstormRepositories.updatedAt, existingRow.updatedAt),
           )
         : and(
             eq(brainstormRepositories.id, id),
@@ -255,7 +254,6 @@ async function beginClone(
 }
 
 async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Promise<void> {
-  activeCloneIds.add(claimed.id);
   const destination = sharedBrainstormRepositoryMirrorDir(claimed.id);
   const legacyDestination = legacyBrainstormRepositoryMirrorDir(claimed.id);
   const url = new URL(claimed.cloneUrl);
@@ -387,7 +385,6 @@ async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Pr
       .set({ status: 'failed', error: message, updatedAt: new Date().toISOString() })
       .where(eq(brainstormRepositories.id, claimed.id));
   } finally {
-    activeCloneIds.delete(claimed.id);
     if (scratch) {
       await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
