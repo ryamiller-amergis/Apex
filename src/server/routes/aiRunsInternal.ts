@@ -25,8 +25,10 @@ import {
 } from '../services/interactiveToolProxyService';
 import {
   isDurableInteractiveTurnSpecification,
+  type DurableInteractiveTurnSpecification,
   type FrozenInteractiveMcpDescriptor,
 } from '../../shared/types/durableInteractiveTurn';
+import { handleBrainstormArtifactMcp } from '../services/brainstormArtifactMcp';
 
 const router = Router();
 
@@ -80,6 +82,11 @@ function localMcpUrl(
       return `${base}/mcp/maxview`;
     case 'mcp-server':
       return `${base}/mcp/mcp-servers/${encodeURIComponent(descriptor.connectionId)}?userId=${encodeURIComponent(descriptor.boundUserId)}`;
+    case 'brainstorm-artifact':
+      throw new InteractiveToolProxyError(
+        'brainstorm-artifact is answered in-process',
+        400,
+      );
     default: {
       const unhandled: never = descriptor;
       throw new InteractiveToolProxyError(
@@ -232,9 +239,15 @@ router.post(
         specification: attempt.specSnapshot,
         body: req.body,
         invokeInternal: (_name, descriptor, body, context) =>
-          postLocalMcp(localMcpUrl(descriptor), body, {
-            signal: context.signal,
-          }),
+          descriptor.serverName === 'brainstorm-artifact'
+            ? handleBrainstormArtifactMcp({
+                runId,
+                specification: attempt.specSnapshot as DurableInteractiveTurnSpecification,
+                body,
+              })
+            : postLocalMcp(localMcpUrl(descriptor), body, {
+                signal: context.signal,
+              }),
       });
       res.status(200).json(result);
     } catch (error) {

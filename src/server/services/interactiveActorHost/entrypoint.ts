@@ -22,11 +22,13 @@ import {
   HttpMethod,
   type DaprInvokerCallbackContent,
 } from '@dapr/dapr';
+import crypto from 'crypto';
 import express from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 // Side-effect: initialize Application Insights when the connection string is set.
 import '../telemetry';
+import { resolveDataRoot } from '../../utils/dataDir';
 import { exitAfterFlush } from '../../utils/processExit';
 import {
   isInteractiveActorBootstrap,
@@ -46,6 +48,7 @@ import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
 import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
+import { BareRepoReader } from '../repoRead/bareRepoReader';
 import {
   RepoServiceReader,
   resolveRepoReadServiceUrl,
@@ -61,6 +64,8 @@ import {
 } from './interactiveSessionActor';
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
+import { mountBrainstormSources } from './brainstormSourceMount';
+import { defaultRunGit } from '../grounding/bundleCheckout';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
   createActorInvocationStallTracker,
@@ -108,6 +113,202 @@ function withinActorInvokeTimeout<T>(work: Promise<T>, timeoutMs: number): Promi
 /** Warm checkout carrying the reader the execution factory needs. */
 type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
 
+function parseBrainstormSourcePath(
+  requestedPath: string,
+): { sourceId: string; innerPath: string } | null {
+  const trimmed = requestedPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!trimmed.startsWith('sources/')) return null;
+  const rest = trimmed.slice('sources/'.length);
+  const slash = rest.indexOf('/');
+  if (slash === -1) {
+    return rest ? { sourceId: rest, innerPath: '' } : null;
+  }
+  const sourceId = rest.slice(0, slash);
+  const innerPath = rest.slice(slash + 1);
+  return sourceId ? { sourceId, innerPath } : null;
+}
+
+function safeCacheSlug(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32) || 'repo'
+  );
+}
+
+function candidateLocalBareMirrorDirs(identity: RepositoryIdentity): string[] {
+  const cacheBase = path.join(resolveDataRoot(), 'repo-cache');
+  const bareRepo =
+    identity.provider === 'github'
+      ? identity.repo.split('/').pop() || identity.repo
+      : identity.repo;
+  const candidates: string[] = [];
+  for (const repoVariant of new Set([bareRepo, identity.repo])) {
+    const rawIdentity = [identity.provider, identity.project, repoVariant].join('\0');
+    const readable = [
+      identity.provider,
+      safeCacheSlug(identity.project),
+      safeCacheSlug(repoVariant),
+    ].join('-');
+    const hash = crypto.createHash('sha256').update(rawIdentity).digest('hex').slice(0, 12);
+    candidates.push(path.join(cacheBase, `${readable}-${hash}.git`));
+  }
+  return candidates;
+}
+
+async function openLocalBareMirrorReader(
+  identity: RepositoryIdentity,
+): Promise<RepoReader | null> {
+  for (const mirrorPath of candidateLocalBareMirrorDirs(identity)) {
+    try {
+      await fs.stat(path.join(mirrorPath, 'HEAD'));
+      const bareRepo =
+        identity.provider === 'github'
+          ? identity.repo.split('/').pop() || identity.repo
+          : identity.repo;
+      const reader = new BareRepoReader({
+        identity: { ...identity, repo: bareRepo },
+        mirrorPath,
+      });
+      await reader.listDir('');
+      return reader;
+    } catch {
+      // Try next candidate.
+    }
+  }
+  return null;
+}
+
+function createBrainstormWorkspaceReader(input: {
+  destination: string;
+  primaryReader: RepoReader;
+  remotePrimaryReader: RepoReader | null;
+  bootstrap: InteractiveActorBootstrap;
+}): RepoReader {
+  const readRoots = input.bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
+  if (readRoots.length === 0) return input.primaryReader;
+
+  const localReader = new LocalCheckoutReader({
+    checkoutPath: input.destination,
+    identity: input.primaryReader.identity,
+  });
+  const serviceUrl = resolveRepoReadServiceUrl();
+  const grounding = input.bootstrap.specification.grounding;
+
+  const hasLocalSourceCheckout = async (sourceId: string): Promise<boolean> => {
+    try {
+      await fs.stat(path.join(input.destination, 'sources', sourceId, '.git'));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const remoteReaderForSource = async (sourceId: string): Promise<RepoReader | null> => {
+    const root = readRoots.find((item) => item.sourceId === sourceId);
+    if (!root) return null;
+    if (
+      input.remotePrimaryReader &&
+      grounding &&
+      grounding.sha.toLowerCase() === root.commitSha.toLowerCase()
+    ) {
+      return input.remotePrimaryReader;
+    }
+    const identity: RepositoryIdentity = {
+      provider: root.provider,
+      project: root.project,
+      repo: root.repository,
+      sha: root.commitSha,
+    };
+    if (serviceUrl) {
+      return new RepoServiceReader({
+        identity,
+        baseUrl: serviceUrl,
+      });
+    }
+    return openLocalBareMirrorReader(identity);
+  };
+
+  return {
+    identity: input.primaryReader.identity,
+    async readFile(filePath: string): Promise<string> {
+      const parsed = parseBrainstormSourcePath(filePath);
+      if (!parsed) {
+        return input.primaryReader.readFile(filePath);
+      }
+      if (await hasLocalSourceCheckout(parsed.sourceId)) {
+        return localReader.readFile(filePath);
+      }
+      const remote = await remoteReaderForSource(parsed.sourceId);
+      if (remote) {
+        return remote.readFile(parsed.innerPath);
+      }
+      return localReader.readFile(filePath);
+    },
+    async listDir(dirPath: string) {
+      const normalized = dirPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      if (normalized === 'sources') {
+        return readRoots.map((root) => ({
+          path: `/sources/${root.sourceId}`,
+          name: root.sourceId,
+          isFolder: true,
+        }));
+      }
+      const parsed = parseBrainstormSourcePath(dirPath);
+      if (!parsed) {
+        return input.primaryReader.listDir(dirPath);
+      }
+      if (await hasLocalSourceCheckout(parsed.sourceId)) {
+        return localReader.listDir(dirPath);
+      }
+      const remote = await remoteReaderForSource(parsed.sourceId);
+      if (remote) {
+        const entries = await remote.listDir(parsed.innerPath);
+        return entries.map((entry) => ({
+          ...entry,
+          path: `/sources/${parsed.sourceId}/${entry.path.replace(/^\/+/, '')}`,
+        }));
+      }
+      return localReader.listDir(dirPath);
+    },
+    async searchCode(query: string, limit?: number) {
+      const primaryResults = await input.primaryReader
+        .searchCode(query, limit)
+        .catch(() => []);
+      const localResults =
+        input.primaryReader === localReader
+          ? []
+          : await localReader.searchCode(query, limit).catch(() => []);
+      const byPath = new Map<string, (typeof primaryResults)[number]>();
+      for (const item of [...primaryResults, ...localResults]) {
+        if (!byPath.has(item.path)) byPath.set(item.path, item);
+      }
+      for (const root of readRoots) {
+        if (await hasLocalSourceCheckout(root.sourceId)) continue;
+        if (
+          grounding &&
+          grounding.sha.toLowerCase() === root.commitSha.toLowerCase() &&
+          primaryResults.length > 0
+        ) {
+          continue;
+        }
+        const remote = await remoteReaderForSource(root.sourceId);
+        if (!remote) continue;
+        const hits = await remote.searchCode(query, limit).catch(() => []);
+        for (const hit of hits) {
+          const prefixedPath = `sources/${root.sourceId}/${hit.path.replace(/^\/+/, '')}`;
+          if (!byPath.has(prefixedPath)) {
+            byPath.set(prefixedPath, { ...hit, path: prefixedPath });
+          }
+        }
+      }
+      return [...byPath.values()];
+    },
+  };
+}
+
 async function openPinnedReaderForBootstrap(
   bootstrap: InteractiveActorBootstrap,
 ): Promise<RepoReader | null> {
@@ -119,8 +320,15 @@ async function openPinnedReaderForBootstrap(
     repo: grounding.repository,
     sha: grounding.sha,
   };
+  const localBareReader = await openLocalBareMirrorReader(identity);
+  if (localBareReader) {
+    return localBareReader;
+  }
   const serviceUrl = resolveRepoReadServiceUrl();
   if (!serviceUrl) {
+    if (bootstrap.specification.workflowClass === 'brainstorm') {
+      return null;
+    }
     throw new Error(
       'Pinned grounding repository is unavailable: repo-read service URL is not configured',
     );
@@ -130,6 +338,9 @@ async function openPinnedReaderForBootstrap(
     await reader.listDir('');
     return reader;
   } catch (error) {
+    if (bootstrap.specification.workflowClass === 'brainstorm') {
+      return null;
+    }
     const reason =
       error instanceof Error ? error.message : 'pinned repo-read open failed';
     throw new Error(`Pinned grounding repository is unavailable: ${reason}`);
@@ -468,6 +679,16 @@ export async function main(): Promise<void> {
         .catch(() => {});
       // The repository is already on disk (worktree) or read remotely through
       // `reader`; only attachments are written here.
+      await mountBrainstormSources({
+        sources: bootstrap.specification.brainstorm?.sources,
+        destination,
+        signal,
+        runGit: async (args, cwd) => {
+          await defaultRunGit(cwd ? ['-C', cwd, ...args] : args, { signal });
+        },
+        checkout: (grounding, sourceDestination, sourceSignal) =>
+          repositoryCheckout.checkout(grounding, sourceDestination, sourceSignal),
+      });
       await materializeInteractiveWorkspace({
         reader: null,
         destination,
@@ -482,9 +703,9 @@ export async function main(): Promise<void> {
         },
         signal,
       });
-      return {
-        workspacePath: destination,
-        reader: reader ?? new LocalCheckoutReader({
+      const baseReader =
+        reader ??
+        new LocalCheckoutReader({
           checkoutPath: destination,
           identity: {
             provider: 'ado',
@@ -492,12 +713,23 @@ export async function main(): Promise<void> {
             repo: 'empty',
             sha: 'none',
           },
+        });
+      return {
+        workspacePath: destination,
+        reader: createBrainstormWorkspaceReader({
+          destination,
+          primaryReader: baseReader,
+          remotePrimaryReader: checkout?.status === 'ready' ? null : reader,
+          bootstrap,
         }),
         dispose: () => repositoryCheckout.release(destination),
       } as ReaderCheckout;
     },
     uploadAttemptArtifacts: async (bootstrap, workspacePath, signal) => {
       const collected = await collectInteractiveArtifacts(workspacePath);
+      // A turn with no workspace outputs still has to finish. Blob is only
+      // needed when there is a file to store.
+      if (collected.length === 0) return undefined;
       const container = artifactContainerName();
       const uploader = createArtifactUploader({
         target: {

@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 17 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(17);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 18 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(18);
   });
 
   it('contains the expected keys in order', () => {
@@ -33,6 +33,7 @@ describe('menuSettings shared types', () => {
       'playbooks',
       'builds',
       'mcp-servers',
+      'brainstorm',
     ]);
   });
 
@@ -56,6 +57,7 @@ describe('menuSettings shared types', () => {
       'Playbooks',
       'Builds',
       'MCP Servers',
+      'Brainstorm',
     ]);
   });
 

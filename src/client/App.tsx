@@ -35,6 +35,7 @@ import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { BUILD_FROM_PROMPT_FLAG } from '../shared/types/featureFlags';
+import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
 import {
@@ -134,6 +135,12 @@ const BuildRunView = lazy(() =>
 const BuildIntakeChatRoute = lazy(() =>
   import('./components/BuildIntakeChatRoute').then((m) => ({ default: m.BuildIntakeChatRoute })),
 );
+const BrainstormSessionsPage = lazy(() =>
+  import('./components/BrainstormSessionsPage').then((m) => ({ default: m.BrainstormSessionsPage })),
+);
+const BrainstormWorkspace = lazy(() =>
+  import('./components/BrainstormWorkspace').then((m) => ({ default: m.BrainstormWorkspace })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -170,6 +177,7 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const locationRef = useRef(location);
+  // eslint-disable-next-line react-hooks/refs -- keep latest location in a ref so event callbacks do not re-subscribe on navigation
   locationRef.current = location;
 
   const [chatOpen, setChatOpen] = useState(false);
@@ -205,7 +213,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -257,6 +265,8 @@ function App() {
                     ? 'builds'
                     : location.pathname === '/mcp-servers' || location.pathname.startsWith('/mcp-servers/')
                     ? 'mcp-servers'
+                    : location.pathname === '/brainstorm' || location.pathname.startsWith('/brainstorm/')
+                    ? 'brainstorm'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -431,6 +441,14 @@ function App() {
     permissionsLoaded &&
     effectiveEnabledViews.includes('mcp-servers') &&
     (isSuperAdmin || can('mcp-servers:view'));
+  const brainstormFlagOn = !homeFlagsLoading && homeFlags[BRAINSTORM_FLAG] === true;
+  const canAccessBrainstorm =
+    brainstormFlagOn &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('brainstorm') &&
+    (isSuperAdmin || can(BRAINSTORM_VIEW));
+  const brainstormSessionId = /^\/brainstorm\/([^/]+)\/?$/.exec(location.pathname)?.[1];
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -985,7 +1003,11 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers)) {
+  if (currentView === 'brainstorm' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1032,6 +1054,8 @@ function App() {
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
             onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
+            onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
+            brainstormEnabled={brainstormFlagOn}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
@@ -1091,6 +1115,8 @@ function App() {
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
             onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
+            onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
+            brainstormEnabled={brainstormFlagOn}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -1566,6 +1592,20 @@ function App() {
                     <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
                   )}
                 </BuildsRouteGuard>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'brainstorm' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                {brainstormSessionId ? (
+                  <BrainstormWorkspace
+                    key={brainstormSessionId}
+                    project={selectedProject}
+                    sessionId={decodeURIComponent(brainstormSessionId)}
+                  />
+                ) : (
+                  <BrainstormSessionsPage project={selectedProject} />
+                )}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (

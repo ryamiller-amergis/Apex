@@ -39,6 +39,8 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
+| `brainstorm:view` | brainstorm | admin, member, viewer |
+| `brainstorm:create` | brainstorm | admin, member, viewer |
 | `builds:view` | builds | admin, member, viewer |
 | `builds:run` | builds | admin, member |
 | `calendar:view` | calendar | admin, member |
