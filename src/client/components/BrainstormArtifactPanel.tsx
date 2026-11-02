@@ -1,6 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useQueryClient } from '@tanstack/react-query';
 import type { BrainstormSessionDetail } from '../../shared/types/brainstorm';
 import {
@@ -12,6 +10,7 @@ import { brainstormArtifactKeys, useBrainstormArtifact, useSwitchArtifactType } 
 import { BrainstormCheckpointField } from './BrainstormCheckpointField';
 import { BrainstormNextActionsPanel, type BrainstormActionRequest } from './BrainstormNextActionsPanel';
 import { BrainstormVersionHistoryDrawer } from './BrainstormVersionHistoryDrawer';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import styles from './BrainstormArtifactPanel.module.css';
 
 export const ARTIFACT_EMPTY_TEXT = 'No artifact yet — ask the collaborator to draft one';
@@ -226,7 +225,8 @@ export const BrainstormArtifactPanel: React.FC<BrainstormArtifactPanelProps> = (
 
       {hasContent ? (
         <div className={`${styles.body} ${styles.markdownDoc}`} {...{ 'data-testid': 'brainstorm-artifact-body' }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{artifact.markdown}</ReactMarkdown>
+          {/* data-testid-exempt — MarkdownWithMermaid renders inside brainstorm-artifact-body */}
+          <MarkdownWithMermaid content={artifact.markdown} skipHtml />
         </div>
       ) : (
         <p className={styles.empty} {...{ 'data-testid': 'brainstorm-artifact-empty' }}>{ARTIFACT_EMPTY_TEXT}</p>
@@ -310,7 +310,8 @@ export const BrainstormArtifactPanel: React.FC<BrainstormArtifactPanelProps> = (
               </div>
             </div>
             <div className={`${styles.readerBody} ${styles.markdownDoc}`} {...{ 'data-testid': 'brainstorm-artifact-reader-body' }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>{artifact.markdown}</ReactMarkdown>
+              {/* data-testid-exempt — MarkdownWithMermaid renders inside brainstorm-artifact-reader-body */}
+              <MarkdownWithMermaid content={artifact.markdown} skipHtml />
             </div>
           </div>
         </div>

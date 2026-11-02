@@ -684,4 +684,52 @@ describe('Brainstorm cloud vs local workspace mount paths', () => {
       await rm(dest, { recursive: true, force: true });
     }
   });
+
+  it('delegates marker-only App Service workspaces (no .git) to V2 worker bundle checkout', async () => {
+    const markerDir = await mkdtemp(path.join(os.tmpdir(), 'brainstorm-marker-only-'));
+    const dest = await mkdtemp(path.join(os.tmpdir(), 'brainstorm-worker-dest-'));
+    await writeFile(path.join(markerDir, '.apex-brainstorm-ready'), `${SHA}\n`);
+    const checkout = jest.fn().mockResolvedValue({ status: 'ready' });
+
+    try {
+      await mountBrainstormSources({
+        sources: {
+          readRoots: [
+            {
+              sourceId: 'source-bundle-1',
+              kind: 'temporary-repository',
+              displayName: 'Apex',
+              workspacePath: markerDir,
+              commitSha: SHA,
+              provider: 'github',
+              project: PROJECT,
+              repository: 'Apex',
+            },
+          ],
+          unavailableSources: [],
+          mcpServers: [],
+          instructions: '',
+        },
+        destination: dest,
+        signal: AbortSignal.timeout(10_000),
+        runGit: async () => {},
+        checkout,
+      });
+
+      expect(checkout).toHaveBeenCalledWith(
+        {
+          provider: 'github',
+          project: PROJECT,
+          repository: 'Apex',
+          sha: SHA,
+          profileId: 'brainstorm-source',
+        },
+        path.join(dest, 'sources', 'source-bundle-1'),
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await rm(markerDir, { recursive: true, force: true });
+      await rm(dest, { recursive: true, force: true });
+    }
+  });
 });

@@ -358,11 +358,18 @@ async function defaultPrepareTurnContext(
     explicitMcpTools,
     resolvers: {
       listProjectSkillRepos: async (project) => {
-        const [{ listSkillConfigs }, { getProjectRepositoryReadiness }, { readCachedOriginSha }, { sharedReadCheckoutService }] = await Promise.all([
+        const [
+          { listSkillConfigs },
+          { getProjectRepositoryReadiness },
+          { readCachedOriginSha, readRemoteBranchTip },
+          { sharedReadCheckoutService },
+          { runGroundingService },
+        ] = await Promise.all([
           import('./projectSettingsService'),
           import('./projectRepositoryReadinessService'),
           import('./repoCacheService'),
           import('./grounding/sharedReadCheckoutService'),
+          import('./runGroundingService'),
         ]);
         const configs = (await listSkillConfigs())
           .filter((item) => item.project === project && Boolean(item.skillRepo?.trim()) && Boolean(item.skillBranch?.trim()))
@@ -378,28 +385,79 @@ async function defaultPrepareTurnContext(
         }> = [];
         for (const config of configs) {
           const provider = config.skillProvider === 'github' ? 'github' as const : 'ado' as const;
+          const groundingProvider = provider === 'github' ? 'github' as const : 'azure_devops' as const;
           const repoName = config.skillRepo.trim();
+          const bareRepoName = provider === 'github' ? (repoName.split('/').pop() || repoName) : repoName;
           const branchName = config.skillBranch.trim();
-          const [readiness, cachedSha] = await Promise.all([
+          const [readiness, cachedShaExact, cachedShaBare] = await Promise.all([
             getProjectRepositoryReadiness(config.id, { project }).catch(() => null),
             readCachedOriginSha({
-              provider: provider === 'github' ? 'github' : 'azure_devops',
+              provider: groundingProvider,
               project: config.project,
               repository: repoName,
               branch: branchName,
             }).catch(() => null),
+            bareRepoName !== repoName
+              ? readCachedOriginSha({
+                  provider: groundingProvider,
+                  project: config.project,
+                  repository: bareRepoName,
+                  branch: branchName,
+                }).catch(() => null)
+              : Promise.resolve(null),
           ]);
-          const sha = (readiness?.sha && SHA_40.test(readiness.sha) ? readiness.sha : null)
+          const cachedSha = cachedShaExact ?? cachedShaBare;
+          let sha = (readiness?.sha && SHA_40.test(readiness.sha) ? readiness.sha : null)
             ?? (cachedSha && SHA_40.test(cachedSha) ? cachedSha : null)
             ?? (config.repositoryCheckoutSha && SHA_40.test(config.repositoryCheckoutSha) ? config.repositoryCheckoutSha : null);
+          if (!sha) {
+            for (const candidateRepo of new Set([bareRepoName, repoName])) {
+              const activeRows = await runGroundingService
+                .findActiveByRepoBranch({
+                  provider: groundingProvider,
+                  project: config.project,
+                  repository: candidateRepo,
+                  branch: branchName,
+                })
+                .catch(() => []);
+              const latestActive = activeRows
+                .filter((row) => row.repoRole === 'target' && SHA_40.test(row.groundedSha.trim()))
+                .sort((left, right) => Date.parse(right.groundedAt) - Date.parse(left.groundedAt))[0];
+              if (latestActive) {
+                sha = latestActive.groundedSha.trim();
+                break;
+              }
+            }
+          }
+          if (!sha) {
+            const remoteTip = await readRemoteBranchTip({
+              provider,
+              project: config.project,
+              repo: repoName,
+              branch: branchName,
+            }).catch(() => null);
+            if (remoteTip && SHA_40.test(remoteTip)) {
+              sha = remoteTip;
+            }
+          }
           if (!sha) continue;
-          const sharedReady = sharedReadCheckoutService.getReady({
-            provider,
-            project: config.project,
-            repo: repoName,
-            branch: branchName,
-            sha,
-          });
+          const sharedReady =
+            sharedReadCheckoutService.getReady({
+              provider,
+              project: config.project,
+              repo: repoName,
+              branch: branchName,
+              sha,
+            }) ??
+            (bareRepoName !== repoName
+              ? sharedReadCheckoutService.getReady({
+                  provider,
+                  project: config.project,
+                  repo: bareRepoName,
+                  branch: branchName,
+                  sha,
+                })
+              : null);
           resolved.push({
             id: config.id,
             displayName: config.friendlyName?.trim() || repoName,

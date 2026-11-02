@@ -27,6 +27,34 @@
   animation: slideIn 0.25s ease;
 }
 
+.drawerResizing {
+  animation: none;
+  transition: none;
+}
+
+.resizeHandle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 4;
+  touch-action: none;
+  transition: background 0.15s ease;
+}
+
+.resizeHandle:hover,
+.resizeHandle:active,
+.resizeHandle:focus-visible {
+  background: color-mix(in srgb, var(--accent-color) 35%, transparent);
+}
+
+.resizeHandle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
 @keyframes slideIn {
   from { transform: translateX(100%); }
   to   { transform: translateX(0); }
@@ -106,15 +134,130 @@
 .prose {
   font-size: 0.9rem;
   color: var(--text-primary);
-  line-height: 1.55;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.prose > *:first-child,
+.prose > * > *:first-child {
+  margin-top: 0;
+}
+
+.prose > *:last-child,
+.prose > * > *:last-child {
+  margin-bottom: 0;
+}
+
+.prose h1 {
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.prose h2 {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.38;
+  color: var(--text-primary);
+}
+
+.prose h3,
+.prose h4 {
+  margin: 12px 0 6px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 
 .prose p {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
 }
 
-.paraSpacer {
-  margin-bottom: 4px !important;
+.prose ul,
+.prose ol {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+.prose li {
+  margin-bottom: 4px;
+}
+
+.prose li > p {
+  margin-bottom: 4px;
+}
+
+.prose hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.prose blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent-color);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.prose code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono, 'Consolas', monospace);
+  font-size: 0.82em;
+}
+
+.prose pre {
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  overflow-x: auto;
+}
+
+.prose pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 0.82rem;
+}
+
+.prose table {
+  width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.prose th,
+.prose td {
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.prose tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-secondary) 45%, transparent);
+}
+
+.prose a {
+  color: var(--accent-color);
 }
 
 .rationale {

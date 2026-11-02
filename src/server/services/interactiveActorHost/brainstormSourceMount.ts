@@ -93,7 +93,7 @@ export async function mountBrainstormSources(input: {
   if (roots.length === 0) return;
   const exists = input.pathExists ?? (async (target: string) => {
     try {
-      await fs.stat(target);
+      await fs.stat(path.join(target, '.git'));
       return true;
     } catch {
       return false;
@@ -102,7 +102,7 @@ export async function mountBrainstormSources(input: {
   for (const root of roots) {
     if (input.signal.aborted) return;
     const dest = path.join(input.destination, 'sources', root.sourceId);
-    if (await alreadyMountedAtSha(dest, root.commitSha)) continue;
+    if ((await alreadyMountedAtSha(dest, root.commitSha)) && (await exists(dest))) continue;
     await fs.mkdir(path.dirname(dest), { recursive: true });
     let resolvedSourceDir: string | null = null;
     for (const candidate of candidateSourcePaths(root.workspacePath)) {
@@ -121,13 +121,15 @@ export async function mountBrainstormSources(input: {
       continue;
     }
     await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
-    await input.checkout({
+    const checkedOut = await input.checkout({
       provider: root.provider,
       project: root.project,
       repository: root.repository,
       sha: root.commitSha,
       profileId: 'brainstorm-source',
     }, dest, input.signal);
-    await fs.writeFile(path.join(dest, '.apex-brainstorm-ready'), `${root.commitSha}\n`).catch(() => {});
+    if (!checkedOut || checkedOut.status === 'ready') {
+      await fs.writeFile(path.join(dest, '.apex-brainstorm-ready'), `${root.commitSha}\n`).catch(() => {});
+    }
   }
 }

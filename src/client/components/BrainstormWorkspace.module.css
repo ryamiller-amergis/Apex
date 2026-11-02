@@ -1,8 +1,12 @@
 .root {
+  position: relative;
   display: flex;
   flex-direction: column;
+  flex: 1 1 0;
   gap: 12px;
+  min-height: 0;
   height: calc(100vh - 56px);
+  max-height: calc(100vh - 56px);
   box-sizing: border-box;
   overflow: hidden;
   padding: 12px 24px 16px;

@@ -82,7 +82,10 @@ export class LocalCheckoutReader implements RepoReader {
         const root = await this.resolveCheckoutRoot();
         const maxResults = boundedSearchLimit(limit);
         const hasGitRoot = await fs.stat(path.join(root, '.git')).then(() => true, () => false);
+        const combined: RepoCodeSearchResult[] = [];
+        const searchedRealpaths = new Set<string>();
         if (hasGitRoot) {
+          searchedRealpaths.add(root);
           try {
             const output = await git(
               safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
@@ -92,21 +95,24 @@ export class LocalCheckoutReader implements RepoReader {
                 maxBuffer: 2 * 1024 * 1024,
               },
             );
-            return this.shapeSearchResults(output, maxResults);
+            combined.push(...this.shapeSearchResults(output, maxResults));
           } catch (error) {
-            if (error instanceof Error && /exit code 1$/i.test(error.message)) return [];
-            throw error;
+            if (!(error instanceof Error && /exit code 1$/i.test(error.message))) {
+              throw error;
+            }
           }
         }
-        // Un-grounded workspaces (e.g. Brainstorm) have mounted git repos under `sources/<id>`.
+        // Mounted git repos under `sources/<id>` (e.g. Brainstorm sources).
         const sourcesDir = path.join(root, 'sources');
         const entries = await fs.readdir(sourcesDir).catch(() => [] as string[]);
-        if (entries.length === 0) return [];
-        const combined: RepoCodeSearchResult[] = [];
+        if (entries.length === 0) return combined;
         for (const entry of entries) {
           if (combined.length >= maxResults) break;
           const sourceRoot = await fs.realpath(path.join(sourcesDir, entry)).catch(() => null);
-          if (!sourceRoot) continue;
+          if (!sourceRoot || searchedRealpaths.has(sourceRoot)) continue;
+          const sourceHasGit = await fs.stat(path.join(sourceRoot, '.git')).then(() => true, () => false);
+          if (!sourceHasGit) continue;
+          searchedRealpaths.add(sourceRoot);
           try {
             const sourceOut = await git(
               safeArgs(sourceRoot, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),

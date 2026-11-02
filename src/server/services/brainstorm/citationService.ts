@@ -96,7 +96,15 @@ export function createCitationService(deps: CitationDeps) {
       const target = resolveCitationPath(workspace, input.requestedPath);
       if (!target) return { ok: false, reason: 'bad-path' };
       const stat = await deps.files.lstat(target);
-      if (!stat || !stat.isFile || stat.isSymbolicLink) return { ok: false, reason: 'bad-path' };
+      if (!stat) {
+        const marker = await deps.files.lstat(path.join(workspace, '.apex-brainstorm-ready'));
+        const hasLocalGit = await deps.files.lstat(path.join(workspace, '.git'));
+        if (!marker || !marker.isFile || marker.isSymbolicLink || hasLocalGit) {
+          return { ok: false, reason: 'bad-path' };
+        }
+      } else if (!stat.isFile || stat.isSymbolicLink) {
+        return { ok: false, reason: 'bad-path' };
+      }
       const relative = path.relative(workspace, target).replace(/\\/g, '/');
       const claim = sanitizePlainText(input.claim);
       const inserted = await deps.persistence.insert({

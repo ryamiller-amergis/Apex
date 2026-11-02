@@ -97,15 +97,19 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
       <ul className={styles.list}>
         {completed.map((handoff) => (
           <li key={handoff.handoffId} className={styles.row}>
-            <Link to={handoff.resultRef!.link!} {...{ 'data-testid': `brainstorm-handoff-link-${handoff.handoffId}` }}>
-              {handoff.targetModule === 'adr'
-                ? 'Open the ADR'
-                : handoff.targetModule === 'interview'
-                  ? 'Open the interview'
-                  : handoff.targetModule === 'feature-request'
-                    ? 'Open the feature request'
-                    : 'Open the artifact'}
-            </Link>
+            {handoff.targetModule === 'standalone' ? (
+              <span className={styles.resultBadge} {...{ 'data-testid': `brainstorm-handoff-link-${handoff.handoffId}` }}>
+                Kept as standalone
+              </span>
+            ) : (
+              <Link to={handoff.resultRef!.link!} {...{ 'data-testid': `brainstorm-handoff-link-${handoff.handoffId}` }}>
+                {handoff.targetModule === 'adr'
+                  ? 'Open the ADR'
+                  : handoff.targetModule === 'interview'
+                    ? 'Open the interview'
+                    : 'Open the feature request'}
+              </Link>
+            )}
             <span className={styles.meta}> from version {handoff.artifactVersion}</span>
           </li>
         ))}
@@ -128,7 +132,14 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
                   </span>
                 )}
               </div>
-              {action.state === 'completed' && action.resultRef?.link ? (
+              {action.state === 'completed' && action.id === 'keep-standalone' ? (
+                <span
+                  className={styles.resultBadge}
+                  {...{ 'data-testid': `brainstorm-action-result-${action.id}` }}
+                >
+                  Kept
+                </span>
+              ) : action.state === 'completed' && action.resultRef?.link ? (
                 <Link
                   to={action.resultRef.link}
                   className={styles.resultLink}

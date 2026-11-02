@@ -11,12 +11,11 @@ import {
 } from '../services/mcpServerReadService';
 import { listSkillConfigs } from '../services/projectSettingsService';
 import {
-  assertResolvedProjectRepositoryReady,
   getProjectRepositoryReadiness,
   isRepositoryReady,
-  ProjectRepositoryNotReady,
 } from '../services/projectRepositoryReadinessService';
-import { getRepoCacheDir, readCachedOriginSha, readRepoCacheFreeBytes } from '../services/repoCacheService';
+import { getRepoCacheDir, readCachedOriginSha, readRemoteBranchTip } from '../services/repoCacheService';
+import { runGroundingService } from '../services/runGroundingService';
 import {
   NonblockingRepoCacheLeaseUnavailableError,
   withRepoCacheLease,
@@ -100,35 +99,66 @@ async function resolveProjectSource(project: string, skillSettingsId: string) {
       groundingProject: project,
     };
   }
-  try {
-    await assertResolvedProjectRepositoryReady({
-      project,
-      settingsId: skillSettingsId,
-      surface: 'brainstorm-source',
-    });
-  } catch (err) {
-    if (err instanceof ProjectRepositoryNotReady) {
-      return {
-        ok: false as const,
-        status: 409 as const,
-        code: 'PROJECT_REPOSITORY_NOT_READY',
-        error: 'A project administrator must clone this repository before it can be attached.',
-      };
-    }
-    return { ok: false as const, status: 404 as const, code: 'NOT_FOUND', error: 'Source not found' };
-  }
   const configs = await listSkillConfigs();
   const config = configs.find((item) => item.id === skillSettingsId && item.project === project);
   if (!config?.skillRepo || !config.skillBranch) {
     return { ok: false as const, status: 404 as const, code: 'NOT_FOUND', error: 'Source not found' };
   }
   const provider = config.skillProvider === 'github' ? 'github' as const : 'ado' as const;
-  const sha = await readCachedOriginSha({
-    provider: provider === 'github' ? 'github' : 'azure_devops',
-    project: config.project,
-    repository: config.skillRepo,
-    branch: config.skillBranch,
-  });
+  const groundingProvider = provider === 'github' ? 'github' as const : 'azure_devops' as const;
+  const repoName = config.skillRepo.trim();
+  const bareRepoName = provider === 'github' ? (repoName.split('/').pop() || repoName) : repoName;
+  const branchName = config.skillBranch.trim();
+  const [readiness, cachedExact, cachedBare] = await Promise.all([
+    getProjectRepositoryReadiness(config.id, { project }).catch(() => null),
+    readCachedOriginSha({
+      provider: groundingProvider,
+      project: config.project,
+      repository: repoName,
+      branch: branchName,
+    }).catch(() => null),
+    bareRepoName !== repoName
+      ? readCachedOriginSha({
+          provider: groundingProvider,
+          project: config.project,
+          repository: bareRepoName,
+          branch: branchName,
+        }).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  let sha =
+    readiness?.sha ??
+    cachedExact ??
+    cachedBare ??
+    config.repositoryCheckoutSha ??
+    null;
+  if (!sha) {
+    for (const candidateRepo of new Set([bareRepoName, repoName])) {
+      const activeRows = await runGroundingService
+        .findActiveByRepoBranch({
+          provider: groundingProvider,
+          project: config.project,
+          repository: candidateRepo,
+          branch: branchName,
+        })
+        .catch(() => []);
+      const latest = activeRows
+        .filter((row) => row.repoRole === 'target' && /^[0-9a-f]{40}$/i.test(row.groundedSha.trim()))
+        .sort((left, right) => Date.parse(right.groundedAt) - Date.parse(left.groundedAt))[0];
+      if (latest) {
+        sha = latest.groundedSha.trim().toLowerCase();
+        break;
+      }
+    }
+  }
+  if (!sha) {
+    sha = await readRemoteBranchTip({
+      provider,
+      project: config.project,
+      repo: repoName,
+      branch: branchName,
+    }).catch(() => null);
+  }
   if (!sha) {
     return {
       ok: false as const,
@@ -141,7 +171,7 @@ async function resolveProjectSource(project: string, skillSettingsId: string) {
     ok: true as const,
     displayName: config.friendlyName || config.skillRepo,
     sha,
-    cacheDir: getRepoCacheDir({ provider, project: config.project, repo: config.skillRepo, branch: config.skillBranch }),
+    cacheDir: getRepoCacheDir({ provider, project: config.project, repo: bareRepoName, branch: branchName }),
     provider,
     repository: config.skillRepo,
     groundingProject: config.project,
@@ -174,7 +204,33 @@ async function loadSourceOptions(
   const configs = (await listSkillConfigs()).filter((item) => item.project === project);
   const repositories = await Promise.all(configs.map(async (config) => {
     const readiness = await getProjectRepositoryReadiness(config.id, { project }).catch(() => null);
-    const ready = Boolean(readiness && isRepositoryReady(readiness));
+    let ready = Boolean(readiness && isRepositoryReady(readiness));
+    if (!ready && config.skillRepo?.trim() && config.skillBranch?.trim()) {
+      const provider = config.skillProvider === 'github' ? 'github' as const : 'ado' as const;
+      const groundingProvider = provider === 'github' ? 'github' as const : 'azure_devops' as const;
+      const repoName = config.skillRepo.trim();
+      const bareRepoName = provider === 'github' ? (repoName.split('/').pop() || repoName) : repoName;
+      const branchName = config.skillBranch.trim();
+      const cached =
+        (await readCachedOriginSha({
+          provider: groundingProvider,
+          project: config.project,
+          repository: repoName,
+          branch: branchName,
+        }).catch(() => null)) ??
+        (bareRepoName !== repoName
+          ? await readCachedOriginSha({
+              provider: groundingProvider,
+              project: config.project,
+              repository: bareRepoName,
+              branch: branchName,
+            }).catch(() => null)
+          : null);
+      ready =
+        Boolean(cached) ||
+        Boolean(config.repositoryCheckoutSha) ||
+        Boolean(process.env.REPO_READ_SERVICE_URL?.trim() || process.env.GROUNDING_BLOB_ACCOUNT_NAME?.trim());
+    }
     return {
       skillSettingsId: config.id,
       displayName: config.friendlyName || config.skillRepo,
@@ -405,7 +461,7 @@ export function brainstormSourceRuntime(): BrainstormSourceRuntime {
           return false;
         }
       },
-      freeBytes: () => readRepoCacheFreeBytes().catch(() => null),
+      freeBytes: async () => null,
     },
     git: {
       cloneFromCache: (input) => cloneCachedCommit(input),

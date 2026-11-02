@@ -5,9 +5,10 @@
 // AI_RUNS_INTERACTIVE_DISPATCH_URL. If a host is already up, this stays alive
 // so `concurrently` does not treat the dev stack as finished.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const APP_PORT = 8080;
+const SIDECAR = 'apex-dapr-sidecar';
 
 async function hostUp() {
   try {
@@ -17,6 +18,17 @@ async function hostUp() {
     return response.status === 200 || response.status === 503;
   } catch {
     return false;
+  }
+}
+
+async function restartDaprSidecarWhenHostListening(childProcess) {
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (childProcess.killed || childProcess.exitCode !== null) return;
+    if (await hostUp()) {
+      spawnSync('docker', ['restart', SIDECAR], { stdio: 'ignore' });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }
 
@@ -48,6 +60,8 @@ if (await hostUp()) {
       },
     },
   );
+
+  void restartDaprSidecarWhenHostListening(child);
 
   const stop = () => {
     if (!child.killed) child.kill();

@@ -1,5 +1,6 @@
 import { promises as dns } from 'node:dns';
 import fsSync, { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { and, asc, eq, ne } from 'drizzle-orm';
 import { db } from '../db/drizzle';
@@ -16,7 +17,7 @@ import {
   type DnsLookup,
 } from './brainstorm/cloneUrlValidator';
 import { credentialsForCloneUrl, redactCloneFailure } from './brainstorm/cloneCredentials';
-import { resolveTemporarySha } from './brainstorm/gitSourceClone';
+import { publishSourceBundleIfConfigured, resolveTemporarySha } from './brainstorm/gitSourceClone';
 import { git } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
 
@@ -170,17 +171,32 @@ async function beginClone(project: string, id: string): Promise<BrainstormCatalo
 async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Promise<void> {
   const destination = sharedBrainstormRepositoryMirrorDir(claimed.id);
   const legacyDestination = legacyBrainstormRepositoryMirrorDir(claimed.id);
-  const creds = credentialsForCloneUrl(new URL(claimed.cloneUrl));
+  const url = new URL(claimed.cloneUrl);
+  const host = url.hostname.toLowerCase();
+  const provider = host === 'github.com' || host === 'www.github.com' ? ('github' as const) : ('ado' as const);
+  const creds = credentialsForCloneUrl(url);
+  const useCloudBundle = Boolean(process.env.GROUNDING_BLOB_ACCOUNT_NAME?.trim()) && !process.env.JEST_WORKER_ID;
+  const scratch = useCloudBundle ? await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-catalog-')) : null;
+  const cloneTarget = scratch ? path.join(scratch, 'repo') : destination;
   try {
-    await fs.rm(destination, { recursive: true, force: true });
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await git([
-      'clone', '--depth', '1', '--single-branch', '--branch', claimed.branch, '--', claimed.cloneUrl, destination,
-    ], { timeout: 180_000, env: creds.env });
+    await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
     if (legacyDestination !== destination) {
       await fs.rm(legacyDestination, { recursive: true, force: true }).catch(() => {});
     }
-    const sha = (await git(['-C', destination, 'rev-parse', 'HEAD'])).trim().toLowerCase();
+    await fs.mkdir(path.dirname(cloneTarget), { recursive: true });
+    await git([
+      'clone', '--depth', '1', '--single-branch', '--branch', claimed.branch, '--', claimed.cloneUrl, cloneTarget,
+    ], { timeout: 180_000, env: creds.env });
+    const sha = (await git(['-C', cloneTarget, 'rev-parse', 'HEAD'])).trim().toLowerCase();
+    if (useCloudBundle) {
+      await publishSourceBundleIfConfigured({
+        repoDir: cloneTarget,
+        provider,
+        project: claimed.project,
+        repository: claimed.displayName,
+        sha,
+      });
+    }
     const nowIso = new Date().toISOString();
     await db
       .update(brainstormRepositories)
@@ -213,6 +229,10 @@ async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Pr
       .update(brainstormRepositories)
       .set({ status: 'failed', error: message, updatedAt: new Date().toISOString() })
       .where(eq(brainstormRepositories.id, claimed.id));
+  } finally {
+    if (scratch) {
+      await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 

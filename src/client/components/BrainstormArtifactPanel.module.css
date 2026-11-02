@@ -1,4 +1,5 @@
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -127,11 +128,13 @@
   color: var(--text-primary);
 }
 
-.markdownDoc > *:first-child {
+.markdownDoc > *:first-child,
+.markdownDoc > * > *:first-child {
   margin-top: 0;
 }
 
-.markdownDoc > *:last-child {
+.markdownDoc > *:last-child,
+.markdownDoc > * > *:last-child {
   margin-bottom: 0;
 }
 
@@ -388,6 +391,8 @@
 
 .srOnly {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   overflow: hidden;

@@ -156,8 +156,38 @@ describe('BrainstormArtifactPanel', () => {
     const props = markdownProps[markdownProps.length - 1];
     expect(props.skipHtml).toBe(true);
     expect(props.rehypePlugins).toBeUndefined();
+    expect(props.components).toEqual(
+      expect.objectContaining({
+        code: expect.any(Function),
+        pre: expect.any(Function),
+      }),
+    );
     expect(container.querySelector('script')).toBeNull();
     expect(container.querySelector('[onerror]')).toBeNull();
+  });
+
+  it('normalizes flowchart blocks into mermaid fences for diagram rendering in the artifact panel and full view', () => {
+    const flowchartMd = [
+      '### Target architecture',
+      '',
+      '```',
+      'flowchart LR',
+      '  subgraph apex_host [Apex App Service]',
+      '    api["Dev Workbench API"]',
+      '    db[(PostgreSQL)]',
+      '  end',
+      '  api --> db',
+      '```',
+    ].join('\n');
+    artifactHook.mockReturnValue(query(artifact({ markdown: flowchartMd })));
+    renderPanel(<BrainstormArtifactPanel project="Apex" session={session} turnRunning={false} />);
+
+    const panelProps = markdownProps[markdownProps.length - 1];
+    expect(String(panelProps.children)).toContain('```mermaid\nflowchart LR');
+
+    fireEvent.click(screen.getByTestId('brainstorm-artifact-reader-open'));
+    const readerProps = markdownProps[markdownProps.length - 1];
+    expect(String(readerProps.children)).toContain('```mermaid\nflowchart LR');
   });
 
   it('shows the empty state when the artifact has no content and hides the checkpoint field on an empty version', () => {
@@ -290,5 +320,26 @@ describe('Next actions and chips (VT-26)', () => {
       <BrainstormArtifactPanel project="Apex" session={session} turnRunning={false} actionRequest={{ actionId: 'keep-standalone', nonce: 1 }} />,
     );
     expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a non-link Kept badge instead of an Open link when keep-standalone is completed', () => {
+    artifactHook.mockReturnValue(query(artifact()));
+    actionsHook.mockReturnValue(query({
+      ...actions,
+      actions: actions.actions.map((item) =>
+        item.id === 'keep-standalone'
+          ? {
+              ...item,
+              state: 'completed' as const,
+              resultRef: { module: 'standalone' as const, id: 'art-1', link: '/brainstorm/s-1' },
+            }
+          : item,
+      ),
+    }));
+    renderPanel(<BrainstormArtifactPanel project="Apex" session={session} turnRunning={false} />);
+
+    const resultBadge = screen.getByTestId('brainstorm-action-result-keep-standalone');
+    expect(resultBadge).toHaveTextContent('Kept');
+    expect(resultBadge.tagName.toLowerCase()).toBe('span');
   });
 });

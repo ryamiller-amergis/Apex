@@ -1,7 +1,75 @@
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import type { RepositoryIdentity } from '../../../shared/types/repoReader';
 import { git } from '../../utils/asyncGit';
+import { bundleRepositoryName } from '../grounding/bundleCheckout';
+import { createGroundingBundleStore } from '../grounding/bundleStoreService';
 import { credentialsForCloneUrl } from './cloneCredentials';
+
+export interface BrainstormBundleIdentity {
+  provider: 'github' | 'ado';
+  project: string;
+  repository: string;
+}
+
+function isCloudBundleStorageConfigured(): boolean {
+  return Boolean(process.env.GROUNDING_BLOB_ACCOUNT_NAME?.trim()) && !process.env.JEST_WORKER_ID;
+}
+
+export async function hasPublishedSourceBundle(
+  input: BrainstormBundleIdentity & { sha: string },
+): Promise<boolean> {
+  if (!isCloudBundleStorageConfigured()) return false;
+  const identity: RepositoryIdentity = {
+    provider: input.provider,
+    project: input.project,
+    repo: bundleRepositoryName(input.provider, input.repository),
+    sha: input.sha.toLowerCase(),
+  };
+  const store = createGroundingBundleStore({
+    repairAndMaterialize: async () => false,
+  });
+  return store.bundleExists(identity).catch(() => false);
+}
+
+export async function publishSourceBundleIfConfigured(
+  input: BrainstormBundleIdentity & {
+    repoDir: string;
+    sha: string;
+    signal?: AbortSignal;
+  },
+): Promise<boolean> {
+  if (!isCloudBundleStorageConfigured()) return false;
+  const identity: RepositoryIdentity = {
+    provider: input.provider,
+    project: input.project,
+    repo: bundleRepositoryName(input.provider, input.repository),
+    sha: input.sha.toLowerCase(),
+  };
+  const store = createGroundingBundleStore({
+    repairAndMaterialize: async () => false,
+  });
+  if (await store.bundleExists(identity).catch(() => false)) return true;
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-bundle-'));
+  const bundlePath = path.join(scratch, 'snapshot.bundle');
+  try {
+    await git(['-C', input.repoDir, 'bundle', 'create', bundlePath, 'HEAD'], {
+      timeout: 180_000,
+      abortSignal: input.signal,
+    });
+    await store.uploadBundle(identity, bundlePath);
+    return true;
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function writeReadyMarkerOnly(destination: string, sha: string): Promise<void> {
+  await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
+  await fs.mkdir(destination, { recursive: true });
+  await fs.writeFile(path.join(destination, '.apex-brainstorm-ready'), `${sha.toLowerCase()}\n`);
+}
 
 const LOCK = [
   '-c', 'core.symlinks=false',
@@ -44,8 +112,36 @@ export async function cloneTemporaryAtSha(input: {
   sha: string;
   destination: string;
   signal: AbortSignal;
+  identity?: BrainstormBundleIdentity;
 }): Promise<'ok' | 'moved'> {
+  if (input.identity && await hasPublishedSourceBundle({ ...input.identity, sha: input.sha })) {
+    await writeReadyMarkerOnly(input.destination, input.sha);
+    return 'ok';
+  }
   const creds = credentialsForCloneUrl(new URL(input.url));
+  if (input.identity && isCloudBundleStorageConfigured()) {
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-temp-clone-'));
+    const repoDir = path.join(scratch, 'repo');
+    try {
+      await git(['init', repoDir], { abortSignal: input.signal });
+      await git([
+        ...LOCK, '-C', repoDir, 'fetch', '--no-tags', '--depth=1', '--', input.url, input.sha,
+      ], { timeout: 120_000, abortSignal: input.signal, env: creds.env });
+      await git(['-C', repoDir, 'checkout', '--detach', 'FETCH_HEAD'], { abortSignal: input.signal });
+      const head = (await git(['-C', repoDir, 'rev-parse', 'HEAD'])).trim().toLowerCase();
+      if (head !== input.sha.toLowerCase()) return 'moved';
+      await publishSourceBundleIfConfigured({
+        ...input.identity,
+        repoDir,
+        sha: input.sha,
+        signal: input.signal,
+      });
+      await writeReadyMarkerOnly(input.destination, input.sha);
+      return 'ok';
+    } finally {
+      await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   await fs.mkdir(path.dirname(input.destination), { recursive: true });
   await fs.rm(input.destination, { recursive: true, force: true });
   await git(['init', input.destination], { abortSignal: input.signal });
@@ -70,21 +166,62 @@ export async function cloneCachedCommit(input: {
   destination: string;
   sha: string;
   signal: AbortSignal;
+  identity?: BrainstormBundleIdentity;
 }): Promise<void> {
   if (input.signal.aborted) throw new Error('The copy was cancelled.');
   await fs.mkdir(path.dirname(input.destination), { recursive: true });
   await clearReadOnlyTopLevel(input.destination);
   await fs.rm(input.destination, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
+  if (input.identity && await hasPublishedSourceBundle({ ...input.identity, sha: input.sha })) {
+    await writeReadyMarkerOnly(input.destination, input.sha);
+    return;
+  }
   const hasWorkingTreeGit = await fs.stat(path.join(input.cacheDir, '.git')).then(() => true, () => false);
   const isBareRepo = !hasWorkingTreeGit && await fs.stat(path.join(input.cacheDir, 'HEAD')).then(() => true, () => false);
+  if (!hasWorkingTreeGit && !isBareRepo && input.identity && Boolean(process.env.REPO_READ_SERVICE_URL?.trim()) && !process.env.JEST_WORKER_ID) {
+    await writeReadyMarkerOnly(input.destination, input.sha);
+    return;
+  }
   try {
     if (isBareRepo) {
+      if (input.identity && isCloudBundleStorageConfigured()) {
+        const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-bare-clone-'));
+        const repoDir = path.join(scratch, 'repo');
+        try {
+          await git(['clone', '--local', '--no-checkout', '--', input.cacheDir, repoDir], { abortSignal: input.signal });
+          await git(['-C', repoDir, 'checkout', '--detach', input.sha], { abortSignal: input.signal });
+          const head = (await git(['-C', repoDir, 'rev-parse', 'HEAD'], { abortSignal: input.signal })).trim().toLowerCase();
+          if (head !== input.sha.toLowerCase()) {
+            throw new Error('The saved clone changed. Attach the repository again.');
+          }
+          await publishSourceBundleIfConfigured({
+            ...input.identity,
+            repoDir,
+            sha: input.sha,
+            signal: input.signal,
+          });
+          await writeReadyMarkerOnly(input.destination, input.sha);
+          return;
+        } finally {
+          await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
+        }
+      }
       await git(['clone', '--local', '--no-checkout', '--', input.cacheDir, input.destination], { abortSignal: input.signal });
       await git(['-C', input.destination, 'checkout', '--detach', input.sha], { abortSignal: input.signal });
     } else {
       const mirrorHead = (await git(['-C', input.cacheDir, 'rev-parse', 'HEAD'], { abortSignal: input.signal })).trim().toLowerCase();
       if (mirrorHead !== input.sha.toLowerCase()) {
         throw new Error('The saved clone changed. Attach the repository again.');
+      }
+      if (input.identity && isCloudBundleStorageConfigured()) {
+        await publishSourceBundleIfConfigured({
+          ...input.identity,
+          repoDir: input.cacheDir,
+          sha: input.sha,
+          signal: input.signal,
+        });
+        await writeReadyMarkerOnly(input.destination, input.sha);
+        return;
       }
       // Link a depth-1 catalog mirror on the same machine via a directory
       // junction when possible so a multi-GB restore finishes in milliseconds
@@ -128,9 +265,12 @@ export async function cloneCachedCommit(input: {
 
 export async function lockDownClone(destination: string): Promise<void> {
   const stat = await fs.lstat(destination).catch(() => null);
-  if (stat?.isSymbolicLink()) return;
-  await git(['-C', destination, 'remote', 'remove', 'origin']).catch(() => {});
-  const entries = await fs.readdir(destination, { withFileTypes: true });
+  if (!stat || stat.isSymbolicLink()) return;
+  const hasGit = await fs.stat(path.join(destination, '.git')).then(() => true, () => false);
+  if (hasGit) {
+    await git(['-C', destination, 'remote', 'remove', 'origin']).catch(() => {});
+  }
+  const entries = await fs.readdir(destination, { withFileTypes: true }).catch(() => []);
   await Promise.all(entries.filter((entry) => entry.isFile()).map((entry) =>
     fs.chmod(path.join(destination, entry.name), 0o444).catch(() => {})));
 }

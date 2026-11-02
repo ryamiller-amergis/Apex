@@ -114,7 +114,10 @@ export function resolveInteractiveThreadWorkspacePath(
 ): string {
   const configured = env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim();
   const root = configured && configured.length > 0 ? configured : os.tmpdir();
-  const revision = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') || 'ungrounded';
+  // Cap revision length so `.cursor/projects/<encoded-cwd>/sdk-agent-store/<hash>/index.db-wal`
+  // stays under Windows MAX_PATH (260 chars), avoiding SQLite "unable to open database file".
+  const cleaned = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') ?? '';
+  const revision = cleaned.length > 0 ? cleaned.slice(0, 8) : 'ungrounded';
   return path.join(root, 'apex-interactive-thread', threadId, revision);
 }
 

@@ -39,9 +39,21 @@ export interface SourceManagerDeps {
     freeBytes(): Promise<number | null>;
   };
   git: {
-    cloneFromCache(input: { cacheDir: string; destination: string; sha: string; signal: AbortSignal }): Promise<void>;
+    cloneFromCache(input: {
+      cacheDir: string;
+      destination: string;
+      sha: string;
+      signal: AbortSignal;
+      identity?: { provider: 'github' | 'ado'; project: string; repository: string };
+    }): Promise<void>;
     resolveTemporary(input: { url: string; revision: string; signal: AbortSignal }): Promise<{ sha: string } | { error: 'UNREACHABLE' | 'REVISION_NOT_FOUND' }>;
-    cloneTemporary(input: { url: string; sha: string; destination: string; signal: AbortSignal }): Promise<'ok' | 'moved'>;
+    cloneTemporary(input: {
+      url: string;
+      sha: string;
+      destination: string;
+      signal: AbortSignal;
+      identity?: { provider: 'github' | 'ado'; project: string; repository: string };
+    }): Promise<'ok' | 'moved'>;
     lockDown(destination: string): Promise<void>;
   };
   projects: {
@@ -291,22 +303,24 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
       const destination = sourceWorkspacePath(deps.dataRoot, sessionId, sourceId);
       const pinned = /^[a-f0-9]{40}$/i.test(row.requestedRevision ?? '') ? row.requestedRevision! : resolved.sha;
       try {
+        const identity = {
+          provider: resolved.provider,
+          project: resolved.groundingProject,
+          repository: resolved.repository,
+        };
         const bounded = await runBoundedClone(row, limits, (signal) => deps.git.cloneFromCache({
           cacheDir: resolved.cacheDir,
           destination,
           sha: pinned,
           signal,
+          identity,
         }));
         if (bounded === 'size') {
           const failed = await fail(row, 'SIZE_LIMIT', sizeLimitMessage(limits.workspaceMaxBytes), ['preparing']);
           track('brainstorm.source.attach', { kind: row.kind, outcome: 'failed', reasonCode: 'SIZE_LIMIT', durationMs: Date.now() - started, sizeBytes: 0 });
           return failed;
         }
-        return markReady(row, ['preparing'], pinned, {
-          provider: resolved.provider,
-          project: resolved.groundingProject,
-          repository: resolved.repository,
-        }, started);
+        return markReady(row, ['preparing'], pinned, identity, started);
       } catch (err) {
         const reasonText = redactCloneFailure((err as Error).message || 'The clone failed.', []);
         const failed = await fail(row, 'UNREACHABLE', reasonText || 'The clone failed.', ['preparing']);
@@ -331,16 +345,17 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
           return failed;
         }
         const sha = resolved.sha;
+        const provider = new URL(row.cloneUrl).hostname.toLowerCase().endsWith('github.com') ? 'github' as const : 'ado' as const;
+        const repository = row.cloneUrl.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') || row.displayName;
+        const identity = { provider, project, repository };
         const bounded = await runBoundedClone(row, limits, async (signal) => {
-          const outcome = await deps.git.cloneTemporary({ url: row.cloneUrl!, sha, destination, signal });
+          const outcome = await deps.git.cloneTemporary({ url: row.cloneUrl!, sha, destination, signal, identity });
           if (outcome === 'moved') throw new Error('REVISION_MOVED');
         });
         if (bounded === 'size') {
           return fail(row, 'SIZE_LIMIT', sizeLimitMessage(limits.workspaceMaxBytes), ['preparing']);
         }
-        const provider = new URL(row.cloneUrl).hostname.toLowerCase().endsWith('github.com') ? 'github' : 'ado';
-        const repository = row.cloneUrl.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') || row.displayName;
-        return markReady(row, ['preparing'], sha, { provider, project, repository }, started);
+        return markReady(row, ['preparing'], sha, identity, started);
       } catch (err) {
         const moved = (err as Error).message === 'REVISION_MOVED';
         const failed = await fail(
@@ -427,9 +442,31 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
           if (row.kind === 'project-repository' && row.refId) {
             const resolved = await deps.projects.resolve(project, row.refId);
             if (!resolved.ok) throw new Error('unreachable');
-            await deps.git.cloneFromCache({ cacheDir: resolved.cacheDir, destination, sha: row.commitSha, signal: AbortSignal.timeout(180_000) });
+            await deps.git.cloneFromCache({
+              cacheDir: resolved.cacheDir,
+              destination,
+              sha: row.commitSha,
+              signal: AbortSignal.timeout(180_000),
+              identity: {
+                provider: resolved.provider,
+                project: resolved.groundingProject,
+                repository: resolved.repository,
+              },
+            });
           } else if (row.cloneUrl) {
-            const outcome = await deps.git.cloneTemporary({ url: row.cloneUrl, sha: row.commitSha, destination, signal: AbortSignal.timeout(180_000) });
+            const provider = row.groundingProvider ?? (new URL(row.cloneUrl).hostname.toLowerCase().endsWith('github.com') ? 'github' : 'ado');
+            const repository = row.groundingRepository ?? (row.cloneUrl.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') || row.displayName);
+            const outcome = await deps.git.cloneTemporary({
+              url: row.cloneUrl,
+              sha: row.commitSha,
+              destination,
+              signal: AbortSignal.timeout(180_000),
+              identity: {
+                provider,
+                project: row.groundingProject || project,
+                repository,
+              },
+            });
             if (outcome === 'moved') throw new Error('unreachable');
           } else {
             throw new Error('unreachable');

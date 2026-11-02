@@ -35,6 +35,7 @@ import { BrainstormCitationsRow } from './BrainstormCitationsRow';
 import { BrainstormMessageFailure } from './BrainstormMessageFailure';
 import { BrainstormReadOnlyBanner } from './BrainstormReadOnlyBanner';
 import { BrainstormSuggestionChips } from './BrainstormSuggestionChips';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import styles from './BrainstormChatPanel.module.css';
 
 interface BrainstormChatPanelProps {
@@ -272,8 +273,16 @@ function BrainstormActivityLog({
 }: {
   items: BrainstormActivityItem[];
 }) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [items]);
+
   return (
-    <div className={styles.activityScroller}>
+    <div ref={scrollerRef} className={styles.activityScroller}>
       {items.map((item) => {
         if (item.kind === 'thinking') {
           if (!item.text) return null;
@@ -720,7 +729,8 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
                   {!isUser && message.activity && message.activity.length > 0 ? (
                     <BrainstormCollapsibleTrace items={message.activity} />
                   ) : null}
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+                  {/* data-testid-exempt — MarkdownWithMermaid renders message body inside BrainstormChatPanel */}
+                  <MarkdownWithMermaid content={text} skipHtml />
                   {incomplete && <span className={styles.incompleteLabel}>Incomplete response</span>}
                 </div>
               ) : !isUser && message.activity && message.activity.length > 0 ? (

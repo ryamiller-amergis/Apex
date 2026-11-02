@@ -1134,6 +1134,142 @@ async function defaultLoadSkill(
   );
 }
 
+const SHA_40_RE = /^[0-9a-f]{40}$/i;
+
+async function resolveLightweightGroundingFallback(
+  input: ResolveGroundingInput,
+  repository: {
+    readonly provider: 'ado' | 'github';
+    readonly repo: string;
+    readonly branch: string;
+  },
+): Promise<FrozenGrounding> {
+  const project = input.thread.kickoff.project;
+  const bareRepo =
+    repository.provider === 'github'
+      ? repository.repo.split('/').pop() || repository.repo
+      : repository.repo;
+  const groundingProvider =
+    repository.provider === 'ado' ? ('azure_devops' as const) : ('github' as const);
+
+  const { readCachedOriginSha, readRemoteBranchTip } = await import(
+    './repoCacheService'
+  );
+
+  let sha: string | null = null;
+  const existingRows = await runGroundingService
+    .getGroundings({
+      runType: 'chat',
+      runId: input.thread.id,
+      project,
+    })
+    .catch(() => []);
+  const activeExisting = existingRows.find(
+    (row) =>
+      row.repoRole === 'target' &&
+      row.isActive &&
+      SHA_40_RE.test(row.groundedSha.trim()),
+  );
+  if (activeExisting) {
+    sha = activeExisting.groundedSha.trim().toLowerCase();
+  }
+
+  if (!sha) {
+    for (const candidateRepo of new Set([bareRepo, repository.repo])) {
+      const activeBranchRows = await runGroundingService
+        .findActiveByRepoBranch({
+          provider: groundingProvider,
+          project,
+          repository: candidateRepo,
+          branch: repository.branch,
+        })
+        .catch(() => []);
+      const latestActive = activeBranchRows
+        .filter(
+          (row) =>
+            row.repoRole === 'target' && SHA_40_RE.test(row.groundedSha.trim()),
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.groundedAt) - Date.parse(left.groundedAt),
+        )[0];
+      if (latestActive) {
+        sha = latestActive.groundedSha.trim().toLowerCase();
+        break;
+      }
+    }
+  }
+
+  if (!sha) {
+    for (const candidateRepo of new Set([bareRepo, repository.repo])) {
+      const cached = await readCachedOriginSha({
+        provider: groundingProvider,
+        project,
+        repository: candidateRepo,
+        branch: repository.branch,
+      }).catch(() => null);
+      if (cached && SHA_40_RE.test(cached.trim())) {
+        sha = cached.trim().toLowerCase();
+        break;
+      }
+    }
+  }
+
+  if (!sha) {
+    const remoteTip = await readRemoteBranchTip({
+      provider: repository.provider,
+      project,
+      repo: repository.repo,
+      branch: repository.branch,
+    }).catch(() => null);
+    if (remoteTip && SHA_40_RE.test(remoteTip.trim())) {
+      sha = remoteTip.trim().toLowerCase();
+    }
+  }
+
+  if (!sha) return null;
+
+  await runGroundingService
+    .activateGroundings({
+      run: { runType: 'chat', runId: input.thread.id, project },
+      target: {
+        provider: groundingProvider,
+        repository: bareRepo,
+        branch: repository.branch,
+        groundedSha: sha,
+      },
+    })
+    .catch(() => undefined);
+
+  const runRef = `chat:${input.thread.id}`;
+  const profile = groundingProfileResolver.registerConnectionProfile(
+    {
+      runRef,
+      provider: repository.provider,
+      project,
+      repo: bareRepo,
+      sha,
+      checkoutPath: input.thread.workspaceDir,
+      caller: 'durable-interactive',
+      shareAcrossInstances: true,
+    },
+    {
+      userId: input.userId,
+      runRef,
+      project,
+    },
+    async () => true,
+  );
+  await groundingProfileResolver.whenShared(profile.id);
+  return {
+    provider: repository.provider,
+    project,
+    repository: repository.repo,
+    sha,
+    profileId: profile.id,
+  };
+}
+
 async function defaultResolveGrounding(
   input: ResolveGroundingInput,
 ): Promise<FrozenGrounding> {
@@ -1160,24 +1296,40 @@ async function defaultResolveGrounding(
       sandboxCwd: input.thread.workspaceDir,
       shareAcrossInstances: true,
     });
-  let selection = await start();
-  if (selection.mode === 'preparing') {
-    if (!selection.waitUntilReady) return null;
-    await waitForPreparation(
-      selection.waitUntilReady(),
-      resolveGroundingPreparationTimeoutMs(),
+  try {
+    let selection = await start();
+    if (selection.mode === 'preparing') {
+      if (!selection.waitUntilReady) {
+        return resolveLightweightGroundingFallback(input, repository);
+      }
+      await waitForPreparation(
+        selection.waitUntilReady(),
+        resolveGroundingPreparationTimeoutMs(),
+      );
+      selection = await start();
+    }
+    if (selection.mode !== 'local') {
+      return resolveLightweightGroundingFallback(input, repository);
+    }
+    await groundingProfileResolver.whenShared(selection.profileId);
+    return {
+      provider: repository.provider,
+      project: input.thread.kickoff.project,
+      repository: repository.repo,
+      sha: selection.resolvedSha,
+      profileId: selection.profileId,
+    };
+  } catch (error) {
+    if (error instanceof GroundingStillPreparingError) {
+      throw error;
+    }
+    const fallback = await resolveLightweightGroundingFallback(
+      input,
+      repository,
     );
-    selection = await start();
+    if (fallback) return fallback;
+    throw error;
   }
-  if (selection.mode !== 'local') return null;
-  await groundingProfileResolver.whenShared(selection.profileId);
-  return {
-    provider: repository.provider,
-    project: input.thread.kickoff.project,
-    repository: repository.repo,
-    sha: selection.resolvedSha,
-    profileId: selection.profileId,
-  };
 }
 
 export async function resolveDurableMaxviewCapability(
@@ -1461,11 +1613,12 @@ export function createDurableInteractiveTurnService(
       // for Technical. Keeping these turns ungrounded also keeps the worker's
       // workspace, and so its warm agent, the same across the product phase.
       const requiresRepositoryPreparation =
-        skillNeedsRepository && !groundInBackground;
-      // An MCP connection chat answers from that server alone. Brainstorm has no
-      // repository until Source-Backed Exploration attaches one.
+        skillNeedsRepository &&
+        !groundInBackground &&
+        input.workflowClass !== 'brainstorm';
+      // An MCP connection chat answers from that server alone.
       const skipRepositoryGrounding =
-        thread.kickoff.assistantType === 'mcp-server' || input.workflowClass === 'brainstorm';
+        thread.kickoff.assistantType === 'mcp-server';
 
       const immutableAttachments = [];
       for (
@@ -1543,9 +1696,13 @@ export function createDurableInteractiveTurnService(
         // Once a thread is pinned, an expired short wait would send an
         // ungrounded turn and move the worker to another workspace.
         const pinned = await deps.hasPinnedGrounding(thread).catch(() => false);
+        const waitMs =
+          input.workflowClass === 'brainstorm'
+            ? resolveGroundingPreparationTimeoutMs()
+            : deps.optionalGroundingWaitMs;
         grounding = pinned
           ? await resolution.catch(() => null)
-          : await resolveWithin(resolution, deps.optionalGroundingWaitMs);
+          : await resolveWithin(resolution, waitMs);
       }
       const groundingDoneAt = deps.now().getTime();
       const repositoryContext =
