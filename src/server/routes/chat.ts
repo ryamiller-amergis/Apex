@@ -17,7 +17,7 @@ import {
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
 import { agentRuns, prds } from '../db/schema';
-import { toggleFlag } from '../services/chatThreadRepository';
+import { isBackgroundWorkflowThread, toggleFlag } from '../services/chatThreadRepository';
 import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
 import type {
@@ -754,6 +754,12 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   const thread = (req as ThreadRequest).thread!;
+  if (await isBackgroundWorkflowThread(thread.id)) {
+    return res.status(409).json({
+      error: 'This thread belongs to a background document job and does not accept chat messages. Start a new chat.',
+      code: 'BACKGROUND_WORKFLOW_THREAD',
+    });
+  }
   const requesterUserId = getUserId(req);
   const buildIntake = isBuildIntakeThread(thread);
   if (buildIntake) {
