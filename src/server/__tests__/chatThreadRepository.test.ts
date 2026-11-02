@@ -478,6 +478,9 @@ describe('listThreadsByUser', () => {
     expect(where).toContain('design_docs.chat_thread_id');
     expect(where).toContain('design_docs.validation_thread_id');
     expect(where).toContain('test_cases.chat_thread_id');
+    expect(where).toContain('adrs.generation_thread_id');
+    expect(where).toContain("bt.kickoff->>'transcript'");
+    expect(query.params).toContain('# ADR Interview Transcript');
   });
 });
 

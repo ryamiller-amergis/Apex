@@ -65,6 +65,8 @@ const BACKGROUND_WORKFLOW_KICKOFF_MARKERS = [
   '# Design Doc Generation — Single Feature',
 ] as const;
 
+const ADR_GENERATION_TRANSCRIPT_HEADING = '# ADR Interview Transcript';
+
 /**
  * Threads owned by a background document job. A user turn on one becomes the
  * thread's newest run, which hides the job's finished run from the V2 harvester
@@ -80,9 +82,14 @@ function backgroundWorkflowThreadCondition(threadId: SQL): SQL {
   return sql`(
     EXISTS (
       SELECT 1 FROM chat_threads bt
-      WHERE bt.id = ${threadId} AND (${kickoffMarkers})
+      WHERE bt.id = ${threadId}
+        AND (
+          ${kickoffMarkers}
+          OR starts_with(coalesce(bt.kickoff->>'transcript', ''), ${ADR_GENERATION_TRANSCRIPT_HEADING})
+        )
     )
     OR EXISTS (SELECT 1 FROM prds WHERE prds.validation_thread_id = ${threadId})
+    OR EXISTS (SELECT 1 FROM adrs WHERE adrs.generation_thread_id = ${threadId})
     OR EXISTS (
       SELECT 1 FROM design_docs
       WHERE design_docs.chat_thread_id = ${threadId}
