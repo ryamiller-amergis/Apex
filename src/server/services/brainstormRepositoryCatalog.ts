@@ -17,9 +17,71 @@ import {
   type DnsLookup,
 } from './brainstorm/cloneUrlValidator';
 import { credentialsForCloneUrl, redactCloneFailure } from './brainstorm/cloneCredentials';
-import { publishSourceBundleIfConfigured, resolveTemporarySha } from './brainstorm/gitSourceClone';
+import {
+  hasPublishedSourceBundle,
+  publishSourceBundleIfConfigured,
+  resolveTemporarySha,
+} from './brainstorm/gitSourceClone';
+import {
+  RepoServiceReader,
+  resolveRepoReadServiceUrl,
+} from './repoRead/repoServiceReader';
 import { git } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
+
+const STALE_CLONING_MS = 2 * 60 * 1000;
+const activeCloneIds = new Set<string>();
+
+export function parseCloneUrlGroundingIdentity(
+  cloneUrl: string,
+  fallbackProject: string,
+  fallbackRepository: string,
+): { provider: 'github' | 'ado'; project: string; repository: string } {
+  try {
+    const url = new URL(cloneUrl);
+    const host = url.hostname.toLowerCase();
+    const segments = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .map((part) => decodeURIComponent(part));
+    if (host === 'github.com' || host === 'www.github.com') {
+      const repoSeg = (segments[1] ?? segments[0] ?? fallbackRepository).replace(/\.git$/i, '');
+      const ownerSeg = segments.length >= 2 ? segments[0] : null;
+      return {
+        provider: 'github',
+        project: fallbackProject,
+        repository: ownerSeg ? `${ownerSeg}/${repoSeg}` : repoSeg,
+      };
+    }
+    const gitIdx = segments.findIndex((seg) => seg.toLowerCase() === '_git');
+    if (gitIdx >= 1 && segments[gitIdx + 1]) {
+      return {
+        provider: 'ado',
+        project: segments[gitIdx - 1] || fallbackProject,
+        repository: segments[gitIdx + 1].replace(/\.git$/i, '') || fallbackRepository,
+      };
+    }
+    const lastSeg = segments[segments.length - 1]?.replace(/\.git$/i, '') || fallbackRepository;
+    return {
+      provider: 'ado',
+      project: fallbackProject,
+      repository: lastSeg,
+    };
+  } catch {
+    return {
+      provider: 'ado',
+      project: fallbackProject,
+      repository: fallbackRepository,
+    };
+  }
+}
+
+function isStaleCloningRow(row: typeof brainstormRepositories.$inferSelect): boolean {
+  if (row.status !== 'cloning') return false;
+  if (!activeCloneIds.has(row.id)) return true;
+  const updatedMs = Date.parse(row.updatedAt);
+  return Number.isFinite(updatedMs) && Date.now() - updatedMs > STALE_CLONING_MS;
+}
 
 export class BrainstormCatalogError extends Error {
   constructor(
@@ -87,6 +149,11 @@ export async function listBrainstormRepositories(project: string): Promise<Brain
     .from(brainstormRepositories)
     .where(eq(brainstormRepositories.project, project))
     .orderBy(asc(brainstormRepositories.displayName));
+  for (const row of rows) {
+    if (isStaleCloningRow(row)) {
+      void beginClone(project, row.id, { forceReclaim: true }).catch(() => {});
+    }
+  }
   return rows.map(toDto);
 }
 
@@ -153,36 +220,126 @@ export async function addBrainstormRepository(input: {
   }
 }
 
-async function beginClone(project: string, id: string): Promise<BrainstormCatalogRepositoryDto | null> {
+async function beginClone(
+  project: string,
+  id: string,
+  options?: { forceReclaim?: boolean },
+): Promise<BrainstormCatalogRepositoryDto | null> {
+  const existingRow = await db
+    .select()
+    .from(brainstormRepositories)
+    .where(and(eq(brainstormRepositories.id, id), eq(brainstormRepositories.project, project)))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (!existingRow) return null;
+  const reclaimable = options?.forceReclaim || isStaleCloningRow(existingRow);
   const [claimed] = await db
     .update(brainstormRepositories)
     .set({ status: 'cloning', error: null, updatedAt: new Date().toISOString() })
-    .where(and(
-      eq(brainstormRepositories.id, id),
-      eq(brainstormRepositories.project, project),
-      ne(brainstormRepositories.status, 'cloning'),
-    ))
+    .where(
+      reclaimable
+        ? and(
+            eq(brainstormRepositories.id, id),
+            eq(brainstormRepositories.project, project),
+          )
+        : and(
+            eq(brainstormRepositories.id, id),
+            eq(brainstormRepositories.project, project),
+            ne(brainstormRepositories.status, 'cloning'),
+          ),
+    )
     .returning();
-  if (!claimed) return findBrainstormRepository(project, id);
+  if (!claimed) return toDto(existingRow);
   void runClone(claimed);
   return toDto(claimed);
 }
 
 async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Promise<void> {
+  activeCloneIds.add(claimed.id);
   const destination = sharedBrainstormRepositoryMirrorDir(claimed.id);
   const legacyDestination = legacyBrainstormRepositoryMirrorDir(claimed.id);
   const url = new URL(claimed.cloneUrl);
-  const host = url.hostname.toLowerCase();
-  const provider = host === 'github.com' || host === 'www.github.com' ? ('github' as const) : ('ado' as const);
   const creds = credentialsForCloneUrl(url);
+  const parsed = parseCloneUrlGroundingIdentity(
+    claimed.cloneUrl,
+    claimed.project,
+    claimed.displayName,
+  );
+  const serviceUrl = resolveRepoReadServiceUrl();
   const useCloudBundle = Boolean(process.env.GROUNDING_BLOB_ACCOUNT_NAME?.trim()) && !process.env.JEST_WORKER_ID;
-  const scratch = useCloudBundle ? await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-catalog-')) : null;
-  const cloneTarget = scratch ? path.join(scratch, 'repo') : destination;
+  let scratch: string | null = null;
   try {
     await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
     if (legacyDestination !== destination) {
       await fs.rm(legacyDestination, { recursive: true, force: true }).catch(() => {});
     }
+
+    // Fast path for V2 interactive / repo-read service: resolve the branch tip SHA
+    // via `git ls-remote` (0 disk bytes on App Service) and let repo-read / worker
+    // grounding serve the repository without cloning gigabytes onto App Service.
+    if ((serviceUrl || useCloudBundle) && !process.env.JEST_WORKER_ID) {
+      const resolved = await resolveTemporarySha({
+        url: claimed.cloneUrl,
+        revision: claimed.branch,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if ('sha' in resolved) {
+        const sha = resolved.sha.toLowerCase();
+        const bundleReady = useCloudBundle
+          ? await hasPublishedSourceBundle({
+              provider: parsed.provider,
+              project: parsed.project,
+              repository: parsed.repository,
+              sha,
+            })
+          : false;
+        if (serviceUrl || bundleReady) {
+          if (serviceUrl) {
+            const bareRepo =
+              parsed.provider === 'github'
+                ? parsed.repository.split('/').pop() || parsed.repository
+                : parsed.repository;
+            void new RepoServiceReader({
+              identity: {
+                provider: parsed.provider,
+                project: parsed.project,
+                repo: bareRepo,
+                sha,
+              },
+              baseUrl: serviceUrl,
+            })
+              .listDir('')
+              .catch(() => {});
+          }
+          const nowIso = new Date().toISOString();
+          await db
+            .update(brainstormRepositories)
+            .set({ status: 'ready', commitSha: sha, error: null, updatedAt: nowIso })
+            .where(eq(brainstormRepositories.id, claimed.id));
+          await db
+            .update(brainstormSources)
+            .set({
+              requestedRevision: sha,
+              resolvedSha: sha,
+              workspaceState: 'cleaned',
+              reasonCode: null,
+              reasonText: null,
+              updatedAt: nowIso,
+            })
+            .where(and(
+              eq(brainstormSources.project, claimed.project),
+              eq(brainstormSources.kind, 'project-repository'),
+              eq(brainstormSources.refId, claimed.id),
+              ne(brainstormSources.workspaceState, 'removed'),
+            ))
+            .catch(() => {});
+          return;
+        }
+      }
+    }
+
+    scratch = useCloudBundle ? await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-catalog-')) : null;
+    const cloneTarget = scratch ? path.join(scratch, 'repo') : destination;
     await fs.mkdir(path.dirname(cloneTarget), { recursive: true });
     await git([
       'clone', '--depth', '1', '--single-branch', '--branch', claimed.branch, '--', claimed.cloneUrl, cloneTarget,
@@ -191,9 +348,9 @@ async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Pr
     if (useCloudBundle) {
       await publishSourceBundleIfConfigured({
         repoDir: cloneTarget,
-        provider,
-        project: claimed.project,
-        repository: claimed.displayName,
+        provider: parsed.provider,
+        project: parsed.project,
+        repository: parsed.repository,
         sha,
       });
     }
@@ -230,6 +387,7 @@ async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Pr
       .set({ status: 'failed', error: message, updatedAt: new Date().toISOString() })
       .where(eq(brainstormRepositories.id, claimed.id));
   } finally {
+    activeCloneIds.delete(claimed.id);
     if (scratch) {
       await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
@@ -243,9 +401,14 @@ export async function cloneBrainstormRepository(project: string, id: string): Pr
 
 /** Deletes a catalog repository and removes its local mirror directory. */
 export async function deleteBrainstormRepository(project: string, id: string): Promise<boolean> {
-  const existing = await findBrainstormRepository(project, id);
-  if (!existing) return false;
-  if (existing.status === 'cloning') {
+  const existingRow = await db
+    .select()
+    .from(brainstormRepositories)
+    .where(and(eq(brainstormRepositories.id, id), eq(brainstormRepositories.project, project)))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+  if (!existingRow) return false;
+  if (existingRow.status === 'cloning' && !isStaleCloningRow(existingRow)) {
     throw new BrainstormCatalogError(
       'REPOSITORY_CLONING',
       409,
@@ -257,7 +420,6 @@ export async function deleteBrainstormRepository(project: string, id: string): P
     .where(and(
       eq(brainstormRepositories.id, id),
       eq(brainstormRepositories.project, project),
-      ne(brainstormRepositories.status, 'cloning'),
     ))
     .returning({ id: brainstormRepositories.id });
   if (deleted.length === 0) return false;

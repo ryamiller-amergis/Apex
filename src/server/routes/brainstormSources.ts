@@ -45,6 +45,7 @@ import {
   catalogReadiness,
   findBrainstormRepository,
   listBrainstormRepositories,
+  parseCloneUrlGroundingIdentity,
 } from '../services/brainstormRepositoryCatalog';
 
 const attachBody = z.union([
@@ -88,15 +89,19 @@ async function resolveProjectSource(project: string, skillSettingsId: string) {
         error: readiness.text,
       };
     }
-    const host = new URL(catalog.cloneUrl).hostname.toLowerCase();
+    const parsed = parseCloneUrlGroundingIdentity(
+      catalog.cloneUrl,
+      project,
+      catalog.displayName,
+    );
     return {
       ok: true as const,
       displayName: catalog.displayName,
       sha: catalog.commitSha,
       cacheDir: brainstormRepositoryMirrorDir(catalog.id),
-      provider: host === 'github.com' || host === 'www.github.com' ? 'github' as const : 'ado' as const,
-      repository: catalog.displayName,
-      groundingProject: project,
+      provider: parsed.provider,
+      repository: parsed.repository,
+      groundingProject: parsed.project,
     };
   }
   const configs = await listSkillConfigs();

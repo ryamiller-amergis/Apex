@@ -118,7 +118,18 @@ export async function cloneTemporaryAtSha(input: {
     await writeReadyMarkerOnly(input.destination, input.sha);
     return 'ok';
   }
-  const creds = credentialsForCloneUrl(new URL(input.url));
+  const parsedUrl = new URL(input.url);
+  const host = parsedUrl.hostname.toLowerCase();
+  const creds = credentialsForCloneUrl(parsedUrl);
+  const repoReadConfigured = Boolean(process.env.REPO_READ_SERVICE_URL?.trim()) && !process.env.JEST_WORKER_ID;
+  if (
+    input.identity &&
+    repoReadConfigured &&
+    (host === 'github.com' || host === 'www.github.com' || creds.secret !== null)
+  ) {
+    await writeReadyMarkerOnly(input.destination, input.sha);
+    return 'ok';
+  }
   if (input.identity && isCloudBundleStorageConfigured()) {
     const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-temp-clone-'));
     const repoDir = path.join(scratch, 'repo');
