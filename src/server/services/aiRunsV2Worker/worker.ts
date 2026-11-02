@@ -47,6 +47,9 @@ export const LOOP_PROGRESS_BUDGET_MS = 5 * 60_000;
 /** Time past a job's deadline for the abort, artifact upload, and terminal publish. */
 export const JOB_PROGRESS_GRACE_MS = 15 * 60_000;
 
+export const WORKER_SHUTDOWN_DETAIL =
+  'worker shut down before the run finished';
+
 export type ExecutionOutcome = Readonly<{
   files: ReadonlyArray<ArtifactFile>;
   detail?: string;
@@ -77,6 +80,12 @@ export type WorkerDeps = Readonly<{
   signal?: AbortSignal;
   /** Aborts the run in flight; lets shutdown stop receiving while the current run finishes. */
   executionSignal?: AbortSignal;
+  /**
+   * Report a run aborted by process shutdown as `worker_lost`, so the
+   * orchestrator dispatches a fresh attempt instead of failing the run. Off,
+   * a shutdown abort reports `progress_timeout` like the run's own deadline.
+   */
+  reportShutdownAsWorkerLost?: boolean;
   /** Called whenever the loop makes progress, with the time by which it must progress again. */
   onProgress?: (nextWithinMs: number) => void;
 }>;
@@ -102,6 +111,16 @@ function failureCategoryFor(error: unknown): AiRunV2FailureCategory {
     return 'progress_timeout';
   }
   return 'internal_error';
+}
+
+/** A platform DOMException is not always an `Error` instance, so match by name. */
+function isShutdownAbort(error: unknown, shutdownReason: unknown): boolean {
+  if (shutdownReason !== undefined && error === shutdownReason) return true;
+  return (
+    typeof error === 'object'
+    && error !== null
+    && (error as { name?: unknown }).name === 'AbortError'
+  );
 }
 
 function executionAbortError(signal: AbortSignal): Error {
@@ -204,7 +223,10 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
       );
     };
     const shutdownSignal = deps.executionSignal ?? deps.signal;
+    let abortedForShutdown = false;
     const abortForShutdown = (): void => {
+      if (deadline.signal.aborted) return;
+      abortedForShutdown = true;
       deadline.abort(shutdownSignal?.reason);
     };
     if (shutdownSignal?.aborted) {
@@ -287,11 +309,19 @@ export function createV2Worker(deps: WorkerDeps): V2Worker {
     } catch (error) {
       const usage =
         error instanceof CursorExecutionWaitError ? error.usage : undefined;
+      const lostToShutdown =
+        deps.reportShutdownAsWorkerLost === true
+        && abortedForShutdown
+        && isShutdownAbort(error, shutdownSignal?.reason);
       await results.publishTerminal({
         status: 'failed',
         artifactStatus: 'failed',
-        failureCategory: failureCategoryFor(error),
-        detail: error instanceof Error ? error.message : String(error),
+        failureCategory: lostToShutdown
+          ? 'worker_lost'
+          : failureCategoryFor(error),
+        detail: lostToShutdown
+          ? WORKER_SHUTDOWN_DETAIL
+          : error instanceof Error ? error.message : String(error),
         ...(usage ?? {}),
       });
       return 'failed';

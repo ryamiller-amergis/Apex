@@ -105,6 +105,9 @@ export const AI_RUN_V2_FAILURE_CATEGORIES = [
 export type AiRunV2FailureCategory =
   (typeof AI_RUN_V2_FAILURE_CATEGORIES)[number];
 
+/** Attempts per run, counting the first, before a lost worker stops being retried. */
+export const AI_RUN_V2_MAX_ATTEMPTS = 3;
+
 export const AI_RUN_V2_COMMAND_KINDS = ['dispatch_command'] as const;
 export type AiRunV2CommandKind = (typeof AI_RUN_V2_COMMAND_KINDS)[number];
 
