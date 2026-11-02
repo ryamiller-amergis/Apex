@@ -318,9 +318,11 @@ export async function isFeatureOperational(key: string): Promise<boolean> {
 
 /**
  * True only when the flag is on for every user and caller in the project: an
- * `everyone` or matching `project` rule, no `caller` rule, and any
- * `environment` rule matching this host. User or group rules alone do not
- * count, because other users in the project still take the flag-off path.
+ * `everyone` or matching `project` rule, and no `caller` or `environment`
+ * rule. User or group rules alone do not count, because other users in the
+ * project still take the flag-off path. Environment rules are excluded
+ * because hosts resolve their environment differently (repo-read sets neither
+ * APP_ENV nor WEBSITE_SITE_NAME), and every host must give the same answer.
  */
 export async function isFlagEnabledForWholeProject(
   key: string,
@@ -331,12 +333,7 @@ export async function isFlagEnabledForWholeProject(
     with: { rules: true },
   });
   if (!flag?.enabled || flag.lifecycle === 'archived') return false;
-  if (flag.rules.some((rule) => rule.type === 'caller')) return false;
-  const environmentRules = flag.rules.filter((rule) => rule.type === 'environment');
-  if (
-    environmentRules.length > 0
-    && !environmentRules.some((rule) => rule.value === getAppEnvironment())
-  ) {
+  if (flag.rules.some((rule) => rule.type === 'caller' || rule.type === 'environment')) {
     return false;
   }
   return flag.rules.some(

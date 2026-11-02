@@ -488,6 +488,9 @@ export function createCallerGroundingService(
       // minutes, and grepping the resulting tree runs slower than the read
       // timeout, while the same grep against the mirror finishes inside it.
       const mirrorServesReads = nativeReadEnabled && mirrorUsable(mirrorPath);
+      // Commit-only runs read through repo-read, so readiness must not clone
+      // or pin from this host's mirror for them either.
+      const commitOnly = await isCommitOnlyCaller(input, nativeReadEnabled);
 
       let checkoutReadinessEnabled = false;
       try {
@@ -505,7 +508,7 @@ export function createCallerGroundingService(
       telemetry.phase(telemetryContext(input), 'readiness-flag-resolved');
 
       // @feature-flag:project-repository-checkout-readiness start winner=enabled
-      if (checkoutReadinessEnabled && !mirrorServesReads) {
+      if (checkoutReadinessEnabled && !mirrorServesReads && !commitOnly) {
         // @feature-flag:project-repository-checkout-readiness enabled-start
         const existing = activeTarget(
           await dependencies.groundingService.getGroundings(input.run)
@@ -606,7 +609,6 @@ export function createCallerGroundingService(
       let fetchedCache:
         | { baseSha: string; mirrorHit?: boolean; cacheDir?: string }
         | undefined;
-      const commitOnly = await isCommitOnlyCaller(input, nativeReadEnabled);
 
       // Stage 6: native-read callers skip working trees once a bare mirror exists.
       // Cold start fetches the mirror first so the first visit can skip too.

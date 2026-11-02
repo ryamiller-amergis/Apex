@@ -775,6 +775,22 @@ describe('commit-only grounding for whole-V2 projects', () => {
     );
   });
 
+  it('skips the checkout-readiness pin when the readiness flag is on', async () => {
+    const pinProjectRepositoryRoot = jest.fn();
+    const deps = commitOnlyDeps({
+      isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: () => false,
+      pinProjectRepositoryRoot,
+    });
+
+    const selected = await start(deps);
+
+    expect(selected).toMatchObject({ mode: 'local', resolvedSha: tip, mirrorPath: undefined });
+    expect(pinProjectRepositoryRoot).not.toHaveBeenCalled();
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
+  });
+
   it('keeps an existing pin without asking the remote', async () => {
     const deps = commitOnlyDeps();
     jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([grounding]);

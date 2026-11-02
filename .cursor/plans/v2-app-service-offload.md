@@ -64,6 +64,7 @@ Follow-ups (not safe for tonight; need design + dev soak):
 - Flags checked read-only in both DBs (Kudu node query, 2026-11-02): Apex + MaxView have project rules for `ai-runs-v2-transport`, `native-read`, `repo-read-service`; `project-repository-checkout-readiness` is disabled in both envs. So prod takes commit-only.
 - Fallback event: `grounding.v2_app_service_fallback` (reason `v2-flag-check-failed` | `native-read-off` | `repo-read-unavailable` | `no-sandbox` | `repo-read-url-missing` | `repo-read-off` | `repo-read-flag-check-failed`) whenever a whole-V2 project lands on App Service's mirror. Interactive legacy on flag error is already `interactive.route.decision` reason `flag-evaluation-error`.
 - Ask Apex passes a per-session `sandboxCwd` (never created, `os.tmpdir()/ask-apex-sessions/<id>`), so it now takes commit-only too.
+- Bugbot fixes: commit-only is resolved before the checkout-readiness block and skips it (flag is off today, but would have pulled V2 runs back onto App Service). `isFlagEnabledForWholeProject` now returns false when the flag has any `environment` rule, because repo-read resolves `local` (no APP_ENV/WEBSITE_SITE_NAME) and prod App Service also resolves `local` (`app-apex-prd` has no "prod"), so hosts could disagree.
 - Known failing before this work: `repoCacheGitIntegration` › compactRepoCache times out at 5 s locally (same on base).
 - Dev watchers live in the agent store `dev-watch/` (`watch-appinsights.sh` → `appinsights.log`, `watch-containerlogs.sh` → `ca-*.log`).
 

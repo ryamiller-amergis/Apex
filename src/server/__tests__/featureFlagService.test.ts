@@ -1109,6 +1109,7 @@ describe('isFlagEnabledForWholeProject', () => {
     ['another project only', [rule('project', 'proj-b')], false],
     ['user rules only', [rule('user', 'user-1')], false],
     ['a caller rule on top of the project', [rule('project', 'proj-a'), rule('caller', 'prd')], false],
+    ['an environment rule on top of the project', [rule('project', 'proj-a'), rule('environment', 'local')], false],
     ['no rules', [], false],
   ])('returns the right answer for %s', async (_label, rules, expected) => {
     mockDb.query.featureFlags.findFirst.mockResolvedValue({ ...baseFlag, rules });
