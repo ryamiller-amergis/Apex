@@ -5,7 +5,6 @@ import type {
   BrainstormHandoffExecutingDto,
   BrainstormHandoffPreviewDto,
   BrainstormHandoffResultDto,
-  BrainstormHandoffSummaryDto,
 } from '../../shared/types/brainstormArtifact';
 import { apiFetch, retryUnlessClientError } from './useBrainstormSessions';
 import { brainstormArtifactKeys, sessionApiPath } from './useBrainstormArtifact';
@@ -40,31 +39,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Confirms once; while another request is creating the record, waits for it to finish. */
+/** Confirms; while the record is still being created, retries confirm until it finishes or a stale claim can be taken over. */
 export function useConfirmHandoff(project: string, sessionId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: async (preview: Pick<BrainstormHandoffPreviewDto, 'handoffId' | 'idempotencyKey'>) => {
       const path = sessionApiPath(project, sessionId, `/handoffs/${encodeURIComponent(preview.handoffId)}/confirm`);
-      let outcome = await apiFetch<BrainstormHandoffResultDto | BrainstormHandoffExecutingDto>(path, {
-        method: 'POST',
-        headers: { 'Idempotency-Key': preview.idempotencyKey },
-        body: JSON.stringify({ confirm: true }),
-      });
+      const confirm = () =>
+        apiFetch<BrainstormHandoffResultDto | BrainstormHandoffExecutingDto>(path, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': preview.idempotencyKey },
+          body: JSON.stringify({ confirm: true }),
+        });
+      let outcome = await confirm();
       for (let poll = 0; outcome.state === 'executing' && poll < EXECUTING_MAX_POLLS; poll += 1) {
         await sleep(EXECUTING_POLL_MS);
-        const summary = await apiFetch<BrainstormHandoffSummaryDto>(
-          sessionApiPath(project, sessionId, `/handoffs/${encodeURIComponent(preview.handoffId)}`),
-        );
-        if (summary.state === 'completed' && summary.resultRef) {
-          outcome = { handoffId: summary.handoffId, state: 'completed', resultRef: summary.resultRef, replayed: true };
-        } else if (summary.state !== 'executing') {
-          outcome = await apiFetch<BrainstormHandoffResultDto | BrainstormHandoffExecutingDto>(path, {
-            method: 'POST',
-            headers: { 'Idempotency-Key': preview.idempotencyKey },
-            body: JSON.stringify({ confirm: true }),
-          });
-        }
+        outcome = await confirm();
       }
       if (outcome.state !== 'completed') throw new Error('The handoff is still being created. Check again shortly.');
       return outcome;

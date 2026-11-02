@@ -43,7 +43,7 @@ interface BrainstormChatPanelProps {
   onSuggestion?: (actionId: BrainstormActionId) => void;
 }
 
-/** Latest failed collaborator reply that a retry has not replaced; the only row Retry may target. */
+/** Latest failed or stopped collaborator reply that a retry has not replaced; the only row Retry may target. */
 export function retryableBrainstormMessage(messages: BrainstormMessageDto[]): BrainstormMessageDto | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
