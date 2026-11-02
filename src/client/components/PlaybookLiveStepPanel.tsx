@@ -30,6 +30,8 @@ interface PlaybookLiveStepPanelProps {
   suspension?: PlaybookSuspensionDetail | null;
   /** The agent report this approval is about, when an earlier step saved one. */
   report?: string | null;
+  /** Pending while the graph is still loading. Unavailable when the graph failed to load. */
+  reportStatus?: 'pending' | 'ready' | 'unavailable';
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onClose: () => void;
@@ -42,6 +44,7 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   step,
   suspension,
   report = null,
+  reportStatus = 'ready',
   expanded,
   onExpandedChange,
   onClose,
@@ -154,7 +157,11 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
               </p>
               {report ? <pre className={styles.decisionReport}>{report}</pre> : (
                 <p className={styles.decisionMissing}>
-                  The agent step did not save a report, so there is nothing here to read. Open the agent step and check its log.
+                  {reportStatus === 'pending'
+                    ? 'Loading the finding…'
+                    : reportStatus === 'unavailable'
+                      ? 'The playbook graph did not load, so the finding cannot be shown yet.'
+                      : 'The agent step did not save a report, so there is nothing here to read. Open the agent step and check its log.'}
                 </p>
               )}
               <div className={styles.decisionActions}>

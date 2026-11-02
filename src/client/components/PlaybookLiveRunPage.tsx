@@ -173,7 +173,10 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             runId={runId}
             step={panelStep}
             suspension={run.data.suspension}
-            report={approvalReportForStep(run.data.steps, graph.edges, panelStep.stepId)}
+            report={graphQuery.isSuccess
+              ? approvalReportForStep(run.data.steps, graph.edges, panelStep.stepId)
+              : null}
+            reportStatus={graphQuery.isPending ? 'pending' : graphQuery.isSuccess ? 'ready' : 'unavailable'}
             expanded={panelExpanded}
             onExpandedChange={setPanelExpanded}
             onClose={() => {
