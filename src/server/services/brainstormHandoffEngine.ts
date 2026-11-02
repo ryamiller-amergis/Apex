@@ -752,7 +752,9 @@ export const defaultTargetServices: TargetServices = {
     return thread.id;
   },
   async findRecordByThread(module, threadId) {
-    if (module === 'feature-request') return null;
+    if (module === 'feature-request') {
+      return (await (await import('./featureRequestService')).getFeatureRequest(threadId))?.id ?? null;
+    }
     if (module === 'adr') return (await import('./adrService')).findAdrIdByThread(threadId);
     return (await import('./interviewService')).findInterviewIdByThread(threadId);
   },
@@ -767,6 +769,7 @@ export const defaultTargetServices: TargetServices = {
   async createFeatureRequestFromPlan(input) {
     const { createFeatureRequest } = await import('./featureRequestService');
     const created = await createFeatureRequest(input.userId, input.project, {
+      id: input.id,
       type: 'technical',
       title: input.title,
       request: input.request,

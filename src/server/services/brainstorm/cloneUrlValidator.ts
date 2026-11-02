@@ -118,9 +118,16 @@ export async function assertCloneHostIsPublic(
   try {
     addresses = await lookup(url.hostname);
   } catch {
-    return { ok: true };
+    addresses = [];
   }
-  if (addresses.length === 0) return { ok: true };
+  if (addresses.length === 0) {
+    return {
+      ok: false,
+      code: 'INVALID_CLONE_URL',
+      field: 'cloneUrl',
+      error: 'That host could not be resolved.',
+    };
+  }
   if (addresses.some((address) => isBlockedCloneAddress(address))) {
     return {
       ok: false,
