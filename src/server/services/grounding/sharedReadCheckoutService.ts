@@ -25,6 +25,7 @@ import type { SkillProvider } from '../../../shared/types/projectSettings';
 import type { RunGrounding } from '../../../shared/types/runGrounding';
 import { resolveDataRoot } from '../../utils/dataDir';
 import { git, safeArgs } from '../../utils/asyncGit';
+import { removeTree } from '../../utils/removeTree';
 import {
   USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
   ensureRepoCache,
@@ -279,7 +280,7 @@ export function createSharedReadCheckoutService(
         // Legacy/partial squatter with no marker (pre-atomic code or crash):
         // safe to replace under the lease we hold, since a marker-less tree is
         // never handed to a reader.
-        await fsp.rm(destination, { recursive: true, force: true });
+        await removeTree(destination);
         await fsp.rename(stagingDir, destination);
         return 'materialized';
       }
@@ -354,7 +355,7 @@ export function createSharedReadCheckoutService(
           } finally {
             // If we didn't promote (peer won, or error) drop the staged tree.
             // After a successful rename this is a no-op (ENOENT swallowed by force).
-            await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+            await removeTree(stagingDir).catch(() => {});
           }
         },
         { waitMs: leaseWaitMs },
@@ -434,7 +435,7 @@ export function createSharedReadCheckoutService(
         // Guard deletion with the same lease so we never race a materialize.
         await withLease(`grounding-shared:${digest}`, async () => {
           if ((refCounts.get(digest) ?? 0) > 0) return;
-          await fsp.rm(workspace, { recursive: true, force: true });
+          await removeTree(workspace);
           await fsp.rm(lastUsedPath(workspace), { force: true });
           result.evicted += 1;
         });
