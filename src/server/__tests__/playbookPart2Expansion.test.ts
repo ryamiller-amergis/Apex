@@ -27,6 +27,14 @@ const notify = (id: string) => ({
 });
 
 describe('playbook part 2', () => {
+  it('accepts a foreach list from an earlier step', () => {
+    const parsed = getStepTypeDescriptor('foreach').inputSchema.safeParse({
+      items: '${steps.scan.findings}',
+      maxIterations: 5,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it('rejects an apex-action parameter object that fails its schema', () => {
     const parsed = getStepTypeDescriptor('apex-action').inputSchema.safeParse({
       operation: 'create-ado-items',

@@ -127,9 +127,9 @@ export const PlaybookTriggersPanel: React.FC<PlaybookTriggersPanelProps> = ({
       refresh();
     },
   });
-  const pause = useMutation({
-    mutationFn: (triggerId: string) => apiRequest(
-      `/api/playbooks/triggers/${encodeURIComponent(triggerId)}/pause?project=${encodeURIComponent(project)}`,
+  const setEnabled = useMutation({
+    mutationFn: (change: { triggerId: string; enabled: boolean }) => apiRequest(
+      `/api/playbooks/triggers/${encodeURIComponent(change.triggerId)}/${change.enabled ? 'resume' : 'pause'}?project=${encodeURIComponent(project)}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project }) },
     ),
     onSuccess: refresh,
@@ -161,14 +161,14 @@ export const PlaybookTriggersPanel: React.FC<PlaybookTriggersPanelProps> = ({
               <span className={`${styles.pill} ${trigger.enabled ? styles.pillOn : ''}`}>
                 {trigger.enabled ? 'On' : 'Paused'}
               </span>
-              {canManage && trigger.enabled ? (
+              {canManage ? (
                 <button
                   type="button"
                   className={styles.rowAction}
-                  onClick={() => pause.mutate(trigger.id)}
-                  {...{ 'data-testid': `playbook-trigger-pause-${trigger.id}` }}
+                  onClick={() => setEnabled.mutate({ triggerId: trigger.id, enabled: !trigger.enabled })}
+                  {...{ 'data-testid': trigger.enabled ? `playbook-trigger-pause-${trigger.id}` : `playbook-trigger-resume-${trigger.id}` }}
                 >
-                  Pause
+                  {trigger.enabled ? 'Pause' : 'Resume'}
                 </button>
               ) : null}
             </li>

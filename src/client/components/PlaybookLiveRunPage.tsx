@@ -20,6 +20,7 @@ import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import { PlaybookLiveStepPanel } from './PlaybookLiveStepPanel';
 import { stepMeta } from './playbookStepCatalog';
+import { approvalReportForStep } from '../utils/playbookApprovalReport';
 import styles from './PlaybookCanvas.module.css';
 
 const EMPTY_GRAPH: PlaybookGraph = { nodes: [], edges: [] };
@@ -172,9 +173,7 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
             runId={runId}
             step={panelStep}
             suspension={run.data.suspension}
-            report={run.data.steps
-              .map((candidate) => candidate.outputInline?.reportMd)
-              .find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? null}
+            report={approvalReportForStep(run.data.steps, graph.edges, panelStep.stepId)}
             expanded={panelExpanded}
             onExpandedChange={setPanelExpanded}
             onClose={() => {

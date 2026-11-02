@@ -17,7 +17,12 @@ import {
 export async function executeForeachStep(
   context: PlaybookStepExecutionContext,
 ): Promise<PlaybookStepOutcome> {
-  const config = parseStepInput<{ items: unknown[]; maxIterations: number }>('foreach', context.config);
+  const config = parseStepInput<{ items: unknown; maxIterations: number }>('foreach', context.config);
+  if (!Array.isArray(config.items)) {
+    const reason = 'Foreach items must be a list by the time the step runs.';
+    await failStepRun({ stepRunId: context.stepRunId, reason });
+    throw new Error(reason);
+  }
   try {
     assertForeachWithinCap(config.items.length, config.maxIterations);
   } catch (error) {

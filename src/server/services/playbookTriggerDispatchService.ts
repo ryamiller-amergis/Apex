@@ -329,6 +329,13 @@ export function scheduleOccurrenceKey(instant: Date): string {
   });
 }
 
+/** A slot that already passed before the subscription existed is not due. */
+export function scheduleOccurrenceIsDue(createdAt: string, instant: Date): boolean {
+  const created = Date.parse(createdAt);
+  if (!Number.isFinite(created)) return false;
+  return instant.getTime() >= created;
+}
+
 export function latestScheduleInstant(now: Date, hour: number, minute: number): Date {
   const scheduled = new Date(Date.UTC(
     now.getUTCFullYear(),

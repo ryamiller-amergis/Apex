@@ -1,14 +1,17 @@
 /**
  * Claims due Playbook schedules and retryable receipts.
  * A missed minute stays due until the next occurrence replaces it.
+ * A slot from before the subscription was created does not.
  */
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
+import pool from '../db';
 import { db } from '../db/drizzle';
 import { playbookTriggerReceipts, playbookTriggerSubscriptions } from '../db/schema';
 import {
   dispatchPlaybookTrigger,
   latestScheduleInstant,
   pendingReceiptIsStale,
+  scheduleOccurrenceIsDue,
   storedPlaybookTriggerDispatch,
 } from './playbookTriggerDispatchService';
 import { renderPlaybookDedupeKey } from '../../shared/utils/playbookTriggerMapping';
@@ -17,10 +20,47 @@ const CHECK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
-export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
-  await db.execute(sql`SELECT pg_advisory_lock(hashtext('playbook-trigger-sweep'))`);
+/**
+ * Holds the sweep lock on one pooled connection. Drizzle queries use other connections,
+ * so the lock and the unlock have to share this client or the lock stays checked out.
+ */
+export async function withPlaybookTriggerSweepLock(body: () => Promise<void>): Promise<void> {
+  const client = await pool.connect();
+  let locked = false;
+  let unlockError: unknown;
   try {
-    const schedules = await db.select().from(playbookTriggerSubscriptions).where(
+    const result = await client.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext('playbook-trigger-sweep')) AS locked`,
+    );
+    locked = result.rows[0]?.locked === true;
+    if (!locked) return;
+    await body();
+  } finally {
+    if (locked) {
+      try {
+        await client.query(`SELECT pg_advisory_unlock(hashtext('playbook-trigger-sweep'))`);
+      } catch (error) {
+        unlockError = error;
+      }
+    }
+    const releaseError = unlockError instanceof Error
+      ? unlockError
+      : unlockError
+        ? new Error('Playbook trigger sweep unlock failed')
+        : undefined;
+    client.release(releaseError);
+  }
+  if (unlockError) {
+    throw unlockError instanceof Error ? unlockError : new Error('Playbook trigger sweep unlock failed');
+  }
+}
+
+export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
+  await withPlaybookTriggerSweepLock(() => sweepPlaybookTriggersUnlocked(now));
+}
+
+async function sweepPlaybookTriggersUnlocked(now: Date): Promise<void> {
+  const schedules = await db.select().from(playbookTriggerSubscriptions).where(
       eq(playbookTriggerSubscriptions.kind, 'schedule'),
     );
     for (const subscription of schedules) {
@@ -28,6 +68,7 @@ export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
         continue;
       }
       const instant = latestScheduleInstant(now, subscription.scheduleHour, subscription.scheduleMinute);
+      if (!scheduleOccurrenceIsDue(subscription.createdAt, instant)) continue;
       const idempotencyKey = renderPlaybookDedupeKey(subscription.dedupeKeyTemplate, {
         occurrence: instant.toISOString().slice(0, 16),
       });
@@ -60,9 +101,6 @@ export async function sweepPlaybookTriggers(now = new Date()): Promise<void> {
         event: stored.event,
       });
     }
-  } finally {
-    await db.execute(sql`SELECT pg_advisory_unlock(hashtext('playbook-trigger-sweep'))`);
-  }
 }
 
 async function sweep(): Promise<void> {

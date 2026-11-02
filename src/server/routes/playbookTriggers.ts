@@ -92,23 +92,35 @@ router.put(
   },
 );
 
+async function setTriggerEnabled(req: Request, res: Response, enabled: boolean): Promise<void> {
+  try {
+    res.json(await setPlaybookTriggerEnabled({
+      project: resolveRequestProject(req)!,
+      triggerId: req.params.triggerId,
+      enabled,
+    }));
+  } catch (error) {
+    if (error instanceof PlaybookTriggerValidationError) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+}
+
 router.post(
   '/:triggerId/pause',
   requirePermission('playbooks:triggers:manage'),
   async (req: Request, res: Response): Promise<void> => {
-    try {
-      res.json(await setPlaybookTriggerEnabled({
-        project: resolveRequestProject(req)!,
-        triggerId: req.params.triggerId,
-        enabled: false,
-      }));
-    } catch (error) {
-      if (error instanceof PlaybookTriggerValidationError) {
-        res.status(404).json({ error: error.message });
-        return;
-      }
-      throw error;
-    }
+    await setTriggerEnabled(req, res, false);
+  },
+);
+
+router.post(
+  '/:triggerId/resume',
+  requirePermission('playbooks:triggers:manage'),
+  async (req: Request, res: Response): Promise<void> => {
+    await setTriggerEnabled(req, res, true);
   },
 );
 

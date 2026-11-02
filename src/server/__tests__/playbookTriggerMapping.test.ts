@@ -1,5 +1,5 @@
 import { applyPlaybookTriggerMapping, renderPlaybookDedupeKey } from '../../shared/utils/playbookTriggerMapping';
-import { latestScheduleInstant } from '../services/playbookTriggerDispatchService';
+import { latestScheduleInstant, scheduleOccurrenceIsDue } from '../services/playbookTriggerDispatchService';
 
 jest.mock('../db/drizzle', () => ({ db: {} }));
 jest.mock('../db', () => ({ __esModule: true, default: { end: jest.fn(), on: jest.fn() } }));
@@ -50,5 +50,12 @@ describe('playbook trigger mapping', () => {
   it('keeps a missed schedule due after the minute has passed', () => {
     const now = new Date(Date.UTC(2026, 9, 26, 4, 30, 0));
     expect(latestScheduleInstant(now, 2, 0).toISOString()).toBe('2026-10-26T02:00:00.000Z');
+  });
+
+  it('does not treat a slot from before the subscription existed as due', () => {
+    const now = new Date(Date.UTC(2026, 9, 26, 4, 30, 0));
+    const instant = latestScheduleInstant(now, 2, 0);
+    expect(scheduleOccurrenceIsDue('2026-10-26T03:00:00.000Z', instant)).toBe(false);
+    expect(scheduleOccurrenceIsDue('2026-10-26T01:00:00.000Z', instant)).toBe(true);
   });
 });

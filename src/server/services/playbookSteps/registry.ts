@@ -287,7 +287,8 @@ const LOOP_INPUT_SCHEMA = z.object({
 });
 
 const FOREACH_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({
-  items: z.array(z.unknown()),
+  // A binding is resolved when the step runs, so the list can come from an earlier step.
+  items: z.union([z.array(z.unknown()), BINDING_STRING]),
 });
 
 const UNTIL_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({

@@ -170,7 +170,7 @@ export async function updatePlaybookTrigger(input: {
     eq(playbookTriggerSubscriptions.project, input.project),
   )).returning();
   if (!row) throw new PlaybookTriggerValidationError('Trigger not found.');
-  return row;
+  return presentTrigger(row, false);
 }
 
 export async function setPlaybookTriggerEnabled(input: {
@@ -186,7 +186,7 @@ export async function setPlaybookTriggerEnabled(input: {
     eq(playbookTriggerSubscriptions.project, input.project),
   )).returning();
   if (!row) throw new PlaybookTriggerValidationError('Trigger not found.');
-  return row;
+  return presentTrigger(row, false);
 }
 
 export async function deletePlaybookTrigger(project: string, triggerId: string): Promise<void> {
