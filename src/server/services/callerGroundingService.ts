@@ -14,6 +14,7 @@ import type {
 } from './runGroundingService';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import {
+  isFlagEnabledForWholeProject,
   isGroundingEnabledForCaller as evaluateGroundingFlag,
   isNativeReadEnabledForCaller as evaluateNativeReadFlag,
   isProjectRepositoryCheckoutReadinessEnabled as evaluateCheckoutReadinessFlag,
@@ -40,6 +41,7 @@ import {
   ensureRepoCache as ensureRepositoryCache,
   getRepoCacheDir,
   readCachedOriginSha as readCachedOriginShaFromRepoCache,
+  readRemoteBranchTip as readRemoteBranchTipFromOrigin,
 } from './repoCacheService';
 import { isUsableBareMirror } from './repoRead/mirrorStore';
 import {
@@ -229,7 +231,12 @@ export interface CallerGroundingDependencies {
   getRepoCacheDir?: typeof getRepoCacheDir;
   isUsableBareMirror?: (mirrorPath: string | undefined) => boolean;
   publishGroundingBundle?: BackgroundBundlePublisher['publish'];
+  /** Whole project on ai-runs-v2-transport: its runs execute off this host. */
+  isV2TransportProject?: (project: string) => Promise<boolean>;
+  readRemoteBranchTip?: typeof readRemoteBranchTipFromOrigin;
 }
+
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 
 function runRefKey(run: RunRef): string {
   return `${run.runType}:${run.runId}`;
@@ -345,6 +352,57 @@ export function createCallerGroundingService(
     const context = telemetryContext(input);
     telemetry.fallback(context, reason);
     return remote();
+  };
+
+  // A V2 run only needs the pinned commit: the worker fetches it through
+  // repo-read. When this host's mirror cannot produce a pin, take the branch
+  // tip from the remote so a broken local mirror does not block the run.
+  const pinRemoteTipForV2Project = async (
+    input: StartCallerGroundingInput
+  ): Promise<void> => {
+    const { isV2TransportProject } = dependencies;
+    if (!isV2TransportProject) return;
+    const isV2 = await isV2TransportProject(input.run.project).catch(() => false);
+    if (!isV2) return;
+    const readRemoteBranchTip =
+      dependencies.readRemoteBranchTip ?? readRemoteBranchTipFromOrigin;
+    const properties = {
+      caller: input.caller,
+      project: input.run.project,
+      runId: input.run.runId,
+      runType: input.run.runType,
+    };
+    let outcome: 'pinned' | 'already-pinned' | 'no-tip' | 'activation-failed' | 'error';
+    try {
+      if (activeTarget(await dependencies.groundingService.getGroundings(input.run))) {
+        outcome = 'already-pinned';
+      } else {
+        const repo = repositoryName(input.repository);
+        const tip = await readRemoteBranchTip({
+          provider: input.repository.provider,
+          project: input.run.project,
+          repo,
+          branch: input.repository.branch,
+        });
+        if (!tip) {
+          outcome = 'no-tip';
+        } else {
+          const activation = await dependencies.groundingService.activateGroundings({
+            run: input.run,
+            target: {
+              provider: groundingProvider(input.repository.provider),
+              repository: repo,
+              branch: input.repository.branch,
+              groundedSha: tip,
+            },
+          });
+          outcome = activatedTarget(activation) ? 'pinned' : 'activation-failed';
+        }
+      }
+    } catch {
+      outcome = 'error';
+    }
+    dependencies.trackEvent('grounding.v2_remote_tip_pin', { ...properties, outcome });
   };
 
   const startLocal = async (
@@ -1028,6 +1086,7 @@ export function createCallerGroundingService(
           telemetryContext(input),
           'grounded-caller-attempt-failed'
         );
+        await pinRemoteTipForV2Project(input);
       }
       // @feature-flag:repo-grounding-workspace-profile enabled-end
       // @feature-flag:repo-grounding-workspace-profile end
@@ -1117,4 +1176,7 @@ export const callerGroundingService = createCallerGroundingService({
   profiles: groundingProfileResolver,
   impactContexts: runImpactContextRegistry,
   trackEvent: emitTelemetryEvent,
+  isV2TransportProject: (project) =>
+    isFlagEnabledForWholeProject(V2_TRANSPORT_FLAG, project),
+  readRemoteBranchTip: readRemoteBranchTipFromOrigin,
 });
