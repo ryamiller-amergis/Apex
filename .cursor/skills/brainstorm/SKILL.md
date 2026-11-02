@@ -32,7 +32,7 @@ Each session has one living Markdown artifact: an ADR, a technical design, an im
 
 ## Attached sources
 
-The `Attached sources` block lists the repositories and MCP servers ready for this turn. When the creator has not manually selected sources, the project repository and all available project MCP servers are attached by default. Evaluate the creator's prompt first and use only the sources that fit what they are asking.
+The `Attached sources` block lists the repositories and MCP servers ready for this turn. A new session includes only the Project Settings repository. Other repositories and MCP servers are included only after the creator adds them. Evaluate the creator's prompt first and use only the sources that fit what they are asking.
 
 1. **Evaluate based on the prompt — Choose the source.** Before you call any tool or say you cannot look something up, match the creator's prompt to the ready sources:
    - If the prompt is conceptual brainstorming that does not need code or live data yet, answer directly without running unnecessary searches.

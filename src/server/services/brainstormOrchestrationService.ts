@@ -270,27 +270,14 @@ async function defaultCancelThreadRun(threadId: string): Promise<void> {
 const SHA_40 = /^[a-f0-9]{40}$/i;
 
 export interface DefaultBrainstormSourceResolvers {
-  listCatalogRepos: (project: string) => Promise<Array<{
-    id: string;
-    displayName: string;
-    cloneUrl: string;
-    status: string;
-    commitSha: string | null;
-    workspacePath: string;
-  }>>;
   listProjectSkillRepos: (project: string) => Promise<Array<{
     id: string;
     displayName: string;
     repository: string;
     provider: 'github' | 'ado';
     commitSha: string;
+    isDefault: boolean;
     workspacePath?: string | null;
-  }>>;
-  isMcpEnabled: (project: string, userId: string) => Promise<boolean>;
-  listProjectMcpServers: (project: string) => Promise<Array<{
-    id: string;
-    name: string;
-    operations: Array<{ id: string; summary?: string }>;
   }>>;
 }
 
@@ -301,61 +288,16 @@ export async function resolveDefaultBrainstormSources(input: {
   resolvers: DefaultBrainstormSourceResolvers;
 }): Promise<{ ready: SourceRecord[]; unavailable: SourceRecord[]; mcpTools: GatewayTool[] }> {
   const { session, settled, explicitMcpTools, resolvers } = input;
-  const hasExplicitRepo = settled.ready.some((row) => row.kind !== 'mcp-server')
-    || settled.unavailable.some((row) => row.kind !== 'mcp-server');
-  const hasExplicitMcp = settled.ready.some((row) => row.kind === 'mcp-server')
-    || settled.unavailable.some((row) => row.kind === 'mcp-server');
+  const attachedRefIds = new Set(
+    [...settled.ready, ...settled.unavailable].map((row) => row.refId).filter((id): id is string => Boolean(id)),
+  );
 
   const defaultRepoRows: SourceRecord[] = [];
-  if (!hasExplicitRepo) {
-    const [catalogRepos, skillRepos] = await Promise.all([
-      resolvers.listCatalogRepos(session.project).catch(() => []),
-      resolvers.listProjectSkillRepos(session.project).catch(() => []),
-    ]);
-    const seenNames = new Set<string>();
-    for (const repo of catalogRepos) {
-      if (repo.status !== 'ready' || !repo.commitSha || !SHA_40.test(repo.commitSha)) continue;
-      let provider: 'github' | 'ado' = 'ado';
-      try {
-        const host = new URL(repo.cloneUrl).hostname.toLowerCase();
-        if (host === 'github.com' || host === 'www.github.com' || host.endsWith('.github.com')) {
-          provider = 'github';
-        }
-      } catch {
-        provider = 'ado';
-      }
-      const sha = repo.commitSha.toLowerCase();
-      defaultRepoRows.push({
-        id: repo.id,
-        sessionId: session.id,
-        project: session.project,
-        kind: 'project-repository',
-        displayName: repo.displayName,
-        cloneUrl: null,
-        requestedRevision: sha,
-        commitSha: sha,
-        state: 'ready',
-        refId: repo.id,
-        reasonCode: null,
-        reasonText: null,
-        sizeBytes: null,
-        mcpReadOnlyToolCount: null,
-        groundingProvider: provider,
-        groundingProject: session.project,
-        groundingRepository: repo.displayName,
-        updatedAt: session.updatedAt,
-        workspaceRemovedAt: null,
-        workspacePath: repo.workspacePath,
-      });
-      seenNames.add(repo.displayName.trim().toLowerCase());
-    }
-    for (const repo of skillRepos) {
-      if (!repo.commitSha || !SHA_40.test(repo.commitSha)) continue;
-      const displayKey = repo.displayName.trim().toLowerCase();
-      const repoKey = repo.repository.trim().toLowerCase();
-      if (seenNames.has(displayKey) || seenNames.has(repoKey)) continue;
-      const sha = repo.commitSha.toLowerCase();
-      defaultRepoRows.push({
+  const skillRepos = await resolvers.listProjectSkillRepos(session.project).catch(() => []);
+  const repo = skillRepos.find((item) => item.isDefault && !attachedRefIds.has(item.id));
+  if (repo && SHA_40.test(repo.commitSha)) {
+    const sha = repo.commitSha.toLowerCase();
+    defaultRepoRows.push({
         id: repo.id,
         sessionId: session.id,
         project: session.project,
@@ -376,37 +318,13 @@ export async function resolveDefaultBrainstormSources(input: {
         updatedAt: session.updatedAt,
         workspaceRemovedAt: null,
         ...(repo.workspacePath ? { workspacePath: repo.workspacePath } : {}),
-      });
-      seenNames.add(displayKey);
-      seenNames.add(repoKey);
-    }
-  }
-
-  const defaultMcpTools: GatewayTool[] = [];
-  if (!hasExplicitMcp) {
-    const mcpOn = await resolvers.isMcpEnabled(session.project, session.creatorId).catch(() => false);
-    if (mcpOn) {
-      const servers = await resolvers.listProjectMcpServers(session.project).catch(() => []);
-      for (const server of servers) {
-        const prefix = toolPrefixFor(server.name, server.id);
-        for (const operation of server.operations) {
-          defaultMcpTools.push({
-            toolName: `${prefix}__${operation.id}`,
-            toolId: operation.id,
-            connectionId: server.id,
-            displayName: server.name,
-            toolPrefix: prefix,
-            ...(operation.summary?.trim() ? { summary: operation.summary.trim().slice(0, 160) } : {}),
-          });
-        }
-      }
-    }
+    });
   }
 
   return {
     ready: [...settled.ready, ...defaultRepoRows],
     unavailable: settled.unavailable,
-    mcpTools: [...explicitMcpTools, ...defaultMcpTools],
+    mcpTools: explicitMcpTools,
   };
 }
 
@@ -438,18 +356,6 @@ async function defaultPrepareTurnContext(
     settled,
     explicitMcpTools,
     resolvers: {
-      listCatalogRepos: async (project) => {
-        const { brainstormRepositoryMirrorDir, listBrainstormRepositories } = await import('./brainstormRepositoryCatalog');
-        const rows = await listBrainstormRepositories(project);
-        return rows.map((row) => ({
-          id: row.id,
-          displayName: row.displayName,
-          cloneUrl: row.cloneUrl,
-          status: row.status,
-          commitSha: row.commitSha,
-          workspacePath: brainstormRepositoryMirrorDir(row.id),
-        }));
-      },
       listProjectSkillRepos: async (project) => {
         const [{ listSkillConfigs }, { getProjectRepositoryReadiness }, { readCachedOriginSha }, { sharedReadCheckoutService }] = await Promise.all([
           import('./projectSettingsService'),
@@ -466,6 +372,7 @@ async function defaultPrepareTurnContext(
           repository: string;
           provider: 'github' | 'ado';
           commitSha: string;
+          isDefault: boolean;
           workspacePath?: string | null;
         }> = [];
         for (const config of configs) {
@@ -498,27 +405,11 @@ async function defaultPrepareTurnContext(
             repository: repoName,
             provider,
             commitSha: sha,
+            isDefault: config.isDefault === true,
             workspacePath: sharedReady?.workspacePath ?? null,
           });
         }
         return resolved;
-      },
-      isMcpEnabled: async (project, userId) => {
-        const { isFeatureEnabled } = await import('./featureFlagService');
-        return isFeatureEnabled('mcp-servers', { project, userId, caller: 'brainstorm' }).catch(() => false);
-      },
-      listProjectMcpServers: async (project) => {
-        const { listMcpServers } = await import('./mcpServerConnectionService');
-        const servers = await listMcpServers(project).catch(() => []);
-        return Promise.all(
-          servers.map(async (server) => ({
-            id: server.id,
-            name: server.name,
-            operations: readOnlyOperations(
-              await listMountedMcpTools(server.id).catch(() => server.operations ?? []),
-            ),
-          })),
-        );
       },
     },
   });

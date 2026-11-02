@@ -123,6 +123,12 @@
   color: var(--text-primary);
   padding: 4px 10px;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.end:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
 }
 
 .failed {

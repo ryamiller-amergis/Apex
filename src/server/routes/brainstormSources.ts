@@ -183,6 +183,7 @@ async function loadSourceOptions(
         ? 'Ready to attach'
         : 'A project administrator must clone this repository before it can be attached.',
       alreadyAttached: attached.some((row) => row.refId === config.id && row.state !== 'removed'),
+      isDefault: config.isDefault === true,
     };
   }));
   const mcpEnabled = await isFeatureEnabled('mcp-servers', { project, userId, caller: 'brainstorm' }).catch(() => false);

@@ -27,37 +27,19 @@ export const BrainstormSourcesPanel: React.FC<BrainstormSourcesPanelProps> = ({ 
     () => (sources.data ?? []).filter((row) => row.state !== 'removed'),
     [sources.data],
   );
-  const hasExplicitRepo = rows.some((row) => row.kind !== 'mcp-server');
-  const hasExplicitMcp = rows.some((row) => row.kind === 'mcp-server');
-
   const defaultRepos = useMemo(() => {
-    if (hasExplicitRepo || !options.data) return [];
-    const seen = new Set<string>();
-    const items: Array<{ id: string; displayName: string; kindLabel: string }> = [];
-    for (const cat of options.data.catalog ?? []) {
-      if (!cat.ready) continue;
-      const key = cat.displayName.trim().toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      items.push({ id: cat.skillSettingsId, displayName: cat.displayName, kindLabel: 'Project catalog repository' });
-    }
-    for (const repo of options.data.repositories ?? []) {
-      if (!repo.ready) continue;
-      const key = repo.displayName.trim().toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      items.push({ id: repo.skillSettingsId, displayName: repo.displayName, kindLabel: 'Project skill repository' });
-    }
-    return items;
-  }, [hasExplicitRepo, options.data]);
-
-  const defaultMcps = useMemo(() => {
-    if (hasExplicitMcp || !options.data || options.data.mcpEnabled === false) return [];
-    return (options.data.mcpServers ?? []).filter((server) => server.readOnlyToolCount > 0);
-  }, [hasExplicitMcp, options.data]);
+    if (!options.data) return [];
+    return (options.data.repositories ?? [])
+      .filter((repo) => repo.isDefault && repo.ready && !repo.alreadyAttached)
+      .map((repo) => ({
+        id: repo.skillSettingsId,
+        displayName: repo.displayName,
+        kindLabel: 'Project repository',
+      }));
+  }, [options.data]);
 
   const ended = session.state === 'ended';
-  const hasDefaults = defaultRepos.length > 0 || defaultMcps.length > 0;
+  const hasDefaults = defaultRepos.length > 0;
 
   return (
     <section className={styles.panel} aria-label="Sources" {...{ 'data-testid': 'brainstorm-sources-panel' }}>
@@ -77,7 +59,7 @@ export const BrainstormSourcesPanel: React.FC<BrainstormSourcesPanelProps> = ({ 
       {sources.isError && <p className={styles.error} role="alert">Sources could not be loaded.</p>}
       {rows.length === 0 && !hasDefaults && !sources.isLoading && !sources.isError && (
         <p className={styles.empty}>
-          No sources yet. By default, the collaborator uses the project repository and available MCP servers when relevant to your prompt, or you can add specific sources here.
+          No extra sources yet. The project repository is included when it is ready. Add a repository or MCP server when you want the collaborator to use it.
         </p>
       )}
       {rows.length > 0 && (
@@ -95,7 +77,7 @@ export const BrainstormSourcesPanel: React.FC<BrainstormSourcesPanelProps> = ({ 
       )}
       {!ended && hasDefaults && (
         <div className={styles.defaultSection}>
-          <p className={styles.defaultHeader}>Default project sources (active unless overridden)</p>
+          <p className={styles.defaultHeader}>Project repository</p>
           <ul className={styles.list} {...{ 'data-testid': 'brainstorm-default-sources-list' }}>
             {defaultRepos.map((repo) => (
               <li
@@ -106,19 +88,6 @@ export const BrainstormSourcesPanel: React.FC<BrainstormSourcesPanelProps> = ({ 
                 <div>
                   <p className={styles.name}>{repo.displayName}</p>
                   <p className={styles.status}>{repo.kindLabel} · Ready</p>
-                </div>
-                <span className={styles.defaultBadge}>Default</span>
-              </li>
-            ))}
-            {defaultMcps.map((server) => (
-              <li
-                key={`mcp-${server.connectionId}`}
-                className={styles.row}
-                {...{ 'data-testid': `brainstorm-default-source-mcp-${server.connectionId}` }}
-              >
-                <div>
-                  <p className={styles.name}>{server.displayName}</p>
-                  <p className={styles.status}>Read-only tools: {server.readOnlyToolCount}</p>
                 </div>
                 <span className={styles.defaultBadge}>Default</span>
               </li>

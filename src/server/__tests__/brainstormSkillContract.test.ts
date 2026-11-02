@@ -30,7 +30,7 @@ describe('Brainstorm skill contract (VT-17)', () => {
     expect(skill).toMatch(/Combine sources/);
     expect(skill).toMatch(/call the one that fits/);
     expect(skill).toMatch(/When no artifact type is selected/);
-    expect(skill).toMatch(/project repository and all available project MCP servers are attached by default/);
+    expect(skill).toMatch(/A new session includes only the Project Settings repository/);
   });
 
   it('tailors replies to role, expertise, tone, project and goal', () => {

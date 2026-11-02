@@ -111,7 +111,7 @@ describe('Brainstorm sources UI — PBI-005 / PBI-008 / PBI-010', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it('lists default-attached project repositories and MCP servers when no explicit sources are attached', async () => {
+  it('lists only the default project repository until the creator adds a source', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     global.fetch = jest.fn(async (url: string) => {
       if (url.includes('/sources/options')) {
@@ -125,6 +125,7 @@ describe('Brainstorm sources UI — PBI-005 / PBI-008 / PBI-010', () => {
                 ready: true,
                 readinessText: 'Ready to attach',
                 alreadyAttached: false,
+                isDefault: true,
               },
             ],
             catalog: [
@@ -162,8 +163,8 @@ describe('Brainstorm sources UI — PBI-005 / PBI-008 / PBI-010', () => {
     );
 
     expect(await screen.findByTestId('brainstorm-default-sources-list')).toBeInTheDocument();
-    expect(screen.getByTestId('brainstorm-default-source-repo-cat-1')).toHaveTextContent('MatterWorx');
     expect(screen.getByTestId('brainstorm-default-source-repo-skill-1')).toHaveTextContent('Apex Repo');
-    expect(screen.getByTestId('brainstorm-default-source-mcp-mcp-1')).toHaveTextContent('Clerk Directory');
+    expect(screen.queryByTestId('brainstorm-default-source-repo-cat-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('brainstorm-default-source-mcp-mcp-1')).not.toBeInTheDocument();
   });
 });

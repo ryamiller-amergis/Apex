@@ -76,10 +76,19 @@
   transition: all 0.2s ease;
 }
 
+.sideTab:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
 .sideTab[aria-selected='true'] {
   border-color: var(--accent-color);
   background: var(--bg-secondary);
   font-weight: 600;
+}
+
+.sideTab[aria-selected='true']:hover {
+  background: var(--bg-tertiary);
 }
 
 .sideControls {

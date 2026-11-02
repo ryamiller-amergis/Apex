@@ -31,6 +31,21 @@
   color: var(--text-primary);
   padding: 6px 12px;
   cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.button:hover:not(:disabled),
+.tab:hover,
+.confirm:hover:not(:disabled) {
+  border-color: var(--accent-color);
+}
+
+.button:focus-visible,
+.tab:focus-visible,
+.confirm:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: var(--glow-accent);
 }
 
 .button:disabled,
@@ -39,10 +54,30 @@
   color: var(--text-muted);
 }
 
+.tab[aria-selected='true'],
+.button[aria-pressed='true'] {
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+  font-weight: 600;
+  box-shadow: var(--glow-accent);
+}
+
 .primary {
-  background: var(--accent-primary);
-  color: var(--text-on-accent, #fff);
+  background: var(--accent-color);
+  color: var(--on-accent);
   border-color: transparent;
+  font-weight: 600;
+  box-shadow: var(--glow-accent);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  color: var(--on-accent);
 }
 
 .list {
@@ -160,13 +195,23 @@
   padding: 8px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
   color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.field input:focus,
+.field select:focus,
+.field input:-webkit-autofill {
+  background: var(--bg-secondary);
+  border-color: var(--accent-color);
+  outline: none;
+  box-shadow: var(--glow-accent);
 }
 
 .error {
   margin: 0;
-  color: var(--danger-color, #b42318);
+  color: var(--error-color);
 }
 
 .actions {

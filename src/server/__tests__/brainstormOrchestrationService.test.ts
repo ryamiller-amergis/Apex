@@ -432,27 +432,15 @@ describe('creator context', () => {
     expect(context).toContain('Infer from the creator prompt');
   });
 
-  it('resolves the default project repository and all available MCP servers when nothing is selected in sources', async () => {
+  it('uses only the default project repository until the creator adds a source', async () => {
     const repoSha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
-    const catalogId = '11111111-1111-4111-8111-111111111111';
     const skillId = '22222222-2222-4222-8222-222222222222';
-    const mcpId = '33333333-3333-4333-8333-333333333333';
 
     const resolved = await resolveDefaultBrainstormSources({
       session,
       settled: { ready: [], unavailable: [] },
       explicitMcpTools: [],
       resolvers: {
-        listCatalogRepos: async () => [
-          {
-            id: catalogId,
-            displayName: 'MaxView',
-            cloneUrl: 'https://dev.azure.com/org/MaxView/_git/MaxView',
-            status: 'ready',
-            commitSha: repoSha,
-            workspacePath: '/data/brainstorm-repo-mirrors/maxview',
-          },
-        ],
         listProjectSkillRepos: async () => [
           {
             id: skillId,
@@ -460,43 +448,29 @@ describe('creator context', () => {
             repository: 'AI-Pilot',
             provider: 'github',
             commitSha: repoSha,
+            isDefault: true,
             workspacePath: '/data/shared-checkout/apex',
           },
-        ],
-        isMcpEnabled: async () => true,
-        listProjectMcpServers: async () => [
           {
-            id: mcpId,
-            name: 'Clerk',
-            operations: [{ id: 'list_users', summary: 'List Clerk users' }],
+            id: '44444444-4444-4444-8444-444444444444',
+            displayName: 'Other',
+            repository: 'other',
+            provider: 'ado',
+            commitSha: repoSha,
+            isDefault: false,
           },
         ],
       },
     });
 
-    expect(resolved.ready).toHaveLength(2);
+    expect(resolved.ready).toHaveLength(1);
     expect(resolved.ready[0]).toMatchObject({
-      id: catalogId,
-      displayName: 'MaxView',
-      commitSha: repoSha,
-      workspacePath: '/data/brainstorm-repo-mirrors/maxview',
-    });
-    expect(resolved.ready[1]).toMatchObject({
       id: skillId,
       displayName: 'Apex',
       commitSha: repoSha,
       workspacePath: '/data/shared-checkout/apex',
     });
-    expect(resolved.mcpTools).toEqual([
-      {
-        toolName: 'clerk-3333__list_users',
-        toolId: 'list_users',
-        connectionId: mcpId,
-        displayName: 'Clerk',
-        toolPrefix: 'clerk-3333',
-        summary: 'List Clerk users',
-      },
-    ]);
+    expect(resolved.mcpTools).toEqual([]);
   });
 });
 

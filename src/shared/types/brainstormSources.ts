@@ -98,6 +98,8 @@ export interface ProjectRepositoryOption {
   ready: boolean;
   readinessText: string;
   alreadyAttached: boolean;
+  /** The Project Settings row marked default. Only that repository is used before the creator adds a source. */
+  isDefault?: boolean;
 }
 
 export const BRAINSTORM_CATALOG_STATUSES = ['not_cloned', 'cloning', 'ready', 'failed'] as const;
