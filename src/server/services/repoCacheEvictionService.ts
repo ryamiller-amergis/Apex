@@ -23,6 +23,7 @@ import {
 } from './repoCacheService';
 import { runGroundingRepository } from './runGroundingRepository';
 import { trackEvent } from './telemetry';
+import { removeTree } from '../utils/removeTree';
 
 /**
  * Bare mirrors are only eviction candidates once they have gone unused for
@@ -334,7 +335,7 @@ export function createRepoCacheEvictionService(
           // The clone's own timeout has passed, so no live git process owns it.
           const stats = await fsp.stat(dir).catch(() => null);
           if (stats && now() - stats.mtimeMs > COLD_CACHE_TIMEOUT_MS) {
-            await fsp.rm(dir, { recursive: true, force: true });
+            await removeTree(dir);
             result.abandonedClonesRemoved += 1;
             console.warn(`[repo-cache] removed abandoned clone ${entry.name}`);
             continue;
@@ -412,7 +413,7 @@ async function removeMirror(
       leaseKey,
       async () => {
         if (!(await isIdle(candidate.dir))) return false;
-        await fsp.rm(candidate.dir, { recursive: true, force: true });
+        await removeTree(candidate.dir);
         return true;
       },
       { waitMs: 0 },
