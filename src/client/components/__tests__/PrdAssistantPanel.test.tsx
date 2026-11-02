@@ -137,14 +137,23 @@ describe('Thread creation', () => {
     expect(screen.getByPlaceholderText(/Ask about this PRD/i)).toBeInTheDocument();
   });
 
-  it('opens an empty thread on the welcome and fills the composer from a suggestion', () => {
-    renderPanel({ open: true, existingThreadId: 'thread-123' });
+  it('opens a newly created thread on the welcome and fills the composer from a suggestion', async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ threadId: 'thread-new-1', created: true }),
+    } as unknown as Response);
+    renderPanel({ open: true, existingThreadId: null });
 
-    expect(screen.getByTestId('prd-assistant-welcome')).toBeInTheDocument();
+    expect(await screen.findByTestId('prd-assistant-welcome')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Summarize the open review comments' }));
 
     expect(screen.getByPlaceholderText(/Ask about this PRD/i)).toHaveValue('Summarize the open review comments');
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show the welcome for an existing thread while its history loads', () => {
+    renderPanel({ open: true, existingThreadId: 'thread-123' });
+    expect(screen.queryByTestId('prd-assistant-welcome')).not.toBeInTheDocument();
   });
 
   it('PBI-007 AC-1 keeps the shared transcript and composer when thread creation fails', async () => {

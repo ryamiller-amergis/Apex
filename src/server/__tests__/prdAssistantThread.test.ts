@@ -218,7 +218,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
       .post('/api/interviews/prds/prd-1/assistant-thread');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ threadId: 'thread-new' });
+    expect(res.body).toEqual({ threadId: 'thread-new', created: true });
     expect(mockCreateThread).toHaveBeenCalledTimes(1);
   });
 

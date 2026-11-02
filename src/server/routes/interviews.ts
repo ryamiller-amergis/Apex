@@ -1086,7 +1086,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(prdsTable.id, req.params.prdId));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }
@@ -2135,7 +2135,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       .set({ docAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }

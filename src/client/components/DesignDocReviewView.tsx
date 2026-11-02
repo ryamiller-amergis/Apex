@@ -355,6 +355,9 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     if (discussContext) return null;
     return docAssistantThreadId ?? localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId));
   });
+  // Only a thread this panel just created is known to be empty; an existing
+  // thread's history arrives over SSE after the panel renders.
+  const [createdThreadId, setCreatedThreadId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -436,9 +439,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       credentials: 'include',
       body: discussContext ? JSON.stringify({ forceNew: true }) : undefined,
     })
-      .then((r) => r.json() as Promise<{ threadId: string }>)
+      .then((r) => r.json() as Promise<{ threadId: string; created?: boolean }>)
       .then((data) => {
         setThreadId(data.threadId);
+        if (data.created) setCreatedThreadId(data.threadId);
         if (!discussContext) {
           localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
         }
@@ -547,8 +551,9 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
                     credentials: 'include',
                     body: JSON.stringify({ forceNew: true }),
                   });
-                  const data = await r.json() as { threadId: string };
+                  const data = await r.json() as { threadId: string; created?: boolean };
                   setThreadId(data.threadId);
+                  if (data.created) setCreatedThreadId(data.threadId);
                   localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
                 } catch {
                   setCreateError('Failed to start new conversation. Please try again.');
@@ -622,12 +627,12 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
         progressLabel={progressLabel}
         progressPhase={progressPhase}
         toolProgress={toolProgress}
-        welcome={readOnly ? undefined : {
+        welcome={!readOnly && !discussContext && threadId && threadId === createdThreadId ? {
           title: 'Ask about this design doc',
           description: 'Apex can answer questions, check the design against the PRD, and edit the Design, Tech Spec, or Assumptions sections.',
           suggestions: DESIGN_DOC_ASSISTANT_SUGGESTIONS,
-          onSuggestion: threadId ? fillComposer : undefined,
-        }}
+          onSuggestion: fillComposer,
+        } : undefined}
         testIdPrefix="design-doc-assistant"
       />
       </AgentPanelShell>
