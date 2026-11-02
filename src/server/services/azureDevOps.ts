@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
-import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
+import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
@@ -2637,51 +2637,68 @@ export class AzureDevOpsService {
   async searchWorkItems(query: string, typeFilter?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
-
-      // Build WIQL query
-      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}'`;
-
-      if (this.areaPath) {
-        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
-      }
-
-      // Filter by work item type if specified
-      if (typeFilter && typeFilter !== 'All') {
-        wiql += ` AND [System.WorkItemType] = '${typeFilter}'`;
-      } else {
-        wiql += ` AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
-      }
-
-      // Search by ID or title/description
-      const numericQuery = parseInt(query, 10);
-      if (!isNaN(numericQuery)) {
-        wiql += ` AND [System.Id] = ${numericQuery}`;
-      } else {
-        wiql += ` AND ([System.Title] CONTAINS '${query}' OR [System.Description] CONTAINS '${query}')`;
-      }
-
-      wiql += ' ORDER BY [System.ChangedDate] DESC';
-
-      const queryResult = await witApi.queryByWiql(
-        { query: wiql },
-        { project: this.project }
-      );
-
-      if (!queryResult.workItems || queryResult.workItems.length === 0) {
-        return [];
-      }
-
-      const ids = queryResult.workItems.map((wi) => wi.id!).slice(0, 50); // Limit to 50 results
-
+      const hasTypeFilter = !!typeFilter && typeFilter !== 'All';
+      const defaultTypes = ['Epic', 'Feature', 'Product Backlog Item', 'Technical Backlog Item', 'Bug'];
       const fields = [
         'System.Id',
         'System.Title',
         'System.State',
         'System.AssignedTo',
         'System.WorkItemType',
+        'System.TeamProject',
       ];
 
-      const workItems = await witApi.getWorkItems(ids, fields);
+      let workItems: Awaited<ReturnType<typeof witApi.getWorkItems>>;
+      const trimmedQuery = query.trim().replace(/^#/, '');
+
+      if (/^\d+$/.test(trimmedQuery)) {
+        // Any area in the project is allowed; findReleaseAssignments checks release epics project-wide
+        // so linking still detects an existing assignment outside the selected area.
+        const found = await witApi.getWorkItems(
+          [parseInt(trimmedQuery, 10)],
+          fields,
+          undefined,
+          undefined,
+          WorkItemErrorPolicy.Omit
+        );
+        const project = this.project.toLowerCase();
+        workItems = (found ?? []).filter((wi) => {
+          if (!wi?.fields) return false;
+          const type = wi.fields['System.WorkItemType'];
+          const inProject = String(wi.fields['System.TeamProject'] ?? '').toLowerCase() === project;
+          const typeMatches = hasTypeFilter ? type === typeFilter : defaultTypes.includes(type);
+          return inProject && typeMatches;
+        });
+      } else {
+        const escape = (value: string) => value.replace(/'/g, "''");
+        let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${escape(this.project)}'`;
+
+        if (this.areaPath) {
+          wiql += ` AND [System.AreaPath] UNDER '${escape(this.areaPath)}'`;
+        }
+
+        if (hasTypeFilter) {
+          wiql += ` AND [System.WorkItemType] = '${escape(typeFilter!)}'`;
+        } else {
+          wiql += ` AND (${defaultTypes.map((t) => `[System.WorkItemType] = '${t}'`).join(' OR ')})`;
+        }
+
+        const escapedQuery = escape(query);
+        wiql += ` AND ([System.Title] CONTAINS '${escapedQuery}' OR [System.Description] CONTAINS '${escapedQuery}')`;
+        wiql += ' ORDER BY [System.ChangedDate] DESC';
+
+        const queryResult = await witApi.queryByWiql(
+          { query: wiql },
+          { project: this.project }
+        );
+
+        if (!queryResult.workItems || queryResult.workItems.length === 0) {
+          return [];
+        }
+
+        const ids = queryResult.workItems.map((wi) => wi.id!).slice(0, 50); // Limit to 50 results
+        workItems = await witApi.getWorkItems(ids, fields);
+      }
 
       return workItems.map((wi) => ({
         id: wi.id!,
@@ -2865,16 +2882,14 @@ export class AzureDevOpsService {
 
   /**
    * Find release Epics currently related to each requested work item.
+   * Searches the whole project, not just the selected area, because the
+   * link search can return items from any area in the project.
    */
   async findReleaseAssignments(workItemIds: number[]): Promise<Record<number, number[]>> {
     const uniqueIds = [...new Set(workItemIds)].filter((id) => Number.isInteger(id) && id > 0);
     if (uniqueIds.length === 0) return {};
 
     const escapedProject = this.project.replace(/'/g, "''");
-    const escapedAreaPath = this.areaPath?.replace(/'/g, "''");
-    const areaClause = escapedAreaPath
-      ? ` AND [Source].[System.AreaPath] = '${escapedAreaPath}'`
-      : '';
     const wiql = `
       SELECT [System.Id]
       FROM WorkItemLinks
@@ -2882,7 +2897,6 @@ export class AzureDevOpsService {
         [Source].[System.TeamProject] = '${escapedProject}'
         AND [Source].[System.WorkItemType] = 'Epic'
         AND [Source].[System.Tags] CONTAINS 'ReleaseVersion'
-        ${areaClause}
       )
       AND [System.Links.LinkType] = 'System.LinkTypes.Related'
       AND [Target].[System.Id] IN (${uniqueIds.join(', ')})

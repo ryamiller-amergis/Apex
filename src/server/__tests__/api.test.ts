@@ -120,6 +120,7 @@ describe('API Routes', () => {
     mockAdoService = {
       getProjects: jest.fn(),
       getWorkItems: jest.fn(),
+      searchWorkItems: jest.fn(),
       updateDueDate: jest.fn(),
       updateWorkItemField: jest.fn(),
       calculateCycleTimeForItems: jest.fn(),
@@ -599,6 +600,22 @@ describe('API Routes', () => {
         .expect(500);
 
       expect(response.body).toEqual({ error: 'Failed to fetch work items' });
+    });
+  });
+
+  describe('GET /api/workitems/search', () => {
+    it('reaches the search handler instead of the get-by-ID route', async () => {
+      const results = [{ id: 59642, title: 'Rate Group Integration and Aliases' }];
+      mockAdoService.searchWorkItems.mockResolvedValue(results as any);
+
+      const response = await request(app)
+        .get('/api/workitems/search')
+        .query({ query: '59642', type: 'All', project: 'MaxView', areaPath: 'MaxView' })
+        .expect(200);
+
+      expect(response.body).toEqual(results);
+      expect(AzureDevOpsService).toHaveBeenCalledWith('MaxView', 'MaxView');
+      expect(mockAdoService.searchWorkItems).toHaveBeenCalledWith('59642', 'All');
     });
   });
 
