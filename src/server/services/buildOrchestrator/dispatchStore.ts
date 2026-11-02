@@ -96,7 +96,7 @@ export interface DispatchStore {
   loadTaskContext(taskId: string): Promise<{ task: DispatchTaskRow; buildRunId: string; revisionId: string } | null>;
   loadAgentRun(agentRunId: string): Promise<BuildAgentRunRow | null>;
   latestAgentRunForTask(taskId: string): Promise<BuildAgentRunRow | null>;
-  /** Latest agent run started since the task's current claim. Runs from earlier attempts are not returned. */
+  /** Latest agent run whose launch snapshot is for the task's current attempt. */
   currentAgentRunForTask(taskId: string): Promise<BuildAgentRunRow | null>;
   /** `pending` to `ready`. */
   promote(taskIds: string[]): Promise<void>;
@@ -215,7 +215,10 @@ export function createDrizzleDispatchStore(): DispatchStore {
   const currentAgentRunForTask = async (taskId: string): Promise<BuildAgentRunRow | null> => {
     const [row] = await db.select(agentRunColumns).from(agentRuns)
       .innerJoin(buildTasks, eq(buildTasks.id, agentRuns.buildTaskId))
-      .where(and(eq(agentRuns.buildTaskId, taskId), sql`${agentRuns.startedAt} >= ${buildTasks.startedAt}`))
+      .where(and(
+        eq(agentRuns.buildTaskId, taskId),
+        sql`(${agentRuns.buildLaunchSnapshot}->>'attempt')::int = ${buildTasks.attempt}`,
+      ))
       .orderBy(desc(agentRuns.startedAt), desc(agentRuns.id))
       .limit(1);
     return row ? toAgentRunRow(row) : null;
@@ -282,9 +285,8 @@ export function createDrizzleDispatchStore(): DispatchStore {
           const branchName = `${taskBranchName(request.buildRunId, request.headKey)}-${attempt}`;
           const now = new Date().toISOString();
 
-          // Database clock, so it compares cleanly with agent_runs.started_at in currentAgentRunForTask.
           const claimed = await tx.update(buildTasks)
-            .set({ status: 'running', attempt, startedAt: sql`now()`, completedAt: null, updatedAt: now })
+            .set({ status: 'running', attempt, startedAt: now, completedAt: null, updatedAt: now })
             .where(and(inArray(buildTasks.id, request.taskIds), eq(buildTasks.status, 'ready')))
             .returning({ id: buildTasks.id });
           if (claimed.length !== request.taskIds.length) throw new ClaimLostError();

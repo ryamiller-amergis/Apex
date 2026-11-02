@@ -37,6 +37,13 @@ export const candidateBuilderUnavailable: BuildLaunchCandidateBuilder = async ()
   detail: 'Apex cannot prepare instructions for build tasks yet.',
 });
 
+/** The completion handler and the sweep find a task's agent by the snapshot's task and attempt, so both must match the claim. */
+function candidateMatchesClaim(candidate: unknown, request: BuildTaskLaunchRequest): boolean {
+  if (typeof candidate !== 'object' || candidate === null) return false;
+  const { buildTaskId, attempt } = candidate as { buildTaskId?: unknown; attempt?: unknown };
+  return buildTaskId === request.tasks[0].id && attempt === request.attempt;
+}
+
 function refusalText(refusals: BuildLaunchRefusal[]): string {
   const codes = refusals.map((refusal) => (refusal.fieldPath ? `${refusal.code} (${refusal.fieldPath})` : refusal.code));
   return `The task launch was refused: ${codes.join(', ')}.`;
@@ -53,6 +60,9 @@ export function createTaskLauncher(deps: {
     try {
       const built = await deps.buildCandidate(request);
       if (!built.ok) return { kind: 'refused', detail: built.detail };
+      if (!candidateMatchesClaim(built.candidate, request)) {
+        return { kind: 'refused', detail: 'The task instructions were prepared for a different task or attempt.' };
+      }
 
       const written = await writeSnapshot({ candidate: built.candidate, expectedProjectId: request.run.project });
       if (!written.ok) {

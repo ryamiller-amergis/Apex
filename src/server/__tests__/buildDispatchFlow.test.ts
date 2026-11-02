@@ -26,9 +26,9 @@ import {
 const RUN_ID = 'run-1';
 const REVISION_ID = 'rev-1';
 
-/** `claimSeq` stands in for started_at: agent runs with a higher seq started after the claim. */
-type MemoryTask = DispatchTaskRow & { revisionId: string; startedAt: string | null; claimSeq: number; claimedAtMs: number };
-type MemoryAgentRun = BuildAgentRunRow & { seq: number };
+type MemoryTask = DispatchTaskRow & { revisionId: string; startedAt: string | null; claimedAtMs: number };
+/** `attempt` stands in for build_launch_snapshot.attempt. */
+type MemoryAgentRun = BuildAgentRunRow & { seq: number; attempt: number };
 
 /** Follows the same conditional-update rules as the Drizzle store. */
 class MemoryDispatchStore implements DispatchStore {
@@ -69,14 +69,14 @@ class MemoryDispatchStore implements DispatchStore {
       branchName: null,
       revisionId: REVISION_ID,
       startedAt: status === 'running' || status === 'merged' ? '2026-10-30T00:00:00.000Z' : null,
-      claimSeq: 0,
       claimedAtMs: this.nowMs,
     };
     this.tasks.push(row);
     return row;
   }
 
-  addAgentRun(taskId: string, status = 'running', withCursorIds = true): string {
+  addAgentRun(taskId: string, status = 'running', withCursorIds = true,
+    attempt = this.tasks.find((row) => row.id === taskId)?.attempt ?? 1): string {
     this.seq += 1;
     const id = `agent-${this.seq}`;
     this.agentRuns.push({
@@ -87,6 +87,7 @@ class MemoryDispatchStore implements DispatchStore {
       cloudAgentIdentity: withCursorIds ? `bc-${id}` : null,
       dispatchMessageId: withCursorIds ? `msg-${id}` : null,
       seq: this.seq,
+      attempt,
     });
     return id;
   }
@@ -119,7 +120,7 @@ class MemoryDispatchStore implements DispatchStore {
   }
 
   private strip(row: MemoryTask): DispatchTaskRow {
-    const { revisionId: _revisionId, startedAt: _startedAt, claimSeq: _claimSeq, claimedAtMs: _claimedAtMs, ...rest } = row;
+    const { revisionId: _revisionId, startedAt: _startedAt, claimedAtMs: _claimedAtMs, ...rest } = row;
     return { ...rest, blockers: [...rest.blockers] };
   }
 
@@ -161,7 +162,7 @@ class MemoryDispatchStore implements DispatchStore {
   async currentAgentRunForTask(taskId: string) {
     const task = this.tasks.find((row) => row.id === taskId);
     const rows = this.agentRuns
-      .filter((row) => row.buildTaskId === taskId && row.seq > (task?.claimSeq ?? 0))
+      .filter((row) => row.buildTaskId === taskId && row.attempt === task?.attempt)
       .sort((a, b) => b.seq - a.seq);
     return rows[0] ? this.strippedAgent(rows[0]) : null;
   }
@@ -184,7 +185,6 @@ class MemoryDispatchStore implements DispatchStore {
       row.status = 'running';
       row.attempt = attempt;
       row.startedAt = '2026-10-30T01:00:00.000Z';
-      row.claimSeq = this.seq;
       row.claimedAtMs = this.nowMs;
     }
     head.branchName = branchName;
@@ -517,15 +517,16 @@ describe('createTaskLauncher (PBI-020 AC-1, VT-12)', () => {
   const request = {
     run: { id: RUN_ID, project: 'Apex', revisionId: REVISION_ID },
     unit: { headKey: 'a', taskKeys: ['a'], mode: 'own_agent' },
-    tasks: [],
+    tasks: [{ id: 'task-a' }],
     attempt: 1,
     branchName: 'b',
   } as unknown as BuildTaskLaunchRequest;
+  const candidate = { buildTaskId: 'task-a', attempt: 1 };
 
   it('makes no SDK call when the snapshot writer refuses', async () => {
     const launchRun = jest.fn();
     const launch = createTaskLauncher({
-      buildCandidate: async () => ({ ok: true, candidate: {} }),
+      buildCandidate: async () => ({ ok: true, candidate }),
       writeSnapshot: jest.fn(async () => ({ ok: false as const, refused: true as const, refusals: [{ code: 'snapshot_secret_value' as const }] })),
       launchRun,
     });
@@ -546,9 +547,22 @@ describe('createTaskLauncher (PBI-020 AC-1, VT-12)', () => {
     expect(writeSnapshot).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['another task', { buildTaskId: 'task-b', attempt: 1 }],
+    ['another attempt', { buildTaskId: 'task-a', attempt: 2 }],
+  ])('refuses a candidate prepared for %s without writing anything', async (_label, mismatched) => {
+    const writeSnapshot = jest.fn();
+    const launch = createTaskLauncher({ buildCandidate: async () => ({ ok: true, candidate: mismatched }), writeSnapshot });
+    await expect(launch(request)).resolves.toEqual({
+      kind: 'refused',
+      detail: 'The task instructions were prepared for a different task or attempt.',
+    });
+    expect(writeSnapshot).not.toHaveBeenCalled();
+  });
+
   it('reports a thrown launch as failed', async () => {
     const launch = createTaskLauncher({
-      buildCandidate: async () => ({ ok: true, candidate: {} }),
+      buildCandidate: async () => ({ ok: true, candidate }),
       writeSnapshot: jest.fn(async () => ({ ok: true as const, runId: 'agent-1' })),
       launchRun: jest.fn(async () => { throw new Error('network'); }),
     });
@@ -635,7 +649,7 @@ describe('applyAgentCompletion (TBI-019)', () => {
     h.store.addRun();
     h.store.addTask('a', 'running');
     const earlier = h.store.addAgentRun('task-a', 'failed');
-    h.store.task('a').claimSeq = 99;
+    h.store.task('a').attempt = 2;
 
     await expect(h.applyCompletion({ agentRunId: earlier })).resolves.toBe('ignored_superseded');
     expect(h.store.events).toHaveLength(0);
@@ -808,11 +822,25 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
       expect(h.launches).toHaveLength(1);
     });
 
+    it('a launch the reaper already failed for its pre-identity TTL is recovered, not counted as a task failure', async () => {
+      const h = harness();
+      claimedLongAgo(h);
+      const reaped = h.store.addAgentRun('task-a', 'failed', false);
+
+      await expect(h.applyCompletion({ agentRunId: reaped })).resolves.toBe('not_launched');
+      const outcome = await h.reconcile();
+
+      expect(outcome).toMatchObject({ completionsApplied: 0, launchesRecovered: 1 });
+      expect(h.store.repairAttempts.get(REVISION_ID)).toBeUndefined();
+      expect(h.store.eventTypes()).toEqual(['task.launch_lost', 'task.launched']);
+      expect(h.cancelAgent).not.toHaveBeenCalled();
+    });
+
     it('an agent run from an earlier attempt does not count as this attempt\'s agent', async () => {
       const h = harness();
       const task = claimedLongAgo(h);
       h.store.addAgentRun('task-a', 'failed');
-      task.claimSeq = 99;
+      task.attempt = 2;
 
       await h.reconcile();
 

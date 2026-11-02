@@ -102,13 +102,14 @@ export function createBuildReconciler(deps: ReconcileDeps): () => Promise<BuildS
 
   /**
    * A claim commits before the launch, so a crash in between leaves a running task with no
-   * agent, or with a queued agent that never got its Cursor IDs. Neither will ever complete.
-   * The task goes back to ready without using a repair attempt.
+   * agent, or with one that never got its Cursor IDs (still queued, or already failed by the
+   * reaper's pre-identity TTL). Neither will ever report a result. The task goes back to ready
+   * without using a repair attempt.
    */
   const recoverLostLaunch = async (head: RunningHead): Promise<boolean> => {
     const current = await store.currentAgentRunForTask(head.taskId);
-    if (current && (isAgentRunTerminalStatus(current.status) || canObserveAgentRun(current))) return false;
-    if (current) await deps.cancelAgent(current);
+    if (current && canObserveAgentRun(current)) return false;
+    if (current && !isAgentRunTerminalStatus(current.status)) await deps.cancelAgent(current);
     const taskIds = (await store.loadPlanTasks(head.revisionId))
       .filter((task) => (task.chainHeadKey ?? task.key) === head.key)
       .map((task) => task.id);
@@ -160,7 +161,7 @@ export function createBuildReconciler(deps: ReconcileDeps): () => Promise<BuildS
       for (const agentRunId of await store.listRunningHeadAgentRunIds()) {
         await attempt(`completion for ${agentRunId}`, async () => {
           const applied = await deps.applyCompletion({ agentRunId });
-          if (applied !== 'not_settled') outcome.completionsApplied += 1;
+          if (applied !== 'not_settled' && applied !== 'not_launched') outcome.completionsApplied += 1;
         });
       }
 

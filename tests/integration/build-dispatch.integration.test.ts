@@ -66,16 +66,16 @@ async function seedTask(revisionId: string, key: string, status: string, blocker
   return row.id;
 }
 
-async function seedAgentRun(taskId: string, status: string,
-  options: { startedMsAgo?: number; cursorIds?: boolean } = {}): Promise<string> {
+/** The snapshot carries only the attempt, which is all the dispatcher reads from it. Defaults to the task's current attempt. */
+async function seedAgentRun(taskId: string, status: string, options: { cursorIds?: boolean } = {}): Promise<string> {
   const ids = options.cursorIds ?? true;
   const [row] = await query<{ id: string }>(
     `INSERT INTO agent_runs (thread_id, status, project_id, lane, owner_instance, build_task_id, workflow_class,
-       cloud_agent_identity, dispatch_message_id, timeout_at, started_at)
-     VALUES ($1, $2, 'Apex', 'cloud-agent', 'apex-build-agent', $3, 'build-task', $4, $5, $6, now() - $7::interval)
+       cloud_agent_identity, dispatch_message_id, timeout_at, started_at, build_launch_snapshot)
+     VALUES ($1, $2, 'Apex', 'cloud-agent', 'apex-build-agent', $3, 'build-task', $4, $5, $6, now(),
+       jsonb_build_object('attempt', (SELECT attempt FROM build_tasks WHERE id = $3)))
      RETURNING id`,
-    [`build-task:${taskId}`, status, taskId, ids ? 'bc-1' : null, ids ? 'msg-1' : null, FUTURE,
-      `${options.startedMsAgo ?? 0} milliseconds`],
+    [`build-task:${taskId}`, status, taskId, ids ? 'bc-1' : null, ids ? 'msg-1' : null, FUTURE],
   );
   return row.id;
 }
@@ -295,34 +295,48 @@ describe('launch lost to a crash between claim and launch', () => {
     const a = await seedTask(revisionId, 'a', 'running', [], { startedMsAgo: LONG_AGO });
     const b = await seedTask(revisionId, 'b', 'running', [], { startedMsAgo: LONG_AGO });
     await seedTask(revisionId, 'c', 'running');
+    const d = await seedTask(revisionId, 'd', 'running', [], { startedMsAgo: LONG_AGO });
     const stuck = await seedAgentRun(b, 'queued', { cursorIds: false });
+    await seedAgentRun(d, 'failed', { cursorIds: false });
     const svc = services();
 
-    await expect(svc.reconcile()).resolves.toMatchObject({ launchesRecovered: 2, errors: 0 });
+    await expect(svc.reconcile()).resolves.toMatchObject({ launchesRecovered: 3, errors: 0 });
 
     expect(svc.cancelAgent.mock.calls.map(([row]) => row.id)).toEqual([stuck]);
-    expect(svc.launches.map((request) => request.tasks[0].id).sort()).toEqual([a, b].sort());
+    expect(svc.launches.map((request) => request.tasks[0].id).sort()).toEqual([a, b, d].sort());
     expect((await taskRows(revisionId)).map((row) => [row.task_key, row.status, row.attempt])).toEqual([
-      ['a', 'running', 2], ['b', 'running', 2], ['c', 'running', 1],
+      ['a', 'running', 2], ['b', 'running', 2], ['c', 'running', 1], ['d', 'running', 2],
     ]);
     const lost = await query(
       `SELECT 1 FROM build_events WHERE build_run_id = $1 AND event_type = 'task.launch_lost'`, [runId]);
-    expect(lost).toHaveLength(2);
+    expect(lost).toHaveLength(3);
     const [revision] = await query<{ repair_attempts: number }>(
       `SELECT repair_attempts FROM build_revisions WHERE id = $1`, [revisionId]);
     expect(revision.repair_attempts).toBe(0);
   });
 
+  it('matches agents by attempt, not clock: an agent stamped before its claim still counts', async () => {
+    const { revisionId } = await seedRun();
+    const a = await seedTask(revisionId, 'a', 'running', [], { startedMsAgo: LONG_AGO });
+    const agentRunId = await seedAgentRun(a, 'completed');
+    await query(`UPDATE agent_runs SET started_at = now() - interval '1 hour' WHERE id = $1`, [agentRunId]);
+    const svc = services();
+
+    await expect(svc.reconcile()).resolves.toMatchObject({ launchesRecovered: 0 });
+    expect(svc.requestMerge).toHaveBeenCalledWith(expect.objectContaining({ headTaskId: a }));
+  });
+
   it('does not apply a finished agent run from an earlier attempt to the current one', async () => {
     const { revisionId } = await seedRun();
     const a = await seedTask(revisionId, 'a', 'running', [], { startedMsAgo: LONG_AGO });
-    await seedAgentRun(a, 'completed', { startedMsAgo: 2 * LONG_AGO });
+    await seedAgentRun(a, 'completed');
+    await query(`UPDATE build_tasks SET attempt = 2 WHERE id = $1`, [a]);
     const svc = services();
 
     await svc.reconcile();
 
     expect(svc.requestMerge).not.toHaveBeenCalled();
-    expect((await taskRows(revisionId)).map((row) => [row.status, row.attempt])).toEqual([['running', 2]]);
+    expect((await taskRows(revisionId)).map((row) => [row.status, row.attempt])).toEqual([['running', 3]]);
   });
 });
 

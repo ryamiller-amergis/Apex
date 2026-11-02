@@ -30,10 +30,11 @@ Context pack: `.ai-pilot/local-dev/feat-010/`. Skill: dev-orchestrator (local mo
 - [x] S1–S9 done. Pushed; PR #265 open.
 - [x] Bugbot fixes on PR #265:
   - Completion decisions re-read the run and task under the run lock (`withRunLock`), which `suspend` and `claim` also take. Merge and the failure policy run after the lock.
-  - The sweep resets heads claimed over `LAUNCH_GRACE_MS` (5 min) ago that have no agent run since the claim, or only a queued one without Cursor IDs. It writes `task.launch_lost` and uses no repair attempt.
-  - `claim` stamps `started_at` with the database clock, so `currentAgentRunForTask` can compare it with `agent_runs.started_at`.
+  - The sweep resets heads claimed over `LAUNCH_GRACE_MS` (5 min) ago whose current agent run is missing or never got Cursor IDs. "Never got Cursor IDs" covers a row still queued and one the reaper already failed after `BUILD_AGENT_PRE_IDENTITY_TTL_MS`. The sweep writes `task.launch_lost` and uses no repair attempt. The completion handler returns `not_launched` for those rows.
+  - "Current agent run" means `build_launch_snapshot.attempt` equals `build_tasks.attempt`. Timestamps are not compared, because the app clock and the database clock can differ. The launcher refuses a candidate whose `buildTaskId` or `attempt` differs from the claim.
 
 ## Rules for port implementers
+- `buildCandidate` must set the snapshot's `buildTaskId` to the head task and `attempt` to `request.attempt`.
 - `mayReportDone` runs under the run lock and must not suspend the run.
 - `requestMerge` must ignore repeats and must not merge into a run that is no longer building.
 

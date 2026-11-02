@@ -11,6 +11,8 @@ import type { TaskFailurePolicy } from './taskFailure';
 export type CompletionOutcome =
   | 'ignored_unknown_run'
   | 'not_settled'
+  /** The agent run never got its Cursor IDs. Not a task result; the sweep's launch recovery handles it. */
+  | 'not_launched'
   | 'ignored_superseded'
   | 'recorded_only'
   | 'discarded'
@@ -131,11 +133,12 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
     const owner = await store.loadTaskContext(agentRun.buildTaskId);
     if (!owner) return 'ignored_unknown_run';
 
+    if (!canObserveAgentRun(agentRun)) return 'not_launched';
+
     let status: TerminalStatus;
     if (isAgentRunTerminalStatus(agentRun.status)) {
       status = agentRun.status;
     } else {
-      if (!canObserveAgentRun(agentRun)) return 'not_settled';
       const observed = await deps.observe({
         project: agentRun.projectId,
         cloudAgentId: agentRun.cloudAgentIdentity,
@@ -177,7 +180,7 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
 
   return async ({ agentRunId }) => {
     const outcome = await apply(agentRunId);
-    if (outcome !== 'not_settled') deps.track('build_completion.applied', { agentRunId, outcome });
+    if (outcome !== 'not_settled' && outcome !== 'not_launched') deps.track('build_completion.applied', { agentRunId, outcome });
     return outcome;
   };
 }
