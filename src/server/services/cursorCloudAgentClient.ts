@@ -16,13 +16,20 @@ import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 // } from './cursorContainerCliService';
 import { resolveGitRemote } from './repoCacheService';
 
-export interface LaunchCloudAgentInput {
+export interface BuildLaunchOptions {
+  startingBranch: string;
+  branchName: string;
+  /** Build agents never open a pull request; true is refused. */
+  openPullRequest: boolean;
+}
+
+interface LaunchCloudAgentBase {
   project: string;
   prompt: string;
+  /** Required. A blank model is refused before any SDK call. */
   model: string;
   skillProvider: SkillProvider;
   skillRepo: string;
-  skillBranch: string;
   workItemId?: number;
   workItemTitle?: string;
   initiatorName?: string;
@@ -35,6 +42,34 @@ export interface LaunchCloudAgentInput {
   autoCreatePr?: boolean;
   /** Small screenshots for a site report. The SDK receives the image bytes. */
   images?: SDKImage[];
+}
+
+export interface LaunchMyWorkCloudAgentInput extends LaunchCloudAgentBase {
+  skillBranch: string;
+  /** Planner launches pass false. My Work keeps the default, which opens a pull request. */
+  openPullRequest?: boolean;
+  build?: undefined;
+}
+
+export interface LaunchBuildCloudAgentInput extends LaunchCloudAgentBase {
+  skillBranch?: undefined;
+  openPullRequest?: undefined;
+  build: BuildLaunchOptions;
+}
+
+export type LaunchCloudAgentInput = LaunchMyWorkCloudAgentInput | LaunchBuildCloudAgentInput;
+
+export type CloudAgentLaunchRefusalCode =
+  | 'model_required'
+  | 'build_pull_request_forbidden'
+  | 'build_options_invalid'
+  | 'starting_branch_ambiguous';
+
+export class CloudAgentLaunchRefusedError extends Error {
+  constructor(readonly code: CloudAgentLaunchRefusalCode, message: string) {
+    super(message);
+    this.name = 'CloudAgentLaunchRefusedError';
+  }
 }
 
 export interface LaunchCloudAgentResult {
@@ -170,24 +205,76 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
   };
 }
 
+interface ResolvedLaunchTarget {
+  model: string;
+  startingRef: string;
+  autoCreatePR: boolean;
+  prompt: string;
+}
+
+function resolveLaunchTarget(input: LaunchCloudAgentInput): ResolvedLaunchTarget {
+  const model = typeof input.model === 'string' ? input.model.trim() : '';
+  if (!model) {
+    throw new CloudAgentLaunchRefusedError('model_required', 'Cloud Agent launch refused: no model was given.');
+  }
+  if (!input.build) {
+    return {
+      model,
+      startingRef: input.skillBranch,
+      autoCreatePR: input.openPullRequest !== false && input.autoCreatePr !== false,
+      prompt: input.prompt,
+    };
+  }
+
+  const { build } = input;
+  if (input.skillBranch !== undefined) {
+    throw new CloudAgentLaunchRefusedError(
+      'starting_branch_ambiguous',
+      'Cloud Agent launch refused: a build launch must not also pass a skill branch.',
+    );
+  }
+  if (build.openPullRequest !== false) {
+    throw new CloudAgentLaunchRefusedError(
+      'build_pull_request_forbidden',
+      'Cloud Agent launch refused: build agents never open a pull request.',
+    );
+  }
+  const startingBranch = typeof build.startingBranch === 'string' ? build.startingBranch.trim() : '';
+  const branchName = typeof build.branchName === 'string' ? build.branchName.trim() : '';
+  if (!startingBranch || !branchName) {
+    throw new CloudAgentLaunchRefusedError(
+      'build_options_invalid',
+      'Cloud Agent launch refused: a build launch needs a starting branch and a branch name.',
+    );
+  }
+  // The SDK has no option that names the pushed branch, so the prompt carries it.
+  return {
+    model,
+    startingRef: startingBranch,
+    autoCreatePR: false,
+    prompt: `${input.prompt}\n\nWork on branch \`${branchName}\` and no other branch.`,
+  };
+}
+
 export async function launchCloudAgent(
   input: LaunchCloudAgentInput,
 ): Promise<LaunchCloudAgentResult> {
+  const target = resolveLaunchTarget(input);
   const repoUrl = buildCloudRepoUrl(input.skillProvider, input.project, input.skillRepo);
   const agent = await Agent.create({
     apiKey: cursorUserLevelApiKey(),
-    model: { id: input.model.trim() || 'composer-2.5' },
+    model: { id: target.model },
     name: input.workItemTitle,
     cloud: {
-      repos: [{ url: repoUrl, startingRef: input.skillBranch }],
-      autoCreatePR: input.autoCreatePr !== false,
+      repos: [{ url: repoUrl, startingRef: target.startingRef }],
+      autoCreatePR: target.autoCreatePR,
     },
   });
   try {
     const run = await agent.send(
       input.images?.length
-        ? { text: input.prompt, images: input.images }
-        : input.prompt,
+        ? { text: target.prompt, images: input.images }
+        : target.prompt,
     );
     return {
       cloudAgentId: agent.agentId,

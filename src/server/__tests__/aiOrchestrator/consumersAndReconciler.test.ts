@@ -258,6 +258,158 @@ describe('resultConsumer', () => {
     expect(recordTerminalUsage).toHaveBeenCalledTimes(1);
     expect(recordTerminalUsage).toHaveBeenCalledWith(resultBody);
   });
+
+  describe('worker_lost result', () => {
+    const lostBody = {
+      schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+      eventId: 'evt-lost',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      timestamp: '2026-09-18T12:00:00.000Z',
+      kind: 'terminal',
+      status: 'failed',
+      artifactStatus: 'failed',
+      failureCategory: 'worker_lost',
+      detail: 'worker shut down before the run finished',
+    } as const;
+
+    function lostResultConsumer(attempts: Record<string, jest.Mock>) {
+      const outcomes: string[] = [];
+      const consumer: QueueConsumer = {
+        receive: async () => ({
+          lockToken: 'lock-lost',
+          messageId: 'm',
+          deliveryCount: 1,
+          body: lostBody,
+        }),
+        complete: async (token) => {
+          outcomes.push(`complete:${token}`);
+        },
+        abandon: async (token) => {
+          outcomes.push(`abandon:${token}`);
+        },
+        deadLetter: async (token) => {
+          outcomes.push(`deadLetter:${token}`);
+        },
+      };
+      const applyTerminalRunEffects = jest.fn().mockResolvedValue(undefined);
+      const recordTerminalUsage = jest.fn().mockResolvedValue(undefined);
+      const handler = createResultConsumer({
+        consumer,
+        attempts: attempts as never,
+        applyTerminalRunEffects,
+        recordTerminalUsage,
+      });
+      return { handler, outcomes, applyTerminalRunEffects, recordTerminalUsage };
+    }
+
+    it('replaces the attempt without finalizing the run while attempts remain', async () => {
+      const replaceLostAttempt = jest.fn().mockResolvedValue({
+        status: 'replaced',
+        lostAttemptId: 'attempt-1',
+        attemptId: 'attempt-2',
+        attemptNumber: 2,
+        dispatchMessageId: 'dispatch-2',
+        outboxId: 'outbox-2',
+      });
+      const transitionAttempt = jest.fn();
+      const { handler, outcomes, applyTerminalRunEffects, recordTerminalUsage } =
+        lostResultConsumer({ replaceLostAttempt, transitionAttempt });
+
+      await expect(handler.processOnce()).resolves.toBe('processed');
+      expect(replaceLostAttempt).toHaveBeenCalledWith({
+        attemptId: 'attempt-1',
+        expectedDispatchMessageId: 'dispatch-1',
+        artifactStatus: 'failed',
+        failureDetail: 'worker shut down before the run finished',
+      });
+      expect(transitionAttempt).not.toHaveBeenCalled();
+      expect(applyTerminalRunEffects).not.toHaveBeenCalled();
+      expect(recordTerminalUsage).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(['complete:lock-lost']);
+    });
+
+    it('finalizes the run as failed once attempts are exhausted', async () => {
+      const run = {
+        runId: 'run-1',
+        threadId: 'thread-1',
+        projectId: 'project-1',
+        lane: 'background',
+        status: 'failed',
+        fromStatus: 'running',
+        terminalReason: 'worker_lost',
+        dispatchMessageId: 'dispatch-1',
+      };
+      const replaceLostAttempt = jest.fn().mockResolvedValue({
+        status: 'attempts_exhausted',
+        attemptCount: 3,
+      });
+      const transitionAttempt = jest.fn().mockResolvedValue({
+        status: 'ok',
+        attemptId: 'attempt-1',
+        to: 'failed',
+        run,
+      });
+      const { handler, outcomes, applyTerminalRunEffects } =
+        lostResultConsumer({ replaceLostAttempt, transitionAttempt });
+
+      await expect(handler.processOnce()).resolves.toBe('processed');
+      expect(transitionAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'failed', failureCategory: 'worker_lost' }),
+      );
+      expect(applyTerminalRunEffects).toHaveBeenCalledWith(
+        expect.objectContaining({ run }),
+      );
+      expect(outcomes).toEqual(['complete:lock-lost']);
+    });
+
+    it('acknowledges a redelivered result for an attempt already replaced', async () => {
+      const replaceLostAttempt = jest.fn().mockResolvedValue({
+        status: 'illegal_transition',
+        from: 'failed',
+        to: 'failed',
+      });
+      const transitionAttempt = jest.fn();
+      const { handler, outcomes, applyTerminalRunEffects } =
+        lostResultConsumer({ replaceLostAttempt, transitionAttempt });
+
+      await expect(handler.processOnce()).resolves.toBe('processed');
+      expect(transitionAttempt).not.toHaveBeenCalled();
+      expect(applyTerminalRunEffects).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(['complete:lock-lost']);
+    });
+
+    it('acknowledges a worker_lost result for a cancelled run without touching it', async () => {
+      const replaceLostAttempt = jest.fn().mockResolvedValue({
+        status: 'run_terminal',
+        lostAttemptId: 'attempt-1',
+        runStatus: 'cancelled',
+      });
+      const transitionAttempt = jest.fn();
+      const { handler, outcomes, applyTerminalRunEffects } =
+        lostResultConsumer({ replaceLostAttempt, transitionAttempt });
+
+      await expect(handler.processOnce()).resolves.toBe('processed');
+      expect(transitionAttempt).not.toHaveBeenCalled();
+      expect(applyTerminalRunEffects).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(['complete:lock-lost']);
+    });
+
+    it('dead-letters a worker_lost result with a stale fence', async () => {
+      const replaceLostAttempt = jest.fn().mockResolvedValue({
+        status: 'fence_mismatch',
+      });
+      const transitionAttempt = jest.fn();
+      const { handler, outcomes } =
+        lostResultConsumer({ replaceLostAttempt, transitionAttempt });
+
+      await expect(handler.processOnce()).resolves.toBe('poison');
+      expect(transitionAttempt).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(['deadLetter:lock-lost']);
+    });
+  });
 });
 
 describe('reconciler', () => {

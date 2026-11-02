@@ -1,0 +1,23 @@
+{
+  "$schema": "./nfr-manifest.schema.json",
+  "schemaVersion": 1,
+  "targets": {
+    "responseTime": {
+      "percentile": 95,
+      "maxMs": 500,
+      "illustrative": true,
+      "verifiedBy": "quality/load-test/profile-read.k6.js"
+    },
+    "concurrency": {
+      "users": 50,
+      "illustrative": true,
+      "verifiedBy": "quality/load-test/profile-read.k6.js"
+    },
+    "dataVolume": {
+      "table": "app_users",
+      "rows": 100000,
+      "illustrative": true,
+      "verifiedBy": "quality/load-test/profile-read.k6.js"
+    }
+  }
+}

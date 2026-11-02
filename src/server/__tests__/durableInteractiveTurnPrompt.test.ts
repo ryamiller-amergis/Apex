@@ -230,6 +230,28 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).not.toContain(SKILL_CONTENT);
   });
 
+  it('pairs a reply with the question it quotes, not a later unanswered question', async () => {
+    // Reproduces the race from interview d05034ee-4d85-423b-9677-e034547efde5:
+    // the UI showed a second question (Q4) before the user answered the
+    // first (Q3). The reply only quotes Q3, so Q4 must stay unanswered.
+    const specification = await admittedSpecification([
+      message('user', 'We need a Brainstorm session feature', 1),
+      message('agent', 'Who may create a Brainstorm session?\na. Any project member\nb. Admins only', 2),
+      message('agent', 'Who may delete a Brainstorm session?\na. The creator\nb. Any admin', 3),
+      message(
+        'user',
+        'Q3 · Who may create a Brainstorm session? Answer: A — Any member of the current project.',
+        4,
+      ),
+    ]);
+
+    expect(specification.currentPrompt).toContain(
+      '2. You asked: Who may create a Brainstorm session?\n'
+      + '   User answered: Q3 · Who may create a Brainstorm session? Answer: A — Any member of the current project.',
+    );
+    expect(specification.currentPrompt).not.toContain('Who may delete a Brainstorm session?');
+  });
+
   it('does not add an answer recap to Home chat turns', async () => {
     const specification = await admittedSpecification(
       [

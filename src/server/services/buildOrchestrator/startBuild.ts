@@ -5,7 +5,7 @@ import {
 import type { StartBuildResponse } from '../../../shared/types/build';
 import type { ProjectSkillConfig } from '../../../shared/types/projectSettings';
 import { preflightRefusalSummary } from '../../../shared/types/buildPreflight';
-import type { FrozenBuildRunConfig, PreflightRefusal, PreflightResult } from '../../../shared/types/buildPreflight';
+import type { FrozenBuildRunConfig, PreflightResult } from '../../../shared/types/buildPreflight';
 import { isBuildFromPromptEnabled, isBuildPairAllowed } from '../buildAccessService';
 import { runPreflight } from '../buildPreflight';
 import { fetchAvailableModels } from '../modelsService';
@@ -54,6 +54,7 @@ export interface StartBuildDeps {
     definitionId: string;
     initiatorUserId: string;
     runInput: Record<string, unknown>;
+    onRunCreated: (runId: string) => Promise<void>;
   }) => Promise<{ runId: string }>;
   findReplay: typeof findBuildByClientRequest;
   admit: typeof admitBuild;
@@ -173,8 +174,8 @@ export async function startBuild(
         prompt,
         skillSettingsId: settings.id,
       },
+      onRunCreated: (runId) => deps.linkPlaybookRun(admitted.build.id, runId),
     });
-    await deps.linkPlaybookRun(admitted.build.id, run.runId);
     admitted.build.playbookRunId = run.runId;
     await deps.writeEvent(eventInput(admitted.build, 'build.started', 'Build started', model ?? null));
     deps.track('build.start.accepted', { status: 'intake' });
@@ -302,10 +303,6 @@ type AdmissionQueueReason = 'project_limit' | 'platform_limit' | null;
 export function refusalOf(error: unknown): { status: number; body: Record<string, unknown> } | null {
   if (!(error instanceof BuildStartError)) return null;
   const body: Record<string, unknown> = { error: error.message, code: error.code };
-  if (error.refusals) body.refusals = error.refusals.map(refusalText);
+  if (error.refusals) body.refusals = error.refusals.map((refusal) => refusal.message);
   return { status: error.status, body };
-}
-
-function refusalText(refusal: PreflightRefusal): string {
-  return `${refusal.message} ${refusal.fixerLabel} can fix this.`;
 }

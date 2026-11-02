@@ -265,6 +265,268 @@ describe('V2 document execution', () => {
     );
   });
 
+  describe('when the Cursor connection drops', () => {
+    function prematureClose(): Error {
+      const error = new Error('[unknown] Premature close');
+      error.name = 'ConnectError';
+      return error;
+    }
+
+    beforeEach(() => {
+      jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('retries once on a fresh agent and returns only the retry output', async () => {
+      const disposals: jest.Mock[] = [];
+      const createExecution = jest.fn(async (snapshot) => {
+        const attempt = createExecution.mock.calls.length;
+        const output = path.join(snapshot.workspaceRef, '.ai-pilot', 'output');
+        const dispose = jest.fn().mockResolvedValue(undefined);
+        disposals.push(dispose);
+        return {
+          run: {
+            supports: () => false,
+            async *stream() {
+              yield undefined as never;
+            },
+            async wait() {
+              await fs.mkdir(output, { recursive: true });
+              if (attempt === 1) {
+                await fs.writeFile(path.join(output, 'partial.prd.md'), '# Half');
+                throw prematureClose();
+              }
+              await fs.writeFile(path.join(output, 'feature.prd.md'), '# Generated PRD');
+              await fs.writeFile(path.join(output, 'feature.backlog.json'), '{"epics":[]}');
+              return { status: 'finished' };
+            },
+          },
+          dispose,
+        };
+      });
+      const progress = checkpoints();
+      const execute = createDocumentExecute({
+        openRepository: jest.fn().mockResolvedValue(repoReader),
+        createExecution,
+      });
+
+      const outcome = await execute({
+        specification: specification(),
+        command: command(),
+        checkpoints: progress,
+        signal: new AbortController().signal,
+      });
+
+      expect(createExecution).toHaveBeenCalledTimes(2);
+      expect(outcome.files.map((file) => file.path)).toEqual(['output/feature.backlog.json', 'output/feature.prd.md']);
+      expect(disposals[0]).toHaveBeenCalledTimes(1);
+      expect(disposals[1]).toHaveBeenCalledTimes(1);
+      expect(progress.publishProgress).toHaveBeenCalledWith(
+        'execution',
+        'running',
+        'Retrying after the Cursor connection dropped',
+      );
+    });
+
+    it('restores scratch inputs under the output directory before retrying', async () => {
+      const originalBacklog = '{"epics":[],"testCaseCount":0}';
+      const seenOnRetry: { prd?: string; backlog?: string; staleCases?: boolean } = {};
+      const createExecution = jest.fn(async (snapshot) => {
+        const attempt = createExecution.mock.calls.length;
+        const output = path.join(snapshot.workspaceRef, '.ai-pilot', 'output');
+        return {
+          run: {
+            supports: () => false,
+            async *stream() {
+              yield undefined as never;
+            },
+            async wait() {
+              if (attempt === 1) {
+                await fs.writeFile(path.join(output, 'feature.backlog.json'), '{"patched":true}');
+                await fs.writeFile(path.join(output, 'feature.test-cases.json'), '[]');
+                throw prematureClose();
+              }
+              seenOnRetry.prd = await fs.readFile(path.join(output, 'feature.prd.md'), 'utf8');
+              seenOnRetry.backlog = await fs.readFile(
+                path.join(output, 'feature.backlog.json'),
+                'utf8',
+              );
+              seenOnRetry.staleCases = await fs
+                .stat(path.join(output, 'feature.test-cases.json'))
+                .then(() => true, () => false);
+              await fs.writeFile(path.join(output, 'feature.test-cases.json'), '[{"id":1}]');
+              await fs.writeFile(path.join(output, 'feature.test-cases.md'), '# Cases');
+              await fs.writeFile(path.join(output, 'feature.backlog.json'), '{"patched":true}');
+              return { status: 'finished' };
+            },
+          },
+          dispose: jest.fn().mockResolvedValue(undefined),
+        };
+      });
+      const execute = createDocumentExecute({
+        openRepository: jest.fn().mockResolvedValue(repoReader),
+        createExecution,
+      });
+
+      const outcome = await execute({
+        specification: specification({
+          workflowClass: 'test-cases',
+          scratchInputs: [
+            { path: '.ai-pilot/kickoff-context.md', content: '# Context' },
+            { path: '.ai-pilot/output/feature.prd.md', content: '# Source PRD' },
+            { path: '.ai-pilot/output/feature.backlog.json', content: originalBacklog },
+          ],
+        }),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      });
+
+      expect(createExecution).toHaveBeenCalledTimes(2);
+      expect(seenOnRetry).toEqual({
+        prd: '# Source PRD',
+        backlog: originalBacklog,
+        staleCases: false,
+      });
+      expect(outcome.files.map((file) => file.path)).toEqual([
+        'output/feature.backlog.json',
+        'output/feature.test-cases.json',
+        'output/feature.test-cases.md',
+      ]);
+    });
+
+    it('retries a wait result that reports the dropped connection', async () => {
+      const createExecution = jest.fn(async (snapshot) => {
+        const attempt = createExecution.mock.calls.length;
+        return {
+          run: {
+            supports: () => false,
+            async *stream() {
+              yield undefined as never;
+            },
+            async wait() {
+              if (attempt === 1) {
+                return { status: 'error', error: { message: 'Premature close' } };
+              }
+              const output = path.join(snapshot.workspaceRef, '.ai-pilot', 'output');
+              await fs.mkdir(output, { recursive: true });
+              await fs.writeFile(path.join(output, 'feature.prd.md'), '# Generated PRD');
+              await fs.writeFile(path.join(output, 'feature.backlog.json'), '{"epics":[]}');
+              return { status: 'finished' };
+            },
+          },
+          dispose: jest.fn().mockResolvedValue(undefined),
+        };
+      });
+      const execute = createDocumentExecute({
+        openRepository: jest.fn().mockResolvedValue(repoReader),
+        createExecution,
+      });
+
+      const outcome = await execute({
+        specification: specification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      });
+
+      expect(createExecution).toHaveBeenCalledTimes(2);
+      expect(outcome.files.map((file) => file.path)).toEqual(['output/feature.backlog.json', 'output/feature.prd.md']);
+    });
+
+    it('fails after the single retry also drops', async () => {
+      const createExecution = jest.fn(async () => ({
+        run: {
+          supports: () => false,
+          async *stream() {
+            yield undefined as never;
+          },
+          async wait(): Promise<never> {
+            throw prematureClose();
+          },
+        },
+        dispose: jest.fn().mockResolvedValue(undefined),
+      }));
+      const execute = createDocumentExecute({
+        openRepository: jest.fn().mockResolvedValue(repoReader),
+        createExecution,
+      });
+
+      await expect(
+        execute({
+          specification: specification(),
+          command: command(),
+          checkpoints: checkpoints(),
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow('Premature close');
+      expect(createExecution).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry once the worker is shutting down', async () => {
+      const controller = new AbortController();
+      const createExecution = jest.fn(async () => ({
+        run: {
+          supports: () => false,
+          async *stream() {
+            yield undefined as never;
+          },
+          async wait(): Promise<never> {
+            controller.abort();
+            throw prematureClose();
+          },
+        },
+        dispose: jest.fn().mockResolvedValue(undefined),
+      }));
+      const execute = createDocumentExecute({
+        openRepository: jest.fn().mockResolvedValue(repoReader),
+        createExecution,
+      });
+
+      await expect(
+        execute({
+          specification: specification(),
+          command: command(),
+          checkpoints: checkpoints(),
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow();
+      expect(createExecution).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not retry a failure that is not a dropped connection', async () => {
+    const createExecution = jest.fn(async () => ({
+      run: {
+        supports: () => false,
+        async *stream() {
+          yield undefined as never;
+        },
+        async wait(): Promise<never> {
+          throw new Error('Cursor failed');
+        },
+      },
+      dispose: jest.fn().mockResolvedValue(undefined),
+    }));
+    const execute = createDocumentExecute({
+      openRepository: jest.fn().mockResolvedValue(repoReader),
+      createExecution,
+    });
+
+    await expect(
+      execute({
+        specification: specification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('Cursor failed');
+    expect(createExecution).toHaveBeenCalledTimes(1);
+  });
+
   it('aborts a repository reader that hangs during startup', async () => {
     let receivedSignal: AbortSignal | undefined;
     let reportOpened!: () => void;

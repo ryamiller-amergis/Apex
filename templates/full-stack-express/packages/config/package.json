@@ -1,0 +1,42 @@
+{
+  "name": "@project-scope/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "format-env-issues.mjs",
+    "format-env-issues.d.ts"
+  ],
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./tsconfig.node.json": "./tsconfig.node.json",
+    "./tsconfig.react.json": "./tsconfig.react.json",
+    "./eslint": "./eslint.mjs",
+    "./prettier": "./prettier.mjs",
+    "./vitest": {
+      "types": "./vitest.d.ts",
+      "default": "./vitest.mjs"
+    },
+    "./testing": {
+      "types": "./testing.d.ts",
+      "default": "./testing.mjs"
+    },
+    "./format-env-issues": {
+      "types": "./format-env-issues.d.ts",
+      "default": "./format-env-issues.mjs"
+    }
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-jsx-a11y": "catalog:",
+    "eslint-plugin-react-hooks": "catalog:",
+    "globals": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:",
+    "yaml": "catalog:"
+  }
+}
