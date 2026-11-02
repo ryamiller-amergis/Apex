@@ -4,9 +4,10 @@
  * database).
  */
 import { execFile } from 'child_process';
-import { readFile, rm, stat, writeFile } from 'fs/promises';
+import { readFile, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { promisify } from 'util';
+import { removeTree } from '../../utils/removeTree';
 import type { SkillProvider } from '../../../shared/types/projectSettings';
 import type {
   BundleKey,
@@ -124,7 +125,7 @@ export async function prepareEmptyDestination(
     if (!existing.isDirectory()) {
       throw new Error('Grounding destination must be a directory');
     }
-    await rm(destination, { recursive: true, force: true });
+    await removeTree(destination);
   } catch (error) {
     const code =
       error && typeof error === 'object'
