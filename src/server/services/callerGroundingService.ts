@@ -18,6 +18,7 @@ import {
   isGroundingEnabledForCaller as evaluateGroundingFlag,
   isNativeReadEnabledForCaller as evaluateNativeReadFlag,
   isProjectRepositoryCheckoutReadinessEnabled as evaluateCheckoutReadinessFlag,
+  isRepoReadServiceEnabledForCaller,
   isSharedReadCheckoutEnabledForCaller as evaluateSharedReadCheckoutFlag,
 } from './featureFlagService';
 import {
@@ -44,6 +45,7 @@ import {
   readRemoteBranchTip as readRemoteBranchTipFromOrigin,
 } from './repoCacheService';
 import { isUsableBareMirror } from './repoRead/mirrorStore';
+import { resolveRepoReadServiceUrl } from './repoRead/repoServiceReader';
 import {
   materializeRunGroundingWithPath,
   type RunGroundingMaterializationResult,
@@ -234,6 +236,8 @@ export interface CallerGroundingDependencies {
   /** Whole project on ai-runs-v2-transport: its runs execute off this host. */
   isV2TransportProject?: (project: string) => Promise<boolean>;
   readRemoteBranchTip?: typeof readRemoteBranchTipFromOrigin;
+  isRepoReadServiceEnabled?: typeof isRepoReadServiceEnabledForCaller;
+  resolveRepoReadServiceUrl?: () => string | null | undefined;
 }
 
 const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
@@ -352,6 +356,32 @@ export function createCallerGroundingService(
     const context = telemetryContext(input);
     telemetry.fallback(context, reason);
     return remote();
+  };
+
+  // Reads for a whole-V2 project go through repo-read by commit, so this host
+  // only pins the commit and never touches its own mirror for it.
+  const isCommitOnlyCaller = async (
+    input: StartCallerGroundingInput
+  ): Promise<boolean> => {
+    const { isV2TransportProject, isRepoReadServiceEnabled } = dependencies;
+    if (!isV2TransportProject || !isRepoReadServiceEnabled) return false;
+    if (!input.sandboxCwd?.trim()) return false;
+    if (!(dependencies.resolveRepoReadServiceUrl ?? resolveRepoReadServiceUrl)()) {
+      return false;
+    }
+    try {
+      const [v2, repoRead] = await Promise.all([
+        isV2TransportProject(input.run.project),
+        isRepoReadServiceEnabled({
+          userId: input.userId,
+          project: input.run.project,
+          caller: input.caller,
+        }),
+      ]);
+      return v2 && repoRead;
+    } catch {
+      return false;
+    }
   };
 
   // A V2 run only needs the pinned commit: the worker fetches it through
@@ -561,10 +591,11 @@ export function createCallerGroundingService(
       let fetchedCache:
         | { baseSha: string; mirrorHit?: boolean; cacheDir?: string }
         | undefined;
+      const commitOnly = nativeReadEnabled && (await isCommitOnlyCaller(input));
 
       // Stage 6: native-read callers skip working trees once a bare mirror exists.
       // Cold start fetches the mirror first so the first visit can skip too.
-      if (nativeReadEnabled && !mirrorUsable(mirrorPath)) {
+      if (nativeReadEnabled && !commitOnly && !mirrorUsable(mirrorPath)) {
         telemetry.phase(telemetryContext(input), 'mirror-clone-start');
         fetchedCache = await dependencies.ensureRepoCache(cacheOptions, {
           waitMs: USER_FACING_REPO_CACHE_LEASE_WAIT_MS,
@@ -582,9 +613,29 @@ export function createCallerGroundingService(
 
       if (
         nativeReadEnabled &&
-        (mirrorUsable(mirrorPath) || Boolean(fetchedCache?.cacheDir))
+        (commitOnly || mirrorUsable(mirrorPath) || Boolean(fetchedCache?.cacheDir))
       ) {
-        if (!grounding) {
+        if (commitOnly) {
+          if (!grounding) {
+            telemetry.phase(telemetryContext(input), 'remote-tip-start');
+            const tip = await (
+              dependencies.readRemoteBranchTip ?? readRemoteBranchTipFromOrigin
+            )({ ...cacheOptions });
+            if (!tip) return fallback(input, 'remote-tip-unavailable');
+            grounding = activatedTarget(
+              await dependencies.groundingService.activateGroundings({
+                run: input.run,
+                target: {
+                  provider: groundingProvider(input.repository.provider),
+                  repository: repo,
+                  branch: input.repository.branch,
+                  groundedSha: tip,
+                },
+              })
+            );
+            telemetry.phase(telemetryContext(input), 'activate-done');
+          }
+        } else if (!grounding) {
           // A first turn refreshes even when the mirror is already warm, and the
           // mirror event below is only emitted once this resolves — which is why
           // a hit can appear to arrive 24s late rather than at the start.
@@ -618,6 +669,7 @@ export function createCallerGroundingService(
         }
 
         const cwd = input.sandboxCwd?.trim() || mirrorPath;
+        const readMirrorPath = commitOnly ? undefined : mirrorPath;
         const callerContext: GroundingCallerContext = {
           userId: input.userId,
           runRef: runRefKey(input.run),
@@ -631,7 +683,7 @@ export function createCallerGroundingService(
             repo,
             sha: grounding.groundedSha,
             checkoutPath: cwd,
-            mirrorPath,
+            mirrorPath: readMirrorPath,
             caller: input.caller,
             shareAcrossInstances: input.shareAcrossInstances,
           },
@@ -644,25 +696,31 @@ export function createCallerGroundingService(
           link: '/home',
           caller: input.caller,
         });
-        telemetry.phase(telemetryContext(input), 'bare-mirror-read');
+        telemetry.phase(
+          telemetryContext(input),
+          commitOnly ? 'repo-read-commit-only' : 'bare-mirror-read'
+        );
 
         // The repo-read service restores this bundle onto a cold container.
         // Identity must match the profile above, or the key will not resolve.
-        // Deliberately not awaited: building it takes minutes.
-        void (
-          dependencies.publishGroundingBundle ??
-          backgroundBundlePublisher.publish
-        )({
-          identity: {
-            provider: profileProvider(grounding.provider),
-            project: grounding.project,
-            repo,
-            sha: grounding.groundedSha,
-          },
-          cacheDir: mirrorPath,
-          branch: input.repository.branch,
-          userId: input.userId,
-        });
+        // Deliberately not awaited: building it takes minutes. Commit-only
+        // projects get their bundles from repo-read's own upkeep.
+        if (!commitOnly) {
+          void (
+            dependencies.publishGroundingBundle ??
+            backgroundBundlePublisher.publish
+          )({
+            identity: {
+              provider: profileProvider(grounding.provider),
+              project: grounding.project,
+              repo,
+              sha: grounding.groundedSha,
+            },
+            cacheDir: mirrorPath,
+            branch: input.repository.branch,
+            userId: input.userId,
+          });
+        }
 
         let released = false;
         return {
@@ -672,7 +730,7 @@ export function createCallerGroundingService(
           resolvedSha: grounding.groundedSha,
           nativeReads: false,
           workingTree: false,
-          mirrorPath,
+          mirrorPath: readMirrorPath,
           release: async (options) => {
             if (released) return;
             released = true;
@@ -1179,4 +1237,6 @@ export const callerGroundingService = createCallerGroundingService({
   isV2TransportProject: (project) =>
     isFlagEnabledForWholeProject(V2_TRANSPORT_FLAG, project),
   readRemoteBranchTip: readRemoteBranchTipFromOrigin,
+  isRepoReadServiceEnabled: isRepoReadServiceEnabledForCaller,
+  resolveRepoReadServiceUrl,
 });

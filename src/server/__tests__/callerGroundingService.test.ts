@@ -711,6 +711,118 @@ describe('V2 project pin when this host cannot ground the run', () => {
   });
 });
 
+describe('commit-only grounding for whole-V2 projects', () => {
+  const tip = 'c'.repeat(40);
+  const sandboxCwd = 'C:\\data\\workspaces\\thread-1';
+  const commitOnlyDeps = (overrides: Partial<CallerGroundingDependencies> = {}) => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isV2TransportProject: jest.fn().mockResolvedValue(true),
+      isRepoReadServiceEnabled: jest.fn().mockResolvedValue(true),
+      resolveRepoReadServiceUrl: () => 'https://repo-read.internal',
+      readRemoteBranchTip: jest.fn().mockResolvedValue(tip),
+      publishGroundingBundle: jest.fn(),
+      ...overrides,
+    });
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
+    jest.mocked(deps.groundingService.activateGroundings).mockResolvedValue({
+      ok: true,
+      durableGrounding: true,
+      fallback: 'none',
+      groundings: [{ ...grounding, groundedSha: tip }],
+    });
+    return deps;
+  };
+  const start = (
+    deps: CallerGroundingDependencies,
+    extra: { sandboxCwd?: string } = { sandboxCwd },
+  ) =>
+    createCallerGroundingService(deps).start({
+      caller: 'durable-interactive',
+      userId: 'developer-1',
+      run,
+      repository: { provider: 'ado', repo: 'MaxView', branch: 'development' },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      ...extra,
+    });
+
+  it('pins the remote tip and reads through repo-read without touching this host mirror', async () => {
+    const deps = commitOnlyDeps();
+
+    const selected = await start(deps);
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: sandboxCwd,
+      resolvedSha: tip,
+      workingTree: false,
+      mirrorPath: undefined,
+    });
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.publishGroundingBundle).not.toHaveBeenCalled();
+    expect(deps.readRemoteBranchTip).toHaveBeenCalledWith({
+      provider: 'ado',
+      project: 'Apex',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+    expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: tip, checkoutPath: sandboxCwd, mirrorPath: undefined }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it('keeps an existing pin without asking the remote', async () => {
+    const deps = commitOnlyDeps();
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([grounding]);
+
+    const selected = await start(deps);
+
+    expect(selected).toMatchObject({ mode: 'local', resolvedSha: grounding.groundedSha });
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['repo-read is off for the caller', { isRepoReadServiceEnabled: jest.fn().mockResolvedValue(false) }],
+    ['the project is not wholly on V2', { isV2TransportProject: jest.fn().mockResolvedValue(false) }],
+    ['repo-read has no URL', { resolveRepoReadServiceUrl: () => undefined }],
+    ['a flag cannot be read', { isV2TransportProject: jest.fn().mockRejectedValue(new Error('db down')) }],
+  ])('uses this host mirror when %s', async (_label, overrides) => {
+    const deps = commitOnlyDeps(overrides as Partial<CallerGroundingDependencies>);
+
+    await start(deps);
+
+    expect(deps.ensureRepoCache).toHaveBeenCalled();
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+  });
+
+  it('uses this host mirror for callers without a sandbox', async () => {
+    const deps = commitOnlyDeps();
+
+    await start(deps, {});
+
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+  });
+
+  it('falls back to remote when the remote has no tip', async () => {
+    const deps = commitOnlyDeps({ readRemoteBranchTip: jest.fn().mockResolvedValue(null) });
+
+    const selected = await start(deps);
+
+    expect(selected.mode).toBe('remote');
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      expect.objectContaining({ reason: 'remote-tip-unavailable' }),
+      expect.anything(),
+    );
+  });
+});
+
 describe('TBI-005 / PBI-004 guarded native-read startup', () => {
   const startInput = {
     caller: 'chat-agent',
