@@ -6,6 +6,10 @@ jest.mock('../BuildAgentHomePill', () => ({
   BuildAgentHomePill: () => null,
 }));
 
+jest.mock('../GuidedCloudJobs', () => ({
+  GuidedCloudJobs: () => <button type="button" data-testid="home-guided-jobs">Report an issue</button>,
+}));
+
 const mockRetryLast = jest.fn();
 const mockRetryFailedRun = jest.fn();
 const mockSend = jest.fn();
@@ -216,6 +220,26 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     fireEvent.click(screen.getByTestId('chat-agent-history-btn'));
     expect(screen.getByTestId('thread-history-sidebar-mock')).toBeInTheDocument();
+  });
+
+  it('places Report an issue beside History in the home header', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        onSelectThread={jest.fn()}
+        launchedFromHome
+        canStartGuidedJobs
+        selectedProject="Apex"
+      />,
+    );
+
+    const report = screen.getByTestId('home-guided-jobs');
+    const history = screen.getByTestId('chat-agent-history-btn');
+    expect(report.parentElement).toBe(history.parentElement);
+    expect(report.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('PBI-007 AC-3 excludes Home-only content outside Home', () => {

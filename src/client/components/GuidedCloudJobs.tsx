@@ -1,5 +1,4 @@
-import React, { useLayoutEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useMemo, useState } from 'react';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import {
   useCancelGuidedCloudAgentRun,
@@ -14,13 +13,6 @@ import { DataGridToolbar } from './DataGridToolbar';
 import gridStyles from './DataGrid.module.css';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import styles from './GuidedCloudJobs.module.css';
-
-export const HOME_GUIDED_JOBS_SLOT_ID = 'home-guided-jobs-slot';
-const HOME_GUIDED_JOBS_SLOT_EVENT = 'home-guided-jobs-slot';
-
-export function notifyHomeGuidedJobsSlot(): void {
-  window.dispatchEvent(new Event(HOME_GUIDED_JOBS_SLOT_EVENT));
-}
 
 const SITE_ISSUE_REPORT_TEMPLATE = [
   'Page:',
@@ -52,9 +44,11 @@ function reportedOn(value: string): string {
 
 interface GuidedCloudJobsProps {
   project: string;
+  /** Right-align in the home tab strip. The chat header keeps it in the action row. */
+  alignEnd?: boolean;
 }
 
-export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => {
+export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, alignEnd = true }) => {
   const { flags } = useFeatureFlags(project);
   const enabled = flags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true;
   const jobsQuery = useGuidedCloudJobs(project, enabled && flags[MY_WORK_CLOUD_AGENT_FLAG] === true);
@@ -70,7 +64,6 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const [actionError, setActionError] = useState<string | null>(null);
   const [bugAlreadyOpened, setBugAlreadyOpened] = useState(false);
   const [search, setSearch] = useState('');
-  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const panelRef = useDialogFocus<HTMLDivElement>(open, () => setOpen(false), job !== null);
   const data = jobsQuery.data;
   const siteIssueJob = data?.jobs[0] ?? null;
@@ -83,16 +76,6 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
         || String(report.bugWorkItemId ?? '').includes(term);
     });
   }, [data?.runs, search]);
-
-  useLayoutEffect(() => {
-    const sync = () => {
-      const next = document.getElementById(HOME_GUIDED_JOBS_SLOT_ID);
-      setHeaderSlot((current) => (current === next ? current : next));
-    };
-    sync();
-    window.addEventListener(HOME_GUIDED_JOBS_SLOT_EVENT, sync);
-    return () => window.removeEventListener(HOME_GUIDED_JOBS_SLOT_EVENT, sync);
-  }, []);
 
   // @feature-flag:cloud-agent-guided-launch start winner=enabled
   if (!enabled || flags[MY_WORK_CLOUD_AGENT_FLAG] !== true) {
@@ -156,20 +139,16 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
 
   const hasReports = (data?.runs ?? []).length > 0;
 
-  const launchButton = (
-    <button
-      type="button"
-      className={headerSlot ? styles.tabButton : `${styles.tabButton} ${styles.tabButtonEnd}`}
-      onClick={() => setOpen(true)}
-      data-testid="home-guided-jobs"
-    >
-      Report an issue
-    </button>
-  );
-
   return (
     <>
-      {headerSlot ? createPortal(launchButton, headerSlot) : launchButton}
+      <button
+        type="button"
+        className={alignEnd ? `${styles.tabButton} ${styles.tabButtonEnd}` : styles.tabButton}
+        onClick={() => setOpen(true)}
+        data-testid="home-guided-jobs"
+      >
+        Report an issue
+      </button>
       {open ? (
         <div className={styles.overlay} role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) setOpen(false);

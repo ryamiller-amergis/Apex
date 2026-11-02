@@ -1177,6 +1177,7 @@ function App() {
                   }
                   onClearNewChatError={() => setFirstMessageError(null)}
                   launchedFromHome
+                  canStartGuidedJobs={isSuperAdmin || can('chat:create')}
                   selectedSkillSettingsId={selectedSkillSettingsId}
                 />
               </ErrorBoundary>

@@ -112,7 +112,7 @@ export const AgentHome: React.FC<AgentHomeProps> = ({
             Project status
           </button>
         )}
-        {canStartGuidedJobs ? <GuidedCloudJobs project={selectedProject} /> : null}
+        {canStartGuidedJobs && view !== 'chat' ? <GuidedCloudJobs project={selectedProject} /> : null}
       </div>
       {view === 'status' && statusAvailable && (
         <div className={styles.statusView} role="tabpanel" aria-label="Project status">
