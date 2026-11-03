@@ -208,7 +208,7 @@ Ensure `.ai-pilot/output/` exists. Write **in this order**:
 |-------|------|---------|
 | 1 | `.ai-pilot/output/{slug}.test-cases.json` | Machine-readable suite — must validate against [`test-case-schema.json`](test-case-schema.json) |
 | 2 | `.ai-pilot/output/{slug}.backlog.json` | **Update in place** — set `testCaseCount` on each in-scope PBI; preserve all other fields |
-| 3 | `.ai-pilot/output/{slug}.test-cases.md` | Human-readable QA handoff |
+| 3 | `.ai-pilot/output/{slug}.test-cases.md` | Human-readable QA handoff. Skip it when the kickoff context says not to write it |
 
 ### Backlog update rules
 

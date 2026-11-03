@@ -43,7 +43,7 @@ When the work item needs more, keep the highest-risk cases and list the rest in 
 ## Output
 
 1. Write `.ai-pilot/output/{slug}.test-cases.json` — validated against `test-case-schema.json`.
-2. Write `.ai-pilot/output/{slug}.test-cases.md` — human-readable summary.
+2. Write `.ai-pilot/output/{slug}.test-cases.md` — human-readable summary. Skip it when the kickoff context says not to write it.
 3. Patch the backlog JSON: update `testCaseCount` on each PBI.
 
 ## Azure DevOps placement
