@@ -86,6 +86,11 @@ export interface CloudAgentRunObservation {
   noChanges?: boolean;
   /** The Cursor run has left the running state. */
   settled?: boolean;
+  /**
+   * Cursor has finished the agent turn. Git metadata can still be missing, which
+   * keeps status as running until a pull request is found.
+   */
+  agentFinished?: boolean;
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {
@@ -157,7 +162,8 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
   const resultText = run.status === 'error'
     ? (run.error?.message ?? run.result ?? null)
     : (run.result ?? null);
-  const gitPending = run.status === 'finished' && !gitKnown;
+  const agentFinished = run.status === 'finished' || run.status === 'completed';
+  const gitPending = agentFinished && !gitKnown;
   return {
     status: gitPending ? 'running' : run.status,
     prUrl,
@@ -165,8 +171,9 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
     branchName,
     baseBranch: null,
     summary: run.result ?? null,
-    noChanges: run.status === 'finished' && gitKnown && !branchName && !prUrl,
+    noChanges: agentFinished && gitKnown && !branchName && !prUrl,
     settled: isTerminalStatus(run.status) && !gitPending,
+    agentFinished,
   };
 }
 
@@ -270,6 +277,13 @@ function clip(value: string, max: number): string {
   return `${trimmed.slice(0, max - 1)}…`;
 }
 
+/** Reply and thinking chunks keep a leading or trailing space so the log can join them. */
+function streamChunk(value: string, max: number): string {
+  const collapsed = value.replace(/\s+/g, ' ');
+  if (collapsed.length <= max) return collapsed;
+  return `${collapsed.slice(0, max - 1)}…`;
+}
+
 /** One Cursor SDK stream message becomes one drawer row. */
 export function sdkMessageToActivity(
   message: SDKMessage,
@@ -286,7 +300,7 @@ export function sdkMessageToActivity(
         id: `assistant:${message.run_id}:${index}`,
         kind: 'assistant',
         title: 'Assistant',
-        detail: clip(text, 500),
+        detail: streamChunk(text, 500),
       };
     }
     case 'thinking':
@@ -295,7 +309,7 @@ export function sdkMessageToActivity(
         id: `thinking:${message.run_id}:${index}`,
         kind: 'thinking',
         title: 'Thinking',
-        detail: clip(message.text, 500),
+        detail: streamChunk(message.text, 500),
       };
     case 'tool_call':
       return {

@@ -261,6 +261,7 @@ const CLOUD_AGENT_INPUT_SCHEMA = z.object({
   state: z.string().min(1).optional(),
   tags: z.string().optional(),
   prompt: z.string().optional(),
+  model: z.string().min(1).optional(),
   deadlineMs: z.number().positive().optional(),
 });
 

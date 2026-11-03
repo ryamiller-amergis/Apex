@@ -5,7 +5,11 @@ import { recommendPlaybookSteps } from '../services/playbookRecommenderService';
 import { ancestorsNearestFirst } from '../services/playbookSteps/cloudAgentAdapter';
 import { describePlaybookSkill, listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
 import { loadPlaybookSkillContent } from '../services/playbookExecutionCapabilityService';
-import { runEventActivityEntries, threadActivityEntries } from '../services/playbookStepActivityService';
+import {
+  mergeActivityEntries,
+  runEventActivityEntries,
+  threadActivityEntries,
+} from '../services/playbookStepActivityService';
 import { getStepTypeDescriptor } from '../services/playbookSteps/registry';
 
 describe('recommendPlaybookSteps', () => {
@@ -34,6 +38,12 @@ describe('recommendPlaybookSteps', () => {
 describe('cloud-agent input', () => {
   it('accepts a step with no work item fields so it can infer them', () => {
     expect(getStepTypeDescriptor('cloud-agent').inputSchema.safeParse({}).success).toBe(true);
+  });
+
+  it('accepts a per-step Cloud Agent model override', () => {
+    expect(getStepTypeDescriptor('cloud-agent').inputSchema.safeParse({
+      model: 'claude-sonnet-4-6',
+    }).success).toBe(true);
   });
 
   it('walks earlier steps nearest first, past an approval', () => {
@@ -91,6 +101,16 @@ describe('describePlaybookSkill', () => {
 });
 
 describe('runEventActivityEntries', () => {
+  it('keeps durable worker events when the thread already has a prompt', () => {
+    expect(mergeActivityEntries(
+      [{ id: 'prompt', kind: 'prompt', title: 'Prompt', detail: 'Investigate', at: '2026-01-01T00:00:00Z' }],
+      [{ id: 'tool', kind: 'tool', title: 'Shell', detail: 'az monitor query', at: '2026-01-01T00:00:01Z' }],
+    )).toEqual([
+      { id: 'prompt', kind: 'prompt', title: 'Prompt', detail: 'Investigate', at: '2026-01-01T00:00:00Z' },
+      { id: 'tool', kind: 'tool', title: 'Shell', detail: 'az monitor query', at: '2026-01-01T00:00:01Z' },
+    ]);
+  });
+
   it('turns stored worker events into tool and status lines', () => {
     const entries = runEventActivityEntries([
       {

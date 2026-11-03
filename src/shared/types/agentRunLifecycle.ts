@@ -93,9 +93,11 @@ export interface ExecutionSnapshot {
   cloudAgent?: {
     workItemId: number;
     workItemTitle?: string;
-    /** My Work branch: feature/apex-<workItemId>-<title-slug>. */
+    /** Cloud Agent branch: bug/<id>-<name> for a bug, otherwise a type prefix. */
     branchName?: string;
+    /** Branch the work is cut from and the pull request merges into. */
     baseBranch: string;
+    requiredReviewers?: string[];
     initiatorName?: string;
     initiatorEmail?: string;
     /** Configured development skill, invoked as `/name` by the container CLI. */

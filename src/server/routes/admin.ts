@@ -3,6 +3,10 @@ import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
 import {
+  listCloudAgentDelivery,
+  saveCloudAgentDelivery,
+} from '../services/cloudAgentDeliverySettings';
+import {
   normalizeConfiguredRepository,
   validateConfiguredRepository,
 } from '../services/foundationSkillAuthorizeService';
@@ -366,21 +370,25 @@ router.put('/groups/:id/members', async (req: Request, res: Response): Promise<v
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [configs, approversBySettingsId, approverGroupsBySettingsId] = await Promise.all([
+    const [configs, approversBySettingsId, approverGroupsBySettingsId, cloudAgentDelivery] = await Promise.all([
       projectSettingsService.listSkillConfigs(),
       projectSettingsService.listApproversForAllProjects(),
       projectSettingsService.listApproverGroupsForAllProjects(),
+      listCloudAgentDelivery(),
     ]);
     const enriched = await Promise.all(configs.map(async (cfg) => {
       const approvers = approversBySettingsId[cfg.id] ?? [];
       const approverGroups = approverGroupsBySettingsId[cfg.id] ?? [];
       const approvalModes = await projectSettingsService.getApprovalModes(cfg.id);
+      const delivery = cloudAgentDelivery.get(cfg.id);
       const countByType = (documentType: string) =>
         approvers.filter((a) => a.documentType === documentType).length +
         approverGroups.filter((g) => g.documentType === documentType).length;
       return {
         ...cfg,
         approvalModes,
+        cloudAgentTargetBranch: delivery?.targetBranch ?? null,
+        cloudAgentRequiredReviewers: delivery?.requiredReviewers ?? [],
         designDocApproverCount: countByType('design_doc'),
         prdApproverCount: countByType('prd'),
         designPrototypeApproverCount: countByType('design_prototype'),
@@ -426,8 +434,21 @@ router.post('/project-settings', async (req: Request, res: Response): Promise<vo
       skillRepo,
       updatedBy,
     });
+    const delivery = body.cloudAgentTargetBranch !== undefined || body.cloudAgentRequiredReviewers !== undefined
+      ? await saveCloudAgentDelivery(config.id, {
+        targetBranch: body.cloudAgentTargetBranch,
+        requiredReviewers: body.cloudAgentRequiredReviewers,
+      })
+      : null;
     const approvalModes = await projectSettingsService.getApprovalModes(config.id);
-    res.status(201).json({ ...config, approvalModes });
+    res.status(201).json({
+      ...config,
+      approvalModes,
+      ...(delivery ? {
+        cloudAgentTargetBranch: delivery.targetBranch,
+        cloudAgentRequiredReviewers: delivery.requiredReviewers,
+      } : {}),
+    });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -470,8 +491,21 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
       skillRepo,
       updatedBy,
     });
+    const delivery = body.cloudAgentTargetBranch !== undefined || body.cloudAgentRequiredReviewers !== undefined
+      ? await saveCloudAgentDelivery(id, {
+        targetBranch: body.cloudAgentTargetBranch,
+        requiredReviewers: body.cloudAgentRequiredReviewers,
+      })
+      : null;
     const approvalModes = await projectSettingsService.getApprovalModes(id);
-    res.json({ ...config, approvalModes });
+    res.json({
+      ...config,
+      approvalModes,
+      ...(delivery ? {
+        cloudAgentTargetBranch: delivery.targetBranch,
+        cloudAgentRequiredReviewers: delivery.requiredReviewers,
+      } : {}),
+    });
   } catch (err) {
     const cause = (err as any)?.cause;
     console.error('[admin] PUT /project-settings error:', (err as Error).message, '| cause:', cause?.message ?? cause ?? '(none)');

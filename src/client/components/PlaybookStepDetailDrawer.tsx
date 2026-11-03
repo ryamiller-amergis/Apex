@@ -29,6 +29,7 @@ import type {
 import type { CloudAgentActivityKind } from '../../shared/types/devWorkbench';
 import { usePlaybookStepActivity, usePlaybookStepOutput } from '../hooks/usePlaybookRuns';
 import { useCloudAgentActivityStream } from '../hooks/useDevWorkbench';
+import { cloudAgentActivityLabel, cloudAgentPhaseIndex } from '../utils/cloudAgentActivityLog';
 import { absoluteTime, stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import { PlaybookSuspensionDetail as SuspensionDetail } from './PlaybookSuspensionDetail';
@@ -179,11 +180,14 @@ export const LogConsole: React.FC<{
   live: boolean;
   startedAt: string | null;
   showKindFilters?: boolean;
+  /** Replaces the generic "Working" pulse when the stream knows the current step. */
+  liveLabel?: string | null;
 }> = ({
   entries,
   live,
   startedAt,
   showKindFilters = true,
+  liveLabel,
 }) => {
   const ref = useRef<HTMLOListElement>(null);
   const [follow, setFollow] = useState(true);
@@ -277,7 +281,7 @@ export const LogConsole: React.FC<{
               <span className={styles.typing}><i /><i /><i /></span>
             </span>
             <div className={styles.entryBody}>
-              <span className={styles.entryLive}>Working</span>
+              <span className={styles.entryLive}>{liveLabel || 'Working'}</span>
             </div>
           </li>
         ) : null}
@@ -337,7 +341,12 @@ export const StepLog: React.FC<{
   }, [activity.data?.entries, cloud.events, isAgent, isCloud, step, suspension]);
 
   const agentRun = activity.data?.agentRun;
-  const phase = agentPhaseIndex(agentRun?.status, step.status);
+  const cloudLabel = isCloud && live
+    ? (cloudAgentActivityLabel(cloud.events) ?? (cloud.error ? null : 'Connecting to the agent…'))
+    : null;
+  const phase = isCloud
+    ? cloudAgentPhaseIndex(cloud.events.length, live)
+    : agentPhaseIndex(agentRun?.status, step.status);
   const failure = stepFailureReason(step);
 
   return (
@@ -367,7 +376,11 @@ export const StepLog: React.FC<{
           ))}
         </ol>
       ) : null}
-      {agentRun?.label && live ? (
+      {cloudLabel ? (
+        <p className={styles.nowDoing} {...{ 'data-testid': 'playbook-cloud-agent-now' }}>
+          <Loader2 size={13} aria-hidden className={styles.spin} /> {cloudLabel}
+        </p>
+      ) : agentRun?.label && live ? (
         <p className={styles.nowDoing}>
           <Loader2 size={13} aria-hidden className={styles.spin} /> {agentRun.label}
         </p>
@@ -377,6 +390,7 @@ export const StepLog: React.FC<{
       <LogConsole
         entries={entries}
         live={live}
+        liveLabel={cloudLabel}
         startedAt={step.startedAt}
         showKindFilters={isAgent || isCloud}
       />

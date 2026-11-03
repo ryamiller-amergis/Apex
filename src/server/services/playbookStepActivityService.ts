@@ -107,6 +107,21 @@ export function threadActivityEntries(messages: readonly ChatMessage[]): Playboo
   return entries.slice(-MAX_ENTRIES);
 }
 
+export function mergeActivityEntries(
+  threadEntries: readonly PlaybookStepActivityEntry[],
+  runEntries: readonly PlaybookStepActivityEntry[],
+): PlaybookStepActivityEntry[] {
+  const seen = new Set<string>();
+  return [...threadEntries, ...runEntries]
+    .filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return true;
+    })
+    .sort((left, right) => left.at.localeCompare(right.at))
+    .slice(-MAX_ENTRIES);
+}
+
 export async function getPlaybookStepActivity(input: {
   project: string;
   runId: string;
@@ -147,22 +162,21 @@ export async function getPlaybookStepActivity(input: {
   };
   const thread = await getThread(agentRun.threadId);
   const fromThread = threadActivityEntries(thread?.messages ?? []);
-  if (fromThread.length > 0) {
-    activity.entries = fromThread;
-  } else {
-    const events = await db
-      .select({
-        eventId: agentRunEvents.eventId,
-        detail: agentRunEvents.detail,
-        event: agentRunEvents.event,
-        at: agentRunEvents.eventTimestamp,
-      })
-      .from(agentRunEvents)
-      .where(eq(agentRunEvents.runId, step.agentRunId))
-      .orderBy(asc(agentRunEvents.sequence))
-      .limit(MAX_ENTRIES);
-    activity.entries = runEventActivityEntries(events);
-  }
+  const events = await db
+    .select({
+      eventId: agentRunEvents.eventId,
+      detail: agentRunEvents.detail,
+      event: agentRunEvents.event,
+      at: agentRunEvents.eventTimestamp,
+    })
+    .from(agentRunEvents)
+    .where(eq(agentRunEvents.runId, step.agentRunId))
+    .orderBy(asc(agentRunEvents.sequence))
+    .limit(MAX_ENTRIES);
+  // A V2 worker records its detailed progress in agent_run_events while the thread
+  // may contain only the prompt. Returning both prevents that prompt from hiding
+  // the live tool, thinking, and response log.
+  activity.entries = mergeActivityEntries(fromThread, runEventActivityEntries(events));
   if (agentRun.lastError) {
     activity.entries.push({
       id: `${step.agentRunId}-error`,

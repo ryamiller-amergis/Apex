@@ -524,6 +524,18 @@ export interface CursorAgentStepConfig {
   threadId?: string;
 }
 
+export interface CloudAgentStepConfig {
+  workItemId?: number | string;
+  workItemSource?: 'automatic' | 'manual';
+  workItemType?: string;
+  state?: string;
+  tags?: string;
+  prompt?: string;
+  /** Overrides the project's default Cloud Agent model for this node. */
+  model?: string;
+  deadlineMs?: number;
+}
+
 export interface ApprovalGateStepConfig {
   /** Overrides the descriptor's 48-hour default for this step only. */
   deadlineMs?: number;

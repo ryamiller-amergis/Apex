@@ -172,6 +172,10 @@ export async function alignCloudAgentPullRequest(input: {
   workItemId: number;
   sourceBranch: string;
   titleBranch?: string | null;
+  /** When set, the pull request is pointed at this branch. */
+  targetBranch?: string | null;
+  /** Azure DevOps team or group names added as required reviewers. */
+  requiredReviewers?: string[] | null;
 }): Promise<void> {
   const { title } = buildCloudAgentPullRequestText(input);
   const ado = new AzureDevOpsService(input.project);
@@ -186,4 +190,49 @@ export async function alignCloudAgentPullRequest(input: {
     project: input.project,
     prUrl: input.prUrl,
   });
+  await applyProjectPullRequestSettings(ado, input);
+}
+
+async function applyProjectPullRequestSettings(
+  ado: AzureDevOpsService,
+  input: {
+    repo: string;
+    project: string;
+    prUrl: string;
+    targetBranch?: string | null;
+    requiredReviewers?: string[] | null;
+  },
+): Promise<void> {
+  const pullRequestId = parsePullRequestNumber(input.prUrl, 'ado');
+  const targetBranch = input.targetBranch?.trim();
+  if (targetBranch) {
+    try {
+      await ado.setPullRequestTargetBranch({
+        repo: input.repo,
+        project: input.project,
+        pullRequestId,
+        targetBranch,
+      });
+    } catch (err) {
+      console.warn(
+        '[cloud-agent] could not point the pull request at the configured branch',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  const reviewers = (input.requiredReviewers ?? []).map((name) => name.trim()).filter(Boolean);
+  if (!reviewers.length) return;
+  try {
+    await ado.addRequiredPullRequestReviewers({
+      repo: input.repo,
+      project: input.project,
+      pullRequestId,
+      names: reviewers,
+    });
+  } catch (err) {
+    console.warn(
+      '[cloud-agent] could not add the configured required reviewers',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }

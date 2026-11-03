@@ -23,6 +23,15 @@ function withApexOriginTag(tags?: string[]): string[] {
   return hasApex ? base : [...base, APEX_ORIGIN_TAG];
 }
 
+function pullRequestIdFromArtifact(url: string): number | null {
+  const encoded = url.match(/%2[fF](\d+)$/);
+  const plain = url.match(/PullRequestId\/(?:[^/]+\/){2}(\d+)$/i);
+  const raw = encoded?.[1] ?? plain?.[1];
+  if (!raw) return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 /** Walk the parent chain to compute depth (0 = root). */
 function computeDepth(id: number, parentMap: Map<number, number | null>): number {
   let depth = 0;
@@ -6311,6 +6320,168 @@ export class AzureDevOpsService {
       return 'abandoned';
     }
     return 'open';
+  }
+
+  /** Display name and email of the person who created the work item. */
+  async getWorkItemCreator(
+    workItemId: number,
+  ): Promise<{ name: string; email: string | null } | null> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const item = await witApi.getWorkItem(
+      workItemId,
+      ['System.CreatedBy'],
+      undefined,
+      undefined,
+      this.project,
+    );
+    const createdBy = item?.fields?.['System.CreatedBy'] as
+      | { displayName?: string; uniqueName?: string }
+      | undefined;
+    const name = createdBy?.displayName?.trim();
+    if (!name) return null;
+    const email = createdBy?.uniqueName?.trim() || null;
+    return { name, email };
+  }
+
+  /**
+   * Active pull request linked to the work item, preferring one opened from
+   * the expected source branch.
+   */
+  async findPullRequestUrlForWorkItem(opts: {
+    repo: string;
+    project: string;
+    workItemId: number;
+    sourceBranch?: string | null;
+  }): Promise<string | null> {
+    if (opts.sourceBranch?.trim()) {
+      const byBranch = await this.findPullRequestUrlBySourceBranch(
+        opts.repo,
+        opts.project,
+        opts.sourceBranch.trim(),
+      );
+      if (byBranch) return byBranch;
+    }
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const item = await witApi.getWorkItem(
+      opts.workItemId,
+      undefined,
+      undefined,
+      WorkItemExpand.Relations,
+      opts.project,
+    );
+    const ids = (item?.relations ?? [])
+      .map((relation) => pullRequestIdFromArtifact(relation.url ?? ''))
+      .filter((id): id is number => id !== null);
+    if (!ids.length) return null;
+    const gitApi = await this.connection.getGitApi();
+    const matches = await Promise.all(ids.map(async (pullRequestId) => {
+      try {
+        return await gitApi.getPullRequestById(pullRequestId, opts.project);
+      } catch {
+        return null;
+      }
+    }));
+    const active = matches
+      .filter((pullRequest) => pullRequest?.status === PullRequestStatus.Active && pullRequest.pullRequestId)
+      .sort((left, right) => (right?.pullRequestId ?? 0) - (left?.pullRequestId ?? 0));
+    const chosen = active[0];
+    if (!chosen?.pullRequestId) return null;
+    const repo = chosen.repository?.name || opts.repo;
+    return `${this.organization}/${opts.project}/_git/${repo}/pullrequest/${chosen.pullRequestId}`;
+  }
+
+  /** Points an open pull request at the project's configured branch. */
+  async setPullRequestTargetBranch(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    targetBranch: string;
+  }): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    const wanted = `refs/heads/${opts.targetBranch}`;
+    const current = await gitApi.getPullRequest(opts.repo, opts.pullRequestId, opts.project);
+    if (current?.targetRefName === wanted) return;
+    await gitApi.updatePullRequest(
+      { targetRefName: wanted },
+      opts.repo,
+      opts.pullRequestId,
+      opts.project,
+    );
+  }
+
+  /**
+   * Adds each name as a required reviewer. A name matches a project team first,
+   * then an Azure DevOps group or user with that display name.
+   */
+  async addRequiredPullRequestReviewers(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    names: string[];
+  }): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    for (const name of opts.names) {
+      const reviewerId = await this.findReviewerId(opts.project, name);
+      if (!reviewerId) {
+        console.warn('[ado] required reviewer was not found', JSON.stringify({
+          project: opts.project,
+          name,
+        }));
+        continue;
+      }
+      try {
+        await gitApi.createPullRequestReviewer(
+          { id: reviewerId, isRequired: true, displayName: name },
+          opts.repo,
+          opts.pullRequestId,
+          reviewerId,
+          opts.project,
+        );
+      } catch (err) {
+        console.warn('[ado] could not add required reviewer', JSON.stringify({
+          project: opts.project,
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    }
+  }
+
+  private async findReviewerId(project: string, name: string): Promise<string | null> {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const coreApi = await this.connection.getCoreApi();
+    const teams = await coreApi.getTeams(project);
+    const team = (teams ?? []).find(
+      (item) => item.name?.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (team?.id) return team.id;
+
+    const org = this.organization.replace(/\/$/, '');
+    const pat = process.env.ADO_PAT;
+    if (!pat) return null;
+    const response = await fetch(`${org}/_apis/IdentityPicker/Identities?api-version=5.0-preview.1`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: trimmed,
+        identityTypes: ['group', 'user'],
+        operationScopes: ['ims', 'source'],
+        options: { MinResults: 1, MaxResults: 5 },
+      }),
+    });
+    if (!response.ok) return null;
+    const body = await response.json() as {
+      results?: Array<{ identities?: Array<{ localId?: string; originId?: string; displayName?: string }> }>;
+    };
+    const identities = body.results?.flatMap((result) => result.identities ?? []) ?? [];
+    const match = identities.find(
+      (identity) => identity.displayName?.trim().toLowerCase() === trimmed.toLowerCase(),
+    ) ?? identities[0];
+    return match?.originId || match?.localId || null;
   }
 
   /**

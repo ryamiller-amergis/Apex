@@ -452,8 +452,14 @@ const WorkItemSourceField: React.FC<PlaybookStepFieldsProps & {
 
 const CloudAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   const { node, config, disabled, setField, setConfig, bindings, referencesFor } = props;
+  const models = useAvailableModels();
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
   const overridden = Boolean(config.workItemType || config.state || config.tags);
+  const modelOptions: PlaybookPickerOption[] = (models.data ?? []).map((model) => ({
+    value: model.id,
+    label: model.displayName,
+    description: model.id,
+  }));
   return (
     <>
       <Field
@@ -490,6 +496,21 @@ const CloudAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           references={referencesFor(prompt)}
           onChange={(value) => setField('prompt', value)}
           {...{ 'data-testid': "playbook-inspector-field-prompt" }}
+        />
+      </Field>
+      <Field label="Model" htmlFor={`${node.id}-model`} hint="Blank uses the project's Cloud Agent model." {...{ 'data-testid': `playbook-field-${node.id}-model` }}>
+        <PlaybookOptionPicker
+          id={`${node.id}-model`}
+          value={typeof config.model === 'string' ? config.model : undefined}
+          options={modelOptions}
+          loading={models.isPending}
+          placeholder="Choose a model"
+          searchPlaceholder="Search models"
+          emptyOption={{ label: 'Project default', description: 'Uses the model set for this project' }}
+          icon={<Cpu size={14} />}
+          disabled={disabled}
+          onChange={(value) => setField('model', value)}
+          {...{ 'data-testid': "playbook-cloud-agent-field-model" }}
         />
       </Field>
       <details className={styles.moreSettings} open={overridden}>
@@ -800,7 +821,7 @@ export const STEP_FIELD_RENDERERS: Record<string, {
     Component: ApexActionFields,
   },
   'cloud-agent': {
-    handledKeys: ['workItemId', 'workItemSource', 'workItemType', 'state', 'tags', 'prompt', 'deadlineMs'],
+    handledKeys: ['workItemId', 'workItemSource', 'workItemType', 'state', 'tags', 'prompt', 'model', 'deadlineMs'],
     Component: CloudAgentFields,
   },
   connector: {

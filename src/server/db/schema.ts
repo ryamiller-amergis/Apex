@@ -1166,6 +1166,14 @@ export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ 
   workflowSettings: many(projectSkillWorkflowSettings),
 }));
 
+/** Cloud Agent branch target and required reviewers for one repository config. */
+export const projectCloudAgentDelivery = pgTable('project_cloud_agent_delivery', {
+  settingsId: uuid('settings_id').primaryKey().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  targetBranch: text('target_branch'),
+  requiredReviewers: jsonb('required_reviewers').$type<string[]>().notNull().default([]),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
 export const projectSkillWorkflowSettingsRelations = relations(projectSkillWorkflowSettings, ({ one }) => ({
   settings: one(projectSkillSettings, {
     fields: [projectSkillWorkflowSettings.settingsId],

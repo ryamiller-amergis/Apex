@@ -4,7 +4,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { appUsers, playbookRuns, playbookStepRuns } from '../../db/schema';
-import type { PlaybookGraph } from '../../../shared/types/playbook';
+import type { CloudAgentStepConfig, PlaybookGraph } from '../../../shared/types/playbook';
 import { AzureDevOpsService } from '../azureDevOps';
 import {
   CloudAgentConflictError,
@@ -85,14 +85,7 @@ async function inferWorkItemId(context: PlaybookStepExecutionContext): Promise<n
 export async function executeCloudAgentStep(
   context: PlaybookStepExecutionContext,
 ): Promise<PlaybookStepOutcome> {
-  const config = parseStepInput<{
-    workItemId?: number;
-    workItemSource?: 'automatic' | 'manual';
-    workItemType?: string;
-    state?: string;
-    tags?: string;
-    deadlineMs?: number;
-  }>(STEP_TYPE, context.config);
+  const config = parseStepInput<CloudAgentStepConfig>(STEP_TYPE, context.config);
   const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs);
   try {
     const explicitId = positiveInteger(config.workItemId);
@@ -125,6 +118,7 @@ export async function executeCloudAgentStep(
       userId: context.initiatorUserId,
       project: context.project,
       workItemId,
+      ...(config.model?.trim() ? { model: config.model.trim() } : {}),
       isSuperAdmin: Boolean(user?.email && isSuperAdminEmail(user.email)),
       item: {
         workItemType: workItemType!,

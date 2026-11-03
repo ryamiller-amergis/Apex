@@ -270,6 +270,7 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     persistLeftoverWork: mockPersistLeftoverWork,
     writeLeftoverWorkToAdo: mockWriteLeftoverWorkToAdo,
     openCloudAgentPullRequest: jest.fn(),
+    findWorkItemPullRequest: jest.fn().mockResolvedValue(null),
     ...overrides,
   } as unknown as CloudAgentServiceDeps;
 }
@@ -474,7 +475,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
         cloudAgent: expect.objectContaining({
           skillName: 'dev-orchestrator',
-          branchName: 'feature/apex-42-wi-42',
+          branchName: 'feat/42-wi-42',
         }),
       }),
     }));
@@ -711,6 +712,22 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     expect(prompt).toContain('Name the work item as AB#123');
     expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
     expect(prompt).not.toContain('Do not open a pull request.');
+  });
+
+  it('names a bug branch and tells the agent to merge into the configured branch', async () => {
+    const prompt = await buildCloudAgentPrompt({
+      project: 'MaxView',
+      workItemId: 11855,
+      workItemTitle: 'Timecards manage page',
+      workItemType: 'Production issue',
+      targetBranch: 'development',
+      createdByName: 'Avery Chen',
+      createdByEmail: 'avery@example.com',
+    });
+
+    expect(prompt).toContain('Create branch `bug/11855-timecards-manage-page` from `development`.');
+    expect(prompt).toContain('Open the pull request into `development` and no other branch.');
+    expect(prompt).toContain('Make the git author and committer Avery Chen <avery@example.com>');
   });
 
   it('tells the agent to open the pull request with the description skeleton', async () => {
@@ -1804,6 +1821,36 @@ describe('reconcileRunningCloudAgentRuns', () => {
 
   afterEach(() => {
     setImmediateSpy.mockRestore();
+  });
+
+  it('completes a finished run when Azure DevOps already has the pull request', async () => {
+    mockLiveRows([liveExecution({
+      executionSnapshot: {
+        repository: 'MaxView',
+        cloudAgent: { workItemId: 11855, branchName: 'bug/11855-timecards', baseBranch: 'development' },
+      },
+    })]);
+    const findWorkItemPullRequest = jest.fn().mockResolvedValue(
+      'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/11855',
+    );
+    await reconcileRunningCloudAgentRuns(makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue(observation({
+        status: 'running',
+        agentFinished: true,
+        prUrl: null,
+      })),
+      findWorkItemPullRequest,
+    }));
+
+    expect(findWorkItemPullRequest).toHaveBeenCalledWith({
+      project: 'MaxView',
+      repo: 'MaxView',
+      workItemId: 11855,
+      sourceBranch: 'bug/11855-timecards',
+    });
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
   });
 
   it('completes a finished execution from its log line and frees the slot', async () => {
