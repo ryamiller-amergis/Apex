@@ -188,7 +188,7 @@ async function loadLinkedAdrs(requestIds: string[]): Promise<Map<string, LinkedA
 export async function createFeatureRequest(
   userId: string,
   project: string,
-  data: { type: WorkItemType; title: string; request: string; advantage?: string | null; adrIds?: string[] },
+  data: { id?: string; type: WorkItemType; title: string; request: string; advantage?: string | null; adrIds?: string[] },
 ): Promise<FeatureRequest> {
   const adrIds = [...new Set(data.adrIds ?? [])];
   if (adrIds.some((id) => !UUID_PATTERN.test(id))) {
@@ -218,6 +218,7 @@ export async function createFeatureRequest(
         throw httpError('Every linked ADR must exist, be accepted, and belong to the request project', 400);
       }
       const [row] = await tx.insert(featureRequests).values({
+        id: data.id,
         type: data.type,
         title: data.title,
         request: data.request,
@@ -243,6 +244,7 @@ export async function createFeatureRequest(
   const [row] = await db
     .insert(featureRequests)
     .values({
+      id: data.id,
       type: data.type,
       title: data.title,
       request: data.request,

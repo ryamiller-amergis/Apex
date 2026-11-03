@@ -28,6 +28,7 @@ export interface NightlyIdleReGroundDependencies {
   reGroundFromCache?: (
     ref: RunRef,
     role: 'target',
+    options?: { materialize?: boolean },
   ) => Promise<{ previousSha: string; newSha: string; groundedAt: string } | null>;
   readCachedOriginSha?: (
     grounding: Pick<
@@ -45,6 +46,13 @@ export interface NightlyIdleReGroundDependencies {
   /** @deprecated Use isEligibleLongLivedChat */
   isInProgressInterviewOrHomeChat?: (threadId: string) => Promise<boolean>;
   now?: () => Date;
+}
+
+export interface NightlyIdleReGroundOptions {
+  /** Skips groundings whose project this host does not ground. */
+  includeProject?: (project: string) => Promise<boolean>;
+  /** Re-pin only when false; defaults to true (re-pin and materialize). */
+  materialize?: boolean;
 }
 
 export interface NightlyIdleReGroundResult {
@@ -186,8 +194,8 @@ export function createNightlyIdleReGroundService(
     (() => runGroundingRepository.listActiveGroundings());
   const reGroundFromCache =
     dependencies.reGroundFromCache ??
-    ((ref: RunRef, role: 'target') =>
-      runGroundingService.reGroundFromCache(ref, role));
+    ((ref: RunRef, role: 'target', options?: { materialize?: boolean }) =>
+      runGroundingService.reGroundFromCache(ref, role, options));
   const readCachedOriginSha =
     dependencies.readCachedOriginSha ?? defaultReadCachedOriginSha;
   const isThreadIdle = dependencies.isThreadIdle ?? defaultIsThreadIdle;
@@ -208,7 +216,10 @@ export function createNightlyIdleReGroundService(
       lastRunEtDate = date;
     },
 
-    async runIfDue(): Promise<NightlyIdleReGroundResult> {
+    async runIfDue(
+      options: NightlyIdleReGroundOptions = {},
+    ): Promise<NightlyIdleReGroundResult> {
+      const { includeProject, materialize = true } = options;
       const current = now();
       const etDate = etCalendarDate(current);
       if (!isNightlyIdleReGroundDue(current, lastRunEtDate)) {
@@ -236,12 +247,20 @@ export function createNightlyIdleReGroundService(
       };
 
       const active = await listActiveGroundings();
-      const targets = active.filter(
+      const chatTargets = active.filter(
         (row) =>
           row.isActive &&
           row.runType === 'chat' &&
           row.repoRole === 'target',
       );
+      const targets = includeProject
+        ? (
+            await Promise.all(
+              chatTargets.map(async (row) =>
+                (await includeProject(row.project)) ? row : null),
+            )
+          ).filter((row): row is RunGrounding => row !== null)
+        : chatTargets;
       result.considered = targets.length;
 
       for (const grounding of targets) {
@@ -268,6 +287,7 @@ export function createNightlyIdleReGroundService(
               project: grounding.project,
             },
             'target',
+            { materialize },
           );
           if (updated && updated.newSha !== updated.previousSha) {
             result.reGrounded += 1;

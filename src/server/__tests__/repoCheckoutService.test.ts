@@ -15,6 +15,7 @@ const mockRemote = {
   },
   secret: 'secret-pat',
 };
+const mockRemoveTree = jest.fn().mockResolvedValue(undefined);
 const mockEnsureRepoCache = jest.fn().mockResolvedValue({
   cacheDir: '/data/repo-cache/maxview.git',
   baseSha: 'abc123',
@@ -34,6 +35,9 @@ jest.mock('../utils/asyncGit', () => ({
   git: (...args: any[]) => mockGit(...args),
   safeArgs: (dir: string, args: string[]) => ['-c', `safe.directory=${dir}`, ...args],
   LONG_TIMEOUT_MS: 120_000,
+}));
+jest.mock('../utils/removeTree', () => ({
+  removeTree: (...args: unknown[]) => mockRemoveTree(...args),
 }));
 jest.mock('../utils/asyncMutex', () => ({
   workspaceMutex: { acquire: jest.fn().mockResolvedValue(() => {}) },
@@ -227,7 +231,7 @@ describe('repoCheckoutService', () => {
       expect(JSON.stringify(mockGit.mock.calls)).not.toContain('secret-pat');
     });
 
-    it('clears an existing workspace without synchronous fs calls', async () => {
+    it('clears an existing workspace in a child process, not through fs', async () => {
       process.env.ADO_ORG = 'https://dev.azure.com/amergis';
       process.env.ADO_PAT = 'secret-pat';
 
@@ -250,10 +254,10 @@ describe('repoCheckoutService', () => {
         workspacePath('session-async'),
         expect.stringContaining(`${workspacePath('session-async')}.removing-`),
       );
-      expect(promises.rm).toHaveBeenCalledWith(
+      expect(mockRemoveTree).toHaveBeenCalledWith(
         expect.stringContaining('.removing-'),
-        { recursive: true, force: true },
       );
+      expect(promises.rm).not.toHaveBeenCalled();
       expect(mockFs.rmSync).not.toHaveBeenCalled();
     });
 

@@ -5,6 +5,9 @@ import { ChatAgentPanel } from '../ChatAgentPanel';
 jest.mock('../BuildAgentHomePill', () => ({
   BuildAgentHomePill: () => null,
 }));
+jest.mock('../BrainstormHomeEntry', () => ({
+  BrainstormHomeEntry: () => null,
+}));
 
 jest.mock('../GuidedCloudJobs', () => ({
   GuidedCloudJobs: () => <button type="button" data-testid="home-guided-jobs">Report an issue</button>,

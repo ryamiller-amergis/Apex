@@ -23,6 +23,8 @@ const MODULE_EFFORT_KEYS = {
   loadTestGeneration: 'loadTestGenerationEffort',
   designModule: 'designModuleEffort',
   designModuleScoping: 'designModuleScopingEffort',
+  // Brainstorm has no project override; it uses the project default.
+  brainstorm: 'defaultEffort',
 } as const satisfies Record<AgentModuleId, keyof ProjectSkillConfig>;
 
 const SKILL_PATH_MODULES = [

@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import { ApexGenerateWorkItemsWizard } from './ApexGenerateWorkItemsWizard';
@@ -18,8 +18,14 @@ import {
   isInterviewableWorkItemType,
   toFeatureRequestInterviewPrefill,
 } from '../utils/featureRequestInterview';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import listStyles from './FeatureRequestsView.module.css';
 import styles from './FeatureRequestDetailPanel.module.css';
+
+const DEFAULT_DRAWER_WIDTH = 560;
+const MIN_DRAWER_WIDTH = 360;
+const MAX_DRAWER_WIDTH = 1200;
+const RESIZE_STEP = 32;
 
 const STATUS_LABELS: Record<FeatureRequestStatus, string> = {
   new: 'New',
@@ -82,14 +88,6 @@ function formatDate(iso: string): string {
   });
 }
 
-function formatBody(text: string): React.ReactNode {
-  return text.split('\n').map((line, i) => (
-    <p key={i} className={line.trim() === '' ? styles['paraSpacer'] : undefined}>
-      {line || '\u00A0'}
-    </p>
-  ));
-}
-
 interface FeatureRequestDetailPanelProps {
   fr: FeatureRequest;
   canManage: boolean;
@@ -118,13 +116,56 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
   onReanalyze,
   isReanalyzing,
 }) => {
-  const navigate = useNavigate();
-  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded, selectedProject, workBoardEnabled } = useAppShell();
-  const canKickOff = permissionsLoaded
-    && can('interviews:manage')
-    && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
   const [showGenerateWizard, setShowGenerateWizard] = useState(false);
+  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_DRAWER_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(DEFAULT_DRAWER_WIDTH);
+  const resizeJustEndedRef = useRef(false);
+
   const handleClose = useCallback(() => onClose(), [onClose]);
+
+  const handleOverlayClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (resizeJustEndedRef.current) {
+        resizeJustEndedRef.current = false;
+        return;
+      }
+      if (e.target === e.currentTarget) handleClose();
+    },
+    [handleClose],
+  );
+
+  const handleResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragStartXRef.current = e.clientX;
+      dragStartWidthRef.current = drawerWidth;
+      setIsResizing(true);
+    },
+    [drawerWidth],
+  );
+
+  const handleResizeKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const maxAllowed = Math.min(
+      MAX_DRAWER_WIDTH,
+      Math.floor((typeof window !== 'undefined' ? window.innerWidth : MAX_DRAWER_WIDTH) * 0.9),
+    );
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setDrawerWidth((w) => Math.min(maxAllowed, w + RESIZE_STEP));
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      setDrawerWidth((w) => Math.max(MIN_DRAWER_WIDTH, w - RESIZE_STEP));
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setDrawerWidth(maxAllowed);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      setDrawerWidth(MIN_DRAWER_WIDTH);
+    }
+  }, []);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -134,21 +175,71 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
     return () => document.removeEventListener('keydown', handleKey);
   }, [handleClose]);
 
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const delta = dragStartXRef.current - e.clientX;
+      const maxAllowed = Math.min(
+        MAX_DRAWER_WIDTH,
+        Math.floor(window.innerWidth * 0.9),
+      );
+      const next = Math.min(
+        maxAllowed,
+        Math.max(MIN_DRAWER_WIDTH, dragStartWidthRef.current + delta),
+      );
+      setDrawerWidth(next);
+    };
+    const onMouseUp = () => {
+      resizeJustEndedRef.current = true;
+      setIsResizing(false);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
+  const navigate = useNavigate();
+  const { can, isSuperAdmin, isInAnyGroup, permissionsLoaded, selectedProject, workBoardEnabled } = useAppShell();
+  const canKickOff = permissionsLoaded
+    && can('interviews:manage')
+    && isInAnyGroup(['BA', 'Manager', 'Product-Owner']);
+
   return (
     <>
       <div
         className={styles['overlay']}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) handleClose();
-        }}
+        onClick={handleOverlayClick}
         aria-hidden="true"
        {...{ 'data-testid': 'feature-request-detail-overlay' }} />
       <aside
-        className={styles['drawer']}
+        className={`${styles['drawer']}${isResizing ? ` ${styles['drawerResizing']}` : ''}`}
+        style={{ width: `${drawerWidth}px` }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="fr-detail-title"
        {...{ 'data-testid': 'feature-request-detail-drawer' }}>
+        {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA separator resize handle */}
+        <div
+          className={styles['resizeHandle']}
+          onMouseDown={handleResizeMouseDown}
+          onKeyDown={handleResizeKeyDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize details panel"
+          aria-valuemin={MIN_DRAWER_WIDTH}
+          aria-valuemax={MAX_DRAWER_WIDTH}
+          aria-valuenow={drawerWidth}
+          tabIndex={0}
+          {...{ 'data-testid': 'feature-request-detail-resize-handle' }}
+        />
+        {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
         <header className={styles['header']}>
           <div className={styles['headerLeft']}>
             <h2 className={styles['title']} id="fr-detail-title">
@@ -166,12 +257,20 @@ export const FeatureRequestDetailPanel: React.FC<FeatureRequestDetailPanelProps>
         <div className={styles['body']}>
           <section className={styles['section']}>
             <h3 className={styles['sectionTitle']}>Description</h3>
-            <div className={styles['prose']}>{formatBody(fr.request)}</div>
+            <div className={styles['prose']} {...{ 'data-testid': 'feature-request-detail-description' }}>
+              {/* data-testid-exempt — MarkdownWithMermaid renders inside feature-request-detail-description */}
+              <MarkdownWithMermaid content={fr.request} skipHtml />
+            </div>
           </section>
 
           <section className={styles['section']}>
             <h3 className={styles['sectionTitle']}>Advantage</h3>
-            <div className={styles['prose']}>{fr.advantage ? formatBody(fr.advantage) : null}</div>
+            <div className={styles['prose']} {...{ 'data-testid': 'feature-request-detail-advantage' }}>
+              {fr.advantage ? (
+                /* data-testid-exempt — MarkdownWithMermaid renders inside feature-request-detail-advantage */
+                <MarkdownWithMermaid content={fr.advantage} skipHtml />
+              ) : null}
+            </div>
           </section>
 
           {(fr.linkedAdrs?.length ?? 0) > 0 && (

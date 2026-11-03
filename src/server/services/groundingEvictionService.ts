@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs';
 import path from 'node:path';
 import type { RunGrounding } from '../../shared/types/runGrounding';
 import { resolveDataRoot } from '../utils/dataDir';
+import { removeTree } from '../utils/removeTree';
 import { resolveRunGroundingWorkspacePath } from './runGroundingMaterializer';
 import { runGroundingRepository } from './runGroundingRepository';
 import { trackEvent } from './telemetry';
@@ -77,7 +78,7 @@ export function createGroundingEvictionService(
           if (now() - stats.atimeMs <= GROUNDING_WORKSPACE_IDLE_TTL_MS) {
             continue;
           }
-          await fs.rm(workspace, { recursive: true, force: true });
+          await removeTree(workspace);
           result.evicted += 1;
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;

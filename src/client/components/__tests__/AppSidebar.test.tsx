@@ -393,6 +393,37 @@ describe('AppSidebar — Builds visibility (FEAT-002 VT-06)', () => {
   });
 });
 
+describe('AppSidebar — Brainstorm under Build', () => {
+  it('shows Brainstorm in the Build group when the flag, menu and permission are on', () => {
+    const onNavigateBrainstorm = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'brainstorm:view'}
+        menuEnabledViews={['brainstorm']}
+        brainstormEnabled
+        onNavigateBrainstorm={onNavigateBrainstorm}
+      />,
+    );
+    expect(screen.getByText('Build')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('nav-item-brainstorm'));
+    expect(onNavigateBrainstorm).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Brainstorm when the flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'brainstorm:view'}
+        menuEnabledViews={['brainstorm']}
+        brainstormEnabled={false}
+        onNavigateBrainstorm={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-brainstorm')).not.toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — grouped sections', () => {
   const allViews = [
     'calendar', 'planning', 'cloudcost', 'backlog', 'adr',
