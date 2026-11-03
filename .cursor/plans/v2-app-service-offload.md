@@ -40,11 +40,68 @@ Tonight (safe to test today):
 6. Terraform: mount share in repo-read env + app; new env settings.
 7. Phase 4a: promote chat-host image only when its source changed.
 8. Phase 5a: loop_error metric carries reason/status.
-Follow-ups (not safe for tonight; need design + dev soak):
-9. Phase 3: Ask Apex → V2 agentic host; walkthrough drafts + grounding impact → V2 document lane (flag-gated, old path kept).
-10. Phase 4b: zero-downtime chat-host swap (multiple revisions, shift traffic after Dapr ready); stop Dapr state component hot-reload.
-11. Phase 2: V2 chat hosts off the share onto local disk + Blob; `.ai-pilot` files to DB/Blob.
-12. Phase 5b: route-decision event for every AI entry; alert when App Service does repo/AI work for a V2 project.
+Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" below.
+
+## Tomorrow (2026-11-03)
+Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.
+
+Where V2 work runs today (target in brackets):
+- Request intake, flag check, execution spec, outbox row: App Service [stays: `.cursor/rules/v2-worker-no-policy.mdc`]
+- Dispatch, checkpoints, terminal results: orchestrator [stays]
+- Document harvest (`documentV2Harvest`, `startupRecovery.ts:343`, ~60 s sweep) and the validation watcher: App Service [orchestrator, workstream A]
+- Ask Apex agent process (`askApexService.ts`, cwd = App Service): App Service [V2 agentic host, B]
+- Walkthrough drafts (`walkthroughAiDraftService.generateProposal`/`generateStepProposal`), grounding impact (`groundingImpactEvaluatorService.evaluateWithCursorSdk`): App Service [V2 document lane, C]
+- Chat hosts and workers: share `ai-pilot-data` for workspaces and `.ai-pilot` files [local disk + Blob, D]
+
+A. Harvest + validation to the orchestrator (fixes the last 0% cause)
+Blockers found 2026-11-02 (why not tonight):
+- `syncOutputToDb` → `notifyAiCompletion` pushes through `notificationService.ts` in-memory `connections` Map on App Service. From the orchestrator the row is saved but no open browser hears it.
+- `syncOutputToDb` starts follow-on jobs (`triggerTestCaseGeneration`, `autoStartPrdValidation` → `startDocumentValidationWatcher`, an in-process `setInterval` that reads the share via `readOutputValidationScorecard`/`isOutputWorkspaceReadable`). The orchestrator has no share mount.
+- `documentV2Harvest.ts` header: the orchestrator is meant to stay domain-neutral.
+Steps:
+1. Quick win first (own PR): for V2 validation threads, do not start the share watcher; harvest already ingests the scorecard via `syncOutputToDb` → `ingestValidationScorecard`. Harvest and `canThisInstanceFailGeneration` pick the document's own run (`prds.validation_thread_id` / `design_docs.validation_thread_id` run), not the thread's newest run (`finishedAttemptReader.listFinishedDocuments` `NOT EXISTS newer`). Test: a chat run after the validation run must not hide it.
+2. Cross-process events: Postgres `LISTEN/NOTIFY` (or Service Bus topic) so any process can publish notifications and thread events and App Service fans them out to its SSE connections. Verify payload size limits (NOTIFY 8 KB; send ids only).
+3. Follow-on job starts go through the outbox (App Service resolves the spec when it consumes the request), not an in-process call.
+4. Move the harvest call into the orchestrator result consumer after `transitionAttempt` (finished attempt known at that moment); keep App Service's sweep as a fallback behind the flag for one sprint.
+5. Same for `designPrototypeV2Harvest` and `uiLabV2Harvest` (`startupRecovery.ts:750,766`).
+Done when: V2 validation reaches the DB in < 10 s after the worker finishes, alerts still arrive live, App Service logs no `[documentValidationWatcher] Started` for V2 projects.
+
+B. Ask Apex on the V2 agentic host
+1. Ask Apex already reads through repo-read (818ee7d4, per-session `sandboxCwd`). Move the agent run to the interactive actor host like Home chat: route Ask Apex sessions through `durableInteractiveTurnService` when the project is whole-V2.
+2. Keep the app-knowledge skill and context pack; the host needs the skill file and the repo docs (`context.md`, `AGENTS.md`, design docs) from repo-read, not App Service's disk.
+3. Flag: new per-project flag (feature-flags skill) or reuse `ai-runs-v2-transport`; ask the user.
+Done when: App Insights shows Ask Apex turns dispatched to `ca-apex-ai-agentic-{env}` for Apex/MaxView and no local Cursor agent process on App Service.
+
+C. Walkthrough drafts + grounding impact on the V2 document lane
+1. Add workflow classes to `BackgroundWorkflowClass` (exhaustive switches in `documentV2Harvest.ts` and the worker's `assertExpectedOutputSet` will flag every place to handle).
+2. Output contract: one JSON file each in `.ai-pilot/output`; harvest applies it (pattern: `walkthrough-smart-tagging`).
+3. Router builds `scratchInputs` (catalog anchors for drafts; diff/commit range for impact).
+4. Drafts are user-facing and synchronous today: decide with the user whether the UI waits on a run (progress like the assistants) or polls.
+Done when: no Cursor SDK calls from App Service for these two on V2 projects.
+
+D. Blob + local disk (old item 11; also `../Apex/.cursor/plans/grounding-local-disk.md` Phase 2)
+1. Inventory every share read/write for V2 runs: `interactiveActorHost/entrypoint.ts`, `interactiveSessionActor.ts` (`reclaimDisk`), `brainstormSourceMount.ts`, `chatAgentService.hydrateThread`, `.ai-pilot` transcript/kickoff files, documents-v2 worker inputs.
+2. Grounding: execution spec carries provider/project/repo/sha only; each host materializes on its own local disk from the Blob bundle (`bundleStoreService.rehydrate`) or repo-read.
+3. `.ai-pilot` files (kickoff transcript, outputs, scorecards): DB for small text, Blob for the rest; App Service reads DB/Blob, never the share, for V2 threads.
+4. Chat-host thread workspace: local disk, rebuilt from DB/Blob on actor activation; idle eviction stays local.
+5. Remove the share mount from V2 hosts only after two clean sprints; keep it for non-V2.
+Done when: V2 hosts run with the share unmounted on dev for a full test pass (PRD, design doc, test cases, validation, chat, Brainstorm).
+
+E. Smaller items
+1. Chat-host zero-downtime swap (old item 10): multiple revisions, shift traffic after Dapr ready; stop the Dapr state component hot-reload (`infra/ai-runs-interactive.tf:177`).
+2. Alerting (old item 12): route-decision event for every AI entry; alert on `grounding.v2_app_service_fallback` and any App Service repo/AI work for a V2 project.
+3. Brainstorm catalog repos and temp repos: on-demand bundle publish by repo-read instead of cloning on App Service.
+4. Agentic host restart mid-turn (dev 2026-11-03 00:33:43Z, thread 498515d8, run 4525e179): container restartCount 1, no error logged, memory normal; probes allow 1 s while `/health` awaited a Dapr metadata fetch with a 2 s timeout. Shipped tonight: `createCachedHealthCheck` (answers from the last report) and the client shows failures from `semanticStatus: 'failed'` on done (reaper/orchestrator terminals were silent) with Try again in the assistants. Still to do:
+   a. Auto re-run a turn lost to a host restart once (extend `neverStartedTurnRetry` in `agentRunReaperService.ts` to started-but-lost turns with no external side effects; Apex applies assistant edits only at turn end). Error + retry only if the re-run fails.
+   b. Faster loss detection: the restarted host reports its lost runs at startup instead of waiting for the 60 s heartbeat timeout plus the sweep (took ~1m45s).
+   c. Confirm restart reason: dev Container Apps env sends logs to `azure-monitor` with no workspace attached, so system logs (probe failures, OOM) are not kept.
+5. Prod Oct 27 "no scorecard": check whether a chat run landed on the validation thread (same query as dev a65426dd, read-only via Kudu).
+6. ADR assistant UI: move to `AssistantConversation` like the PRD and design-doc assistants.
+
+Questions for the user before starting:
+- Which flag gates B and C (new per-project flag or `ai-runs-v2-transport`)?
+- A step 2: Postgres `LISTEN/NOTIFY` or a Service Bus topic for cross-process events?
+- C step 4: should walkthrough drafts wait in the UI with live progress?
 
 ## Done
 - [x] Prod investigation (see Key facts)

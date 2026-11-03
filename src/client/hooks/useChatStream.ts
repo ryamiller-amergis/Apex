@@ -770,18 +770,31 @@ export function useChatStream(
           clearRetryTimeout();
           clearPollTimer();
           setStatus('idle');
-          if ((event as { error?: string }).error) {
+          {
             const doneEvent = event as SseDoneEvent & { error?: string };
-            if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
-              setRetryableRunId(doneEvent.runId.slice(0, 200));
+            // Terminal writes outside the turn (reaper, orchestrator) report
+            // the failure only in the envelope's status and detail.
+            const failureText = doneEvent.error
+              || (event.semanticStatus === 'failed'
+                ? safeDetail(event.semanticDetail) ?? 'The agent run did not finish. Please retry.'
+                : null);
+            if (failureText) {
+              if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
+                setRetryableRunId(doneEvent.runId.slice(0, 200));
+              }
+              const errMsg: ChatMessage = {
+                id: uuidv4(),
+                role: 'system',
+                text: `Error: ${failureText}`,
+                ts: new Date().toISOString(),
+              };
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                return last?.role === 'system' && last.text.startsWith('Error:')
+                  ? prev
+                  : [...prev, errMsg];
+              });
             }
-            const errMsg: ChatMessage = {
-              id: uuidv4(),
-              role: 'system',
-              text: `Error: ${doneEvent.error}`,
-              ts: new Date().toISOString(),
-            };
-            setMessages((prev) => [...prev, errMsg]);
           }
           if (event.prdReady) setPrdReady(true);
           if (event.backlogReady) setBacklogReady(true);

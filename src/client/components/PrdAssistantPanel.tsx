@@ -275,6 +275,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               suggestions: PRD_ASSISTANT_SUGGESTIONS,
               onSuggestion: fillComposer,
             } : undefined}
+            onRetry={session.retryableRunId ? () => { void session.retryFailedRun(); } : undefined}
             testIdPrefix="prd-assistant"
           />
         </AgentPanelShell>

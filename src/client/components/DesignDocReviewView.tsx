@@ -633,6 +633,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           suggestions: DESIGN_DOC_ASSISTANT_SUGGESTIONS,
           onSuggestion: fillComposer,
         } : undefined}
+        onRetry={!readOnly && session.retryableRunId ? () => { void session.retryFailedRun(); } : undefined}
         testIdPrefix="design-doc-assistant"
       />
       </AgentPanelShell>

@@ -85,4 +85,35 @@ describe('AssistantConversation', () => {
     });
     expect(screen.queryByTestId('agent-choice-submit-btn')).not.toBeInTheDocument();
   });
+
+  it('offers Try again on a trailing error and calls onRetry', () => {
+    const onRetry = jest.fn();
+    renderConversation({
+      onRetry,
+      messages: [{
+        id: 'e-1',
+        role: 'system',
+        text: 'Error: Interactive agent stopped responding. Please retry.',
+        ts: '2026-11-02T21:01:00.000Z',
+      }],
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Interactive agent stopped responding');
+    fireEvent.click(screen.getByTestId('prd-assistant-retry'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Try again while a turn is running or when the error is not last', () => {
+    const error: ChatMessage = {
+      id: 'e-1',
+      role: 'system',
+      text: 'Error: Worker failed',
+      ts: '2026-11-02T21:01:00.000Z',
+    };
+    const { rerender, props } = renderConversation({ onRetry: jest.fn(), messages: [error], isWorking: true });
+    expect(screen.queryByTestId('prd-assistant-retry')).not.toBeInTheDocument();
+
+    rerender(<AssistantConversation {...props} isWorking={false} messages={[error, agentReply]} />);
+    expect(screen.queryByTestId('prd-assistant-retry')).not.toBeInTheDocument();
+  });
 });

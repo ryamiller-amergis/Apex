@@ -1181,6 +1181,53 @@ describe('useChatStream', () => {
     expect(result.current.status).toBe('idle');
   });
 
+  it('shows a run failed outside the turn from the done envelope status', () => {
+    const runId = '50000000-0000-4000-8000-000000000002';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', {
+        type: 'done',
+        runId,
+        semanticStatus: 'failed',
+        semanticDetail: 'Interactive agent stopped responding. Please retry.',
+      });
+    });
+
+    expect(result.current.retryableRunId).toBe(runId);
+    expect(result.current.messages[result.current.messages.length - 1]).toMatchObject({
+      role: 'system',
+      text: 'Error: Interactive agent stopped responding. Please retry.',
+    });
+  });
+
+  it('does not repeat an error the turn already reported', () => {
+    const runId = '50000000-0000-4000-8000-000000000003';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', { type: 'error', error: 'Worker failed', runId });
+      lastES!.emit('message', {
+        type: 'done',
+        runId,
+        semanticStatus: 'failed',
+        semanticDetail: 'Worker failed',
+      });
+    });
+
+    expect(result.current.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+  });
+
+  it('adds no error for a completed done envelope', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', { type: 'done', semanticStatus: 'completed' });
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+  });
+
   it('clears retryableRunId on a successful committed message event', () => {
     const runId = '50000000-0000-4000-8000-000000000001';
     const { result } = renderHook(() => useChatStream('t1'));

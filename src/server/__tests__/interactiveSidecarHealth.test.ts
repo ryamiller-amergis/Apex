@@ -1,5 +1,6 @@
 import {
   createActorInvocationStallTracker,
+  createCachedHealthCheck,
   createSidecarHealthMonitor,
   evaluateSidecarMetadata,
   interactiveHealthRoute,
@@ -139,5 +140,50 @@ describe('interactiveHealthRoute', () => {
     await interactiveHealthRoute(async () => report)({} as never, res as never);
     expect(res.status).toHaveBeenCalledWith(code);
     expect(res.json).toHaveBeenCalledWith(report);
+  });
+});
+
+describe('createCachedHealthCheck', () => {
+  const degraded = {
+    status: 'degraded',
+    problem: 'sidecar-unreachable',
+    detail: 'slow',
+  } as const;
+
+  it('waits for the first check only', async () => {
+    const check = jest.fn().mockResolvedValue({ status: 'ok' });
+    const cached = createCachedHealthCheck(check);
+
+    await expect(cached()).resolves.toEqual({ status: 'ok' });
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers from the last report while the next check is still running', async () => {
+    let release: (report: typeof degraded) => void = () => undefined;
+    const check = jest.fn()
+      .mockResolvedValue(degraded)
+      .mockResolvedValueOnce({ status: 'ok' })
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const cached = createCachedHealthCheck(check);
+    await cached();
+
+    await expect(cached()).resolves.toEqual({ status: 'ok' });
+    await expect(cached()).resolves.toEqual({ status: 'ok' });
+    expect(check).toHaveBeenCalledTimes(2);
+
+    release(degraded);
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(cached()).resolves.toEqual(degraded);
+  });
+
+  it('reports degraded when a check rejects', async () => {
+    const check = jest.fn().mockRejectedValue(new Error('boom'));
+    const cached = createCachedHealthCheck(check);
+
+    await expect(cached()).resolves.toEqual({
+      status: 'degraded',
+      problem: 'sidecar-unreachable',
+      detail: 'boom',
+    });
   });
 });

@@ -58,6 +58,20 @@
 
 .systemBubble p { margin: 0; }
 
+.retryButton {
+  display: block;
+  margin: 6px auto 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary, #111);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.retryButton:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.05)); }
+
 .agentMsgMeta {
   display: block;
   margin-top: 4px;
