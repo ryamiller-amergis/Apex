@@ -179,6 +179,10 @@ resource "azurerm_linux_web_app" "main" {
       "DATABASE_URL",
       var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
       "DB_POOL_MAX",
+      # Staging opts in to test-account sign-in; a swap must not carry that into production.
+      "ALLOW_TEST_ACCOUNT_SIGN_IN",
+      # Production runs a larger libuv pool than staging.
+      "UV_THREADPOOL_SIZE",
       # How long a background run may wait for a worker before it is failed as
       # queue_ttl. Approving a PRD submits one run per feature against a lane
       # that runs ten at a time, so the legitimate wait scales with the feature
