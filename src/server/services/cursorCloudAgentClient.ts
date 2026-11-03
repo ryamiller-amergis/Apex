@@ -162,7 +162,7 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
   const resultText = run.status === 'error'
     ? (run.error?.message ?? run.result ?? null)
     : (run.result ?? null);
-  const agentFinished = run.status === 'finished' || run.status === 'completed';
+  const agentFinished = run.status === 'finished';
   const gitPending = agentFinished && !gitKnown;
   return {
     status: gitPending ? 'running' : run.status,

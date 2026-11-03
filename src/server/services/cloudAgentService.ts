@@ -372,7 +372,11 @@ export interface CloudAgentServiceDeps {
     project: string;
     workItemId: number;
     workItemTitle?: string;
+    workItemType?: string;
     branchName?: string;
+    targetBranch?: string | null;
+    createdByName?: string | null;
+    createdByEmail?: string | null;
   }) => Promise<string>;
   persistLeftoverWork: typeof persistLeftoverWork;
   writeLeftoverWorkToAdo: typeof writeLeftoverWorkToAdo;
