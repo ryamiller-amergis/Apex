@@ -513,6 +513,7 @@ additive and inert while the flag is disabled.
 | Container Apps Environment | `cae-apex-ai-dev` | `cae-apex-ai-prd` |
 | Container Apps Job | `caj-apex-ai-runs-dev` | `caj-apex-ai-runs-prd` |
 | Runner MI | `mi-apex-ai-runs-runner-dev` | `mi-apex-ai-runs-runner-prd` |
+| Insights reader | `mi-apex-insights-reader-dev` | same identity, attached to the prod job and document worker |
 | Azure Files share | `ai-pilot-data` on shared storage | same |
 | Runner image ACR | Reuses `acrapexlt{env}` / repo `apex-ai-runs` | same |
 
@@ -565,6 +566,22 @@ remains inert behind the disabled feature flag.
 | Runner MI | **AcrPull** | load-test ACR (`acrapexlt*`) |
 | Apex API (system identity) | Azure Service Bus Data **Sender** | `ai-runs-background` queue (no receive) |
 | Runner MI | `AiRun.Runner` app role | Entra app when `enable_ai_runs_entra_app=true` |
+| `mi-apex-insights-reader-dev` | Monitoring Reader, Log Analytics Reader, and Reader on MaxView production telemetry | Assigned outside this module. Apply does not create or remove those role assignments. |
+
+Dev state owns `mi-apex-insights-reader-dev`. Prod does not create `mi-apex-insights-reader-prd`. A prod apply reads the dev identity and attaches it to `caj-apex-ai-runs-prd` and `ca-apex-ai-runs-documents-v2-prd`, and sets `AZURE_INSIGHTS_CLIENT_ID`. `AZURE_CLIENT_ID` stays the worker's own identity.
+
+The identity already exists. Import it into the **default** workspace before the first dev apply, or apply tries to create a second identity with the same name:
+
+```bash
+az account set --subscription "MSS-DevTest"
+terraform workspace select default
+terraform import 'azurerm_user_assigned_identity.ai_runs_insights_reader[0]' \
+  "/subscriptions/9d08693d-0c89-4f11-aa43-6cbdb89cf1cb/resourceGroups/rg-scrum-dev/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-apex-insights-reader-dev"
+terraform plan
+terraform apply
+```
+
+Prod has nothing to import. From the `prd` workspace, `terraform plan -var-file="terraform.prd.tfvars"` should show the prod job and document worker gaining that identity. The plan needs permission to read the identity in MSS-DevTest. A plan that destroys the identity or removes `AZURE_INSIGHTS_CLIENT_ID` should not be applied.
 
 By default Terraform provisions the dedicated Key Vault and seeds its
 `cursor-api-key` secret from the existing sensitive `cursor_api_key` variable.

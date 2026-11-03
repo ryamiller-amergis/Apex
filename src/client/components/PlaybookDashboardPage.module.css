@@ -143,6 +143,31 @@
   background: var(--bg-tertiary);
 }
 
+.dangerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.15rem;
+  padding: 0 0.9rem;
+  border-radius: 9px;
+  border: 1px solid var(--error-color);
+  background: transparent;
+  color: var(--error-color);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+}
+
+.dangerButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .errorBanner,
 .successBanner {
   margin: 0;

@@ -94,6 +94,7 @@ export interface PreparedBackgroundWorkflowWorker {
   skillPath: string;
   skillContent?: string;
   skillSha256?: string;
+  skillCompanions?: Array<{ path: string; content: string }>;
   /** No Skill was frozen because the mirror was still fetching the pinned commit. */
   skillRepositorySyncing?: boolean;
   projectId: string;
@@ -604,6 +605,9 @@ export function createBackgroundWorkflowRouter(
           skillPath: prepared.skillPath,
           skillContent: prepared.skillContent,
           skillSha256: prepared.skillSha256,
+          ...(prepared.skillCompanions?.length
+            ? { skillCompanions: prepared.skillCompanions }
+            : {}),
           workflowClass: input.workflowClass,
           projectId: prepared.projectId,
           threadId: input.threadId,

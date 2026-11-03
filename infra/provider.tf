@@ -28,6 +28,16 @@ provider "azurerm" {
   skip_provider_registration = true
 }
 
+# Prod workers log in as mi-apex-insights-reader-dev, which lives in MSS-DevTest.
+# This alias reads that identity during a prod plan. It does not create a second one.
+provider "azurerm" {
+  alias           = "insights_reader"
+  subscription_id = var.ai_runs_insights_reader_subscription_id
+  features {}
+
+  skip_provider_registration = true
+}
+
 provider "azuread" {
   tenant_id = var.azure_tenant_id
 }

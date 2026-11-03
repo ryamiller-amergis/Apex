@@ -556,6 +556,30 @@ variable "ai_runs_runner_identity_name" {
   default     = null
 }
 
+variable "ai_runs_insights_reader_name" {
+  description = "Shared user-assigned identity for MaxView telemetry reads. Dev creates this identity. Prod attaches the same one. Do not create a second identity per environment."
+  type        = string
+  default     = "mi-apex-insights-reader-dev"
+}
+
+variable "ai_runs_insights_reader_resource_group_name" {
+  description = "Resource group of mi-apex-insights-reader-dev. The identity stays in the dev group when prod workers use it."
+  type        = string
+  default     = "rg-scrum-dev"
+}
+
+variable "ai_runs_insights_reader_location" {
+  description = "Region of mi-apex-insights-reader-dev. Must match the identity that already exists."
+  type        = string
+  default     = "East US"
+}
+
+variable "ai_runs_insights_reader_subscription_id" {
+  description = "Subscription that holds mi-apex-insights-reader-dev. Prod apply reads the identity from here."
+  type        = string
+  default     = "9d08693d-0c89-4f11-aa43-6cbdb89cf1cb"
+}
+
 variable "ai_runs_max_in_flight" {
   description = "Global background in-flight cap. Must match App Service AI_RUNS_BACKGROUND_INFLIGHT_LIMIT and KEDA max_executions (Phase 1: 8–12; default 10)."
   type        = number

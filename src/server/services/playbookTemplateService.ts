@@ -1,28 +1,35 @@
 /**
- * Installs the one shipped Playbook template as a project-owned draft.
+ * Installs a shipped Playbook template as a project-owned draft.
  *
- * The source file is not a shared definition row. Install copies its graph into
- * the target project and records which template version that copy came from.
- * It does not publish, and it does not rewrite a definition that already has
- * history.
+ * The catalog is source files, not a shared definition row. Install copies a
+ * graph into the target project and records which template version that copy
+ * came from. It does not publish. Apply replaces the draft graph only after
+ * an explicit confirmation, and it does not touch a published version or a run.
  */
-import { and, eq } from 'drizzle-orm';
-import type { PlaybookDefinitionDetail, PlaybookGraph } from '../../shared/types/playbook';
+import { and, eq, inArray } from 'drizzle-orm';
+import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
+import type {
+  PlaybookTemplateDetail,
+  PlaybookTemplateInstallState,
+  PlaybookTemplateSummary,
+} from '../../shared/types/playbookTemplates';
 import { db } from '../db/drizzle';
-import { playbookDefinitions } from '../db/schema';
-import { createDefinition, getDefinitionDetail } from './playbookDefinitionService';
-import buildFromPromptTemplate from '../playbookTemplates/build-from-prompt.json';
-import interviewTemplate from '../playbookTemplates/interview.json';
+import { playbookDefinitionVersions, playbookDefinitions } from '../db/schema';
+import {
+  PlaybookDefinitionNotFoundError,
+  PlaybookDraftConflictError,
+  PlaybookDraftNotFoundError,
+  createDefinition,
+  getDefinitionDetail,
+} from './playbookDefinitionService';
+import {
+  getShippedPlaybookTemplate,
+  loadPlaybookTemplateCatalog,
+  type ShippedPlaybookTemplate,
+} from './playbookTemplateCatalogService';
+import { isFeatureEnabled } from './featureFlagService';
 
 export const CORE_INTERVIEW_TEMPLATE_KEY = 'core-interview';
-
-interface ShippedPlaybookTemplate {
-  templateKey: string;
-  templateVersion: number;
-  name: string;
-  description: string | null;
-  graph: PlaybookGraph;
-}
 
 export class PlaybookTemplateNotFoundError extends Error {
   constructor(templateKey: string) {
@@ -49,12 +56,6 @@ export class PlaybookTemplateAlreadyPublishedError extends Error {
   }
 }
 
-/** Imported, not read from disk: `tsc` emits imported JSON into `dist/` but skips loose files. */
-const TEMPLATE_SOURCES: Record<string, { fileName: string; source: unknown }> = {
-  [CORE_INTERVIEW_TEMPLATE_KEY]: { fileName: 'interview.json', source: interviewTemplate },
-  'build-from-prompt': { fileName: 'build-from-prompt.json', source: buildFromPromptTemplate },
-};
-
 function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -65,34 +66,133 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 function loadShippedTemplate(templateKey: string): ShippedPlaybookTemplate {
-  const entry = TEMPLATE_SOURCES[templateKey];
-  if (!entry) throw new PlaybookTemplateNotFoundError(templateKey);
+  const template = getShippedPlaybookTemplate(templateKey);
+  if (!template) throw new PlaybookTemplateNotFoundError(templateKey);
+  return template;
+}
 
-  const { fileName } = entry;
-  const parsed = structuredClone(entry.source) as Partial<ShippedPlaybookTemplate>;
-  if (parsed.templateKey !== templateKey) {
-    throw new PlaybookTemplateInvalidError(
-      `Shipped template file ${fileName} does not declare templateKey ${templateKey}.`,
-    );
+export class PlaybookTemplatePrerequisiteError extends Error {
+  constructor(readonly missingFlags: string[]) {
+    super(`This template needs ${missingFlags.join(', ')} before it can be installed.`);
+    this.name = 'PlaybookTemplatePrerequisiteError';
   }
-  if (!Number.isInteger(parsed.templateVersion) || (parsed.templateVersion ?? 0) < 1) {
-    throw new PlaybookTemplateInvalidError(
-      `Shipped template ${templateKey} has no monotonic templateVersion.`,
-    );
-  }
-  if (!parsed.name?.trim() || !parsed.graph || !Array.isArray(parsed.graph.nodes)) {
-    throw new PlaybookTemplateInvalidError(
-      `Shipped template ${templateKey} is missing a name or graph.`,
-    );
-  }
+}
 
-  return {
-    templateKey,
-    templateVersion: parsed.templateVersion!,
-    name: parsed.name.trim(),
-    description: typeof parsed.description === 'string' ? parsed.description : null,
-    graph: structuredClone(parsed.graph),
-  };
+export class PlaybookTemplateConfirmationRequiredError extends Error {
+  constructor() {
+    super('Replacing the draft requires confirmation.');
+    this.name = 'PlaybookTemplateConfirmationRequiredError';
+  }
+}
+
+export class PlaybookTemplateVersionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlaybookTemplateVersionError';
+  }
+}
+
+export function recordPlaybookTemplateEvent(
+  event: 'browse' | 'install' | 'update-offered' | 'update-accepted',
+  fields: Record<string, unknown>,
+): void {
+  console.info('[playbook-template]', JSON.stringify({ event, ...fields }));
+}
+
+export async function assertTemplatePrerequisites(input: {
+  templateKey: string;
+  userId: string | undefined;
+  project: string;
+}): Promise<void> {
+  const template = loadShippedTemplate(input.templateKey);
+  const missing: string[] = [];
+  for (const flag of template.requiredFlags) {
+    const enabled = await isFeatureEnabled(flag, { userId: input.userId ?? '', project: input.project });
+    if (!enabled) missing.push(flag);
+  }
+  if (missing.length > 0) throw new PlaybookTemplatePrerequisiteError(missing);
+}
+
+function installStateFor(input: {
+  installedVersion: number | null;
+  catalogVersion: number;
+  hasPublished: boolean;
+}): PlaybookTemplateInstallState {
+  if (input.installedVersion == null) return 'not-installed';
+  if (input.installedVersion < input.catalogVersion) return 'update-available';
+  if (input.hasPublished) return 'published';
+  return 'draft-only';
+}
+
+export async function listPlaybookTemplates(project: string): Promise<PlaybookTemplateSummary[]> {
+  const catalog = loadPlaybookTemplateCatalog();
+  const installed = await db
+    .select()
+    .from(playbookDefinitions)
+    .where(eq(playbookDefinitions.project, project));
+  const byKey = new Map(
+    installed.filter((row) => row.templateKey).map((row) => [row.templateKey as string, row]),
+  );
+  const ids = [...byKey.values()].map((row) => row.id);
+  const versions = ids.length === 0
+    ? []
+    : await db
+      .select({
+        definitionId: playbookDefinitionVersions.definitionId,
+        status: playbookDefinitionVersions.status,
+      })
+      .from(playbookDefinitionVersions)
+      .where(inArray(playbookDefinitionVersions.definitionId, ids));
+  const publishedIds = new Set(
+    versions.filter((row) => row.status === 'published').map((row) => row.definitionId),
+  );
+
+  recordPlaybookTemplateEvent('browse', { project, count: catalog.length });
+
+  return catalog.map((entry) => {
+    const row = byKey.get(entry.templateKey);
+    const state = installStateFor({
+      installedVersion: row?.templateVersion ?? null,
+      catalogVersion: entry.templateVersion,
+      hasPublished: row ? publishedIds.has(row.id) : false,
+    });
+    if (state === 'update-available' && row) {
+      recordPlaybookTemplateEvent('update-offered', {
+        project,
+        templateKey: entry.templateKey,
+        installedTemplateVersion: row.templateVersion,
+        templateVersion: entry.templateVersion,
+      });
+    }
+    return {
+      templateKey: entry.templateKey,
+      templateVersion: entry.templateVersion,
+      displayName: entry.displayName,
+      summary: entry.summary,
+      category: entry.category,
+      tags: entry.tags,
+      graphFile: entry.graphFile,
+      requiredFlags: entry.requiredFlags,
+      requiredPermissions: entry.requiredPermissions,
+      installPolicy: entry.installPolicy,
+      ...(entry.estimatedCostBand ? { estimatedCostBand: entry.estimatedCostBand } : {}),
+      installState: state,
+      installedDefinitionId: row?.id ?? null,
+      installedTemplateVersion: row?.templateVersion ?? null,
+      stepSummary: entry.graph.nodes.map((node) => node.stepType),
+    };
+  });
+}
+
+export async function getPlaybookTemplateDetail(
+  project: string,
+  templateKey: string,
+): Promise<PlaybookTemplateDetail> {
+  const summaries = await listPlaybookTemplates(project);
+  const summary = summaries.find((entry) => entry.templateKey === templateKey);
+  if (!summary) throw new PlaybookTemplateNotFoundError(templateKey);
+  const shipped = loadShippedTemplate(templateKey);
+  return { ...summary, graph: structuredClone(shipped.graph) };
 }
 
 async function findInstalledTemplate(project: string, templateKey: string) {
@@ -147,6 +247,13 @@ export async function installPlaybookTemplate(input: {
       templateKey: template.templateKey,
       templateVersion: template.templateVersion,
     });
+    recordPlaybookTemplateEvent('install', {
+      project: input.project,
+      templateKey: template.templateKey,
+      templateVersion: template.templateVersion,
+      definitionId: detail.definition.id,
+      actorUserId: input.createdByUserId,
+    });
     return { created: true, detail };
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
@@ -154,4 +261,82 @@ export async function installPlaybookTemplate(input: {
     if (!raced) throw error;
     return installExisting(input.project, template.templateKey, raced.id);
   }
+}
+
+/**
+ * Replaces the retained draft graph with a newer shipped template.
+ * Published versions and runs are not updated.
+ */
+export async function applyPlaybookTemplate(input: {
+  project: string;
+  definitionId: string;
+  templateKey: string;
+  templateVersion: number;
+  expectedDraftUpdatedAt: string;
+  confirmed: boolean;
+  actorUserId: string;
+}): Promise<PlaybookDefinitionDetail> {
+  if (input.confirmed !== true) throw new PlaybookTemplateConfirmationRequiredError();
+  const template = loadShippedTemplate(input.templateKey);
+  if (template.templateVersion !== input.templateVersion) {
+    throw new PlaybookTemplateVersionError(
+      `Template ${input.templateKey} is at version ${template.templateVersion}.`,
+    );
+  }
+
+  await db.transaction(async (tx) => {
+    const [definition] = await tx
+      .select()
+      .from(playbookDefinitions)
+      .where(and(
+        eq(playbookDefinitions.id, input.definitionId),
+        eq(playbookDefinitions.project, input.project),
+      ))
+      .for('update');
+    if (!definition) throw new PlaybookDefinitionNotFoundError(input.definitionId);
+    if (definition.templateKey !== template.templateKey) {
+      throw new PlaybookTemplateVersionError(
+        'Apply only updates a definition installed from the same template.',
+      );
+    }
+    const [draft] = await tx
+      .select()
+      .from(playbookDefinitionVersions)
+      .where(and(
+        eq(playbookDefinitionVersions.definitionId, definition.id),
+        eq(playbookDefinitionVersions.status, 'draft'),
+      ))
+      .for('update');
+    if (!draft) throw new PlaybookDraftNotFoundError(input.definitionId);
+    if (draft.updatedAt !== input.expectedDraftUpdatedAt) {
+      throw new PlaybookDraftConflictError(input.definitionId);
+    }
+
+    const now = new Date().toISOString();
+    const [updatedDraft] = await tx
+      .update(playbookDefinitionVersions)
+      .set({ graph: structuredClone(template.graph), updatedAt: now })
+      .where(and(
+        eq(playbookDefinitionVersions.id, draft.id),
+        eq(playbookDefinitionVersions.status, 'draft'),
+        eq(playbookDefinitionVersions.updatedAt, input.expectedDraftUpdatedAt),
+      ))
+      .returning({ id: playbookDefinitionVersions.id });
+    if (!updatedDraft) throw new PlaybookDraftConflictError(input.definitionId);
+
+    await tx
+      .update(playbookDefinitions)
+      .set({ templateVersion: template.templateVersion, updatedAt: now })
+      .where(eq(playbookDefinitions.id, definition.id))
+      .returning({ id: playbookDefinitions.id });
+  });
+
+  recordPlaybookTemplateEvent('update-accepted', {
+    project: input.project,
+    definitionId: input.definitionId,
+    templateKey: template.templateKey,
+    templateVersion: template.templateVersion,
+    actorUserId: input.actorUserId,
+  });
+  return getDefinitionDetail(input.project, input.definitionId);
 }

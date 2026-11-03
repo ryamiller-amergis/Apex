@@ -841,6 +841,23 @@ describe('AzureDevOpsService', () => {
       expect(tags.filter((t) => t === 'apex')).toHaveLength(1);
     });
 
+    it('writes Bug repro steps when the caller supplies them', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockWitApi.createWorkItem.mockResolvedValue({ id: 504 });
+
+      await service.createWorkItemForPrd({
+        type: 'Bug',
+        title: 'Playbook finding',
+        description: '<p>Hidden description</p>',
+        reproStepsHtml: '<p>Visible on the Bug form</p>',
+      });
+
+      const patch = mockWitApi.createWorkItem.mock.calls[0][1] as Array<{ path: string; value: unknown }>;
+      expect(patch).toEqual(expect.arrayContaining([
+        { op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: '<p>Visible on the Bug form</p>' },
+      ]));
+    });
+
     it('does not add the apex tag to non-Feature types', async () => {
       const service = new AzureDevOpsService('MaxView');
       mockWitApi.createWorkItem.mockResolvedValue({ id: 503 });
