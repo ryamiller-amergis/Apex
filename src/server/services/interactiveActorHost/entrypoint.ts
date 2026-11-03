@@ -69,6 +69,7 @@ import { defaultRunGit } from '../grounding/bundleCheckout';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
   createActorInvocationStallTracker,
+  createCachedHealthCheck,
   createDaprSidecarClient,
   createSidecarHealthMonitor,
   interactiveHealthRoute,
@@ -781,7 +782,7 @@ export async function main(): Promise<void> {
     now: Date.now,
   });
   const httpApp = express();
-  httpApp.get('/health', interactiveHealthRoute(() => sidecarHealth.check()));
+  httpApp.get('/health', interactiveHealthRoute(createCachedHealthCheck(() => sidecarHealth.check())));
 
   const server = new DaprServer({
     serverPort,

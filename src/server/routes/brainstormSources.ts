@@ -15,13 +15,13 @@ import {
   isRepositoryReady,
 } from '../services/projectRepositoryReadinessService';
 import { getRepoCacheDir, readCachedOriginSha, readRemoteBranchTip } from '../services/repoCacheService';
+import { cloneProjectCommit, isWholeV2Project } from '../services/brainstorm/projectCommitClone';
 import { runGroundingService } from '../services/runGroundingService';
 import {
   NonblockingRepoCacheLeaseUnavailableError,
   withRepoCacheLease,
 } from '../services/repoCacheLeaseService';
 import {
-  cloneCachedCommit,
   cloneTemporaryAtSha,
   lockDownClone,
   measureDirectory,
@@ -114,15 +114,18 @@ async function resolveProjectSource(project: string, skillSettingsId: string) {
   const repoName = config.skillRepo.trim();
   const bareRepoName = provider === 'github' ? (repoName.split('/').pop() || repoName) : repoName;
   const branchName = config.skillBranch.trim();
+  const wholeV2 = await isWholeV2Project(config.project);
   const [readiness, cachedExact, cachedBare] = await Promise.all([
     getProjectRepositoryReadiness(config.id, { project }).catch(() => null),
-    readCachedOriginSha({
-      provider: groundingProvider,
-      project: config.project,
-      repository: repoName,
-      branch: branchName,
-    }).catch(() => null),
-    bareRepoName !== repoName
+    wholeV2
+      ? Promise.resolve(null)
+      : readCachedOriginSha({
+          provider: groundingProvider,
+          project: config.project,
+          repository: repoName,
+          branch: branchName,
+        }).catch(() => null),
+    bareRepoName !== repoName && !wholeV2
       ? readCachedOriginSha({
           provider: groundingProvider,
           project: config.project,
@@ -469,7 +472,7 @@ export function brainstormSourceRuntime(): BrainstormSourceRuntime {
       freeBytes: async () => null,
     },
     git: {
-      cloneFromCache: (input) => cloneCachedCommit(input),
+      cloneFromCache: (input) => cloneProjectCommit(input),
       resolveTemporary: (input) => resolveTemporarySha(input),
       cloneTemporary: (input) => cloneTemporaryAtSha(input),
       lockDown: (destination) => lockDownClone(destination),

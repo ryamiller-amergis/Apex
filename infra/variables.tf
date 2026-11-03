@@ -919,6 +919,17 @@ variable "repo_read_service_environment_id" {
   default     = null
 }
 
+variable "repo_read_service_grounding_maintenance_mode" {
+  description = "GROUNDING_MAINTENANCE_MODE for repo-read. \"v2-projects\" makes it own repo upkeep for projects wholly on ai-runs-v2-transport and clean the workspace share. Null leaves upkeep on App Service."
+  type        = string
+  default     = "v2-projects"
+
+  validation {
+    condition     = var.repo_read_service_grounding_maintenance_mode == null || var.repo_read_service_grounding_maintenance_mode == "v2-projects"
+    error_message = "repo_read_service_grounding_maintenance_mode must be null or \"v2-projects\"."
+  }
+}
+
 variable "repo_read_service_workload_profile_name" {
   description = "Workload profile within the repo-read environment. Null uses Consumption. Must already exist on the target environment."
   type        = string

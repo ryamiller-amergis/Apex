@@ -235,7 +235,9 @@ export function createResultConsumer(deps: ResultConsumerDeps): ResultConsumer {
           const outcome = await processOnce();
           if (outcome === 'idle') await clock.sleep(250);
         } catch (err) {
-          metrics.increment('orchestrator.result.loop_error');
+          metrics.increment('orchestrator.result.loop_error', {
+            error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+          });
           console.error(
             '[aiOrchestrator/resultConsumer]',
             err instanceof Error ? err.message : String(err),

@@ -66,6 +66,7 @@ describe('nightlyIdleReGroundService', () => {
     expect(reGroundFromCache).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'idle-behind' }),
       'target',
+      { materialize: true },
     );
 
     const second = await service.runIfDue();

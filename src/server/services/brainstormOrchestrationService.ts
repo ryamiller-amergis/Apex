@@ -364,13 +364,19 @@ async function defaultPrepareTurnContext(
           { readCachedOriginSha, readRemoteBranchTip },
           { sharedReadCheckoutService },
           { runGroundingService },
+          { isFlagEnabledForWholeProject },
         ] = await Promise.all([
           import('./projectSettingsService'),
           import('./projectRepositoryReadinessService'),
           import('./repoCacheService'),
           import('./grounding/sharedReadCheckoutService'),
           import('./runGroundingService'),
+          import('./featureFlagService'),
         ]);
+        // App Service stops refreshing its own mirrors for whole-V2 projects,
+        // so its cached SHA would pin an old commit.
+        const wholeV2 = await isFlagEnabledForWholeProject('ai-runs-v2-transport', project)
+          .catch(() => false);
         const configs = (await listSkillConfigs())
           .filter((item) => item.project === project && Boolean(item.skillRepo?.trim()) && Boolean(item.skillBranch?.trim()))
           .sort((a, b) => (a.isDefault === b.isDefault ? 0 : a.isDefault ? -1 : 1));
@@ -391,13 +397,15 @@ async function defaultPrepareTurnContext(
           const branchName = config.skillBranch.trim();
           const [readiness, cachedShaExact, cachedShaBare] = await Promise.all([
             getProjectRepositoryReadiness(config.id, { project }).catch(() => null),
-            readCachedOriginSha({
-              provider: groundingProvider,
-              project: config.project,
-              repository: repoName,
-              branch: branchName,
-            }).catch(() => null),
-            bareRepoName !== repoName
+            wholeV2
+              ? Promise.resolve(null)
+              : readCachedOriginSha({
+                  provider: groundingProvider,
+                  project: config.project,
+                  repository: repoName,
+                  branch: branchName,
+                }).catch(() => null),
+            bareRepoName !== repoName && !wholeV2
               ? readCachedOriginSha({
                   provider: groundingProvider,
                   project: config.project,

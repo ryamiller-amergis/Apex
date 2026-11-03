@@ -30,7 +30,10 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 
 jest.mock('../services/projectSettingsService', () => ({ resolveSkillConfig: jest.fn() }));
-jest.mock('../services/chatThreadRepository', () => ({ toggleFlag: jest.fn() }));
+jest.mock('../services/chatThreadRepository', () => ({
+  toggleFlag: jest.fn(),
+  isBackgroundWorkflowThread: jest.fn().mockResolvedValue(false),
+}));
 jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
   replayRunEventPage: jest.fn().mockResolvedValue({ events: [], nextEventId: null, hasMore: false }),

@@ -48,7 +48,7 @@ import {
   buildDocumentAssistantEditGuidance,
   resolveDocumentAssistantType,
 } from './documentAssistantGuidance';
-import { isFeatureEnabled } from './featureFlagService';
+import { isFeatureEnabled, isFlagEnabledForWholeProject } from './featureFlagService';
 import { trackEvent } from './telemetry';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import {
@@ -1200,7 +1200,11 @@ async function resolveLightweightGroundingFallback(
     }
   }
 
-  if (!sha) {
+  // App Service stops refreshing its own mirrors for whole-V2 projects, so its
+  // cached SHA would pin an old commit; ask the remote instead.
+  const wholeV2 = await isFlagEnabledForWholeProject('ai-runs-v2-transport', project)
+    .catch(() => false);
+  if (!sha && !wholeV2) {
     for (const candidateRepo of new Set([bareRepo, repository.repo])) {
       const cached = await readCachedOriginSha({
         provider: groundingProvider,
