@@ -365,6 +365,11 @@ export function useChatStream(
   // Set while the server re-runs an attempt lost to a host restart; cleared by
   // the re-run's first progress or by any ending.
   const restartTimeoutRef = useRef<number | null>(null);
+  // A reload replays messages but not run events, so a failed last turn is
+  // looked up once per thread from the run status.
+  const lastRunCheckedRef = useRef(false);
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const clearRestart = useCallback(() => {
     if (restartTimeoutRef.current !== null) {
@@ -454,6 +459,7 @@ export function useChatStream(
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
     failedRunIdRef.current = null;
+    lastRunCheckedRef.current = false;
     clearRestart();
     clearConnectionErrorTimeout();
     clearRetryTimeout();
@@ -497,6 +503,25 @@ export function useChatStream(
     // Defaults to SSE (EventSource) so behavior is unchanged until the
     // WebSocket gateway is enabled; both backends deliver the same
     // (data, lastEventId) pair this handler expects.
+    const showFailedLastRun = async () => {
+      try {
+        const res = await fetch(`/api/chat/threads/${threadId}/run-status`, {
+          credentials: 'include',
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as AgentRunStatusResponse;
+        if (data.status !== 'failed' || !data.runId) return;
+        if (statusRef.current !== 'idle' || restartTimeoutRef.current !== null) return;
+        endRun({
+          runId: data.runId.slice(0, 200),
+          outcome: 'failed',
+          detail: data.lastError ?? undefined,
+        });
+      } catch {
+        // The next live ending reports the failure instead.
+      }
+    };
+
     const handleMessage = (data: string, lastEventId: string) => {
       let event: SseEvent;
       try {
@@ -760,6 +785,10 @@ export function useChatStream(
             clearTurnProgress();
           }
           setStatus(event.status);
+          if (event.status === 'idle' && !lastRunCheckedRef.current) {
+            lastRunCheckedRef.current = true;
+            void showFailedLastRun();
+          }
           break;
         }
         case 'grounding': {

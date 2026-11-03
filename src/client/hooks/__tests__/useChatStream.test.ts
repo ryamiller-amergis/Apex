@@ -1485,4 +1485,38 @@ describe('useChatStream run endings', () => {
       expectEnded(result, { status: 'idle', retryableRunId: null, errors: 0 });
     });
   });
+
+  describe('reload after the last turn ended', () => {
+    async function reloadIdle(snapshot: Record<string, unknown>) {
+      const originalFetch = global.fetch;
+      const fetchSpy = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ runId: 'run-1', health: 'worker_lost', ...snapshot }),
+      } as Response);
+      global.fetch = fetchSpy;
+      try {
+        const hook = renderHook(() => useChatStream('t1'));
+        await act(async () => {
+          lastES!.emitOpen();
+          lastES!.emit('message', { type: 'status', status: 'idle' });
+          lastES!.emit('message', { type: 'status', status: 'idle' });
+        });
+        return { ...hook, fetchSpy };
+      } finally {
+        if (originalFetch) global.fetch = originalFetch;
+        else delete (global as { fetch?: typeof fetch }).fetch;
+      }
+    }
+
+    it('shows the failed last turn with one error and Retry', async () => {
+      const { result, fetchSpy } = await reloadIdle({ status: 'failed', lastError: LOST });
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows nothing when the last turn completed', async () => {
+      const { result } = await reloadIdle({ status: 'completed', lastError: null });
+      expectEnded(result, { status: 'idle', retryableRunId: null, errors: 0 });
+    });
+  });
 });
