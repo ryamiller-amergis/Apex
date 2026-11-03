@@ -19,6 +19,7 @@ import type {
   SseTokenEvent,
   SseToolStatusEvent,
 } from '../../shared/types/chat';
+import { INTERACTIVE_AUTO_RETRY_DETAIL } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 import {
   friendlyChatErrorMessage,
@@ -33,6 +34,8 @@ import {
 } from '../utils/threadEventStream';
 
 const CONNECTION_ERROR_GRACE_MS = 2_000;
+/** Longest wait for a re-queued turn's first event before showing the error. */
+const AUTO_RETRY_GIVE_UP_MS = 3 * 60_000;
 
 /** Chronological order for chat history (SSE replay + REST merge). */
 export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
@@ -288,6 +291,7 @@ export function useChatStream(
     Map<number, { text: string; key: string }>
   >(new Map());
   const retryTimeoutRef = useRef<number | null>(null);
+  const autoRetryLostRunIdRef = useRef<string | null>(null);
   const connectionErrorTimeoutRef = useRef<number | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
@@ -463,6 +467,17 @@ export function useChatStream(
         ) {
           setLastProgressAt(semanticPhase.timestamp);
         }
+      }
+
+      if (
+        autoRetryLostRunIdRef.current
+        && event.runId
+        && event.runId !== autoRetryLostRunIdRef.current
+      ) {
+        autoRetryLostRunIdRef.current = null;
+        clearRetryTimeout();
+        setIsRetrying(false);
+        setRetryReason(null);
       }
 
       switch (event.type) {
@@ -778,7 +793,24 @@ export function useChatStream(
               || (event.semanticStatus === 'failed'
                 ? safeDetail(event.semanticDetail) ?? 'The agent run did not finish. Please retry.'
                 : null);
-            if (failureText) {
+            if (!doneEvent.error && failureText === INTERACTIVE_AUTO_RETRY_DETAIL) {
+              setIsRetrying(true);
+              setRetryReason('Restarting the agent…');
+              const lostRunId = typeof doneEvent.runId === 'string' ? doneEvent.runId.slice(0, 200) : null;
+              autoRetryLostRunIdRef.current = lostRunId;
+              retryTimeoutRef.current = window.setTimeout(() => {
+                autoRetryLostRunIdRef.current = null;
+                setIsRetrying(false);
+                setRetryReason(null);
+                if (lostRunId) setRetryableRunId(lostRunId);
+                setMessages((prev) => [...prev, {
+                  id: uuidv4(),
+                  role: 'system',
+                  text: 'Error: The agent did not restart. Please retry.',
+                  ts: new Date().toISOString(),
+                }]);
+              }, AUTO_RETRY_GIVE_UP_MS);
+            } else if (failureText) {
               if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
                 setRetryableRunId(doneEvent.runId.slice(0, 200));
               }

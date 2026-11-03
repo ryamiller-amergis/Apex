@@ -621,10 +621,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       <AssistantConversation
         messages={visibleMessages}
         streamingText={streamingText}
-        isWorking={showTypingIndicator}
+        isWorking={showTypingIndicator || session.isRetrying}
         isStarting={isCreating}
         startError={createError}
-        progressLabel={progressLabel}
+        progressLabel={session.isRetrying ? session.retryReason : progressLabel}
         progressPhase={progressPhase}
         toolProgress={toolProgress}
         welcome={!readOnly && !discussContext && threadId && threadId === createdThreadId ? {

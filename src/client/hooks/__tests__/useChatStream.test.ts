@@ -1,6 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { durableTokenKey, useChatStream } from '../useChatStream';
 import type { SseTokenEvent } from '../../../shared/types/chat';
+import { INTERACTIVE_AUTO_RETRY_DETAIL } from '../../../shared/types/chat';
 
 // ── EventSource mock ───────────────────────────────────────────────────────────
 
@@ -1199,6 +1200,67 @@ describe('useChatStream', () => {
       role: 'system',
       text: 'Error: Interactive agent stopped responding. Please retry.',
     });
+  });
+
+  it('shows a re-queued turn as restarting, not as an error', () => {
+    jest.useFakeTimers();
+    try {
+      const lostRunId = '50000000-0000-4000-8000-000000000004';
+      const { result } = renderHook(() => useChatStream('t1'));
+
+      act(() => {
+        lastES!.emit('message', {
+          type: 'done',
+          runId: lostRunId,
+          semanticStatus: 'failed',
+          semanticDetail: INTERACTIVE_AUTO_RETRY_DETAIL,
+        });
+      });
+      expect(result.current.isRetrying).toBe(true);
+      expect(result.current.retryReason).toBe('Restarting the agent…');
+      expect(result.current.messages).toHaveLength(0);
+
+      act(() => {
+        lastES!.emit('message', {
+          type: 'phase',
+          runId: '50000000-0000-4000-8000-000000000005',
+          phase: 'grounding',
+          status: 'running',
+        });
+        jest.advanceTimersByTime(4 * 60_000);
+      });
+      expect(result.current.isRetrying).toBe(false);
+      expect(result.current.messages.filter((m) => m.role === 'system')).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows the error when a re-queued turn never starts', () => {
+    jest.useFakeTimers();
+    try {
+      const lostRunId = '50000000-0000-4000-8000-000000000006';
+      const { result } = renderHook(() => useChatStream('t1'));
+
+      act(() => {
+        lastES!.emit('message', {
+          type: 'done',
+          runId: lostRunId,
+          semanticStatus: 'failed',
+          semanticDetail: INTERACTIVE_AUTO_RETRY_DETAIL,
+        });
+        jest.advanceTimersByTime(3 * 60_000);
+      });
+
+      expect(result.current.isRetrying).toBe(false);
+      expect(result.current.retryableRunId).toBe(lostRunId);
+      expect(result.current.messages[result.current.messages.length - 1]).toMatchObject({
+        role: 'system',
+        text: 'Error: The agent did not restart. Please retry.',
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does not repeat an error the turn already reported', () => {

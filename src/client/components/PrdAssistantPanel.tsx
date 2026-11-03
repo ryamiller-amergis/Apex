@@ -263,10 +263,10 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
           <AssistantConversation
             messages={visibleMessages}
             streamingText={streamingText}
-            isWorking={showTypingIndicator}
+            isWorking={showTypingIndicator || session.isRetrying}
             isStarting={isCreating}
             startError={createError}
-            progressLabel={progressLabel}
+            progressLabel={session.isRetrying ? session.retryReason : progressLabel}
             progressPhase={progressPhase}
             toolProgress={toolProgress}
             welcome={threadId && threadId === createdThreadId ? {

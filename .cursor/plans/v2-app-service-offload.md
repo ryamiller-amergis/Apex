@@ -92,13 +92,30 @@ E. Smaller items
 2. Alerting (old item 12): route-decision event for every AI entry; alert on `grounding.v2_app_service_fallback` and any App Service repo/AI work for a V2 project.
 3. Brainstorm catalog repos and temp repos: on-demand bundle publish by repo-read instead of cloning on App Service.
 4. Agentic host restart mid-turn (dev 2026-11-03 00:33:43Z, thread 498515d8, run 4525e179): container restartCount 1, no error logged, memory normal; probes allow 1 s while `/health` awaited a Dapr metadata fetch with a 2 s timeout. Shipped tonight: `createCachedHealthCheck` (answers from the last report) and the client shows failures from `semanticStatus: 'failed'` on done (reaper/orchestrator terminals were silent) with Try again in the assistants. Still to do:
-   a. Auto re-run a turn lost to a host restart once (extend `neverStartedTurnRetry` in `agentRunReaperService.ts` to started-but-lost turns with no external side effects; Apex applies assistant edits only at turn end). Error + retry only if the re-run fails.
-   b. Faster loss detection: the restarted host reports its lost runs at startup instead of waiting for the 60 s heartbeat timeout plus the sweep (took ~1m45s).
-   c. Confirm restart reason: dev Container Apps env sends logs to `azure-monitor` with no workspace attached, so system logs (probe failures, OOM) are not kept.
+   Automatic re-run on restart and faster loss detection: workstream F. Confirm restart reason: dev Container Apps env sends logs to `azure-monitor` with no workspace attached, so system logs (probe failures, OOM) are not kept; ask the user before adding a diagnostic setting (infra).
+
+F. Automatic retry when a chat host restarts mid-turn
+Goal: a turn lost to a host restart, deploy, or crash re-runs once on its own; the user sees "Restarting…" and then the answer. The error + Try again (shipped 32e5850d) appears only when the re-run also fails or is not safe.
+Today: `agentRunReaperService.ts` retries once only for durable turns still `dispatched` past the start budget (`neverStartedTurnRetry`, eligible when the run has exactly one attempt and `specification.toolGrant === null`; retry = `durableInteractiveTurnService.retry`). A `running` turn whose heartbeat stops (`DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS` 60 s) is failed with "Interactive agent stopped responding. Please retry." and no retry. Dev case took ~1m45s from restart to failure.
+Steps:
+1. [x] Done 2026-11-02 (same night): shared `INTERACTIVE_AUTO_RETRY_DETAIL` (`src/shared/types/chat.ts`) is the reaper's detail for a re-queued turn; `useChatStream` shows it as `isRetrying` "Restarting the agent…" (no error), clears on the first event of a different run, and after `AUTO_RETRY_GIVE_UP_MS` (3 min) shows "Error: The agent did not restart. Please retry." with Try again. Both assistants show the restarting line. Step 2 must use the same detail (or a sibling constant) for host-lost re-runs.
+2. Extend eligibility to `running` turns lost to a dead host (rename to `lostTurnRetry`). Safe when all hold:
+   - first attempt only (one automatic re-run per user message; `ai_run_attempts` count = 1);
+   - `toolGrant === null` (no delegated ADO token);
+   - no external write happened in the lost attempt: no tool event for an MCP/ADO write in `agent_run_events` (list the write tools; read-only tools are fine);
+   - the workflow applies its edits only at turn end (PRD/design-doc assistants, Home chat, Ask Apex). Check ADR and interview turns before including them.
+   Not eligible → today's error + Try again.
+3. Re-run from the same user message; do not post a second user bubble. Clear the partial streamed text of the lost attempt on the client (`retrying` event resets `streamingText`).
+4. Faster detection: on startup the interactive host lists runs it owned (`agent_runs` running on lane `ai-runs-interactive`, dapr-actor-v2, heartbeat older than its start time) and hands them to the same retry path, instead of waiting for the heartbeat timeout plus the reaper sweep. Lower the heartbeat timeout only if heartbeats are reliable (check `heartbeatAt` gaps in prod first).
+5. Deploys: a planned restart (new revision) drains first (`createInteractiveShutdownDrain`); turns still running at drain timeout take the same retry path. Ties in with E.1 (zero-downtime swap).
+6. Telemetry: `interactive.turn.auto_retry` {reason: never_started | host_lost | deploy, eligible, skippedReason}; alert when auto-retries exceed N/hour (a host in a restart loop).
+7. Tests: reaper unit tests for each eligibility rule; client test that a retried run shows "Restarting…" and no error; dev check by restarting the agentic container mid-turn (`az containerapp revision restart`) and confirming the answer arrives.
+Done when: on dev, restarting the agentic host mid-turn produces the answer with no error for PRD/design-doc assistant and Home chat turns, and a turn with an ADO write shows error + Try again instead of re-running.
 5. Prod Oct 27 "no scorecard": check whether a chat run landed on the validation thread (same query as dev a65426dd, read-only via Kudu).
 6. ADR assistant UI: move to `AssistantConversation` like the PRD and design-doc assistants.
 
 Questions for the user before starting:
+- F step 2: which turn types are allowed to re-run on their own (proposal: PRD/design-doc assistants, Home chat, Ask Apex; not ADR or interviews until checked)?
 - Which flag gates B and C (new per-project flag or `ai-runs-v2-transport`)?
 - A step 2: Postgres `LISTEN/NOTIFY` or a Service Bus topic for cross-process events?
 - C step 4: should walkthrough drafts wait in the UI with live progress?
