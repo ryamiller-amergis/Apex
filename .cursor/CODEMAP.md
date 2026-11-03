@@ -8,7 +8,7 @@ Kept in sync by `.cursor/rules/codemap-sync.mdc`; `npm run lint:codemap` checks 
 React + Vite client, Express + TypeScript server, PostgreSQL via Drizzle, SQL migrations via node-pg-migrate,
 Jest + Testing Library, Playwright E2E, Terraform on Azure.
 
-## Top levela
+## Top level
 
 - `src/`: the app, see below.
 - `migrations/`: node-pg-migrate SQL, `YYYYMMDDHHMMSS_<slug>.sql`.
