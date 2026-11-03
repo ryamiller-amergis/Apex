@@ -361,7 +361,7 @@ export function mergeRemoteMcpConfig(
     ? normalizeOAuthClientId(patch.oauthClientId)
     : stored.oauthClientId;
   const oauthClientSecret = patch.oauthClientSecret !== undefined
-    ? (normalizeOAuthClientSecret(patch.oauthClientSecret) ?? stored.oauthClientSecret)
+    ? normalizeOAuthClientSecret(patch.oauthClientSecret)
     : stored.oauthClientSecret;
   let secretNames = patch.secretNames
     ? patch.secretNames.map((name) => name.trim())

@@ -49,6 +49,11 @@ function parseMcpConfig(text: string): ParsedConfig | { error: string } {
   return { url: record.url.trim(), headers };
 }
 
+function oauthClientIdForPatch(formValue: string, stored?: string | null): string | undefined {
+  const resolved = formValue.trim() || stored?.trim() || '';
+  return resolved || undefined;
+}
+
 interface McpServersViewProps {
   project: string;
   enabled: boolean;
@@ -287,10 +292,9 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
     try {
       const savedSecrets = secrets;
       const savedNames = [...savedSecretNames, ...secrets.map((secret) => secret.name)];
+      const patchedOAuthClientId = oauthClientIdForPatch(oauthClientId, selectedConnection?.oauthClientId);
       const oauthPatch = {
-        ...(oauthClientId.trim() || selectedConnection?.oauthClientId
-          ? { oauthClientId: oauthClientId.trim() }
-          : {}),
+        ...(patchedOAuthClientId ? { oauthClientId: patchedOAuthClientId } : {}),
         ...(oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}),
       };
       if (selectedId && !composing) {
@@ -344,6 +348,7 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
     setSaving(true);
     setFormError(null);
     try {
+      const patchedOAuthClientId = oauthClientIdForPatch(oauthClientId, selectedConnection?.oauthClientId);
       await mcpServers.updateAccess(selectedId, {
         name: name.trim(),
         mcpUrl: parsed.url,
@@ -352,9 +357,7 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
         secretNames: [...savedSecretNames, ...secrets.map((secret) => secret.name)],
         toolNames: enabledToolNames,
         authMode: 'oauth',
-        ...(oauthClientId.trim() || selectedConnection?.oauthClientId
-          ? { oauthClientId: oauthClientId.trim() }
-          : {}),
+        ...(patchedOAuthClientId ? { oauthClientId: patchedOAuthClientId } : {}),
         ...(oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}),
       });
       const authorizationUrl = await mcpServers.startOAuth(selectedId);
