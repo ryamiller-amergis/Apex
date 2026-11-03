@@ -1298,3 +1298,124 @@ describe('useChatStream', () => {
     expect(result.current.status).toBe('running');
   });
 });
+
+describe('useChatStream run endings', () => {
+  type Hook = { current: ReturnType<typeof useChatStream> };
+  const LOST = 'Interactive agent stopped responding. Please retry.';
+  let eventSeq = 0;
+  const nextId = () => `evt-${++eventSeq}`;
+
+  function startTurn(eventDriven: boolean) {
+    const hook = renderHook(() => useChatStream('t1', { initialStatus: 'running' }));
+    act(() => {
+      lastES!.emitOpen();
+      lastES!.emit('message', { type: 'status', status: 'running', eventDrivenTermination: eventDriven });
+      lastES!.emit('message', { type: 'tool_status', callId: 'c1', toolName: 'Read', status: 'running' }, nextId());
+      lastES!.emit('message', { type: 'token', text: 'partial reply' });
+    });
+    expect(hook.result.current.streamingText).toBe('partial reply');
+    return hook;
+  }
+
+  function errorMessages(result: Hook): number {
+    return result.current.messages.filter((m) => m.role === 'system' && m.text.startsWith('Error:')).length;
+  }
+
+  function expectEnded(
+    result: Hook,
+    expected: { status: 'idle' | 'error'; retryableRunId: string | null; errors: number },
+  ) {
+    expect(result.current.status).toBe(expected.status);
+    expect(result.current.retryableRunId).toBe(expected.retryableRunId);
+    expect(errorMessages(result)).toBe(expected.errors);
+    expect(result.current.streamingText).toBe('');
+    expect(result.current.thinkingText).toBe('');
+    expect(result.current.toolProgress).toEqual([]);
+    expect(result.current.progressLabel).toBeNull();
+    expect(result.current.isRetrying).toBe(false);
+  }
+
+  const failedDone = (runId: string) => ({ type: 'done', runId, semanticStatus: 'failed', semanticDetail: LOST });
+
+  describe.each([true, false])('event-driven termination %s', (eventDriven) => {
+    it('ends a failed run from the terminal done alone, with one error and Retry', () => {
+      const { result } = startTurn(eventDriven);
+      act(() => lastES!.emit('message', failedDone('run-1'), nextId()));
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+    });
+
+    it('shows one error when the error event and the terminal done both report the failure', () => {
+      const { result } = startTurn(eventDriven);
+      act(() => {
+        lastES!.emit('message', { type: 'error', runId: 'run-1', error: LOST }, nextId());
+        lastES!.emit('message', failedDone('run-1'), nextId());
+      });
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+    });
+
+    it.each(['completed', 'cancelled'] as const)('ends a %s run as idle with no error', (semanticStatus) => {
+      const { result } = startTurn(eventDriven);
+      act(() => lastES!.emit('message', { type: 'done', runId: 'run-1', semanticStatus }, nextId()));
+      expectEnded(result, { status: 'idle', retryableRunId: null, errors: 0 });
+    });
+
+    it('clears the turn on a terminal status broadcast and leaves the error to the done', () => {
+      const { result } = startTurn(eventDriven);
+      act(() => lastES!.emit('message', { type: 'status', status: 'error' }));
+      expectEnded(result, { status: 'error', retryableRunId: null, errors: 0 });
+      act(() => lastES!.emit('message', failedDone('run-1'), nextId()));
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+    });
+
+    it('reports a retried run that fails again under the same run id', () => {
+      const { result } = startTurn(eventDriven);
+      act(() => lastES!.emit('message', failedDone('run-1'), nextId()));
+      act(() => result.current.clearRetryableRunId());
+      act(() => lastES!.emit('message', failedDone('run-1'), nextId()));
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 2 });
+    });
+
+    it('reports a second failure after the same run made progress again', () => {
+      const { result } = startTurn(eventDriven);
+      act(() => lastES!.emit('message', failedDone('run-1'), nextId()));
+      act(() => {
+        lastES!.emit('message', { type: 'token', text: 'again' });
+        lastES!.emit('message', failedDone('run-1'), nextId());
+      });
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 2 });
+    });
+  });
+
+  describe('poll fallback (event-driven termination off)', () => {
+    async function pollEnding(snapshot: Record<string, unknown>) {
+      jest.useFakeTimers();
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ runId: 'run-1', health: null, progressPhase: null, progressAt: null, ...snapshot }),
+      } as Response);
+      try {
+        const hook = startTurn(false);
+        act(() => lastES!.emitError());
+        await act(async () => {
+          jest.advanceTimersByTime(4_000);
+        });
+        return hook;
+      } finally {
+        if (originalFetch) global.fetch = originalFetch;
+        else delete (global as { fetch?: typeof fetch }).fetch;
+        jest.useRealTimers();
+      }
+    }
+
+    it('ends a failed run with one error and Retry', async () => {
+      const { result } = await pollEnding({ status: 'failed', lastError: LOST });
+      expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+    });
+
+    it('ends a completed run as idle with no error', async () => {
+      const { result } = await pollEnding({ status: 'completed', lastError: null });
+      expectEnded(result, { status: 'idle', retryableRunId: null, errors: 0 });
+    });
+  });
+});

@@ -193,6 +193,12 @@ function mergeThinkingText(previous: string, incoming: string): string {
   return `${previous} ${trimmed}`;
 }
 
+type RunEnding = Readonly<{
+  runId: string | null;
+  outcome: 'completed' | 'failed' | 'cancelled';
+  detail?: string;
+}>;
+
 function progressLabelForPhase(phase: AgentRunPhase, detail?: string): string {
   return friendlyChatProgressLabel(detail, phase);
 }
@@ -348,6 +354,53 @@ export function useChatStream(
     }
   }, []);
 
+  // A failed run can be reported by its error event, its terminal done, and the
+  // poll; this keeps the error message to one per run until it makes progress
+  // again (a retry reuses the run id).
+  const failedRunIdRef = useRef<string | null>(null);
+
+  const clearTurnProgress = useCallback(() => {
+    streamBufferRef.current = '';
+    streamTrimOffsetRef.current = 0;
+    pendingOffsetTokensRef.current.clear();
+    setStreamingText('');
+    setThinkingText('');
+    setToolProgress([]);
+    setIsRetrying(false);
+    setRetryReason(null);
+    setGroundingPreparation(null);
+    setProgressLabel(null);
+    setProgressPhase(null);
+    clearRetryTimeout();
+    clearPollTimer();
+  }, [clearRetryTimeout, clearPollTimer]);
+
+  const endRun = useCallback((ending: RunEnding) => {
+    clearTurnProgress();
+    if (ending.outcome !== 'failed') {
+      setStatus('idle');
+      return;
+    }
+    setStatus('error');
+    setRetryableRunId(ending.runId);
+    if (ending.runId && failedRunIdRef.current === ending.runId) return;
+    failedRunIdRef.current = ending.runId;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: uuidv4(),
+        role: 'system',
+        text: `Error: ${friendlyChatErrorMessage(ending.detail)}`,
+        ts: new Date().toISOString(),
+      },
+    ]);
+  }, [clearTurnProgress]);
+
+  const clearRetryableRunId = useCallback(() => {
+    failedRunIdRef.current = null;
+    setRetryableRunId(null);
+  }, []);
+
   const reset = useCallback(() => {
     setMessages(initialMessagesRef.current ?? []);
     setStreamingText('');
@@ -374,6 +427,7 @@ export function useChatStream(
     pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
+    failedRunIdRef.current = null;
     clearConnectionErrorTimeout();
     clearRetryTimeout();
     clearPollTimer();
@@ -463,6 +517,15 @@ export function useChatStream(
         ) {
           setLastProgressAt(semanticPhase.timestamp);
         }
+      }
+
+      if (
+        event.type === 'token' ||
+        event.type === 'thinking' ||
+        event.type === 'tool_call' ||
+        event.type === 'tool_status'
+      ) {
+        failedRunIdRef.current = null;
       }
 
       switch (event.type) {
@@ -655,6 +718,11 @@ export function useChatStream(
               clearPollTimer();
             }
           }
+          // A terminal status carries no run id or detail; the run's done or
+          // the poll reports the failure, so only the turn progress clears here.
+          if (event.status === 'idle' || event.status === 'error') {
+            clearTurnProgress();
+          }
           setStatus(event.status);
           break;
         }
@@ -708,17 +776,8 @@ export function useChatStream(
             clearRetryTimeout();
             const errorText = errorEvent.error;
             retryTimeoutRef.current = window.setTimeout(() => {
-              setIsRetrying(false);
-              setRetryReason(null);
-              if (durableRunId) setRetryableRunId(durableRunId);
-              const fallbackMsg: ChatMessage = {
-                id: uuidv4(),
-                role: 'system',
-                text: `Error: ${friendlyChatErrorMessage(errorText)}`,
-                ts: new Date().toISOString(),
-              };
-              setMessages((prev) => [...prev, fallbackMsg]);
-              setStatus('error');
+              retryTimeoutRef.current = null;
+              endRun({ runId: durableRunId, outcome: 'failed', detail: errorText });
             }, 5000);
             break;
           }
@@ -736,53 +795,28 @@ export function useChatStream(
             break;
           }
 
-          if (durableRunId) {
-            setRetryableRunId(durableRunId);
-          } else {
-            setRetryableRunId(null);
-          }
-          const errMsg: ChatMessage = {
-            id: uuidv4(),
-            role: 'system',
-            text: `Error: ${friendlyChatErrorMessage(event.error)}`,
-            ts: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, errMsg]);
-          setStatus('error');
+          endRun({ runId: durableRunId, outcome: 'failed', detail: event.error });
           break;
         }
         case 'done': {
+          const doneEvent = event as SseDoneEvent;
           setLastProgressAt(Date.now());
-          streamBufferRef.current = '';
-          streamTrimOffsetRef.current = 0;
-          pendingOffsetTokensRef.current.clear();
-          setStreamingText('');
-          setThinkingText('');
-          setToolProgress([]);
-          setIsRetrying(false);
-          setRetryReason(null);
-          setGroundingPreparation(null);
-          setProgressLabel(null);
-          setProgressPhase(null);
-          // Keep retryableRunId across clean done after a prior failure so
-          // Retry remains available. Clear only on accepted turn, successful
-          // message, cancel, or thread change.
-          clearRetryTimeout();
-          clearPollTimer();
-          setStatus('idle');
-          if ((event as { error?: string }).error) {
-            const doneEvent = event as SseDoneEvent & { error?: string };
-            if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
-              setRetryableRunId(doneEvent.runId.slice(0, 200));
-            }
-            const errMsg: ChatMessage = {
-              id: uuidv4(),
-              role: 'system',
-              text: `Error: ${doneEvent.error}`,
-              ts: new Date().toISOString(),
-            };
-            setMessages((prev) => [...prev, errMsg]);
-          }
+          // A clean done keeps retryableRunId from a prior failure so Retry
+          // stays available; it clears on an accepted turn, a successful
+          // message, cancel, or a thread change.
+          endRun({
+            runId:
+              typeof doneEvent.runId === 'string' && doneEvent.runId.trim()
+                ? doneEvent.runId.slice(0, 200)
+                : null,
+            outcome:
+              event.semanticStatus === 'failed'
+                ? 'failed'
+                : event.semanticStatus === 'cancelled'
+                  ? 'cancelled'
+                  : 'completed',
+            detail: event.semanticDetail,
+          });
           if (event.prdReady) setPrdReady(true);
           if (event.backlogReady) setBacklogReady(true);
           break;
@@ -918,33 +952,17 @@ export function useChatStream(
           'cancelled',
         ].includes(data.status);
         if (isTerminal) {
-          const mappedStatus: ChatThreadStatus =
-            data.status === 'completed' || data.status === 'cancelled'
-              ? 'idle'
-              : data.status === 'failed'
-                ? 'error'
-                : (data.status as ChatThreadStatus);
-          setStatus(mappedStatus);
-          clearPollTimer();
-          streamBufferRef.current = '';
-          streamTrimOffsetRef.current = 0;
-          setStreamingText('');
-          setThinkingText('');
-          setToolProgress([]);
-          setIsRetrying(false);
-          setRetryReason(null);
-          if (
-            (data.status === 'error' || data.status === 'failed') &&
-            data.lastError
-          ) {
-            const errMsg: ChatMessage = {
-              id: uuidv4(),
-              role: 'system',
-              text: `Error: ${data.lastError}`,
-              ts: new Date().toISOString(),
-            };
-            setMessages((prev) => [...prev, errMsg]);
-          }
+          endRun({
+            runId: data.runId ? data.runId.slice(0, 200) : null,
+            outcome:
+              data.status === 'error' || data.status === 'failed'
+                ? 'failed'
+                : data.status === 'cancelled'
+                  ? 'cancelled'
+                  : 'completed',
+            detail: data.lastError ?? undefined,
+          });
+          if (data.status === 'closed') setStatus('closed');
         }
       } catch {
         // Network error during poll — retry next interval
@@ -964,7 +982,7 @@ export function useChatStream(
     };
     // @feature-flag:event-driven-run-termination disabled-end
     // @feature-flag:event-driven-run-termination end
-  }, [threadId, status, isConnected, eventDrivenTermination, clearPollTimer]);
+  }, [threadId, status, isConnected, eventDrivenTermination, clearPollTimer, endRun]);
 
   return {
     messages,
@@ -984,7 +1002,7 @@ export function useChatStream(
     isRetrying,
     retryReason,
     retryableRunId,
-    clearRetryableRunId: () => setRetryableRunId(null),
+    clearRetryableRunId,
     groundingPreparation,
   };
 }
