@@ -3,7 +3,7 @@
  * (tool calls, reasoning, replies). Thread messages are written as the agent works, so polling
  * this shows progress while the step is still running.
  */
-import { asc, eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { agentRunEvents, agentRuns } from '../db/schema';
 import type { ChatMessage } from '../../shared/types/chat';
@@ -168,7 +168,9 @@ export async function getPlaybookStepActivity(input: {
   };
   const thread = await getThread(agentRun.threadId);
   const fromThread = threadActivityEntries(thread?.messages ?? []);
-  const events = await db
+  // Newest first, then restored to run order. Reading the oldest rows instead would
+  // freeze the log on the first MAX_ENTRIES events of a long run.
+  const newestFirst = await db
     .select({
       eventId: agentRunEvents.eventId,
       detail: agentRunEvents.detail,
@@ -177,8 +179,9 @@ export async function getPlaybookStepActivity(input: {
     })
     .from(agentRunEvents)
     .where(eq(agentRunEvents.runId, step.agentRunId))
-    .orderBy(asc(agentRunEvents.sequence))
+    .orderBy(desc(agentRunEvents.sequence))
     .limit(MAX_ENTRIES);
+  const events = newestFirst.reverse();
   // A V2 worker records its detailed progress in agent_run_events while the thread
   // may contain only the prompt. Returning both prevents that prompt from hiding
   // the live tool, thinking, and response log.

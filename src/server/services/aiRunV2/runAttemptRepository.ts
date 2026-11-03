@@ -1439,6 +1439,9 @@ export function createRunAttemptRepository(options?: {
         ) {
           const activity = checkpoint.progress;
           const sourceInstance = `ai-run-v2-checkpoint:${checkpoint.attemptId}`;
+          // Postgres rejects \u0000 inside jsonb, and an agent reply can carry one.
+          const eventJson = JSON.stringify(activity.event).split('\\u0000').join('');
+          const detail = activity.detail?.split('\u0000').join('') || null;
           await executor.execute(sql`
             INSERT INTO agent_run_events (
               event_id,
@@ -1462,8 +1465,8 @@ export function createRunAttemptRepository(options?: {
               ${activity.eventType},
               ${activity.phase},
               ${activity.status},
-              ${activity.detail ?? null},
-              ${JSON.stringify(activity.event)}::jsonb
+              ${detail},
+              ${eventJson}::jsonb
             )
             ON CONFLICT (event_id) DO NOTHING
           `);

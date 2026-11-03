@@ -6326,10 +6326,19 @@ export class AzureDevOpsService {
   async getWorkItemCreator(
     workItemId: number,
   ): Promise<{ name: string; email: string | null } | null> {
+    const facts = await this.getWorkItemCreatorAndTitle(workItemId);
+    if (!facts.name) return null;
+    return { name: facts.name, email: facts.email };
+  }
+
+  /** Creator and title in one read, for the Cloud Agent branch and pull-request title. */
+  async getWorkItemCreatorAndTitle(
+    workItemId: number,
+  ): Promise<{ name: string | null; email: string | null; title: string | null }> {
     const witApi = await this.connection.getWorkItemTrackingApi();
     const item = await witApi.getWorkItem(
       workItemId,
-      ['System.CreatedBy'],
+      ['System.CreatedBy', 'System.Title'],
       undefined,
       undefined,
       this.project,
@@ -6337,10 +6346,12 @@ export class AzureDevOpsService {
     const createdBy = item?.fields?.['System.CreatedBy'] as
       | { displayName?: string; uniqueName?: string }
       | undefined;
-    const name = createdBy?.displayName?.trim();
-    if (!name) return null;
-    const email = createdBy?.uniqueName?.trim() || null;
-    return { name, email };
+    const title = item?.fields?.['System.Title'];
+    return {
+      name: createdBy?.displayName?.trim() || null,
+      email: createdBy?.uniqueName?.trim() || null,
+      title: typeof title === 'string' ? title.trim() || null : null,
+    };
   }
 
   /**

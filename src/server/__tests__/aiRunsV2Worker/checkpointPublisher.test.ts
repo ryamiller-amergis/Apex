@@ -1,4 +1,9 @@
 import { createCheckpointPublisher } from '../../services/aiRunsV2Worker/checkpointPublisher';
+import {
+  AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES,
+  isAiRunV2Checkpoint,
+  type AiRunV2Checkpoint,
+} from '../../../shared/types/aiRunV2';
 
 describe('checkpointPublisher', () => {
   it('keeps one monotonic sequence while carrying generic text progress', async () => {
@@ -115,5 +120,40 @@ describe('checkpointPublisher', () => {
         },
       },
     });
+  });
+
+  it('truncates a long activity event so the consumer still accepts it', async () => {
+    const sent: AiRunV2Checkpoint[] = [];
+    const publisher = createCheckpointPublisher({
+      target: {
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+      },
+      send: async (_messageId, body) => {
+        sent.push(body);
+      },
+    });
+
+    await publisher.publishActivity?.({
+      eventId: 'event-1',
+      threadId: 'thread-1',
+      runId: 'run-1',
+      sourceInstance: 'worker',
+      sequence: 1,
+      timestamp: '2026-09-22T12:00:00.000Z',
+      type: 'token',
+      phase: 'implementation',
+      status: 'running',
+      event: {
+        type: 'token',
+        text: 'x'.repeat(AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES * 2),
+      } as never,
+    });
+
+    const progress = sent[0]?.kind === 'progress' ? sent[0].progress : undefined;
+    expect(progress).toMatchObject({ kind: 'activity_event', eventType: 'token' });
+    expect(isAiRunV2Checkpoint(sent[0])).toBe(true);
   });
 });

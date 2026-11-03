@@ -1304,6 +1304,33 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     }));
   });
 
+  it('completes a still-running agent once its pull request is open in Azure DevOps', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'running',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        agentFinished: false,
+      }),
+      findWorkItemPullRequest: jest.fn().mockResolvedValue(
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+      ),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+    }));
+  });
+
   it('picks up the autoCreatePR url on a later poll of the same finished run', async () => {
     mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
     mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
