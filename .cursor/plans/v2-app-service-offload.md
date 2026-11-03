@@ -46,7 +46,7 @@ Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" 
 - Prod Terraform reconciled (two forked local states merged into `Apex/infra`; tbi copy retired). Plan from main 61c7678b = no changes. Prod plan/apply needs the secret inputs from the agent-store helper `tf-merge/prd-secrets-env.sh` (Oct 9 apply passed them on the command line). #268 pins `ALLOW_TEST_ACCOUNT_SIGN_IN`/`UV_THREADPOOL_SIZE`.
 - Repo vars set: `GROUNDING_MAINTENANCE_MODE_PRODUCTION=legacy-projects`, `_STAGING=disk-only`. Live slots still `full`/`cleanup-only` until the next prod deploy (user chose no restart).
 - Decisions: F re-runs only PRD/design-doc assistants, Home chat, Ask Apex; B and C gate on `ai-runs-v2-transport`; A step 2 uses Postgres LISTEN/NOTIFY; C walkthrough drafts wait in place with live progress.
-- In progress: F.0 PR 1 on `feat/chat-run-ended-signal` — server `finalizeAgentRun` appends a `done` (status + detail) when the caller passed none; client `endRun` used by every ending; test matrix. PR 2 = F.0 c/e + F steps 1–7.
+- In progress: all of workstream F on one branch/PR, `feat/chat-run-ended-signal` (#269, draft until F is done). Committed: F.0 a/b/d — server `finalizeAgentRun` appends a `done` (status + detail) when the caller passed none; client `endRun` used by every ending; test matrix. Next on the same branch: F.0 c/e + F steps 1–7. A–E each get their own PR.
 
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.

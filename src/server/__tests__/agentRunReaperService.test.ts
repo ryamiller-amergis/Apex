@@ -28,6 +28,29 @@ jest.mock('../services/pgNotifyService', () => ({
   nextRunEventSequence: jest.fn().mockReturnValue(1),
   notifyRunEvent: jest.fn().mockResolvedValue(undefined),
   finalizeReconciledAgentRun: jest.fn().mockResolvedValue(true),
+  buildRunDoneEnvelope: (input: {
+    runId: string;
+    threadId: string;
+    status: string;
+    detail?: string;
+    autoRetry?: boolean;
+  }) => ({
+    eventId: `done-${input.runId}`,
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: 'worker-a',
+    sequence: 2,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    type: 'done',
+    phase: 'completion',
+    status: input.status,
+    detail: input.detail,
+    event: {
+      type: 'done',
+      runId: input.runId,
+      ...(input.autoRetry ? { autoRetry: true } : {}),
+    },
+  }),
 }));
 jest.mock('../services/agentRunLifecycleService', () => {
   const actual = jest.requireActual('../services/agentRunLifecycleService');
@@ -1109,52 +1132,67 @@ describe('reapOrphanedRuns', () => {
       );
     });
 
-    it('retries a never-started turn once when it is eligible', async () => {
+    const autoRetryDone = expect.objectContaining({
+      type: 'done',
+      status: 'failed',
+      event: expect.objectContaining({ type: 'done', autoRetry: true }),
+    });
+
+    it('re-runs a never-started turn once when it is eligible', async () => {
       mockFindMany.mockResolvedValue([durableRow({
         status: 'dispatched',
         dispatchedAt: timestamp(60_001),
         requestedByUserId: 'user-1',
       })]);
-      const neverStartedTurnRetry = {
-        isEligible: jest.fn().mockResolvedValue(true),
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
         retry: jest.fn().mockResolvedValue(undefined),
       };
 
-      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
 
-      const turn = { runId: 'run-durable', threadId: 'thread-durable', userId: 'user-1' };
-      expect(neverStartedTurnRetry.isEligible).toHaveBeenCalledWith(turn);
+      const turn = {
+        runId: 'run-durable',
+        threadId: 'thread-durable',
+        userId: 'user-1',
+        reason: 'never_started',
+      };
+      expect(lostTurnRetry.isEligible).toHaveBeenCalledWith(turn);
       expect(mockMarkTerminal).toHaveBeenCalledWith(
         'run-durable',
         expect.objectContaining({
           terminalReason: 'worker_lost',
-          detail: 'Interactive agent did not start. Retrying automatically.',
+          detail: 'Interactive agent did not start. Restarting automatically.',
+          events: [expect.objectContaining({ type: 'health' }), autoRetryDone],
         }),
       );
-      expect(neverStartedTurnRetry.retry).toHaveBeenCalledWith(turn);
+      expect(lostTurnRetry.retry).toHaveBeenCalledWith(turn);
     });
 
-    it('asks the user to retry when the turn is not eligible for an automatic retry', async () => {
+    it('asks the user to retry when the turn is not eligible for an automatic re-run', async () => {
       mockFindMany.mockResolvedValue([durableRow({
         status: 'dispatched',
         dispatchedAt: timestamp(60_001),
         requestedByUserId: 'user-1',
       })]);
-      const neverStartedTurnRetry = {
-        isEligible: jest.fn().mockResolvedValue(false),
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: false, skippedReason: 'tool_grant' }),
         retry: jest.fn(),
       };
 
-      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
 
       expect(mockMarkTerminal).toHaveBeenCalledWith(
         'run-durable',
-        expect.objectContaining({ detail: 'Interactive agent did not start. Please retry.' }),
+        expect.objectContaining({
+          detail: 'Interactive agent did not start. Please retry.',
+          events: [expect.objectContaining({ type: 'health' })],
+        }),
       );
-      expect(neverStartedTurnRetry.retry).not.toHaveBeenCalled();
+      expect(lostTurnRetry.retry).not.toHaveBeenCalled();
     });
 
-    it('does not retry a running turn whose heartbeat went silent', async () => {
+    it('re-runs an eligible running turn whose host stopped heartbeating', async () => {
       mockFindMany.mockResolvedValue([durableRow({
         status: 'running',
         dispatchedAt: timestamp(5 * 60_000),
@@ -1162,12 +1200,55 @@ describe('reapOrphanedRuns', () => {
         heartbeatAt: timestamp(60_001),
         requestedByUserId: 'user-1',
       })]);
-      const neverStartedTurnRetry = { isEligible: jest.fn(), retry: jest.fn() };
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
+        retry: jest.fn().mockResolvedValue(undefined),
+      };
 
-      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
 
-      expect(neverStartedTurnRetry.isEligible).not.toHaveBeenCalled();
-      expect(neverStartedTurnRetry.retry).not.toHaveBeenCalled();
+      expect(lostTurnRetry.isEligible).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
+      );
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          detail: 'Interactive agent stopped responding. Restarting automatically.',
+          events: [expect.objectContaining({ type: 'health' }), autoRetryDone],
+        }),
+      );
+      expect(lostTurnRetry.retry).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
+      );
+    });
+
+    it('ends the turn with a failed done when the re-run cannot start', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
+        retry: jest.fn().mockRejectedValue(new Error('RUN_NOT_RETRYABLE')),
+      };
+
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
+
+      const { notifyRunEvent } = jest.requireMock('../services/pgNotifyService') as {
+        notifyRunEvent: jest.Mock;
+      };
+      expect(notifyRunEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'done',
+          status: 'failed',
+          detail: 'Interactive agent stopped responding. Please retry.',
+          event: { type: 'done', runId: 'run-durable' },
+        }),
+        { persist: true },
+      );
     });
 
     it('fails a running turn whose heartbeat went silent', async () => {

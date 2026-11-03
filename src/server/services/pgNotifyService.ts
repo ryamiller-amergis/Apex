@@ -88,6 +88,7 @@ export function buildRunDoneEnvelope(input: {
   status: 'completed' | 'failed' | 'cancelled';
   detail?: string;
   timestamp?: string;
+  autoRetry?: boolean;
 }): AgentRunEventEnvelope {
   return {
     eventId: randomUUID(),
@@ -100,7 +101,11 @@ export function buildRunDoneEnvelope(input: {
     phase: 'completion',
     status: input.status,
     detail: input.detail,
-    event: { type: 'done', runId: input.runId },
+    event: {
+      type: 'done',
+      runId: input.runId,
+      ...(input.autoRetry ? { autoRetry: true } : {}),
+    },
   };
 }
 
