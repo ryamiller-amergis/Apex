@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../utils/apiFetch';
 import type { WorkItem } from '../types/workitem';
 import type {
+  QaAdoSuiteSelection,
+  QaAdoTestPlanOption,
   QaLabGenerateRequest,
   QaLabGenerationCandidates,
   QaLabPublishedCase,
@@ -68,6 +70,16 @@ export function useQaLabWorkItemDetail(
       apiFetch(`/api/workitems/${workItemId}?project=${encodeURIComponent(project ?? '')}`),
     enabled: enabled && !!project && !!workItemId,
     staleTime: 60_000,
+  });
+}
+
+/** Test Plans and static suites the signed-in user can publish a suite into. */
+export function useAdoTestPlanOptions(suiteId: string | null, enabled: boolean) {
+  return useQuery<{ plans: QaAdoTestPlanOption[] }>({
+    queryKey: ['qa-lab', 'test-plans', suiteId],
+    queryFn: () => apiFetch(`/api/interviews/ado-test-suites/${suiteId}/test-plans`),
+    enabled: enabled && !!suiteId,
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -142,9 +154,9 @@ export function usePublishAdoTestSuite() {
       failures: Array<{ localCaseId: string; message: string }>;
     },
     Error,
-    { suiteId: string }
+    { suiteId: string; selections?: Record<string, QaAdoSuiteSelection>; localCaseIds?: string[] }
   >({
-    mutationFn: async ({ suiteId }) => {
+    mutationFn: async ({ suiteId, selections, localCaseIds }) => {
       const result = await apiFetch<{
         published: QaLabPublishedCase[];
         skippedLocalCaseIds: string[];
@@ -152,6 +164,10 @@ export function usePublishAdoTestSuite() {
       }>(`/api/interviews/ado-test-suites/${suiteId}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(selections ? { selections } : {}),
+          ...(localCaseIds ? { localCaseIds } : {}),
+        }),
       });
       if (result.failures.length > 0) {
         throw new Error(
@@ -160,6 +176,26 @@ export function usePublishAdoTestSuite() {
       }
       return result;
     },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });
+    },
+  });
+}
+
+/** Remove generated cases from an ADO-native suite before they are published. */
+export function useDeleteAdoTestCases() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { deletedLocalCaseIds: string[] },
+    Error,
+    { suiteId: string; localCaseIds: string[] }
+  >({
+    mutationFn: ({ suiteId, localCaseIds }) =>
+      apiFetch(`/api/interviews/ado-test-suites/${suiteId}/delete-cases`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ localCaseIds }),
+      }),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });
     },

@@ -1,5 +1,8 @@
 import type { TestCaseCoverageSummary, TestCaseStatus } from './interview';
 
+/** Automation tiers developers own. QA Lab hides them and never publishes them as Test Cases. */
+export const DEVELOPER_ONLY_AUTOMATION_TIERS: readonly string[] = ['unit', 'integration'];
+
 /** Level of the backlog node whose ADO work item ID matched the lookup. */
 export type QaLabMatchLevel = 'pbi' | 'feature' | 'epic';
 
@@ -33,6 +36,10 @@ export interface QaLabTestCase {
   acceptanceCriteriaIndex?: number | null;
   businessRules: string[];
   pbiId: string;
+  /** Test Plan name the skill proposed for this case. */
+  proposedTestPlan?: string;
+  /** Static suite path the skill proposed, `Suite > Child`. */
+  proposedTestSuite?: string;
 }
 
 export interface QaLabSuite {
@@ -79,6 +86,8 @@ export interface QaLabGenerationTarget {
   pbiTargets: QaLabBacklogPbiTarget[];
   /** Latest test-case row for the PRD, when one exists. */
   testCaseStatus?: TestCaseStatus | null;
+  /** Agent thread of the latest test-case run, for live progress. */
+  testCaseThreadId?: string | null;
 }
 
 export interface QaLabBacklogPbiTarget {
@@ -106,6 +115,10 @@ export interface QaLabPublishedCase {
   adoTestCaseUrl: string;
   parentWorkItemId: number;
   publishedAt: string;
+  testPlanId?: number;
+  testSuiteId?: number;
+  /** Set when the Test Case was created but adding it to the suite failed. */
+  suiteError?: string;
 }
 
 /** State for a suite generated directly from an ADO work item. */
@@ -113,6 +126,10 @@ export interface QaLabExternalSuite {
   id: string;
   status: TestCaseStatus;
   publishedCases: QaLabPublishedCase[];
+  /** The project's skill requires a confirmed Test Plan suite for every case. */
+  requireSuite: boolean;
+  /** Agent thread that generates the suite, for live progress. */
+  threadId: string | null;
 }
 
 export interface QaLabWorkItemTestCases {
@@ -150,6 +167,63 @@ export interface QaAdoGenerationItem {
   description: string;
   acceptanceCriteria: string;
   reproSteps: string;
+}
+
+/**
+ * Which work item a published Test Case links to. `requirement` is the PBI/Bug
+ * that owns the case, `parent` is that item's parent, and `root` is the item
+ * QA generated from.
+ */
+export type QaAdoPlacementLinkTo = 'requirement' | 'parent' | 'root';
+
+export type QaAdoPlacementLinkType = 'tested-by' | 'hierarchy' | 'related';
+
+/**
+ * Where the project's create-test-case skill files cases in Azure DevOps. Set
+ * at the top of the skill output and optionally per case; per-case values win.
+ */
+export interface QaAdoPlacement {
+  linkTo?: QaAdoPlacementLinkTo;
+  linkType?: QaAdoPlacementLinkType;
+  areaPath?: string;
+  iterationPath?: string;
+  tags?: string[];
+  /** Proposed Azure Test Plan name. QA confirms the plan before publish. */
+  testPlan?: string;
+  /** Proposed static suite path inside `testPlan`, written `Suite > Child`. */
+  testSuite?: string;
+  /** Publish refuses cases that have no confirmed Test Plan suite. */
+  requireSuite?: boolean;
+}
+
+/** A static Test Suite a published case can be added to. */
+export interface QaAdoTestSuiteOption {
+  id: number;
+  /** Path below the plan's root suite, `Suite > Child`. Empty for the root suite. */
+  path: string;
+}
+
+export interface QaAdoTestPlanOption {
+  id: number;
+  name: string;
+  suites: QaAdoTestSuiteOption[];
+}
+
+/** The Test Plan suite QA confirmed for one case. */
+export interface QaAdoSuiteSelection {
+  planId: number;
+  suiteId: number;
+}
+
+export interface QaLabPublishRequest {
+  /** Confirmed suites keyed by local case id. */
+  selections?: Record<string, QaAdoSuiteSelection>;
+  /** Publish only these cases. Omit to publish every unpublished case. */
+  localCaseIds?: string[];
+}
+
+export interface QaLabDeleteCasesRequest {
+  localCaseIds: string[];
 }
 
 /** ADO-native requirement context captured when a QA suite starts. */

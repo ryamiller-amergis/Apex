@@ -215,6 +215,23 @@ Ensure `.ai-pilot/output/` exists. Write **in this order**:
 5. Do **not** add `testCaseCount` to TBI objects.
 6. Re-validate the patched backlog against [`backlog-schema.json`](../to-prd/backlog-schema.json) before writing.
 
+### Azure DevOps placement
+
+Apex files published cases in Azure DevOps by the `placement` block in the JSON output (see `definitions.placement` in [`test-case-schema.json`](test-case-schema.json)). The project owns the rule: read the `## Azure DevOps placement` section of this project's adapter or project notes.
+
+1. If the project states a rule, write it as the top-level `placement`. Use case-level `placement` only when the project maps cases to different areas or tags (for example by module); case values override the top level and tags are combined.
+2. Use only area paths, iteration paths, and tags the project lists. Never invent a path.
+3. If the project states no rule, omit `placement`. Apex then links each case to its requirement with Tested By.
+
+| Field | Values |
+|-------|--------|
+| `linkTo` | `requirement` (the PBI/Bug), `parent` (its parent, usually the Feature), `root` (the item QA generated from) |
+| `linkType` | `tested-by`, `hierarchy`, `related` |
+| `areaPath`, `iterationPath` | Paths under the project, for example `Project\Team\Module` |
+| `tags` | Up to 20 tags, no `;` |
+| `testPlan`, `testSuite` | Proposed Azure Test Plan and static suite (`Feature > Sub-feature`). Copy names exactly from the "Azure Test Plans" list in the kickoff context. QA confirms them in Apex, then Apex adds the case to the suite |
+| `requireSuite` | Top level only. `true` when the project files every case in a suite; Apex then refuses to publish a case without a confirmed suite |
+
 ### Markdown template (`{slug}.test-cases.md`)
 
 ```markdown

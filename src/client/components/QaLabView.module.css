@@ -11,11 +11,33 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   border-right: 1px solid var(--border-color);
   background: var(--bg-secondary);
+}
+
+.sidebarResizeHandle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 2;
+  width: 6px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebarResizeHandle:hover,
+.sidebarResizeHandle:focus-visible {
+  background: color-mix(in srgb, var(--accent-color) 45%, transparent);
+  outline: none;
 }
 
 .sidebarHeader {
@@ -628,8 +650,78 @@
   border-color: var(--accent-color);
 }
 
+.cardRow {
+  display: flex;
+  align-items: center;
+}
+
+.cardCheckbox {
+  flex-shrink: 0;
+  margin: 0 0 0 12px;
+  cursor: pointer;
+}
+
+.cardDelete {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 8px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cardDelete svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cardDelete:hover {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+  color: var(--error-color);
+}
+
+.badgePublished {
+  background: color-mix(in srgb, var(--success-color) 14%, transparent);
+  color: var(--success-color);
+}
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dangerBtn {
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--error-color);
+  border: 1px solid color-mix(in srgb, var(--error-color) 50%, var(--border-color));
+  border-radius: 7px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dangerBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+}
+
+.dangerBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .cardHeader {
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 10px;
   width: 100%;

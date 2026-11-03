@@ -9,8 +9,15 @@ import type { TestCaseCoverageSummary } from '../../shared/types/interview';
 import type {
   QaAdoGenerationContext,
   QaAdoGenerationItem,
+  QaAdoPlacement,
+  QaAdoPlacementLinkTo,
+  QaAdoPlacementLinkType,
+  QaAdoSuiteSelection,
+  QaAdoTestPlanOption,
   QaLabGenerationCandidates,
+  QaLabPublishedCase,
 } from '../../shared/types/qaLab';
+import { DEVELOPER_ONLY_AUTOMATION_TIERS } from '../../shared/types/qaLab';
 import type { RunRef } from '../../shared/types/runGrounding';
 import { getDefaultModel } from './appSettingsService';
 import {
@@ -40,13 +47,7 @@ const NOT_SPECIFIED = 'Not specified on the Azure DevOps work item';
 
 const activeAdoTestSuiteWatchers = new Map<string, ReturnType<typeof setInterval>>();
 
-export interface QaAdoPublishedCase {
-  localCaseId: string;
-  adoTestCaseId: number;
-  adoTestCaseUrl: string;
-  parentWorkItemId: number;
-  publishedAt: string;
-}
+export type QaAdoPublishedCase = QaLabPublishedCase;
 
 export interface AdoTestSuiteRecord {
   id: string;
@@ -70,6 +71,8 @@ export interface AdoQaContextReader {
   getQaTestGenerationContext(
     rootId: number,
   ): Promise<QaAdoGenerationContext | null>;
+  /** Lets the skill propose real Test Plan and suite names. */
+  listStaticTestPlanSuites?(): Promise<QaAdoTestPlanOption[]>;
 }
 
 export interface TriggerAdoTestCaseGenerationInput {
@@ -169,13 +172,19 @@ export interface AdoTestCaseWriter {
     stepsHtml: string;
     parentId: number;
     assignedTo?: string;
-    linkType?: 'hierarchy' | 'tested-by';
+    linkType?: QaAdoPlacementLinkType;
+    areaPath?: string;
+    iterationPath?: string;
+    tags?: string[];
   }): Promise<{ id: number; url: string }>;
+  addTestCasesToSuite?(planId: number, suiteId: number, testCaseIds: number[]): Promise<void>;
 }
 
 export interface PublishAdoTestCasesOptions {
   /** Local case ids to publish. Omit to publish every unpublished case. */
   localCaseIds?: string[];
+  /** Test Plan suites QA confirmed, keyed by local case id. */
+  selections?: Record<string, QaAdoSuiteSelection>;
   assignedTo?: string;
   /** Injected writer. Used before the request and token options. */
   ado?: AdoTestCaseWriter;
@@ -194,8 +203,19 @@ interface PublishableCase {
   localCaseId: string;
   title: string;
   steps: Array<string | { action: string; expected?: string }>;
+  /** A unit or integration check, which is not a QA Test Case. */
+  developerOnly: boolean;
   parentWorkItemId: number;
+  placement: QaAdoPlacement;
+  placementError: string | null;
 }
+
+const PLACEMENT_LINK_TO: readonly QaAdoPlacementLinkTo[] = ['requirement', 'parent', 'root'];
+const PLACEMENT_LINK_TYPES: readonly QaAdoPlacementLinkType[] = ['tested-by', 'hierarchy', 'related'];
+const MAX_PLACEMENT_TAGS = 20;
+const MAX_TAG_LENGTH = 100;
+const MAX_CLASSIFICATION_PATH_LENGTH = 256;
+const MAX_TEST_PLAN_CONTEXT_LINES = 400;
 
 /** Backlog id the create-test-case skill can trace. The number is the ADO work item id. */
 export function adoBacklogPbiId(adoWorkItemId: number): string {
@@ -366,6 +386,7 @@ export async function triggerAdoTestCaseGeneration(
     slug,
     prdMarkdown,
     backlog,
+    testPlans: await readTestPlanOptions(reader),
   });
   const model = input.model
     ?? skillConfig.testCaseModel
@@ -551,8 +572,10 @@ export async function publishAdoTestCases(
   }
 
   const byId = new Map(cases.map((testCase) => [testCase.localCaseId, testCase]));
-  const requested = options.localCaseIds ?? cases.map((testCase) => testCase.localCaseId);
+  const requested = options.localCaseIds
+    ?? cases.filter((testCase) => !testCase.developerOnly).map((testCase) => testCase.localCaseId);
   const writer = await resolveTestCaseWriter(row.project, row.sourceSnapshot, options);
+  const context = generationContextFrom(row.sourceSnapshot);
   const published: QaAdoPublishedCase[] = [];
   const skippedLocalCaseIds: string[] = [];
   const failures: PublishAdoTestCasesResult['failures'] = [];
@@ -565,8 +588,24 @@ export async function publishAdoTestCases(
     const latest = await loadSuite(suiteId);
     if (!latest) throw new Error(`ADO test suite ${suiteId} was not found`);
     const stored = publishedCasesFrom(latest.publishedCases);
-    if (stored.some((item) => item.localCaseId === localCaseId)) {
-      skippedLocalCaseIds.push(localCaseId);
+    const selection = options.selections?.[localCaseId];
+    if (selection !== undefined && !isValidSelection(selection)) {
+      failures.push({ localCaseId, message: 'The selected Test Plan suite is not valid' });
+      continue;
+    }
+    const existing = stored.find((item) => item.localCaseId === localCaseId);
+    if (existing) {
+      if (!existing.suiteError || !selection) {
+        skippedLocalCaseIds.push(localCaseId);
+        continue;
+      }
+      const retried = await addToSuite(writer, existing, selection);
+      await savePublishedCase(suiteId, retried);
+      if (retried.suiteError) {
+        failures.push({ localCaseId, message: suiteFailureMessage(retried) });
+      } else {
+        published.push(retried);
+      }
       continue;
     }
 
@@ -578,32 +617,73 @@ export async function publishAdoTestCases(
       });
       continue;
     }
+    if (testCase.developerOnly) {
+      failures.push({
+        localCaseId,
+        message: 'Unit and integration checks are not published as Test Cases',
+      });
+      continue;
+    }
+
+    if (testCase.placementError) {
+      failures.push({ localCaseId, message: testCase.placementError });
+      continue;
+    }
+    const { placement } = testCase;
+    const outsideProject = [placement.areaPath, placement.iterationPath]
+      .find((value) => value !== undefined && !isUnderProject(value, row.project));
+    if (outsideProject !== undefined) {
+      failures.push({
+        localCaseId,
+        message: `Placement path "${outsideProject}" is not under the ${row.project} project`,
+      });
+      continue;
+    }
+    const linkTarget = resolveLinkTarget(testCase, context);
+    if ('error' in linkTarget) {
+      failures.push({ localCaseId, message: linkTarget.error });
+      continue;
+    }
+    if (!selection && placement.requireSuite) {
+      failures.push({
+        localCaseId,
+        message: 'Confirm a Test Plan and suite for this case before publishing',
+      });
+      continue;
+    }
+    if (selection && !writer.addTestCasesToSuite) {
+      failures.push({
+        localCaseId,
+        message: 'This Azure DevOps client cannot add cases to Test Plan suites',
+      });
+      continue;
+    }
 
     try {
       const created = await writer.createTestCaseWorkItem({
         title: testCase.title,
         stepsHtml: buildTestCaseStepsXml(testCase.steps),
-        parentId: testCase.parentWorkItemId,
-        linkType: 'tested-by',
+        parentId: linkTarget.id,
+        linkType: placement.linkType ?? 'tested-by',
+        ...(placement.areaPath ? { areaPath: placement.areaPath } : {}),
+        ...(placement.iterationPath ? { iterationPath: placement.iterationPath } : {}),
+        ...(placement.tags?.length ? { tags: placement.tags } : {}),
         ...(options.assignedTo ? { assignedTo: options.assignedTo } : {}),
       });
-      const publishedAt = new Date().toISOString();
-      const entry: QaAdoPublishedCase = {
+      const createdCase: QaAdoPublishedCase = {
         localCaseId,
         adoTestCaseId: created.id,
         adoTestCaseUrl: created.url,
-        parentWorkItemId: testCase.parentWorkItemId,
-        publishedAt,
+        parentWorkItemId: linkTarget.id,
+        publishedAt: new Date().toISOString(),
       };
-      const refreshed = publishedCasesFrom((await loadSuite(suiteId))?.publishedCases);
-      if (!refreshed.some((item) => item.localCaseId === localCaseId)) {
-        refreshed.push(entry);
-        await db
-          .update(qaAdoTestSuites)
-          .set({ publishedCases: refreshed, updatedAt: publishedAt })
-          .where(eq(qaAdoTestSuites.id, suiteId));
-      }
+      // Save the created Test Case before the suite call so a suite failure can
+      // be retried without creating a second Test Case.
+      await savePublishedCase(suiteId, createdCase);
+      const entry = selection ? await addToSuite(writer, createdCase, selection) : createdCase;
+      if (selection) await savePublishedCase(suiteId, entry);
       published.push(entry);
+      if (entry.suiteError) failures.push({ localCaseId, message: suiteFailureMessage(entry) });
     } catch (error) {
       failures.push({
         localCaseId,
@@ -615,6 +695,119 @@ export async function publishAdoTestCases(
   return { published, skippedLocalCaseIds, failures };
 }
 
+function isValidSelection(selection: QaAdoSuiteSelection): boolean {
+  return Number.isSafeInteger(selection?.planId) && selection.planId > 0
+    && Number.isSafeInteger(selection?.suiteId) && selection.suiteId > 0;
+}
+
+async function addToSuite(
+  writer: AdoTestCaseWriter,
+  entry: QaAdoPublishedCase,
+  selection: QaAdoSuiteSelection,
+): Promise<QaAdoPublishedCase> {
+  const { suiteError: _previousError, ...rest } = entry;
+  const placed = { ...rest, testPlanId: selection.planId, testSuiteId: selection.suiteId };
+  if (!writer.addTestCasesToSuite) {
+    return { ...placed, suiteError: 'This Azure DevOps client cannot add cases to Test Plan suites' };
+  }
+  try {
+    await writer.addTestCasesToSuite(selection.planId, selection.suiteId, [entry.adoTestCaseId]);
+    return placed;
+  } catch (error) {
+    return {
+      ...placed,
+      suiteError: error instanceof Error ? error.message : 'Adding the case to the suite failed',
+    };
+  }
+}
+
+function suiteFailureMessage(entry: QaAdoPublishedCase): string {
+  return `Created Test Case ${entry.adoTestCaseId} but could not add it to the suite: ${entry.suiteError}`;
+}
+
+/** Upserts one published case. A different Test Case already saved for the id wins. */
+async function savePublishedCase(suiteId: string, entry: QaAdoPublishedCase): Promise<void> {
+  const current = publishedCasesFrom((await loadSuite(suiteId))?.publishedCases);
+  const index = current.findIndex((item) => item.localCaseId === entry.localCaseId);
+  if (index >= 0 && current[index].adoTestCaseId !== entry.adoTestCaseId) return;
+  if (index >= 0) current[index] = entry;
+  else current.push(entry);
+  await db
+    .update(qaAdoTestSuites)
+    .set({ publishedCases: current, updatedAt: new Date().toISOString() })
+    .where(eq(qaAdoTestSuites.id, suiteId));
+}
+
+/** True when the project's skill output requires a confirmed suite for every case. */
+export function suiteRequiredByOutput(testCasesJson: unknown): boolean {
+  return parsePlacement(asRecord(testCasesJson)?.placement).placement.requireSuite === true;
+}
+
+/** A request the suite's current state cannot accept, such as deleting a published case. */
+export class AdoTestSuiteConflictError extends Error {}
+
+/**
+ * Removes generated cases from the suite before they reach Azure DevOps. A case
+ * already published stays, because its Test Case work item lives in ADO.
+ */
+export async function deleteAdoTestCases(
+  suiteId: string,
+  localCaseIds: string[],
+): Promise<{ deletedLocalCaseIds: string[] }> {
+  const row = await loadSuite(suiteId);
+  if (!row) throw new Error(`ADO test suite ${suiteId} was not found`);
+  if (row.status !== 'ready') {
+    throw new AdoTestSuiteConflictError('Test cases can be deleted only after generation finishes');
+  }
+  const wanted = new Set(localCaseIds);
+  const published = publishedCasesFrom(row.publishedCases)
+    .filter((entry) => wanted.has(entry.localCaseId))
+    .map((entry) => entry.localCaseId);
+  if (published.length > 0) {
+    throw new AdoTestSuiteConflictError(
+      `Already published to Azure DevOps, delete there instead: ${published.join(', ')}`,
+    );
+  }
+
+  const root = asRecord(row.testCasesJson);
+  const suites = Array.isArray(root?.suites) ? root.suites : [];
+  const deleted: string[] = [];
+  const nextSuites = suites.map((suiteValue) => {
+    const suite = asRecord(suiteValue);
+    if (!suite) return suiteValue;
+    const key = (['testCases', 'test_cases', 'cases'] as const).find((name) => Array.isArray(suite[name]));
+    if (!key) return suiteValue;
+    const parentWorkItemId = parentIdFromSuite(suite);
+    const pbiId = stringFrom(suite.pbiId)
+      ?? stringFrom(suite.pbi_id)
+      ?? (parentWorkItemId === null ? '' : adoBacklogPbiId(parentWorkItemId));
+    const kept = (suite[key] as unknown[]).filter((value, index) => {
+      const record = asRecord(value);
+      const id = record ? localCaseIdOf(record, pbiId, index) : null;
+      if (id === null || !wanted.has(id)) return true;
+      deleted.push(id);
+      return false;
+    });
+    if (kept.length === (suite[key] as unknown[]).length) return suiteValue;
+    return {
+      ...suite,
+      [key]: kept,
+      ...(typeof suite.testCaseCount === 'number' ? { testCaseCount: kept.length } : {}),
+    };
+  });
+  if (deleted.length === 0) return { deletedLocalCaseIds: [] };
+
+  const testCasesJson = { ...root, suites: nextSuites };
+  await db
+    .update(qaAdoTestSuites)
+    .set({
+      testCasesJson,
+      coverageSummary: summarizeCoverage(testCasesJson),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(eq(qaAdoTestSuites.id, suiteId), eq(qaAdoTestSuites.status, 'ready')));
+  return { deletedLocalCaseIds: deleted };
+}
 /**
  * Post-run hook for agent output, including V2 worker harvests whose files
  * live in a temporary workspace instead of the thread workspace.
@@ -873,6 +1066,7 @@ function renderGenerationContext(input: {
   slug: string;
   prdMarkdown: string;
   backlog: SyntheticAdoBacklog;
+  testPlans: QaAdoTestPlanOption[];
 }): string {
   return [
     '# Test Case Generation Context',
@@ -897,6 +1091,7 @@ function renderGenerationContext(input: {
     'several user types, write a separate case for each one. Use `User` only when the',
     'work items name no user type.',
     '',
+    ...renderTestPlanSection(input.testPlans),
     '## Synthetic PRD',
     input.prdMarkdown,
     '',
@@ -905,6 +1100,43 @@ function renderGenerationContext(input: {
     JSON.stringify(input.backlog, null, 2),
     '```',
   ].join('\n');
+}
+
+async function readTestPlanOptions(reader: AdoQaContextReader): Promise<QaAdoTestPlanOption[]> {
+  if (!reader.listStaticTestPlanSuites) return [];
+  try {
+    return await reader.listStaticTestPlanSuites();
+  } catch (error) {
+    console.warn(
+      `[adoTestSuite] Test Plans unavailable for generation context: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return [];
+  }
+}
+
+function renderTestPlanSection(testPlans: QaAdoTestPlanOption[]): string[] {
+  if (testPlans.length === 0) return [];
+  const lines: string[] = [];
+  for (const plan of testPlans) {
+    if (lines.length >= MAX_TEST_PLAN_CONTEXT_LINES) break;
+    lines.push(`- ${plan.name}`);
+    for (const suite of plan.suites) {
+      if (!suite.path) continue;
+      if (lines.length >= MAX_TEST_PLAN_CONTEXT_LINES) break;
+      lines.push(`  - ${suite.path}`);
+    }
+  }
+  return [
+    '## Azure Test Plans',
+    '',
+    'These Test Plans and static suites exist in Azure DevOps. When this project\'s skill',
+    'files cases in Test Plans, copy `placement.testPlan` and `placement.testSuite` from',
+    'this list exactly. QA confirms the placement in Apex before anything is published.',
+    '',
+    ...lines,
+    ...(lines.length >= MAX_TEST_PLAN_CONTEXT_LINES ? ['- … (list truncated)'] : []),
+    '',
+  ];
 }
 
 function buildKickoffMessage(pbiIds: string[]): string {
@@ -1141,6 +1373,7 @@ function areaPathFromSnapshot(snapshot: unknown): string | undefined {
 function collectPublishableCases(testCasesJson: unknown): PublishableCase[] {
   const root = asRecord(testCasesJson);
   if (!root) return [];
+  const defaultPlacement = parsePlacement(root.placement);
   const suites = Array.isArray(root.suites) ? root.suites : [];
   const found: PublishableCase[] = [];
   const seen = new Set<string>();
@@ -1156,7 +1389,7 @@ function collectPublishableCases(testCasesJson: unknown): PublishableCase[] {
     const cases = suite.testCases ?? suite.test_cases ?? suite.cases;
     if (!Array.isArray(cases)) continue;
     cases.forEach((value, index) => {
-      const testCase = toPublishableCase(value, pbiId, parentWorkItemId, index);
+      const testCase = toPublishableCase(value, pbiId, parentWorkItemId, index, defaultPlacement);
       if (!testCase || seen.has(testCase.localCaseId)) return;
       seen.add(testCase.localCaseId);
       found.push(testCase);
@@ -1176,27 +1409,136 @@ function parentIdFromSuite(suite: Record<string, unknown>): number | null {
   return Number.isSafeInteger(id) ? id : null;
 }
 
+function localCaseIdOf(record: Record<string, unknown>, pbiId: string, index: number): string {
+  return stringFrom(record.id)
+    ?? stringFrom(record.testCaseId)
+    ?? stringFrom(record.test_case_id)
+    ?? stringFrom(record.caseId)
+    ?? `${pbiId}-${index + 1}`;
+}
+
 function toPublishableCase(
   value: unknown,
   pbiId: string,
   parentWorkItemId: number,
   index: number,
+  defaultPlacement: ParsedPlacement,
 ): PublishableCase | null {
   const record = asRecord(value);
   if (!record) return null;
   const title = stringFrom(record.title) ?? stringFrom(record.name);
   if (!title) return null;
-  const localCaseId = stringFrom(record.id)
-    ?? stringFrom(record.testCaseId)
-    ?? stringFrom(record.test_case_id)
-    ?? stringFrom(record.caseId)
-    ?? `${pbiId}-${index + 1}`;
+  const localCaseId = localCaseIdOf(record, pbiId, index);
+  const casePlacement = parsePlacement(record.placement);
+  const automationTier = stringFrom(asRecord(record.automation)?.recommendedTier)
+    ?? stringFrom(record.automationTier);
   return {
     localCaseId,
     title,
     steps: stepsFrom(record.steps),
+    developerOnly: automationTier !== null && DEVELOPER_ONLY_AUTOMATION_TIERS.includes(automationTier),
     parentWorkItemId,
+    placement: mergePlacements(defaultPlacement.placement, casePlacement.placement),
+    placementError: defaultPlacement.error ?? casePlacement.error,
   };
+}
+
+interface ParsedPlacement {
+  placement: QaAdoPlacement;
+  error: string | null;
+}
+
+/** Reads the skill's placement block. An invalid value becomes a per-case publish failure. */
+function parsePlacement(value: unknown): ParsedPlacement {
+  if (value === undefined || value === null) return { placement: {}, error: null };
+  const record = asRecord(value);
+  if (!record) return { placement: {}, error: 'placement must be an object' };
+
+  const placement: QaAdoPlacement = {};
+  const invalid = (message: string): ParsedPlacement => ({ placement: {}, error: message });
+
+  if (record.linkTo !== undefined) {
+    if (!PLACEMENT_LINK_TO.includes(record.linkTo as QaAdoPlacementLinkTo)) {
+      return invalid(`placement.linkTo must be one of ${PLACEMENT_LINK_TO.join(', ')}`);
+    }
+    placement.linkTo = record.linkTo as QaAdoPlacementLinkTo;
+  }
+  if (record.linkType !== undefined) {
+    if (!PLACEMENT_LINK_TYPES.includes(record.linkType as QaAdoPlacementLinkType)) {
+      return invalid(`placement.linkType must be one of ${PLACEMENT_LINK_TYPES.join(', ')}`);
+    }
+    placement.linkType = record.linkType as QaAdoPlacementLinkType;
+  }
+  for (const key of ['areaPath', 'iterationPath', 'testPlan', 'testSuite'] as const) {
+    const raw = record[key];
+    if (raw === undefined) continue;
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (!text || text.length > MAX_CLASSIFICATION_PATH_LENGTH) {
+      return invalid(`placement.${key} must be a non-empty value of at most ${MAX_CLASSIFICATION_PATH_LENGTH} characters`);
+    }
+    placement[key] = text;
+  }
+  if (record.requireSuite !== undefined) {
+    if (typeof record.requireSuite !== 'boolean') return invalid('placement.requireSuite must be true or false');
+    placement.requireSuite = record.requireSuite;
+  }
+  if (record.tags !== undefined) {
+    if (!Array.isArray(record.tags) || record.tags.length > MAX_PLACEMENT_TAGS) {
+      return invalid(`placement.tags must be a list of at most ${MAX_PLACEMENT_TAGS} tags`);
+    }
+    const tags: string[] = [];
+    for (const tag of record.tags) {
+      const text = typeof tag === 'string' ? tag.trim() : '';
+      if (!text || text.length > MAX_TAG_LENGTH || text.includes(';')) {
+        return invalid(`placement.tags entries must be non-empty, at most ${MAX_TAG_LENGTH} characters, and contain no ";"`);
+      }
+      tags.push(text);
+    }
+    placement.tags = tags;
+  }
+  return { placement, error: null };
+}
+
+function mergePlacements(base: QaAdoPlacement, override: QaAdoPlacement): QaAdoPlacement {
+  const tags = Array.from(new Set([...(base.tags ?? []), ...(override.tags ?? [])]));
+  return {
+    ...base,
+    ...override,
+    ...(tags.length > 0 ? { tags } : {}),
+  };
+}
+
+function isUnderProject(classificationPath: string, project: string): boolean {
+  const normalized = classificationPath.toLowerCase();
+  const prefix = project.toLowerCase();
+  return normalized === prefix || normalized.startsWith(`${prefix}\\`);
+}
+
+/** Resolves the work item a case links to, using only ids from the captured ADO hierarchy. */
+function resolveLinkTarget(
+  testCase: PublishableCase,
+  context: QaAdoGenerationContext,
+): { id: number } | { error: string } {
+  const linkTo = testCase.placement.linkTo ?? 'requirement';
+  switch (linkTo) {
+    case 'requirement':
+      return { id: testCase.parentWorkItemId };
+    case 'root':
+      return context.root.id > 0
+        ? { id: context.root.id }
+        : { error: 'The suite has no root work item to link to' };
+    case 'parent': {
+      const owner = context.targets.find((item) => item.id === testCase.parentWorkItemId)
+        ?? (context.root.id === testCase.parentWorkItemId ? context.root : null);
+      return owner?.parentId
+        ? { id: owner.parentId }
+        : { error: `Work item ${testCase.parentWorkItemId} has no parent to link to` };
+    }
+    default: {
+      const unhandled: never = linkTo;
+      throw new Error(`Unknown placement.linkTo: ${String(unhandled)}`);
+    }
+  }
 }
 
 function stepsFrom(value: unknown): PublishableCase['steps'] {
@@ -1254,12 +1596,18 @@ function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
     ) {
       continue;
     }
+    const testPlanId = numberFrom(record?.testPlanId);
+    const testSuiteId = numberFrom(record?.testSuiteId);
+    const suiteError = stringFrom(record?.suiteError);
     cases.push({
       localCaseId,
       adoTestCaseId,
       adoTestCaseUrl,
       parentWorkItemId,
       publishedAt,
+      ...(testPlanId !== null ? { testPlanId } : {}),
+      ...(testSuiteId !== null ? { testSuiteId } : {}),
+      ...(suiteError ? { suiteError } : {}),
     });
   }
   return cases;

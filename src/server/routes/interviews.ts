@@ -118,12 +118,20 @@ import {
   getTestCasesForWorkItem,
 } from '../services/testCaseLookupService';
 import {
+  AdoTestSuiteConflictError,
+  deleteAdoTestCases,
   getLatestAdoTestSuite,
   listAdoGenerationCandidates,
   publishAdoTestCases,
+  suiteRequiredByOutput,
   triggerAdoTestCaseGeneration,
 } from '../services/adoTestCaseSuiteService';
-import type { QaLabGenerateRequest } from '../../shared/types/qaLab';
+import type {
+  QaAdoSuiteSelection,
+  QaLabDeleteCasesRequest,
+  QaLabGenerateRequest,
+  QaLabPublishRequest,
+} from '../../shared/types/qaLab';
 import type { EffortLevel } from '../../shared/types/effort';
 import {
   generateFallbackReport as generateFallbackValidationReport,
@@ -433,6 +441,8 @@ router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'
         id: external.id,
         status: external.status,
         publishedCases: external.publishedCases ?? [],
+        requireSuite: suiteRequiredByOutput(external.testCasesJson),
+        threadId: external.chatThreadId,
       },
     });
   } catch (err) {
@@ -534,8 +544,21 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       res.status(404).json({ error: 'QA suite not found' });
       return;
     }
+    const { selections, localCaseIds } = (req.body ?? {}) as QaLabPublishRequest;
+    if (selections !== undefined && !isSuiteSelectionMap(selections)) {
+      res.status(400).json({ error: 'selections must map case ids to { planId, suiteId }' });
+      return;
+    }
+    if (localCaseIds !== undefined && !isCaseIdList(localCaseIds)) {
+      res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
+      return;
+    }
     const adoService = await adoWriteForRequest(req, suite.project);
-    res.json(await publishAdoTestCases(suite.id, adoService));
+    res.json(await publishAdoTestCases(suite.id, {
+      ado: adoService,
+      ...(selections ? { selections } : {}),
+      ...(localCaseIds ? { localCaseIds } : {}),
+    }));
   } catch (err) {
     if (isAdoUserAuthError(err)) {
       res.status(403).json({ error: err.message });
@@ -544,6 +567,74 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
     next(err);
   }
 });
+
+/** Test Plans and static suites the signed-in user can publish this suite into. */
+router.get('/ado-test-suites/:suiteId/test-plans', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    const adoService = await adoWriteForRequest(req, suite.project);
+    res.json({ plans: await adoService.listStaticTestPlanSuites() });
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    const status = (err as { statusCode?: number; status?: number })?.statusCode
+      ?? (err as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      res.status(403).json({
+        error: 'Azure DevOps denied access to Test Plans. Publishing into suites needs Test Plans access (Basic + Test Plans or Visual Studio Enterprise).',
+      });
+      return;
+    }
+    next(err);
+  }
+});
+
+/** Removes generated cases that QA does not want published. */
+router.post('/ado-test-suites/:suiteId/delete-cases', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { localCaseIds } = (req.body ?? {}) as Partial<QaLabDeleteCasesRequest>;
+    if (!isCaseIdList(localCaseIds)) {
+      res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    res.json(await deleteAdoTestCases(suite.id, localCaseIds));
+  } catch (err) {
+    if (err instanceof AdoTestSuiteConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+const MAX_CASE_IDS = 500;
+
+function isCaseIdList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.length <= MAX_CASE_IDS
+    && value.every((id) => typeof id === 'string' && id.trim().length > 0 && id.length <= 200);
+}
+
+function isSuiteSelectionMap(value: unknown): value is Record<string, QaAdoSuiteSelection> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => {
+    const selection = entry as Partial<QaAdoSuiteSelection> | null;
+    return Number.isSafeInteger(selection?.planId) && (selection?.planId ?? 0) > 0
+      && Number.isSafeInteger(selection?.suiteId) && (selection?.suiteId ?? 0) > 0;
+  });
+}
 
 router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {

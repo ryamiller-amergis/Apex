@@ -18,9 +18,11 @@ import { resolveSkillConfig } from '../services/projectSettingsService';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import {
   ADO_TEST_SUITE_WATCHER_INTERVAL_MS,
+  AdoTestSuiteConflictError,
   adoBacklogPbiId,
   adoBacklogTbiId,
   buildSyntheticAdoBacklog,
+  deleteAdoTestCases,
   getLatestAdoTestSuite,
   inferUserTypes,
   isAdoTestSuiteWatcherActive,
@@ -732,6 +734,273 @@ describe('ADO test suite generation and publish', () => {
       expect.objectContaining({ localCaseId: 'TC-PBI-18499-001', adoTestCaseId: 9002 }),
     ]);
     expect(dbMock.state.updates.every((update) => update.status === undefined)).toBe(true);
+  });
+
+  describe('publishing and deleting chosen cases', () => {
+    const twoCaseSuite = (publishedCases: unknown[] = []) => ({
+      id: 'suite-1',
+      project: 'Apex',
+      status: 'ready',
+      sourceSnapshot: { root: { areaPath: 'Apex\\QA' } },
+      publishedCases,
+      testCasesJson: {
+        suites: [{
+          pbiId: 'PBI-18452',
+          testCaseCount: 2,
+          testCases: [
+            { id: 'TC-1', title: 'Keep me', steps: ['Open'] },
+            { id: 'TC-2', title: 'Drop me', steps: ['Close'] },
+          ],
+        }],
+      },
+    });
+
+    it('publishes only the requested case ids', async () => {
+      const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9001, url: 'https://ado.example/9001' });
+      dbMock.state.suiteRow = twoCaseSuite();
+
+      const result = await publishAdoTestCases('suite-1', {
+        ado: { createTestCaseWorkItem },
+        localCaseIds: ['TC-2'],
+      });
+
+      expect(result.published.map((item) => item.localCaseId)).toEqual(['TC-2']);
+      expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
+      expect(createTestCaseWorkItem).toHaveBeenCalledWith(expect.objectContaining({ title: 'Drop me' }));
+    });
+
+    it('never publishes unit or integration checks as Test Cases', async () => {
+      const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9001, url: 'https://ado.example/9001' });
+      const row = twoCaseSuite();
+      const testCases = (row.testCasesJson.suites[0].testCases as Array<Record<string, unknown>>);
+      testCases[1].automation = { recommendedTier: 'unit' };
+      dbMock.state.suiteRow = row;
+
+      const all = await publishAdoTestCases('suite-1', { ado: { createTestCaseWorkItem } });
+      const forced = await publishAdoTestCases('suite-1', {
+        ado: { createTestCaseWorkItem },
+        localCaseIds: ['TC-2'],
+      });
+
+      expect(all.published.map((item) => item.localCaseId)).toEqual(['TC-1']);
+      expect(forced.failures).toEqual([{
+        localCaseId: 'TC-2',
+        message: 'Unit and integration checks are not published as Test Cases',
+      }]);
+      expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
+    });
+
+    it('removes unpublished cases and updates the suite count', async () => {
+      dbMock.state.suiteRow = twoCaseSuite();
+
+      const result = await deleteAdoTestCases('suite-1', ['TC-2', 'TC-missing']);
+
+      expect(result.deletedLocalCaseIds).toEqual(['TC-2']);
+      const saved = dbMock.state.suiteRow?.testCasesJson as {
+        suites: Array<{ testCaseCount: number; testCases: Array<{ id: string }> }>;
+      };
+      expect(saved.suites[0].testCases.map((entry) => entry.id)).toEqual(['TC-1']);
+      expect(saved.suites[0].testCaseCount).toBe(1);
+    });
+
+    it('refuses to delete a case already published to Azure DevOps', async () => {
+      dbMock.state.suiteRow = twoCaseSuite([{
+        localCaseId: 'TC-1',
+        adoTestCaseId: 9001,
+        adoTestCaseUrl: 'https://ado.example/9001',
+        parentWorkItemId: 18452,
+        publishedAt: '2026-11-03T00:00:00.000Z',
+      }]);
+
+      await expect(deleteAdoTestCases('suite-1', ['TC-1'])).rejects.toBeInstanceOf(AdoTestSuiteConflictError);
+      const saved = dbMock.state.suiteRow?.testCasesJson as { suites: Array<{ testCases: unknown[] }> };
+      expect(saved.suites[0].testCases).toHaveLength(2);
+    });
+
+    it('refuses to delete while the suite is generating', async () => {
+      dbMock.state.suiteRow = { ...twoCaseSuite(), status: 'generating' };
+
+      await expect(deleteAdoTestCases('suite-1', ['TC-2'])).rejects.toBeInstanceOf(AdoTestSuiteConflictError);
+    });
+  });
+
+  it('files cases where the skill placement says, with per-case overrides', async () => {
+    const createTestCaseWorkItem = jest.fn()
+      .mockResolvedValueOnce({ id: 9101, url: 'https://ado.example/9101' })
+      .mockResolvedValueOnce({ id: 9102, url: 'https://ado.example/9102' });
+    dbMock.state.suiteRow = {
+      id: 'suite-1',
+      project: 'Apex',
+      status: 'ready',
+      sourceSnapshot: {
+        root: { id: 18000, parentId: 17000, workItemType: 'Feature', title: 'Alerts', areaPath: 'Apex\\QA' },
+        targets: [{ id: 18452, parentId: 18000, workItemType: 'Product Backlog Item', title: 'Save' }],
+        technicalContext: [],
+      },
+      publishedCases: [],
+      testCasesJson: {
+        placement: { linkTo: 'parent', linkType: 'related', areaPath: 'Apex\\Alerts', tags: ['qa-lab'] },
+        suites: [{
+          pbiId: 'PBI-18452',
+          testCases: [
+            { id: 'TC-1', title: 'Saves', steps: ['Save'] },
+            {
+              id: 'TC-2',
+              title: 'Reloads',
+              steps: ['Reload'],
+              placement: { linkTo: 'root', iterationPath: 'Apex\\Sprint 9', tags: ['regression'] },
+            },
+          ],
+        }],
+      },
+    };
+
+    const result = await publishAdoTestCases('suite-1', { ado: { createTestCaseWorkItem } });
+
+    expect(result.failures).toEqual([]);
+    expect(createTestCaseWorkItem).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      parentId: 18000,
+      linkType: 'related',
+      areaPath: 'Apex\\Alerts',
+      tags: ['qa-lab'],
+    }));
+    expect(createTestCaseWorkItem).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      parentId: 18000,
+      linkType: 'related',
+      areaPath: 'Apex\\Alerts',
+      iterationPath: 'Apex\\Sprint 9',
+      tags: ['qa-lab', 'regression'],
+    }));
+    expect(result.published.map((item) => item.parentWorkItemId)).toEqual([18000, 18000]);
+  });
+
+  it('defaults to a Tested By link on the requirement when the skill sets no placement', async () => {
+    const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9201, url: 'https://ado.example/9201' });
+    dbMock.state.suiteRow = {
+      id: 'suite-1',
+      project: 'Apex',
+      status: 'ready',
+      sourceSnapshot: { root: { areaPath: 'Apex\\QA' } },
+      publishedCases: [],
+      testCasesJson: {
+        suites: [{ pbiId: 'PBI-18452', testCases: [{ id: 'TC-1', title: 'Saves', steps: ['Save'] }] }],
+      },
+    };
+
+    await publishAdoTestCases('suite-1', { ado: { createTestCaseWorkItem } });
+
+    const spec = createTestCaseWorkItem.mock.calls[0][0];
+    expect(spec).toEqual(expect.objectContaining({ parentId: 18452, linkType: 'tested-by' }));
+    expect(spec).not.toHaveProperty('areaPath');
+    expect(spec).not.toHaveProperty('tags');
+  });
+
+  it('reports invalid or out-of-project placement as a failure without writing', async () => {
+    const createTestCaseWorkItem = jest.fn();
+    dbMock.state.suiteRow = {
+      id: 'suite-1',
+      project: 'Apex',
+      status: 'ready',
+      sourceSnapshot: { root: { areaPath: 'Apex\\QA' } },
+      publishedCases: [],
+      testCasesJson: {
+        suites: [{
+          pbiId: 'PBI-18452',
+          testCases: [
+            { id: 'TC-1', title: 'Bad link', steps: ['x'], placement: { linkTo: 'epic' } },
+            { id: 'TC-2', title: 'Other project', steps: ['x'], placement: { areaPath: 'OtherProject\\Team' } },
+            { id: 'TC-3', title: 'No parent', steps: ['x'], placement: { linkTo: 'parent' } },
+          ],
+        }],
+      },
+    };
+
+    const result = await publishAdoTestCases('suite-1', { ado: { createTestCaseWorkItem } });
+
+    expect(createTestCaseWorkItem).not.toHaveBeenCalled();
+    expect(result.failures).toEqual([
+      { localCaseId: 'TC-1', message: expect.stringContaining('placement.linkTo must be one of') },
+      { localCaseId: 'TC-2', message: expect.stringContaining('is not under the Apex project') },
+      { localCaseId: 'TC-3', message: 'Work item 18452 has no parent to link to' },
+    ]);
+  });
+
+  it('adds created cases to the confirmed suite and blocks unconfirmed cases when the skill requires a suite', async () => {
+    const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9301, url: 'https://ado.example/9301' });
+    const addTestCasesToSuite = jest.fn().mockResolvedValue(undefined);
+    dbMock.state.suiteRow = {
+      id: 'suite-1',
+      project: 'Apex',
+      status: 'ready',
+      sourceSnapshot: { root: { areaPath: 'Apex\\QA' } },
+      publishedCases: [],
+      testCasesJson: {
+        placement: { requireSuite: true },
+        suites: [{
+          pbiId: 'PBI-18452',
+          testCases: [
+            { id: 'TC-1', title: 'Saves', steps: ['Save'], placement: { testPlan: '15 Timesheets', testSuite: 'Create' } },
+            { id: 'TC-2', title: 'Reloads', steps: ['Reload'] },
+          ],
+        }],
+      },
+    };
+
+    const result = await publishAdoTestCases('suite-1', {
+      ado: { createTestCaseWorkItem, addTestCasesToSuite },
+      selections: { 'TC-1': { planId: 15, suiteId: 150 } },
+    });
+
+    expect(addTestCasesToSuite).toHaveBeenCalledWith(15, 150, [9301]);
+    expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
+    expect(result.published).toEqual([
+      expect.objectContaining({ localCaseId: 'TC-1', testPlanId: 15, testSuiteId: 150 }),
+    ]);
+    expect(result.failures).toEqual([{
+      localCaseId: 'TC-2',
+      message: 'Confirm a Test Plan and suite for this case before publishing',
+    }]);
+  });
+
+  it('keeps a created case when the suite add fails and retries only the suite add', async () => {
+    const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9401, url: 'https://ado.example/9401' });
+    const addTestCasesToSuite = jest.fn()
+      .mockRejectedValueOnce(new Error('suite locked'))
+      .mockResolvedValueOnce(undefined);
+    dbMock.state.suiteRow = {
+      id: 'suite-1',
+      project: 'Apex',
+      status: 'ready',
+      sourceSnapshot: { root: { areaPath: 'Apex\\QA' } },
+      publishedCases: [],
+      testCasesJson: {
+        suites: [{ pbiId: 'PBI-18452', testCases: [{ id: 'TC-1', title: 'Saves', steps: ['Save'] }] }],
+      },
+    };
+    const options = {
+      ado: { createTestCaseWorkItem, addTestCasesToSuite },
+      selections: { 'TC-1': { planId: 15, suiteId: 150 } },
+    };
+
+    const first = await publishAdoTestCases('suite-1', options);
+    expect(first.failures).toEqual([{
+      localCaseId: 'TC-1',
+      message: 'Created Test Case 9401 but could not add it to the suite: suite locked',
+    }]);
+    expect(dbMock.state.suiteRow?.publishedCases).toEqual([
+      expect.objectContaining({ adoTestCaseId: 9401, suiteError: 'suite locked' }),
+    ]);
+
+    const second = await publishAdoTestCases('suite-1', options);
+    expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
+    expect(addTestCasesToSuite).toHaveBeenCalledTimes(2);
+    expect(second.failures).toEqual([]);
+    expect(dbMock.state.suiteRow?.publishedCases).toEqual([
+      expect.not.objectContaining({ suiteError: expect.anything() }),
+    ]);
+    expect((dbMock.state.suiteRow?.publishedCases as unknown[])[0]).toEqual(
+      expect.objectContaining({ adoTestCaseId: 9401, testPlanId: 15, testSuiteId: 150 }),
+    );
   });
 
   it('uses the request token writer and refuses publish before the suite is ready', async () => {

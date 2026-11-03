@@ -1,4 +1,5 @@
-import { AzureDevOpsService } from '../services/azureDevOps';
+import { AzureDevOpsService, staticSuitePaths } from '../services/azureDevOps';
+import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import * as azdev from 'azure-devops-node-api';
 import { retryWithBackoff } from '../utils/retry';
 
@@ -1199,5 +1200,23 @@ describe('AzureDevOpsService', () => {
       expect(result.incompleteCount).toBe(1);
       expect(result.medianDays).toBeNull();
     });
+  });
+});
+
+describe('staticSuitePaths', () => {
+  it('builds paths below the plan root and keeps only static suites', () => {
+    const suites = [
+      { id: 1, name: '15 Timesheets', suiteType: TestSuiteType.StaticTestSuite },
+      { id: 2, name: 'Geofence', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 3, name: 'Inside Distance', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 2, name: 'Geofence' } },
+      { id: 4, name: 'By requirement', suiteType: TestSuiteType.RequirementTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 5, name: 'Orphan', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 99, name: 'Missing' } },
+    ] as TestSuite[];
+
+    expect(staticSuitePaths(suites)).toEqual([
+      { id: 1, path: '' },
+      { id: 2, path: 'Geofence' },
+      { id: 3, path: 'Geofence > Inside Distance' },
+    ]);
   });
 });

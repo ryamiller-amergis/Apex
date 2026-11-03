@@ -2,11 +2,13 @@ import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
 import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
+import type { QaAdoTestPlanOption, QaAdoTestSuiteOption } from '../../shared/types/qaLab';
 import {
   computeLastEnterInProgressToDone,
   summarizeRelatedItemCycleTimes,
@@ -33,6 +35,33 @@ function computeDepth(id: number, parentMap: Map<number, number | null>): number
     if (depth > 20) break; // guard against cycles
   }
   return depth;
+}
+
+const MAX_TEST_PLANS = 200;
+
+/**
+ * Static suites of one plan with paths below the plan's root suite. A suite
+ * whose parent chain breaks (a parent outside the page) is left out.
+ */
+export function staticSuitePaths(suites: TestSuite[]): QaAdoTestSuiteOption[] {
+  const byId = new Map(suites.map((suite) => [suite.id, suite]));
+  const pathOf = (suite: TestSuite): string[] | null => {
+    const names: string[] = [];
+    let current: TestSuite | undefined = suite;
+    for (let depth = 0; current?.parentSuite; depth++) {
+      if (depth > 20) return null;
+      names.unshift(current.name);
+      current = byId.get(current.parentSuite.id);
+    }
+    return current ? names : null;
+  };
+  const options: QaAdoTestSuiteOption[] = [];
+  for (const suite of suites) {
+    if (suite.suiteType !== TestSuiteType.StaticTestSuite) continue;
+    const names = pathOf(suite);
+    if (names) options.push({ id: suite.id, path: names.join(' > ') });
+  }
+  return options.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 export class AzureDevOpsService {
@@ -6039,17 +6068,28 @@ export class AzureDevOpsService {
     parentId: number;
     assignedTo?: string;
     /** ADO-native QA publishing uses the Tested By relationship. */
-    linkType?: 'hierarchy' | 'tested-by';
+    linkType?: 'hierarchy' | 'tested-by' | 'related';
+    /** Overrides the area path this service was created with. */
+    areaPath?: string;
+    iterationPath?: string;
+    tags?: string[];
   }): Promise<{ id: number; url: string }> {
     const witApi = await this.connection.getWorkItemTrackingApi();
     const orgUrl = this.organization.replace(/\/$/, '');
+    const areaPath = spec.areaPath ?? this.areaPath;
 
     const buildPatch = (linkRel: string, includeAssignedTo: boolean): any[] => {
       const patch: any[] = [
         { op: 'add', path: '/fields/System.Title', value: spec.title },
       ];
-      if (this.areaPath) {
-        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+      if (areaPath) {
+        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: areaPath });
+      }
+      if (spec.iterationPath) {
+        patch.push({ op: 'add', path: '/fields/System.IterationPath', value: spec.iterationPath });
+      }
+      if (spec.tags?.length) {
+        patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
       }
       if (spec.stepsHtml) {
         patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: spec.stepsHtml });
@@ -6071,7 +6111,9 @@ export class AzureDevOpsService {
 
     const preferredLink = spec.linkType === 'tested-by'
       ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
-      : 'System.LinkTypes.Hierarchy-Reverse';
+      : spec.linkType === 'related'
+        ? 'System.LinkTypes.Related'
+        : 'System.LinkTypes.Hierarchy-Reverse';
     const fallbackLink = preferredLink === 'System.LinkTypes.Hierarchy-Reverse'
       ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
       : 'System.LinkTypes.Hierarchy-Reverse';
@@ -6106,6 +6148,46 @@ export class AzureDevOpsService {
       id: wi.id,
       url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
     };
+  }
+
+  /**
+   * Active Test Plans with their static suites. Requirement and query-based
+   * suites are left out because Test Cases cannot be added to them directly.
+   */
+  async listStaticTestPlanSuites(): Promise<QaAdoTestPlanOption[]> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const plans: Array<{ id: number; name: string }> = [];
+    let planToken: string | undefined;
+    do {
+      const page = await testPlanApi.getTestPlans(this.project, undefined, planToken, false, true);
+      for (const plan of page ?? []) {
+        if (typeof plan.id === 'number' && plan.name) plans.push({ id: plan.id, name: plan.name });
+      }
+      planToken = page?.continuationToken || undefined;
+    } while (planToken && plans.length < MAX_TEST_PLANS);
+
+    const options: QaAdoTestPlanOption[] = [];
+    for (const plan of plans.slice(0, MAX_TEST_PLANS)) {
+      const suites: TestSuite[] = [];
+      let suiteToken: string | undefined;
+      do {
+        const page = await testPlanApi.getTestSuitesForPlan(this.project, plan.id, undefined, suiteToken, false);
+        suites.push(...(page ?? []));
+        suiteToken = page?.continuationToken || undefined;
+      } while (suiteToken);
+      options.push({ id: plan.id, name: plan.name, suites: staticSuitePaths(suites) });
+    }
+    return options;
+  }
+
+  async addTestCasesToSuite(planId: number, suiteId: number, testCaseIds: number[]): Promise<void> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    await testPlanApi.addTestCasesToSuite(
+      testCaseIds.map((id) => ({ workItem: { id } })),
+      this.project,
+      planId,
+      suiteId,
+    );
   }
 
   /**

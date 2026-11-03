@@ -1,7 +1,13 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import type { QaLabSuite, QaLabTestCase } from '../../shared/types/qaLab';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  DEVELOPER_ONLY_AUTOMATION_TIERS,
+  type QaAdoSuiteSelection,
+  type QaLabSuite,
+  type QaLabTestCase,
+} from '../../shared/types/qaLab';
 import {
   useAdoGenerationCandidates,
+  useDeleteAdoTestCases,
   useGenerateTestCasesForAdoWorkItem,
   useGenerateTestCasesForPrd,
   usePublishAdoTestSuite,
@@ -10,7 +16,10 @@ import {
   useWorkItemTestCases,
 } from '../hooks/useQaLab';
 import { env } from '../config/env';
+import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { QaLabAssistantPanel } from './QaLabAssistantPanel';
+import { QaLabGenerationStatus } from './QaLabGenerationStatus';
+import { QaLabPublishReview, type QaLabPublishReviewCase } from './QaLabPublishReview';
 import { RichTextField } from './RichTextField';
 import styles from './QaLabView.module.css';
 
@@ -44,34 +53,50 @@ const FILTER_LABELS: Record<FilterKey, string> = {
 
 const ALL_USER_TYPES = '';
 
+const SIDEBAR_WIDTH_KEY = 'qa-lab-sidebar-width';
+const SIDEBAR_DEFAULT_WIDTH = 300;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 640;
+const SIDEBAR_KEY_STEP = 24;
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function readSidebarWidth(): number {
+  const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  return Number.isFinite(stored) && stored > 0 ? clampSidebarWidth(stored) : SIDEBAR_DEFAULT_WIDTH;
+}
+
 function userTypeOf(testCase: QaLabTestCase): string {
   return testCase.persona?.trim() || 'Unspecified';
 }
 
 /**
  * Manual holds every scenario a QA person runs by hand, including the ones
- * also tagged for Playwright. Automated holds unit and integration checks.
+ * also marked for Playwright. Unit and integration checks belong to developers,
+ * so QA Lab does not show them.
  */
-type CaseKind = 'manual' | 'e2e' | 'automated';
+type CaseKind = 'manual' | 'e2e';
 
 const CASE_TABS: { key: CaseKind; label: string; hint: string }[] = [
   { key: 'manual', label: 'Manual', hint: 'Scenarios QA runs by hand, including those also marked for E2E' },
-  { key: 'e2e', label: 'E2E', hint: 'User-facing paths marked for Playwright automation' },
-  { key: 'automated', label: 'Automated', hint: 'Unit and integration checks for developers' },
+  { key: 'e2e', label: 'E2E', hint: 'Manual scenarios to automate as Playwright tests' },
 ];
 
 const COVERAGE_TIERS = ['happy', 'error', 'edge', 'negative'] as const;
 
+function isQaCase(testCase: QaLabTestCase): boolean {
+  return !DEVELOPER_ONLY_AUTOMATION_TIERS.includes(testCase.automationTier ?? '');
+}
+
 function isOnTab(testCase: QaLabTestCase, tab: CaseKind): boolean {
-  const tier = testCase.automationTier;
-  const isAutomatedOnly = tier === 'unit' || tier === 'integration';
+  if (!isQaCase(testCase)) return false;
   switch (tab) {
     case 'manual':
-      return !isAutomatedOnly;
+      return true;
     case 'e2e':
-      return tier === 'e2e-playwright';
-    case 'automated':
-      return isAutomatedOnly;
+      return testCase.automationTier === 'e2e-playwright';
     default: {
       const unhandled: never = tab;
       throw new Error(`Unknown case tab: ${String(unhandled)}`);
@@ -96,44 +121,82 @@ function uniqueValues(cases: QaLabTestCase[], key: FilterKey): string[] {
 
 /* ── Test case card ──────────────────────────────────────────────────────── */
 
+/** Checkbox and delete controls for cases in an ADO-native suite. */
+interface CaseSelection {
+  selectedIds: Set<string>;
+  publishedIds: Set<string>;
+  onToggleSelected: (id: string) => void;
+  onDelete: (id: string) => void;
+}
+
 interface TestCaseCardProps {
   testCase: QaLabTestCase;
   expanded: boolean;
   onToggle: () => void;
+  selection: CaseSelection | null;
 }
 
-const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggle }) => {
+const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggle, selection }) => {
   const traceBits = [
     testCase.acceptanceCriteriaIndex != null ? `AC-${testCase.acceptanceCriteriaIndex + 1}` : null,
     ...testCase.businessRules,
   ].filter((bit): bit is string => bit !== null);
+  const isPublished = selection?.publishedIds.has(testCase.id) ?? false;
 
   return (
     <div
       className={`${styles.card} ${expanded ? styles.cardExpanded : ''}`}
       {...{ 'data-testid': `qa-lab-case-${testCase.id}` }}
     >
-      <button
-        type="button"
-        className={styles.cardHeader}
-        onClick={onToggle}
-        aria-expanded={expanded}
-        {...{ 'data-testid': `qa-lab-case-toggle-${testCase.id}` }}
-      >
-        <span className={styles.caseId}>{testCase.id}</span>
-        <span className={styles.caseTitle}>{testCase.title}</span>
-        <span className={styles.caseBadges}>
-          {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
-          {testCase.type && <span className={styles.badge}>{testCase.type}</span>}
-          {testCase.persona && <span className={styles.badge}>{testCase.persona}</span>}
-          {testCase.automationTier === 'e2e-playwright' && (
-            <span className={`${styles.badge} ${styles.badgeAutomation}`}>E2E</span>
-          )}
-        </span>
-        <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`} aria-hidden="true">
-          ▾
-        </span>
-      </button>
+      <div className={styles.cardRow}>
+        {selection && !isPublished && (
+          <input
+            type="checkbox"
+            className={styles.cardCheckbox}
+            checked={selection.selectedIds.has(testCase.id)}
+            onChange={() => selection.onToggleSelected(testCase.id)}
+            aria-label={`Select ${testCase.id}`}
+            {...{ 'data-testid': `qa-lab-case-select-${testCase.id}` }}
+          />
+        )}
+        <button
+          type="button"
+          className={styles.cardHeader}
+          onClick={onToggle}
+          aria-expanded={expanded}
+          {...{ 'data-testid': `qa-lab-case-toggle-${testCase.id}` }}
+        >
+          <span className={styles.caseId}>{testCase.id}</span>
+          <span className={styles.caseTitle}>{testCase.title}</span>
+          <span className={styles.caseBadges}>
+            {isPublished && <span className={`${styles.badge} ${styles.badgePublished}`}>Published</span>}
+            {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
+            {testCase.type && <span className={styles.badge}>{testCase.type}</span>}
+            {testCase.persona && <span className={styles.badge}>{testCase.persona}</span>}
+            {testCase.automationTier === 'e2e-playwright' && (
+              <span className={`${styles.badge} ${styles.badgeAutomation}`}>E2E</span>
+            )}
+          </span>
+          <span className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`} aria-hidden="true">
+            ▾
+          </span>
+        </button>
+        {selection && !isPublished && (
+          <button
+            type="button"
+            className={styles.cardDelete}
+            onClick={() => selection.onDelete(testCase.id)}
+            aria-label={`Delete ${testCase.id}`}
+            title="Delete this test case"
+            {...{ 'data-testid': `qa-lab-case-delete-${testCase.id}` }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            </svg>
+          </button>
+        )}
+      </div>
 
       {expanded && (
         <div className={styles.cardBody}>
@@ -244,6 +307,7 @@ interface SuiteGroupProps {
   manualCases: QaLabTestCase[] | null;
   expandedIds: Set<string>;
   onToggleCase: (id: string) => void;
+  selection: CaseSelection | null;
 }
 
 const ManualCoverage: React.FC<{ suiteId: string; cases: QaLabTestCase[] }> = ({ suiteId, cases }) => {
@@ -283,6 +347,7 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({
   manualCases,
   expandedIds,
   onToggleCase,
+  selection,
 }) => {
   if (cases.length === 0) return null;
 
@@ -322,6 +387,7 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({
             testCase={testCase}
             expanded={expandedIds.has(testCase.id)}
             onToggle={() => onToggleCase(testCase.id)}
+            selection={selection}
           />
         ))}
       </div>
@@ -343,7 +409,44 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [activeUserType, setActiveUserType] = useState(ALL_USER_TYPES);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [scopeSelection, setScopeSelection] = useState<Set<string> | null>(null);
+  const [publishReviewOpen, setPublishReviewOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(new Set());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const saveSidebarWidth = useCallback((width: number) => {
+    const next = clampSidebarWidth(width);
+    setSidebarWidth(next);
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next));
+  }, []);
+
+  const handleSidebarResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sidebarDragRef.current = { startX: event.clientX, startWidth: sidebarWidth };
+  }, [sidebarWidth]);
+
+  const handleSidebarResizeMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = sidebarDragRef.current;
+    if (!drag) return;
+    setSidebarWidth(clampSidebarWidth(drag.startWidth + event.clientX - drag.startX));
+  }, []);
+
+  const handleSidebarResizeEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!sidebarDragRef.current) return;
+    sidebarDragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    saveSidebarWidth(sidebarWidth);
+  }, [saveSidebarWidth, sidebarWidth]);
+
+  const handleSidebarResizeKey = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowLeft') saveSidebarWidth(sidebarWidth - SIDEBAR_KEY_STEP);
+    else if (event.key === 'ArrowRight') saveSidebarWidth(sidebarWidth + SIDEBAR_KEY_STEP);
+    else return;
+    event.preventDefault();
+  }, [saveSidebarWidth, sidebarWidth]);
 
   const workItemDetail = useQaLabWorkItemDetail(project, selectedWorkItemId, detailsOpen);
   const adoWorkItemUrl = selectedWorkItemId
@@ -363,6 +466,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const generateTestCases = useGenerateTestCasesForPrd();
   const generateAdoTestCases = useGenerateTestCasesForAdoWorkItem();
   const publishAdoSuite = usePublishAdoTestSuite();
+  const deleteAdoCases = useDeleteAdoTestCases();
 
   const testableItems = useMemo(
     () => (workItemList?.items ?? []).filter((item) => TESTABLE_TYPES.has(item.workItemType)),
@@ -392,12 +496,12 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   );
 
   const allCases = useMemo(
-    () => (data?.suites ?? []).flatMap((suite) => suite.testCases),
+    () => (data?.suites ?? []).flatMap((suite) => suite.testCases).filter(isQaCase),
     [data?.suites],
   );
 
   const tabCounts = useMemo(() => {
-    const counts: Record<CaseKind, number> = { manual: 0, e2e: 0, automated: 0 };
+    const counts: Record<CaseKind, number> = { manual: 0, e2e: 0 };
     for (const tab of CASE_TABS) {
       counts[tab.key] = allCases.filter((entry) => isOnTab(entry, tab.key)).length;
     }
@@ -418,7 +522,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     return Array.from(counts.entries()).sort(([left], [right]) => left.localeCompare(right));
   }, [kindCases]);
 
-  const showUserTypeTabs = activeTab !== 'automated' && userTypeCounts.length > 1;
+  const showUserTypeTabs = userTypeCounts.length > 1;
   const effectiveUserType = showUserTypeTabs ? activeUserType : ALL_USER_TYPES;
 
   const matchesUserType = useCallback(
@@ -469,6 +573,61 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     [externalSuite?.publishedCases],
   );
   const unpublishedCount = allCases.filter((entry) => !publishedCaseIds.has(entry.id)).length;
+  const reviewCases = useMemo<QaLabPublishReviewCase[]>(() => {
+    const suiteErrors = new Map(
+      (externalSuite?.publishedCases ?? [])
+        .filter((entry) => entry.suiteError)
+        .map((entry) => [entry.localCaseId, entry.suiteError]),
+    );
+    return allCases
+      .filter((entry) => !publishedCaseIds.has(entry.id) || suiteErrors.has(entry.id))
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        proposedTestPlan: entry.proposedTestPlan,
+        proposedTestSuite: entry.proposedTestSuite,
+        suiteError: suiteErrors.get(entry.id),
+      }));
+  }, [allCases, publishedCaseIds, externalSuite?.publishedCases]);
+  const canSelectCases = externalSuite?.status === 'ready' && !isGenerating;
+  const selectedForPublish = useMemo(
+    () => reviewCases.filter((entry) => selectedCaseIds.has(entry.id)),
+    [reviewCases, selectedCaseIds],
+  );
+  const hasSelection = selectedForPublish.length > 0;
+  const publishTargets = hasSelection ? selectedForPublish : reviewCases;
+  const pendingPublishCount = publishTargets.length;
+  const needsPublishReview = externalSuite?.requireSuite === true
+    || publishTargets.some((entry) => entry.proposedTestPlan || entry.suiteError);
+  const deletableIds = useMemo(
+    () => new Set(allCases.filter((entry) => !publishedCaseIds.has(entry.id)).map((entry) => entry.id)),
+    [allCases, publishedCaseIds],
+  );
+  const selectedForDelete = useMemo(
+    () => Array.from(selectedCaseIds).filter((id) => deletableIds.has(id)),
+    [selectedCaseIds, deletableIds],
+  );
+
+  const toggleSelectedCase = useCallback((id: string) => {
+    setSelectedCaseIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const caseSelection = useMemo<CaseSelection | null>(
+    () => canSelectCases
+      ? {
+        selectedIds: selectedCaseIds,
+        publishedIds: publishedCaseIds,
+        onToggleSelected: toggleSelectedCase,
+        onDelete: (id) => setPendingDeleteIds([id]),
+      }
+      : null,
+    [canSelectCases, selectedCaseIds, publishedCaseIds, toggleSelectedCase],
+  );
 
   const adoCandidates = useAdoGenerationCandidates(
     project,
@@ -516,8 +675,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     setExpandedIds(new Set());
     setScopeOpen(false);
     setScopeSelection(null);
+    setPublishReviewOpen(false);
     setDetailsOpen(false);
     setActiveUserType(ALL_USER_TYPES);
+    setSelectedCaseIds(new Set());
+    setPendingDeleteIds(null);
   }, []);
 
   const handleExpandAll = useCallback(() => {
@@ -571,20 +733,75 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     refetch,
   ]);
 
-  const handlePublish = useCallback(async () => {
-    if (!externalSuite || unpublishedCount === 0) return;
+  const publishSuite = useCallback(async (selections?: Record<string, QaAdoSuiteSelection>) => {
+    if (!externalSuite) return;
     try {
-      await publishAdoSuite.mutateAsync({ suiteId: externalSuite.id });
+      await publishAdoSuite.mutateAsync({
+        suiteId: externalSuite.id,
+        selections,
+        ...(hasSelection ? { localCaseIds: selectedForPublish.map((entry) => entry.id) } : {}),
+      });
+      setPublishReviewOpen(false);
+      setSelectedCaseIds(new Set());
       await refetch();
     } catch {
       // Mutation state renders the server error below the work-item header.
+      await refetch();
     }
-  }, [externalSuite, unpublishedCount, publishAdoSuite, refetch]);
+  }, [externalSuite, publishAdoSuite, hasSelection, selectedForPublish, refetch]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!externalSuite || !pendingDeleteIds) return;
+    try {
+      await deleteAdoCases.mutateAsync({ suiteId: externalSuite.id, localCaseIds: pendingDeleteIds });
+      setSelectedCaseIds((previous) => {
+        const next = new Set(previous);
+        for (const id of pendingDeleteIds) next.delete(id);
+        return next;
+      });
+    } catch {
+      // Mutation state renders the server error below the work-item header.
+    }
+    setPendingDeleteIds(null);
+    await refetch();
+  }, [externalSuite, pendingDeleteIds, deleteAdoCases, refetch]);
+
+  const handleSelectAllShown = useCallback(() => {
+    setSelectedCaseIds(new Set(
+      tabCases.filter(matchesFilters).map((entry) => entry.id).filter((id) => deletableIds.has(id)),
+    ));
+  }, [tabCases, matchesFilters, deletableIds]);
+
+  const handlePublish = useCallback(async () => {
+    if (!externalSuite || pendingPublishCount === 0) return;
+    if (needsPublishReview) {
+      setPublishReviewOpen(true);
+      return;
+    }
+    await publishSuite();
+  }, [externalSuite, pendingPublishCount, needsPublishReview, publishSuite]);
 
   return (
-    <div className={styles.layout} {...{ 'data-testid': 'qa-lab-view' }}>
+    <div
+      className={styles.layout}
+      style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}
+      {...{ 'data-testid': 'qa-lab-view' }}
+    >
       {/* ── Work item picker ── */}
       <aside className={styles.sidebar} aria-label="Work items">
+        <button
+          type="button"
+          className={styles.sidebarResizeHandle}
+          aria-label={`Resize work items panel, ${sidebarWidth} pixels wide. Use left and right arrows.`}
+          title="Drag to resize · double-click to reset"
+          onPointerDown={handleSidebarResizeStart}
+          onPointerMove={handleSidebarResizeMove}
+          onPointerUp={handleSidebarResizeEnd}
+          onPointerCancel={handleSidebarResizeEnd}
+          onDoubleClick={() => saveSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+          onKeyDown={handleSidebarResizeKey}
+          {...{ 'data-testid': 'qa-lab-sidebar-resize' }}
+        />
         <div className={styles.sidebarHeader}>
           <h2 className={styles.sidebarTitle}>Work items</h2>
           <span className={styles.sidebarCount}>{visibleWorkItems.length}</span>
@@ -742,14 +959,18 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                         type="button"
                         className={styles.secondaryBtn}
                         onClick={() => void handlePublish()}
-                        disabled={publishAdoSuite.isPending || unpublishedCount === 0}
+                        disabled={publishAdoSuite.isPending || pendingPublishCount === 0 || publishReviewOpen}
                         {...{ 'data-testid': 'qa-lab-publish-ado' }}
                       >
                         {publishAdoSuite.isPending
                           ? 'Publishing…'
-                          : unpublishedCount === 0
+                          : pendingPublishCount === 0
                             ? 'Published to ADO'
-                            : `Publish ${unpublishedCount} to ADO`}
+                            : hasSelection
+                              ? `Publish ${pendingPublishCount} selected`
+                              : unpublishedCount === 0
+                              ? `Finish suite placement (${pendingPublishCount})`
+                              : `Publish ${pendingPublishCount} to ADO`}
                       </button>
                     )}
                     <button
@@ -827,6 +1048,18 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                   </>
                 )}
               </section>
+            )}
+
+            {publishReviewOpen && externalSuite && !isGenerating && (
+              // data-testid-exempt — QaLabPublishReview owns its panel testids
+              <QaLabPublishReview
+                suiteId={externalSuite.id}
+                cases={reviewCases}
+                requireSuite={externalSuite.requireSuite}
+                isPublishing={publishAdoSuite.isPending}
+                onCancel={() => setPublishReviewOpen(false)}
+                onPublish={(selections) => void publishSuite(selections)}
+              />
             )}
 
             {scopeOpen && !isGenerating && (
@@ -917,12 +1150,36 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               </p>
             )}
 
-            {(generateTestCases.error || generateAdoTestCases.error || publishAdoSuite.error) && (
+            {(generateTestCases.error || generateAdoTestCases.error || publishAdoSuite.error || deleteAdoCases.error) && (
               <p className={`${styles.status} ${styles.statusError}`} {...{ 'data-testid': 'qa-lab-action-error' }}>
-                {(generateTestCases.error ?? generateAdoTestCases.error ?? publishAdoSuite.error)?.message}
+                {(generateTestCases.error ?? generateAdoTestCases.error ?? publishAdoSuite.error ?? deleteAdoCases.error)?.message}
               </p>
             )}
 
+            {pendingDeleteIds && (
+              <ConfirmDeleteModal
+                title={pendingDeleteIds.length === 1 ? 'Delete test case' : `Delete ${pendingDeleteIds.length} test cases`}
+                itemName={pendingDeleteIds.length === 1
+                  ? (allCases.find((entry) => entry.id === pendingDeleteIds[0])?.title ?? pendingDeleteIds[0])
+                  : `${pendingDeleteIds.length} selected cases`}
+                description="Remove from this generated suite"
+                isPending={deleteAdoCases.isPending}
+                onConfirm={() => void confirmDelete()}
+                onCancel={() => setPendingDeleteIds(null)}
+                data-testid="qa-lab-delete-confirm"
+              />
+            )}
+
+            {isGenerating ? (
+              <QaLabGenerationStatus
+                threadId={externalSuite?.status === 'generating'
+                  ? externalSuite.threadId
+                  : generation?.testCaseStatus === 'generating'
+                    ? (generation.testCaseThreadId ?? null)
+                    : null}
+              />
+            ) : (
+            <>
             {(generation || externalSuite) && (
               <div className={styles.provenance} {...{ 'data-testid': 'qa-lab-provenance' }}>
                 {generation ? (
@@ -1023,6 +1280,40 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                     </label>
                   ) : null,
                 )}
+                {caseSelection && (
+                  <div className={styles.selectionBar} {...{ 'data-testid': 'qa-lab-selection-bar' }}>
+                    <button
+                      type="button"
+                      className={styles.linkBtn}
+                      onClick={handleSelectAllShown}
+                      {...{ 'data-testid': 'qa-lab-select-all-shown' }}
+                    >
+                      Select all shown
+                    </button>
+                    {selectedForDelete.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          className={styles.linkBtn}
+                          onClick={() => setSelectedCaseIds(new Set())}
+                          {...{ 'data-testid': 'qa-lab-select-none' }}
+                        >
+                          Clear
+                        </button>
+                        <span className={styles.resultCount}>{selectedForDelete.length} selected</span>
+                        <button
+                          type="button"
+                          className={styles.dangerBtn}
+                          onClick={() => setPendingDeleteIds(selectedForDelete)}
+                          disabled={deleteAdoCases.isPending}
+                          {...{ 'data-testid': 'qa-lab-delete-selected' }}
+                        >
+                          Delete selected
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
                 <span className={styles.toolbarSpacer} />
                 <span className={styles.resultCount}>
                   {filteredCount} of {tabCases.length} shown
@@ -1089,8 +1380,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                   : null}
                 expandedIds={expandedIds}
                 onToggleCase={toggleCase}
+                selection={caseSelection}
               />
             ))}
+            </>
+            )}
           </>
         )}
       </main>

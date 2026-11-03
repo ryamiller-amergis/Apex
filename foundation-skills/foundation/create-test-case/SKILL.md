@@ -33,6 +33,15 @@ For each PBI in the backlog:
 2. Write `.ai-pilot/output/{slug}.test-cases.md` — human-readable summary.
 3. Patch the backlog JSON: update `testCaseCount` on each PBI.
 
+## Azure DevOps placement
+
+Apex files published cases in Azure DevOps by the `placement` block in the JSON output. The project owns the rule: read the adapter's `## Azure DevOps placement` section.
+
+1. If the adapter states a rule, write it as the top-level `placement`. Use case-level `placement` only when the adapter maps cases to different areas or tags (for example by module).
+2. Use only area paths, iteration paths, and tags the adapter lists. Never invent a path.
+3. If the project files cases in Azure Test Plans, set `testPlan` and `testSuite` on each case, copied exactly from the "Azure Test Plans" list in the kickoff context. Set top-level `requireSuite: true` when every case must be in a suite. QA confirms the plan and suite in Apex before publishing.
+4. If the adapter states no rule, omit `placement`. Apex then links each case to its requirement with Tested By.
+
 ## Quality gates
 
 - [ ] Every PBI has at least one test case for each of the four AC coverage scenarios (a–d)
@@ -40,3 +49,4 @@ For each PBI in the backlog:
 - [ ] No test cases invented without a basis in the backlog
 - [ ] Output validates against `test-case-schema.json`
 - [ ] `testCaseCount` updated in the backlog JSON
+- [ ] `placement` matches the adapter's rule, or is omitted when the adapter has none

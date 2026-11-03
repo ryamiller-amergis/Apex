@@ -188,6 +188,7 @@ function normalizeTestCase(
   value: unknown,
   fallbackPbiId: string,
   index: number,
+  defaultPlacement: Record<string, unknown> | null = null,
 ): QaLabTestCase | null {
   const record = asRecord(value);
   if (!record) return null;
@@ -198,6 +199,9 @@ function normalizeTestCase(
   const traceability = asRecord(record.traceability);
   const automation = asRecord(record.automation);
   const acIndex = traceability?.acceptanceCriteriaIndex;
+  const placement = asRecord(record.placement);
+  const proposedTestPlan = asString(placement?.testPlan) ?? asString(defaultPlacement?.testPlan);
+  const proposedTestSuite = asString(placement?.testSuite) ?? asString(defaultPlacement?.testSuite);
 
   return {
     id: asString(record.id) ?? `${fallbackPbiId}-TC-${index + 1}`,
@@ -220,6 +224,8 @@ function normalizeTestCase(
     acceptanceCriteriaIndex: typeof acIndex === 'number' ? acIndex : null,
     businessRules: asStringList(traceability?.businessRules),
     pbiId: asString(traceability?.pbiId) ?? fallbackPbiId,
+    ...(proposedTestPlan ? { proposedTestPlan } : {}),
+    ...(proposedTestSuite ? { proposedTestSuite } : {}),
   };
 }
 
@@ -236,6 +242,7 @@ function extractSuites(
   if (!root) return [];
 
   const wanted = new Set(pbiIds);
+  const defaultPlacement = asRecord(root.placement);
   const suites: QaLabSuite[] = [];
 
   for (const rawSuite of asArray(root.suites)) {
@@ -246,7 +253,7 @@ function extractSuites(
     if (!pbiId || !wanted.has(pbiId)) continue;
 
     const cases = suiteCases(suite)
-      .map((entry, index) => normalizeTestCase(entry, pbiId, index))
+      .map((entry, index) => normalizeTestCase(entry, pbiId, index, defaultPlacement))
       .filter((entry): entry is QaLabTestCase => entry !== null);
 
     if (cases.length === 0) continue;
@@ -330,6 +337,7 @@ export async function getTestCasesForWorkItem(
       pbiIds: match.pbiIds,
       pbiTargets: match.pbiTargets,
       testCaseStatus: testCaseRecord?.status ?? null,
+      testCaseThreadId: testCaseRecord?.chatThreadId ?? null,
     };
     if (!result.generation) result.generation = target;
 

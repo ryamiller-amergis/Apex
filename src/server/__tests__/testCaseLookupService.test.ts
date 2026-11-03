@@ -340,6 +340,7 @@ describe('getTestCasesForWorkItem', () => {
       pbiIds: ['PBI-001'],
       pbiTargets: [{ pbiId: 'PBI-001', title: 'Pay by card' }],
       testCaseStatus: null,
+      testCaseThreadId: null,
     });
   });
 
