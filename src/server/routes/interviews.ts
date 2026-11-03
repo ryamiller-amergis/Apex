@@ -154,11 +154,22 @@ import {
   suiteRequiredByOutput,
   triggerAdoTestCaseGeneration,
 } from '../services/adoTestCaseSuiteService';
+import {
+  QaCaseNotFoundError,
+  addCaseComment,
+  getCaseReview,
+  regenerateAdoTestCase,
+  restoreCaseRegeneration,
+} from '../services/qaCaseRegenerationService';
+import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
 import type {
   QaAdoSuiteSelection,
+  QaLabAddCaseCommentRequest,
   QaLabDeleteCasesRequest,
   QaLabGenerateRequest,
   QaLabPublishRequest,
+  QaLabAssistantThreadRequest,
+  QaLabRegenerateCaseRequest,
 } from '../../shared/types/qaLab';
 import type { EffortLevel } from '../../shared/types/effort';
 import {
@@ -645,6 +656,90 @@ router.post('/ado-test-suites/:suiteId/delete-cases', requirePermission('intervi
     next(err);
   }
 });
+
+router.get('/ado-test-suites/:suiteId/case-review', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await getCaseReview(req.params.suiteId));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/cases/:localCaseId/comments', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { body } = (req.body ?? {}) as Partial<QaLabAddCaseCommentRequest>;
+    if (typeof body !== 'string' || body.trim().length === 0 || body.length > MAX_COMMENT_LENGTH) {
+      res.status(400).json({ error: `body must be 1–${MAX_COMMENT_LENGTH} characters` });
+      return;
+    }
+    res.status(201).json(await addCaseComment({
+      suiteId: req.params.suiteId,
+      localCaseId: req.params.localCaseId,
+      body,
+      authorId: getUserId(req),
+      authorName: getDisplayName(req),
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/cases/:localCaseId/regenerate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { model } = (req.body ?? {}) as QaLabRegenerateCaseRequest;
+    if (model !== undefined && (typeof model !== 'string' || model.trim().length === 0)) {
+      res.status(400).json({ error: 'model must be a non-empty string' });
+      return;
+    }
+    res.status(202).json(await regenerateAdoTestCase({
+      suiteId: req.params.suiteId,
+      localCaseId: req.params.localCaseId,
+      userId: getUserId(req),
+      ...(model ? { model: model.trim() } : {}),
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/regenerations/:regenerationId/restore', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await restoreCaseRegeneration(req.params.suiteId, req.params.regenerationId));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/assistant-thread', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { threadId } = (req.body ?? {}) as QaLabAssistantThreadRequest;
+    if (threadId !== undefined && threadId !== null && typeof threadId !== 'string') {
+      res.status(400).json({ error: 'threadId must be a string' });
+      return;
+    }
+    res.json(await openQaLabAssistantThread({
+      suiteId: req.params.suiteId,
+      userId: getUserId(req),
+      threadId,
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+const MAX_COMMENT_LENGTH = 4000;
+
+function sendCaseReviewError(err: unknown, res: Response, next: NextFunction): void {
+  if (err instanceof QaCaseNotFoundError) {
+    res.status(404).json({ error: err.message });
+    return;
+  }
+  if (err instanceof AdoTestSuiteConflictError) {
+    res.status(409).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
 
 const MAX_CASE_IDS = 500;
 

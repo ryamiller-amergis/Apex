@@ -184,7 +184,7 @@ function normalizeTestData(value: unknown): Record<string, string> {
   return out;
 }
 
-function normalizeTestCase(
+export function normalizeTestCase(
   value: unknown,
   fallbackPbiId: string,
   index: number,

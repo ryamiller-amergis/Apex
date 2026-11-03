@@ -106,6 +106,7 @@ function isExpectedArtifactPath(
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
+        || /\.case\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;

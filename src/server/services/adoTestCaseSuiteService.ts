@@ -215,7 +215,7 @@ const PLACEMENT_LINK_TYPES: readonly QaAdoPlacementLinkType[] = ['tested-by', 'h
 const MAX_PLACEMENT_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
 const MAX_CLASSIFICATION_PATH_LENGTH = 256;
-const MAX_TEST_PLAN_CONTEXT_LINES = 400;
+const TEST_PLANS_FILE = '.ai-pilot/test-plans.md';
 
 /** Backlog id the create-test-case skill can trace. The number is the ADO work item id. */
 export function adoBacklogPbiId(adoWorkItemId: number): string {
@@ -307,7 +307,7 @@ export function resetAdoTestSuiteWatchersForTests(): void {
 }
 
 /** Keeps only the chosen PBIs/Bugs. TBIs stay as context for whatever remains. */
-function narrowGenerationTargets(
+export function narrowGenerationTargets(
   context: QaAdoGenerationContext,
   targetIds: number[] | undefined,
 ): QaAdoGenerationContext {
@@ -380,13 +380,14 @@ export async function triggerAdoTestCaseGeneration(
   const slug = sanitizeSlug(context.root.title);
   const prdMarkdown = renderSyntheticPrd(context, pbiIds);
   const kickoffMessage = buildKickoffMessage(pbiIds);
+  const testPlans = await readTestPlanOptions(reader);
   const freeformContext = renderGenerationContext({
     project,
     rootWorkItemId: input.rootWorkItemId,
     slug,
     prdMarkdown,
     backlog,
-    testPlans: await readTestPlanOptions(reader),
+    testPlans,
   });
   const model = input.model
     ?? skillConfig.testCaseModel
@@ -421,6 +422,7 @@ export async function triggerAdoTestCaseGeneration(
     pbiIds,
     freeformContext,
   });
+  writeTestPlanFile(thread.workspaceDir, testPlans);
   updateThreadKickoffContext(thread.id, freeformContext);
 
   const [inserted] = await db
@@ -464,6 +466,27 @@ async function dispatchAdoTestSuite(input: {
   sourceThreadId?: string;
   kickoffMessage: string;
 }): Promise<void> {
+  const dispatched = await dispatchQaLabRun({
+    ...input,
+    logLabel: `suiteId=${input.suiteId}`,
+    onPreparationFailure: () => markAdoTestSuiteFailed(input.suiteId, input.threadId, input.workspaceDir),
+  });
+  if (dispatched) startAdoTestSuiteWatcher(input.suiteId, input.threadId);
+}
+
+/**
+ * Starts the hidden agent turn for a QA Lab thread. Returns false when routing
+ * failed; `onPreparationFailure` has already run by then.
+ */
+export async function dispatchQaLabRun(input: {
+  threadId: string;
+  userId: string;
+  project: string;
+  sourceThreadId?: string;
+  kickoffMessage: string;
+  logLabel: string;
+  onPreparationFailure: () => Promise<void>;
+}): Promise<boolean> {
   const destinationRun: RunRef = {
     runType: 'chat',
     runId: input.threadId,
@@ -472,7 +495,7 @@ async function dispatchAdoTestSuite(input: {
   const reportPreparationFailure = async (): Promise<void> => {
     await runGroundingService.persistThenMarkTerminalInactive(
       destinationRun,
-      () => markAdoTestSuiteFailed(input.suiteId, input.threadId, input.workspaceDir),
+      input.onPreparationFailure,
     );
   };
 
@@ -493,7 +516,7 @@ async function dispatchAdoTestSuite(input: {
             );
           } catch {
             console.warn(
-              `[adoTestSuite] Grounding propagation unavailable (suiteId=${input.suiteId})`,
+              `[adoTestSuite] Grounding propagation unavailable (${input.logLabel})`,
             );
           }
         }
@@ -514,14 +537,13 @@ async function dispatchAdoTestSuite(input: {
     });
   } catch (error) {
     console.error(
-      `[adoTestSuite] Routing failed (suiteId=${input.suiteId})`,
+      `[adoTestSuite] Routing failed (${input.logLabel})`,
       error,
     );
     await reportPreparationFailure();
-    return;
+    return false;
   }
-
-  startAdoTestSuiteWatcher(input.suiteId, input.threadId);
+  return true;
 }
 
 export async function getLatestAdoTestSuite(
@@ -807,6 +829,115 @@ export async function deleteAdoTestCases(
     })
     .where(and(eq(qaAdoTestSuites.id, suiteId), eq(qaAdoTestSuites.status, 'ready')));
   return { deletedLocalCaseIds: deleted };
+}
+
+export interface AdoSuiteCaseMatch {
+  testCase: Record<string, unknown>;
+  pbiId: string;
+  parentWorkItemId: number | null;
+}
+
+export function findAdoSuiteCase(testCasesJson: unknown, localCaseId: string): AdoSuiteCaseMatch | null {
+  let match: AdoSuiteCaseMatch | null = null;
+  mapSuiteCases(testCasesJson, (testCase, id, pbiId, parentWorkItemId) => {
+    if (!match && id === localCaseId) match = { testCase, pbiId, parentWorkItemId };
+    return testCase;
+  });
+  return match;
+}
+
+export function listAdoSuiteCases(testCasesJson: unknown): Array<AdoSuiteCaseMatch & { localCaseId: string }> {
+  const cases: Array<AdoSuiteCaseMatch & { localCaseId: string }> = [];
+  mapSuiteCases(testCasesJson, (testCase, localCaseId, pbiId, parentWorkItemId) => {
+    cases.push({ testCase, localCaseId, pbiId, parentWorkItemId });
+    return testCase;
+  });
+  return cases;
+}
+
+/** Swaps one case for `next`. Returns null when the case is not in the output. */
+export function replaceAdoSuiteCase(
+  testCasesJson: unknown,
+  localCaseId: string,
+  next: Record<string, unknown>,
+): Record<string, unknown> | null {
+  let replaced = false;
+  const result = mapSuiteCases(testCasesJson, (testCase, id) => {
+    if (replaced || id !== localCaseId) return testCase;
+    replaced = true;
+    return next;
+  });
+  return replaced ? result : null;
+}
+
+/**
+ * Appends `testCase` to the suite for one work item, given as `PBI-123` or `123`,
+ * under a new id. Returns null when no suite covers that work item.
+ */
+export function appendAdoSuiteCase(
+  testCasesJson: unknown,
+  workItemRef: string,
+  testCase: Record<string, unknown>,
+): { testCasesJson: Record<string, unknown>; localCaseId: string } | null {
+  const taken = new Set<string>();
+  mapSuiteCases(testCasesJson, (record, id) => {
+    taken.add(id);
+    return record;
+  });
+  const wanted = workItemRef.trim().replace(/^PBI-/i, '');
+  const root = asRecord(testCasesJson) ?? {};
+  const suites = Array.isArray(root.suites) ? root.suites : [];
+  let localCaseId: string | null = null;
+  const nextSuites = suites.map((suiteValue) => {
+    const suite = asRecord(suiteValue);
+    if (localCaseId !== null || !suite) return suiteValue;
+    const parentWorkItemId = parentIdFromSuite(suite);
+    const pbiId = stringFrom(suite.pbiId)
+      ?? stringFrom(suite.pbi_id)
+      ?? (parentWorkItemId === null ? '' : adoBacklogPbiId(parentWorkItemId));
+    if (String(parentWorkItemId) !== wanted && pbiId.replace(/^PBI-/i, '') !== wanted) return suiteValue;
+    const key = (['testCases', 'test_cases', 'cases'] as const).find((name) => Array.isArray(suite[name])) ?? 'testCases';
+    const cases = Array.isArray(suite[key]) ? suite[key] as unknown[] : [];
+    let next = cases.length + 1;
+    while (taken.has(`${pbiId}-${next}`)) next += 1;
+    localCaseId = `${pbiId}-${next}`;
+    const nextCases = [...cases, { ...testCase, id: localCaseId }];
+    return {
+      ...suite,
+      [key]: nextCases,
+      ...(typeof suite.testCaseCount === 'number' ? { testCaseCount: nextCases.length } : {}),
+    };
+  });
+  return localCaseId === null ? null : { testCasesJson: { ...root, suites: nextSuites }, localCaseId };
+}
+
+function mapSuiteCases(
+  testCasesJson: unknown,
+  map: (
+    testCase: Record<string, unknown>,
+    localCaseId: string,
+    pbiId: string,
+    parentWorkItemId: number | null,
+  ) => Record<string, unknown>,
+): Record<string, unknown> {
+  const root = asRecord(testCasesJson) ?? {};
+  const suites = Array.isArray(root.suites) ? root.suites : [];
+  const nextSuites = suites.map((suiteValue) => {
+    const suite = asRecord(suiteValue);
+    if (!suite) return suiteValue;
+    const key = (['testCases', 'test_cases', 'cases'] as const).find((name) => Array.isArray(suite[name]));
+    if (!key) return suiteValue;
+    const parentWorkItemId = parentIdFromSuite(suite);
+    const pbiId = stringFrom(suite.pbiId)
+      ?? stringFrom(suite.pbi_id)
+      ?? (parentWorkItemId === null ? '' : adoBacklogPbiId(parentWorkItemId));
+    const cases = (suite[key] as unknown[]).map((value, index) => {
+      const record = asRecord(value);
+      return record ? map(record, localCaseIdOf(record, pbiId, index), pbiId, parentWorkItemId) : value;
+    });
+    return { ...suite, [key]: cases };
+  });
+  return { ...root, suites: nextSuites };
 }
 /**
  * Post-run hook for agent output, including V2 worker harvests whose files
@@ -1104,7 +1235,7 @@ function renderGenerationContext(input: {
   ].join('\n');
 }
 
-async function readTestPlanOptions(reader: AdoQaContextReader): Promise<QaAdoTestPlanOption[]> {
+export async function readTestPlanOptions(reader: AdoQaContextReader): Promise<QaAdoTestPlanOption[]> {
   if (!reader.listStaticTestPlanSuites) return [];
   try {
     return await reader.listStaticTestPlanSuites();
@@ -1116,29 +1247,32 @@ async function readTestPlanOptions(reader: AdoQaContextReader): Promise<QaAdoTes
   }
 }
 
-function renderTestPlanSection(testPlans: QaAdoTestPlanOption[]): string[] {
+export function renderTestPlanSection(testPlans: QaAdoTestPlanOption[]): string[] {
   if (testPlans.length === 0) return [];
-  const lines: string[] = [];
-  for (const plan of testPlans) {
-    if (lines.length >= MAX_TEST_PLAN_CONTEXT_LINES) break;
-    lines.push(`- ${plan.name}`);
-    for (const suite of plan.suites) {
-      if (!suite.path) continue;
-      if (lines.length >= MAX_TEST_PLAN_CONTEXT_LINES) break;
-      lines.push(`  - ${suite.path}`);
-    }
-  }
   return [
     '## Azure Test Plans',
     '',
-    'These Test Plans and static suites exist in Azure DevOps. When this project\'s skill',
-    'files cases in Test Plans, copy `placement.testPlan` and `placement.testSuite` from',
-    'this list exactly. QA confirms the placement in Apex before anything is published.',
-    '',
-    ...lines,
-    ...(lines.length >= MAX_TEST_PLAN_CONTEXT_LINES ? ['- … (list truncated)'] : []),
+    `Every Test Plan and static suite in Azure DevOps is listed in \`${TEST_PLANS_FILE}\`,`,
+    'one plan per top-level bullet with its suite paths beneath. When this project\'s skill',
+    'files cases in Test Plans, search that file for the module and sub-module, then copy',
+    '`placement.testPlan` and `placement.testSuite` from it exactly. QA confirms the',
+    'placement in Apex before anything is published.',
     '',
   ];
+}
+
+/** Writes the full Test Plan list the kickoff context points at; no-op when there are none. */
+export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlanOption[]): void {
+  if (testPlans.length === 0) return;
+  const lines = ['# Azure Test Plans', ''];
+  for (const plan of testPlans) {
+    lines.push(`- ${plan.name}`);
+    for (const suite of plan.suites) {
+      if (suite.path) lines.push(`  - ${suite.path}`);
+    }
+  }
+  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceDir, TEST_PLANS_FILE), `${lines.join('\n')}\n`, 'utf-8');
 }
 
 function buildKickoffMessage(pbiIds: string[]): string {
@@ -1401,7 +1535,7 @@ function collectPublishableCases(testCasesJson: unknown): PublishableCase[] {
   return found;
 }
 
-function parentIdFromSuite(suite: Record<string, unknown>): number | null {
+export function parentIdFromSuite(suite: Record<string, unknown>): number | null {
   const explicit = numberFrom(suite.adoWorkItemId) ?? numberFrom(suite.ado_work_item_id);
   if (explicit !== null) return explicit;
   const pbiId = stringFrom(suite.pbiId) ?? stringFrom(suite.pbi_id) ?? '';
@@ -1411,7 +1545,7 @@ function parentIdFromSuite(suite: Record<string, unknown>): number | null {
   return Number.isSafeInteger(id) ? id : null;
 }
 
-function localCaseIdOf(record: Record<string, unknown>, pbiId: string, index: number): string {
+export function localCaseIdOf(record: Record<string, unknown>, pbiId: string, index: number): string {
   return stringFrom(record.id)
     ?? stringFrom(record.testCaseId)
     ?? stringFrom(record.test_case_id)
@@ -1560,7 +1694,7 @@ function stepsFrom(value: unknown): PublishableCase['steps'] {
   return steps;
 }
 
-function summarizeCoverage(testCasesJson: unknown): TestCaseCoverageSummary | null {
+export function summarizeCoverage(testCasesJson: unknown): TestCaseCoverageSummary | null {
   const root = asRecord(testCasesJson);
   const direct = asRecord(root?.coverageSummary) ?? asRecord(root?.coverage_summary);
   const cases = collectPublishableCases(testCasesJson);
@@ -1579,7 +1713,7 @@ function summarizeCoverage(testCasesJson: unknown): TestCaseCoverageSummary | nu
   };
 }
 
-function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
+export function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
   if (!Array.isArray(value)) return [];
   const cases: QaAdoPublishedCase[] = [];
   for (const item of value) {
@@ -1648,7 +1782,7 @@ async function readOutputTestCasesMd(
   return file ? fs.readFileSync(file, 'utf-8') : null;
 }
 
-async function findOutputFile(
+export async function findOutputFile(
   threadId: string,
   pattern: RegExp,
   workspaceDirOverride?: string,
@@ -1667,7 +1801,7 @@ async function resolveWorkspaceDir(threadId: string): Promise<string | null> {
   return row?.workspaceDir ?? null;
 }
 
-async function cleanupWorkspace(
+export async function cleanupWorkspace(
   threadId: string,
   workspaceDirOverride?: string,
 ): Promise<void> {
@@ -1706,7 +1840,7 @@ function findAllFiles(dir: string, pattern: RegExp): string[] {
   }
 }
 
-function sanitizeSlug(input: string): string {
+export function sanitizeSlug(input: string): string {
   const slug = input
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')

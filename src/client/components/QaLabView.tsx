@@ -2,10 +2,13 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   DEVELOPER_ONLY_AUTOMATION_TIERS,
   type QaAdoSuiteSelection,
+  type QaLabCaseComment,
+  type QaLabCaseRegeneration,
   type QaLabSuite,
   type QaLabTestCase,
 } from '../../shared/types/qaLab';
 import {
+  useAdoCaseReview,
   useAdoGenerationCandidates,
   useDeleteAdoTestCases,
   useGenerateTestCasesForAdoWorkItem,
@@ -17,7 +20,8 @@ import {
 } from '../hooks/useQaLab';
 import { env } from '../config/env';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
-import { QaLabAssistantPanel } from './QaLabAssistantPanel';
+import { QaLabAssistantPanel, type QaLabAssistantTarget } from './QaLabAssistantPanel';
+import { QaLabCaseComments } from './QaLabCaseComments';
 import { QaLabGenerationStatus } from './QaLabGenerationStatus';
 import { QaLabPublishReview, type QaLabPublishReviewCase } from './QaLabPublishReview';
 import { RichTextField } from './RichTextField';
@@ -129,19 +133,31 @@ interface CaseSelection {
   onDelete: (id: string) => void;
 }
 
+/** Reviewer comments and single-case regenerations for an ADO-native suite. */
+interface CaseReviewInfo {
+  suiteId: string;
+  commentsByCase: Map<string, QaLabCaseComment[]>;
+  regenerationByCase: Map<string, QaLabCaseRegeneration>;
+}
+
 interface TestCaseCardProps {
   testCase: QaLabTestCase;
   expanded: boolean;
   onToggle: () => void;
   selection: CaseSelection | null;
+  review: CaseReviewInfo | null;
 }
 
-const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggle, selection }) => {
+const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggle, selection, review }) => {
   const traceBits = [
     testCase.acceptanceCriteriaIndex != null ? `AC-${testCase.acceptanceCriteriaIndex + 1}` : null,
     ...testCase.businessRules,
   ].filter((bit): bit is string => bit !== null);
   const isPublished = selection?.publishedIds.has(testCase.id) ?? false;
+  const comments = review?.commentsByCase.get(testCase.id) ?? [];
+  const openComments = comments.filter((comment) => comment.status === 'open').length;
+  const regeneration = review?.regenerationByCase.get(testCase.id) ?? null;
+  const isRegenerating = regeneration?.status === 'generating';
 
   return (
     <div
@@ -170,6 +186,7 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
           <span className={styles.caseTitle}>{testCase.title}</span>
           <span className={styles.caseBadges}>
             {isPublished && <span className={`${styles.badge} ${styles.badgePublished}`}>Published</span>}
+            {isRegenerating && <span className={`${styles.badge} ${styles.badgeAutomation}`}>Regenerating…</span>}
             {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
             {testCase.type && <span className={styles.badge}>{testCase.type}</span>}
             {testCase.persona && <span className={styles.badge}>{testCase.persona}</span>}
@@ -181,6 +198,21 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
             ▾
           </span>
         </button>
+        {review && (
+          <button
+            type="button"
+            className={`${styles.cardDelete} ${styles.cardComment}`}
+            onClick={() => { if (!expanded) onToggle(); }}
+            aria-label={`Comments on ${testCase.id}`}
+            title={openComments > 0 ? `${openComments} open comments` : 'Comment on this test case'}
+            {...{ 'data-testid': `qa-lab-case-comment-${testCase.id}` }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            {openComments > 0 && <span className={styles.commentCount}>{openComments}</span>}
+          </button>
+        )}
         {selection && !isPublished && (
           <button
             type="button"
@@ -294,6 +326,17 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
               Not an automation candidate — {testCase.automationRationale}
             </p>
           )}
+
+          {review && (
+            <QaLabCaseComments
+              suiteId={review.suiteId}
+              localCaseId={testCase.id}
+              currentCase={testCase}
+              comments={comments}
+              regeneration={regeneration}
+              isPublished={isPublished}
+            />
+          )}
         </div>
       )}
     </div>
@@ -310,6 +353,7 @@ interface SuiteGroupProps {
   expandedIds: Set<string>;
   onToggleCase: (id: string) => void;
   selection: CaseSelection | null;
+  review: CaseReviewInfo | null;
 }
 
 const ManualCoverage: React.FC<{ suiteId: string; cases: QaLabTestCase[] }> = ({ suiteId, cases }) => {
@@ -350,6 +394,7 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({
   expandedIds,
   onToggleCase,
   selection,
+  review,
 }) => {
   if (cases.length === 0) return null;
 
@@ -390,6 +435,7 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({
             expanded={expandedIds.has(testCase.id)}
             onToggle={() => onToggleCase(testCase.id)}
             selection={selection}
+            review={review}
           />
         ))}
       </div>
@@ -630,6 +676,26 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
       : null,
     [canSelectCases, selectedCaseIds, publishedCaseIds, toggleSelectedCase],
   );
+
+  const reviewSuiteId = canSelectCases && externalSuite ? externalSuite.id : null;
+  const assistantTarget = useMemo<QaLabAssistantTarget | null>(() => {
+    if (reviewSuiteId) return { kind: 'suite', suiteId: reviewSuiteId };
+    return generation ? { kind: 'prd', prdId: generation.prdId } : null;
+  }, [reviewSuiteId, generation]);
+  const { data: caseReviewData } = useAdoCaseReview(reviewSuiteId);
+  const caseReview = useMemo<CaseReviewInfo | null>(() => {
+    if (!reviewSuiteId) return null;
+    const commentsByCase = new Map<string, QaLabCaseComment[]>();
+    for (const comment of caseReviewData?.comments ?? []) {
+      const list = commentsByCase.get(comment.localCaseId) ?? [];
+      list.push(comment);
+      commentsByCase.set(comment.localCaseId, list);
+    }
+    const regenerationByCase = new Map<string, QaLabCaseRegeneration>(
+      (caseReviewData?.regenerations ?? []).map((run) => [run.localCaseId, run]),
+    );
+    return { suiteId: reviewSuiteId, commentsByCase, regenerationByCase };
+  }, [reviewSuiteId, caseReviewData]);
 
   const adoCandidates = useAdoGenerationCandidates(
     project,
@@ -946,14 +1012,14 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               <div className={styles.contentActions}>
                 {canGenerate && (
                   <>
-                    {generation && (
+                    {assistantTarget && (
                       <button
                         type="button"
                         className={styles.secondaryBtn}
                         onClick={() => setAssistantOpen(true)}
                         {...{ 'data-testid': 'qa-lab-open-assistant' }}
                       >
-                        Ask QA Assistant
+                        {assistantTarget.kind === 'suite' ? 'Ask Apex' : 'Ask QA Assistant'}
                       </button>
                     )}
                     {externalSuite?.status === 'ready' && allCases.length > 0 && (
@@ -1383,6 +1449,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 expandedIds={expandedIds}
                 onToggleCase={toggleCase}
                 selection={caseSelection}
+                review={caseReview}
               />
             ))}
             </>
@@ -1391,10 +1458,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         )}
       </main>
 
-      {assistantOpen && generation && (
+      {assistantOpen && assistantTarget && (
         // data-testid-exempt — QaLabAssistantPanel owns its panel chrome
         <QaLabAssistantPanel
-          prdId={generation.prdId}
+          key={assistantTarget.kind === 'suite' ? assistantTarget.suiteId : assistantTarget.prdId}
+          target={assistantTarget}
           contextLabel={selectedWorkItem?.title ?? `Work item #${selectedWorkItemId}`}
           open={assistantOpen}
           onClose={() => setAssistantOpen(false)}

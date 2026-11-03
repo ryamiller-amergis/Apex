@@ -1037,6 +1037,8 @@ describe('document artifact allowlists', () => {
         'feature.test-cases.md',
       ],
     ],
+    ['test-cases', ['feature.backlog.json', 'feature.test-cases.json']],
+    ['test-cases', ['feature-tc-2.case.json']],
     [
       'walkthrough-smart-tagging',
       ['walkthrough-anchor-smart-tagging.json'],

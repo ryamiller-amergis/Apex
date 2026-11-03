@@ -1,9 +1,13 @@
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../utils/apiFetch';
 import type { WorkItem } from '../types/workitem';
 import type {
   QaAdoSuiteSelection,
   QaAdoTestPlanOption,
+  QaLabCaseComment,
+  QaLabCaseRegeneration,
+  QaLabCaseReview,
   QaLabGenerateRequest,
   QaLabGenerationCandidates,
   QaLabPublishedCase,
@@ -195,6 +199,93 @@ export function useDeleteAdoTestCases() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ localCaseIds }),
+      }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });
+    },
+  });
+}
+
+const caseReviewKey = (suiteId: string | null) => ['qa-lab', 'case-review', suiteId] as const;
+const CASE_REVIEW_POLL_MS = 5_000;
+
+/**
+ * Comments and the latest regeneration per case. Polls while a case is
+ * regenerating and refreshes the cases once it finishes.
+ */
+export function useAdoCaseReview(suiteId: string | null) {
+  const queryClient = useQueryClient();
+  const query = useQuery<QaLabCaseReview>({
+    queryKey: caseReviewKey(suiteId),
+    queryFn: () => apiFetch(`/api/interviews/ado-test-suites/${suiteId}/case-review`),
+    enabled: !!suiteId,
+    refetchInterval: (current) =>
+      current.state.data?.regenerations.some((run) => run.status === 'generating')
+        ? CASE_REVIEW_POLL_MS
+        : false,
+  });
+
+  const generatingIds = (query.data?.regenerations ?? [])
+    .filter((run) => run.status === 'generating')
+    .map((run) => run.id)
+    .join(',');
+  const previousGeneratingIds = useRef(generatingIds);
+  useEffect(() => {
+    const stillGenerating = new Set(generatingIds.split(','));
+    const finishedOne = previousGeneratingIds.current
+      .split(',')
+      .some((id) => id.length > 0 && !stillGenerating.has(id));
+    previousGeneratingIds.current = generatingIds;
+    if (finishedOne) {
+      void queryClient.invalidateQueries({ queryKey: ['qa-lab', 'work-item-test-cases'] });
+    }
+  }, [generatingIds, queryClient]);
+
+  return query;
+}
+
+export function useAddCaseComment() {
+  const queryClient = useQueryClient();
+  return useMutation<QaLabCaseComment, Error, { suiteId: string; localCaseId: string; body: string }>({
+    mutationFn: ({ suiteId, localCaseId, body }) =>
+      apiFetch(
+        `/api/interviews/ado-test-suites/${suiteId}/cases/${encodeURIComponent(localCaseId)}/comments`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body }),
+        },
+      ),
+    onSettled: (_data, _error, { suiteId }) => {
+      void queryClient.invalidateQueries({ queryKey: caseReviewKey(suiteId) });
+    },
+  });
+}
+
+export function useRegenerateCase() {
+  const queryClient = useQueryClient();
+  return useMutation<QaLabCaseRegeneration, Error, { suiteId: string; localCaseId: string; model?: string }>({
+    mutationFn: ({ suiteId, localCaseId, model }) =>
+      apiFetch(
+        `/api/interviews/ado-test-suites/${suiteId}/cases/${encodeURIComponent(localCaseId)}/regenerate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(model ? { model } : {}),
+        },
+      ),
+    onSettled: (_data, _error, { suiteId }) => {
+      void queryClient.invalidateQueries({ queryKey: caseReviewKey(suiteId) });
+    },
+  });
+}
+
+export function useRestoreCase() {
+  const queryClient = useQueryClient();
+  return useMutation<QaLabCaseRegeneration, Error, { suiteId: string; regenerationId: string }>({
+    mutationFn: ({ suiteId, regenerationId }) =>
+      apiFetch(`/api/interviews/ado-test-suites/${suiteId}/regenerations/${regenerationId}/restore`, {
+        method: 'POST',
       }),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });

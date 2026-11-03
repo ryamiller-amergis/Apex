@@ -899,6 +899,41 @@ export const qaAdoTestSuites = pgTable('qa_ado_test_suites', {
   statusIdx: index('qa_ado_test_suites_status_idx').on(t.status),
 }));
 
+export const qaCaseRegenerations = pgTable('qa_case_regenerations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  status: text('status').$type<'generating' | 'ready' | 'failed' | 'restored'>().notNull().default('generating'),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  previousCase: jsonb('previous_case').notNull(),
+  source: text('source').$type<'comments' | 'assistant'>().notNull().default('comments'),
+  error: text('error'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  suiteCaseIdx: index('qa_case_regenerations_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+  oneGenerating: uniqueIndex('qa_case_regenerations_one_generating_idx')
+    .on(t.suiteId, t.localCaseId)
+    .where(sql`${t.status} = 'generating'`),
+  threadIdx: index('qa_case_regenerations_thread_idx').on(t.chatThreadId),
+}));
+
+export const qaCaseComments = pgTable('qa_case_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  body: text('body').notNull(),
+  status: text('status').$type<'open' | 'addressed'>().notNull().default('open'),
+  regenerationId: uuid('regeneration_id').references(() => qaCaseRegenerations.id, { onDelete: 'set null' }),
+  authorId: text('author_id').notNull(),
+  authorName: text('author_name'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  suiteCaseIdx: index('qa_case_comments_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
 export const designDocs = pgTable('design_docs', {
   id: uuid('id').primaryKey().defaultRandom(),
   prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),

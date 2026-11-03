@@ -109,7 +109,8 @@ export function isAllowedDocumentScratchInputPath(
       return value === '.ai-pilot/kickoff-transcript.md';
     case 'test-cases':
       return (
-        /^\.ai-pilot\/output\/[^/]+\.prd\.md$/i.test(value)
+        value === '.ai-pilot/test-plans.md'
+        || /^\.ai-pilot\/output\/[^/]+\.prd\.md$/i.test(value)
         || /^\.ai-pilot\/output\/[^/]+\.backlog\.json$/i.test(value)
       );
     case 'design-doc':

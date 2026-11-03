@@ -7,9 +7,13 @@ import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSk
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import styles from './QaLabAssistantPanel.module.css';
 
+/** What owns the cases in view; the assistant thread is scoped to it. */
+export type QaLabAssistantTarget =
+  | { kind: 'prd'; prdId: string }
+  | { kind: 'suite'; suiteId: string };
+
 export interface QaLabAssistantPanelProps {
-  /** PRD that owns the test cases in view; the assistant thread is scoped to it. */
-  prdId: string;
+  target: QaLabAssistantTarget;
   /** Shown in the panel header so QA knows which requirement is in context. */
   contextLabel?: string;
   open: boolean;
@@ -22,8 +26,13 @@ const MIN_PANEL_WIDTH = 300;
 const MAX_PANEL_WIDTH = 820;
 const DEFAULT_PANEL_WIDTH = 400;
 
+interface QuickPrompt {
+  label: string;
+  prompt: string;
+}
+
 /** Canned openers so QA does not have to phrase prompts from scratch. */
-const QUICK_PROMPTS: { label: string; prompt: string }[] = [
+const PRD_QUICK_PROMPTS: QuickPrompt[] = [
   {
     label: 'Fill coverage gaps',
     prompt:
@@ -41,8 +50,85 @@ const QUICK_PROMPTS: { label: string; prompt: string }[] = [
   },
 ];
 
+const SUITE_QUICK_PROMPTS: QuickPrompt[] = [
+  {
+    label: 'Review cases',
+    prompt:
+      "Review the unpublished cases against this project's test-case skill and the work items. List the problems by case id. Do not change anything yet.",
+  },
+  {
+    label: 'Fill coverage gaps',
+    prompt:
+      'Find acceptance criteria that no case covers yet and add a case for each one with qa_lab_add_case, in the format the skill sets.',
+  },
+  {
+    label: 'Fix login steps',
+    prompt:
+      'In every unpublished case, make the login step sign in as the user type the case tests. Move setup done by other user types into the precondition step. Use qa_lab_update_case.',
+  },
+];
+
+interface TargetConfig {
+  title: string;
+  threadUrl: string;
+  storageKey: string | null;
+  quickPrompts: QuickPrompt[];
+  invalidateKeys: unknown[][];
+  emptyTitle: string;
+  emptyBody: string;
+  placeholder: string;
+}
+
+function configFor(target: QaLabAssistantTarget): TargetConfig {
+  switch (target.kind) {
+    case 'prd':
+      return {
+        title: 'QA Assistant',
+        // The PRD assistant thread carries the add_test_case tool, so QA Lab reuses it.
+        threadUrl: `/api/interviews/prds/${target.prdId}/assistant-thread`,
+        storageKey: null,
+        quickPrompts: PRD_QUICK_PROMPTS,
+        invalidateKeys: [['prd-test-cases', target.prdId], ['qa-lab']],
+        emptyTitle: 'Generate test cases on demand',
+        emptyBody: 'Ask for extra coverage in plain language, or use a shortcut below. New cases are traced back to their acceptance criteria and appear in the grid automatically.',
+        placeholder: 'Ask for more test cases… (Enter to send)',
+      };
+    case 'suite':
+      return {
+        title: 'Ask Apex',
+        threadUrl: `/api/interviews/ado-test-suites/${target.suiteId}/assistant-thread`,
+        storageKey: `qa-lab-assistant-thread:${target.suiteId}`,
+        quickPrompts: SUITE_QUICK_PROMPTS,
+        invalidateKeys: [['qa-lab']],
+        emptyTitle: 'Change these cases in plain language',
+        emptyBody: 'Ask Apex can explain, edit, add, delete, comment on, or regenerate the unpublished cases. Edits show what changed on the case and can be restored. Publishing stays with you.',
+        placeholder: 'Ask Apex to change the cases… (Enter to send)',
+      };
+    default: {
+      const unhandled: never = target;
+      return unhandled;
+    }
+  }
+}
+
+function readStoredThread(key: string | null): string | null {
+  if (!key) return null;
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storeThread(key: string | null, threadId: string): void {
+  if (!key) return;
+  try {
+    window.sessionStorage.setItem(key, threadId);
+  } catch { /* storage unavailable */ }
+}
+
 export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
-  prdId,
+  target,
   contextLabel,
   open,
   onClose,
@@ -62,6 +148,8 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   const dragStartXRef = useRef(0);
   const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
 
+  const config = configFor(target);
+  const { threadUrl, storageKey, invalidateKeys } = config;
   const queryClient = useQueryClient();
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   const { data: globalDefaultModel } = useGlobalDefaultModel();
@@ -76,25 +164,25 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
     if (fallback) setSelectedModel(fallback);
   }, [selectedModel, globalDefaultModel?.value, availableModels]);
 
-  // A finished run may have added cases via add_test_case — refetch the grid.
+  // A finished run may have changed cases through its tools — refetch the grid.
   useEffect(() => {
     if (wasRunningRef.current && !isRunning) {
-      void queryClient.invalidateQueries({ queryKey: ['prd-test-cases', prdId] });
-      void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });
+      for (const queryKey of invalidateKeys) void queryClient.invalidateQueries({ queryKey });
       onRunComplete?.();
     }
     wasRunningRef.current = isRunning;
-  }, [isRunning, queryClient, prdId, onRunComplete]);
+  }, [isRunning, queryClient, invalidateKeys, onRunComplete]);
 
-  // The PRD assistant thread carries the add_test_case tool, so QA Lab reuses it.
   useEffect(() => {
     if (!open || threadId) return;
     setIsCreating(true);
     setCreateError(null);
-    fetch(`/api/interviews/prds/${prdId}/assistant-thread`, {
+    const storedThreadId = readStoredThread(storageKey);
+    fetch(threadUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      ...(storageKey ? { body: JSON.stringify({ threadId: storedThreadId }) } : {}),
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -107,14 +195,17 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
         }
         return response.json() as Promise<{ threadId: string }>;
       })
-      .then((data) => setThreadId(data.threadId))
+      .then((data) => {
+        storeThread(storageKey, data.threadId);
+        setThreadId(data.threadId);
+      })
       .catch((err: unknown) =>
         setCreateError(
           err instanceof Error ? err.message : 'Could not start the assistant. Please try again.',
         ),
       )
       .finally(() => setIsCreating(false));
-  }, [open, prdId, threadId]);
+  }, [open, threadUrl, storageKey, threadId]);
 
   const handleResizeMouseDown = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -172,7 +263,7 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   return (
     <div {...{ 'data-testid': 'qa-lab-assistant-panel' }}>
       <AgentPanelShell
-        title="QA Assistant"
+        title={config.title}
         ariaLabel="QA Lab assistant panel"
         onClose={onClose}
         closeAriaLabel="Close QA assistant"
@@ -200,7 +291,7 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
                 ? 'Starting assistant…'
                 : isRunning
                   ? 'Agent is thinking…'
-                  : 'Ask for more test cases… (Enter to send)'
+                  : config.placeholder
             }
             testIdPrefix="qa-lab-assistant"
             textareaRef={textareaRef}
@@ -210,7 +301,7 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
             onModelChange={setSelectedModel}
             before={(
               <div className={styles.quickPrompts}>
-                {QUICK_PROMPTS.map((quick) => (
+                {config.quickPrompts.map((quick) => (
                   <button
                     key={quick.label}
                     type="button"
@@ -238,11 +329,8 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
           {createError && <div className={styles.messageBubbleSystem}>{createError}</div>}
           {!isCreating && !createError && visibleMessages.length === 0 && (
             <div className={styles.emptyState}>
-              <p className={styles.emptyTitle}>Generate test cases on demand</p>
-              <p className={styles.emptyBody}>
-                Ask for extra coverage in plain language, or use a shortcut below. New cases are
-                traced back to their acceptance criteria and appear in the grid automatically.
-              </p>
+              <p className={styles.emptyTitle}>{config.emptyTitle}</p>
+              <p className={styles.emptyBody}>{config.emptyBody}</p>
             </div>
           )}
           {visibleMessages.map((message) => {

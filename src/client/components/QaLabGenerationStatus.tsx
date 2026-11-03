@@ -122,7 +122,6 @@ export const QaLabGenerationStatus: React.FC<QaLabGenerationStatusProps> = ({ th
         </p>
         {(thinking || toolProgress.length > 0) && (
           <div ref={scrollerRef} className={styles.activityScroller} {...{ 'data-testid': 'qa-lab-generating-steps' }}>
-            {thinking && <p className={styles.thinking}>{thinking}</p>}
             {toolProgress.map((tool) => {
               const target = targetOf(tool.args);
               return (
@@ -136,6 +135,7 @@ export const QaLabGenerationStatus: React.FC<QaLabGenerationStatusProps> = ({ th
                 </div>
               );
             })}
+            {thinking && <p className={styles.thinking}>{thinking}</p>}
           </div>
         )}
       </div>

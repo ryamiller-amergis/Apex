@@ -58,7 +58,7 @@
 
 .milestone_active .milestoneMark {
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
 }
 
 .milestone_done {
@@ -68,7 +68,7 @@
 
 .milestone_done .milestoneMark {
   background: var(--success-color);
-  color: var(--bg-primary);
+  color: var(--on-success);
 }
 
 .liveWorkBox {

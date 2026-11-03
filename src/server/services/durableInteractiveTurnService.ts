@@ -715,6 +715,7 @@ function capabilityMetadata(
     thread.kickoff.webResearchEnabled ||
     thread.kickoff.assistantType === 'calendar-work-item' ||
     thread.kickoff.assistantType === 'mcp-server' ||
+    thread.kickoff.qaLabSuiteId ||
     resolveDocumentAssistantType(thread.kickoff)
   ) {
     capabilities.push('mcp');
@@ -1036,8 +1037,9 @@ function frozenMcpDescriptors(
       enableRepoBrowse: false,
     });
   }
-  // Document assistants stage edits through ado-skills `update_*` tools.
-  if (hasAdoCapability || resolveDocumentAssistantType(thread.kickoff)) {
+  // Document assistants stage edits through ado-skills `update_*` tools, and
+  // QA Lab Ask Apex edits cases through its `qa_lab_*` tools.
+  if (hasAdoCapability || thread.kickoff.qaLabSuiteId || resolveDocumentAssistantType(thread.kickoff)) {
     descriptors.push({
       kind: 'internal-proxy',
       serverName: 'ado-skills',

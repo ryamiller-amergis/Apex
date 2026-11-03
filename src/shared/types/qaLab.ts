@@ -226,6 +226,57 @@ export interface QaLabDeleteCasesRequest {
   localCaseIds: string[];
 }
 
+export type QaLabCaseCommentStatus = 'open' | 'addressed';
+
+export interface QaLabCaseComment {
+  id: string;
+  localCaseId: string;
+  body: string;
+  /** `addressed` once a regeneration used it. */
+  status: QaLabCaseCommentStatus;
+  authorName: string | null;
+  createdAt: string;
+}
+
+export type QaLabCaseRegenerationStatus = 'generating' | 'ready' | 'failed' | 'restored';
+
+/** The latest single-case regeneration for one case. */
+export type QaLabCaseEditSource = 'comments' | 'assistant';
+
+export interface QaLabCaseRegeneration {
+  id: string;
+  localCaseId: string;
+  status: QaLabCaseRegenerationStatus;
+  threadId: string | null;
+  error: string | null;
+  /** True when the case it replaced can be put back. */
+  canRestore: boolean;
+  /** comments: rewritten by an agent run from reviewer comments. assistant: edited through Ask Apex. */
+  source: QaLabCaseEditSource;
+  /** The case as it was before this rewrite; set only while the rewrite is the live version. */
+  previousCase: QaLabTestCase | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QaLabCaseReview {
+  comments: QaLabCaseComment[];
+  regenerations: QaLabCaseRegeneration[];
+}
+
+export interface QaLabAddCaseCommentRequest {
+  body: string;
+}
+
+export interface QaLabRegenerateCaseRequest {
+  model?: string;
+}
+
+export interface QaLabAssistantThreadRequest {
+  /** The thread the client used last for this suite; reused when it still fits. */
+  threadId?: string | null;
+}
+
 /** ADO-native requirement context captured when a QA suite starts. */
 export interface QaAdoGenerationContext {
   root: QaAdoGenerationItem;

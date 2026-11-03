@@ -737,6 +737,16 @@ describe('useChatStream', () => {
     expect(result.current.thinkingText).toBe('');
   });
 
+  it('joins numbered thinking pieces exactly and drops repeats', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      for (const [seq, text] of [[1, 'Keep each case conc'], [2, 'ise by'], [1, 'Keep each case conc'], [2, 'ise by'], [3, ' writing steps']] as const) {
+        lastES!.emit('message', { type: 'thinking', text, seq });
+      }
+    });
+    expect(result.current.thinkingText).toBe('Keep each case concise by writing steps');
+  });
+
   it('trims pre-tool narration on running tool events without breaking offset token alignment', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {
