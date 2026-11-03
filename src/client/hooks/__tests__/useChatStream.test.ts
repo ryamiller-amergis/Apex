@@ -1223,7 +1223,7 @@ describe('useChatStream', () => {
       act(() => {
         lastES!.emit('message', {
           type: 'phase',
-          runId: '50000000-0000-4000-8000-000000000005',
+          runId: lostRunId,
           phase: 'grounding',
           status: 'running',
         });
@@ -1261,6 +1261,49 @@ describe('useChatStream', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('shows a run the reaper ended with only a failed health event', () => {
+    const runId = '50000000-0000-4000-8000-000000000007';
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', { type: 'status', status: 'running', eventDrivenTermination: true });
+      lastES!.emit('message', { type: 'token', text: 'Partial answ', runId });
+      lastES!.emit('message', {
+        type: 'health',
+        health: 'worker_lost',
+        detail: 'Interactive agent stopped responding. Please retry.',
+        runId,
+        semanticStatus: 'failed',
+      });
+    });
+
+    expect(result.current.streamingText).toBe('');
+    expect(result.current.retryableRunId).toBe(runId);
+    expect(result.current.messages[result.current.messages.length - 1]).toMatchObject({
+      role: 'system',
+      text: 'Error: Interactive agent stopped responding. Please retry.',
+    });
+  });
+
+  it('shows a reaper re-queue from a health event as restarting', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+
+    act(() => {
+      lastES!.emit('message', { type: 'status', status: 'running', eventDrivenTermination: true });
+      lastES!.emit('message', {
+        type: 'health',
+        health: 'worker_lost',
+        detail: INTERACTIVE_AUTO_RETRY_DETAIL,
+        runId: '50000000-0000-4000-8000-000000000008',
+        semanticStatus: 'failed',
+      });
+    });
+
+    expect(result.current.isRetrying).toBe(true);
+    expect(result.current.retryReason).toBe('Restarting the agent…');
+    expect(result.current.messages.filter((m) => m.role === 'system')).toHaveLength(0);
   });
 
   it('does not repeat an error the turn already reported', () => {
