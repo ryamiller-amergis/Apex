@@ -49,6 +49,11 @@ function parseMcpConfig(text: string): ParsedConfig | { error: string } {
   return { url: record.url.trim(), headers };
 }
 
+function oauthClientIdForPatch(formValue: string, stored?: string | null): string | undefined {
+  const resolved = formValue.trim() || stored?.trim() || '';
+  return resolved || undefined;
+}
+
 interface McpServersViewProps {
   project: string;
   enabled: boolean;
@@ -108,6 +113,8 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
   const [savedSecretNames, setSavedSecretNames] = useState<string[]>([]);
   const [authMode, setAuthMode] = useState<McpServerAuthMode>('none');
   const [oauthConnected, setOauthConnected] = useState(false);
+  const [oauthClientId, setOauthClientId] = useState('');
+  const [oauthClientSecret, setOauthClientSecret] = useState('');
   const [oauthNotice] = useState(readOAuthNotice);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -175,6 +182,8 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
     setSavedSecretNames([]);
     setAuthMode('none');
     setOauthConnected(false);
+    setOauthClientId('');
+    setOauthClientSecret('');
     setSelectedId(null);
     setFormError(null);
   };
@@ -195,6 +204,8 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
     setSavedSecretNames(connection.secretNames ?? []);
     setAuthMode(connection.authMode ?? 'none');
     setOauthConnected(Boolean(connection.oauthConnected));
+    setOauthClientId(connection.oauthClientId ?? '');
+    setOauthClientSecret('');
     setFormError(null);
   };
 
@@ -281,6 +292,11 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
     try {
       const savedSecrets = secrets;
       const savedNames = [...savedSecretNames, ...secrets.map((secret) => secret.name)];
+      const patchedOAuthClientId = oauthClientIdForPatch(oauthClientId, selectedConnection?.oauthClientId);
+      const oauthPatch = {
+        ...(patchedOAuthClientId ? { oauthClientId: patchedOAuthClientId } : {}),
+        ...(oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}),
+      };
       if (selectedId && !composing) {
         await mcpServers.updateAccess(selectedId, {
           name: name.trim(),
@@ -290,9 +306,11 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
           secretNames: savedNames,
           toolNames: enabledToolNames,
           authMode,
+          ...oauthPatch,
         });
         setSecrets([]);
         setSavedSecretNames(savedNames);
+        setOauthClientSecret('');
       } else {
         await mcpServers.createConnection({
           name: name.trim(),
@@ -304,6 +322,7 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
           secrets: savedSecrets,
           toolNames: enabledToolNames,
           authMode,
+          ...oauthPatch,
         });
         resetDraft();
         setComposing(false);
@@ -329,6 +348,7 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
     setSaving(true);
     setFormError(null);
     try {
+      const patchedOAuthClientId = oauthClientIdForPatch(oauthClientId, selectedConnection?.oauthClientId);
       await mcpServers.updateAccess(selectedId, {
         name: name.trim(),
         mcpUrl: parsed.url,
@@ -337,6 +357,8 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
         secretNames: [...savedSecretNames, ...secrets.map((secret) => secret.name)],
         toolNames: enabledToolNames,
         authMode: 'oauth',
+        ...(patchedOAuthClientId ? { oauthClientId: patchedOAuthClientId } : {}),
+        ...(oauthClientSecret.trim() ? { oauthClientSecret: oauthClientSecret.trim() } : {}),
       });
       const authorizationUrl = await mcpServers.startOAuth(selectedId);
       window.location.assign(authorizationUrl);
@@ -733,6 +755,36 @@ export const McpServersView: React.FC<McpServersViewProps> = ({
                         ? 'Signed in. Test the server to load its tools.'
                         : 'Apex sends you to the provider to approve access, then stores the token encrypted.'}
                     </p>
+                    <div className={styles.fieldGrid}>
+                      <label className={styles.field} htmlFor="mcp-servers-oauth-client-id">
+                        OAuth Client ID (optional)
+                        <input
+                          id="mcp-servers-oauth-client-id"
+                          type="text"
+                          value={oauthClientId}
+                          placeholder="Leave blank if server supports dynamic registration"
+                          onChange={(event) => setOauthClientId(event.target.value)}
+                          {...{ 'data-testid': 'mcp-servers-oauth-client-id' }}
+                        />
+                      </label>
+                      <label className={styles.field} htmlFor="mcp-servers-oauth-client-secret">
+                        OAuth Client Secret (optional)
+                        <input
+                          id="mcp-servers-oauth-client-secret"
+                          type="password"
+                          autoComplete="off"
+                          value={oauthClientSecret}
+                          placeholder={selectedConnection?.hasOAuthClientSecret ? '•••• (saved)' : 'Leave blank for public client PKCE'}
+                          onChange={(event) => setOauthClientSecret(event.target.value)}
+                          {...{ 'data-testid': 'mcp-servers-oauth-client-secret' }}
+                        />
+                      </label>
+                    </div>
+                    {selectedId && !composing && typeof window !== 'undefined' && (
+                      <p className={styles.configNote} {...{ 'data-testid': 'mcp-servers-oauth-redirect-uri' }}>
+                        Redirect URI: <code>{`${window.location.origin}/api/projects/${encodeURIComponent(project)}/mcp-servers/${encodeURIComponent(selectedId)}/oauth/callback`}</code>
+                      </p>
+                    )}
                     <button
                       type="button"
                       className={styles.connectButton}
