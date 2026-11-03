@@ -107,7 +107,7 @@ import {
   markValidationReady,
   overrideDesignDocValidation,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript } from '../services/chatAgentService';
 import {
   approveInterviewBrief,
   formatInterviewBriefForPrd,
@@ -1081,27 +1081,12 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       userId,
     });
 
-    void sendMessage(
-      thread.id,
-      'Introduce yourself as Apex, the PRD assistant. ' +
-        'In 3–5 short bullet points, summarize what you can help with in this context: ' +
-        'editing PRD content, adding new requirements/sections, answering questions about the PRD, ' +
-        'resolving review comments, and refining the backlog. ' +
-        'Mention that when you make changes, they appear as a proposed diff for the owner to review and accept. ' +
-        'Keep it concise and friendly — this is the first thing the user sees.',
-    ).catch((err: unknown) => {
-      console.error(
-        `[interviews] PRD assistant kickoff failed (prdId=${req.params.prdId}):`,
-        err,
-      );
-    });
-
     await db
       .update(prdsTable)
       .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(prdsTable.id, req.params.prdId));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }
@@ -2150,7 +2135,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       .set({ docAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }

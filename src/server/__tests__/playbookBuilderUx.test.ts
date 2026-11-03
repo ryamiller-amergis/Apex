@@ -105,9 +105,16 @@ describe('runEventActivityEntries', () => {
         event: { type: 'tool_call', toolName: 'Shell', input: { command: 'az account show' } },
         at: 't2',
       },
+      {
+        eventId: '3',
+        detail: 'Shell started',
+        event: { type: 'tool_call', toolName: 'Shell', input: { keys: ['command'], target: 'az account show' } },
+        at: 't3',
+      },
     ]);
     expect(entries.map((entry) => [entry.kind, entry.title, entry.detail])).toEqual([
       ['status', 'preparing', undefined],
+      ['tool', 'Shell', 'az account show'],
       ['tool', 'Shell', 'az account show'],
     ]);
   });

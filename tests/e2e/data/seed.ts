@@ -437,6 +437,22 @@ export const SeedApi = {
     await post(request, '/seed/mcp-servers-access', opts);
   },
 
+  /** Turn the Brainstorm flag on for the listed projects only, or off everywhere. */
+  async setBrainstormFlag(
+    request: APIRequestContext,
+    opts: { enabled: boolean; projects: string[] },
+  ): Promise<void> {
+    await post(request, '/seed/brainstorm-flag', opts);
+  },
+
+  /** Write artifact versions for a session as if collaborator turns had made them. */
+  async seedBrainstormArtifact(
+    request: APIRequestContext,
+    opts: { sessionId: string; type: 'adr' | 'technical_design' | 'discovery_brief' | 'implementation_plan'; versions: string[] },
+  ): Promise<void> {
+    await post(request, '/seed/brainstorm-artifact', opts);
+  },
+
   async seedMcpServerProviderStub(request: APIRequestContext): Promise<void> {
     await post(request, '/seed/mcp-servers-provider-stub');
   },

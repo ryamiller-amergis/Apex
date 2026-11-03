@@ -64,6 +64,7 @@ import {
   isRemoteSearchConvergenceEnabled,
   isNativeReadEnabledForCaller,
   isRepoReadServiceEnabledForCaller,
+  isFlagEnabledForWholeProject,
 } from '../services/featureFlagService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -1086,4 +1087,49 @@ describe('grounding rollout accessors', () => {
       ).resolves.toBe(false);
     },
   );
+});
+
+// ── isFlagEnabledForWholeProject ─────────────────────────────────────────────
+
+describe('isFlagEnabledForWholeProject', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const rule = (type: string, value: string | null) => ({
+    id: `rule-${type}-${value}`,
+    flagId: 'flag-1',
+    type,
+    value,
+    createdBy: null,
+    createdAt: '2026-01-01T00:00:00Z',
+  });
+
+  it.each([
+    ['a matching project rule', [rule('project', 'proj-a')], true],
+    ['an everyone rule', [rule('everyone', null)], true],
+    ['another project only', [rule('project', 'proj-b')], false],
+    ['user rules only', [rule('user', 'user-1')], false],
+    ['a caller rule on top of the project', [rule('project', 'proj-a'), rule('caller', 'prd')], false],
+    ['an environment rule on top of the project', [rule('project', 'proj-a'), rule('environment', 'local')], false],
+    ['no rules', [], false],
+  ])('returns the right answer for %s', async (_label, rules, expected) => {
+    mockDb.query.featureFlags.findFirst.mockResolvedValue({ ...baseFlag, rules });
+
+    await expect(isFlagEnabledForWholeProject('new-dashboard', 'proj-a')).resolves.toBe(expected);
+  });
+
+  it('returns false when the flag is off or archived', async () => {
+    mockDb.query.featureFlags.findFirst.mockResolvedValueOnce({
+      ...baseFlag,
+      enabled: false,
+      rules: [rule('project', 'proj-a')],
+    });
+    mockDb.query.featureFlags.findFirst.mockResolvedValueOnce({
+      ...baseFlag,
+      lifecycle: 'archived',
+      rules: [rule('project', 'proj-a')],
+    });
+
+    await expect(isFlagEnabledForWholeProject('new-dashboard', 'proj-a')).resolves.toBe(false);
+    await expect(isFlagEnabledForWholeProject('new-dashboard', 'proj-a')).resolves.toBe(false);
+  });
 });

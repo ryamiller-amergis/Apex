@@ -25,7 +25,7 @@ function clip(text: string): string {
 /** The argument a reader cares about for a tool call: a path, a command, or a query. */
 function toolDetail(input: Record<string, unknown> | undefined): string | undefined {
   if (!input) return undefined;
-  for (const key of ['path', 'target_file', 'file', 'command', 'query', 'pattern', 'url', 'glob_pattern']) {
+  for (const key of ['path', 'target_file', 'file', 'command', 'query', 'pattern', 'url', 'glob_pattern', 'target']) {
     const value = input[key];
     if (typeof value === 'string' && value.trim()) return clip(value);
   }

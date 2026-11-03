@@ -18,6 +18,7 @@ import {
   appRoles,
   appUserProjectRoles,
   appUserRoles,
+  brainstormSessions,
   chatThreads,
   featureFlagRules,
   featureFlags,
@@ -45,6 +46,8 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { legacyWorkflowFields } from '../../shared/constants/projectSkillWorkflows';
 import { saveWorkflowSettings } from '../services/projectSkillWorkflowSettings';
+import { brainstormArtifactStore } from '../services/brainstormArtifactVersionStore';
+import type { BrainstormArtifactType } from '../../shared/types/brainstormArtifact';
 
 const router = express.Router();
 
@@ -1199,6 +1202,63 @@ router.post('/seed/menu-settings', async (req, res) => {
 router.post('/seed/mcp-servers-provider-stub', (_req, res) => {
   setMcpServerFetchStub(clerkTicketFetchStub);
   res.json({ ok: true });
+});
+
+router.post('/seed/brainstorm-flag', async (req, res) => {
+  try {
+    const { enabled, projects } = req.body as { enabled: boolean; projects: string[] };
+    const [flag] = await db.select().from(featureFlags).where(eq(featureFlags.key, 'brainstorm'));
+    if (!flag) {
+      res.status(500).json({ error: 'brainstorm feature flag is not seeded' });
+      return;
+    }
+    await db.update(featureFlags).set({ enabled, updatedAt: new Date().toISOString() }).where(eq(featureFlags.id, flag.id));
+    await db.delete(featureFlagRules).where(eq(featureFlagRules.flagId, flag.id));
+    if (enabled) {
+      for (const project of projects ?? []) {
+        await db.insert(featureFlagRules).values({
+          flagId: flag.id,
+          type: 'project',
+          value: project,
+          createdBy: 'e2e',
+        });
+      }
+    }
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/brainstorm-flag failed: ${message}` });
+  }
+});
+
+/** Writes artifact versions through the real store, standing in for collaborator turns. */
+router.post('/seed/brainstorm-artifact', async (req, res) => {
+  try {
+    const { sessionId, type, versions } = req.body as {
+      sessionId: string;
+      type: BrainstormArtifactType;
+      versions: string[];
+    };
+    const [session] = await db.select().from(brainstormSessions).where(eq(brainstormSessions.id, sessionId));
+    if (!session) {
+      res.status(404).json({ error: 'session not found' });
+      return;
+    }
+    const ctx = { sessionId, project: session.project, authorId: session.creatorId };
+    let current = await brainstormArtifactStore.setTypeOnEmpty({ ...ctx, expectedVersion: 0, type });
+    for (const markdown of versions) {
+      current = await brainstormArtifactStore.applyAiChange({
+        ...ctx,
+        runId: randomUUID(),
+        baseVersion: current.sequence,
+        markdown,
+      });
+    }
+    res.json({ version: current.sequence });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/brainstorm-artifact failed: ${message}` });
+  }
 });
 
 router.post('/seed/mcp-servers-access', async (req, res) => {

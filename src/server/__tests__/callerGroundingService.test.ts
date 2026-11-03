@@ -617,6 +617,260 @@ describe('PBI-005 shared caller grounding startup', () => {
   });
 });
 
+describe('V2 project pin when this host cannot ground the run', () => {
+  const tip = 'b'.repeat(40);
+  const start = (deps: CallerGroundingDependencies) =>
+    createCallerGroundingService(deps).start({
+      caller: 'prd',
+      userId: 'developer-1',
+      run,
+      repository: { provider: 'ado', repo: 'MaxView', branch: 'development' },
+      reauthorize: async () => true,
+    });
+  const failingDeps = (overrides: Partial<CallerGroundingDependencies> = {}) => {
+    const deps = dependencies({
+      materialize: jest.fn().mockRejectedValue(new Error('git fetch failed: bad object')),
+      readRemoteBranchTip: jest.fn().mockResolvedValue(tip),
+      isV2TransportProject: jest.fn().mockResolvedValue(true),
+      ...overrides,
+    });
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
+    return deps;
+  };
+  const pinEvents = (deps: CallerGroundingDependencies) =>
+    jest.mocked(deps.trackEvent).mock.calls.filter(
+      ([name]) => name === 'grounding.v2_remote_tip_pin',
+    );
+
+  it('pins the remote branch tip for a V2 project and still returns remote', async () => {
+    const deps = failingDeps();
+
+    const selected = await start(deps);
+
+    expect(selected.mode).toBe('remote');
+    expect(deps.readRemoteBranchTip).toHaveBeenCalledWith({
+      provider: 'ado',
+      project: 'Apex',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+    expect(deps.groundingService.activateGroundings).toHaveBeenLastCalledWith({
+      run,
+      target: {
+        provider: 'azure_devops',
+        repository: 'MaxView',
+        branch: 'development',
+        groundedSha: tip,
+      },
+    });
+    expect(pinEvents(deps)).toEqual([
+      ['grounding.v2_remote_tip_pin', expect.objectContaining({ outcome: 'pinned', caller: 'prd' })],
+    ]);
+  });
+
+  it('does nothing for a project not wholly on V2', async () => {
+    const deps = failingDeps({ isV2TransportProject: jest.fn().mockResolvedValue(false) });
+
+    expect((await start(deps)).mode).toBe('remote');
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(pinEvents(deps)).toHaveLength(0);
+  });
+
+  it('does nothing when the V2 flag cannot be read', async () => {
+    const deps = failingDeps({
+      isV2TransportProject: jest.fn().mockRejectedValue(new Error('db down')),
+    });
+
+    expect((await start(deps)).mode).toBe('remote');
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(pinEvents(deps)).toHaveLength(0);
+  });
+
+  it('keeps an existing pin', async () => {
+    const deps = failingDeps();
+    jest.mocked(deps.groundingService.getGroundings)
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([grounding]);
+
+    await start(deps);
+
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(pinEvents(deps)[0][1]).toMatchObject({ outcome: 'already-pinned' });
+  });
+
+  it('reports no-tip and error without throwing', async () => {
+    const noTip = failingDeps({ readRemoteBranchTip: jest.fn().mockResolvedValue(null) });
+    const broken = failingDeps({
+      readRemoteBranchTip: jest.fn().mockRejectedValue(new Error('ls-remote timed out')),
+    });
+
+    expect((await start(noTip)).mode).toBe('remote');
+    expect((await start(broken)).mode).toBe('remote');
+    expect(pinEvents(noTip)[0][1]).toMatchObject({ outcome: 'no-tip' });
+    expect(pinEvents(broken)[0][1]).toMatchObject({ outcome: 'error' });
+  });
+});
+
+describe('commit-only grounding for whole-V2 projects', () => {
+  const tip = 'c'.repeat(40);
+  const sandboxCwd = 'C:\\data\\workspaces\\thread-1';
+  const commitOnlyDeps = (overrides: Partial<CallerGroundingDependencies> = {}) => {
+    const deps = dependencies({
+      isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(true),
+      isV2TransportProject: jest.fn().mockResolvedValue(true),
+      isRepoReadServiceEnabled: jest.fn().mockResolvedValue(true),
+      resolveRepoReadServiceUrl: () => 'https://repo-read.internal',
+      readRemoteBranchTip: jest.fn().mockResolvedValue(tip),
+      publishGroundingBundle: jest.fn(),
+      ...overrides,
+    });
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([]);
+    jest.mocked(deps.groundingService.activateGroundings).mockResolvedValue({
+      ok: true,
+      durableGrounding: true,
+      fallback: 'none',
+      groundings: [{ ...grounding, groundedSha: tip }],
+    });
+    return deps;
+  };
+  const start = (
+    deps: CallerGroundingDependencies,
+    extra: { sandboxCwd?: string } = { sandboxCwd },
+  ) =>
+    createCallerGroundingService(deps).start({
+      caller: 'durable-interactive',
+      userId: 'developer-1',
+      run,
+      repository: { provider: 'ado', repo: 'MaxView', branch: 'development' },
+      reauthorize: async () => true,
+      readOnlyShareable: true,
+      ...extra,
+    });
+
+  it('pins the remote tip and reads through repo-read without touching this host mirror', async () => {
+    const deps = commitOnlyDeps();
+
+    const selected = await start(deps);
+
+    expect(selected).toMatchObject({
+      mode: 'local',
+      cwd: sandboxCwd,
+      resolvedSha: tip,
+      workingTree: false,
+      mirrorPath: undefined,
+    });
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
+    expect(deps.publishGroundingBundle).not.toHaveBeenCalled();
+    expect(deps.readRemoteBranchTip).toHaveBeenCalledWith({
+      provider: 'ado',
+      project: 'Apex',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+    expect(deps.profiles.registerConnectionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ sha: tip, checkoutPath: sandboxCwd, mirrorPath: undefined }),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it('skips the checkout-readiness pin when the readiness flag is on', async () => {
+    const pinProjectRepositoryRoot = jest.fn();
+    const deps = commitOnlyDeps({
+      isProjectRepositoryCheckoutReadinessEnabled: jest.fn().mockResolvedValue(true),
+      isUsableBareMirror: () => false,
+      pinProjectRepositoryRoot,
+    });
+
+    const selected = await start(deps);
+
+    expect(selected).toMatchObject({ mode: 'local', resolvedSha: tip, mirrorPath: undefined });
+    expect(pinProjectRepositoryRoot).not.toHaveBeenCalled();
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.materialize).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing pin without asking the remote', async () => {
+    const deps = commitOnlyDeps();
+    jest.mocked(deps.groundingService.getGroundings).mockResolvedValue([grounding]);
+
+    const selected = await start(deps);
+
+    expect(selected).toMatchObject({ mode: 'local', resolvedSha: grounding.groundedSha });
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['repo-read is off for the caller', { isRepoReadServiceEnabled: jest.fn().mockResolvedValue(false) }, 'repo-read-off'],
+    ['repo-read has no URL', { resolveRepoReadServiceUrl: () => undefined }, 'repo-read-url-missing'],
+    ['the V2 flag cannot be read', { isV2TransportProject: jest.fn().mockRejectedValue(new Error('db down')) }, 'v2-flag-check-failed'],
+    ['the repo-read flag cannot be read', { isRepoReadServiceEnabled: jest.fn().mockRejectedValue(new Error('db down')) }, 'repo-read-flag-check-failed'],
+  ])('uses this host mirror and reports it when %s', async (_label, overrides, reason) => {
+    const deps = commitOnlyDeps(overrides as Partial<CallerGroundingDependencies>);
+
+    await start(deps);
+
+    expect(deps.ensureRepoCache).toHaveBeenCalled();
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.objectContaining({ project: 'Apex', caller: 'durable-interactive', reason }),
+    );
+  });
+
+  it('uses this host mirror without reporting it when the project is not wholly on V2', async () => {
+    const deps = commitOnlyDeps({ isV2TransportProject: jest.fn().mockResolvedValue(false) });
+
+    await start(deps);
+
+    expect(deps.ensureRepoCache).toHaveBeenCalled();
+    expect(deps.trackEvent).not.toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.anything(),
+    );
+  });
+
+  it('uses this host mirror for callers without a sandbox and reports it', async () => {
+    const deps = commitOnlyDeps();
+
+    await start(deps, {});
+
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.objectContaining({ reason: 'no-sandbox' }),
+    );
+  });
+
+  it('reports a whole-V2 project whose caller has native-read off', async () => {
+    const deps = commitOnlyDeps({ isNativeReadEnabledForCaller: jest.fn().mockResolvedValue(false) });
+
+    await start(deps);
+
+    expect(deps.readRemoteBranchTip).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.v2_app_service_fallback',
+      expect.objectContaining({ reason: 'native-read-off' }),
+    );
+  });
+
+  it('falls back to remote when the remote has no tip', async () => {
+    const deps = commitOnlyDeps({ readRemoteBranchTip: jest.fn().mockResolvedValue(null) });
+
+    const selected = await start(deps);
+
+    expect(selected.mode).toBe('remote');
+    expect(deps.ensureRepoCache).not.toHaveBeenCalled();
+    expect(deps.trackEvent).toHaveBeenCalledWith(
+      'grounding.fallback',
+      expect.objectContaining({ reason: 'remote-tip-unavailable' }),
+      expect.anything(),
+    );
+  });
+});
+
 describe('TBI-005 / PBI-004 guarded native-read startup', () => {
   const startInput = {
     caller: 'chat-agent',

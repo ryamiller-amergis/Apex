@@ -103,6 +103,11 @@ export function getRepoCacheLeaseKey(
     .digest('hex')}`;
 }
 
+/** Whether `dir` is one of this host's project mirrors (not a feature-owned clone). */
+export function isRepoCacheDir(dir: string): boolean {
+  return path.dirname(path.resolve(dir)) === path.resolve(REPO_CACHE_BASE);
+}
+
 export function getRepoCacheDir(options: RepoCacheOptions): string {
   const canonical = cacheDirForIdentity(cacheIdentity(options), options, false);
   if (cacheExists(canonical)) return canonical;

@@ -114,7 +114,10 @@ export function resolveInteractiveThreadWorkspacePath(
 ): string {
   const configured = env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim();
   const root = configured && configured.length > 0 ? configured : os.tmpdir();
-  const revision = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') || 'ungrounded';
+  // Cap revision length so `.cursor/projects/<encoded-cwd>/sdk-agent-store/<hash>/index.db-wal`
+  // stays under Windows MAX_PATH (260 chars), avoiding SQLite "unable to open database file".
+  const cleaned = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') ?? '';
+  const revision = cleaned.length > 0 ? cleaned.slice(0, 8) : 'ungrounded';
   return path.join(root, 'apex-interactive-thread', threadId, revision);
 }
 
@@ -272,15 +275,15 @@ export interface InteractiveActorDependencies {
     options?: { reclaimDisk(): Promise<void> },
   ): Promise<WarmThreadCheckout>;
   /**
-   * Collect attempt-local outputs, upload attempt-scoped blobs, write the
-   * manifest last, and return its blob ref. Required for durable completed
-   * terminals that claim `artifactsFlushed: true`.
+   * Collect attempt-local outputs and upload them when there is something to
+   * store. Returns no ref when the workspace has no eligible files. A durable
+   * completed terminal still sets `artifactsFlushed: true`.
    */
   uploadAttemptArtifacts?(
     bootstrap: InteractiveActorBootstrap,
     workspacePath: string,
     signal: AbortSignal,
-  ): Promise<AiRunBlobRef>;
+  ): Promise<AiRunBlobRef | undefined>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -1099,18 +1102,34 @@ export function createInteractiveSessionActor(
     activeDurableThreads.add(threadId);
 
     let startupSequence = 0;
-    const publishStartupPhase = (
+    const publishStartupPhase = async (
       phase: 'setup' | 'analysis',
       detail: string,
-    ): Promise<void> =>
-      publishLive(threadId, createCursorRunEventEnvelope({
+    ): Promise<void> => {
+      const event: SseEvent = {
+        type: 'phase',
+        phase,
+        status: 'running',
+        detail,
+      };
+      await publishLive(threadId, createCursorRunEventEnvelope({
         threadId,
         runId,
         sourceInstance,
         sequence: (startupSequence += 1),
         timestamp: new Date(now()).toISOString(),
-        event: { type: 'phase', phase, status: 'running', detail },
+        event,
       })).catch(() => {});
+      await post({
+        dispatchMessageId,
+        attemptId,
+        kind: 'progress',
+        phase,
+        status: 'running',
+        detail,
+        event,
+      }).catch(() => {});
+    };
 
     try {
       await publishStartupPhase(
@@ -1583,18 +1602,22 @@ export function createInteractiveSessionActor(
           mcpToolRequired && !mcpToolUsedThisAttempt
             ? mcpServerNoToolFallback('the connected MCP server')
             : result.text;
-        if (finalText && finalText.trim().length > 0) {
-          const finalMessage: ChatMessage = {
-            id: randomUUID(),
-            role: 'agent',
-            text: specification.guidedInterview
-              ? normalizeGuidedInterviewResponse(
-                  finalText,
-                  specification.guidedInterview.turn,
-                )
-              : finalText,
-            ts: new Date(now()).toISOString(),
-          };
+        const finalMessage: ChatMessage | null =
+          finalText && finalText.trim().length > 0
+            ? {
+                id: randomUUID(),
+                role: 'agent',
+                text: specification.guidedInterview
+                  ? normalizeGuidedInterviewResponse(
+                      finalText,
+                      specification.guidedInterview.turn,
+                    )
+                  : finalText,
+                ts: new Date(now()).toISOString(),
+              }
+            : null;
+        if (finalMessage) {
+          await publishLiveEnvelope({ type: 'message', message: finalMessage });
           await post({
             dispatchMessageId,
             attemptId,
@@ -1643,8 +1666,12 @@ export function createInteractiveSessionActor(
           artifactsFlushed: true,
           artifactManifestRef,
           cursorAgentId: reusableAgentId,
+          ...(finalMessage
+            ? { event: { type: 'message', message: finalMessage } }
+            : {}),
           stageTimings: stageTimings(),
         });
+        await publishLiveEnvelope({ type: 'done', runId });
 
         if (result.runLeftUnsettled) {
           if (agentCache.get(threadId)?.handle === agentHandle) {
