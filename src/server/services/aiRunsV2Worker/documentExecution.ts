@@ -598,21 +598,12 @@ export function createDocumentExecute(
                 sourceInstance: 'ai-runs-v2-document-worker',
               },
               sink: {
-                publish: (event, envelope) => {
-                  if (
-                    event.type !== 'phase'
-                    && event.type !== 'tool_call'
-                    && event.type !== 'tool_status'
-                    && event.type !== 'error'
-                  ) {
-                    return;
-                  }
-                  return checkpoints.publishProgress(
+                publish: (_event, envelope) => checkpoints.publishActivity?.(envelope)
+                  ?? checkpoints.publishProgress(
                     envelope.phase,
                     envelope.status,
                     envelope.detail,
-                  );
-                },
+                  ),
               },
               hooks: {
                 beforeStreamEvent: () => {

@@ -69,4 +69,51 @@ describe('checkpointPublisher', () => {
     await Promise.all([progress, heartbeat]);
     expect(sent).toEqual([1, 2]);
   });
+
+  it('publishes a summarized Cursor event as durable activity progress', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const publisher = createCheckpointPublisher({
+      target: {
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+      },
+      send: async (_messageId, body) => {
+        sent.push(body as unknown as Record<string, unknown>);
+      },
+    });
+
+    await publisher.publishActivity?.({
+      eventId: 'event-1',
+      threadId: 'thread-1',
+      runId: 'run-1',
+      sourceInstance: 'worker',
+      sequence: 1,
+      timestamp: '2026-09-22T12:00:00.000Z',
+      type: 'tool',
+      phase: 'implementation',
+      status: 'running',
+      detail: 'grep_search started',
+      event: {
+        type: 'tool_call',
+        toolName: 'grep_search',
+        input: { target: 'TimecardController' },
+      },
+    });
+
+    expect(sent[0]).toMatchObject({
+      kind: 'progress',
+      phase: 'implementation',
+      status: 'running',
+      progress: {
+        kind: 'activity_event',
+        eventType: 'tool',
+        event: {
+          type: 'tool_call',
+          toolName: 'grep_search',
+        },
+      },
+    });
+  });
 });

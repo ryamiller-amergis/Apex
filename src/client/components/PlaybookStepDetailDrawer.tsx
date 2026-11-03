@@ -32,6 +32,7 @@ import { useCloudAgentActivityStream } from '../hooks/useDevWorkbench';
 import { cloudAgentActivityLabel, cloudAgentPhaseIndex } from '../utils/cloudAgentActivityLog';
 import { absoluteTime, stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { PlaybookSuspensionDetail as SuspensionDetail } from './PlaybookSuspensionDetail';
 import styles from './PlaybookStepDetailDrawer.module.css';
 
@@ -434,7 +435,9 @@ export const StepDetails: React.FC<{
       {typeof step.outputInline?.reportMd === 'string' && step.outputInline.reportMd.trim() ? (
         <section className={styles.section}>
           <h3>Report</h3>
-          <pre className={styles.report}>{step.outputInline.reportMd}</pre>
+          <div className={styles.report} {...{ 'data-testid': 'playbook-step-report' }}>
+            <MarkdownWithMermaid content={step.outputInline.reportMd} />
+          </div>
         </section>
       ) : null}
 
@@ -476,7 +479,9 @@ export const StepDetails: React.FC<{
           && output.data.reportMd !== step.outputInline?.reportMd ? (
           <>
             <h3>Report</h3>
-            <pre className={styles.report}>{output.data.reportMd}</pre>
+            <div className={styles.report} {...{ 'data-testid': 'playbook-step-report-full' }}>
+              <MarkdownWithMermaid content={output.data.reportMd} />
+            </div>
           </>
         ) : null}
         {output.data ? (

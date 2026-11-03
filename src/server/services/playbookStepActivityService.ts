@@ -65,6 +65,12 @@ export function runEventActivityEntries(
       entries.push({ id: row.eventId, kind: 'thinking', title: 'Thinking', detail: clip(text), at: row.at });
       continue;
     }
+    if (type === 'token') {
+      const text = typeof event.text === 'string' ? event.text : row.detail;
+      if (!text?.trim()) continue;
+      entries.push({ id: row.eventId, kind: 'message', title: 'Agent', detail: clip(text), at: row.at });
+      continue;
+    }
     if (type === 'error') {
       const text = typeof event.error === 'string' ? event.error : row.detail;
       if (!text?.trim()) continue;

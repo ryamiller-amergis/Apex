@@ -159,8 +159,26 @@ function descriptionFromTemplate(workItemId: number | null, workItemTitle?: stri
 }
 
 /**
+ * Pull-request title: `<work item type> <id>: <title>` when both the id and a real
+ * title are known, so it reads like a sentence instead of a branch slug. Falls back to
+ * `[APEX] <branch without the feature/ prefix>` when there is no title to build from.
+ */
+export function buildPullRequestTitle(input: {
+  branchName: string;
+  workItemId: number | null;
+  workItemTitle?: string | null;
+  workItemType?: string | null;
+}): string {
+  const workItemTitle = input.workItemTitle?.trim();
+  if (input.workItemId && workItemTitle) {
+    const typeLabel = input.workItemType?.trim() || 'Work item';
+    return `${typeLabel} ${input.workItemId}: ${workItemTitle}`;
+  }
+  return `[APEX] ${input.branchName.replace(/^[^/]+\//, '')}`;
+}
+
+/**
  * Pull-request title and description used by My Work.
- * Title: [APEX] <branch without the feature/ prefix>
  * Description: pr-description.md, with the Work items line filled.
  * A Cloud Agent final message wrapped in pr-description tags replaces that skeleton.
  */
@@ -168,9 +186,10 @@ export function buildImplementationPullRequestText(input: {
   branchName: string;
   workItemId: number | null;
   workItemTitle?: string | null;
+  workItemType?: string | null;
   agentDescription?: string | null;
 }): { title: string; description: string } {
-  const title = `[APEX] ${input.branchName.replace(/^[^/]+\//, '')}`.slice(0, TITLE_LIMIT);
+  const title = buildPullRequestTitle(input).slice(0, TITLE_LIMIT);
   const reference = input.workItemId ? buildWorkItemReferenceText(input.workItemId) : null;
   const filled = input.agentDescription?.trim();
   const description = filled

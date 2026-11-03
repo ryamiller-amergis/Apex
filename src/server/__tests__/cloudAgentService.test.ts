@@ -707,7 +707,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     });
 
     expect(prompt).toContain('Work on branch `feature/apex-123-shift-scheduler` and no other branch.');
-    expect(prompt).toContain('Open a pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Open a pull request titled `Work item 123: Shift Scheduler`');
     expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
     expect(prompt).toContain('Name the work item as AB#123');
     expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
@@ -737,7 +737,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       workItemTitle: 'Shift Scheduler',
     });
 
-    expect(prompt).toContain('Open a pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Open a pull request titled `Work item 123: Shift Scheduler`');
     expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
     expect(prompt).toContain('#### What does this PR do?');
     expect(prompt).toContain('#### How should this be manually tested?');

@@ -77,6 +77,7 @@ import {
 import { prepareCloudAgentKickoff, type CloudAgentKickoffInput } from './cloudAgentKickoff';
 import {
   buildPullRequestDescriptionInstructions,
+  buildPullRequestTitle,
   cloudAgentBranchName,
   implementationBranchName,
 } from './implementationDelivery';
@@ -438,7 +439,12 @@ export async function buildCloudAgentPrompt(input: {
     || (input.workItemType?.trim()
       ? cloudAgentBranchName(input.workItemId, workItemTitle, input.workItemType)
       : implementationBranchName(input.workItemId, workItemTitle));
-  const pullRequestTitle = `[APEX] ${branchName.replace(/^[^/]+\//, '')}`;
+  const pullRequestTitle = buildPullRequestTitle({
+    branchName,
+    workItemId: input.workItemId,
+    workItemTitle: input.workItemTitle?.trim() || null,
+    workItemType: input.workItemType,
+  });
   const targetBranch = input.targetBranch?.trim();
   const creator = input.createdByName?.trim();
   const files = pack.files
@@ -749,6 +755,7 @@ async function persistQueuedRun(
           cloudAgent: {
             workItemId: input.workItemId,
             workItemTitle: input.workItemTitle,
+            ...(input.item.workItemType?.trim() ? { workItemType: input.item.workItemType.trim() } : {}),
             branchName,
             baseBranch: targetBranch,
             ...(delivery.requiredReviewers.length ? { requiredReviewers: delivery.requiredReviewers } : {}),
@@ -1254,6 +1261,8 @@ async function writeWorkItemPullRequest(
     repository: string;
     prUrl: string;
     workItemId: number;
+    workItemTitle?: string | null;
+    workItemType?: string | null;
     runId: string;
     sessionId: string;
     titleBranch?: string | null;
@@ -1279,6 +1288,8 @@ async function writeWorkItemPullRequest(
         repo: input.repository,
         prUrl: input.prUrl,
         workItemId: input.workItemId,
+        workItemTitle: input.workItemTitle,
+        workItemType: input.workItemType,
         sourceBranch: input.titleBranch,
         titleBranch: input.titleBranch,
         targetBranch: input.targetBranch,
@@ -1465,6 +1476,8 @@ export async function applyCloudAgentCompletion(input: {
       repository,
       prUrl,
       workItemId: session.workItemId,
+      workItemTitle: terminalSnapshot?.cloudAgent?.workItemTitle ?? null,
+      workItemType: terminalSnapshot?.cloudAgent?.workItemType ?? null,
       runId: input.runId,
       sessionId,
       titleBranch: terminalSnapshot?.cloudAgent?.branchName ?? session.branchName ?? null,

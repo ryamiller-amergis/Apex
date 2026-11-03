@@ -10,6 +10,7 @@ import {
   type AiRunV2Checkpoint,
   type AiRunV2RunProgress,
 } from '../../../shared/types/aiRunV2';
+import type { AgentRunEventEnvelope } from '../../../shared/types/chat';
 
 export const CHECKPOINT_INTERVAL_MS = 30_000;
 
@@ -42,6 +43,8 @@ export type CheckpointPublisher = {
     detail?: string,
     progress?: AiRunV2RunProgress,
   ): Promise<void>;
+  /** Persist one summarized Cursor event for replay in the Playbook step log. */
+  publishActivity?(event: AgentRunEventEnvelope): Promise<void>;
   lastSequence(): number;
 };
 
@@ -102,6 +105,26 @@ export function createCheckpointPublisher(
         status,
         ...(detail === undefined ? {} : { detail }),
         ...(progress === undefined ? {} : { progress }),
+      });
+    },
+
+    async publishActivity(event) {
+      sequence += 1;
+      await publish({
+        ...envelope(),
+        kind: 'progress',
+        checkpointSequence: sequence,
+        phase: event.phase,
+        status: event.status,
+        ...(event.detail === undefined ? {} : { detail: event.detail }),
+        progress: {
+          kind: 'activity_event',
+          eventType: event.type,
+          phase: event.phase,
+          status: event.status,
+          ...(event.detail === undefined ? {} : { detail: event.detail }),
+          event: event.event as unknown as Record<string, unknown>,
+        },
       });
     },
 
