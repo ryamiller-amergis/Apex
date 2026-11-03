@@ -401,6 +401,9 @@ export function mergeRemoteMcpConfig(
     throw new McpServerError(400, 'A tool name is invalid', 'OPERATIONS_REQUIRED');
   }
   const clientChanged = patch.oauthClientId !== undefined && oauthClientId !== stored.oauthClientId;
+  const keptOAuth = (patch.authMode !== undefined && patch.authMode !== stored.authMode) || clientChanged
+    ? undefined
+    : stored.oauth;
   return {
     ...stored,
     headers,
@@ -410,9 +413,12 @@ export function mergeRemoteMcpConfig(
     authMode,
     oauthClientId,
     oauthClientSecret: oauthClientId ? oauthClientSecret : undefined,
-    oauth: (patch.authMode !== undefined && patch.authMode !== stored.authMode) || clientChanged
-      ? undefined
-      : stored.oauth,
+    oauth: keptOAuth
+      ? {
+          ...keptOAuth,
+          ...(oauthClientId && oauthClientSecret ? { clientSecret: oauthClientSecret } : {}),
+        }
+      : undefined,
   };
 }
 
