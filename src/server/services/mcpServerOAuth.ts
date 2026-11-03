@@ -3,7 +3,7 @@ import { McpServerError } from './mcpServerErrors';
 import type { RemoteMcpCredential, RemoteMcpOAuth } from './mcpServerDiscovery';
 import { assertResolvedPublicHttpsUrl } from './mcpServerOpenApi';
 
-const SCOPE_NAME = /^[A-Za-z0-9_.:-]{1,80}$/;
+const SCOPE_NAME = /^[A-Za-z0-9_.:/-]{1,160}$/;
 const PENDING_MS = 10 * 60 * 1000;
 
 export interface OAuthResponse {
@@ -67,6 +67,16 @@ export function authorizationServerMetadataUrl(issuer: string): string {
   return `${url.origin}/.well-known/oauth-authorization-server${path}`;
 }
 
+export function openIdConfigurationUrl(issuer: string): string {
+  const url = new URL(issuer);
+  const path = url.pathname.replace(/\/$/, '');
+  return `${url.origin}${path}/.well-known/openid-configuration`;
+}
+
+function hasUriScope(scopes: readonly string[]): boolean {
+  return scopes.some((scope) => scope.includes('://'));
+}
+
 export function createPkcePair(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -89,7 +99,9 @@ export function buildOAuthAuthorizationUrl(input: {
   url.searchParams.set('code_challenge', input.codeChallenge);
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('state', input.state);
-  url.searchParams.set('resource', input.resource);
+  if (input.resource && !hasUriScope(input.scopes)) {
+    url.searchParams.set('resource', input.resource);
+  }
   if (input.scopes.length > 0) url.searchParams.set('scope', input.scopes.join(' '));
   return url.toString();
 }
@@ -147,7 +159,7 @@ export async function discoverMcpOAuth(
   if (authorizationServers.length === 0) {
     throw new McpServerError(502, 'This server did not offer OAuth sign-in.', 'OAUTH_REQUIRED');
   }
-  const server = await readJsonRecord(authorizationServerMetadataUrl(authorizationServers[0]), fetchImpl);
+  const server = await readAuthorizationServerMetadata(authorizationServers[0], fetchImpl);
   const authorizationEndpoint = stringField(server, 'authorization_endpoint');
   const tokenEndpoint = stringField(server, 'token_endpoint');
   if (!authorizationEndpoint || !tokenEndpoint) {
@@ -166,14 +178,70 @@ export async function discoverMcpOAuth(
   await assertResolvedPublicHttpsUrl(tokenEndpoint);
   const registrationEndpoint = stringField(server, 'registration_endpoint');
   if (registrationEndpoint) await assertResolvedPublicHttpsUrl(registrationEndpoint);
+  const scopes = readScopes(metadata.scopes_supported);
+  const serverScopes = readScopes(server.scopes_supported);
+  if (scopes.length > 0 && serverScopes.includes('offline_access') && !scopes.includes('offline_access')) {
+    scopes.push('offline_access');
+  }
   return {
     resource,
     authorizationEndpoint,
     tokenEndpoint,
     registrationEndpoint,
-    scopes: readScopes(metadata.scopes_supported),
+    scopes,
     usePublicClient: authMethods.includes('none'),
   };
+}
+
+export async function resolveOAuthClient(
+  discovered: DiscoveredMcpOAuth,
+  redirectUri: string,
+  configured?: { clientId?: string; clientSecret?: string },
+  fetchImpl: OAuthFetch = fetch,
+): Promise<{ clientId: string; clientSecret?: string }> {
+  const explicitId = configured?.clientId?.trim();
+  if (explicitId) {
+    return {
+      clientId: explicitId,
+      clientSecret: configured?.clientSecret?.trim() || undefined,
+    };
+  }
+  if (discovered.registrationEndpoint) {
+    return registerOAuthClient(discovered, redirectUri, fetchImpl);
+  }
+  const envClient = resolveEnvOAuthClient(discovered);
+  if (envClient) {
+    return envClient;
+  }
+  throw new McpServerError(
+    400,
+    'This server requires an OAuth Client ID. Enter an OAuth Client ID and save before signing in.',
+    'OAUTH_REQUIRED',
+  );
+}
+
+function resolveEnvOAuthClient(
+  discovered: DiscoveredMcpOAuth,
+): { clientId: string; clientSecret?: string } | null {
+  const mcpClientId = process.env.MCP_OAUTH_CLIENT_ID?.trim();
+  if (mcpClientId) {
+    return {
+      clientId: mcpClientId,
+      clientSecret: process.env.MCP_OAUTH_CLIENT_SECRET?.trim() || undefined,
+    };
+  }
+  try {
+    const host = new URL(discovered.authorizationEndpoint).hostname.toLowerCase();
+    if (host === 'login.microsoftonline.com' && process.env.AZURE_CLIENT_ID?.trim()) {
+      return {
+        clientId: process.env.AZURE_CLIENT_ID.trim(),
+        clientSecret: process.env.AZURE_CLIENT_SECRET?.trim() || undefined,
+      };
+    }
+  } catch {
+    // Ignore malformed endpoint URL.
+  }
+  return null;
 }
 
 export async function registerOAuthClient(
@@ -213,13 +281,16 @@ export async function exchangeAuthorizationCode(
   codeVerifier: string,
   fetchImpl: OAuthFetch = fetch,
 ): Promise<Pick<RemoteMcpOAuth, 'accessToken' | 'refreshToken' | 'expiresAt'>> {
+  const resourceOrScope: Record<string, string> = hasUriScope(oauth.scopes)
+    ? { scope: oauth.scopes.join(' ') }
+    : { resource: oauth.resource };
   return requestToken(oauth, {
     grant_type: 'authorization_code',
     code,
     redirect_uri: oauth.redirectUri,
     code_verifier: codeVerifier,
     client_id: oauth.clientId,
-    resource: oauth.resource,
+    ...resourceOrScope,
   }, fetchImpl);
 }
 
@@ -230,11 +301,14 @@ export async function refreshOAuthTokens(
   if (!oauth.refreshToken) {
     throw new McpServerError(400, 'Sign in with OAuth again.', 'OAUTH_REQUIRED');
   }
+  const resourceOrScope: Record<string, string> = hasUriScope(oauth.scopes)
+    ? { scope: oauth.scopes.join(' ') }
+    : { resource: oauth.resource };
   return requestToken(oauth, {
     grant_type: 'refresh_token',
     refresh_token: oauth.refreshToken,
     client_id: oauth.clientId,
-    resource: oauth.resource,
+    ...resourceOrScope,
   }, fetchImpl);
 }
 
@@ -281,6 +355,17 @@ async function requestToken(
     refreshToken,
     expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : undefined,
   };
+}
+
+async function readAuthorizationServerMetadata(
+  issuer: string,
+  fetchImpl: OAuthFetch,
+): Promise<Record<string, unknown>> {
+  try {
+    return await readJsonRecord(authorizationServerMetadataUrl(issuer), fetchImpl);
+  } catch {
+    return readJsonRecord(openIdConfigurationUrl(issuer), fetchImpl);
+  }
 }
 
 async function readJsonRecord(url: string, fetchImpl: OAuthFetch): Promise<Record<string, unknown>> {
