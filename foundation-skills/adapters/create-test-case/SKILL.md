@@ -22,6 +22,22 @@ description: Project adapter for create-test-case. Customize for your project.
 - `--feature "Title"` — scope to all PBIs under a Feature
 - `--no-prd` — backlog only (skip PRD enrichment)
 
+## Case volume
+
+Per-PBI limits. Leave empty to use the foundation defaults (8 manual-runnable, 2 E2E).
+
+- Manual-runnable cases per PBI: 8
+- E2E-tagged cases per PBI: 2
+- Several roles: one case, then "Login as {Role} and perform steps N-M".
+
+## Case format
+
+How this project writes titles, steps, and expected results. Leave empty to use the schema's defaults. For example:
+
+- Title: `Validate {action} - {role}`.
+- Step 1 `Access Env.`, step 2 `Precondition: …`, step 3 `Login as {Role}`.
+- One action and one observable result per step.
+
 ## Azure DevOps placement
 
 Where Apex files this project's published Test Cases. Leave this section empty to link each case to its requirement with Tested By.

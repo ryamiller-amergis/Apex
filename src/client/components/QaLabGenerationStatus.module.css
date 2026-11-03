@@ -3,11 +3,9 @@
   flex: 1;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 0.75rem;
   min-height: 320px;
   padding: 2rem 1rem;
-  text-align: center;
 }
 
 .label {
@@ -16,31 +14,142 @@
   font-weight: 600;
 }
 
-.current {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-}
-
-.steps {
+.milestones {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.25rem 0 0;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.milestone {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
   color: var(--text-muted);
-  font-size: 0.8rem;
-  text-align: left;
+  font-size: 0.78rem;
 }
 
-.step {
+.milestoneMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.milestone_pending {
+  opacity: 0.7;
+}
+
+.milestone_active {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.milestone_active .milestoneMark {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+}
+
+.milestone_done {
+  border-color: color-mix(in srgb, var(--success-color) 50%, var(--border-color));
+  color: var(--text-secondary);
+}
+
+.milestone_done .milestoneMark {
+  background: var(--success-color);
+  color: var(--bg-primary);
+}
+
+.liveWorkBox {
+  width: min(640px, 100%);
+}
+
+.activity {
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
 }
 
-.stepMark {
-  width: 1rem;
-  text-align: center;
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.activityScroller {
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.thinking {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.stepRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.stepBullet {
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.stepItem {
+  min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.stepStatus {
+  color: var(--text-muted);
+}
+
+.stepLabel {
+  color: var(--text-secondary);
+}
+
+.stepTarget {
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
 }
 
 .hint {
