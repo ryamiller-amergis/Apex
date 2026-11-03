@@ -193,6 +193,10 @@ function mergeThinkingText(previous: string, incoming: string): string {
   return `${previous} ${trimmed}`;
 }
 
+const RESTARTING_LABEL = 'Restarting the agent…';
+const RESTART_GIVE_UP_MS = 3 * 60_000;
+const RESTART_GAVE_UP_DETAIL = 'The agent did not restart. Please retry.';
+
 type RunEnding = Readonly<{
   runId: string | null;
   outcome: 'completed' | 'failed' | 'cancelled';
@@ -358,8 +362,19 @@ export function useChatStream(
   // poll; this keeps the error message to one per run until it makes progress
   // again (a retry reuses the run id).
   const failedRunIdRef = useRef<string | null>(null);
+  // Set while the server re-runs an attempt lost to a host restart; cleared by
+  // the re-run's first progress or by any ending.
+  const restartTimeoutRef = useRef<number | null>(null);
+
+  const clearRestart = useCallback(() => {
+    if (restartTimeoutRef.current !== null) {
+      window.clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+  }, []);
 
   const clearTurnProgress = useCallback(() => {
+    clearRestart();
     streamBufferRef.current = '';
     streamTrimOffsetRef.current = 0;
     pendingOffsetTokensRef.current.clear();
@@ -373,7 +388,7 @@ export function useChatStream(
     setProgressPhase(null);
     clearRetryTimeout();
     clearPollTimer();
-  }, [clearRetryTimeout, clearPollTimer]);
+  }, [clearRestart, clearRetryTimeout, clearPollTimer]);
 
   const endRun = useCallback((ending: RunEnding) => {
     clearTurnProgress();
@@ -395,6 +410,17 @@ export function useChatStream(
       },
     ]);
   }, [clearTurnProgress]);
+
+  const beginRestart = useCallback((runId: string | null) => {
+    clearTurnProgress();
+    setStatus('running');
+    setIsRetrying(true);
+    setRetryReason(RESTARTING_LABEL);
+    restartTimeoutRef.current = window.setTimeout(() => {
+      restartTimeoutRef.current = null;
+      endRun({ runId, outcome: 'failed', detail: RESTART_GAVE_UP_DETAIL });
+    }, RESTART_GIVE_UP_MS);
+  }, [clearTurnProgress, endRun]);
 
   const clearRetryableRunId = useCallback(() => {
     failedRunIdRef.current = null;
@@ -428,10 +454,11 @@ export function useChatStream(
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
     failedRunIdRef.current = null;
+    clearRestart();
     clearConnectionErrorTimeout();
     clearRetryTimeout();
     clearPollTimer();
-  }, [clearConnectionErrorTimeout, clearRetryTimeout, clearPollTimer]);
+  }, [clearConnectionErrorTimeout, clearRetryTimeout, clearPollTimer, clearRestart]);
 
   // Merge REST thread snapshots into live state without reconnecting SSE.
   // Covers the common case where useChatThread loads after EventSource opens,
@@ -526,6 +553,11 @@ export function useChatStream(
         event.type === 'tool_status'
       ) {
         failedRunIdRef.current = null;
+        if (restartTimeoutRef.current !== null) {
+          clearRestart();
+          setIsRetrying(false);
+          setRetryReason(null);
+        }
       }
 
       switch (event.type) {
@@ -621,6 +653,7 @@ export function useChatStream(
           setRetryReason(null);
           setRetryableRunId(null);
           clearRetryTimeout();
+          clearRestart();
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === messageEvent.message.id);
             return exists
@@ -720,7 +753,10 @@ export function useChatStream(
           }
           // A terminal status carries no run id or detail; the run's done or
           // the poll reports the failure, so only the turn progress clears here.
+          // During a restart the thread is idle between the lost attempt and the
+          // re-run, which is not an ending.
           if (event.status === 'idle' || event.status === 'error') {
+            if (restartTimeoutRef.current !== null) break;
             clearTurnProgress();
           }
           setStatus(event.status);
@@ -801,14 +837,19 @@ export function useChatStream(
         case 'done': {
           const doneEvent = event as SseDoneEvent;
           setLastProgressAt(Date.now());
+          const doneRunId =
+            typeof doneEvent.runId === 'string' && doneEvent.runId.trim()
+              ? doneEvent.runId.slice(0, 200)
+              : null;
+          if (doneEvent.autoRetry) {
+            beginRestart(doneRunId);
+            break;
+          }
           // A clean done keeps retryableRunId from a prior failure so Retry
           // stays available; it clears on an accepted turn, a successful
           // message, cancel, or a thread change.
           endRun({
-            runId:
-              typeof doneEvent.runId === 'string' && doneEvent.runId.trim()
-                ? doneEvent.runId.slice(0, 200)
-                : null,
+            runId: doneRunId,
             outcome:
               event.semanticStatus === 'failed'
                 ? 'failed'
@@ -951,7 +992,8 @@ export function useChatStream(
           'failed',
           'cancelled',
         ].includes(data.status);
-        if (isTerminal) {
+        // A restart leaves the run failed for a moment before the re-run.
+        if (isTerminal && restartTimeoutRef.current === null) {
           endRun({
             runId: data.runId ? data.runId.slice(0, 200) : null,
             outcome:

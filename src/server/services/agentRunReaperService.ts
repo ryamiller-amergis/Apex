@@ -259,7 +259,7 @@ async function lostAttemptCalledMcp(runId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
-const defaultLostTurnRetry: LostTurnRetry = {
+export const defaultLostTurnRetry: LostTurnRetry = {
   async isEligible(turn) {
     const [attempts] = await db
       .select({ total: count() })

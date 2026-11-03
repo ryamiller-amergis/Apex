@@ -1375,6 +1375,73 @@ describe('useChatStream run endings', () => {
       expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 2 });
     });
 
+    describe('automatic re-run after a lost host', () => {
+      const restartDone = (runId: string) => ({
+        type: 'done',
+        runId,
+        autoRetry: true,
+        semanticStatus: 'failed',
+        semanticDetail: 'Interactive agent stopped responding. Restarting automatically.',
+      });
+
+      it('shows Restarting with no error, then the re-run answer', () => {
+        const { result } = startTurn(eventDriven);
+        act(() => lastES!.emit('message', restartDone('run-1'), nextId()));
+        expect(result.current.status).toBe('running');
+        expect(result.current.isRetrying).toBe(true);
+        expect(result.current.retryReason).toBe('Restarting the agent…');
+        expect(result.current.streamingText).toBe('');
+        expect(result.current.retryableRunId).toBeNull();
+        expect(errorMessages(result)).toBe(0);
+
+        act(() => {
+          lastES!.emit('message', { type: 'token', text: 'fresh answer' });
+        });
+        expect(result.current.isRetrying).toBe(false);
+        expect(result.current.streamingText).toBe('fresh answer');
+
+        act(() => lastES!.emit('message', { type: 'done', runId: 'run-1', semanticStatus: 'completed' }, nextId()));
+        expectEnded(result, { status: 'idle', retryableRunId: null, errors: 0 });
+      });
+
+      it('keeps restarting through the idle status between the lost attempt and the re-run', () => {
+        const { result } = startTurn(eventDriven);
+        act(() => {
+          lastES!.emit('message', restartDone('run-1'), nextId());
+          lastES!.emit('message', { type: 'status', status: 'idle' });
+        });
+        expect(result.current.status).toBe('running');
+        expect(result.current.isRetrying).toBe(true);
+      });
+
+      it('shows one error with Retry when the re-run itself fails', () => {
+        const { result } = startTurn(eventDriven);
+        act(() => {
+          lastES!.emit('message', restartDone('run-1'), nextId());
+          lastES!.emit('message', failedDone('run-1'), nextId());
+        });
+        expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+      });
+
+      it('gives up after three minutes with no progress and enables Retry', () => {
+        jest.useFakeTimers();
+        try {
+          const { result } = startTurn(eventDriven);
+          act(() => lastES!.emit('message', restartDone('run-1'), nextId()));
+          act(() => {
+            jest.advanceTimersByTime(3 * 60_000 - 1);
+          });
+          expect(result.current.isRetrying).toBe(true);
+          act(() => {
+            jest.advanceTimersByTime(1);
+          });
+          expectEnded(result, { status: 'error', retryableRunId: 'run-1', errors: 1 });
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
+
     it('reports a second failure after the same run made progress again', () => {
       const { result } = startTurn(eventDriven);
       act(() => lastES!.emit('message', failedDone('run-1'), nextId()));
