@@ -35,7 +35,6 @@ import {
 } from './admissionGovernorService';
 import { workerTierTelemetry } from './workerTierTelemetry';
 import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
-import { INTERACTIVE_AUTO_RETRY_DETAIL } from '../../shared/types/chat';
 import {
   NonblockingRepoCacheLeaseUnavailableError,
   RepoCacheLeaseLostError,
@@ -965,7 +964,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
               retryTurn = candidate;
             }
             detail = retryTurn
-              ? INTERACTIVE_AUTO_RETRY_DETAIL
+              ? 'Interactive agent did not start. Retrying automatically.'
               : 'Interactive agent did not start. Please retry.';
           }
         } else if (

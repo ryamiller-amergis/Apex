@@ -19,7 +19,6 @@ import type {
   SseTokenEvent,
   SseToolStatusEvent,
 } from '../../shared/types/chat';
-import { INTERACTIVE_AUTO_RETRY_DETAIL } from '../../shared/types/chat';
 import { v4 as uuidv4 } from 'uuid';
 import {
   friendlyChatErrorMessage,
@@ -34,8 +33,6 @@ import {
 } from '../utils/threadEventStream';
 
 const CONNECTION_ERROR_GRACE_MS = 2_000;
-/** Longest wait for a re-queued turn's first event before showing the error. */
-const AUTO_RETRY_GIVE_UP_MS = 3 * 60_000;
 
 /** Chronological order for chat history (SSE replay + REST merge). */
 export function sortChatMessagesByTs(messages: ChatMessage[]): ChatMessage[] {
@@ -291,7 +288,6 @@ export function useChatStream(
     Map<number, { text: string; key: string }>
   >(new Map());
   const retryTimeoutRef = useRef<number | null>(null);
-  const autoRetryPendingRef = useRef(false);
   const connectionErrorTimeoutRef = useRef<number | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
@@ -420,49 +416,6 @@ export function useChatStream(
     // Defaults to SSE (EventSource) so behavior is unchanged until the
     // WebSocket gateway is enabled; both backends deliver the same
     // (data, lastEventId) pair this handler expects.
-    const reportRunFailure = (
-      rawRunId: unknown,
-      rawDetail: unknown,
-      { canAutoRetry = true }: { canAutoRetry?: boolean } = {},
-    ) => {
-      const runId = typeof rawRunId === 'string' && rawRunId.trim()
-        ? rawRunId.slice(0, 200)
-        : null;
-      const detail = safeDetail(rawDetail) ?? 'The agent run did not finish. Please retry.';
-      if (canAutoRetry && detail === INTERACTIVE_AUTO_RETRY_DETAIL) {
-        setIsRetrying(true);
-        setRetryReason('Restarting the agent…');
-        autoRetryPendingRef.current = true;
-        clearRetryTimeout();
-        retryTimeoutRef.current = window.setTimeout(() => {
-          autoRetryPendingRef.current = false;
-          setIsRetrying(false);
-          setRetryReason(null);
-          if (runId) setRetryableRunId(runId);
-          setMessages((prev) => [...prev, {
-            id: uuidv4(),
-            role: 'system',
-            text: 'Error: The agent did not restart. Please retry.',
-            ts: new Date().toISOString(),
-          }]);
-        }, AUTO_RETRY_GIVE_UP_MS);
-        return;
-      }
-      if (runId) setRetryableRunId(runId);
-      const errMsg: ChatMessage = {
-        id: uuidv4(),
-        role: 'system',
-        text: `Error: ${detail}`,
-        ts: new Date().toISOString(),
-      };
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        return last?.role === 'system' && last.text.startsWith('Error:')
-          ? prev
-          : [...prev, errMsg];
-      });
-    };
-
     const handleMessage = (data: string, lastEventId: string) => {
       let event: SseEvent;
       try {
@@ -510,20 +463,6 @@ export function useChatStream(
         ) {
           setLastProgressAt(semanticPhase.timestamp);
         }
-      }
-
-      // A re-queued turn keeps its run id, so any progress after the restart
-      // means the new attempt is live.
-      if (
-        autoRetryPendingRef.current
-        && event.type !== 'health'
-        && event.type !== 'done'
-        && event.type !== 'status'
-      ) {
-        autoRetryPendingRef.current = false;
-        clearRetryTimeout();
-        setIsRetrying(false);
-        setRetryReason(null);
       }
 
       switch (event.type) {
@@ -664,20 +603,6 @@ export function useChatStream(
           break;
         }
         case 'health': {
-          if (event.semanticStatus === 'failed') {
-            // The reaper ends a lost run with only this event, no `done`.
-            streamBufferRef.current = '';
-            streamTrimOffsetRef.current = 0;
-            setStreamingText('');
-            setThinkingText('');
-            setToolProgress([]);
-            setProgressLabel(null);
-            setProgressPhase(null);
-            reportRunFailure(
-              event.runId,
-              (event as SseHealthEvent).detail ?? event.semanticDetail,
-            );
-          }
           // @feature-flag:event-driven-run-termination start winner=enabled
           if (eventDrivenTerminationRef.current) {
             // @feature-flag:event-driven-run-termination enabled-start
@@ -845,15 +770,18 @@ export function useChatStream(
           clearRetryTimeout();
           clearPollTimer();
           setStatus('idle');
-          {
+          if ((event as { error?: string }).error) {
             const doneEvent = event as SseDoneEvent & { error?: string };
-            if (doneEvent.error) {
-              reportRunFailure(doneEvent.runId, doneEvent.error, { canAutoRetry: false });
-            } else if (event.semanticStatus === 'failed') {
-              // Orchestrator terminals report the failure only in the
-              // envelope's status and detail.
-              reportRunFailure(doneEvent.runId, event.semanticDetail);
+            if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
+              setRetryableRunId(doneEvent.runId.slice(0, 200));
             }
+            const errMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'system',
+              text: `Error: ${doneEvent.error}`,
+              ts: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errMsg]);
           }
           if (event.prdReady) setPrdReady(true);
           if (event.backlogReady) setBacklogReady(true);

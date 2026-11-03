@@ -260,13 +260,6 @@ export interface SseRetryingEvent {
   reason?: 'reconnecting';
 }
 
-/**
- * Terminal detail for a durable turn the reaper failed and already re-queued.
- * The client shows it as a restart in progress, not an error.
- */
-export const INTERACTIVE_AUTO_RETRY_DETAIL =
-  'Interactive agent did not start. Retrying automatically.';
-
 export interface SseDoneEvent {
   type: 'done';
   runId?: string;

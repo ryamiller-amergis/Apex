@@ -621,10 +621,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       <AssistantConversation
         messages={visibleMessages}
         streamingText={streamingText}
-        isWorking={showTypingIndicator || session.isRetrying}
+        isWorking={showTypingIndicator}
         isStarting={isCreating}
         startError={createError}
-        progressLabel={session.isRetrying ? session.retryReason : progressLabel}
+        progressLabel={progressLabel}
         progressPhase={progressPhase}
         toolProgress={toolProgress}
         welcome={!readOnly && !discussContext && threadId && threadId === createdThreadId ? {
@@ -633,7 +633,6 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           suggestions: DESIGN_DOC_ASSISTANT_SUGGESTIONS,
           onSuggestion: fillComposer,
         } : undefined}
-        onRetry={!readOnly && session.retryableRunId ? () => { void session.retryFailedRun(); } : undefined}
         testIdPrefix="design-doc-assistant"
       />
       </AgentPanelShell>

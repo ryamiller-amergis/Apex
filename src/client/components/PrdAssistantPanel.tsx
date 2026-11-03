@@ -263,10 +263,10 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
           <AssistantConversation
             messages={visibleMessages}
             streamingText={streamingText}
-            isWorking={showTypingIndicator || session.isRetrying}
+            isWorking={showTypingIndicator}
             isStarting={isCreating}
             startError={createError}
-            progressLabel={session.isRetrying ? session.retryReason : progressLabel}
+            progressLabel={progressLabel}
             progressPhase={progressPhase}
             toolProgress={toolProgress}
             welcome={threadId && threadId === createdThreadId ? {
@@ -275,7 +275,6 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               suggestions: PRD_ASSISTANT_SUGGESTIONS,
               onSuggestion: fillComposer,
             } : undefined}
-            onRetry={session.retryableRunId ? () => { void session.retryFailedRun(); } : undefined}
             testIdPrefix="prd-assistant"
           />
         </AgentPanelShell>

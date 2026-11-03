@@ -26,8 +26,6 @@ export interface AssistantConversationProps {
   progressPhase: AgentRunPhase | null;
   toolProgress?: ToolProgress[];
   welcome?: AssistantWelcome;
-  /** Re-runs the failed turn; offered on the last message when it is an error. */
-  onRetry?: () => void;
   testIdPrefix: string;
 }
 
@@ -73,7 +71,6 @@ export const AssistantConversation: React.FC<AssistantConversationProps> = ({
   progressPhase,
   toolProgress = [],
   welcome,
-  onRetry,
   testIdPrefix,
 }) => {
   const endRef = useRef<HTMLDivElement>(null);
@@ -124,7 +121,7 @@ export const AssistantConversation: React.FC<AssistantConversationProps> = ({
       )}
       {startError && <div className={styles.systemBubble}>{startError}</div>}
 
-      {messages.map((message, index) => {
+      {messages.map((message) => {
         if (message.role === 'user') {
           return (
             <div key={message.id} className={styles.userBubble}>
@@ -133,29 +130,7 @@ export const AssistantConversation: React.FC<AssistantConversationProps> = ({
           );
         }
         if (message.role === 'system') {
-          const canRetry = Boolean(onRetry)
-            && !isWorking
-            && index === messages.length - 1
-            && message.text.startsWith('Error:');
-          return (
-            <div
-              key={message.id}
-              className={styles.systemBubble}
-              role={message.text.startsWith('Error:') ? 'alert' : undefined}
-            >
-              {message.text}
-              {canRetry && (
-                <button
-                  type="button"
-                  className={styles.retryButton}
-                  onClick={onRetry}
-                  {...{ 'data-testid': `${testIdPrefix}-retry` }}
-                >
-                  ↺ Try again
-                </button>
-              )}
-            </div>
-          );
+          return <div key={message.id} className={styles.systemBubble}>{message.text}</div>;
         }
         if (message.role === 'agent') {
           return (
