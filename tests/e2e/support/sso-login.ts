@@ -9,6 +9,9 @@ import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
+import type { DevMockPersonaId } from '../../../src/shared/constants/devMockUsers';
+import { personaAuthFile, personaCredentials } from './persona-accounts';
+import type { SsoCredentials } from './persona-accounts';
 
 /** Ephemeral session file consumed by the `deployed-smoke` Playwright project. */
 export const DEPLOYED_AUTH_FILE = path.resolve(__dirname, '..', '.auth', 'deployed.json');
@@ -46,9 +49,12 @@ export async function isServerAuthenticated(page: Page): Promise<boolean> {
  * Drive the real Amergis SSO / Entra form to an authenticated Apex session.
  * Leaves the page on the project selector or an authenticated app shell.
  */
-export async function performEntraSsoLogin(page: Page): Promise<void> {
-  const email = process.env.E2E_TEST_USER;
-  const password = process.env.E2E_TEST_PASSWORD;
+export async function performEntraSsoLogin(
+  page: Page,
+  credentials?: SsoCredentials,
+): Promise<void> {
+  const email = credentials?.email ?? process.env.E2E_TEST_USER;
+  const password = credentials?.password ?? process.env.E2E_TEST_PASSWORD;
 
   if (!email || !password) {
     throw new Error(
@@ -117,10 +123,13 @@ export async function performEntraSsoLogin(page: Page): Promise<void> {
 }
 
 /** Persist the current context cookies/origins for later deployed-smoke workers. */
-export async function saveDeployedStorageState(context: BrowserContext): Promise<void> {
-  fs.mkdirSync(path.dirname(DEPLOYED_AUTH_FILE), { recursive: true });
-  await context.storageState({ path: DEPLOYED_AUTH_FILE });
-  console.log(`[E2E SSO] Saved programmatic SSO session to ${DEPLOYED_AUTH_FILE}`);
+export async function saveDeployedStorageState(
+  context: BrowserContext,
+  file: string = DEPLOYED_AUTH_FILE,
+): Promise<void> {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await context.storageState({ path: file });
+  console.log(`[E2E SSO] Saved programmatic SSO session to ${file}`);
 }
 
 /**
@@ -128,13 +137,16 @@ export async function saveDeployedStorageState(context: BrowserContext): Promise
  * still recognizes the session. Catches FileStore races where the setup
  * browser looked authenticated but the session file is already empty/missing.
  */
-export async function assertStorageStateAuthenticates(browser: Browser): Promise<void> {
-  if (!fs.existsSync(DEPLOYED_AUTH_FILE)) {
-    throw new Error(`[E2E SSO] Expected storageState at ${DEPLOYED_AUTH_FILE} but file is missing.`);
+export async function assertStorageStateAuthenticates(
+  browser: Browser,
+  file: string = DEPLOYED_AUTH_FILE,
+): Promise<void> {
+  if (!fs.existsSync(file)) {
+    throw new Error(`[E2E SSO] Expected storageState at ${file} but file is missing.`);
   }
 
   const context = await browser.newContext({
-    storageState: DEPLOYED_AUTH_FILE,
+    storageState: file,
     baseURL: process.env.E2E_BASE_URL,
   });
   try {
@@ -173,4 +185,38 @@ export async function ensureDeployedServerSession(page: Page): Promise<void> {
   );
   await performEntraSsoLogin(page);
   await saveDeployedStorageState(page.context());
+}
+
+/**
+ * Switch the page context to the persona's own test account. Falls back to the
+ * default session when that persona has no password configured.
+ */
+export async function ensurePersonaServerSession(
+  page: Page,
+  persona: DevMockPersonaId,
+): Promise<void> {
+  const credentials = personaCredentials(persona);
+  if (!credentials) {
+    await ensureDeployedServerSession(page);
+    return;
+  }
+
+  const file = personaAuthFile(persona);
+  const context = page.context();
+  // Drop the default account's cookies, including Entra's, so SSO cannot
+  // silently sign the persona in as the wrong user.
+  await context.clearCookies();
+  if (fs.existsSync(file)) {
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      cookies: Parameters<BrowserContext['addCookies']>[0];
+    };
+    await context.addCookies(saved.cookies);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    if (await isServerAuthenticated(page)) return;
+    console.warn(`[E2E SSO] Saved session for persona "${persona}" is stale — re-running Entra login.`);
+    await context.clearCookies();
+  }
+
+  await performEntraSsoLogin(page, credentials);
+  await saveDeployedStorageState(context, file);
 }

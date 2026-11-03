@@ -2,6 +2,7 @@ import { generateDailySessions, runFacilitator, sendStandupReminders } from './s
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { standupSessions } from '../db/schema';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 /**
  * Background service that checks for due standup sessions and triggers
@@ -10,8 +11,11 @@ import { standupSessions } from '../db/schema';
  */
 export class StandupSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
   private readonly CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  private readonly runGuard = createSingleFlight({
+    name: 'StandupScheduler',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   start(): void {
     if (this.intervalId) {
@@ -34,8 +38,8 @@ export class StandupSchedulerService {
   }
 
   private async run(): Promise<void> {
-    if (this.isRunning) return;
-    this.isRunning = true;
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) return;
 
     try {
       // 1. Generate any due sessions
@@ -52,7 +56,7 @@ export class StandupSchedulerService {
     } catch (err) {
       console.error('[StandupScheduler] Error during run:', (err as Error).message);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 

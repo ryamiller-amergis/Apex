@@ -1,6 +1,5 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { useStartDesignDocValidationPlaybook } from '../hooks/useDesignDocValidationPlaybook';
 
 interface DesignDocPlaybookStartActionProps {
@@ -46,18 +45,8 @@ export const DesignDocPlaybookStartAction: React.FC<DesignDocPlaybookStartAction
   isOwner,
   canRun,
 }) => {
-  const enabled = useFeatureFlag('playbooks-production-adapters', project);
-
-  // @feature-flag:playbooks-production-adapters start winner=enabled
-  if (!enabled || !isOwner || !canRun) {
-    // @feature-flag:playbooks-production-adapters disabled-start
-    return null;
-    // @feature-flag:playbooks-production-adapters disabled-end
-  }
-  // @feature-flag:playbooks-production-adapters enabled-start
+  if (!isOwner || !canRun) return null;
   return (
     <DesignDocPlaybookStartActionEnabled designDocId={designDocId} project={project} />
   );
-  // @feature-flag:playbooks-production-adapters enabled-end
-  // @feature-flag:playbooks-production-adapters end
 };

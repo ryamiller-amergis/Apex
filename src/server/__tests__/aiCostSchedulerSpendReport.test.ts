@@ -2,7 +2,6 @@ const runCursorBillingSync = jest.fn();
 const runCostAllocation = jest.fn();
 const generateBriefForAllProjects = jest.fn();
 const runUndercountReport = jest.fn();
-const isFeatureOperational = jest.fn().mockResolvedValue(true);
 
 jest.mock('../services/cursorBillingSyncService', () => ({
   runCursorBillingSync,
@@ -14,18 +13,16 @@ jest.mock('../services/aiCostDailyBriefService', () => ({
 jest.mock('../services/aiCostUndercountReportService', () => ({
   aiCostUndercountReportService: { run: runUndercountReport },
 }));
-jest.mock('../services/featureFlagService', () => ({ isFeatureOperational }));
 
 import { AiCostSchedulerService } from '../services/aiCostScheduler';
 
-describe('TBI-050 scheduler cadence and flag', () => {
+describe('TBI-050 scheduler cadence', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers().setSystemTime(new Date('2026-09-22T16:00:00.000Z'));
     runCostAllocation.mockResolvedValue(undefined);
     runUndercountReport.mockResolvedValue(undefined);
     generateBriefForAllProjects.mockResolvedValue(undefined);
-    isFeatureOperational.mockResolvedValue(true);
   });
 
   afterEach(() => jest.useRealTimers());
@@ -41,18 +38,17 @@ describe('TBI-050 scheduler cadence and flag', () => {
     expect(runUndercountReport).toHaveBeenCalledTimes(2);
   });
 
-  it('does not run the report while the feature flag is off', async () => {
-    isFeatureOperational.mockResolvedValue(false);
+  it('runs the report on the daily cadence without a feature flag', async () => {
     const scheduler = new AiCostSchedulerService();
 
     await (scheduler as unknown as { run(): Promise<void> }).run();
 
-    expect(runUndercountReport).not.toHaveBeenCalled();
+    expect(runUndercountReport).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the established daily brief running when the Playbook flag lookup fails', async () => {
+  it('keeps the established daily brief running when the Playbook report fails', async () => {
     jest.setSystemTime(new Date(2026, 8, 22, 8, 0, 0));
-    isFeatureOperational.mockRejectedValue(new Error('flag service unavailable'));
+    runUndercountReport.mockRejectedValue(new Error('report unavailable'));
     const scheduler = new AiCostSchedulerService();
 
     await (scheduler as unknown as { run(): Promise<void> }).run();

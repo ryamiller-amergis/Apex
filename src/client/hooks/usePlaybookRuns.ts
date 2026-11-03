@@ -20,6 +20,7 @@ import type {
   RetryPlaybookStepResponse,
   PlaybookGateDetail,
   PlaybookRunFilter,
+  StartRunResult,
 } from '../../shared/types/playbook';
 
 /** How often a live run is re-read. Frequent enough to watch, slow enough not to be a load test. */
@@ -148,6 +149,25 @@ export function usePlaybookRun(project: string | undefined, runId: string | null
   });
 }
 
+export function usePlaybookStepOutput(
+  project: string | undefined,
+  runId: string | null,
+  stepRunId: string | null,
+  enabled: boolean
+) {
+  return useQuery<Record<string, unknown>>({
+    queryKey: ['playbook-step-output', project, runId, stepRunId],
+    queryFn: () =>
+      apiFetch<Record<string, unknown>>(
+        `/api/playbooks/runs/${encodeURIComponent(runId!)}`
+          + `/steps/${encodeURIComponent(stepRunId!)}`
+          + `/output?project=${encodeURIComponent(project!)}&part=full`
+      ),
+    enabled: Boolean(project && runId && stepRunId && enabled),
+    retry: false,
+  });
+}
+
 async function invalidateRunQueries(
   queryClient: ReturnType<typeof useQueryClient>,
   project: string,
@@ -157,6 +177,20 @@ async function invalidateRunQueries(
     queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
     queryClient.invalidateQueries({ queryKey: ['playbook-run', project, runId] }),
   ]);
+}
+
+/** Starts a run on the definition's current published version. */
+export function useStartPlaybookRun(project: string, definitionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StartRunResult, PlaybookRunApiError, void>({
+    mutationFn: () =>
+      apiFetch('/api/playbooks/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, definitionId }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
+  });
 }
 
 export function useCancelPlaybookRun(project: string, runId: string) {

@@ -14,7 +14,7 @@ import { test as base, request as requestLib } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import { devLogin } from './auth';
 import { SeedApi } from '../data/seed';
-import { ensureDeployedServerSession, isDeployedAuthMode } from './sso-login';
+import { ensurePersonaServerSession, isDeployedAuthMode } from './sso-login';
 
 export type Persona = 'developer' | 'ba' | 'manager' | 'product-owner' | 'qa' | 'ui-ux';
 
@@ -53,9 +53,10 @@ export const test = base.extend<E2EFixtures>({
       // The saved connect.sid can still be stale after a deploy or session expiry
       // while the cookie is present — /auth/status then returns
       // authenticated:false and every smoke lands on the login card. Detect that
-      // and re-run Entra SSO into this context, refreshing deployed.json.
+      // and re-run Entra SSO into this context, refreshing the saved session.
+      // Personas with E2E_PERSONA_<ID>_PASSWORD sign in as their own test account.
       if (isDeployedAuthMode()) {
-        await ensureDeployedServerSession(page);
+        await ensurePersonaServerSession(page, persona);
         return;
       }
       await devLogin(page, persona);

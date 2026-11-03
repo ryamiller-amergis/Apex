@@ -147,7 +147,57 @@ describe('durable interactive skill loading', () => {
       status: 422,
       code: 'INTERACTIVE_V2_SKILL_UNAVAILABLE',
     });
-    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(readFile.mock.calls.map(([filePath]) => filePath)).toEqual([
+      '.cursor/skills/project-skill/SKILL.md',
+      '.agents/skills/project-skill/SKILL.md',
+      'skills/project-skill/SKILL.md',
+    ]);
+  });
+
+  it('finds a project skill stored under another skill root in the pinned repository', async () => {
+    const readFile = jest.fn(async (filePath: string) => {
+      if (filePath === '.cursor/skills/adr-finalize/SKILL.md') return '# ADR finalize';
+      throw new RepoReaderError('LOCAL_READ_UNAVAILABLE', 'File not found', true);
+    });
+
+    await expect(
+      loadDurableInteractiveSkill(
+        {
+          path: '.agents/skills/adr-finalize/SKILL.md',
+          registration: 'project',
+          pinnedReader: reader(readFile as unknown as RepoReader['readFile']),
+        },
+        { builtInRoots: roots },
+      ),
+    ).resolves.toEqual({
+      path: '.cursor/skills/adr-finalize/SKILL.md',
+      content: '# ADR finalize',
+    });
+  });
+
+  it('uses the bundled copy of an Apex-default skill the project repository lacks', async () => {
+    const skillDir = path.join(builtInRoot, 'adr-assistant');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# bundled ADR assistant');
+    const readFile = jest
+      .fn()
+      .mockRejectedValue(new RepoReaderError('LOCAL_READ_UNAVAILABLE', 'File not found', true));
+
+    await expect(
+      loadDurableInteractiveSkill(
+        {
+          path: '.agents/skills/adr-assistant/SKILL.md',
+          registration: 'project',
+          pinnedReader: reader(readFile),
+          bundledFallback: true,
+        },
+        { builtInRoots: roots },
+      ),
+    ).resolves.toEqual({
+      path: '.cursor/skills/adr-assistant/SKILL.md',
+      content: '# bundled ADR assistant',
+    });
+    expect(readFile).toHaveBeenCalledTimes(3);
   });
 
   it('loads a valid regular built-in skill from its explicit root', async () => {
@@ -315,7 +365,7 @@ describe('durable interactive skill loading', () => {
           { builtInRoots: roots, syncWait },
         ),
       ).rejects.toMatchObject({ code: 'INTERACTIVE_V2_SKILL_UNAVAILABLE' });
-      expect(readFile).toHaveBeenCalledTimes(1);
+      expect(readFile).toHaveBeenCalledTimes(3);
       expect(sleep).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('File not found'));
     });

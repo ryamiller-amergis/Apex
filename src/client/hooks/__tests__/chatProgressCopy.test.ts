@@ -93,7 +93,24 @@ describe('friendlyToolActivityLabel', () => {
       friendlyToolActivityLabel('mcp', { toolName: 'search_repo_code', keys: ['query'] }),
     ).toBe('Searching the codebase');
     expect(friendlyToolActivityLabel('mcp', { toolName: 'create_work_item' })).toBe(
-      'Using a connected tool',
+      'Create work item',
+    );
+    expect(friendlyToolActivityLabel('mcp:list_applications')).toBe('Listing applications');
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'listAllApplications' })).toBe(
+      'Listing applications',
+    );
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'aggregateEntityUsage' })).toBe(
+      'Aggregating entity usage',
+    );
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'entityUsage' })).toBe(
+      'Querying entity usage',
+    );
+    expect(friendlyToolActivityLabel('mcp:whoami')).toBe('Checking account');
+    expect(friendlyChatProgressLabel('mcp:list_applications completed')).toBe(
+      'Listing applications',
+    );
+    expect(friendlyChatProgressLabel('mcp:listAllApplications running')).toBe(
+      'Listing applications',
     );
   });
 

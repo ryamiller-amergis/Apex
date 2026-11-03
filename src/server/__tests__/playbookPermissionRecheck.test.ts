@@ -15,6 +15,8 @@ const executeApprovalGate = jest.fn();
 const executeCursorAgent = jest.fn();
 const executeIngestArtifact = jest.fn();
 const executeBranch = jest.fn();
+const executeInterview = jest.fn();
+const executeBuild = jest.fn();
 const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
@@ -39,6 +41,14 @@ jest.mock('../services/playbookSteps/ingestArtifactAdapter', () => ({
 
 jest.mock('../services/playbookSteps/branchAdapter', () => ({
   executeBranchStep: (...args: unknown[]) => executeBranch(...args),
+}));
+
+jest.mock('../services/playbookSteps/interviewAdapter', () => ({
+  executeInterviewStep: (...args: unknown[]) => executeInterview(...args),
+}));
+
+jest.mock('../services/playbookSteps/buildAdapter', () => ({
+  executeBuildStep: (...args: unknown[]) => executeBuild(...args),
 }));
 
 jest.mock('../services/featureFlagService', () => ({
@@ -73,6 +83,15 @@ function context(stepType: string): PlaybookStepExecutionContext {
       whenTrue: 'publish',
       whenFalse: 'notify-the-team',
     },
+    interview: {
+      mode: 'human_led',
+      profileKey: 'ba-discovery',
+    },
+    build: {
+      buildRunId: 'build-1',
+      briefId: 'brief-1',
+      interviewId: 'interview-1',
+    },
   };
   return {
     runId: 'run-1',
@@ -98,6 +117,8 @@ beforeEach(() => {
   executeCursorAgent.mockResolvedValue({ kind: 'suspended' });
   executeIngestArtifact.mockResolvedValue({ kind: 'completed', output: {} });
   executeBranch.mockResolvedValue({ kind: 'completed', output: {} });
+  executeInterview.mockResolvedValue({ kind: 'suspended' });
+  executeBuild.mockResolvedValue({ kind: 'suspended' });
   isFeatureEnabled.mockResolvedValue(true);
 });
 

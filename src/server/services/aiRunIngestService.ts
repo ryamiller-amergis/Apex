@@ -37,7 +37,6 @@ import {
   isAiRunIngestKind,
   isAiRunTerminalIngestStatus,
   type AiRunIngestBody,
-  type AiRunBootstrapResponse,
   type AiRunBootstrapResult,
   type AiRunIngestErrorCode,
   type AiRunProgressIngest,
@@ -58,8 +57,10 @@ import {
   type AiRunV2FailureCategory,
 } from '../../shared/types/aiRunV2';
 import { workerTierTelemetry } from './workerTierTelemetry';
+import { trackEvent } from './telemetry';
 import { recordCursorChatUsage } from './aiUsageService';
 import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
+import type { InteractiveTerminalInput } from './brainstormTurnLedger';
 import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
 import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
 import {
@@ -104,6 +105,66 @@ function isDurableInteractiveSnapshot(
   { kind: 'interactive-turn' }
 > {
   return 'kind' in snapshot && snapshot.kind === 'interactive-turn';
+}
+
+const STAGE_TIMING_FIELDS = [
+  'workspaceMs',
+  'agentAcquireMs',
+  'firstEventMs',
+  'firstTokenMs',
+  'workerTurnMs',
+] as const;
+
+function elapsedSince(startIso: string | null, endMs: number): number | undefined {
+  if (!startIso) return undefined;
+  const startMs = Date.parse(startIso);
+  return Number.isFinite(startMs) ? Math.max(0, endMs - startMs) : undefined;
+}
+
+/** Malformed timings are dropped: telemetry must not reject a terminal. */
+function trackInteractiveTurnStages(
+  existing: typeof agentRuns.$inferSelect,
+  body: AiRunTerminalIngest,
+  nowIso: string,
+): void {
+  const timings: Record<string, unknown> =
+    body.stageTimings && typeof body.stageTimings === 'object'
+      ? body.stageTimings
+      : {};
+  const measurements: Record<string, number> = {};
+  for (const field of STAGE_TIMING_FIELDS) {
+    const value = timings[field];
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      measurements[field] = value;
+    }
+  }
+  const nowMs = Date.parse(nowIso);
+  const admittedToTerminalMs = elapsedSince(existing.createdAt, nowMs);
+  if (admittedToTerminalMs !== undefined) {
+    measurements.admittedToTerminalMs = admittedToTerminalMs;
+  }
+  const dispatchedToTerminalMs = elapsedSince(existing.dispatchedAt, nowMs);
+  if (dispatchedToTerminalMs !== undefined) {
+    measurements.dispatchedToTerminalMs = dispatchedToTerminalMs;
+  }
+  const snapshot = existing.executionSnapshot;
+  const specification =
+    snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot : null;
+  const agentMode = timings.agentMode;
+  trackEvent(
+    'InteractiveTurnStages',
+    {
+      status: body.status,
+      agentMode:
+        agentMode === 'warm' || agentMode === 'resumed' || agentMode === 'recreated'
+          ? agentMode
+          : 'unknown',
+      workflowClass: specification?.workflowClass ?? 'unknown',
+      interviewPhase: specification?.guidedInterview?.phase ?? 'none',
+      grounded: specification?.grounding ? 'true' : 'false',
+    },
+    measurements,
+  );
 }
 
 export class AiRunIngestError extends Error {
@@ -153,6 +214,13 @@ export interface AiRunIngestDependencies {
   }) => Promise<void>;
   /** Called when a failed run reports that the Cursor team admin blocked its model. */
   onModelBlocked?: () => void;
+  /** Called after an interactive V2 terminal commits. Errors are logged, never thrown. */
+  onInteractiveTerminal?: (input: InteractiveTerminalInput) => Promise<void>;
+}
+
+async function defaultOnInteractiveTerminal(input: InteractiveTerminalInput): Promise<void> {
+  const { finalizeBrainstormTerminal } = await import('./brainstormTurnLedger');
+  await finalizeBrainstormTerminal(input);
 }
 
 function requestModelAvailabilityProbe(): void {
@@ -172,6 +240,8 @@ async function consumeCompletedArtifacts(
 async function failGeneratingArtifacts(threadId: string): Promise<void> {
   const { failGeneratingTestCasesForThread } = await import('./testCaseService');
   await failGeneratingTestCasesForThread(threadId);
+  const { applyAdrGenerationResult } = await import('./adrService');
+  await applyAdrGenerationResult(threadId, null, 'the agent run failed');
 }
 
 async function reflectFailedGeneration(
@@ -400,6 +470,7 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
     devSessionId: row.devSessionId ?? null,
+    buildTaskId: row.buildTaskId ?? null,
     workflowClass: row.workflowClass ?? null,
     cloudAgentIdentity: row.cloudAgentIdentity ?? null,
     cloudAgentManaged: row.cloudAgentManaged ?? false,
@@ -496,8 +567,16 @@ function resolveInteractiveCallbackBaseUrl(): string {
   const configured =
     process.env.AI_RUNS_APEX_CALLBACK_BASE_URL?.trim() ||
     process.env.APEX_CALLBACK_URL?.trim() ||
-    process.env.PUBLIC_APP_URL?.trim();
+    process.env.PUBLIC_APP_URL?.trim() ||
+    process.env.APEX_URL?.trim();
   if (configured) return configured.replace(/\/+$/, '');
+  // Actor hosts run in other containers, where localhost is not App Service.
+  if (process.env.WEBSITE_SITE_NAME?.trim()) {
+    throw new AiRunIngestError(
+      'APEX_URL or AI_RUNS_APEX_CALLBACK_BASE_URL is required for interactive tool proxy URLs',
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
   const port = process.env.PORT?.trim() || '3001';
   return `http://localhost:${port}`;
 }
@@ -1100,6 +1179,29 @@ async function terminalizeDaprActorV2(input: {
     await reflectFailedGeneration(existing.threadId, dependencies);
   }
 
+  const snapshot = existing.executionSnapshot;
+  const frozenWorkflowClass =
+    snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot.workflowClass : null;
+  if (existing.lane === INTERACTIVE_LANE && frozenWorkflowClass === 'brainstorm') {
+    await (dependencies.onInteractiveTerminal ?? defaultOnInteractiveTerminal)({
+      threadId: existing.threadId,
+      runId,
+      status,
+      failureCategory,
+      message: assistantMessage ? { id: assistantMessage.id, text: assistantMessage.text } : null,
+      inputTokens: body.inputTokens,
+      outputTokens: body.outputTokens,
+      cacheReadTokens: body.cacheReadTokens,
+      cacheWriteTokens: body.cacheWriteTokens,
+      durationMs: body.durationMs,
+    }).catch((err: unknown) => {
+      console.error(
+        '[aiRunIngest] interactive terminal effect failed:',
+        err instanceof Error ? err.message : 'Unexpected error',
+      );
+    });
+  }
+
   return { run: mapRow(run), cancelRequested: run.cancelRequested };
 }
 
@@ -1313,7 +1415,7 @@ export async function ingest(
 
   if (existing.transportVersion === 'dapr-actor-v2') {
     const attemptNumber = await loadAttemptNumber(body.attemptId!);
-    return terminalizeDaprActorV2({
+    const result = await terminalizeDaprActorV2({
       existing,
       body,
       nowIso,
@@ -1321,6 +1423,10 @@ export async function ingest(
       attemptNumber,
       dependencies,
     });
+    if (existing.lane === INTERACTIVE_LANE) {
+      trackInteractiveTurnStages(existing, body, nowIso);
+    }
+    return result;
   }
 
   if (body.status === 'completed') {

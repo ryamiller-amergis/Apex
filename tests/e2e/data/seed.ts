@@ -364,9 +364,33 @@ export const SeedApi = {
       designPrototypeApprovers?: string[];
       testCaseApprovers?: string[];
       adrApprovers?: string[];
+      defaultModel?: string | null;
+      defaultEffort?: 'low' | 'medium' | 'high' | null;
+      /**
+       * Flat per-workflow values (e.g. `interviewModel`, `adrEffort`) written to the
+       * legacy columns only, as app code from before project_skill_workflow_settings did.
+       */
+      legacyWorkflowValues?: Record<string, string | number | null>;
     },
   ): Promise<SeededProjectSettings> {
     return post<SeededProjectSettings>(request, '/seed/project-settings', opts);
+  },
+
+  /** Per-workflow child rows (project_skill_workflow_settings) for one settings row. */
+  async inspectWorkflowSettings(
+    request: APIRequestContext,
+    settingsId: string,
+  ): Promise<Array<Record<string, unknown> & { workflow: string }>> {
+    const res = await request.get(
+      `${E2E_API}/inspect/project-skill-workflow-settings?settingsId=${encodeURIComponent(settingsId)}`,
+    );
+    if (!res.ok()) throw new Error(`inspectWorkflowSettings failed: ${res.status()} ${await res.text()}`);
+    return ((await res.json()) as { rows: Array<Record<string, unknown> & { workflow: string }> }).rows;
+  },
+
+  /** Grant a persona a global copy of the admin role (admin:roles etc.); removed by reset(). */
+  async seedAdminRole(request: APIRequestContext, opts: { userId: string }): Promise<void> {
+    await post(request, '/seed/admin-role', opts);
   },
 
   async seedPlaybookLifecycle(
@@ -402,6 +426,37 @@ export const SeedApi = {
    * Override project menu visibility for the E2E test project.
    * Use in access-control tests to hide or show specific nav items.
    */
+  async seedMcpServersAccess(
+    request: APIRequestContext,
+    opts: {
+      enabled: boolean;
+      projects: string[];
+      grants: Array<{ userId: string; project: string; permissions: string[] }>;
+    },
+  ): Promise<void> {
+    await post(request, '/seed/mcp-servers-access', opts);
+  },
+
+  /** Turn the Brainstorm flag on for the listed projects only, or off everywhere. */
+  async setBrainstormFlag(
+    request: APIRequestContext,
+    opts: { enabled: boolean; projects: string[] },
+  ): Promise<void> {
+    await post(request, '/seed/brainstorm-flag', opts);
+  },
+
+  /** Write artifact versions for a session as if collaborator turns had made them. */
+  async seedBrainstormArtifact(
+    request: APIRequestContext,
+    opts: { sessionId: string; type: 'adr' | 'technical_design' | 'discovery_brief' | 'implementation_plan'; versions: string[] },
+  ): Promise<void> {
+    await post(request, '/seed/brainstorm-artifact', opts);
+  },
+
+  async seedMcpServerProviderStub(request: APIRequestContext): Promise<void> {
+    await post(request, '/seed/mcp-servers-provider-stub');
+  },
+
   async setMenuSettings(
     request: APIRequestContext,
     project: string,

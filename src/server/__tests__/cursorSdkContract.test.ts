@@ -13,7 +13,7 @@ const fixturePath = path.join(
   repoRoot,
   'scripts',
   'cursor-sdk-contract',
-  'cursor-sdk-1.0.24.contract.json'
+  'cursor-sdk-1.0.37.contract.json'
 );
 
 function readJson(filePath: string): unknown {
@@ -21,7 +21,7 @@ function readJson(filePath: string): unknown {
 }
 
 describe('Cursor SDK installed contract (TBI-001)', () => {
-  it('DoD-0 — manifest range and lock resolve SDK 1.0.24', () => {
+  it('DoD-0 — manifest and lock pin SDK 1.0.37 exactly', () => {
     const manifest = readJson(path.join(repoRoot, 'package.json')) as {
       dependencies: Record<string, string>;
     };
@@ -32,9 +32,9 @@ describe('Cursor SDK installed contract (TBI-001)', () => {
       >;
     };
 
-    expect(manifest.dependencies['@cursor/sdk']).toBe('^1.0.24');
-    expect(lock.packages[''].dependencies?.['@cursor/sdk']).toBe('^1.0.24');
-    expect(lock.packages['node_modules/@cursor/sdk'].version).toBe('1.0.24');
+    expect(manifest.dependencies['@cursor/sdk']).toBe('1.0.37');
+    expect(lock.packages[''].dependencies?.['@cursor/sdk']).toBe('1.0.37');
+    expect(lock.packages['node_modules/@cursor/sdk'].version).toBe('1.0.37');
   });
 
   it('DoD-2 — generated Agent/LocalAgent/sandbox/settings snapshot matches fixture', () => {
@@ -56,7 +56,7 @@ describe('Cursor SDK installed contract (TBI-001)', () => {
     expect(snapshot).toEqual(readJson(fixturePath));
     expect(snapshot.package).toEqual({
       name: '@cursor/sdk',
-      version: '1.0.24',
+      version: '1.0.37',
     });
 
     for (const area of ['Agent', 'LocalAgent', 'sandbox', 'trustedSettings']) {

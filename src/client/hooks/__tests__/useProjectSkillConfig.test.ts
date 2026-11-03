@@ -276,6 +276,30 @@ describe('useUpsertProjectSkillConfig', () => {
     expect(sentBody).toEqual({ friendlyName: 'Main', skillRepo: 'org/new-skills', skillBranch: 'release' });
   });
 
+  it('sends per-workflow settings as flat fields, exactly as given', async () => {
+    mockFetchOk(skillConfig);
+    const { wrapper } = createWrapper();
+    const body = {
+      friendlyName: 'Main',
+      skillRepo: 'org/new-skills',
+      skillBranch: 'release',
+      prdModel: 'composer-2',
+      prdEffort: 'high' as const,
+      adrModel: 'claude-opus-4-6',
+      adrEffort: 'low' as const,
+      prdReviewBedrockMaxTokens: 32000,
+    };
+
+    const { result } = renderHook(() => useUpsertProjectSkillConfig(), { wrapper });
+    await act(async () => {
+      result.current.mutate({ id: 'uuid-123', project: 'proj-alpha', body });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const sentBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(sentBody).toEqual(body);
+  });
+
   it('PBI-002 AC-0 sends independent module approval modes without changing sibling values', async () => {
     mockFetchOk(skillConfig);
     const { wrapper } = createWrapper();
@@ -426,8 +450,8 @@ describe('useAvailableModels', () => {
   it('fetches /api/available-models and returns the models array', async () => {
     mockFetchOk({
       models: [
-        { id: 'composer-2', displayName: 'Composer 2' },
         { id: 'gpt-4o', displayName: 'GPT-4o' },
+        { id: 'composer-2', displayName: 'Composer 2' },
       ],
     });
     const { wrapper } = createWrapper();
@@ -436,7 +460,10 @@ describe('useAvailableModels', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toHaveLength(2);
+    expect(result.current.data?.map((model) => model.displayName)).toEqual([
+      'Composer 2',
+      'GPT-4o',
+    ]);
     expect(global.fetch).toHaveBeenCalledWith('/api/available-models', expect.any(Object));
   });
 });

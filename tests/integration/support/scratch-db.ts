@@ -130,12 +130,22 @@ export async function createScratchDatabase(label = 'verify'): Promise<ScratchDa
   };
 }
 
+/** Applies every migration that is not yet recorded. Used to re-apply a migration after a scoped down. */
+export async function migrateUp(connectionString: string): Promise<void> {
+  await execFileAsync(
+    process.execPath,
+    [MIGRATE_CLI, 'up', '--no-check-order', '--migrations-dir', MIGRATIONS_DIR],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, DATABASE_URL: connectionString },
+      maxBuffer: 32 * 1024 * 1024,
+    }
+  );
+}
+
 /**
  * Rolls back the most recent `count` migrations.
- *
- * Reversibility is a stated non-functional requirement on the playbook schema, and the only honest
- * way to check it is to actually run the down path and see what is left behind. Scoped to a scratch
- * database for the obvious reason.
+ * Scoped to a scratch database.
  */
 export async function migrateDown(connectionString: string, count: number): Promise<void> {
   await execFileAsync(
@@ -147,6 +157,26 @@ export async function migrateDown(connectionString: string, count: number): Prom
       maxBuffer: 32 * 1024 * 1024,
     }
   );
+}
+
+/**
+ * How many applied migrations `down` must undo so that `migrationName` is the last one rolled
+ * back. `down N` undoes the last N rows in `run_on, id` order, so a test that hard-codes N breaks
+ * as soon as any newer migration (a changelog version sync, for example) lands after its own.
+ */
+export async function migrationsFrom(connectionString: string, migrationName: string): Promise<number> {
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ name: string }>(
+      'SELECT name FROM pgmigrations ORDER BY run_on, id'
+    );
+    const index = rows.findIndex((row) => row.name === migrationName);
+    if (index === -1) throw new Error(`Migration "${migrationName}" has not been applied.`);
+    return rows.length - index;
+  } finally {
+    await client.end();
+  }
 }
 
 const SCRATCH_NAME = /^apex_scratch_[a-z0-9]+_\d+_\d+$/;

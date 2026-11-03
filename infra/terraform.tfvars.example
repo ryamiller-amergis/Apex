@@ -86,13 +86,10 @@ postgresql_backup_retention_days = 7
 # Null uses the standard stapex<environment>async name (for example,
 # stapexdevasync or stapexprdasync). Override only for a global-name collision.
 shared_storage_account_name = null
-# blob_containers default includes pdf-artifacts. Example for another module:
-# blob_containers = {
-#   pdf-artifacts      = {}
-#   standup-recordings = {}
-# }
-
-pdf_blob_container_name = "pdf-artifacts"
+# blob_containers default includes pdf-artifacts, repo-grounding,
+# cursor-prompts, and playbook-step-outputs. pdf-artifacts stays so apply
+# does not destroy existing blobs; PDF assembly moved to DocHub. If you
+# override the map, include every container the environment still uses.
 
 # ---------------------------------------------------------------------------
 # Load Test module — FEAT-002
@@ -308,3 +305,11 @@ pdf_blob_container_name = "pdf-artifacts"
 # ai_platform_v2_interactive_dispatch_base_url = "https://ca-apex-ai-interactive-dev.<cae-domain>"
 # # PROD example (Central US): point the same vars at the existing prod AI host.
 
+
+# ── Alerts (empty list = no alerts) ─────────────────────────────────────────
+# alert_email_receivers                   = ["you@example.com"]
+# alert_http_5xx_threshold                = 10
+# app_service_storage_quota_gb            = 250
+# alert_container_app_names               = ["ca-apex-ai-agentic-prd", "ca-apex-repo-read-d4-prd"]
+# alert_container_app_resource_group_name = "rg-apex-prd-app"
+# alert_email_hours                       = { start = "08:00:00", end = "18:00:00", time_zone = "Eastern Standard Time" }

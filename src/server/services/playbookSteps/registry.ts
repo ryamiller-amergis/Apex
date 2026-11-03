@@ -25,6 +25,7 @@ import type {
   BranchStepConfig,
   CursorAgentStepConfig,
   IngestArtifactStepConfig,
+  InterviewStepConfig,
   NotifyStepConfig,
   PlaybookStepSideEffect,
   PlaybookStepTypeDescriptor,
@@ -69,6 +70,16 @@ export const CURSOR_AGENT_DEADLINE_MS = 60 * MINUTE_MS;
 export const APPROVAL_GATE_DEADLINE_MS = 48 * HOUR_MS;
 
 /**
+ * An interview outlives the request that started it.
+ *
+ * Seven days is long enough for a BA to leave and return, and short enough for the sweep to end
+ * an abandoned run. A node may set `deadlineMs` from 1 hour through 14 days.
+ */
+export const INTERVIEW_DEADLINE_MS = 7 * 24 * HOUR_MS;
+export const INTERVIEW_MIN_DEADLINE_MS = HOUR_MS;
+export const INTERVIEW_MAX_DEADLINE_MS = 14 * 24 * HOUR_MS;
+
+/**
  * A completion time somebody can read as a time.
  *
  * Deliberately looser than a strict RFC 3339 check. What this is protecting against is a step
@@ -93,7 +104,9 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
   prompt: z.string().min(1),
   model: z.string().optional(),
   // Optional for immutable Phase 0 history; every newly published graph is checked separately.
-  mcpProfile: z.string().min(1).optional(),
+  mcpProfile: z.enum(['repository-read-only']).optional().describe(
+    'Read-only repository and network access; no external writes or deployment.'
+  ),
   deadlineMs: z.number().positive().max(CURSOR_AGENT_DEADLINE_MS).optional(),
   threadId: z.string().min(1).optional(),
 });
@@ -168,10 +181,56 @@ const BRANCH_OUTPUT_SCHEMA = z.object({
   continuation: z.string().min(1),
 });
 
+const INTERVIEW_INPUT_SCHEMA = z.object({
+  mode: z.enum(['human_led', 'multi_agent_assisted']),
+  profileKey: z.string().refine((value) => value.trim().length > 0, 'must be nonblank'),
+  deadlineMs: z
+    .number()
+    .refine(
+      (value) =>
+        Number.isFinite(value) &&
+        value >= INTERVIEW_MIN_DEADLINE_MS &&
+        value <= INTERVIEW_MAX_DEADLINE_MS,
+      'must be from 1 hour through 14 days'
+    )
+    .optional(),
+  openingMessage: z.string().refine((value) => value.trim().length > 0, 'must be nonblank').optional(),
+  skillSettingsId: z.string().refine((value) => value.trim().length > 0, 'must be nonblank').optional(),
+});
+
+/** A build can sit through several revisions plus requester wait. Not overridable. */
+export const BUILD_STEP_DEADLINE_MS = INTERVIEW_MAX_DEADLINE_MS;
+
+const BUILD_INPUT_SCHEMA = z.object({
+  buildRunId: z.string().min(1),
+  briefId: z.string().min(1),
+  interviewId: z.string().min(1),
+});
+
+const BUILD_OUTPUT_SCHEMA = z.object({
+  buildRunId: z.string().min(1),
+  status: z.enum(['accepted', 'cancelled', 'failed']),
+  pullRequestUrl: z.string().min(1).optional(),
+});
+
+const INTERVIEW_OUTPUT_SCHEMA = z.object({
+  interviewId: z.string().min(1),
+  briefId: z.string().min(1),
+  briefVersion: z
+    .number()
+    .refine((value) => Number.isInteger(value) && value > 0, 'must be a positive integer'),
+  approvedBy: z.string().min(1),
+  approvedAt: READABLE_TIMESTAMP,
+  unresolvedCount: z
+    .number()
+    .refine((value) => Number.isFinite(value) && value >= 0, 'must be nonnegative'),
+});
+
 /** The step types Apex ships. Adding a fourth is a change to this array and nowhere else. */
 export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   {
     stepType: 'cursor-agent',
+    schemaVersion: 1,
     canSuspend: true,
     defaultDeadlineMs: CURSOR_AGENT_DEADLINE_MS,
     // A definition may shorten the observed ceiling, but never extend it.
@@ -187,6 +246,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'ingest-artifact',
+    schemaVersion: 1,
     canSuspend: false,
     isAgentStep: false,
     sideEffect: 'writes-apex',
@@ -196,6 +256,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'branch',
+    schemaVersion: 1,
     canSuspend: false,
     isAgentStep: false,
     sideEffect: 'read',
@@ -205,6 +266,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'approval-gate',
+    schemaVersion: 1,
     canSuspend: true,
     defaultDeadlineMs: APPROVAL_GATE_DEADLINE_MS,
     deadlineOverridable: true,
@@ -219,6 +281,7 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   },
   {
     stepType: 'notify',
+    schemaVersion: 1,
     // Completes as soon as the notification row is written, so there is nothing to wait for and
     // therefore nothing to expire.
     canSuspend: false,
@@ -227,6 +290,34 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     requiredPermissions: ['playbooks:run'],
     inputSchema: NOTIFY_INPUT_SCHEMA,
     outputSchema: NOTIFY_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'interview',
+    schemaVersion: 1,
+    canSuspend: true,
+    defaultDeadlineMs: INTERVIEW_DEADLINE_MS,
+    deadlineOverridable: true,
+    suspendReason: 'interview',
+    isAgentStep: false,
+    // Creates Apex interview and thread rows. It does not hand work to an external system.
+    sideEffect: 'writes-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: INTERVIEW_INPUT_SCHEMA,
+    outputSchema: INTERVIEW_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'build',
+    schemaVersion: 1,
+    canSuspend: true,
+    defaultDeadlineMs: BUILD_STEP_DEADLINE_MS,
+    deadlineOverridable: false,
+    suspendReason: 'build',
+    isAgentStep: false,
+    // Writes Apex rows and parks. Cursor and Azure DevOps run from a later dispatcher.
+    sideEffect: 'writes-apex',
+    requiredPermissions: ['builds:run'],
+    inputSchema: BUILD_INPUT_SCHEMA,
+    outputSchema: BUILD_OUTPUT_SCHEMA,
   },
 ];
 
@@ -276,6 +367,12 @@ export function validateStepTypeDescriptor(descriptor: PlaybookStepTypeDescripto
 
   if (!stepType || !stepType.trim()) {
     throw new PlaybookStepTypeError('A Playbook step type descriptor must declare a stepType.');
+  }
+
+  if (!Number.isInteger(descriptor.schemaVersion) || descriptor.schemaVersion < 1) {
+    throw new PlaybookStepTypeError(
+      `Step type "${stepType}" must declare a positive integer schemaVersion.`
+    );
   }
 
   assertZodSchema(stepType, 'inputSchema', descriptor.inputSchema);
@@ -435,6 +532,15 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
     );
   }
 
+  if (
+    stepType === 'interview' &&
+    (overrideMs < INTERVIEW_MIN_DEADLINE_MS || overrideMs > INTERVIEW_MAX_DEADLINE_MS)
+  ) {
+    throw new PlaybookStepTypeError(
+      `Deadline override for step type "${stepType}" must be from 1 hour through 14 days.`
+    );
+  }
+
   return overrideMs;
 }
 
@@ -514,14 +620,16 @@ export function assertSkillAllowed(stepType: string, skillPath: string): void {
  * The named three are a boot assertion, not a constraint on the registry — `createStepTypeRegistry`
  * stays generic so a fourth type can be registered by a caller without editing anything here.
  */
-export function validateStepTypeRegistry(): void {
-  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch'];
-  const missing = expected.filter((stepType) => !stepTypeRegistry.has(stepType));
+export function validateStepTypeRegistry(
+  registry: { has(stepType: string): boolean } = stepTypeRegistry,
+): void {
+  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch', 'interview', 'build'];
+  const missing = expected.filter((stepType) => !registry.has(stepType));
 
   if (missing.length > 0) {
     throw new PlaybookStepTypeError(
       `Playbook step type registry is missing: ${missing.join(', ')}. ` +
-        'Apex ships all three.'
+        'Apex ships every production step type.'
     );
   }
 
@@ -541,6 +649,7 @@ export type {
   BranchStepConfig,
   CursorAgentStepConfig,
   IngestArtifactStepConfig,
+  InterviewStepConfig,
   NotifyStepConfig,
   PlaybookStepTypeDescriptor,
 };

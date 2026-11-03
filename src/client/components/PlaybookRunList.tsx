@@ -11,6 +11,7 @@
  * moment a view shows the definition's current version instead.
  */
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { PlaybookRunStepList } from './PlaybookRunStepList';
 import { PlaybookRunActions } from './PlaybookRunActions';
 import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
@@ -73,6 +74,14 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
         <span className={styles.runMeta}>
           started {absoluteTime(run.startedAt)} by {run.initiatorUserId}
         </span>
+        <Link
+          className={styles.runMeta}
+          to={`/playbooks/runs/${run.runId}`}
+          onClick={(event) => event.stopPropagation()}
+          {...{ 'data-testid': 'playbook-run-live-canvas' }}
+        >
+          Live canvas
+        </Link>
       </button>
 
       {expanded ? (

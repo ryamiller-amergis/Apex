@@ -7,6 +7,7 @@ import type {
   ApexWorkItemType,
 } from '../../shared/types/apexWorkItem';
 import { APEX_WORK_ITEM_STATUSES, STATUS_META } from '../../shared/types/apexWorkItem';
+import { sortByLabel } from '../utils/sortByLabel';
 import {
   useApexWorkItem,
   useUpdateApexWorkItem,
@@ -686,7 +687,7 @@ export const ApexWorkItemDetailPanel: React.FC<ApexWorkItemDetailPanelProps> = (
                   </button>
                   {ownerMenuOpen && (
                     <div className={styles.ownerMenu} role="listbox" {...{ 'data-testid': 'work-item-owner-menu' }}>
-                      {owners.map((o) => (
+                      {sortByLabel(owners, (o) => o.displayName).map((o) => (
                         <button
                           key={o.oid}
                           type="button"

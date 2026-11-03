@@ -76,13 +76,13 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
   };
 
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="start-chat-title">
+    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="start-chat-title" data-testid="start-chat-modal">
       <div className={styles.modal}>
         <div className={styles.header}>
           <h2 className={styles.title} id="start-chat-title">
             Start Agent Chat
           </h2>
-          <button className={styles.closeBtn} onClick={onClose} aria-label="Close">
+          <button className={styles.closeBtn} onClick={onClose} aria-label="Close" data-testid="start-chat-close">
             ✕
           </button>
         </div>
@@ -93,6 +93,7 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
             <label className={styles.label} htmlFor="sc-project">Project</label>
             <select
               id="sc-project"
+              data-testid="start-chat-project"
               className={styles.select}
               value={project}
               onChange={(e) => handleProjectChange(e.target.value)}
@@ -135,6 +136,7 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
             </label>
             <select
               id="sc-skill"
+              data-testid="start-chat-skill"
               className={styles.select}
               value={skillPath}
               onChange={(e) => setSkillPath(e.target.value)}
@@ -166,6 +168,7 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
             <label className={styles.label} htmlFor="sc-model">Model</label>
             <select
               id="sc-model"
+              data-testid="start-chat-model"
               className={styles.select}
               value={model}
               onChange={(e) => setModel(e.target.value)}
@@ -187,6 +190,7 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
             </label>
             <textarea
               id="sc-transcript"
+              data-testid="start-chat-transcript"
               className={styles.textarea}
               placeholder="Paste a prior Cursor chat transcript, meeting notes, or any context the skill should start from…"
               value={transcript}
@@ -202,6 +206,7 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
             </label>
             <textarea
               id="sc-context"
+              data-testid="start-chat-context"
               className={styles.textarea}
               placeholder="Any other context, constraints, or notes for the agent…"
               value={freeformContext}
@@ -216,13 +221,14 @@ export const StartChatModal: React.FC<StartChatModalProps> = ({ onClose, onStart
         </div>
 
         <div className={styles.footer}>
-          <button className={styles.btnCancel} onClick={onClose}>
+          <button className={styles.btnCancel} onClick={onClose} data-testid="start-chat-cancel">
             Cancel
           </button>
           <button
             className={styles.btnPrimary}
             onClick={handleStart}
             disabled={!canStart}
+            data-testid="start-chat-submit"
           >
             {startChat.isPending ? 'Starting…' : skillPath ? 'Start Chat with Skill' : 'Start Chat'}
           </button>

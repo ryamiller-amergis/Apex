@@ -74,12 +74,12 @@ const ROUTE_ENTRIES: readonly WalkthroughRouteCatalogEntry[] = Object.freeze([
   Object.freeze({ route: '/feature-requests', label: 'Feature requests' }),
   Object.freeze({ route: '/ui-lab', label: 'UI Lab' }),
   Object.freeze({ route: '/qa-lab', label: 'QA Lab' }),
-  Object.freeze({ route: '/pdf-tools', label: 'PDF tools' }),
   Object.freeze({ route: '/ai-cost', label: 'AI cost analytics' }),
   Object.freeze({ route: '/design-module', label: 'Design module' }),
   Object.freeze({ route: '/load-tests', label: 'Load tests' }),
   Object.freeze({ route: '/diagrams', label: 'Diagrams' }),
   Object.freeze({ route: '/work-board', label: 'Work Board' }),
+  Object.freeze({ route: '/playbooks', label: 'Playbooks' }),
 ]);
 
 const BY_ROUTE = new Map(ROUTE_ENTRIES.map((entry) => [entry.route, entry]));

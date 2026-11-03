@@ -36,8 +36,10 @@ const searchInputSchema: Record<string, SDKJsonValue> = {
  */
 export function createNativeReadTools(
   repoReader: RepoReader,
+  options?: { allowSearch?: boolean },
 ): Record<string, SDKCustomTool> {
-  return {
+  const allowSearch = options?.allowSearch !== false;
+  const tools: Record<string, SDKCustomTool> = {
     get_skill_file: {
       description: 'Read a file from the authorized pinned repository checkout.',
       inputSchema: pathInputSchema,
@@ -60,7 +62,9 @@ export function createNativeReadTools(
         }],
       }),
     },
-    search_repo_code: {
+  };
+  if (allowSearch) {
+    tools.search_repo_code = {
       description: 'Search code in the authorized pinned repository checkout.',
       inputSchema: searchInputSchema,
       execute: async ({ query, limit }) => ({
@@ -76,6 +80,7 @@ export function createNativeReadTools(
           ),
         }],
       }),
-    },
-  };
+    };
+  }
+  return tools;
 }

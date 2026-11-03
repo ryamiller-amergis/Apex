@@ -15,6 +15,10 @@ import { db } from '../db/drizzle';
 import { playbookDefinitions, playbookDefinitionVersions } from '../db/schema';
 import { assertGraphWithinGuards } from './playbookGuardService';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
+import { getStepTypeDescriptor } from './playbookSteps/registry';
+import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
+import { getSkillConfig } from './projectSettingsService';
+import { copyLayoutToPublishedVersion } from './playbookVersionLayoutService';
 import type {
   PlaybookDefinition,
   PlaybookDefinitionDetail,
@@ -27,6 +31,8 @@ import type {
   PlaybookPublishResponse,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
+import type { PlaybookAgentRunPolicy } from '../../shared/types/playbookExecutionCapability';
+import type { SkillProvider } from '../../shared/types/projectSettings';
 
 /**
  * Legal lifecycle moves.
@@ -92,6 +98,17 @@ export class PlaybookDraftNotFoundError extends Error {
   }
 }
 
+/**
+ * Publish refused an interview node whose profile key is blank, missing, or disabled
+ * in the target project's skill configuration.
+ */
+export class PlaybookInterviewProfilePublishError extends Error {
+  constructor(project: string, profileKey: string) {
+    super(`Interview profile "${profileKey}" is missing or disabled for project ${project}.`);
+    this.name = 'PlaybookInterviewProfilePublishError';
+  }
+}
+
 /** The caller saved or published from a revision that another author has replaced. */
 export class PlaybookDraftConflictError extends Error {
   constructor(definitionId: string) {
@@ -100,6 +117,46 @@ export class PlaybookDraftConflictError extends Error {
     );
     this.name = 'PlaybookDraftConflictError';
   }
+}
+
+/** Adds the shared step-contract version to the immutable graph without changing the draft. */
+export function stampPublishedStepTypeVersions(
+  graph: PlaybookGraph,
+  policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = []
+): PlaybookGraph {
+  const policyByNode = new Map(policies.map(({ nodeId, policy }) => [nodeId, policy]));
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      stepTypeVersion: getStepTypeDescriptor(node.stepType).schemaVersion,
+      ...(policyByNode.has(node.id) ? { agentPolicy: policyByNode.get(node.id) } : {}),
+    })),
+  };
+}
+
+async function assertPlaybookCapabilitiesForPublish(input: {
+  graph: PlaybookGraph;
+  project?: string;
+  userId?: string;
+}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
+  let repository = input.project;
+  let provider: SkillProvider | undefined;
+  if (input.project) {
+    try {
+      const settings = await getSkillConfig(input.project);
+      repository = settings?.skillRepo ?? input.project;
+      provider = settings?.skillProvider;
+    } catch {
+      // A policy can still be frozen without optional repository grounding.
+    }
+  }
+  return resolvePlaybookGraphAgentPolicies({
+    graph: input.graph,
+    enforce: true,
+    repository,
+    provider,
+  });
 }
 
 /** Content may only be edited while a version is still a draft. */
@@ -162,11 +219,20 @@ export async function publishVersion(
   assertLifecycleTransition(version.status, 'published');
   assertGraphWithinGuards(version.graph as PlaybookGraph);
   assertCursorAgentsUseReadOnlyMcp(version.graph as PlaybookGraph);
+  const policies = await assertPlaybookCapabilitiesForPublish({
+    graph: version.graph as PlaybookGraph,
+    userId: publishedByUserId,
+  });
+  const publishedGraph = stampPublishedStepTypeVersions(
+    version.graph as PlaybookGraph,
+    policies
+  );
 
   await db
     .update(playbookDefinitionVersions)
     .set({
       status: 'published',
+      graph: publishedGraph,
       publishedBy: publishedByUserId,
       publishedAt: new Date().toISOString(),
     })
@@ -199,6 +265,8 @@ interface CreateDefinitionInput {
   description?: string | null;
   graph: PlaybookGraph;
   createdByUserId: string;
+  templateKey?: string | null;
+  templateVersion?: number | null;
 }
 
 interface UpdateDraftInput {
@@ -215,6 +283,8 @@ interface PublishDraftInput {
   definitionId: string;
   publishedByUserId: string;
   expectedDraftUpdatedAt: string;
+  /** Used when an interview node's profileKey is a `${input.*}` binding. */
+  sampleRunInput?: Record<string, unknown>;
 }
 
 interface DeprecateVersionInput {
@@ -241,10 +311,54 @@ function toDefinition(row: DefinitionRow): PlaybookDefinition {
     project: row.project,
     name: row.name,
     description: row.description,
+    templateKey: row.templateKey ?? null,
+    templateVersion: row.templateVersion ?? null,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function enabledInterviewProfile(
+  options: Array<{ key?: string | null; enabled?: boolean | null }> | null | undefined,
+  profileKey: string,
+): boolean {
+  const key = profileKey.trim();
+  if (!key) return false;
+  return (options ?? []).some(
+    (option) =>
+      Boolean(option.key?.trim()) && option.key?.trim() === key && option.enabled !== false,
+  );
+}
+
+/**
+ * Interview publish resolves each node's profileKey against the target project.
+ * A `${input.*}` binding is substituted from the publisher's sample run input.
+ * The check runs before the draft is copied into an immutable version.
+ */
+async function assertInterviewProfilesForPublish(
+  project: string,
+  graph: PlaybookGraph,
+  sampleRunInput: Record<string, unknown> | undefined,
+): Promise<void> {
+  const interviewNodes = graph.nodes.filter((node) => node.stepType === 'interview');
+  if (interviewNodes.length === 0) return;
+
+  const { resolveSkillConfig } = await import('./projectSettingsService');
+  const { resolvePlaybookBindings } = await import('./playbookBindingResolver');
+  const skillConfig = await resolveSkillConfig({ project });
+  const options = skillConfig?.interviewSkillOptions;
+
+  for (const node of interviewNodes) {
+    const raw = typeof node.config?.profileKey === 'string' ? node.config.profileKey.trim() : '';
+    const resolved = raw.includes('${')
+      ? resolvePlaybookBindings(raw, { input: sampleRunInput ?? {}, steps: {} })
+      : raw;
+    const key = typeof resolved === 'string' ? resolved.trim() : '';
+    if (!key || !enabledInterviewProfile(options, key)) {
+      throw new PlaybookInterviewProfilePublishError(project, key || raw || '(blank)');
+    }
+  }
 }
 
 function toDraft(row: VersionRow): PlaybookDefinitionDraft {
@@ -306,6 +420,8 @@ export async function createDefinition(
         project: input.project,
         name: input.name.trim(),
         description: input.description ?? null,
+        templateKey: input.templateKey ?? null,
+        templateVersion: input.templateVersion ?? null,
         createdBy: input.createdByUserId,
       })
       .returning();
@@ -436,8 +552,19 @@ export async function publishDraft(
     );
     assertGraphWithinGuards(draft.graph);
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
+    const policies = await assertPlaybookCapabilitiesForPublish({
+      graph: draft.graph,
+      project: input.project,
+      userId: input.publishedByUserId,
+    });
+    await assertInterviewProfilesForPublish(
+      input.project,
+      draft.graph,
+      input.sampleRunInput,
+    );
 
     const publishedAt = new Date().toISOString();
+    const publishedGraph = stampPublishedStepTypeVersions(draft.graph, policies);
     const [advancedDraft] = await tx
       .update(playbookDefinitionVersions)
       .set({
@@ -460,12 +587,18 @@ export async function publishDraft(
       .values({
         definitionId: draft.definitionId,
         versionNumber: draft.versionNumber,
-        graph: draft.graph,
+        graph: publishedGraph,
         status: 'published',
         publishedBy: input.publishedByUserId,
         publishedAt,
       })
       .returning();
+
+    await copyLayoutToPublishedVersion(tx, {
+      fromVersionId: draft.id,
+      toVersionId: publishedVersion.id,
+      graph: draft.graph as PlaybookGraph,
+    });
 
     return {
       publishedVersion: toPublishedSummary(publishedVersion),
@@ -476,6 +609,29 @@ export async function publishDraft(
 }
 
 /** Returns project-scoped definition identity, retained draft, and complete immutable history. */
+export async function getVersionGraph(
+  project: string,
+  definitionId: string,
+  versionId: string
+): Promise<PlaybookGraph> {
+  const [row] = await db
+    .select({ graph: playbookDefinitionVersions.graph })
+    .from(playbookDefinitionVersions)
+    .innerJoin(
+      playbookDefinitions,
+      eq(playbookDefinitions.id, playbookDefinitionVersions.definitionId)
+    )
+    .where(
+      and(
+        eq(playbookDefinitionVersions.id, versionId),
+        eq(playbookDefinitions.id, definitionId),
+        eq(playbookDefinitions.project, project)
+      )
+    );
+  if (!row) throw new PlaybookVersionNotFoundError(versionId);
+  return row.graph as PlaybookGraph;
+}
+
 export async function getDefinitionDetail(
   project: string,
   definitionId: string

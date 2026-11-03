@@ -10,7 +10,7 @@
  * source of truth; action mutations invalidate and re-read it rather than editing cached rows.
  */
 import React from 'react';
-import { PlaybookDefinitionPanel } from './PlaybookDefinitionPanel';
+import { ArrowLeft } from 'lucide-react';
 import { PlaybookRunList } from './PlaybookRunList';
 import { usePlaybookRuns } from '../hooks/usePlaybookRuns';
 import styles from './PlaybookStatusView.module.css';
@@ -32,6 +32,9 @@ export const PlaybookStatusView: React.FC<PlaybookStatusViewProps> = ({ selected
   return (
     <div className={styles.view} {...{ 'data-testid': 'playbook-status-view' }}>
       <header className={styles.header}>
+        <a href="/playbooks" className={styles.backLink} data-testid="playbook-runs-back">
+          <ArrowLeft size={14} aria-hidden /> Playbooks
+        </a>
         <h1 className={styles.title}>Playbook runs</h1>
         <p className={styles.hint}>
           {assignedFilter
@@ -39,14 +42,9 @@ export const PlaybookStatusView: React.FC<PlaybookStatusViewProps> = ({ selected
             : `Live step status for ${selectedProject}, read from Apex's own tables.`}
         </p>
         {assignedFilter ? (
-          <a href="/playbooks" data-testid="playbook-clear-assigned-filter">Show all runs</a>
+          <a href="/playbooks?view=runs" data-testid="playbook-clear-assigned-filter">Show all runs</a>
         ) : null}
       </header>
-
-      <PlaybookDefinitionPanel
-        project={selectedProject}
-        {...{ 'data-testid': 'playbook-definitions-panel' }}
-      />
 
       {isPending ? (
         <p className={styles.loading} {...{ 'data-testid': 'playbook-runs-loading' }}>

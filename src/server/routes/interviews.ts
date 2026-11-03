@@ -1,7 +1,7 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { requirePermission, requireGroupMembership } from '../middleware/rbac';
+import { requireAnyPermission, requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
@@ -23,10 +23,13 @@ import {
 } from '../services/artifactUsageContext';
 import { fixPrdContentWithBedrock, fixPrdBacklogWithBedrock, fixDesignDocSectionWithBedrock, regeneratePrdContentRegionWithBedrock, regeneratePrdBacklogItemWithBedrock, regenerateMarkdownRegionWithBedrock, BedrockModelTruncatedError } from '../services/bedrockService';
 import {
+  canCompleteInterviewAndGeneratePrd,
   createInterview,
   deleteInterview,
   getInterview,
+  INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE,
   listInterviews,
+  updateInterviewPhaseAssignments,
   updateInterviewStatus,
   updateInterviewTitle,
 } from '../services/interviewService';
@@ -45,7 +48,10 @@ import type {
   AddDesignModuleLinkRequest,
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
-import { getActiveUsers } from '../services/rbacService';
+import { getActiveUsers, getUserPermissions } from '../services/rbacService';
+import { BUILDS_VIEW } from '../../shared/types/buildAccess';
+import { BUILD_INTAKE_OPTION_KEY } from '../../shared/types/buildPreflight';
+import { getUserGroupNames } from '../services/groupService';
 import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
   createPrd,
@@ -73,6 +79,7 @@ import {
   triggerFixCoverageGaps,
   acceptFixCoverageGaps,
   overridePrdReadiness,
+  forceSubmitForReview,
   revertPrdSection,
   dismissPrdFixSession,
   applyProposedPrdChanges,
@@ -100,13 +107,34 @@ import {
   markValidationReady,
   overrideDesignDocValidation,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript } from '../services/chatAgentService';
+import {
+  approveInterviewBrief,
+  formatInterviewBriefForPrd,
+  getApprovedInterviewBriefForPrd,
+  getInterviewBrief,
+  InterviewBriefError,
+  saveInterviewBrief,
+} from '../services/interviewBriefService';
+import { draftInterviewBriefSections } from '../services/interviewOrchestratorService';
+import {
+  approveBuildBrief,
+  BuildBriefError,
+  draftBuildBrief,
+  getBuildBriefAnalysis,
+  getRedactedBuildBrief,
+  saveBuildBrief,
+} from '../services/buildBriefService';
+import { isBuildIntakeInterview } from '../services/buildIntakeAccess';
+import { buildIntakeInterviewOf, requireBriefEditor, requireBriefReader } from '../middleware/buildIntakeBrief';
+
+const BUILD_REQUEST_NO_PRD_MESSAGE = 'Build requests do not create a PRD.';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
-import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
+import { canCreateDesignDocAssistantThread, isBuildIntakeParticipant } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
 import {
   getTestCases,
@@ -763,7 +791,28 @@ router.put('/prds/:prdId/backlog', requirePermission('interviews:manage'), async
   }
 });
 
-router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async (req, res, next) => {
+/**
+ * `requirePermission` resolves roles for the request's project, and this route
+ * carries only the PRD id. Without the PRD's project it falls back to global
+ * roles and rejects users whose access comes from a project-scoped role, even
+ * though the PRD page (scoped to that project) offered them the action.
+ */
+async function withPrdProject(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.prds.findFirst({
+      where: eq(prdsTable.id, req.params.prdId),
+      columns: { project: true },
+    });
+    if (row?.project) {
+      req.headers['x-apex-project'] = row.project;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/prds/:prdId/submit', withPrdProject, requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { prdApproverIds, designDocApproverIds, designPrototypeApproverIds, qaApproverIds } = req.body as {
@@ -772,12 +821,17 @@ router.post('/prds/:prdId/submit', requirePermission('interviews:manage'), async
       designPrototypeApproverIds?: string[];
       qaApproverIds?: string[];
     };
-    await submitForReview(req.params.prdId, userId, {
-      prdApproverIds: prdApproverIds ?? [],
-      designDocApproverIds: designDocApproverIds ?? [],
-      designPrototypeApproverIds: designPrototypeApproverIds ?? [],
-      qaApproverIds: qaApproverIds ?? [],
-    });
+    await submitForReview(
+      req.params.prdId,
+      userId,
+      {
+        prdApproverIds: prdApproverIds ?? [],
+        designDocApproverIds: designDocApproverIds ?? [],
+        designPrototypeApproverIds: designPrototypeApproverIds ?? [],
+        qaApproverIds: qaApproverIds ?? [],
+      },
+      { isSuperAdmin: isSuperAdminRequest(req) },
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -1327,27 +1381,12 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       userId,
     });
 
-    void sendMessage(
-      thread.id,
-      'Introduce yourself as Apex, the PRD assistant. ' +
-        'In 3–5 short bullet points, summarize what you can help with in this context: ' +
-        'editing PRD content, adding new requirements/sections, answering questions about the PRD, ' +
-        'resolving review comments, and refining the backlog. ' +
-        'Mention that when you make changes, they appear as a proposed diff for the owner to review and accept. ' +
-        'Keep it concise and friendly — this is the first thing the user sees.',
-    ).catch((err: unknown) => {
-      console.error(
-        `[interviews] PRD assistant kickoff failed (prdId=${req.params.prdId}):`,
-        err,
-      );
-    });
-
     await db
       .update(prdsTable)
       .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(prdsTable.id, req.params.prdId));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }
@@ -1878,6 +1917,22 @@ router.post('/prds/:prdId/override-readiness', requirePermission('interviews:man
   }
 });
 
+// POST /prds/:prdId/force-submit — super-admin escape hatch to pending_review, with an audited reason
+router.post('/prds/:prdId/force-submit', async (req, res, next) => {
+  try {
+    if (!isSuperAdminRequest(req)) {
+      res.status(403).json({ error: 'Only super admins can force submit a PRD for review' });
+      return;
+    }
+    const userId = getUserId(req);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : '';
+    const result = await forceSubmitForReview(req.params.prdId, userId, reason, getDisplayName(req));
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // PATCH /prds/:prdId/revert-section — revert to baseline
 router.patch('/prds/:prdId/revert-section', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
@@ -2380,7 +2435,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       .set({ docAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }
@@ -3528,7 +3583,42 @@ router.get('/:id/usage', requirePermission('interviews:view'), async (req, res, 
   }
 });
 
-router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
+/**
+ * `interviews:view`, or `builds:view` on a build-intake interview for its
+ * requester, a Project Admin or a Platform Admin.
+ */
+async function allowBuildIntakeParticipant(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.interviews.findFirst({
+      where: eq(interviewsTable.id, req.params.id),
+      columns: { authorId: true, project: true, playbookProfileKey: true },
+    });
+    if (
+      row?.playbookProfileKey === BUILD_INTAKE_OPTION_KEY
+      && await isBuildIntakeParticipant(getUserId(req), row.authorId ?? '', row.project)
+    ) {
+      next();
+      return;
+    }
+    requirePermission('interviews:view')(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+}
+
+const requireInterviewReadOrBuildsView = requireAnyPermission('interviews:view', BUILDS_VIEW);
+
+const requireInterviewRead: RequestHandler = (req, res, next) => {
+  void requireInterviewReadOrBuildsView(req, res, (err?: unknown) => {
+    if (err) {
+      next(err);
+      return;
+    }
+    void allowBuildIntakeParticipant(req, res, next);
+  });
+};
+
+router.get('/:id', requireInterviewRead, async (req, res, next) => {
   try {
     const interview = await getInterview(req.params.id);
     if (!interview) {
@@ -3541,12 +3631,50 @@ router.get('/:id', requirePermission('interviews:view'), async (req, res, next) 
   }
 });
 
-router.patch('/:id', requirePermission('interviews:manage'), async (req, res, next) => {
+router.patch('/:id', async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const { status, title } = req.body as { status?: string; title?: string };
-    if (status) await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);
-    if (title) await updateInterviewTitle(req.params.id, userId, title);
+    const { status, title, phaseAssignments } = req.body as {
+      status?: string;
+      title?: string;
+      phaseAssignments?: {
+        discoveryAssigneeId?: string | null;
+        deliveryAssigneeId?: string | null;
+        technicalAssigneeId?: string | null;
+      };
+    };
+    const needsManage = Boolean(title)
+      || Boolean(phaseAssignments)
+      || (status != null && status !== 'complete');
+    let hasManage = false;
+    if (needsManage) {
+      const perms = await getUserPermissions(userId, resolveRequestProject(req));
+      hasManage = isSuperAdminRequest(req) || perms.has('interviews:manage');
+    }
+    const denyManage = () => {
+      res.status(403).json({ error: 'Forbidden', missing: ['interviews:manage'] });
+    };
+    if (status) {
+      if (status !== 'complete' && !hasManage) {
+        denyManage();
+        return;
+      }
+      await updateInterviewStatus(req.params.id, userId, status as InterviewStatus);
+    }
+    if (title) {
+      if (!hasManage) {
+        denyManage();
+        return;
+      }
+      await updateInterviewTitle(req.params.id, userId, title);
+    }
+    if (phaseAssignments) {
+      if (!hasManage) {
+        denyManage();
+        return;
+      }
+      await updateInterviewPhaseAssignments(req.params.id, userId, phaseAssignments);
+    }
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -3563,7 +3691,146 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
   }
 });
 
-router.post('/:interviewId/prds', requirePermission('interviews:manage'), async (req, res, next) => {
+function sendBuildBriefError(res: Response, err: unknown, next: NextFunction): void {
+  if (err instanceof BuildBriefError) {
+    res.status(err.statusCode).json({ error: err.message, ...(err.draftFailed ? { draftFailed: true } : {}) });
+    return;
+  }
+  if (err instanceof InterviewBriefError) {
+    res.status(err.statusCode).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
+
+const notBuildIntake: RequestHandler = (_req, res) => {
+  res.status(404).json({ error: 'Interview not found' });
+};
+
+const requireBriefEditorOrManager = () => requireBriefEditor([
+  requirePermission('interviews:manage'),
+  requireGroupMembership('BA', 'Manager', 'Product-Owner'),
+]);
+
+router.get('/:id/brief', requireInterviewRead, requireBriefReader([]), async (req, res, next) => {
+  try {
+    const brief = buildIntakeInterviewOf(res)
+      ? await getRedactedBuildBrief(req.params.id)
+      : await getInterviewBrief(req.params.id);
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id/brief/analysis', requireBriefReader([notBuildIntake]), async (req, res, next) => {
+  try {
+    res.json(await getBuildBriefAnalysis({ interviewId: req.params.id, viewerId: getUserId(req) }));
+  } catch (err) {
+    sendBuildBriefError(res, err, next);
+  }
+});
+
+router.put('/:id/brief', requireBriefEditorOrManager(), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) {
+    try {
+      res.json(await saveBuildBrief({
+        interviewId: req.params.id,
+        actorId: getUserId(req),
+        sections: req.body?.sections,
+        requirements: req.body?.requirements,
+      }));
+    } catch (err) {
+      sendBuildBriefError(res, err, next);
+    }
+    return;
+  }
+  try {
+    const brief = await saveInterviewBrief({
+      interviewId: req.params.id,
+      sections: req.body?.sections,
+      savedBy: getUserId(req),
+    });
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/brief/draft', requireBriefEditorOrManager(), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) {
+    try {
+      res.json(await draftBuildBrief({ interviewId: req.params.id, actorId: getUserId(req), mode: 'manual' }));
+    } catch (err) {
+      sendBuildBriefError(res, err, next);
+    }
+    return;
+  }
+  try {
+    const sections = await draftInterviewBriefSections({ interviewId: req.params.id });
+    const brief = await saveInterviewBrief({
+      interviewId: req.params.id,
+      sections,
+      savedBy: getUserId(req),
+    });
+    res.json(brief);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const BRIEF_APPROVE_FORBIDDEN_MESSAGE =
+  'Only the author, an interview section owner, a project admin, a platform admin, or a BA, Manager, or Product Owner with interviews:manage can approve this interview brief';
+const BRIEF_APPROVER_GROUPS = ['BA', 'Manager', 'Product-Owner'];
+
+async function approveBuildIntakeBrief(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.json(await approveBuildBrief({ interviewId: req.params.id, actorId: getUserId(req) }));
+  } catch (err) {
+    sendBuildBriefError(res, err, next);
+  }
+}
+
+router.post('/:id/brief/approve', requireBriefEditor([]), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) return approveBuildIntakeBrief(req, res, next);
+  try {
+    const userId = getUserId(req);
+    const interview = await getInterview(req.params.id);
+    if (!interview) {
+      res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+    const completer = await canCompleteInterviewAndGeneratePrd(userId, interview);
+    let allowed = completer;
+    if (!allowed && isSuperAdminRequest(req)) {
+      allowed = true;
+    }
+    if (!allowed) {
+      const perms = await getUserPermissions(userId, resolveRequestProject(req));
+      if (perms.has('interviews:manage')) {
+        if (perms.has('admin:roles')) {
+          allowed = true;
+        } else {
+          const groups = await getUserGroupNames(userId);
+          allowed = BRIEF_APPROVER_GROUPS.some((group) => groups.includes(group));
+        }
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({ error: BRIEF_APPROVE_FORBIDDEN_MESSAGE });
+      return;
+    }
+    const result = await approveInterviewBrief({
+      interviewId: req.params.id,
+      approvedBy: userId,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:interviewId/prds', async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { chatThreadId, title, model, kickoffGeneration, groundingPolicy } = req.body as {
@@ -3583,6 +3850,31 @@ router.post('/:interviewId/prds', requirePermission('interviews:manage'), async 
     if (!interview) {
       res.status(404).json({ error: 'Interview not found' });
       return;
+    }
+    if (isBuildIntakeInterview(interview)) {
+      res.status(409).json({ error: BUILD_REQUEST_NO_PRD_MESSAGE });
+      return;
+    }
+    const canGenerate = await canCompleteInterviewAndGeneratePrd(userId, interview);
+    if (!canGenerate) {
+      res.status(403).json({ error: INTERVIEW_COMPLETE_FORBIDDEN_MESSAGE });
+      return;
+    }
+
+    const approvedBrief = await getApprovedInterviewBriefForPrd(req.params.interviewId);
+    if (interview.playbookRunId && !approvedBrief) {
+      res.status(409).json({ error: 'Approve the interview brief before generating a PRD.' });
+      return;
+    }
+    if (approvedBrief) {
+      const updated = await updateThreadKickoffTranscript(
+        chatThreadId,
+        formatInterviewBriefForPrd(approvedBrief),
+      );
+      if (!updated) {
+        res.status(409).json({ error: 'The PRD thread could not be prepared from the approved brief.' });
+        return;
+      }
     }
 
     const readinessEnabled = await isProjectRepositoryCheckoutReadinessEnabled({

@@ -51,3 +51,20 @@ resource "azurerm_role_assignment" "grounding_staging_blob_contributor" {
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
 }
+
+# Large Playbook step output stays private to the Apex application. The App
+# Service identity reads and writes this container; callers receive output only
+# through the authenticated Playbook route.
+resource "azurerm_role_assignment" "playbook_step_output_blob_contributor" {
+  scope                = azurerm_storage_container.shared["playbook-step-outputs"].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app.main.identity[0].principal_id
+}
+
+resource "azurerm_role_assignment" "playbook_step_output_staging_blob_contributor" {
+  count = var.enable_staging_slot && !var.staging_slot_shares_app_identity ? 1 : 0
+
+  scope                = azurerm_storage_container.shared["playbook-step-outputs"].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}

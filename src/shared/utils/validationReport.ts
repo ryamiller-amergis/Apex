@@ -66,42 +66,134 @@ export function collectValidationGaps(
   return fromRoot;
 }
 
+const OVERALL_PERCENT_KEYS = [
+  'overall_score',
+  'overall_percentage',
+  'overall_percent',
+  'overall_pct',
+  'overall',
+] as const;
+
+const PERCENT_KEYS = [
+  'percentage',
+  'percent',
+  'pct',
+  'score_pct',
+  'weighted_percentage',
+  'weighted_pct',
+  'overall_score',
+  'score',
+  'value',
+] as const;
+
+/** Section lists the prd-spec-review skill scores on its 0–3 rubric. */
+const RUBRIC_SECTION_KEYS = ['prd_sections', 'backlog_sections'] as const;
+const RUBRIC_MAX_SECTION_SCORE = 3;
+
 /**
- * Resolve the overall percentage from a scorecard, tolerating the alternate
- * shape where the skill nests percentages under `scores` instead of writing a
- * top-level `overall_score`. Returns null when no finite percentage is present.
+ * Resolve the overall percentage from a scorecard. Prefers a percentage the
+ * agent wrote (top-level, `summary`, `scores`, or `files[]`); only when none is
+ * present does it apply the skill's weighted 0–3 formula to the stored section
+ * scores. Returns null when nothing usable is present.
  */
 export function resolveScorecardOverallScore(raw: unknown): number | null {
   const record = asRecord(raw);
   if (!record) return null;
 
-  const direct = finiteNumber(record.overall_score);
+  const direct = firstPercent(record, OVERALL_PERCENT_KEYS);
   if (direct !== null) return direct;
+
+  const summary = asRecord(record.summary);
+  if (summary) {
+    const fromSummary = firstPercent(summary, OVERALL_PERCENT_KEYS);
+    if (fromSummary !== null) return fromSummary;
+  }
 
   const scores = asRecord(record.scores);
   if (scores) {
-    const overall = finiteNumber(scores.overall)
-      ?? finiteNumber(asRecord(scores.overall)?.percentage);
+    const overall = firstPercent(scores, OVERALL_PERCENT_KEYS);
     if (overall !== null) return overall;
 
     const parts = Object.entries(scores)
-      .filter(([key]) => key !== 'overall')
-      .map(([, value]) => finiteNumber(value) ?? finiteNumber(asRecord(value)?.percentage))
-      .filter((value): value is number => value !== null);
-    if (parts.length > 0) {
-      return parts.reduce((sum, value) => sum + value, 0) / parts.length;
-    }
+      .filter(([key]) => !(OVERALL_PERCENT_KEYS as readonly string[]).includes(key))
+      .map(([, value]) => percentOf(value));
+    const average = averageOf(parts);
+    if (average !== null) return average;
   }
 
   const files = Array.isArray(record.files) ? record.files : [];
-  const fileScores = files
-    .map((file) => finiteNumber(asRecord(file)?.score))
-    .filter((value): value is number => value !== null);
-  if (fileScores.length > 0) {
-    return fileScores.reduce((sum, value) => sum + value, 0) / fileScores.length;
-  }
+  const fileAverage = averageOf(files.map((file) => percentOf(file)));
+  if (fileAverage !== null) return fileAverage;
 
+  return averageOf(RUBRIC_SECTION_KEYS.map((key) => rubricSectionsPercent(record[key])));
+}
+
+function firstPercent(record: Record<string, unknown>, keys: readonly string[]): number | null {
+  for (const key of keys) {
+    const value = percentOf(record[key]);
+    if (value !== null) return value;
+  }
   return null;
+}
+
+/** A number, a "82%" string, `{ score, max }`, or a record carrying a percent field. */
+function percentOf(value: unknown): number | null {
+  const direct = finitePercent(value);
+  if (direct !== null) return direct;
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const max = finiteNumber(record.max) ?? finiteNumber(record.out_of) ?? finiteNumber(record.max_score);
+  const earned = finiteNumber(record.score) ?? finiteNumber(record.value);
+  if (max !== null && max > 0 && earned !== null) return (earned / max) * 100;
+
+  for (const key of PERCENT_KEYS) {
+    const pct = finitePercent(record[key]);
+    if (pct !== null) return pct;
+  }
+  return null;
+}
+
+/** Applies `Σ(score × weight) / (3 × Σ weight) × 100`; null if any score is off the 0–3 rubric. */
+function rubricSectionsPercent(value: unknown): number | null {
+  const entries = Array.isArray(value)
+    ? value
+    : asRecord(value)
+      ? Object.values(value as Record<string, unknown>)
+      : [];
+  let weighted = 0;
+  let totalWeight = 0;
+  for (const entry of entries) {
+    const section = asRecord(entry);
+    const score = section ? finiteNumber(section.score) : finiteNumber(entry);
+    if (score === null) continue;
+    if (score < 0 || score > RUBRIC_MAX_SECTION_SCORE) return null;
+    const weight = section ? finiteNumber(section.weight) ?? 1 : 1;
+    if (weight <= 0) continue;
+    weighted += score * weight;
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? (weighted / (RUBRIC_MAX_SECTION_SCORE * totalWeight)) * 100 : null;
+}
+
+function averageOf(values: Array<number | null>): number | null {
+  const present = values.filter((value): value is number => value !== null);
+  return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) / present.length : null;
+}
+
+function finitePercent(value: unknown): number | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim().replace(/%$/, '').trim();
+    return trimmed === '' ? null : finiteNumber(trimmed);
+  }
+  return finiteNumber(value);
+}
+
+/** True for the placeholder Apex stores when the agent's scorecard had no usable score. */
+export function isUnusableValidationScorecard(
+  scorecard: Pick<ValidationScorecard, 'slug'> | null | undefined,
+): boolean {
+  return scorecard?.slug === 'validation-unusable';
 }
 
 /** Last-resort scorecard so a finished run always has something the UI can show. */

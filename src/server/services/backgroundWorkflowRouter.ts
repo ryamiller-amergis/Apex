@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type { PlaybookAgentRunPolicy } from '../../shared/types/playbookExecutionCapability';
 import type {
   BackgroundWorkflowClass,
   WorkflowRouteDecision,
@@ -54,6 +55,7 @@ const V2_WORKLOAD_LANE = 'document' as const;
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'prd',
+  'adr',
   'design-doc',
   'test-cases',
 ]);
@@ -108,6 +110,8 @@ export interface BackgroundWorkflowRouteInput {
    */
   agentRunId?: string;
   threadId: string;
+  /** App-Service-resolved policy for a Playbook agent step. */
+  playbookAgentPolicy?: PlaybookAgentRunPolicy;
   /** Worker-only preparation, evaluated lazily after the feature flag enables routing. */
   prepareWorker(): Promise<PreparedBackgroundWorkflowWorker>;
   runInProcess(): Promise<void> | void;
@@ -488,16 +492,51 @@ export function createBackgroundWorkflowRouter(
     };
   };
 
+  // With V2 on, a run that cannot reach a worker fails visibly instead of
+  // running on App Service, the same as the interactive lane.
+  const refusePreparation = async (
+    input: BackgroundWorkflowRouteInput,
+    reason: string,
+    startedAt: number,
+    error?: unknown,
+  ): Promise<WorkflowRouteDecision> => {
+    console.warn(
+      `[background-route] V2 run not started: ${reason} (workflow=${input.workflowClass}, runId=${input.destinationRun.runId})`
+      + (error !== undefined ? `: ${errorMessage(error)}` : ''),
+    );
+    safeTrack(
+      'background.materialization.outcome',
+      {
+        workflowClass: input.workflowClass,
+        project: input.destinationRun.project,
+        route: 'failed',
+        reason,
+      },
+      { durationMs: Math.max(0, now() - startedAt) },
+    );
+    routeDecision(input, 'failed', reason);
+    await Promise.resolve(
+      input.reportRecoverablePreparationFailure({
+        reason: 'materialization-unavailable',
+        workflowClass: input.workflowClass,
+        project: input.destinationRun.project,
+        runId: input.destinationRun.runId,
+      }),
+    ).catch(() => undefined);
+    return { route: 'failed', reason };
+  };
+
   const routeWorker = async (
     input: BackgroundWorkflowRouteInput,
     useV2Transport: boolean,
   ): Promise<WorkflowRouteDecision> => {
+    const recover = useV2Transport ? refusePreparation : recoverPreparation;
     const preparationStartedAt = now();
     let prepared: PreparedBackgroundWorkflowWorker;
     try {
       prepared = await input.prepareWorker();
     } catch (error) {
-      return recoverPreparation(
+      return recover(
         input,
         'worker-preparation-failed',
         preparationStartedAt,
@@ -521,7 +560,7 @@ export function createBackgroundWorkflowRouter(
         try {
           prepared = await input.prepareWorker();
         } catch (error) {
-          return recoverPreparation(
+          return recover(
             input,
             'worker-preparation-failed',
             preparationStartedAt,
@@ -539,7 +578,7 @@ export function createBackgroundWorkflowRouter(
           input.workflowClass,
         );
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'workspace-preparation-failed',
           preparationStartedAt,
@@ -570,6 +609,9 @@ export function createBackgroundWorkflowRouter(
           threadId: input.threadId,
           deadlineMs,
           scratchInputs: documentScratchInputs,
+          ...(input.playbookAgentPolicy
+            ? { playbookAgentPolicy: input.playbookAgentPolicy }
+            : {}),
           ...(targetGrounding
             ? {
                 groundedSha: targetGrounding.groundedSha,
@@ -630,7 +672,7 @@ export function createBackgroundWorkflowRouter(
       try {
         await clearGenerationOutput(prepared.threadWorkspacePath);
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'workspace-preparation-failed',
           preparationStartedAt,
@@ -660,12 +702,15 @@ export function createBackgroundWorkflowRouter(
         skillPath: prepared.skillPath,
         projectId: prepared.projectId,
         threadId: input.threadId,
+        ...(input.playbookAgentPolicy
+          ? { playbookAgentPolicy: input.playbookAgentPolicy }
+          : {}),
       };
       let dispatchedRunId: string;
       try {
         dispatchedRunId = await dispatch(snapshot);
       } catch (error) {
-        return recoverPreparation(
+        return recover(
           input,
           'worker-enqueue-failed',
           preparationStartedAt,
@@ -681,12 +726,74 @@ export function createBackgroundWorkflowRouter(
     }
 
     if (!isUsableTargetGrounding(prepared.targetGrounding, input.destinationRun)) {
-      return recoverPreparation(
+      return recover(
         input,
         'grounding-unavailable',
         preparationStartedAt,
       );
     }
+
+    // The V2 document worker checks out the grounded commit itself, so App
+    // Service neither reads its mirror nor prepares a checkout.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      try {
+        await clearGenerationOutput(prepared.threadWorkspacePath);
+      } catch {
+        return recover(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+      const v2Reason = 'v2-commit-only';
+      safeTrack(
+        'background.materialization.outcome',
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          route: 'worker',
+          reason: v2Reason,
+        },
+        { durationMs: Math.max(0, now() - preparationStartedAt) },
+      );
+      const v2ModelChoice = await resolveModelChoice(prepared.model, prepared.effort);
+      const v2Snapshot: ExecutionSnapshot = {
+        prompt: prepared.prompt,
+        model: v2ModelChoice.model,
+        effort: v2ModelChoice.effort,
+        workspaceRef: prepared.threadWorkspacePath,
+        groundedSha: prepared.targetGrounding.groundedSha,
+        repository: prepared.targetGrounding.repository,
+        workflowClass: input.workflowClass,
+        skillPath: prepared.skillPath,
+        projectId: prepared.projectId,
+        threadId: input.threadId,
+        ...(input.playbookAgentPolicy
+          ? { playbookAgentPolicy: input.playbookAgentPolicy }
+          : {}),
+      };
+      let v2RunId: string;
+      try {
+        v2RunId = await dispatch(v2Snapshot, prepared.targetGrounding);
+      } catch (error) {
+        return recover(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+          error,
+        );
+      }
+      routeDecision(input, 'worker', v2Reason);
+      return {
+        route: 'worker',
+        workspacePath: prepared.threadWorkspacePath,
+        runId: v2RunId,
+      };
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
 
     // PRD / design-doc / test-cases: prefer the bare mirror when the worker
     // can actually open it (same disk or HTTP). Else reuse the interview's
@@ -764,7 +871,7 @@ export function createBackgroundWorkflowRouter(
           repository: prepared.repository,
         });
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'materialization-failed',
           preparationStartedAt,
@@ -775,7 +882,7 @@ export function createBackgroundWorkflowRouter(
         materialized.state !== 'materialized'
         || !materialized.workspacePath
       ) {
-        return recoverPreparation(
+        return recover(
           input,
           'materialization-unavailable',
           preparationStartedAt,
@@ -788,7 +895,7 @@ export function createBackgroundWorkflowRouter(
           materialized.workspacePath,
         );
       } catch {
-        return recoverPreparation(
+        return recover(
           input,
           'workspace-preparation-failed',
           preparationStartedAt,
@@ -824,12 +931,15 @@ export function createBackgroundWorkflowRouter(
       skillPath: prepared.skillPath,
       projectId: prepared.projectId,
       threadId: input.threadId,
+      ...(input.playbookAgentPolicy
+        ? { playbookAgentPolicy: input.playbookAgentPolicy }
+        : {}),
     };
     let dispatchedRunId: string;
     try {
       dispatchedRunId = await dispatch(snapshot, prepared.targetGrounding);
     } catch (error) {
-      return recoverPreparation(
+      return recover(
         input,
         'worker-enqueue-failed',
         preparationStartedAt,

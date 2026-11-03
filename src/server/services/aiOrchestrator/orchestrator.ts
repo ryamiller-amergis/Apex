@@ -17,6 +17,8 @@ export type OrchestratorDeps = Readonly<{
   metrics?: OrchestratorMetrics;
   reconcilerIntervalMs?: number;
   signal?: AbortSignal;
+  /** Called after every reconciler pass, including failed ones. */
+  onReconcilerPass?: () => void;
 }>;
 
 export type Orchestrator = {
@@ -58,6 +60,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             err instanceof Error ? err.message : String(err),
           );
         }
+        deps.onReconcilerPass?.();
       };
       await runReconciler();
       reconcilerTimer = setInterval(() => {

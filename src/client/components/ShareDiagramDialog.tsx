@@ -12,6 +12,7 @@ import {
   useRevokeShare,
   useShareTargets,
 } from '../hooks/useDiagramShares';
+import { sortByLabel } from '../utils/sortByLabel';
 import dialogShell from './DiagramDialog.module.css';
 import styles from './ShareDiagramDialog.module.css';
 
@@ -340,7 +341,7 @@ export const ShareDiagramDialog: React.FC<ShareDiagramDialogProps> = ({
 
         <div className={styles.addForm} {...{ 'data-testid': 'share-add-form' }}>
           <ShareTargetPicker
-            targets={targetsQuery.data ?? []}
+            targets={sortByLabel(targetsQuery.data ?? [], (target) => target.displayName ?? target.email ?? target.userId)}
             isLoading={targetsQuery.isLoading}
             query={query}
             selectedUserId={selectedTarget?.userId ?? null}

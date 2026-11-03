@@ -64,6 +64,7 @@ import {
   isRemoteSearchConvergenceEnabled,
   isNativeReadEnabledForCaller,
   isRepoReadServiceEnabledForCaller,
+  isFlagEnabledForWholeProject,
 } from '../services/featureFlagService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -744,6 +745,38 @@ describe('evaluateFlags', () => {
 
     expect(result['repo-grounding-workspace-profile']).toBe(false);
   });
+
+  it('TBI-005 VT-15 enables workflow-human-evaluation for Apex only, and for nobody when disabled', async () => {
+    mockDb.query.featureFlags.findMany.mockResolvedValue([
+      {
+        ...baseFlag,
+        key: 'workflow-human-evaluation',
+        enabled: true,
+        rules: [{ type: 'project', value: 'Apex' }],
+      },
+    ]);
+
+    const apex = await evaluateFlags({ userId: 'user-1', project: 'Apex', groupIds: [] });
+    const beta = await evaluateFlags({ userId: 'user-1', project: 'Beta', groupIds: [] });
+
+    expect(apex['workflow-human-evaluation']).toBe(true);
+    expect(beta['workflow-human-evaluation']).toBe(false);
+
+    mockDb.query.featureFlags.findMany.mockResolvedValue([
+      {
+        ...baseFlag,
+        key: 'workflow-human-evaluation',
+        enabled: false,
+        rules: [{ type: 'project', value: 'Apex' }],
+      },
+    ]);
+
+    const apexOff = await evaluateFlags({ userId: 'user-1', project: 'Apex', groupIds: [] });
+    const betaOff = await evaluateFlags({ userId: 'user-1', project: 'Beta', groupIds: [] });
+
+    expect(apexOff['workflow-human-evaluation']).toBe(false);
+    expect(betaOff['workflow-human-evaluation']).toBe(false);
+  });
 });
 
 // ── isFeatureEnabled ─────────────────────────────────────────────────────────
@@ -1054,4 +1087,49 @@ describe('grounding rollout accessors', () => {
       ).resolves.toBe(false);
     },
   );
+});
+
+// ── isFlagEnabledForWholeProject ─────────────────────────────────────────────
+
+describe('isFlagEnabledForWholeProject', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const rule = (type: string, value: string | null) => ({
+    id: `rule-${type}-${value}`,
+    flagId: 'flag-1',
+    type,
+    value,
+    createdBy: null,
+    createdAt: '2026-01-01T00:00:00Z',
+  });
+
+  it.each([
+    ['a matching project rule', [rule('project', 'proj-a')], true],
+    ['an everyone rule', [rule('everyone', null)], true],
+    ['another project only', [rule('project', 'proj-b')], false],
+    ['user rules only', [rule('user', 'user-1')], false],
+    ['a caller rule on top of the project', [rule('project', 'proj-a'), rule('caller', 'prd')], false],
+    ['an environment rule on top of the project', [rule('project', 'proj-a'), rule('environment', 'local')], false],
+    ['no rules', [], false],
+  ])('returns the right answer for %s', async (_label, rules, expected) => {
+    mockDb.query.featureFlags.findFirst.mockResolvedValue({ ...baseFlag, rules });
+
+    await expect(isFlagEnabledForWholeProject('new-dashboard', 'proj-a')).resolves.toBe(expected);
+  });
+
+  it('returns false when the flag is off or archived', async () => {
+    mockDb.query.featureFlags.findFirst.mockResolvedValueOnce({
+      ...baseFlag,
+      enabled: false,
+      rules: [rule('project', 'proj-a')],
+    });
+    mockDb.query.featureFlags.findFirst.mockResolvedValueOnce({
+      ...baseFlag,
+      lifecycle: 'archived',
+      rules: [rule('project', 'proj-a')],
+    });
+
+    await expect(isFlagEnabledForWholeProject('new-dashboard', 'proj-a')).resolves.toBe(false);
+    await expect(isFlagEnabledForWholeProject('new-dashboard', 'proj-a')).resolves.toBe(false);
+  });
 });

@@ -79,6 +79,32 @@ describe('aiRunsWorker callback client', () => {
     expect(sleepImpl.mock.calls.map(([ms]) => ms)).toEqual([500, 1000]);
   });
 
+  it('retries a bootstrap request that hangs past the request timeout', async () => {
+    const hangUntilAborted = (_url: string, init: RequestInit): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    const fetchImpl = jest.fn()
+      .mockImplementationOnce(hangUntilAborted)
+      .mockResolvedValueOnce(response(200, {
+        projectId: 'project-1',
+        run: { id: 'run-1' },
+      }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+      requestTimeoutMs: 10,
+    });
+
+    await expect(client.getBootstrap({
+      runId: 'run-1',
+      dispatchMessageId: 'dispatch-1',
+    })).resolves.toEqual({ projectId: 'project-1', run: { id: 'run-1' } });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('gives up on a bootstrap failure that stays transient, rather than retrying forever', async () => {
     const fetchImpl = jest.fn().mockResolvedValue(response(500, { error: 'down' }));
     const client = createAiRunsCallbackClient({
@@ -150,6 +176,45 @@ describe('aiRunsWorker callback client', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(sleepImpl.mock.calls.map(([ms]) => ms)).toEqual([500, 1000]);
+  });
+
+  it('retries transcript progress, whose eventId makes a replay a no-op', async () => {
+    const fetchImpl = jest.fn()
+      .mockResolvedValueOnce(response(503, { error: 'restarting' }))
+      .mockResolvedValueOnce(response(200, { ok: true, cancelRequested: false }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-1',
+      kind: 'progress',
+      phase: 'implementation',
+      status: 'running',
+      eventId: '10000000-0000-4000-8000-000000000009',
+    })).resolves.toEqual({ ok: true, cancelRequested: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry progress without an eventId', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(response(503, { error: 'restarting' }));
+    const client = createAiRunsCallbackClient({
+      callbackBaseUrl: 'https://apex.example',
+      getToken: jest.fn().mockResolvedValue('token'),
+      fetchImpl: fetchImpl as never,
+      sleepImpl: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(client.postIngest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-1',
+      kind: 'progress',
+      phase: 'implementation',
+      status: 'running',
+    })).rejects.toBeInstanceOf(AiRunCallbackError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('retries a terminal report when the connection drops before any HTTP status', async () => {

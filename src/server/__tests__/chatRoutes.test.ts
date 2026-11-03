@@ -79,8 +79,10 @@ jest.mock('../services/wikiCatalog', () => ({
   saveWikiPage: jest.fn(),
 }));
 
+const mockIsBackgroundWorkflowThread = jest.fn().mockResolvedValue(false);
 jest.mock('../services/chatThreadRepository', () => ({
   toggleFlag: jest.fn(),
+  isBackgroundWorkflowThread: (...args: unknown[]) => mockIsBackgroundWorkflowThread(...args),
 }));
 
 jest.mock('../services/pgNotifyService', () => ({
@@ -107,6 +109,22 @@ jest.mock('../services/interactiveLiveBus', () => ({
 
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: jest.fn().mockResolvedValue(false),
+}));
+
+const mockGetMenuConfig = jest.fn();
+jest.mock('../services/menuSettingsService', () => ({
+  getMenuConfig: (...args: unknown[]) => mockGetMenuConfig(...args),
+}));
+
+const mockAssertCallerCanUseMcpServer = jest.fn();
+jest.mock('../services/mcpServerReadService', () => ({
+  assertCallerCanUseMcpServer: (...args: unknown[]) =>
+    mockAssertCallerCanUseMcpServer(...args),
+}));
+
+const mockGetUserPermissions = jest.fn().mockResolvedValue(new Set(['mcp-servers:view']));
+jest.mock('../services/rbacService', () => ({
+  getUserPermissions: (...args: unknown[]) => mockGetUserPermissions(...args),
 }));
 
 const mockDurableRetry = jest.fn();
@@ -154,6 +172,13 @@ jest.mock('../services/groupService', () => ({
 
 const mockResolveThreadAccess = jest.fn();
 const mockCanWriteThread = jest.fn();
+const mockPrepareAssistedInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
+const mockPrepareAutonomousInterviewTurn = jest.fn().mockResolvedValue({ internalContext: null });
+
+jest.mock('../services/interviewOrchestratorService', () => ({
+  prepareAssistedInterviewTurn: (...args: unknown[]) => mockPrepareAssistedInterviewTurn(...args),
+  prepareAutonomousInterviewTurn: (...args: unknown[]) => mockPrepareAutonomousInterviewTurn(...args),
+}));
 
 jest.mock('../services/threadAccessService', () => ({
   resolveThreadAccess: (...args: unknown[]) => mockResolveThreadAccess(...args),
@@ -169,6 +194,7 @@ import chatRouter, {
 } from '../routes/chat';
 import * as chatAgentService from '../services/chatAgentService';
 import { isFeatureEnabled } from '../services/featureFlagService';
+import { McpServerError } from '../services/mcpServerErrors';
 import type {
   AgentRunEventEnvelope,
   ChatThread,
@@ -910,6 +936,115 @@ describe('POST /api/chat/threads — Home pill admission (TBI-005)', () => {
   });
 });
 
+describe('POST /api/chat/threads — integration connection kickoff', () => {
+  function post(kickoff: Record<string, unknown>) {
+    return request(buildApp())
+      .post('/api/chat/threads')
+      .send({ kickoff: { project: 'MaxView', repo: 'MaxView', ...kickoff } });
+  }
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockIsSuperAdmin = false;
+    mockGetUserGroupIds.mockResolvedValue([]);
+    mockChatService.createThread.mockResolvedValue({ id: 'new-thread-id' } as ChatThread);
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'MaxView',
+      quickSkillPills: [{
+        label: 'App Knowledge',
+        skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+        allowedUserIds: ['user-1'],
+        allowedGroupIds: [],
+      }],
+      quickMcpPills: [],
+    });
+    (isFeatureEnabled as jest.Mock).mockResolvedValue(true);
+    mockGetMenuConfig.mockResolvedValue({
+      project: 'MaxView',
+      enabledViews: ['mcp-servers'],
+      updatedBy: null,
+    });
+    mockAssertCallerCanUseMcpServer.mockResolvedValue(undefined);
+    mockGetUserPermissions.mockResolvedValue(new Set(['mcp-servers:view']));
+  });
+
+  afterEach(() => {
+    mockIsSuperAdmin = false;
+    mockResolveSkillConfig.mockResolvedValue(null);
+    (isFeatureEnabled as jest.Mock).mockResolvedValue(false);
+  });
+
+  it('refuses an integration kickoff when the caller is not on the connection allow-list', async () => {
+    mockAssertCallerCanUseMcpServer.mockRejectedValue(
+      new McpServerError(403, 'You cannot use this connection', 'NOT_ALLOWED'),
+    );
+
+    const res = await post({
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('NOT_ALLOWED');
+    expect(mockChatService.createThread).not.toHaveBeenCalled();
+  });
+
+  it('creates an integration thread when the caller is allowed on that connection', async () => {
+    const res = await post({
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'MaxView');
+    expect(mockAssertCallerCanUseMcpServer).toHaveBeenCalledWith({
+      project: 'MaxView',
+      connectionId: 'conn-clerk',
+      userId: 'user-1',
+    });
+    expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates an MCP-server thread without Home pill admission', async () => {
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'settings-1',
+      project: 'MaxView',
+      quickSkillPills: [{
+        label: 'App Knowledge',
+        skillPath: '/.cursor/skills/app-knowledge/SKILL.md',
+        allowedUserIds: ['user-2'],
+        allowedGroupIds: [],
+      }],
+      quickMcpPills: [],
+    });
+
+    const res = await post({
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockGetUserGroupIds).not.toHaveBeenCalled();
+    expect(mockChatService.createThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an integration kickoff without mcp-servers:view', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:view']));
+
+    const res = await post({
+      assistantType: 'mcp-server',
+      mcpServerId: 'conn-clerk',
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.missing).toEqual(['mcp-servers:view']);
+    expect(mockAssertCallerCanUseMcpServer).not.toHaveBeenCalled();
+    expect(mockChatService.createThread).not.toHaveBeenCalled();
+  });
+});
+
 describe('Home pill admission is creation-only (PBI-007 / TBI-005 DoD-4)', () => {
   const threadId = 'owned-thread-id';
   const revokedSkillPill = {
@@ -1164,6 +1299,58 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
   });
 });
 
+describe('POST /api/chat/threads/:id/messages — background document threads', () => {
+  const threadId = 'validation-thread-id';
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: {
+        id: threadId,
+        userId: 'user-1',
+        kickoff: { project: 'Apex', repo: 'Apex' },
+        messages: [],
+        status: 'idle',
+        workspaceDir: '/tmp/ws',
+        flagged: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastActivityAt: '2026-01-01T00:00:00.000Z',
+      },
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    mockIsBackgroundWorkflowThread.mockResolvedValue(false);
+  });
+
+  it('refuses a chat turn on a thread owned by a document job', async () => {
+    mockIsBackgroundWorkflowThread.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'what is on the home page?' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('BACKGROUND_WORKFLOW_THREAD');
+    expect(mockIsBackgroundWorkflowThread).toHaveBeenCalledWith(threadId);
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('accepts a chat turn on an ordinary thread', async () => {
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'what is on the home page?' });
+
+    expect(res.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/chat/threads/:id/messages — cached grounding delegation', () => {
   const threadId = 'cached-grounding-thread-id';
   const idleThread = {
@@ -1274,6 +1461,115 @@ describe('POST /api/chat/threads/:id/messages — cached grounding delegation', 
     expect(res.status).toBe(202);
     expect(mockGetAdoTokenForUser).not.toHaveBeenCalled();
     expect(mockRegisterChatAdoWriteTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-ASSIST-6 — assisted messages prepare specialist context before sendMessage', () => {
+  const threadId = 'assisted-interview-thread';
+  const baText = 'Cashiers need a faster close.';
+  const idleThread = {
+    id: threadId,
+    userId: 'user-1',
+    kickoff: {
+      project: 'Apex',
+      repo: 'AI-Pilot',
+      skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+    },
+    messages: [],
+    status: 'idle',
+    workspaceDir: '/tmp/ws',
+    flagged: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastActivityAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  function threadWithMode(mode: 'human_led' | 'multi_agent_assisted' | null) {
+    return {
+      ...idleThread,
+      kickoff: {
+        ...idleThread.kickoff,
+        ...(mode
+          ? { playbookInterview: { snapshot: { mode } } }
+          : {}),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockPrepareAssistedInterviewTurn.mockResolvedValue({ internalContext: null });
+    mockPrepareAutonomousInterviewTurn.mockResolvedValue({ internalContext: null });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: idleThread,
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
+  });
+
+  it('prepares a multi-agent interview and sends the BA text with internal context', async () => {
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+    mockPrepareAutonomousInterviewTurn.mockResolvedValue({ internalContext });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: threadWithMode('multi_agent_assisted'),
+      access: 'owner',
+    });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: baText });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+    expect(mockPrepareAutonomousInterviewTurn).toHaveBeenCalledWith({
+      mainThreadId: threadId,
+      answerText: baText,
+    });
+    expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      baText,
+      undefined,
+      [],
+      expect.objectContaining({
+        internalContext,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+      }),
+    );
+  });
+
+  it('sends an ordinary or human-led message immediately and does not prepare a review', async () => {
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: threadWithMode('human_led'),
+      access: 'owner',
+    });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: baText });
+
+    expect(res.status).toBe(202);
+    expect(mockPrepareAutonomousInterviewTurn).not.toHaveBeenCalled();
+    expect(mockPrepareAssistedInterviewTurn).not.toHaveBeenCalled();
+    expect(mockChatService.sendMessage).toHaveBeenCalledWith(
+      threadId,
+      baText,
+      undefined,
+      [],
+      expect.objectContaining({
+        turnSkill: undefined,
+        turnIdPolicy: 'required',
+        legacyCompletion: 'detach',
+      }),
+    );
+    const sentOptions = mockChatService.sendMessage.mock.calls[0]?.[4] as { internalContext?: string } | undefined;
+    expect(sentOptions?.internalContext).toBeUndefined();
   });
 });
 
@@ -1598,5 +1894,6 @@ describe('POST /api/chat/threads/:id/runs/:runId/retry', () => {
       userId: 'user-1',
       toolGrant: undefined,
     });
+
   });
 });

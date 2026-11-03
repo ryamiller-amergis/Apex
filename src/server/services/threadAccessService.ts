@@ -5,8 +5,11 @@ import type { ChatThread } from '../../shared/types/chat';
 import { loadFullThread } from './chatThreadRepository';
 import { getThread } from './chatAgentService';
 import { getUserPermissions } from './rbacService';
-import { isAdminUser } from '../utils/rbacHelpers';
+import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
+import { isBuildIntakeThread } from './buildIntakeThread';
+import { canActOnBuildIntakeInterview, isBuildIntakeInterview } from './buildIntakeAccess';
+import { isBrainstormThread, resolveBrainstormThreadAccess } from './brainstormThread';
 
 export type ThreadAccess = 'owner' | 'read';
 
@@ -75,9 +78,16 @@ async function findThreadLink(threadId: string): Promise<ThreadLink | null> {
   return null;
 }
 
-async function userCanReadLinkedThread(userId: string): Promise<boolean> {
-  const perms = await getUserPermissions(userId);
-  return perms.has('interviews:view') || perms.has('chat:view_all');
+/**
+ * Who may see a build intake: the requester, a Project Admin of the build's
+ * project, or a Platform Admin. The build-intake write rule uses the same check.
+ */
+export async function isBuildIntakeParticipant(
+  userId: string,
+  requesterUserId: string,
+  project: string | null | undefined,
+): Promise<boolean> {
+  return canActOnBuildIntakeInterview(userId, { authorId: requesterUserId, project: project ?? null });
 }
 
 /**
@@ -93,8 +103,21 @@ export async function resolveThreadAccess(
   const thread = (await getThread(threadId)) ?? (await loadFullThread(threadId));
   if (!thread) return null;
 
+  // Runs before the owner shortcut so the flag, project and policy bind the creator too.
+  if (isBrainstormThread(thread)) {
+    const access = await resolveBrainstormThreadAccess(userId, threadId);
+    return access ? { access, thread } : null;
+  }
+
   if (thread.userId === userId) {
     return { access: 'owner', thread };
+  }
+
+  // chat:view_all and interviews:view do not reach a build-intake thread.
+  if (isBuildIntakeThread(thread)) {
+    return (await isBuildIntakeParticipant(userId, thread.userId, thread.kickoff.project))
+      ? { access: 'read', thread }
+      : null;
   }
 
   const perms = await getUserPermissions(userId);
@@ -123,13 +146,62 @@ export async function canWriteThread(userId: string, threadId: string): Promise<
   const thread = await loadFullThread(threadId);
   if (!thread) return false;
 
+  // Brainstorm writes go through /api/brainstorm only.
+  if (isBrainstormThread(thread)) return false;
+
   if (thread.userId === userId) return true;
 
   const link = await findThreadLink(threadId);
-  if (!link || link.kind !== 'design_doc_assistant') return false;
+  if (!link) return false;
 
-  if (await isAdminUser(userId)) return true;
+  if (link.kind === 'interview') {
+    return canAnswerInterview(userId, link.documentId);
+  }
+
+  if (link.kind !== 'design_doc_assistant') return false;
+
+  if (await isAdminUser(userId) || await isPlatformAdmin(userId)) return true;
   return isAssignedApprover(link.documentId, 'design_doc', userId);
+}
+
+/**
+ * Interview author, a selected section owner, a project admin, or a platform admin
+ * may answer questions on the interview thread.
+ */
+async function canAnswerInterview(userId: string, interviewId: string): Promise<boolean> {
+  const row = await db.query.interviews.findFirst({
+    where: eq(interviews.id, interviewId),
+    columns: {
+      authorId: true,
+      project: true,
+      prdOwnerId: true,
+      designDocOwnerId: true,
+      designPrototypeOwnerId: true,
+      testCaseOwnerId: true,
+      discoveryAssigneeId: true,
+      deliveryAssigneeId: true,
+      technicalAssigneeId: true,
+      playbookProfileKey: true,
+    },
+  });
+  if (!row) return false;
+  // Section owners and phase assignees do not reach a build-intake interview.
+  if (isBuildIntakeInterview(row)) return canActOnBuildIntakeInterview(userId, row);
+  if (
+    row.authorId === userId
+    || row.prdOwnerId === userId
+    || row.designDocOwnerId === userId
+    || row.designPrototypeOwnerId === userId
+    || row.testCaseOwnerId === userId
+    || row.discoveryAssigneeId === userId
+    || row.deliveryAssigneeId === userId
+    || row.technicalAssigneeId === userId
+  ) {
+    return true;
+  }
+  if (await isPlatformAdmin(userId)) return true;
+  if (row.project && await isProjectAdmin(userId, row.project)) return true;
+  return false;
 }
 
 /** Author, admin, or assigned approver may create / replace doc_assistant_thread_id on a design doc. */

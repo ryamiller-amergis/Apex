@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 16 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(16);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 19 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(19);
   });
 
   it('contains the expected keys in order', () => {
@@ -26,12 +26,15 @@ describe('menuSettings shared types', () => {
       'ui-lab',
       'qa-lab',
       'feature-requests',
-      'pdf-tools',
       'ai-cost',
       'design-module',
       'load-tests',
       'diagrams',
       'work-board',
+      'playbooks',
+      'builds',
+      'mcp-servers',
+      'brainstorm',
     ]);
   });
 
@@ -48,12 +51,15 @@ describe('menuSettings shared types', () => {
       'UI Lab',
       'QA Lab',
       'Apex Backlog',
-      'PDF Assembly Tool',
       'AI Cost Analytics',
       'Design Module',
       'Load Tests',
       'Diagrams',
       'Work Board',
+      'Playbooks',
+      'Builds',
+      'MCP Servers',
+      'Brainstorm',
     ]);
   });
 
@@ -68,12 +74,20 @@ describe('menuSettings shared types', () => {
     expect(keys).toContain('feature-requests');
     expect(keys).toContain('load-tests');
     expect(keys).toContain('diagrams');
+    expect(keys).toContain('mcp-servers');
   });
 
-  it('VT-04 / BR-011: diagrams is configurable but excluded from DEFAULT_ENABLED_MENU_VIEWS', () => {
-    expect(ALL_MENU_VIEWS).toContain('diagrams');
+  it('SC-1: integrations is configurable but omitted from DEFAULT_ENABLED_MENU_VIEWS', () => {
+    expect(ALL_MENU_VIEWS).toContain('mcp-servers');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('mcp-servers');
     expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
-    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 1);
+    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 3);
+  });
+
+  it('FEAT-002 VT-14: builds is configurable, labelled Builds, and opt-in', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toContainEqual({ key: 'builds', label: 'Builds' });
+    expect(ALL_MENU_VIEWS).toContain('builds');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('builds');
   });
 
   it('ProjectMenuConfig shape is correctly typed', () => {

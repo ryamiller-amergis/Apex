@@ -35,6 +35,14 @@ Table shapes live in `src/server/db/schema.ts` as Drizzle `pgTable` definitions.
 - Use `jsonb('col').$type<YourType>()` to add compile-time typing to JSONB columns.
 - Define `relations()` exports for any FK relationships — this enables the `db.query.*` relational API.
 
+### Table width
+
+Keep every table at 50 columns or fewer. `src/server/__tests__/schemaTableWidth.test.ts` enforces it.
+
+- When the same group of columns repeats per item (per workflow, per step, per channel), move the group into a child table keyed by the parent id and the item key. Adding an item is then a row, not a migration.
+- Postgres rejects a function call with more than 100 arguments (error 54023). Drizzle loads each related row by passing all its columns to one function, so a wide table breaks every relational include that loads it whole.
+- For project AI workflow settings, see `.cursor/rules/project-skill-settings.mdc`.
+
 ## Relational queries — prefer db.query.* for nested reads
 
 When loading a parent row with its related children, use the relational query API instead of multiple round-trips:
@@ -49,6 +57,12 @@ const result = await db.query.chatThreads.findFirst({
       with: { attachments: true },
     },
   },
+});
+
+// ✅ GOOD — select only the columns you use from a wide related table
+const config = await db.query.standupConfigs.findFirst({
+  where: eq(standupConfigs.id, configId),
+  with: { skillSettings: { columns: { skillRepo: true, skillBranch: true } } },
 });
 
 // ❌ BAD — three separate queries and manual grouping with Map

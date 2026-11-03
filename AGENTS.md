@@ -4,7 +4,7 @@ This file is the first-stop reference for AI agents operating within the Apex co
 
 ## Application Summary
 
-Apex is an internal product-building and project-management platform. It centralizes AI-guided design interviews, automated PRD/design doc generation, review workflows, daily standups, planning analytics, Azure DevOps integration, feature request triage, cloud cost tracking, guided walkthroughs, load testing, UI prototyping, PDF assembly, AI cost analytics, and design-module scoping into a single React + Express + PostgreSQL application.
+Apex is an internal product-building and project-management platform. It centralizes AI-guided design interviews, automated PRD/design doc generation, review workflows, daily standups, planning analytics, Azure DevOps integration, feature request triage, cloud cost tracking, guided walkthroughs, load testing, UI prototyping, AI cost analytics, and design-module scoping into a single React + Express + PostgreSQL application.
 
 ## Feature Map
 
@@ -24,7 +24,6 @@ Apex is an internal product-building and project-management platform. It central
 | Calendar & Work Items | `design-docs/calendar-work-item-assistant.md` | — | `azureDevOps.ts`, `calendarWorkItemAssistantService.ts` | `ScrumCalendar.tsx`, `UnscheduledList.tsx`, `DetailsPanel.tsx`, `CalendarWorkItemAssistantPanel.tsx` |
 | Guided Walkthroughs | — | `.cursor/skills/walkthrough-generation/SKILL.md`, `.cursor/skills/walkthrough-anchor-smart-tagging/SKILL.md`, `.cursor/skills/walkthrough-anchor-discovery/SKILL.md`, `.cursor/skills/create-walkthrough-data-testids/SKILL.md` | `walkthroughService.ts`, `walkthroughGenerationService.ts`, `walkthroughAiDraftService.ts`, `walkthroughAnchorRegistryService.ts`, `walkthroughAnchorSmartTaggingService.ts`, `walkthroughNotificationService.ts` | `WalkthroughCatalog.tsx`, `WalkthroughRenderer.tsx`, `GuidedWalkthroughHost.tsx`, `WalkthroughHelpPanel.tsx`, `ManualWalkthroughEditor.tsx`, `WalkthroughAnchorManagement.tsx` |
 | UI Lab | — | `.cursor/skills/ui-lab/SKILL.md` | `uiLabService.ts` | `UiLabView.tsx` |
-| PDF Assembly | `design-docs/pdf-assembly-three-panel-ux.md` | — | `pdfAssemblyService.ts`, `documentConversionService.ts` | `PdfAssemblyView.tsx`, `PdfDocumentSidebar.tsx` |
 | AI Cost Analytics | — | — | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `aiCostScheduler.ts` | `AiCostAnalytics.tsx`, `AiCostComparison.tsx` |
 | Design Module | — | `.cursor/skills/design-module-scoping/SKILL.md`, `.cursor/skills/design-module-doc/SKILL.md` | `designModuleScopingService.ts` | `DesignModuleView.tsx`, `DesignModuleFormModal.tsx`, `DesignModuleFileTree.tsx` |
 | Load Testing | — | `.cursor/skills/k6-load-test-generation/SKILL.md` | `loadTestService.ts`, `loadTestAiGenerationService.ts` | `LoadTestsListPage.tsx`, `LoadTestDefinitionBuilderView.tsx`, `LoadTestRunDetailView.tsx` |
@@ -38,7 +37,8 @@ Apex is an internal product-building and project-management platform. It central
 | ADO Export | — | — | `azureDevOps.ts` | `CreateAdoItemsModal.tsx` |
 | Ask Apex (this agent) | — | `.cursor/skills/app-knowledge/SKILL.md` | `askApexService.ts` | `AskApexChat.tsx` |
 | User Profile | — | — | `profileService.ts`, `avatarResolverService.ts` | `ProfilePage.tsx`, `AvatarEditor.tsx`, `UserMenu.tsx` |
-| Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md` | — | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
+| Brainstorm | — | `.cursor/skills/brainstorm/SKILL.md` | `brainstormSessionService.ts`, `brainstormOrchestrationService.ts`, `brainstormTurnLedger.ts`, `brainstormAccessPolicy.ts`, `brainstormArtifactVersionStore.ts`, `brainstormArtifactMcp.ts`, `brainstormHandoffEngine.ts`, `brainstormRepositoryCatalog.ts` | `BrainstormHomeEntry.tsx`, `BrainstormSessionsPage.tsx`, `BrainstormWorkspace.tsx`, `BrainstormChatPanel.tsx`, `BrainstormArtifactPanel.tsx`, `BrainstormNextActionsPanel.tsx`, `BrainstormRepositoryAdmin.tsx` |
+| Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md`, `design-docs/reusable-playbook-interview-step.md` | `.cursor/skills/interview-orchestrator/SKILL.md`, `.cursor/skills/interview-requirements-review/SKILL.md`, `.cursor/skills/interview-brief-draft/SKILL.md` | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
 
 ## Key Terminology
 
@@ -142,6 +142,7 @@ src/
 | How do load tests work? | `loadTestService.ts`, `.cursor/skills/k6-load-test-generation/SKILL.md`, Admin → Load Test Targets |
 | What walkthrough routes and anchors exist? | `src/shared/walkthroughRoutes.ts`; anchors: DB catalog via `/api/platform-admin/walkthroughs/anchors` (DOM markers in `walkthroughAnchors.ts`) |
 | How is AI usage cost tracked? | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `/ai-cost` view |
+| Where did PDF tools go? | Standalone DocHub app (`apex-dochub`). Apex no longer hosts `/pdf-tools` or `/api/pdf`. |
 
 ## Agent Guidelines
 

@@ -525,12 +525,14 @@ const IntakeFeatureContextModal: React.FC<IntakeFeatureContextModalProps> = ({
             <div className={styles['intake-content']}>
               <section className={styles['intake-section']}>
                 <h3>Request</h3>
-                <p>{intakeItem.request}</p>
+                {/* data-testid-exempt — MarkdownWithMermaid renders inside feature-context-panel */}
+                <MarkdownWithMermaid content={intakeItem.request} className={styles.markdown} skipHtml />
               </section>
               {intakeItem.advantage && (
                 <section className={styles['intake-section']}>
                   <h3>Advantage</h3>
-                  <p>{intakeItem.advantage}</p>
+                  {/* data-testid-exempt — MarkdownWithMermaid renders inside feature-context-panel */}
+                  <MarkdownWithMermaid content={intakeItem.advantage} className={styles.markdown} skipHtml />
                 </section>
               )}
               <section className={styles['intake-section']}>

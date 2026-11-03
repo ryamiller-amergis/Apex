@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, not, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatMessageAttachments, chatMessages, chatThreads, interviews } from '../db/schema';
 import type {
@@ -51,6 +51,59 @@ function resultRows<T>(result: unknown): T[] {
     return (result as { rows: T[] }).rows;
   }
   return [];
+}
+
+/**
+ * Kickoff headings written by background document jobs. A re-run moves the
+ * document's thread reference to a new thread, so earlier job threads are only
+ * recognizable by their kickoff.
+ */
+const BACKGROUND_WORKFLOW_KICKOFF_MARKERS = [
+  'document_operation: validation',
+  '# Design Doc Validation Context',
+  '# Test Case Generation Context',
+  '# Design Doc Generation — Single Feature',
+] as const;
+
+const ADR_GENERATION_TRANSCRIPT_HEADING = '# ADR Interview Transcript';
+
+/**
+ * Threads owned by a background document job. A user turn on one becomes the
+ * thread's newest run, which hides the job's finished run from the V2 harvester
+ * and lets the watcher give up on it.
+ */
+function backgroundWorkflowThreadCondition(threadId: SQL): SQL {
+  const kickoffMarkers = sql.join(
+    BACKGROUND_WORKFLOW_KICKOFF_MARKERS.map(
+      (marker) => sql`strpos(coalesce(bt.kickoff->>'freeformContext', ''), ${marker}) > 0`,
+    ),
+    sql` OR `,
+  );
+  return sql`(
+    EXISTS (
+      SELECT 1 FROM chat_threads bt
+      WHERE bt.id = ${threadId}
+        AND (
+          ${kickoffMarkers}
+          OR starts_with(coalesce(bt.kickoff->>'transcript', ''), ${ADR_GENERATION_TRANSCRIPT_HEADING})
+        )
+    )
+    OR EXISTS (SELECT 1 FROM prds WHERE prds.validation_thread_id = ${threadId})
+    OR EXISTS (SELECT 1 FROM adrs WHERE adrs.generation_thread_id = ${threadId})
+    OR EXISTS (
+      SELECT 1 FROM design_docs
+      WHERE design_docs.chat_thread_id = ${threadId}
+        OR design_docs.validation_thread_id = ${threadId}
+    )
+    OR EXISTS (SELECT 1 FROM test_cases WHERE test_cases.chat_thread_id = ${threadId})
+  )`;
+}
+
+export async function isBackgroundWorkflowThread(threadId: string): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT ${backgroundWorkflowThreadCondition(sql`${threadId}::uuid`)} AS background
+  `);
+  return resultRows<{ background: boolean }>(result)[0]?.background === true;
 }
 
 interface SearchThreadRow {
@@ -169,6 +222,8 @@ export async function listThreadsByUser(
     eq(chatThreads.userId, userId),
     sql`NOT EXISTS (SELECT 1 FROM interviews WHERE interviews.chat_thread_id = ${chatThreads.id})`,
     sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
+    sql`NOT EXISTS (SELECT 1 FROM brainstorm_sessions WHERE brainstorm_sessions.chat_thread_id = ${chatThreads.id})`,
+    not(backgroundWorkflowThreadCondition(sql`${chatThreads.id}`)),
   ];
 
   if (opts?.project) {
@@ -254,6 +309,10 @@ export async function searchThreads(
         AND NOT EXISTS (
           SELECT 1 FROM prds WHERE prds.chat_thread_id = t.id
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM brainstorm_sessions WHERE brainstorm_sessions.chat_thread_id = t.id
+        )
+        AND NOT ${backgroundWorkflowThreadCondition(sql`t.id`)}
         ${projectFilter}
         ${flaggedFilter}
     ),
@@ -497,6 +556,14 @@ export async function clearStaleRun(threadId: string): Promise<void> {
     .update(chatThreads)
     .set({ status: 'idle', activeRunId: null })
     .where(eq(chatThreads.id, threadId));
+}
+
+/** Move an idle-closed thread back to 'idle'; other columns are left as stored. */
+export async function reopenClosedThread(threadId: string): Promise<void> {
+  await db
+    .update(chatThreads)
+    .set({ status: 'idle' })
+    .where(and(eq(chatThreads.id, threadId), eq(chatThreads.status, 'closed')));
 }
 
 /** Lightweight read of the thread's persisted Cursor agent id (interactive resume). */

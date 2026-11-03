@@ -59,6 +59,8 @@ export function stepStatusLabel(status: PlaybookStepRunStatus): string {
 export function suspendReasonLabel(reason: string): string {
   if (reason === 'approval_gate') return 'Waiting for someone to approve this step';
   if (reason === 'agent_run') return 'Waiting for the agent to finish its turn';
+  if (reason === 'interview') return 'Waiting for the interview brief to be approved';
+  if (reason === 'build') return 'Waiting for the build to finish';
   return reason;
 }
 

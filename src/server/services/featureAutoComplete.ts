@@ -1,5 +1,12 @@
 import { AzureDevOpsService } from './azureDevOps';
 import { parseAutoCheckTeams } from './adoTeamConfig';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  withRepoCacheLease,
+} from './repoCacheLeaseService';
+
+const LEASE_KEY = 'feature-auto-complete:sweep';
 
 /**
  * Background service that automatically updates Feature status to "Done"
@@ -7,9 +14,12 @@ import { parseAutoCheckTeams } from './adoTeamConfig';
  */
 export class FeatureAutoCompleteService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
   private readonly COMPLETED_STATES = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
   private readonly CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
+  private readonly runGuard = createSingleFlight({
+    name: 'FeatureAutoComplete',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   /**
    * Start the background service
@@ -23,12 +33,33 @@ export class FeatureAutoCompleteService {
     console.log('[FeatureAutoComplete] Starting service - checking every 15 minutes');
     
     // Run immediately on start
-    this.checkAndUpdateFeatures();
+    void this.runScheduledCheck();
     
     // Then run every 15 minutes
     this.intervalId = setInterval(() => {
-      this.checkAndUpdateFeatures();
+      void this.runScheduledCheck();
     }, this.CHECK_INTERVAL);
+  }
+
+  /**
+   * Periodic sweep. Every App Service instance runs this timer, so a Postgres
+   * lease lets only one instance poll Azure DevOps per interval. The lease is
+   * not released on completion; it expires just before the next interval.
+   */
+  private async runScheduledCheck(): Promise<void> {
+    try {
+      await withRepoCacheLease(
+        LEASE_KEY,
+        async () => this.checkAndUpdateFeatures(),
+        { leaseMs: this.CHECK_INTERVAL - 5000, waitMs: 0, releaseOnComplete: false },
+      );
+    } catch (error) {
+      if (error instanceof NonblockingRepoCacheLeaseUnavailableError) {
+        console.log('[FeatureAutoComplete] Another instance holds the sweep lease, skipping...');
+        return;
+      }
+      console.error('[FeatureAutoComplete] Could not run the scheduled check:', error);
+    }
   }
 
   /**
@@ -46,12 +77,12 @@ export class FeatureAutoCompleteService {
    * Main method to check and update features
    */
   private async checkAndUpdateFeatures(): Promise<void> {
-    if (this.isRunning) {
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) {
       console.log('[FeatureAutoComplete] Previous check still running, skipping...');
       return;
     }
 
-    this.isRunning = true;
     const startTime = Date.now();
     console.log(`[FeatureAutoComplete] Starting feature check at ${new Date().toISOString()}`);
 
@@ -85,7 +116,7 @@ export class FeatureAutoCompleteService {
     } catch (error) {
       console.error('[FeatureAutoComplete] Error during feature check:', error);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 

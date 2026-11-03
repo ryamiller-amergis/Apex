@@ -2,6 +2,7 @@ import { Application, Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createAdoMcpServer } from './server';
 import { mountCalendarAssistantMcp } from '../calendarAssistant/express';
+import { mountMcpServers } from '../mcpServers/express';
 import { failMcpHttpResponse, handleMcpPost } from '../mcpRequestLog';
 import { McpTimeoutError, resolveMcpHttpTimeoutMs } from '../mcpTimeout';
 import type {
@@ -41,7 +42,11 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
       repoReader = profileId
         ? await groundingProfileResolver.resolveConnectionProfile(profileId)
         : undefined;
-    } catch {
+    } catch (error) {
+      console.warn(
+        '[mcp/ado] grounding profile unavailable:',
+        error instanceof Error ? error.message : String(error),
+      );
       res.status(404).json({ error: 'Grounding profile is unavailable' });
       return;
     }
@@ -90,4 +95,6 @@ export function mountAdoMcp(app: Application, basePath = '/mcp/ado-skills'): voi
   // Mount the session-bound calendar assistant MCP alongside ado-skills.
   // URL: POST /mcp/calendar-assistant/:sessionId
   mountCalendarAssistantMcp(app);
+  // URL: POST /mcp/mcp-servers/:connectionId
+  mountMcpServers(app);
 }

@@ -56,7 +56,7 @@ export interface PrototypeContext {
   };
 }
 
-function designSystemPathCandidates(configuredPath: string | null): string[] {
+export function designSystemPathCandidates(configuredPath: string | null): string[] {
   const looksLikePath = Boolean(
     configuredPath && (configuredPath.includes('/') || /\.md$/i.test(configuredPath)),
   );

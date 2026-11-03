@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
+import { sortByLabel } from '../utils/sortByLabel';
 import styles from './RepoSelector.module.css';
 
 interface RepoSelectorProps {
@@ -17,12 +18,13 @@ export const RepoSelector: React.FC<RepoSelectorProps> = ({ configs, onSelect, o
       </div>
 
       <div className={styles.grid}>
-        {configs.map((config) => (
+        {sortByLabel(configs, (config) => config.friendlyName).map((config) => (
           <button
             key={config.id}
             className={styles.card}
             onClick={() => onSelect(config.id)}
             type="button"
+            {...{ 'data-testid': `repo-selector-${config.id}` }}
           >
             <div className={styles.cardIcon}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -46,7 +48,7 @@ export const RepoSelector: React.FC<RepoSelectorProps> = ({ configs, onSelect, o
       </div>
 
       {onBack && (
-        <button type="button" className={styles.backButton} onClick={onBack}>
+        <button type="button" className={styles.backButton} onClick={onBack} {...{ 'data-testid': 'repo-selector-back' }}>
           &larr; Back to projects
         </button>
       )}

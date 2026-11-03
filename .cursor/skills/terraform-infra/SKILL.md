@@ -37,7 +37,6 @@ across repos is proven. Split by **workload concern**, not by resource type:
 | `provider.tf` | Terraform/required_providers, azurerm provider flags |
 | `main.tf` | Core app stack (RG, App Service, Insights, autoscale, common wiring) |
 | `shared-async.tf` | Shared Blob account + containers |
-| `pdf-processing.tf` | Apex App Service RBAC for PDF container (no separate PDF host) |
 | `variables.tf` | All inputs |
 | `outputs.tf` | All outputs (including app-setting contracts) |
 | `terraform.tfvars.example` | Documented non-secret defaults and extension examples |
@@ -45,10 +44,9 @@ across repos is proven. Split by **workload concern**, not by resource type:
 
 **Add a new `*.tf` file** when a workload needs its own compute/identity surface
 beyond the Apex app. **Extend maps** in `shared-async.tf` when the change is
-only another container. PDF assembly uses the Apex App Service plus RBAC in
-`pdf-processing.tf` — do not invent a second PDF Web App for Blob alone.
-Do not scatter the same concern across many tiny files. Do not dump new
-platform resources into `main.tf` when they belong on the shared async platform.
+only another container. Do not scatter the same concern across many tiny files.
+Do not dump new platform resources into `main.tf` when they belong on the shared
+async platform.
 
 ## Azure / provider conventions
 
@@ -61,9 +59,9 @@ platform resources into `main.tf` when they belong on the shared async platform.
   is added) over account- or namespace-wide roles.
 - Disable public/anonymous blob access by default
   (`allow_nested_items_to_be_public = false`, `container_access_type = "private"`).
-- Do **not** provision Service Bus by default (PDF uses Postgres + Blob).
+- Do **not** provision Service Bus by default (current-scale jobs use Postgres + Blob).
 - Tag resources with `merge(var.tags, { Environment = var.environment, ... })`.
-  Add a `Workload` tag for non-core stacks (`shared-async`, `pdf-processing`).
+  Add a `Workload` tag for non-core stacks (`shared-async`).
 
 ## Variables and outputs
 

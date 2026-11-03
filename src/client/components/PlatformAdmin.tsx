@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { OBSERVABILITY_VIEWER_FLAG } from '../../shared/types/observability';
 import { useAppShell } from '../hooks/useAppShell';
+import { sortByLabel } from '../utils/sortByLabel';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import {
   useApproveProjectAccessRequest,
@@ -53,6 +54,7 @@ import { MODULE_VIEW_PERMISSIONS, isRestrictedAccessEmail } from '../../shared/t
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
 import { DevEnvAllowlistPanel } from './DevEnvAllowlistPanel';
+import { BuildAllowlistPanel } from './BuildAllowlistPanel';
 import styles from './PlatformAdmin.module.css';
 
 const ObservabilityWorkspace = lazy(() =>
@@ -78,7 +80,7 @@ const userAccessSchema = z.object({
 
 type UserAccessFormValues = z.infer<typeof userAccessSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
+type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'builds' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -415,6 +417,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             <button
               type="button"
               role="tab"
+              id="platform-admin-tab-builds"
+              aria-selected={activeTab === 'builds'}
+              aria-controls="platform-admin-panel-builds"
+              className={`${styles.tabButton} ${activeTab === 'builds' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('builds')}
+              {...{ 'data-testid': 'platform-admin-tab-builds' }}
+            >
+              Builds
+            </button>
+            <button
+              type="button"
+              role="tab"
               id="platform-admin-tab-flags"
               aria-selected={activeTab === 'flags'}
               aria-controls="platform-admin-panel-flags"
@@ -553,7 +567,20 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               aria-labelledby="platform-admin-tab-dev-access"
               className={styles.tabPanel}
             >
+              {/* data-testid-exempt — DevEnvAllowlistPanel owns its control ids */}
               <DevEnvAllowlistPanel />
+            </div>
+          )}
+          {activeTab === 'builds' && (
+            <div
+              id="platform-admin-panel-builds"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-builds"
+              className={styles.tabPanel}
+              {...{ 'data-testid': 'platform-admin-panel-builds' }}
+            >
+              {/* data-testid-exempt — BuildAllowlistPanel owns its control ids */}
+              <BuildAllowlistPanel />
             </div>
           )}
           {activeTab === 'flags' && (
@@ -738,17 +765,19 @@ const AssignmentCard: React.FC<AssignmentCardProps> = ({
   const filteredUsers = useMemo(() => {
     const selected = new Set(selectedUserIds);
     const normalizedQuery = searchQuery.trim().toLowerCase();
-    return availableUsers
-      .filter((user) => !selected.has(user.userId))
-      .filter((user) => {
-        if (!normalizedQuery) return true;
-        return [
-          user.displayName,
-          user.email,
-          user.userId,
-        ].some((value) => value.toLowerCase().includes(normalizedQuery));
-      })
-      .slice(0, 8);
+    return sortByLabel(
+      availableUsers
+        .filter((user) => !selected.has(user.userId))
+        .filter((user) => {
+          if (!normalizedQuery) return true;
+          return [
+            user.displayName,
+            user.email,
+            user.userId,
+          ].some((value) => value.toLowerCase().includes(normalizedQuery));
+        }),
+      (user) => user.displayName || user.email || user.userId,
+    ).slice(0, 8);
   }, [availableUsers, searchQuery, selectedUserIds]);
   const savedPendingEmailSet = useMemo(() => {
     return new Set(pendingAssignments.map((assignment) => assignment.email.toLowerCase()));

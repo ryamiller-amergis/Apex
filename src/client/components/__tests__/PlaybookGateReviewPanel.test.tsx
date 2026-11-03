@@ -14,6 +14,7 @@ jest.mock('../../hooks/usePlaybookRuns', () => ({
 const run: PlaybookRunDetail = {
   runId: 'run-1',
   project: 'Apex',
+  definitionId: 'def-1',
   definitionName: 'Validation',
   definitionVersionId: 'version-1',
   versionNumber: 1,

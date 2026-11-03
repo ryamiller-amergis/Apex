@@ -1,6 +1,7 @@
 import React from 'react';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { canAccessMyWork } from '../utils/canAccessMyWork';
+import { canAccessBuilds } from '../utils/canAccessBuilds';
 import styles from './AppSidebar.module.css';
 
 interface NavItem {
@@ -44,15 +45,34 @@ interface AppSidebarProps {
   onNavigateUiLab?: () => void;
   onNavigateQaLab?: () => void;
   onNavigateFeatureRequests?: () => void;
-  onNavigatePdfTools?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
   onNavigateWorkBoard?: () => void;
   workBoardEnabled?: boolean;
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
+  onNavigatePlaybooks?: () => void;
+  /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  onNavigateBuilds?: () => void;
+  /** `build-from-prompt` evaluated for this user and project. */
+  buildsEnabled?: boolean;
+  onNavigateBrainstorm?: () => void;
+  /** Brainstorm stays hidden until its flag and the project menu are both on. */
+  brainstormEnabled?: boolean;
+  onNavigateMcpServers?: () => void;
+  /** MCP Servers stays hidden until the project flag and menu are both on. */
+  mcpServersEnabled?: boolean;
   onNavigateAdmin: () => void;
 }
+
+const IconMcpServers: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 3.5h6v4H7z" />
+    <path d="M10 7.5v3" />
+    <path d="M4 13.5h12v3H4z" />
+    <path d="M6 13.5v-2h8v2" />
+  </svg>
+);
 
 const IconHome: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -137,13 +157,6 @@ const IconFeatureRequests: React.FC = () => (
   </svg>
 );
 
-const IconPdfTools: React.FC = () => (
-  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="4" y="2" width="12" height="16" rx="1.5" />
-    <path d="M7 6h6M7 9h6M7 12h4" />
-  </svg>
-);
-
 const IconDesignModule: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <rect x="3" y="3" width="5" height="5" rx="1" />
@@ -166,6 +179,28 @@ const IconLoadTests: React.FC = () => (
     <path d="M10 3a7 7 0 100 14A7 7 0 0010 3z" />
     <path d="M10 7v3l2 2" />
     <path d="M3.5 10h1M15.5 10h1M10 3.5v1M10 15.5v1" />
+  </svg>
+);
+
+const IconPlaybooks: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="4" cy="10" r="1.6" />
+    <circle cx="10" cy="10" r="1.6" />
+    <circle cx="16" cy="10" r="1.6" />
+    <path d="M5.6 10h2.8M11.6 10h2.8" />
+  </svg>
+);
+
+const IconBrainstorm: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 3a5 5 0 00-2 9.6V14h4v-1.4A5 5 0 0010 3z" />
+    <path d="M8.5 16.5h3" />
+  </svg>
+);
+
+const IconBuilds: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 6l-4 4 4 4M13 6l4 4-4 4M11 4l-2 12" />
   </svg>
 );
 
@@ -223,13 +258,19 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateUiLab,
   onNavigateQaLab,
   onNavigateFeatureRequests,
-  onNavigatePdfTools,
   onNavigateAiCost,
   onNavigateDesignModule,
   onNavigateWorkBoard,
   workBoardEnabled = true,
   onNavigateLoadTests,
   onNavigateDiagrams,
+  onNavigatePlaybooks,
+  onNavigateBuilds,
+  buildsEnabled = false,
+  onNavigateBrainstorm,
+  brainstormEnabled = false,
+  onNavigateMcpServers,
+  mcpServersEnabled = false,
   onNavigateAdmin,
 }) => {
   const { isMobile } = useBreakpoint();
@@ -241,10 +282,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       id: 'build',
       label: 'Build',
       items: [
+        { label: 'Brainstorm', view: 'brainstorm', icon: <IconBrainstorm />, permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
         { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
         { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
         { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+        { label: 'Builds', view: 'builds', icon: <IconBuilds />, permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
         { label: 'Diagrams', view: 'diagrams', icon: <IconDiagrams />, permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}), testId: 'nav-diagrams' },
       ],
     },
@@ -271,8 +314,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       items: [
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
         { label: 'QA Lab', view: 'qa-lab', icon: <IconQaLab />, permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}), testId: 'nav-qa-lab' },
-        { label: 'PDF Assembly Tool', view: 'pdf-tools', icon: <IconPdfTools />, permission: 'pdf-assembly:use', onNavigate: onNavigatePdfTools ?? (() => {}) },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
+        { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
+        { label: 'MCP Servers', view: 'mcp-servers', icon: <IconMcpServers />, permission: 'mcp-servers:view', onNavigate: onNavigateMcpServers ?? (() => {}) },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
       ],
@@ -298,10 +342,21 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
     }
-    if (item.view === 'pdf-tools') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('pdf-tools')) return false;
-      if (!isSuperAdmin && !can('pdf-assembly:use')) return false;
-      return true;
+    if (item.view === 'builds') {
+      return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
+    }
+    if (item.view === 'brainstorm') {
+      if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
+      return isSuperAdmin || can('brainstorm:view');
+    }
+    if (item.view === 'playbooks') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
+      return isSuperAdmin || can('playbooks:view');
+    }
+    if (item.view === 'mcp-servers') {
+      if (!mcpServersEnabled) return false;
+      if (!menuEnabledViews.includes('mcp-servers')) return false;
+      return isSuperAdmin || can('mcp-servers:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;

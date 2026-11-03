@@ -263,9 +263,35 @@ describe('ai-runs-v2-transport', () => {
 
     await executeCursorAgentStep(context());
     const prepared = await routeBackgroundWorkflow.mock.calls[0][0].prepareWorker();
+    const policy = routeBackgroundWorkflow.mock.calls[0][0].playbookAgentPolicy;
 
     expect(prepareBackgroundWorkflowTurn).toHaveBeenCalledWith('thread-1', 'Summarise the design docs');
     expect(prepared.model).toBe('claude-4');
+    expect(prepared.skillSha256).toBe(policy.skill.sha256);
+    expect(prepared.skillContent.length).toBeGreaterThan(0);
+  });
+
+  it('binds the V2 Skill to the bytes the policy hashed, not the catalog copy', async () => {
+    const catalogSkill = '# catalog skill that must not win';
+    prepareBackgroundWorkflowTurn.mockResolvedValue({
+      prompt: `framed prompt\n\n${catalogSkill}`,
+      model: 'thread-model',
+      skillPath: 'catalog/SKILL.md',
+      skillContent: catalogSkill,
+      skillSha256: 'c'.repeat(64),
+      projectId: 'Apex',
+      threadWorkspacePath: '/tmp/threads/thread-1',
+    });
+
+    await executeCursorAgentStep(context());
+    const prepared = await routeBackgroundWorkflow.mock.calls[0][0].prepareWorker();
+    const policy = routeBackgroundWorkflow.mock.calls[0][0].playbookAgentPolicy;
+
+    expect(prepared.skillPath).toBe(policy.skill.path);
+    expect(prepared.skillContent).not.toBe(catalogSkill);
+    expect(prepared.skillSha256).toBe(policy.skill.sha256);
+    expect(prepared.prompt).not.toContain(catalogSkill);
+    expect(prepared.prompt).toContain(prepared.skillContent);
   });
 
   it('fails the step as retryable instead of running in process when V2 cannot prepare', async () => {

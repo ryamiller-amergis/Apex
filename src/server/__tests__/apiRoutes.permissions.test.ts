@@ -93,6 +93,7 @@ jest.mock('../middleware/rbac', () => ({
 jest.mock('../services/rbacService', () => ({
   getUserPermissions: jest.fn().mockResolvedValue(new Set()),
   getUserRoleNames: jest.fn().mockResolvedValue([]),
+  getUserProjectRoles: jest.fn().mockResolvedValue([]),
   getChangelogPrefs: jest.fn().mockResolvedValue({
     lastSeenVersion: null,
     showOnLogin: true,
@@ -165,9 +166,13 @@ function buildApp(userOid?: string) {
 
 // ── Mock references ────────────────────────────────────────────────────────────
 
-const { getUserPermissions: mockGetUserPermissions } = jest.requireMock(
-  '../services/rbacService',
-) as { getUserPermissions: jest.Mock };
+const {
+  getUserPermissions: mockGetUserPermissions,
+  getUserProjectRoles: mockGetUserProjectRoles,
+} = jest.requireMock('../services/rbacService') as {
+  getUserPermissions: jest.Mock;
+  getUserProjectRoles: jest.Mock;
+};
 
 // ── GET /api/me/permissions ────────────────────────────────────────────────────
 
@@ -181,7 +186,9 @@ describe('GET /api/me/permissions', () => {
 
     expect(res.status).toBe(200);
     expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', undefined);
+    expect(mockGetUserProjectRoles).not.toHaveBeenCalled();
     expect(res.body.permissions).toContain('chat:create');
+    expect(res.body.projectRoles).toEqual([]);
   });
 
   it('passes the project query param to getUserPermissions', async () => {
@@ -194,6 +201,18 @@ describe('GET /api/me/permissions', () => {
     expect(res.status).toBe(200);
     expect(mockGetUserPermissions).toHaveBeenCalledWith('user-1', 'MyProject');
     expect(res.body.permissions).toContain('admin:roles');
+  });
+
+  it('returns projectRoles for the requested project', async () => {
+    mockGetUserProjectRoles.mockResolvedValue(['admin']);
+
+    const res = await request(buildApp('user-1')).get(
+      '/api/me/permissions?project=MyProject',
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockGetUserProjectRoles).toHaveBeenCalledWith('user-1', 'MyProject');
+    expect(res.body.projectRoles).toEqual(['admin']);
   });
 
   it('returns 401 when no user is authenticated', async () => {

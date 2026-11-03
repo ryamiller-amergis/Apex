@@ -155,6 +155,19 @@
   padding: 4px;
 }
 
+/* Portaled onto the page so the dialog's overflow does not clip it. */
+.comboMenu {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
 .comboOption {
   display: flex;
   align-items: center;
@@ -406,6 +419,14 @@
   font-size: 13px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.errorBanner {
+  padding: 10px 12px;
+  border: 1px solid var(--danger-color);
+  border-radius: 6px;
+  color: var(--danger-color);
+  font-size: 13px;
 }
 
 /* ── Approver chips ──────────────────────────────────────────────── */

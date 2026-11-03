@@ -9,12 +9,15 @@ export type MenuItemKey =
   | 'ui-lab'
   | 'qa-lab'
   | 'feature-requests'
-  | 'pdf-tools'
   | 'ai-cost'
   | 'design-module'
   | 'load-tests'
   | 'diagrams'
-  | 'work-board';
+  | 'work-board'
+  | 'playbooks'
+  | 'builds'
+  | 'mcp-servers'
+  | 'brainstorm';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -27,12 +30,15 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'ui-lab', label: 'UI Lab' },
   { key: 'qa-lab', label: 'QA Lab' },
   { key: 'feature-requests', label: 'Apex Backlog' },
-  { key: 'pdf-tools', label: 'PDF Assembly Tool' },
   { key: 'ai-cost', label: 'AI Cost Analytics' },
   { key: 'design-module', label: 'Design Module' },
   { key: 'load-tests', label: 'Load Tests' },
   { key: 'diagrams', label: 'Diagrams' },
   { key: 'work-board', label: 'Work Board' },
+  { key: 'playbooks', label: 'Playbooks' },
+  { key: 'builds', label: 'Builds' },
+  { key: 'mcp-servers', label: 'MCP Servers' },
+  { key: 'brainstorm', label: 'Brainstorm' },
 ];
 
 /** All configurable menu keys (includes opt-in-only keys such as Diagrams). */
@@ -40,10 +46,10 @@ export const ALL_MENU_VIEWS: MenuItemKey[] = CONFIGURABLE_MENU_ITEMS.map((item) 
 
 /**
  * Default enabled views when a project has no explicit menu config row.
- * Diagrams is opt-in (BR-011) and must not appear here.
+ * Diagrams, Builds and MCP Servers are opt-in and must not appear here.
  */
 export const DEFAULT_ENABLED_MENU_VIEWS: MenuItemKey[] = ALL_MENU_VIEWS.filter(
-  (key) => key !== 'diagrams',
+  (key) => key !== 'diagrams' && key !== 'builds' && key !== 'mcp-servers',
 );
 
 export interface ProjectMenuConfig {

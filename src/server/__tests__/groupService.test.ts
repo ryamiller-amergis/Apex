@@ -63,6 +63,7 @@ import {
   deleteGroup,
   setGroupMembers,
   getUserGroupNames,
+  getUserGroupNamesForProject,
   getUserGroupIds,
 } from '../services/groupService';
 
@@ -404,6 +405,21 @@ describe('getUserGroupNames', () => {
 
     await getUserGroupNames('specific-user-oid');
 
+    expect(chain.where).toHaveBeenCalled();
+  });
+});
+
+describe('getUserGroupNamesForProject — TBI-007', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('VT-20: reads group names for the user in that project only', async () => {
+    const chain = makeSelectChain([{ name: 'BA' }]);
+    mockDb.select.mockReturnValue(chain);
+
+    const result = await getUserGroupNamesForProject('user-abc', 'proj-a');
+
+    expect(result).toEqual(['BA']);
+    expect(chain.innerJoin).toHaveBeenCalled();
     expect(chain.where).toHaveBeenCalled();
   });
 });

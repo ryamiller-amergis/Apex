@@ -651,35 +651,40 @@
   cursor: not-allowed;
 }
 
+/* Starting a run is one of two equal choices on every row, so it carries the
+   same weight as local development. The filled accent is kept for a row's
+   actual next step (View PR, Resume run), which only some rows have. */
 .cloud-dev-btn {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   padding: 8px 16px;
-  border: 1px solid var(--accent-color);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
   font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
-  background: var(--accent-color);
-  color: var(--on-accent);
-  box-shadow: var(--glow-accent);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Keeps the cloud action distinguishable from local development at a glance
+   without a filled button on every row. */
+.cloud-dev-btn .cloud-button-icon {
+  color: var(--accent-color);
 }
 
 .cloud-dev-btn:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: var(--bg-secondary);
+  box-shadow: var(--glow-accent);
 }
 
-/* A disabled primary must not keep the filled accent + glow — it reads as enabled. */
-.cloud-dev-btn:disabled {
-  border-color: var(--border-color);
-  background: var(--bg-tertiary);
+.cloud-dev-btn:disabled .cloud-button-icon {
   color: var(--text-muted);
-  box-shadow: none;
-  opacity: 1;
 }
 
 .cloud-button-icon {
@@ -861,16 +866,6 @@
 
 /* The reason stays mounted (aria-describedby target) but out of the layout
    until the trigger is clicked. */
-/* Full-width flex item, so it wraps onto its own line above every button in
-   the row's action area. `order` keeps it first regardless of DOM position. */
-.cloud-reason-row {
-  order: -1;
-  display: flex;
-  width: 100%;
-  justify-content: flex-end;
-  padding-bottom: 4px;
-}
-
 .cloud-reason {
   position: relative;
   display: inline-flex;

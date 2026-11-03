@@ -21,8 +21,14 @@ import {
 import {
   InteractiveToolProxyError,
   invokeInteractiveToolProxy,
+  postLocalMcp,
 } from '../services/interactiveToolProxyService';
-import { isDurableInteractiveTurnSpecification } from '../../shared/types/durableInteractiveTurn';
+import {
+  isDurableInteractiveTurnSpecification,
+  type DurableInteractiveTurnSpecification,
+  type FrozenInteractiveMcpDescriptor,
+} from '../../shared/types/durableInteractiveTurn';
+import { handleBrainstormArtifactMcp } from '../services/brainstormArtifactMcp';
 
 const router = Router();
 
@@ -50,16 +56,11 @@ function extractBearerToken(header: unknown): string {
 }
 
 function localMcpUrl(
-  serverName: 'ado-skills' | 'calendar-assistant' | 'maxview',
-  descriptor: {
-    profileId?: string;
-    calendarSessionId?: string;
-    enableRepoBrowse: boolean;
-  },
+  descriptor: Extract<FrozenInteractiveMcpDescriptor, { kind: 'internal-proxy' }>,
 ): string {
   const port = process.env.PORT?.trim() || '3001';
   const base = `http://127.0.0.1:${port}`;
-  switch (serverName) {
+  switch (descriptor.serverName) {
     case 'ado-skills': {
       const profilePath = descriptor.profileId
         ? `/grounding/${descriptor.profileId}`
@@ -79,8 +80,15 @@ function localMcpUrl(
     }
     case 'maxview':
       return `${base}/mcp/maxview`;
+    case 'mcp-server':
+      return `${base}/mcp/mcp-servers/${encodeURIComponent(descriptor.connectionId)}?userId=${encodeURIComponent(descriptor.boundUserId)}`;
+    case 'brainstorm-artifact':
+      throw new InteractiveToolProxyError(
+        'brainstorm-artifact is answered in-process',
+        400,
+      );
     default: {
-      const unhandled: never = serverName;
+      const unhandled: never = descriptor;
       throw new InteractiveToolProxyError(
         `Unsupported internal MCP server: ${String(unhandled)}`,
         400,
@@ -230,32 +238,16 @@ router.post(
         claims,
         specification: attempt.specSnapshot,
         body: req.body,
-        invokeInternal: async (name, descriptor, body) => {
-          const response = await fetch(localMcpUrl(name, descriptor), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body ?? {}),
-          });
-          const text = await response.text();
-          let parsed: unknown = {};
-          if (text) {
-            try {
-              parsed = JSON.parse(text);
-            } catch {
-              throw new InteractiveToolProxyError(
-                'Internal MCP returned non-JSON',
-                502,
-              );
-            }
-          }
-          if (!response.ok) {
-            throw new InteractiveToolProxyError(
-              `Internal MCP failed (${response.status})`,
-              502,
-            );
-          }
-          return parsed;
-        },
+        invokeInternal: (_name, descriptor, body, context) =>
+          descriptor.serverName === 'brainstorm-artifact'
+            ? handleBrainstormArtifactMcp({
+                runId,
+                specification: attempt.specSnapshot as DurableInteractiveTurnSpecification,
+                body,
+              })
+            : postLocalMcp(localMcpUrl(descriptor), body, {
+                signal: context.signal,
+              }),
       });
       res.status(200).json(result);
     } catch (error) {

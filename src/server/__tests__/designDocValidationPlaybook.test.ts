@@ -149,14 +149,4 @@ describe('FEAT-014 design-doc validation Playbook', () => {
     });
   });
 
-  it('does not seed or publish while playbooks-production-adapters is disabled', async () => {
-    isFeatureEnabled.mockResolvedValue(false);
-
-    await expect(publishDesignDocValidationPlaybook({
-      project: 'Apex',
-      publishedByUserId: 'author-1',
-    })).rejects.toThrow(/playbooks-production-adapters.*disabled/i);
-    expect(createDefinition).not.toHaveBeenCalled();
-    expect(publishDraft).not.toHaveBeenCalled();
-  });
 });

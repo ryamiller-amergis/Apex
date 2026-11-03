@@ -42,6 +42,30 @@ describe('ChatRunProgressLabel', () => {
     expect(screen.getByText('Searching the codebase · 2 steps')).toBeTruthy();
   });
 
+  it('names a finished connected tool instead of the raw tool id', () => {
+    render(
+      <ChatRunProgressLabel
+        fallbackLabel="mcp:list_applications completed"
+        progressPhase="implementation"
+        toolProgress={[tool({ toolName: 'mcp:list_applications', status: 'completed' })]}
+      />,
+    );
+
+    expect(screen.getByText('Listing applications · 1 step')).toBeTruthy();
+  });
+
+  it('returns to Thinking when all tools have completed and analysis resumes', () => {
+    render(
+      <ChatRunProgressLabel
+        fallbackLabel="Analysis completed"
+        progressPhase="analysis"
+        toolProgress={[tool({ toolName: 'mcp:listAllApplications', status: 'completed' })]}
+      />,
+    );
+
+    expect(screen.getByText('Thinking… · 1 step')).toBeTruthy();
+  });
+
   it('adds elapsed seconds after the first few seconds', () => {
     render(
       <ChatRunProgressLabel fallbackLabel="Thinking…" progressPhase="analysis" toolProgress={[]} />,

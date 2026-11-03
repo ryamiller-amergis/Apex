@@ -34,7 +34,7 @@ import {
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { DesignDocPlaybookStartAction } from './DesignDocPlaybookStartAction';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
@@ -50,6 +50,7 @@ import { effortLabel } from '../../shared/utils/effort';
 import {
   collectValidationGaps,
   designDocFeatureSectionScore,
+  isUnusableValidationScorecard,
 } from '../../shared/utils/validationReport';
 import {
   designDocHasProposedChanges,
@@ -335,6 +336,13 @@ const MIN_PANEL_WIDTH = 280;
 const MAX_PANEL_WIDTH = 800;
 const DEFAULT_PANEL_WIDTH = 380;
 
+const DESIGN_DOC_ASSISTANT_SUGGESTIONS = [
+  'Summarize this design doc',
+  'Check the tech spec against the PRD',
+  'What risks or open questions remain?',
+  'Suggest improvements to the weakest section',
+] as const;
+
 const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   designDocId,
   onClose,
@@ -347,19 +355,30 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     if (discussContext) return null;
     return docAssistantThreadId ?? localStorage.getItem(ASSISTANT_THREAD_LS_KEY(designDocId));
   });
+  // Only a thread this panel just created is known to be empty; an existing
+  // thread's history arrives over SSE after the panel renders.
+  const [createdThreadId, setCreatedThreadId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [showNewConvConfirm, setShowNewConvConfirm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId, { locked: readOnly });
-  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
+  const {
+    messages,
+    streamingText,
+    isRunning,
+    isSending,
+    showTypingIndicator,
+    progressLabel,
+    progressPhase,
+    toolProgress,
+  } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the design doc so the main
@@ -420,9 +439,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       credentials: 'include',
       body: discussContext ? JSON.stringify({ forceNew: true }) : undefined,
     })
-      .then((r) => r.json() as Promise<{ threadId: string }>)
+      .then((r) => r.json() as Promise<{ threadId: string; created?: boolean }>)
       .then((data) => {
         setThreadId(data.threadId);
+        if (data.created) setCreatedThreadId(data.threadId);
         if (!discussContext) {
           localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
         }
@@ -480,9 +500,10 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     });
   }, [threadId, isRunning, discussContext]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, streamingText]);
+  const fillComposer = useCallback((prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -530,8 +551,9 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
                     credentials: 'include',
                     body: JSON.stringify({ forceNew: true }),
                   });
-                  const data = await r.json() as { threadId: string };
+                  const data = await r.json() as { threadId: string; created?: boolean };
                   setThreadId(data.threadId);
+                  if (data.created) setCreatedThreadId(data.threadId);
                   localStorage.setItem(ASSISTANT_THREAD_LS_KEY(designDocId), data.threadId);
                 } catch {
                   setCreateError('Failed to start new conversation. Please try again.');
@@ -596,53 +618,23 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           </div>
         )}
       >
-      <div className={styles.assistantMessages}>
-        <div className={styles.assistantMessageList}>
-          {isCreating && (
-            <div className={styles.assistantInitializing}>
-              <div className={styles.qaTypingIndicator}>
-                <span className={styles.qaTypingDot} />
-                <span className={styles.qaTypingDot} />
-                <span className={styles.qaTypingDot} />
-              </div>
-              <span>Starting assistant…</span>
-            </div>
-          )}
-          {createError && (
-            <div className={styles.qaMessageBubbleSystem}>{createError}</div>
-          )}
-          {visibleMessages.map((msg) => {
-            if (msg.role === 'system') {
-              return <div key={msg.id} className={styles.qaMessageBubbleSystem}>{msg.text}</div>;
-            }
-            if (msg.role === 'user') {
-              return (
-                <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleUser}`}>
-                  {msg.text}
-                </div>
-              );
-            }
-            return (
-              <div key={msg.id} className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-              </div>
-            );
-          })}
-          {showTypingIndicator && (
-            <div className={styles.qaTypingIndicator}>
-              <span className={styles.qaTypingDot} />
-              <span className={styles.qaTypingDot} />
-              <span className={styles.qaTypingDot} />
-            </div>
-          )}
-          {streamingText && (
-            <div className={`${styles.qaMessageBubble} ${styles.qaMessageBubbleAssistant}`}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+      <AssistantConversation
+        messages={visibleMessages}
+        streamingText={streamingText}
+        isWorking={showTypingIndicator}
+        isStarting={isCreating}
+        startError={createError}
+        progressLabel={progressLabel}
+        progressPhase={progressPhase}
+        toolProgress={toolProgress}
+        welcome={!readOnly && !discussContext && threadId && threadId === createdThreadId ? {
+          title: 'Ask about this design doc',
+          description: 'Apex can answer questions, check the design against the PRD, and edit the Design, Tech Spec, or Assumptions sections.',
+          suggestions: DESIGN_DOC_ASSISTANT_SUGGESTIONS,
+          onSuggestion: fillComposer,
+        } : undefined}
+        testIdPrefix="design-doc-assistant"
+      />
       </AgentPanelShell>
     </div>
     </>
@@ -1930,6 +1922,9 @@ export const DesignDocReviewView: React.FC = () => {
     doc.validationScore !== undefined &&
     doc.validationScore !== null &&
     doc.validationScore < validationThreshold;
+  const validationScoreMissing = isUnusableValidationScorecard(doc.validationScorecard);
+  const displayedValidationScore = validationScoreMissing ? null : doc.validationScore;
+  const validationScoreLabel = validationScoreMissing ? 'not recorded' : `${doc.validationScore}%`;
   const hasValidationOverride = !!doc.validationOverride;
   const validationBlocking = scoreBelowThreshold && !hasValidationOverride;
   const canManage = can('interviews:manage');
@@ -2161,10 +2156,10 @@ export const DesignDocReviewView: React.FC = () => {
               </span>
               {doc.validationScore !== null && doc.validationScore !== undefined && (
                 <span
-                  className={`${styles.validationBadge} ${doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
+                  className={`${styles.validationBadge} ${validationScoreMissing ? styles.validationBadgeBad : doc.validationScore >= validationThreshold ? styles.validationBadgeGood : doc.validationScore >= 70 ? styles.validationBadgeMid : styles.validationBadgeBad}`}
                   {...{ 'data-testid': 'dd-validation-badge' }}
                 >
-                  {doc.validationScore}% validated
+                  {validationScoreMissing ? 'Score not recorded' : `${doc.validationScore}% validated`}
                 </span>
               )}
               {doc.reviewerId && doc.reviewedAt && (
@@ -2328,7 +2323,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
                           : undefined
                   }
                   type="button"
@@ -2356,7 +2351,7 @@ export const DesignDocReviewView: React.FC = () => {
                       : unresolvedCount > 0
                         ? 'Resolve all comments before approving'
                         : validationBlocking
-                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${doc.validationScore}%)`
+                          ? `Validation score must be ≥ ${validationThreshold}% (current: ${validationScoreLabel})`
                           : undefined
                   }
                   type="button"
@@ -2638,7 +2633,7 @@ export const DesignDocReviewView: React.FC = () => {
                 <div className={styles.failureBannerTitle}>
                   Validation needs attention
                   <span className={bannerSeverity === 'red' ? styles.failureBannerScoreBadgeRed : styles.failureBannerScoreBadgeAmber}>
-                    {doc.validationScore}%
+                    {validationScoreMissing ? 'No score' : `${doc.validationScore}%`}
                   </span>
                 </div>
                 <div className={styles.failureBannerSummary}>
@@ -2922,7 +2917,7 @@ export const DesignDocReviewView: React.FC = () => {
                     onToggleComments={toggleCommentsPanel}
                     onToggleValidation={toggleValidationPanel}
                     openCommentCount={reviewComments.filter((c) => c.status === 'open').length}
-                    validationScore={doc.validationScore}
+                    validationScore={displayedValidationScore}
                     isValidating={doc.status === 'validating'}
                     commentsPanel={
                       <CommentsSidePanel
@@ -2952,7 +2947,7 @@ export const DesignDocReviewView: React.FC = () => {
                     }
                     validationPanel={
                       <ValidationSidePanel
-                        score={doc.validationScore}
+                        score={displayedValidationScore}
                         scorecard={doc.validationScorecard}
                         reportMarkdown={validationReport?.markdown ?? doc.validationReportMd}
                         isValidating={doc.status === 'validating'}

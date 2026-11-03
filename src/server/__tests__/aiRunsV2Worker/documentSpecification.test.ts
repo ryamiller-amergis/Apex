@@ -86,13 +86,36 @@ describe('V2 document execution specification', () => {
   });
 
   it('accepts a scratch-only Playbook step that carries its kickoff context', () => {
-    const playbookStep = (scratchInputs: unknown) => specification({
-      workflowClass: 'playbook-step',
-      groundedSha: undefined,
-      repository: undefined,
-      provider: undefined,
-      scratchInputs,
-    });
+    const playbookStep = (scratchInputs: unknown) => {
+      const candidate = specification({
+        workflowClass: 'playbook-step',
+        groundedSha: undefined,
+        repository: undefined,
+        provider: undefined,
+        scratchInputs,
+      });
+      return {
+        ...candidate,
+        playbookAgentPolicy: {
+          schemaVersion: 1,
+          resolverVersion: 1,
+          executionProfile: 'repository-read-only',
+          capabilities: ['repository-read', 'network-read'],
+          skill: {
+            path: candidate.skillPath,
+            sha256: candidate.skillSha256,
+          },
+          mcpServers: [],
+          localAgent: {
+            cwdMode: 'scratch',
+            allowBuiltinWrites: true,
+            customTools: 'none',
+          },
+          enforcement: 'enforce',
+          resolvedAt: '2026-10-19T00:00:00.000Z',
+        },
+      };
+    };
 
     expect(isAiRunV2DocumentSpecification(playbookStep([
       { path: '.ai-pilot/kickoff-context.md', content: '# Document' },

@@ -96,7 +96,7 @@ export function createSessionOptions(
     secret: env.SESSION_SECRET || 'your-secret-key-change-this',
     store,
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,
     name: 'connect.sid',
     cookie: {
       secure: env.NODE_ENV === 'production',

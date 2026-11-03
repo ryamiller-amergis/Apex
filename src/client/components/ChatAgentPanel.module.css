@@ -1,7 +1,7 @@
 /* ── Panel shell ── */
 .homePanel {
   position: absolute;
-  inset: 56px 0 0;
+  inset: 46px 0 0;
   z-index: 1;
   width: 100%;
   min-width: 0;
@@ -9,11 +9,136 @@
   border-left: 0;
   box-shadow: none;
   animation: none;
+  overflow: visible;
+}
+
+/* Docks the Home chat session controls (status, active skill badge, History, + New)
+   directly into the right side of the 46px AgentHome tab strip. */
+.homePanel > header {
+  top: -46px;
+  right: 0;
+  left: 220px;
+  height: 46px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  z-index: 3;
+}
+
+.homeMergedBarMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 4px;
+  padding-right: 10px;
+  border-right: 1px solid var(--border-color);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.homeMergedBarMeta .connBadge {
+  margin-left: 2px;
+}
+
+.homeSkillBadgeWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.homeSkillBadgeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  max-width: 200px;
+}
+
+.homeSkillBadgeBtn:hover,
+.homeSkillBadgeBtnActive {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+.homeSkillBadgeText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.homeSkillBadgeIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  font-style: italic;
+  flex-shrink: 0;
+}
+
+.homeSkillPopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(380px, 80vw);
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+  z-index: 30;
+}
+
+.homeSkillBadgeWrap:hover .homeSkillPopover,
+.homeSkillBadgeWrap:focus-within .homeSkillPopover,
+.homeSkillPopoverOpen {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.homeSkillPopover .pillDescription {
+  margin: 0;
+  text-align: left;
 }
 
 @media (max-width: 768px) {
   .homePanel {
-    inset: 52px 0 0;
+    inset: 44px 0 0;
+  }
+
+  .homePanel > header {
+    top: -44px;
+    left: 176px;
+    height: 44px;
+    padding: 0 10px;
+  }
+
+  .homeMergedBarMeta .statusText,
+  .homeMergedBarMeta .connBadge {
+    display: none;
   }
 }
 
@@ -510,6 +635,15 @@
   flex-direction: column;
   gap: 20px;
   scroll-behavior: smooth;
+}
+
+.homePanel .messages {
+  padding: 14px 24px;
+  gap: 14px;
+}
+
+.homePanel .agentBubble {
+  max-width: 96%;
 }
 
 /* ── Message rows ── */
@@ -1059,6 +1193,40 @@
 
 .composerEmbed {
   padding: 12px 16px 10px;
+}
+
+.composerEmbed.homeConversationComposer {
+  padding: 8px 20px 10px;
+}
+
+.compactComposerShell {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
+  border-radius: 12px;
+}
+
+.compactComposerShell > textarea {
+  flex: 1 1 220px;
+  min-width: 0;
+  order: 1;
+  padding: 3px 2px;
+  font-size: 0.9rem;
+}
+
+.compactComposerShell > div {
+  flex: 1 1 100%;
+  order: 3;
+}
+
+.compactComposerShell > div:has(select),
+.compactComposerShell > div:has([data-testid$="send-btn"]),
+.compactComposerShell > div:has([data-testid$="stop-btn"]) {
+  flex: 0 0 auto;
+  order: 2;
+  margin-left: auto;
 }
 
 .fileInput {

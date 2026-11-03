@@ -67,6 +67,7 @@ const PROJECTION_RESULT = {
     {
       runId: 'run-1',
       project: PROJECT,
+      definitionId: 'def-1',
       definitionName: 'Demo A',
       definitionVersionId: 'ver-1',
       versionNumber: 3,

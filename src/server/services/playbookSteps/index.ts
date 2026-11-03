@@ -16,10 +16,12 @@ import { executeCursorAgentStep } from './cursorAgentAdapter';
 import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
+import { executeInterviewStep } from './interviewAdapter';
+import { executeBuildStep } from './buildAdapter';
 import { getUserPermissions } from '../rbacService';
+import { isSuperAdminUserId } from '../../utils/superAdminUser';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
-import { isFeatureEnabled } from '../featureFlagService';
 import { configHasBindings } from '../playbookBindingResolver';
 import { resolveRunStepConfig } from '../playbookStepBindings';
 import {
@@ -35,6 +37,8 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   notify: executeNotifyStep,
   'ingest-artifact': executeIngestArtifactStep,
   branch: executeBranchStep,
+  interview: executeInterviewStep,
+  build: executeBuildStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */
@@ -55,13 +59,6 @@ export class PlaybookPermissionRevokedError extends Error {
         `${missingPermissions.join(', ')} on ${project}.`
     );
     this.name = 'PlaybookPermissionRevokedError';
-  }
-}
-
-export class PlaybookProductionAdapterDisabledError extends Error {
-  constructor(stepType: string) {
-    super(`Step type "${stepType}" is unavailable while playbooks-production-adapters is disabled.`);
-    this.name = 'PlaybookProductionAdapterDisabledError';
   }
 }
 
@@ -86,6 +83,7 @@ async function assertInitiatorStillPermitted(
   context: PlaybookStepExecutionContext,
   requiredPermissions: readonly string[]
 ): Promise<void> {
+  if (await isSuperAdminUserId(context.initiatorUserId)) return;
   const permissions = await getUserPermissions(context.initiatorUserId, context.project);
   const missingPermissions = requiredPermissions.filter(
     (permission) => !permissions.has(permission)
@@ -125,27 +123,6 @@ export async function executeStep(
   }
   const parsedConfig = parseStepInput(context.stepType, boundConfig);
 
-  // @feature-flag:playbooks-production-adapters start winner=enabled
-  const isPhase2Step = context.stepType === 'ingest-artifact'
-    || context.stepType === 'branch'
-    || (context.stepType === 'approval-gate' && Boolean(parsedConfig.approverPool));
-  const phase2Enabled = !isPhase2Step || await isFeatureEnabled('playbooks-production-adapters', {
-      userId: context.initiatorUserId,
-      project: context.project,
-    });
-  if (isPhase2Step && !phase2Enabled) {
-    // @feature-flag:playbooks-production-adapters disabled-start
-    if (context.stepType === 'ingest-artifact' || context.stepType === 'branch') {
-      throw new PlaybookProductionAdapterDisabledError(context.stepType);
-    }
-    if (context.stepType === 'approval-gate') {
-      delete parsedConfig.approverPool;
-      delete parsedConfig.gatedStepId;
-    }
-    // @feature-flag:playbooks-production-adapters disabled-end
-  }
-  // @feature-flag:playbooks-production-adapters enabled-start
-
   // Every descriptor is enforced, including `read`. Fetch once at the last boundary before
   // dispatch so a permission revoked while the run was parked cannot reach an adapter.
   await assertInitiatorStillPermitted(
@@ -153,10 +130,7 @@ export async function executeStep(
     requiredPermissionsForStep(context.stepType, parsedConfig),
   );
 
-  const result = await adapter({ ...context, config: parsedConfig });
-  // @feature-flag:playbooks-production-adapters enabled-end
-  // @feature-flag:playbooks-production-adapters end
-  return result;
+  return adapter({ ...context, config: parsedConfig });
 }
 
 export * from './registry';

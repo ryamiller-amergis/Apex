@@ -44,7 +44,10 @@ resource "azurerm_linux_web_app" "main" {
   resource_group_name = local.app_resource_group_name
   service_plan_id     = azurerm_service_plan.main.id
   https_only          = true
-  tags                = merge(var.tags, { Environment = var.environment })
+  # ARR affinity pins a browser to one instance; when that instance hangs, the
+  # user stays pinned to it. deploy.yml enforces the live value.
+  client_affinity_enabled = false
+  tags                    = merge(var.tags, { Environment = var.environment })
 
   identity {
     type = "SystemAssigned"
@@ -68,6 +71,10 @@ resource "azurerm_linux_web_app" "main" {
     # dependency endpoints are observed separately so a shared database outage
     # does not remove every application instance from rotation.
     health_check_path = "/api/health"
+    # Azure pings about once a minute. azurerm 3.63+ rejects
+    # WEBSITE_HEALTHCHECK_MAXPINGFAILURES in app_settings and writes this
+    # value into that setting. 2 replaces the platform default of 10.
+    health_check_eviction_time_in_min = 2
 
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
     # upgrade). Declared explicitly so a full apply never reverts the runtime
@@ -93,13 +100,14 @@ resource "azurerm_linux_web_app" "main" {
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
 
-    # PDF artifacts (managed identity; no storage keys)
-    "PDF_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
-    "PDF_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared[var.pdf_blob_container_name].name
-
     # Repository grounding bundles (managed identity; no storage keys)
     "GROUNDING_BLOB_ACCOUNT_NAME"   = azurerm_storage_account.shared.name
     "GROUNDING_BLOB_CONTAINER_NAME" = azurerm_storage_container.shared["repo-grounding"].name
+
+    # Playbook step output (managed identity; no storage keys). Existing apps
+    # keep using the shared-account fallback until deploy writes this setting.
+    "PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME" = azurerm_storage_account.shared.name
+    "PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME"    = azurerm_storage_container.shared["playbook-step-outputs"].name
 
     # Repo read service (null/empty while enable_repo_read_service is false)
     "REPO_READ_SERVICE_URL"   = try("https://${azurerm_container_app.repo_read_service[0].ingress[0].fqdn}", "")
@@ -171,6 +179,10 @@ resource "azurerm_linux_web_app" "main" {
       "DATABASE_URL",
       var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
       "DB_POOL_MAX",
+      # Staging opts in to test-account sign-in; a swap must not carry that into production.
+      "ALLOW_TEST_ACCOUNT_SIGN_IN",
+      # Production runs a larger libuv pool than staging.
+      "UV_THREADPOOL_SIZE",
       # How long a background run may wait for a worker before it is failed as
       # queue_ttl. Approving a PRD submits one run per feature against a lane
       # that runs ten at a time, so the legitimate wait scales with the feature
@@ -180,6 +192,14 @@ resource "azurerm_linux_web_app" "main" {
       # shortly after the former 90s reaper threshold. Keep this with each slot
       # until V2 confirms worker loss through checkpoints plus platform status.
       "AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS",
+      # Staging shares production's database, so a full grounding sweep there
+      # clones production's repositories onto staging's disk. Staging holds
+      # "cleanup-only" and production "full"; a swap must not trade them.
+      "GROUNDING_MAINTENANCE_MODE",
+      # Staging shares production's database, so its background sweeps would
+      # claim production's work. Staging holds "off" and production "full"; a
+      # swap must not trade them.
+      "BACKGROUND_JOBS_MODE",
     ])
   }
 
@@ -188,7 +208,7 @@ resource "azurerm_linux_web_app" "main" {
     failed_request_tracing  = true
 
     dynamic "application_logs" {
-      for_each = var.environment == "dev" ? [1] : []
+      for_each = contains(["dev", "prd"], var.environment) ? [1] : []
 
       content {
         file_system_level = "Information"
@@ -197,8 +217,8 @@ resource "azurerm_linux_web_app" "main" {
 
     http_logs {
       file_system {
-        retention_in_days = 7
-        retention_in_mb   = 35
+        retention_in_days = var.environment == "prd" ? 3 : 7
+        retention_in_mb   = var.environment == "prd" ? 100 : 35
       }
     }
   }
@@ -223,11 +243,13 @@ resource "azurerm_linux_web_app_slot" "staging" {
   name           = var.staging_slot_name
   app_service_id = azurerm_linux_web_app.main.id
   https_only     = true
-  tags           = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
+  # Same as production; deploy.yml enforces the live value.
+  client_affinity_enabled = false
+  tags                    = merge(var.tags, { Environment = var.environment, Slot = var.staging_slot_name })
 
   # Slot identities are not swapped with application code. Keep a dedicated
-  # system identity on staging so pre-swap PDF smoke tests retain managed-
-  # identity access to the production shared Blob account.
+  # system identity on staging so pre-swap checks retain managed-identity
+  # access to the production shared Blob account.
   identity {
     type = "SystemAssigned"
   }

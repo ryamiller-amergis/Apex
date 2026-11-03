@@ -13,6 +13,7 @@ import {
 import { getObservabilityCaptureService } from './observabilityCaptureService';
 import { isObservabilityCaptureEnabled } from './observabilityCaptureFlagSnapshot';
 import { trackEvent } from './telemetry';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export const OBSERVABILITY_RETENTION_LOCK_KEY = 'apex:observability-retention';
 export const OBSERVABILITY_RETENTION_DAYS = 30;
@@ -146,7 +147,10 @@ export function createObservabilityOperationsService(
   const track = deps.track ?? trackEvent;
 
   let timer: ReturnType<typeof setInterval> | null = null;
-  let isRunning = false;
+  const runGuard = createSingleFlight({
+    name: 'observability-retention',
+    stuckAfterMs: stuckAfterForInterval(OBSERVABILITY_RETENTION_CHECK_INTERVAL_MS),
+  });
   let lastSuccessfulUtcDate: string | null = null;
 
   async function readStoreStatistics(): Promise<{
@@ -257,10 +261,10 @@ export function createObservabilityOperationsService(
   }
 
   async function tick(): Promise<void> {
-    if (isRunning) return;
     const current = now();
     if (!isRetentionDue(current, lastSuccessfulUtcDate)) return;
-    isRunning = true;
+    const runToken = runGuard.tryEnter();
+    if (runToken === null) return;
     try {
       const result = await runRetentionCycle();
       if (!result.skipped) {
@@ -269,7 +273,7 @@ export function createObservabilityOperationsService(
     } catch {
       // Contained: next hourly check remains eligible because lastSuccessfulUtcDate is unchanged.
     } finally {
-      isRunning = false;
+      runGuard.exit(runToken);
     }
   }
 

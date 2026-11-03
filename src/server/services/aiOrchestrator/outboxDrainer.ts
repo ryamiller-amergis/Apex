@@ -88,6 +88,8 @@ export type OutboxDrainerDeps = Readonly<{
   acquireOutboxLease?: <T>(
     work: (lease: HeldDistributedLease) => Promise<T>,
   ) => Promise<T>;
+  /** Called after every drain pass, including failed ones. */
+  onProgress?: () => void;
 }>;
 
 export type OutboxDrainer = {
@@ -997,6 +999,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
               err instanceof Error ? err.message : String(err),
             );
           }
+          deps.onProgress?.();
         }
       })
       .catch(() => undefined);

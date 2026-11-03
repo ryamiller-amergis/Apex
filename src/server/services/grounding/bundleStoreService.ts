@@ -22,6 +22,7 @@ import { isFeatureEnabled as evaluateFeatureFlag } from '../featureFlagService';
 import { createGroundingTelemetry } from '../groundingTelemetry';
 import { resolveGitRemote } from '../repoCacheService';
 import { trackEvent } from '../telemetry';
+import { removeTree } from '../../utils/removeTree';
 import {
   bundleKey,
   checkoutBundleAtSha,
@@ -340,9 +341,7 @@ export function createGroundingBundleStore(
             false
           );
           if (destinationOwned) {
-            await rm(destination, { recursive: true, force: true }).catch(
-              () => undefined
-            );
+            await removeTree(destination).catch(() => undefined);
           }
         }
 
@@ -371,9 +370,7 @@ export function createGroundingBundleStore(
           fallbackReason = 'repair-failed';
         }
 
-        await rm(destination, { recursive: true, force: true }).catch(
-          () => undefined
-        );
+        await removeTree(destination).catch(() => undefined);
         telemetry('grounding.bundle.fallback', { reason: fallbackReason });
         telemetry(
           'grounding.bundle.materialization.duration',
@@ -480,9 +477,7 @@ export function createGroundingBundleStore(
           );
           // A half-written mirror would fail every later read, and the caller
           // clones from the remote instead — leave nothing behind.
-          await rm(destination, { recursive: true, force: true }).catch(
-            () => undefined
-          );
+          await removeTree(destination).catch(() => undefined);
           telemetry('grounding.bundle.fallback', { reason, shape: 'bare' });
           telemetry(
             'grounding.bundle.materialization.duration',

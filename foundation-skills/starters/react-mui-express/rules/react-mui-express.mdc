@@ -1,0 +1,33 @@
+---
+description: Coding rules for the React + MUI client and the Express server
+alwaysApply: true
+---
+
+# Coding rules — React + MUI on Express
+
+Copy this file to `.cursor/rules/react-mui-express.mdc` in the target repository and adjust it to the app.
+
+## TypeScript
+
+- `strict` mode is on. Do not use `any`; use `unknown` and narrow it.
+- Types shared by client and server live in `src/shared/`.
+- In a `switch` over a union, end with a `never` check so a new member fails the build.
+
+## Client (React + MUI)
+
+- Function components and hooks only. One component per file, named like the file.
+- Server data goes through TanStack Query hooks in `src/client/hooks/`. Do not call `fetch` inside a component.
+- Follow the design-system skill at `.cursor/skills/design-system/SKILL.md` for components, tokens, icons and layout.
+- Every interactive element has a stable `data-testid`.
+
+## Server (Express)
+
+- Routes in `src/server/routes/` validate input and call a service; business logic lives in `src/server/services/`.
+- Validate every request body with a schema and return 400 with field errors when it fails.
+- Check permissions in the route before calling the service.
+- Never log or return a secret, token or connection string. Return a fixed message, not raw error text.
+
+## Tests
+
+- Every change ships with a test that fails without it. Unit tests sit beside the code in `__tests__/`.
+- Run the commands in the quality manifest before you finish: type-check, lint, related tests.

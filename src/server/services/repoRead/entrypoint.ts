@@ -15,6 +15,7 @@ import {
   getRepoCacheDir,
 } from '../repoCacheService';
 import { flushTelemetry, trackEvent } from '../telemetry';
+import { groundingMaintenanceScheduler } from '../groundingMaintenanceScheduler';
 import { BareRepoReader } from './bareRepoReader';
 import { handleRepoReadRequest } from './httpHandler';
 import type { RepoReadOperation } from './httpProtocol';
@@ -241,6 +242,13 @@ async function main(): Promise<void> {
       serverPort: port,
     })
   );
+
+  // Repo-read owns upkeep for projects wholly on V2 only when configured to;
+  // App Service keeps every other project.
+  if (groundingMaintenanceScheduler.mode === 'v2-projects') {
+    groundingMaintenanceScheduler.start();
+    console.log('[repo-read] grounding maintenance started (mode=v2-projects)');
+  }
 }
 
 if (require.main === module) {

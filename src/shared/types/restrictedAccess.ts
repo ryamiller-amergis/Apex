@@ -30,12 +30,15 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   'ui-lab': 'ui-lab:view',
   'qa-lab': 'planning:qa',
   'feature-requests': 'feature-requests:view',
-  'pdf-tools': 'pdf-assembly:use',
   'ai-cost': 'analytics:ai-cost:view',
   'design-module': 'design-module:view',
   'load-tests': 'load-test:view',
   diagrams: 'diagram:view',
   'work-board': 'work-board:view',
+  playbooks: 'playbooks:view',
+  builds: 'builds:view',
+  'mcp-servers': 'mcp-servers:view',
+  brainstorm: 'brainstorm:view',
 };
 
 export interface RestrictedUserAccess {

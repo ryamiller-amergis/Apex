@@ -107,7 +107,7 @@ function selectOwner(labelPattern: RegExp, userName: string) {
   const input = within(field).getByRole('combobox');
   fireEvent.focus(input);
   fireEvent.change(input, { target: { value: userName.split(' ')[0] } });
-  fireEvent.mouseDown(within(field).getByRole('option', { name: new RegExp(userName) }));
+  fireEvent.mouseDown(screen.getByRole('option', { name: new RegExp(userName) }));
 }
 
 function selectAllOwners() {

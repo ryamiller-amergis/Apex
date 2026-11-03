@@ -73,6 +73,7 @@ jest.mock('../services/chatThreadRepository', () => ({
   loadFullThread: jest.fn().mockResolvedValue(null),
   listMessageIds: jest.fn().mockResolvedValue([]),
   deleteThread: jest.fn().mockResolvedValue(undefined),
+  reopenClosedThread: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/prdService', () => ({ syncPrdContent: jest.fn() }));
@@ -224,6 +225,10 @@ import type {
   ChatThread,
   ChatThreadKickoff,
 } from '../../shared/types/chat';
+import {
+  mcpServerToolRetryPrompt,
+  mcpServerTurnRequiresToolUse,
+} from '../../shared/types/mcpServers';
 import { getSkillFile } from '../services/skillCatalogFacade';
 import type { CallerGroundingSelection } from '../services/callerGroundingService';
 import type {
@@ -254,6 +259,21 @@ describe('turn skill prompts', () => {
     expect(prompt).toContain(
       'Informational questions and analysis must not mutate Azure DevOps',
     );
+  });
+
+  it('VT-ASSIST-5 keeps the visible user request exact when internal specialist context is added to the prompt', () => {
+    const baText = 'Cashiers need a faster close.';
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+
+    const prompt = buildTurnPrompt(baText, undefined, internalContext);
+
+    expect(prompt.split('User request:\n')[1]).toBe(baText);
+    expect(prompt).toContain(internalContext);
+    expect(prompt.indexOf(internalContext)).toBeLessThan(prompt.indexOf('User request:\n'));
   });
 
   it('routes only MCP-dependent skill content away from the interactive actor', () => {
@@ -1492,6 +1512,55 @@ describe('canonical durable send wrapper', () => {
     }
   });
 
+  it('reopens an idle-closed thread when its owner sends a message', async () => {
+    const accepted = {
+      turnId,
+      runId,
+      status: 'queued' as const,
+      interactiveClass: 'fast' as const,
+    };
+    mockDurableInteractiveAdmit.mockResolvedValue(accepted);
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      async (input: { admitDurable(): Promise<typeof accepted> }) => ({
+        route: 'durable',
+        response: await input.admitDurable(),
+      }),
+    );
+    const { reopenClosedThread: mockReopenClosedThread } = jest.requireMock(
+      '../services/chatThreadRepository',
+    ) as { reopenClosedThread: jest.Mock };
+    mockReopenClosedThread.mockClear();
+    const closedId = '30000000-0000-4000-8000-000000000077';
+    const now = new Date().toISOString();
+    mockPgLoadFullThread.mockResolvedValue({
+      id: closedId,
+      userId: 'developer-1',
+      status: 'closed',
+      kickoff: baseKickoff(),
+      workspaceDir: '',
+      messages: [],
+      createdAt: now,
+      lastActivityAt: now,
+    });
+
+    try {
+      await expect(
+        sendMessage(closedId, 'Picking this back up', undefined, [], {
+          turnId,
+          turnIdPolicy: 'required',
+        }),
+      ).resolves.toEqual({ route: 'durable', response: accepted });
+      expect(mockReopenClosedThread).toHaveBeenCalledWith(closedId);
+      expect((await getThread(closedId))?.status).not.toBe('closed');
+      expect(mockDurableInteractiveAdmit).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: closedId, text: 'Picking this back up' }),
+      );
+    } finally {
+      mockPgLoadFullThread.mockResolvedValue(null);
+      await closeThread(closedId);
+    }
+  });
+
   it('runs the stale-thread gate only inside the detached legacy callback', async () => {
     mockCanonicalInteractiveWorkflowRoute.mockImplementation(
       mockCanonicalLegacyRoute,
@@ -2315,6 +2384,120 @@ describe('document assistant MCP wiring', () => {
     }
   });
 
+  it('VT-ASSIST-5 persists the BA text and puts specialist context only in the model prompt', async () => {
+    const { insertMessage: mockPgInsertMessage } = jest.requireMock(
+      '../services/chatThreadRepository'
+    ) as {
+      insertMessage: jest.Mock;
+    };
+    const originalFetch = global.fetch;
+    const baText = 'Cashiers need a faster close.';
+    const internalContext = [
+      '<<<INTERNAL_SPECIALIST_CONTEXT>>>',
+      '{"findings":["Close is slow"]}',
+      '<<<END_INTERNAL_SPECIALIST_CONTEXT>>>',
+    ].join('\n');
+    process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL = 'https://interactive.test';
+    mockIsFeatureEnabled.mockImplementation(
+      async (key: string) => key === 'ai-runs-interactive'
+    );
+    mockPgInsertMessage.mockClear();
+    mockEnqueueAgentRun.mockResolvedValue({ runId: 'interactive-run-assist' });
+    mockInteractiveWorkflowRoute.mockImplementation(
+      async (input: {
+        dispatchToActor(dispatch: {
+          runId: string;
+          dispatchMessageId: string;
+        }): Promise<void>;
+      }) => {
+        await input.dispatchToActor({
+          runId: 'interactive-run-assist',
+          dispatchMessageId: 'dispatch-assist',
+        });
+        return {
+          route: 'actor',
+          runId: 'interactive-run-assist',
+          dispatchMessageId: 'dispatch-assist',
+          slot: 'reserved',
+        };
+      }
+    );
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true }),
+    }) as unknown as typeof fetch;
+    const repoReader: RepoReader = {
+      identity: {
+        provider: 'github',
+        project: 'Apex',
+        repo: 'AI-Pilot',
+        sha: 'interactive-sha',
+      },
+      readFile: jest.fn().mockResolvedValue('# repository context'),
+      listDir: jest.fn().mockResolvedValue([]),
+      searchCode: jest.fn().mockResolvedValue([]),
+    };
+    mockCallerGroundingStart.mockResolvedValue({
+      mode: 'local',
+      cwd: '/tmp/interactive-checkout',
+      profileId: 'interactive-profile' as GroundingProfileId,
+      resolvedSha: 'interactive-sha',
+      nativeReads: true,
+      workingTree: true,
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+    mockResolveConnectionProfile.mockResolvedValue(repoReader);
+    mockCallerGroundingSelectionToBinding.mockReturnValue({
+      mode: 'local',
+      sha: 'interactive-sha',
+    });
+    mockEvaluateBindingContinuity.mockReturnValue({
+      decision: 'recreate',
+      reason: 'legacy-binding-missing',
+    });
+
+    const thread = await createThread('developer-1', baseKickoff(), {
+      skipAutoKickoff: true,
+    });
+
+    try {
+      await sendMessage(thread.id, baText, undefined, [], { internalContext });
+
+      expect(mockPgInsertMessage).toHaveBeenCalledTimes(1);
+      const persisted = mockPgInsertMessage.mock.calls[0][1] as {
+        role: string;
+        text: string;
+        hidden?: boolean;
+      };
+      expect(persisted.role).toBe('user');
+      expect(persisted.text).toBe(baText);
+      expect(persisted.hidden).toBeUndefined();
+      expect(persisted.text).not.toContain('INTERNAL_SPECIALIST_CONTEXT');
+      expect(mockEnqueueAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            prompt: expect.stringContaining(internalContext),
+          }),
+        })
+      );
+      const prompt = mockEnqueueAgentRun.mock.calls[0][0].snapshot.prompt as string;
+      expect(prompt.split('User request:\n')[1]).toContain(baText);
+      expect(prompt.split('User request:\n')[1]).not.toContain('INTERNAL_SPECIALIST_CONTEXT');
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL;
+      mockIsFeatureEnabled.mockReset();
+      mockIsFeatureEnabled.mockResolvedValue(false);
+      mockInteractiveWorkflowRoute.mockReset();
+      mockEnqueueAgentRun.mockReset();
+      await closeThread(thread.id);
+      mockCallerGroundingStart.mockReset();
+      mockResolveConnectionProfile.mockReset();
+      mockCallerGroundingSelectionToBinding.mockReset();
+      mockEvaluateBindingContinuity.mockReset();
+    }
+  });
+
   it('dispatches interactive turns from a bare mirror when the worker can read it', async () => {
     const { insertMessage: mockPgInsertMessage } = jest.requireMock(
       '../services/chatThreadRepository'
@@ -2960,5 +3143,68 @@ describe('buildDocumentAssistantEditGuidance', () => {
     expect(guidance).toContain(
       'Do NOT write proposed design-doc content to `.ai-pilot/output/`'
     );
+  });
+});
+
+describe('integration connector MCP mount (SC-5)', () => {
+  it('SC-5 mounts only the selected connection tool server', () => {
+    const port = process.env.PORT ?? '3001';
+    const servers = buildMcpServers(
+      baseKickoff({
+        assistantType: 'mcp-server',
+        mcpServerId: 'conn-clerk',
+        skillProvider: 'ado',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+      { maxviewEnabled: true, userId: 'user-1' },
+    );
+
+    expect(servers).toEqual({
+      'mcp-server': {
+        url: `http://localhost:${port}/mcp/mcp-servers/conn-clerk?userId=user-1`,
+      },
+    });
+  });
+
+  it('tells an MCP chat to use only the connected read-only tools', () => {
+    const prompt = buildInitialPrompt(baseKickoff({
+      assistantType: 'mcp-server',
+      mcpServerId: '20000000-0000-4000-8000-000000000002',
+      pillLabel: 'Clerk',
+    }));
+
+    expect(prompt).toContain('Clerk');
+    expect(prompt).toContain('read-only tools');
+    expect(prompt).toContain('Complete the user’s request');
+    expect(prompt).toContain('call the relevant MCP tools before answering');
+    expect(prompt).toContain('If the user explicitly defines an approximation');
+    expect(prompt).toContain('offset probes or binary search');
+    expect(prompt).toContain('at most eight MCP calls');
+    expect(prompt).toContain('Do not return SQL');
+    expect(prompt).not.toContain('ado-skills');
+  });
+
+  it('requires MCP tools for data questions and follow-up calculations', () => {
+    expect(mcpServerTurnRequiresToolUse('How many people logged in today?')).toBe(true);
+    expect(
+      mcpServerTurnRequiresToolUse(
+        "Count users whose last_sign_in_at falls on today's date",
+      ),
+    ).toBe(true);
+    expect(mcpServerTurnRequiresToolUse('Thanks!')).toBe(false);
+    expect(mcpServerTurnRequiresToolUse('What can you do?')).toBe(false);
+  });
+
+  it('builds an outcome-first retry after an MCP turn skips tool use', () => {
+    const retry = mcpServerToolRetryPrompt(
+      'Clerk',
+      'Count users whose last_sign_in_at is today',
+    );
+
+    expect(retry).toContain('Discard that draft');
+    expect(retry).toContain('Call the relevant MCP tools');
+    expect(retry).toContain('Return the result first');
+    expect(retry).toContain('Count users whose last_sign_in_at is today');
+    expect(retry).not.toContain('write SQL');
   });
 });

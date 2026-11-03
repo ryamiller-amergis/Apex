@@ -419,6 +419,80 @@ describe('AdminRoles — permissions modal', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('TBI-004 VT-18 lists workflow-evaluation keys and saves their ids', async () => {
+    const { mutateAsync } = setupDefaultMocks();
+    mutateAsync.mockResolvedValue(undefined);
+    (usePermissions as jest.Mock).mockReturnValue({
+      data: [
+        ...allPermissions,
+        {
+          id: 'we-view',
+          key: 'workflow-evaluation:view',
+          description: 'View workflow evaluation definitions, event history and job diagnostics',
+          category: 'workflow-evaluation',
+        },
+        {
+          id: 'we-submit',
+          key: 'workflow-evaluation:submit',
+          description: 'Submit human workflow evaluations on Interview phases and PRDs',
+          category: 'workflow-evaluation',
+        },
+      ],
+    });
+
+    render(<AdminRoles />);
+    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
+
+    expect(screen.getByText('workflow-evaluation')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('role-permission-workflow-evaluation-view-checkbox'));
+    fireEvent.click(screen.getByTestId('role-permission-workflow-evaluation-submit-checkbox'));
+    fireEvent.click(screen.getByTestId('role-permissions-save'));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'role-admin',
+          permissionIds: expect.arrayContaining(['p1', 'p2', 'we-view', 'we-submit']),
+        }),
+      );
+    });
+  });
+
+  it('TBI-004 VT-19 warns when submit is granted without view, then clears', () => {
+    (usePermissions as jest.Mock).mockReturnValue({
+      data: [
+        ...allPermissions,
+        {
+          id: 'we-view',
+          key: 'workflow-evaluation:view',
+          description: 'View definitions',
+          category: 'workflow-evaluation',
+        },
+        {
+          id: 'we-submit',
+          key: 'workflow-evaluation:submit',
+          description: 'Submit evaluations',
+          category: 'workflow-evaluation',
+        },
+      ],
+    });
+
+    render(<AdminRoles />);
+    fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
+    fireEvent.click(screen.getByTestId('role-permission-workflow-evaluation-submit-checkbox'));
+
+    const warning = screen.getByTestId('workflow-evaluation-submit-without-view-warning');
+    expect(warning).toHaveAttribute('role', 'status');
+    expect(warning).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByTestId('role-permissions-save')).toHaveAttribute(
+      'aria-describedby',
+      'workflow-evaluation-submit-without-view-warning',
+    );
+
+    fireEvent.click(screen.getByTestId('role-permission-workflow-evaluation-view-checkbox'));
+    expect(screen.queryByTestId('workflow-evaluation-submit-without-view-warning')).not.toBeInTheDocument();
+  });
+
   it('PBI-008 AC-0 exposes all Playbook keys with visible purpose text', () => {
     render(<AdminRoles />);
     fireEvent.click(screen.getAllByTitle('Manage permissions')[0]);
@@ -518,6 +592,33 @@ describe('AdminRoles — members modal', () => {
     fireEvent.click(screen.getByTestId('project-role-assign'));
 
     expect(screen.getByTestId('playbook-author-without-run-warning')).toHaveAttribute(
+      'role',
+      'alert',
+    );
+  });
+
+  it('TBI-004 shows the members-dialog warning when the role can submit without view', () => {
+    const mutate = jest.fn((_variables, options) => {
+      options.onSuccess({ ok: true });
+    });
+    (useAssignProjectRole as jest.Mock).mockReturnValue({
+      mutate,
+      isPending: false,
+      error: null,
+    });
+    (useRoles as jest.Mock).mockReturnValue({
+      data: [{ ...adminRole, permissions: ['workflow-evaluation:submit'] }, memberRole],
+      isLoading: false,
+    });
+    render(<AdminRoles selectedProject="Apex" />);
+
+    fireEvent.click(screen.getAllByTitle('Manage members')[0]);
+    fireEvent.change(screen.getByTestId('project-role-member-select'), {
+      target: { value: 'u2' },
+    });
+    fireEvent.click(screen.getByTestId('project-role-assign'));
+
+    expect(screen.getByTestId('workflow-evaluation-submit-without-view-warning')).toHaveAttribute(
       'role',
       'alert',
     );

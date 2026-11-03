@@ -17,6 +17,16 @@ import * as prdService from '../services/prdService';
 
 jest.mock('../services/interviewService');
 jest.mock('../services/prdService');
+jest.mock('../services/interviewBriefService', () => ({
+  getInterviewBrief: jest.fn(),
+  saveInterviewBrief: jest.fn(),
+  approveInterviewBrief: jest.fn(),
+  getApprovedInterviewBriefForPrd: jest.fn().mockResolvedValue(null),
+  formatInterviewBriefForPrd: jest.fn().mockReturnValue('# Approved Interview Brief'),
+}));
+jest.mock('../services/interviewOrchestratorService', () => ({
+  draftInterviewBriefSections: jest.fn(),
+}));
 jest.mock('../services/chatAgentService', () => ({
   readOutputPrd: jest.fn().mockReturnValue(null),
   readOutputBacklog: jest.fn().mockReturnValue(null),
@@ -28,6 +38,7 @@ jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn().mockResolvedValue({ id: 'thread-mock', kickoff: {} }),
   sendMessage: jest.fn().mockResolvedValue(undefined),
   getThreadAsync: jest.fn().mockResolvedValue(null),
+  updateThreadKickoffTranscript: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/designDocService');
@@ -80,6 +91,11 @@ jest.mock('../services/appSettingsService', () => ({
 
 jest.mock('../services/rbacService', () => ({
   getActiveUsers: jest.fn(),
+  getUserPermissions: jest.fn().mockResolvedValue(new Set(['interviews:manage'])),
+}));
+
+jest.mock('../services/groupService', () => ({
+  getUserGroupNames: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('../services/testCaseService', () => ({
@@ -117,6 +133,7 @@ jest.mock('../services/bedrockService', () => ({
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
+      interviews: { findFirst: jest.fn().mockResolvedValue(undefined) },
       prds: { findFirst: jest.fn() },
       designPlans: { findFirst: jest.fn() },
       designDocs: { findFirst: jest.fn() },
@@ -150,6 +167,19 @@ jest.mock('../middleware/rbac', () => ({
   requireGroupMembership: (..._groupNames: string[]) =>
     (_req: any, _res: any, next: any) => next(),
   attachPermissions: (_req: any, _res: any, next: any) => next(),
+  resolveRequestProject: (req: {
+    query?: { project?: unknown };
+    body?: { project?: unknown };
+    get?: (name: string) => string | undefined;
+    headers?: Record<string, unknown>;
+  }) => {
+    const fromQuery = req.query?.project;
+    if (typeof fromQuery === 'string' && fromQuery) return fromQuery;
+    const fromBody = req.body?.project;
+    if (typeof fromBody === 'string' && fromBody) return fromBody;
+    const header = req.get?.('x-apex-project') ?? req.headers?.['x-apex-project'];
+    return typeof header === 'string' && header ? header : undefined;
+  },
 }));
 
 jest.mock('../utils/requestUser', () => ({
@@ -168,9 +198,6 @@ describe('BR-012 generation route authorization', () => {
     );
 
     expect(source).toContain(
-      "router.post('/:interviewId/prds', requirePermission('interviews:manage')",
-    );
-    expect(source).toContain(
       "router.post('/prds/:prdId/design-docs', requirePermission('interviews:manage')",
     );
     expect(source).toContain(
@@ -185,17 +212,72 @@ describe('BR-012 generation route authorization', () => {
   });
 });
 
+const COMPLETE_FORBIDDEN =
+  'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
+const BRIEF_APPROVE_FORBIDDEN =
+  'Only the author, an interview section owner, a project admin, a platform admin, or a BA, Manager, or Product Owner with interviews:manage can approve this interview brief';
+
+function routeSlice(source: string, signature: string, length = 2200): string {
+  const start = source.indexOf(signature);
+  return source.slice(start, start + length);
+}
+
+describe('interview complete and PRD generation authorization', () => {
+  function source(): string {
+    return fs.readFileSync(
+      path.join(process.cwd(), 'src/server/routes/interviews.ts'),
+      'utf8',
+    );
+  }
+
+  it('authorizes PRD generation with the shared completer helper instead of interviews:manage', () => {
+    const slice = routeSlice(source(), "router.post('/:interviewId/prds'");
+    expect(slice).toContain('canCompleteInterviewAndGeneratePrd');
+    expect(slice).not.toContain("requirePermission('interviews:manage')");
+  });
+
+  it('authorizes brief approval for completers without the manage and group middleware', () => {
+    const slice = routeSlice(source(), "router.post('/:id/brief/approve'");
+    expect(slice).toContain('canCompleteInterviewAndGeneratePrd');
+    expect(slice).not.toContain("requirePermission('interviews:manage')");
+    expect(slice).not.toContain('requireGroupMembership');
+  });
+
+  it('keeps rename, archive, reopen, and phase assignment behind interviews:manage on PATCH', () => {
+    const slice = routeSlice(source(), "router.patch('/:id'");
+    expect(slice).toContain("perms.has('interviews:manage')");
+    expect(slice).toContain("status !== 'complete'");
+  });
+});
+
 const {
   readOutputPrd: mockReadOutputPrd,
   readOutputBacklog: mockReadOutputBacklog,
   createThread: mockCreateThread,
   sendMessage: mockSendMessage,
+  updateThreadKickoffTranscript: mockUpdateThreadKickoffTranscript,
 } = jest.requireMock('../services/chatAgentService') as {
   readOutputPrd: jest.Mock;
   readOutputBacklog: jest.Mock;
   createThread: jest.Mock;
   sendMessage: jest.Mock;
+  updateThreadKickoffTranscript: jest.Mock;
 };
+
+const {
+  getInterviewBrief: mockGetInterviewBrief,
+  saveInterviewBrief: mockSaveInterviewBrief,
+  approveInterviewBrief: mockApproveInterviewBrief,
+  getApprovedInterviewBriefForPrd: mockGetApprovedInterviewBriefForPrd,
+} = jest.requireMock('../services/interviewBriefService') as {
+  getInterviewBrief: jest.Mock;
+  saveInterviewBrief: jest.Mock;
+  approveInterviewBrief: jest.Mock;
+  getApprovedInterviewBriefForPrd: jest.Mock;
+};
+const { draftInterviewBriefSections: mockDraftInterviewBriefSections } = jest.requireMock(
+  '../services/interviewOrchestratorService',
+) as { draftInterviewBriefSections: jest.Mock };
 
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
   '../services/projectSettingsService',
@@ -205,8 +287,14 @@ const { getDefaultModel: mockGetDefaultModel } = jest.requireMock(
   '../services/appSettingsService',
 ) as { getDefaultModel: jest.Mock };
 
-const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
+const { getActiveUsers: mockGetActiveUsers, getUserPermissions: mockGetUserPermissions } = jest.requireMock(
+  '../services/rbacService',
+) as {
   getActiveUsers: jest.Mock;
+  getUserPermissions: jest.Mock;
+};
+const { getUserGroupNames: mockGetUserGroupNames } = jest.requireMock('../services/groupService') as {
+  getUserGroupNames: jest.Mock;
 };
 
 const {
@@ -647,6 +735,94 @@ describe('PATCH /api/interviews/:id', () => {
 
     expect(res.status).toBe(404);
   });
+
+  it('completes an interview for a caller who lacks interviews:manage', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set());
+    mockInterviewService.updateInterviewStatus.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ status: 'complete' });
+
+    expect(res.status).toBe(200);
+    expect(mockInterviewService.updateInterviewStatus).toHaveBeenCalledWith(
+      'interview-1',
+      'user-test',
+      'complete',
+    );
+  });
+
+  it('rejects a title change when the caller lacks interviews:manage', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set());
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ title: 'Renamed' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: 'Forbidden', missing: ['interviews:manage'] });
+    expect(mockInterviewService.updateInterviewTitle).not.toHaveBeenCalled();
+  });
+
+  it('rejects archive and reopen when the caller lacks interviews:manage', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set());
+
+    const archived = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ status: 'archived' });
+    const reopened = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ status: 'in_progress' });
+
+    expect(archived.status).toBe(403);
+    expect(reopened.status).toBe(403);
+    expect(mockInterviewService.updateInterviewStatus).not.toHaveBeenCalled();
+  });
+
+  it('rejects phase assignment when the caller lacks interviews:manage', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set());
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ phaseAssignments: { discoveryAssigneeId: 'user-2' } });
+
+    expect(res.status).toBe(403);
+    expect(mockInterviewService.updateInterviewPhaseAssignments).not.toHaveBeenCalled();
+  });
+
+  it('applies a complete status and still rejects a mixed title change without interviews:manage', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set());
+    mockInterviewService.updateInterviewStatus.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ status: 'complete', title: 'Renamed', phaseAssignments: { discoveryAssigneeId: 'user-2' } });
+
+    expect(mockInterviewService.updateInterviewStatus).toHaveBeenCalledWith(
+      'interview-1',
+      'user-test',
+      'complete',
+    );
+    expect(mockInterviewService.updateInterviewTitle).not.toHaveBeenCalled();
+    expect(mockInterviewService.updateInterviewPhaseAssignments).not.toHaveBeenCalled();
+    expect(res.status).toBe(403);
+  });
+
+  it('still assigns phases when the caller has interviews:manage', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    mockInterviewService.updateInterviewPhaseAssignments.mockResolvedValue(undefined);
+
+    const res = await request(buildApp())
+      .patch('/api/interviews/interview-1')
+      .send({ phaseAssignments: { discoveryAssigneeId: 'user-2' } });
+
+    expect(res.status).toBe(200);
+    expect(mockInterviewService.updateInterviewPhaseAssignments).toHaveBeenCalledWith(
+      'interview-1',
+      'user-test',
+      { discoveryAssigneeId: 'user-2' },
+    );
+  });
 });
 
 // ── DELETE /api/interviews/:id ─────────────────────────────────────────────────
@@ -670,6 +846,179 @@ describe('DELETE /api/interviews/:id', () => {
     const res = await request(buildApp()).delete('/api/interviews/interview-1');
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe('Playbook interview brief routes', () => {
+  const brief = {
+    id: 'brief-1',
+    interviewId: 'interview-1',
+    status: 'draft',
+    version: 1,
+    sections: {
+      problemAndOutcome: 'Reduce rework',
+      users: 'Business analysts',
+      scope: 'Discovery',
+      businessRules: '',
+      scenarios: '',
+      acceptanceCriteria: '',
+      assumptions: '',
+      unresolvedItems: [],
+    },
+    approvedBy: null,
+    approvedAt: null,
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('loads, saves, and approves the BA brief with the request user', async () => {
+    mockGetInterviewBrief.mockResolvedValue(brief);
+    mockInterviewService.getInterview.mockResolvedValue(interview);
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+    mockSaveInterviewBrief.mockResolvedValue({ ...brief, version: 2 });
+    mockApproveInterviewBrief.mockResolvedValue({ version: 3, resumed: true });
+    mockDraftInterviewBriefSections.mockResolvedValue(brief.sections);
+
+    const loaded = await request(buildApp()).get('/api/interviews/interview-1/brief');
+    const drafted = await request(buildApp()).post('/api/interviews/interview-1/brief/draft');
+    const saved = await request(buildApp())
+      .put('/api/interviews/interview-1/brief')
+      .send({ sections: brief.sections });
+    const approved = await request(buildApp())
+      .post('/api/interviews/interview-1/brief/approve');
+
+    expect(loaded.status).toBe(200);
+    expect(drafted.status).toBe(200);
+    expect(saved.status).toBe(200);
+    expect(approved.status).toBe(200);
+    expect(mockSaveInterviewBrief).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+      sections: brief.sections,
+      savedBy: 'user-test',
+    });
+    expect(mockDraftInterviewBriefSections).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+    });
+    expect(mockApproveInterviewBrief).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+      approvedBy: 'user-test',
+    });
+  });
+
+  it('FEAT-005: both read routes use the build-intake read guard', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/server/routes/interviews.ts'), 'utf8');
+    expect(source).toContain("router.get('/:id', requireInterviewRead,");
+    expect(source).toContain("router.get('/:id/brief', requireInterviewRead,");
+    const guard = routeSlice(source, 'async function allowBuildIntakeParticipant', 900);
+    expect(guard).toContain('BUILD_INTAKE_OPTION_KEY');
+    expect(guard).toContain('isBuildIntakeParticipant');
+    expect(guard).toContain("requirePermission('interviews:view')");
+  });
+
+  it('FEAT-005: the build requester reads a build-intake interview and its brief', async () => {
+    const { db } = jest.requireMock('../db/drizzle') as { db: { query: { interviews: { findFirst: jest.Mock } } } };
+    db.query.interviews.findFirst.mockResolvedValue({
+      authorId: 'user-test',
+      project: 'Apex',
+      playbookProfileKey: 'build-intake',
+    });
+    mockInterviewService.getInterview.mockResolvedValue({ ...interview, playbookProfileKey: 'build-intake' });
+    mockGetInterviewBrief.mockResolvedValue(brief);
+
+    const detail = await request(buildApp()).get('/api/interviews/interview-1');
+    const loaded = await request(buildApp()).get('/api/interviews/interview-1/brief');
+
+    expect(detail.status).toBe(200);
+    expect(loaded.status).toBe(200);
+    db.query.interviews.findFirst.mockResolvedValue(undefined);
+  });
+
+  it('VT-12: a build-intake brief with a sensitive-data warning still approves (PBI-010 AC-3)', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({ ...interview, playbookProfileKey: 'build-intake' });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+    mockApproveInterviewBrief.mockResolvedValue({ version: 2, resumed: true });
+
+    const res = await request(buildApp()).post('/api/interviews/interview-1/brief/approve');
+
+    expect(res.status).toBe(200);
+    expect(mockApproveInterviewBrief).toHaveBeenCalledWith({ interviewId: 'interview-1', approvedBy: 'user-test' });
+  });
+
+  it('approves a brief for a section owner who lacks interviews:manage and approver groups', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      authorId: 'someone-else',
+      prdOwnerId: 'user-test',
+    });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+    mockGetUserPermissions.mockResolvedValue(new Set());
+    mockGetUserGroupNames.mockResolvedValue([]);
+    mockApproveInterviewBrief.mockResolvedValue({ version: 2, resumed: true });
+
+    const res = await request(buildApp()).post('/api/interviews/interview-1/brief/approve');
+
+    expect(res.status).toBe(200);
+    expect(mockInterviewService.canCompleteInterviewAndGeneratePrd).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining({ prdOwnerId: 'user-test', authorId: 'someone-else' }),
+    );
+    expect(mockApproveInterviewBrief).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+      approvedBy: 'user-test',
+    });
+    expect(mockGetUserGroupNames).not.toHaveBeenCalled();
+  });
+
+  it('approves a brief for a project admin and a platform admin through the shared helper', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      authorId: 'someone-else',
+    });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+    mockGetUserPermissions.mockResolvedValue(new Set());
+    mockGetUserGroupNames.mockResolvedValue([]);
+    mockApproveInterviewBrief.mockResolvedValue({ version: 2, resumed: false });
+
+    const res = await request(buildApp()).post('/api/interviews/interview-1/brief/approve');
+
+    expect(res.status).toBe(200);
+    expect(mockApproveInterviewBrief).toHaveBeenCalled();
+  });
+
+  it('keeps brief approval for a BA, Manager, or Product Owner who has interviews:manage', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      authorId: 'someone-else',
+    });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(false);
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    mockGetUserGroupNames.mockResolvedValue(['Manager']);
+    mockApproveInterviewBrief.mockResolvedValue({ version: 4, resumed: false });
+
+    const res = await request(buildApp()).post('/api/interviews/interview-1/brief/approve');
+
+    expect(res.status).toBe(200);
+    expect(mockGetUserGroupNames).toHaveBeenCalledWith('user-test');
+    expect(mockApproveInterviewBrief).toHaveBeenCalledWith({
+      interviewId: 'interview-1',
+      approvedBy: 'user-test',
+    });
+  });
+
+  it('rejects brief approval for an unrelated user', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      authorId: 'someone-else',
+    });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(false);
+    mockGetUserPermissions.mockResolvedValue(new Set());
+    mockGetUserGroupNames.mockResolvedValue([]);
+
+    const res = await request(buildApp()).post('/api/interviews/interview-1/brief/approve');
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: BRIEF_APPROVE_FORBIDDEN });
+    expect(mockApproveInterviewBrief).not.toHaveBeenCalled();
   });
 });
 
@@ -839,12 +1188,44 @@ describe('POST /api/interviews/prds/:prdId/submit', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(mockPrdService.submitForReview).toHaveBeenCalledWith('prd-1', 'user-test', {
-      prdApproverIds: [],
-      designDocApproverIds: [],
-      designPrototypeApproverIds: [],
-      qaApproverIds: [],
-    });
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith(
+      'prd-1',
+      'user-test',
+      {
+        prdApproverIds: [],
+        designDocApproverIds: [],
+        designPrototypeApproverIds: [],
+        qaApproverIds: [],
+      },
+      { isSuperAdmin: false },
+    );
+  });
+
+  it('passes isSuperAdmin=true to the service for a super admin', async () => {
+    mockPrdService.submitForReview.mockResolvedValue(undefined);
+    mockIsSuperAdminRequest.mockReturnValueOnce(true);
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/submit');
+
+    expect(res.status).toBe(200);
+    expect(mockPrdService.submitForReview).toHaveBeenCalledWith(
+      'prd-1',
+      'user-test',
+      expect.any(Object),
+      { isSuperAdmin: true },
+    );
+  });
+
+  it('looks up the PRD project before the permission check', async () => {
+    mockPrdService.submitForReview.mockResolvedValue(undefined);
+    mockDb.query.prds.findFirst.mockResolvedValueOnce({ project: 'MaxView' });
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/submit');
+
+    expect(res.status).toBe(200);
+    expect(mockDb.query.prds.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ columns: { project: true } }),
+    );
   });
 
   it('propagates 409 conflict from service', async () => {
@@ -950,7 +1331,10 @@ describe('POST /api/interviews/prds/:prdId/sync', () => {
 // ── POST /api/interviews/:interviewId/prds ────────────────────────────────────
 
 describe('POST /api/interviews/:interviewId/prds', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+  });
 
   it('returns 201 with prdId and threadId and starts the watcher', async () => {
     mockInterviewService.getInterview.mockResolvedValue(interview);
@@ -1022,6 +1406,40 @@ describe('POST /api/interviews/:interviewId/prds', () => {
     finishKickoff();
   });
 
+  it('uses the approved brief as the canonical PRD transcript for a Playbook interview', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      playbookRunId: 'run-1',
+    });
+    mockGetApprovedInterviewBriefForPrd.mockResolvedValue({ id: 'brief-1', status: 'approved' });
+    mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(201);
+    expect(mockUpdateThreadKickoffTranscript).toHaveBeenCalledWith(
+      'thread-new',
+      '# Approved Interview Brief',
+    );
+  });
+
+  it('refuses PRD generation for a Playbook interview until its brief is approved', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      playbookRunId: 'run-1',
+    });
+    mockGetApprovedInterviewBriefForPrd.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(409);
+    expect(mockPrdService.createPrd).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when interview does not exist', async () => {
     mockInterviewService.getInterview.mockResolvedValue(null);
 
@@ -1040,6 +1458,49 @@ describe('POST /api/interviews/:interviewId/prds', () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ error: 'chatThreadId is required' });
+    expect(mockPrdService.createPrd).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['section owner', { authorId: 'someone-else', prdOwnerId: 'user-test' }],
+    ['project admin', { authorId: 'someone-else', project: 'proj-alpha' }],
+    ['platform admin', { authorId: 'someone-else', project: 'proj-alpha' }],
+  ])('generates a PRD when the shared helper allows a %s', async (_label, row) => {
+    mockInterviewService.getInterview.mockResolvedValue({ ...interview, ...row });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+    mockGetUserPermissions.mockResolvedValue(new Set());
+    mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(201);
+    expect(mockInterviewService.canCompleteInterviewAndGeneratePrd).toHaveBeenCalledWith(
+      'user-test',
+      expect.objectContaining(row),
+    );
+    expect(mockPrdService.createPrd).toHaveBeenCalled();
+  });
+
+  it('rejects PRD generation for an unrelated user even when they have interviews:manage', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({
+      ...interview,
+      authorId: 'someone-else',
+      prdOwnerId: 'owner-prd',
+      designDocOwnerId: 'owner-dd',
+      designPrototypeOwnerId: 'owner-proto',
+      testCaseOwnerId: 'owner-qa',
+    });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(false);
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+
+    const res = await request(buildApp())
+      .post('/api/interviews/interview-1/prds')
+      .send({ chatThreadId: 'thread-new' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: COMPLETE_FORBIDDEN });
     expect(mockPrdService.createPrd).not.toHaveBeenCalled();
   });
 });
@@ -2512,6 +2973,44 @@ describe('POST /api/interviews/prds/:prdId/override-readiness', () => {
       .send({ reason: '' });
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/interviews/prds/:prdId/force-submit', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('rejects callers who are not super admins', async () => {
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/force-submit')
+      .send({ reason: 'Stuck' });
+
+    expect(res.status).toBe(403);
+    expect(mockPrdService.forceSubmitForReview).not.toHaveBeenCalled();
+  });
+
+  it('force submits for a super admin and returns any reviewer assignment error', async () => {
+    mockIsSuperAdminRequest.mockReturnValueOnce(true);
+    mockPrdService.forceSubmitForReview.mockResolvedValue({ reviewerAssignmentError: 'not in pool' });
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/force-submit')
+      .send({ reason: 'Stuck' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, reviewerAssignmentError: 'not in pool' });
+    expect(mockPrdService.forceSubmitForReview).toHaveBeenCalledWith('prd-1', 'user-test', 'Stuck', 'Test User');
+  });
+
+  it('propagates service validation errors', async () => {
+    mockIsSuperAdminRequest.mockReturnValueOnce(true);
+    mockPrdService.forceSubmitForReview.mockRejectedValue(
+      Object.assign(new Error('A reason is required to force submit for review'), { status: 400 }),
+    );
+
+    const res = await request(buildApp()).post('/api/interviews/prds/prd-1/force-submit').send({});
+
+    expect(res.status).toBe(400);
+    expect(mockPrdService.forceSubmitForReview).toHaveBeenCalledWith('prd-1', 'user-test', '', 'Test User');
   });
 });
 

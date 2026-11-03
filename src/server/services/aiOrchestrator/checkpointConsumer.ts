@@ -16,6 +16,8 @@ export type CheckpointConsumerDeps = Readonly<{
   metrics?: OrchestratorMetrics;
   signal?: AbortSignal;
   maxDeliveryCount?: number;
+  /** Called at the start of every loop pass. */
+  onProgress?: () => void;
 }>;
 
 export type CheckpointConsumer = {
@@ -90,13 +92,16 @@ export function createCheckpointConsumer(
     processOnce,
     async runLoop(): Promise<void> {
       while (!deps.signal?.aborted) {
+        deps.onProgress?.();
         try {
           const outcome = await processOnce();
           if (outcome === 'idle') {
             await clock.sleep(250);
           }
         } catch (err) {
-          metrics.increment('orchestrator.checkpoint.loop_error');
+          metrics.increment('orchestrator.checkpoint.loop_error', {
+            error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+          });
           console.error(
             '[aiOrchestrator/checkpointConsumer]',
             err instanceof Error ? err.message : String(err),

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAvailableApproverPool } from '../hooks/useInterviews';
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
+import { sortByLabel } from '../utils/sortByLabel';
 import styles from './ApproverSelectModal.module.css';
 
 interface ApproverSelectModalProps {
@@ -148,7 +149,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
 
     return (
       <div>
-        {pool.groups.map((group) => {
+        {sortByLabel(pool.groups, (group) => group.name).map((group) => {
           const allSelected = group.members.length > 0 && group.members.every((m) => selected.has(m.userId));
           return (
             <div key={group.id} className={styles.groupSection}>
@@ -173,7 +174,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
                 </button>
               </div>
               <div className={styles.chipGrid}>
-                {group.members.map((m) => {
+                {sortByLabel(group.members, (m) => m.displayName ?? m.email ?? m.userId).map((m) => {
                   const isSelected = selected.has(m.userId);
                   return (
                     <button
@@ -199,7 +200,7 @@ export const ApproverSelectModal: React.FC<ApproverSelectModalProps> = ({
               <span className={styles.groupName}>Individuals</span>
             </div>
             <div className={styles.chipGrid}>
-              {pool.individuals.map((a) => {
+              {sortByLabel(pool.individuals, (a) => a.displayName ?? a.email ?? a.userId).map((a) => {
                 const isSelected = selected.has(a.userId);
                 return (
                   <button

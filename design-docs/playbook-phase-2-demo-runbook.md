@@ -19,7 +19,7 @@ depends on a score you do not control.
 | # | Do | Expect |
 |---|----|--------|
 | P1 | `npm run migrate:up` | Migrations current, including `run_input` on `playbook_runs`. |
-| P2 | Platform Admin → Feature Flags → enable `playbooks-production-adapters` for the project | Seeded `false`. Every Phase 2 surface stays hidden until this is on. |
+| P2 | Platform Admin → Menu visibility → enable Playbooks for the project, and grant `playbooks:view` (plus `playbooks:author` or `playbooks:run` for the person rehearsing) | The module and the role are the gate. The Playbooks rollout flags are archived. |
 | P3 | Project Admin → Skills → set the design-doc validation Skill | `.cursor/skills/design-doc-validation/SKILL.md`. There is no default; publishing fails without it. |
 | P4 | `npx ts-node --project tsconfig.server.json scripts/seed-design-doc-validation-playbook.ts --project Apex` | One definition printed, with its id and the scoring Skill it resolved. |
 | P5 | Run it a second time | `already present`. Nothing duplicated, no version bump. |

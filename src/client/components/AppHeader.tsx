@@ -7,9 +7,11 @@ import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { canAccessMyWork } from '../utils/canAccessMyWork';
+import { canAccessBuilds } from '../utils/canAccessBuilds';
 import type { ThemeMode } from '../hooks/useAppShell';
 import type { ProjectRepoConfigSummary } from '../../shared/types/projectSettings';
 import type { WorkItemType } from '../../shared/types/featureRequest';
+import { sortByLabel } from '../utils/sortByLabel';
 import styles from './AppHeader.module.css';
 
 interface NavItem {
@@ -22,7 +24,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'pdf-tools' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -60,6 +62,15 @@ interface AppHeaderProps {
   onNavigateDiagrams?: () => void;
   onNavigateWorkBoard?: () => void;
   workBoardEnabled?: boolean;
+  onNavigatePlaybooks?: () => void;
+  /** Playbooks stays hidden until the production-adapters flag is on for the project. */
+  onNavigateBuilds?: () => void;
+  /** `build-from-prompt` evaluated for this user and project. */
+  buildsEnabled?: boolean;
+  onNavigateBrainstorm?: () => void;
+  brainstormEnabled?: boolean;
+  onNavigateMcpServers?: () => void;
+  mcpServersEnabled?: boolean;
   onNavigateAdmin: () => void;
   onOpenChangelog: () => void;
   onThemeChange: (theme: ThemeMode) => void;
@@ -101,6 +112,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateDiagrams,
   onNavigateWorkBoard,
   workBoardEnabled = true,
+  onNavigatePlaybooks,
+  onNavigateBuilds,
+  buildsEnabled = false,
+  onNavigateBrainstorm,
+  brainstormEnabled = false,
+  onNavigateMcpServers,
+  mcpServersEnabled = false,
   onNavigateAdmin,
   onOpenChangelog,
   onThemeChange,
@@ -135,9 +153,11 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Planning', view: 'planning', permission: 'planning:view', onNavigate: onNavigatePlanning },
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'AI Cost Analytics', view: 'ai-cost', permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
+    { label: 'Brainstorm', view: 'brainstorm', permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+    { label: 'Builds', view: 'builds', permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
     { label: 'QA Lab', view: 'qa-lab', permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}) },
@@ -145,6 +165,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
+    { label: 'Playbooks', view: 'playbooks', permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
+    { label: 'MCP Servers', view: 'mcp-servers', permission: 'mcp-servers:view', onNavigate: onNavigateMcpServers ?? (() => {}) },
     { label: 'Work Board', view: 'work-board', permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
   ];
@@ -169,6 +191,22 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       if (!workBoardEnabled) return false;
       if (!isSuperAdmin && !menuEnabledViews.includes('work-board')) return false;
       return isSuperAdmin || can('work-board:view');
+    }
+    if (item.view === 'builds') {
+      return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
+    }
+    if (item.view === 'brainstorm') {
+      if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
+      return isSuperAdmin || can('brainstorm:view');
+    }
+    if (item.view === 'playbooks') {
+      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
+      return isSuperAdmin || can('playbooks:view');
+    }
+    if (item.view === 'mcp-servers') {
+      if (!mcpServersEnabled) return false;
+      if (!menuEnabledViews.includes('mcp-servers')) return false;
+      return isSuperAdmin || can('mcp-servers:view');
     }
     if (item.view === 'ui-lab') {
       if (!isSuperAdmin && !menuEnabledViews.includes('ui-lab')) return false;
@@ -245,7 +283,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onChange={(e) => onChangeSkillSettings(e.target.value)}
               {...{ 'data-testid': 'app-header-repo-switcher' }}
             >
-              {repoConfigs.map((cfg) => (
+              {sortByLabel(repoConfigs, (cfg) => cfg.friendlyName).map((cfg) => (
                 <option key={cfg.id} value={cfg.id}>
                   {cfg.friendlyName}
                 </option>

@@ -172,4 +172,18 @@ describe('AgentHome tabs', () => {
     expect(onRestoreThread).toHaveBeenCalledTimes(2);
     expect(onRestoreThread).toHaveBeenLastCalledWith('thread-repeat');
   });
+
+  it('does not restore a saved thread while AgentHome is inactive on another route', () => {
+    sessionStorage.setItem('agentHomeThreadId:Apex', 'thread-saved');
+    const onRestoreThread = jest.fn();
+    render(
+      <AgentHome
+        selectedProject="Apex"
+        isActive={false}
+        onRestoreThread={onRestoreThread}
+      />,
+      { wrapper },
+    );
+    expect(onRestoreThread).not.toHaveBeenCalled();
+  });
 });

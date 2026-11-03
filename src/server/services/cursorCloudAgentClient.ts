@@ -6,21 +6,30 @@
 import { Agent, type Run, type SDKMessage } from '@cursor/sdk';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
-import {
-  cancelCursorContainerCliRun,
-  getCursorContainerCliRun,
-  isContainerAgentId,
-  streamCursorContainerCliRun,
-} from './cursorContainerCliService';
+// My Work cloud agents start with Agent.create. The container script
+// (run-cli.sh) is not on this path.
+// import {
+//   cancelCursorContainerCliRun,
+//   getCursorContainerCliRun,
+//   isContainerAgentId,
+//   streamCursorContainerCliRun,
+// } from './cursorContainerCliService';
 import { resolveGitRemote } from './repoCacheService';
 
-export interface LaunchCloudAgentInput {
+export interface BuildLaunchOptions {
+  startingBranch: string;
+  branchName: string;
+  /** Build agents never open a pull request; true is refused. */
+  openPullRequest: boolean;
+}
+
+interface LaunchCloudAgentBase {
   project: string;
   prompt: string;
+  /** Required. A blank model is refused before any SDK call. */
   model: string;
   skillProvider: SkillProvider;
   skillRepo: string;
-  skillBranch: string;
   workItemId?: number;
   workItemTitle?: string;
   initiatorName?: string;
@@ -29,6 +38,34 @@ export interface LaunchCloudAgentInput {
   skillName?: string;
   /** Azure DevOps token for the developer who started the run. Used only to open the pull request. */
   adoUserToken?: string | null;
+}
+
+export interface LaunchMyWorkCloudAgentInput extends LaunchCloudAgentBase {
+  skillBranch: string;
+  /** Planner launches pass false. My Work keeps the default, which opens a pull request. */
+  openPullRequest?: boolean;
+  build?: undefined;
+}
+
+export interface LaunchBuildCloudAgentInput extends LaunchCloudAgentBase {
+  skillBranch?: undefined;
+  openPullRequest?: undefined;
+  build: BuildLaunchOptions;
+}
+
+export type LaunchCloudAgentInput = LaunchMyWorkCloudAgentInput | LaunchBuildCloudAgentInput;
+
+export type CloudAgentLaunchRefusalCode =
+  | 'model_required'
+  | 'build_pull_request_forbidden'
+  | 'build_options_invalid'
+  | 'starting_branch_ambiguous';
+
+export class CloudAgentLaunchRefusedError extends Error {
+  constructor(readonly code: CloudAgentLaunchRefusalCode, message: string) {
+    super(message);
+    this.name = 'CloudAgentLaunchRefusedError';
+  }
 }
 
 export interface LaunchCloudAgentResult {
@@ -102,13 +139,13 @@ function isTerminalStatus(status: Run['status']): boolean {
   return status === 'finished' || status === 'error' || status === 'cancelled';
 }
 
-function containerExecutionName(cloudAgentId: string, cursorRunId: string): string {
-  if (isContainerAgentId(cursorRunId)) {
-    return cursorRunId.slice('container-agent-'.length);
-  }
-  if (cursorRunId.trim()) return cursorRunId.trim();
-  return cloudAgentId.slice('container-agent-'.length);
-}
+// function containerExecutionName(cloudAgentId: string, cursorRunId: string): string {
+//   if (isContainerAgentId(cursorRunId)) {
+//     return cursorRunId.slice('container-agent-'.length);
+//   }
+//   if (cursorRunId.trim()) return cursorRunId.trim();
+//   return cloudAgentId.slice('container-agent-'.length);
+// }
 
 export function observeCloudRun(run: Run): CloudAgentRunObservation {
   const gitKnown = run.git != null;
@@ -133,22 +170,73 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
   };
 }
 
+interface ResolvedLaunchTarget {
+  model: string;
+  startingRef: string;
+  autoCreatePR: boolean;
+  prompt: string;
+}
+
+function resolveLaunchTarget(input: LaunchCloudAgentInput): ResolvedLaunchTarget {
+  const model = typeof input.model === 'string' ? input.model.trim() : '';
+  if (!model) {
+    throw new CloudAgentLaunchRefusedError('model_required', 'Cloud Agent launch refused: no model was given.');
+  }
+  if (!input.build) {
+    return {
+      model,
+      startingRef: input.skillBranch,
+      autoCreatePR: input.openPullRequest !== false,
+      prompt: input.prompt,
+    };
+  }
+
+  const { build } = input;
+  if (input.skillBranch !== undefined) {
+    throw new CloudAgentLaunchRefusedError(
+      'starting_branch_ambiguous',
+      'Cloud Agent launch refused: a build launch must not also pass a skill branch.',
+    );
+  }
+  if (build.openPullRequest !== false) {
+    throw new CloudAgentLaunchRefusedError(
+      'build_pull_request_forbidden',
+      'Cloud Agent launch refused: build agents never open a pull request.',
+    );
+  }
+  const startingBranch = typeof build.startingBranch === 'string' ? build.startingBranch.trim() : '';
+  const branchName = typeof build.branchName === 'string' ? build.branchName.trim() : '';
+  if (!startingBranch || !branchName) {
+    throw new CloudAgentLaunchRefusedError(
+      'build_options_invalid',
+      'Cloud Agent launch refused: a build launch needs a starting branch and a branch name.',
+    );
+  }
+  // The SDK has no option that names the pushed branch, so the prompt carries it.
+  return {
+    model,
+    startingRef: startingBranch,
+    autoCreatePR: false,
+    prompt: `${input.prompt}\n\nWork on branch \`${branchName}\` and no other branch.`,
+  };
+}
+
 export async function launchCloudAgent(
   input: LaunchCloudAgentInput,
 ): Promise<LaunchCloudAgentResult> {
+  const target = resolveLaunchTarget(input);
   const repoUrl = buildCloudRepoUrl(input.skillProvider, input.project, input.skillRepo);
   const agent = await Agent.create({
     apiKey: cursorUserLevelApiKey(),
-    model: { id: input.model.trim() || 'composer-2.5' },
+    model: { id: target.model },
     name: input.workItemTitle,
     cloud: {
-      repos: [{ url: repoUrl, startingRef: input.skillBranch }],
-      autoCreatePR: input.skillProvider === 'github',
-      skipReviewerRequest: true,
+      repos: [{ url: repoUrl, startingRef: target.startingRef }],
+      autoCreatePR: target.autoCreatePR,
     },
   });
   try {
-    const run = await agent.send(input.prompt);
+    const run = await agent.send(target.prompt);
     return {
       cloudAgentId: agent.agentId,
       cursorRunId: run.id,
@@ -169,9 +257,9 @@ export async function getCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): Promise<CloudAgentRunObservation> {
-  if (isContainerAgentId(input.cloudAgentId)) {
-    return getCursorContainerCliRun(containerExecutionName(input.cloudAgentId, input.cursorRunId));
-  }
+  // if (isContainerAgentId(input.cloudAgentId)) {
+  //   return getCursorContainerCliRun(containerExecutionName(input.cloudAgentId, input.cursorRunId));
+  // }
   const run = await loadCloudRun(input.cloudAgentId, input.cursorRunId);
   return observeCloudRun(run);
 }
@@ -241,12 +329,12 @@ export async function* streamCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): AsyncGenerator<CloudAgentActivityEvent> {
-  if (isContainerAgentId(input.cloudAgentId)) {
-    yield* streamCursorContainerCliRun(
-      containerExecutionName(input.cloudAgentId, input.cursorRunId),
-    );
-    return;
-  }
+  // if (isContainerAgentId(input.cloudAgentId)) {
+  //   yield* streamCursorContainerCliRun(
+  //     containerExecutionName(input.cloudAgentId, input.cursorRunId),
+  //   );
+  //   return;
+  // }
   const run = await loadCloudRun(input.cloudAgentId, input.cursorRunId);
   if (!run.supports('stream')) {
     throw new Error(run.unsupportedReason('stream') ?? 'This Cursor run cannot be streamed.');
@@ -264,12 +352,12 @@ export async function cancelCursorCloudAgentRun(input: {
   cloudAgentId: string;
   cursorRunId: string;
 }): Promise<void> {
-  if (isContainerAgentId(input.cloudAgentId)) {
-    await cancelCursorContainerCliRun(
-      containerExecutionName(input.cloudAgentId, input.cursorRunId),
-    );
-    return;
-  }
+  // if (isContainerAgentId(input.cloudAgentId)) {
+  //   await cancelCursorContainerCliRun(
+  //     containerExecutionName(input.cloudAgentId, input.cursorRunId),
+  //   );
+  //   return;
+  // }
   const run = await loadCloudRun(input.cloudAgentId, input.cursorRunId);
   if (!run.supports('cancel')) {
     throw new Error(run.unsupportedReason('cancel') ?? 'This Cursor run cannot be cancelled.');

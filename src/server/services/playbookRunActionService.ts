@@ -1,6 +1,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
+  interviews,
   playbookRuns,
   playbookStepRuns,
 } from '../db/schema';
@@ -138,6 +139,13 @@ async function cancelRows(runId: string): Promise<boolean> {
           ])
         )
       );
+    await tx
+      .update(interviews)
+      .set({ status: 'archived', updatedAt: nowIso() })
+      .where(and(
+        eq(interviews.playbookRunId, runId),
+        eq(interviews.status, 'in_progress'),
+      ));
     return true;
   });
 }

@@ -11,6 +11,7 @@ import {
   configHasBindings,
   resolvePlaybookBindings,
 } from './playbookBindingResolver';
+import { createPlaybookStepOutputStore } from './playbookStepOutputStore';
 
 export async function resolveRunStepConfig(
   runId: string,
@@ -26,7 +27,9 @@ export async function resolveRunStepConfig(
   const prior = await db
     .select({
       stepId: playbookStepRuns.stepId,
+      stepRunId: playbookStepRuns.id,
       output: playbookStepRuns.outputInline,
+      outputBlobRef: playbookStepRuns.outputBlobRef,
     })
     .from(playbookStepRuns)
     .where(and(
@@ -36,7 +39,19 @@ export async function resolveRunStepConfig(
 
   const steps: Record<string, Record<string, unknown>> = {};
   for (const row of prior) {
-    steps[row.stepId] = (row.output ?? {}) as Record<string, unknown>;
+    if (row.outputBlobRef) {
+      const envelope = await createPlaybookStepOutputStore().load(row.outputBlobRef);
+      if (
+        envelope.runId !== runId
+        || envelope.stepRunId !== row.stepRunId
+        || envelope.stepId !== row.stepId
+      ) {
+        throw new Error(`Playbook output reference for step "${row.stepId}" has wrong ownership.`);
+      }
+      steps[row.stepId] = envelope.output;
+    } else {
+      steps[row.stepId] = (row.output ?? {}) as Record<string, unknown>;
+    }
   }
 
   return resolvePlaybookBindings(config, {

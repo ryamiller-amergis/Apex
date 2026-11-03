@@ -1,0 +1,50 @@
+.page {
+  padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.newBuild,
+.pager button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  cursor: pointer;
+  box-shadow: var(--glow-accent);
+  transition: all 0.2s ease;
+}
+
+.newBuild:focus-visible,
+.pager button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.pager {
+  display: flex;
+  gap: 8px;
+}
+
+.pager button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

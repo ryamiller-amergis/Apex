@@ -969,6 +969,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 12px;
   height: 200px;
   color: var(--text-muted);
   font-size: 0.9rem;
@@ -1436,6 +1437,13 @@
   color: var(--text-primary);
   font-weight: 600;
   text-align: right;
+}
+
+.submitError {
+  align-self: center;
+  max-width: 320px;
+  font-size: 0.8rem;
+  color: var(--error-color);
 }
 
 .readinessStages {

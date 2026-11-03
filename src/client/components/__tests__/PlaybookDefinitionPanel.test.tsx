@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import type {
   PlaybookDefinitionDetail,
   PlaybookPublishedVersionSummary,
@@ -28,6 +29,8 @@ const DETAIL: PlaybookDefinitionDetail = {
     project: PROJECT,
     name: 'Release checks',
     description: 'Checks a release',
+    templateKey: null,
+    templateVersion: null,
     createdBy: 'author',
     createdAt: '2026-09-22T10:00:00.000Z',
     updatedAt: '2026-09-22T12:00:00.000Z',
@@ -54,7 +57,9 @@ function renderPanel(canAuthor = true) {
   });
   return render(
     <QueryClientProvider client={client}>
-      <PlaybookDefinitionPanel project={PROJECT} />
+      <MemoryRouter>
+        <PlaybookDefinitionPanel project={PROJECT} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -70,9 +75,12 @@ beforeEach(() => {
 
 it('renders independent loading, error/retry, and author-aware empty states', async () => {
   let resolveFetch!: (value: Response) => void;
-  (global.fetch as jest.Mock).mockReturnValueOnce(
-    new Promise((resolve) => { resolveFetch = resolve; }),
-  );
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    if (url.includes('/api/feature-flags/')) {
+      return Promise.resolve(jsonResponse({ flags: {} }));
+    }
+    return new Promise((resolve) => { resolveFetch = resolve; });
+  });
   const loading = renderPanel();
   expect(screen.getByTestId('playbook-definitions-loading')).toBeInTheDocument();
   resolveFetch(jsonResponse({ definitions: [] }));
@@ -80,7 +88,12 @@ it('renders independent loading, error/retry, and author-aware empty states', as
   expect(screen.getByTestId('playbook-definition-create')).toBeInTheDocument();
   loading.unmount();
 
-  (global.fetch as jest.Mock).mockResolvedValueOnce(jsonResponse({ error: 'List unavailable' }, 500));
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    if (url.includes('/api/feature-flags/')) {
+      return Promise.resolve(jsonResponse({ flags: {} }));
+    }
+    return Promise.resolve(jsonResponse({ error: 'List unavailable' }, 500));
+  });
   renderPanel();
   expect(await screen.findByTestId('playbook-definitions-error')).toHaveTextContent('List unavailable');
   expect(screen.getByTestId('playbook-definitions-retry')).toBeInTheDocument();

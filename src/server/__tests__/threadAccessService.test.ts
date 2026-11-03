@@ -29,6 +29,8 @@ jest.mock('../services/rbacService', () => ({
 
 jest.mock('../utils/rbacHelpers', () => ({
   isAdminUser: jest.fn(),
+  isProjectAdmin: jest.fn(),
+  isPlatformAdmin: jest.fn(),
 }));
 
 jest.mock('../services/documentApprovalService', () => ({
@@ -39,7 +41,7 @@ import { db } from '../db/drizzle';
 import { loadFullThread } from '../services/chatThreadRepository';
 import { getThread } from '../services/chatAgentService';
 import { getUserPermissions } from '../services/rbacService';
-import { isAdminUser } from '../utils/rbacHelpers';
+import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from '../services/documentApprovalService';
 import {
   resolveThreadAccess,
@@ -51,6 +53,8 @@ const mockLoadFullThread = loadFullThread as jest.Mock;
 const mockGetThread = getThread as jest.Mock;
 const mockGetUserPermissions = getUserPermissions as jest.Mock;
 const mockIsAdminUser = isAdminUser as jest.Mock;
+const mockIsProjectAdmin = isProjectAdmin as jest.Mock;
+const mockIsPlatformAdmin = isPlatformAdmin as jest.Mock;
 const mockIsAssignedApprover = isAssignedApprover as jest.Mock;
 
 const mockDb = db as unknown as {
@@ -80,6 +84,8 @@ beforeEach(() => {
   mockLoadFullThread.mockResolvedValue(baseThread);
   mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
   mockIsAdminUser.mockResolvedValue(false);
+  mockIsProjectAdmin.mockResolvedValue(false);
+  mockIsPlatformAdmin.mockResolvedValue(false);
   mockIsAssignedApprover.mockResolvedValue(false);
   mockDb.query.interviews.findFirst.mockResolvedValue(null);
   mockDb.query.prds.findFirst.mockResolvedValue(null);
@@ -155,6 +161,47 @@ describe('canWriteThread', () => {
     expect(await canWriteThread('viewer-1', 'thread-1')).toBe(false);
   });
 
+  it('allows a selected section owner to answer an interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+      testCaseOwnerId: 'qa-1',
+    });
+    expect(await canWriteThread('qa-1', 'thread-1')).toBe(true);
+  });
+
+  it('allows an assigned interview phase participant to answer', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+      deliveryAssigneeId: 'delivery-1',
+    });
+    expect(await canWriteThread('delivery-1', 'thread-1')).toBe(true);
+  });
+
+  it('allows a project admin to answer an interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+    });
+    mockIsProjectAdmin.mockResolvedValue(true);
+    expect(await canWriteThread('admin-1', 'thread-1')).toBe(true);
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('admin-1', 'Apex');
+  });
+
+  it('allows a platform admin to answer an interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      id: 'iv-1',
+      authorId: 'author-1',
+      project: 'Apex',
+    });
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    expect(await canWriteThread('platform-1', 'thread-1')).toBe(true);
+  });
+
   it('allows an assigned approver to write on a design-doc assistant thread', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue({
       id: 'doc-1',
@@ -197,5 +244,92 @@ describe('canCreateDesignDocAssistantThread', () => {
   it('denies a viewer who is not author or admin', async () => {
     mockDb.query.designDocs.findFirst.mockResolvedValue({ authorId: 'author-1' });
     expect(await canCreateDesignDocAssistantThread('viewer-1', 'doc-1')).toBe(false);
+  });
+});
+
+describe('VT-13 — build-intake thread read narrowing (PBI-009 security NFR)', () => {
+  const intakeThread: ChatThread = {
+    ...baseThread,
+    userId: 'requester-1',
+    kickoff: {
+      project: 'Apex',
+      repo: 'org/target',
+      playbookInterview: { runId: 'run-1', stepId: 'intake', snapshot: { key: 'build-intake', mode: 'human_led' } },
+    } as ChatThread['kickoff'],
+  };
+
+  beforeEach(() => {
+    mockGetThread.mockResolvedValue(intakeThread);
+    mockDb.query.interviews.findFirst.mockResolvedValue({ id: 'iv-1' });
+  });
+
+  it('allows the requester as owner', async () => {
+    await expect(resolveThreadAccess('requester-1', 'thread-1')).resolves.toEqual({ access: 'owner', thread: intakeThread });
+  });
+
+  it('allows a Project Admin of the build project', async () => {
+    mockIsProjectAdmin.mockImplementation(async (_user: string, project: string) => project === 'Apex');
+    await expect(resolveThreadAccess('pa-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: intakeThread });
+  });
+
+  it('allows a Platform Admin', async () => {
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    await expect(resolveThreadAccess('platform-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: intakeThread });
+  });
+
+  it('refuses a member with interviews:view', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+    await expect(resolveThreadAccess('member-1', 'thread-1')).resolves.toBeNull();
+  });
+
+  it('refuses a chat:view_all holder who is not a Project Admin', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['chat:view_all']));
+    await expect(resolveThreadAccess('viewer-all-1', 'thread-1')).resolves.toBeNull();
+  });
+
+  it('leaves a non-build interview thread on today\'s rules', async () => {
+    mockGetThread.mockResolvedValue(baseThread);
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:view']));
+    await expect(resolveThreadAccess('member-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: baseThread });
+  });
+});
+
+describe('VT-08 — build-intake write rule on the interview thread (TBI-010 DoD-0, DoD-1, DoD-3)', () => {
+  const buildInterview = {
+    id: 'iv-1',
+    authorId: 'author-1',
+    project: 'Apex',
+    testCaseOwnerId: 'qa-1',
+    deliveryAssigneeId: 'delivery-1',
+    playbookProfileKey: 'build-intake',
+  };
+
+  beforeEach(() => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(buildInterview);
+  });
+
+  it('VT-08 allows a Project Admin of the interview project', async () => {
+    mockIsProjectAdmin.mockImplementation(async (_user: string, project: string) => project === 'Apex');
+    expect(await canWriteThread('pa-1', 'thread-1')).toBe(true);
+  });
+
+  it('VT-08 allows a Platform Admin', async () => {
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    expect(await canWriteThread('platform-1', 'thread-1')).toBe(true);
+  });
+
+  it('VT-08 refuses a section owner and a phase assignee', async () => {
+    expect(await canWriteThread('qa-1', 'thread-1')).toBe(false);
+    expect(await canWriteThread('delivery-1', 'thread-1')).toBe(false);
+  });
+
+  it('VT-08 refuses a BA, Manager or Product Owner who is not the requester or an admin', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    expect(await canWriteThread('ba-1', 'thread-1')).toBe(false);
+  });
+
+  it('VT-08 keeps section owners on a non-build interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({ ...buildInterview, playbookProfileKey: 'grill-with-docs' });
+    expect(await canWriteThread('qa-1', 'thread-1')).toBe(true);
   });
 });

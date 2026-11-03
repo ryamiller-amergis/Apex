@@ -2,7 +2,6 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { designDocs, playbookDefinitions, playbookDefinitionVersions, playbookRuns } from '../db/schema';
 import type { PlaybookGraph } from '../../shared/types/playbook';
-import { isFeatureEnabled } from './featureFlagService';
 import { createThread, getThread } from './chatAgentService';
 import { getDesignDoc } from './designDocService';
 import { stopDocumentValidationWatcher } from './documentValidationService';
@@ -129,16 +128,6 @@ export async function publishDesignDocValidationPlaybook(input: {
   project: string;
   publishedByUserId: string;
 }): Promise<{ definitionId: string; publishedVersionId: string }> {
-  const enabled = await isFeatureEnabled('playbooks-production-adapters', {
-    userId: input.publishedByUserId,
-    project: input.project,
-  });
-  if (!enabled) {
-    throw new DesignDocValidationPlaybookConfigurationError(
-      'playbooks-production-adapters is disabled for this project.',
-    );
-  }
-
   const settings = await getSkillConfig(input.project);
   const skillPath = settings?.designDocValidationSkillPath?.trim();
   if (!skillPath) {
@@ -175,14 +164,6 @@ export async function startDesignDocValidationPlaybook(input: {
   project: string;
   callerUserId: string;
 }): Promise<{ runId: string; definitionVersionId: string; outcome: 'started' | 'already-running' }> {
-  const enabled = await isFeatureEnabled('playbooks-production-adapters', {
-    userId: input.callerUserId,
-    project: input.project,
-  });
-  if (!enabled) {
-    throw new DesignDocValidationPlaybookNotFoundError(input.designDocId);
-  }
-
   const document = await getDesignDoc(input.designDocId);
   if (!document || document.project !== input.project) {
     throw new DesignDocValidationPlaybookNotFoundError(input.designDocId);
@@ -219,7 +200,6 @@ export async function startDesignDocValidationPlaybook(input: {
     project: input.project,
     definitionId: definition.id,
     initiatorUserId: document.ownerId,
-    spendAdmissionEnabled: true,
     runInput: {
       documentType: 'design_doc',
       documentId: document.id,

@@ -39,11 +39,17 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
+| `brainstorm:view` | brainstorm | admin, member, viewer |
+| `brainstorm:create` | brainstorm | admin, member, viewer |
+| `builds:view` | builds | admin, member, viewer |
+| `builds:run` | builds | admin, member |
 | `calendar:view` | calendar | admin, member |
 | `chat:create` | chat | admin, member |
 | `chat:view` | chat | admin, member |
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |
+| `mcp-servers:view` | mcp-servers | *(no default roles — assign explicitly)* |
+| `mcp-servers:manage` | mcp-servers | *(no default roles — assign explicitly)* |
 | `cost:view` | cost | admin, viewer |
 | `diagram:view` | diagram | admin, member, viewer |
 | `diagram:create` | diagram | admin, member |
@@ -65,7 +71,6 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
-| `pdf-assembly:use` | pdf-tools | *(no default roles — assign explicitly)* |
 | `playbooks:view` | playbooks | admin, member, viewer |
 | `playbooks:run` | playbooks | admin, member |
 | `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |
@@ -76,6 +81,8 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `work-board:view` | work-board | admin, member, viewer |
 | `work-board:manage` | work-board | admin, member |
 | `work-board:admin` | work-board | admin, member |
+| `workflow-evaluation:view` | workflow-evaluation | admin, member |
+| `workflow-evaluation:submit` | workflow-evaluation | admin, member |
 | `workitems:write` | workitems | admin, member |
 
 ## Client Gating Pattern

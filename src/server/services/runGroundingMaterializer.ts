@@ -5,6 +5,7 @@ import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { git, safeArgs } from '../utils/asyncGit';
 import { resolveDataRoot } from '../utils/dataDir';
+import { removeTree } from '../utils/removeTree';
 import {
   createGroundingBundleStore,
   type GroundingBundleStore,
@@ -290,6 +291,15 @@ export function createRunGroundingMaterializer(
             durationMs: Math.max(0, now() - exactFetchStartedAt),
           });
         }
+        // A full refetch only helps when the mirror is missing the commit. If
+        // it has the commit and its tree, the clone failed for another reason
+        // (a concurrent repack, disk, timeout) and a refetch would only write
+        // another full pack.
+        const pinnedTreePresent = await runGit(
+          safeArgs(cache.cacheDir, ['cat-file', '-e', `${identity.sha}^{tree}`]),
+          { cwd: cache.cacheDir },
+        ).then(() => true, () => false);
+        if (pinnedTreePresent) return false;
         try {
           const repairedCache = await repairCache(cacheOptions);
           await materializePinnedSha(repairedCache);
@@ -345,7 +355,7 @@ export function createRunGroundingMaterializer(
       const sharedPath = getReadySharedCheckoutPath(grounding);
       if (!sharedPath) return false;
       await ensureSafeDirectory();
-      fs.rmSync(destination, { recursive: true, force: true });
+      await removeTree(destination);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       await runGit(
         safeArgs(sharedPath, [

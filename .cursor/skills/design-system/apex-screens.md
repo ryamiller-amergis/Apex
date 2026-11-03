@@ -88,7 +88,6 @@
 | `/standup/summary` | `StandupSummaryView.tsx` | Facilitator summary | Team, Admin | summary cards | Detail | — | 2026-07-30 |
 | `/ui-lab` | `UiLabView.tsx` | UI Lab generation / review | UI-UX | design list, preview | Hub | empty: no designs | 2026-07-30 |
 | `/design-module` | `DesignModuleView.tsx` | Design module library | UI-UX, Admin | module cards | Hub | empty/loading | 2026-07-30 |
-| `/pdf-tools` | PDF assembly views | PDF assembly / overlay tools | Ops | tool panels | Form | — | 2026-07-30 |
 | `/feature-requests` | `FeatureRequestsView.tsx` | Apex Backlog feature request triage | BA, Admin | request list/detail | List | empty/loading | 2026-07-30 |
 
 ---

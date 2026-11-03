@@ -43,6 +43,7 @@ function run(
   return {
     runId: 'run-1',
     project: 'Apex',
+    definitionId: 'def-1',
     definitionName: 'Demo A',
     definitionVersionId: 'ver-1',
     versionNumber: 1,

@@ -9,6 +9,7 @@ import {
   type JourneyAggregationCycleResult,
 } from './journeyAggregationService';
 import { trackEvent } from './telemetry';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export { JOURNEY_ROLLUP_INTERVAL_MS, JOURNEY_ROLLUP_STARTUP_DELAY_MS };
 
@@ -36,11 +37,14 @@ export function createJourneyAggregationScheduler(
 
   let intervalTimer: ReturnType<typeof setInterval> | null = null;
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
-  let isRunning = false;
+  const runGuard = createSingleFlight({
+    name: 'journey-rollup',
+    stuckAfterMs: stuckAfterForInterval(intervalMs),
+  });
 
   async function tick(): Promise<void> {
-    if (isRunning) return;
-    isRunning = true;
+    const runToken = runGuard.tryEnter();
+    if (runToken === null) return;
     const startedAt = (deps.now ?? (() => new Date()))().getTime();
     try {
       await runCycle();
@@ -62,7 +66,7 @@ export function createJourneyAggregationScheduler(
         // Telemetry must never affect the scheduler.
       }
     } finally {
-      isRunning = false;
+      runGuard.exit(runToken);
     }
   }
 

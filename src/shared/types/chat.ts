@@ -21,7 +21,8 @@ export type AgentModuleId =
   | 'calendarAssistant'
   | 'loadTestGeneration'
   | 'designModule'
-  | 'designModuleScoping';
+  | 'designModuleScoping'
+  | 'brainstorm';
 
 export interface ChatMessage {
   id: string;
@@ -59,6 +60,8 @@ export interface ChatAttachmentMeta {
 export interface ChatThreadKickoff {
   project: string;
   repo: string;
+  /** Repository the skill is read from when it is not `repo` (the grounding repository). */
+  skillRepo?: string;
   branch?: string;
   /** Branch to fetch skills from (defaults to `branch` if not set) */
   skillBranch?: string;
@@ -66,6 +69,11 @@ export interface ChatThreadKickoff {
   skillProvider?: import('./projectSettings').SkillProvider;
   /** Optional — omit for a free-chat session with no skill pre-loaded */
   skillPath?: string;
+  /**
+   * Server-set when `skillPath` is Apex's default rather than a project setting.
+   * The copy bundled with Apex may stand in when the project repository lacks it.
+   */
+  skillPathIsAppDefault?: boolean;
   /** Cursor SDK model ID to use for this thread (e.g. "claude-opus-4-6") */
   model?: string;
   /** Server-set module identity. Client-supplied values are discarded by client-facing routes. */
@@ -81,7 +89,9 @@ export interface ChatThreadKickoff {
   /** Server-verified MCP profile applied to a Playbook cursor-agent thread. */
   playbookMcpProfile?: string;
   /** Identifies the type of assistant thread — controls system prompt behavior */
-  assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item';
+  assistantType?: 'design-doc' | 'prd' | 'adr' | 'calendar-work-item' | 'mcp-server';
+  /** Integration assistant: the one connection this thread may call */
+  mcpServerId?: string;
   /** Calendar assistant: anchor work item ID */
   calendarAnchorWorkItemId?: number;
   /** Calendar assistant: selected work item IDs (immutable after session start) */

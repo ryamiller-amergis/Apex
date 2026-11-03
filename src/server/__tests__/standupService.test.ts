@@ -43,11 +43,17 @@ jest.mock('../db/schema', () => ({
   appGroupMembers: {},
   appUsers: {},
   projectSkillSettings: {},
+  projectSkillWorkflowSettings: { workflow: 'workflow' },
   chatMessages: {},
   appGroups: {},
 }));
 
-import { sendStandupReminders, runFacilitator } from '../services/standupService';
+import {
+  sendStandupReminders,
+  runFacilitator,
+  triggerSessionForConfig,
+  generateDailySessions,
+} from '../services/standupService';
 import { createNotification } from '../services/notificationService';
 import { sendTeamsNotification } from '../services/teamsBotService';
 import { createThread } from '../services/chatAgentService';
@@ -210,5 +216,83 @@ describe('runFacilitator', () => {
       }),
     );
     expect(mockDb.update).toHaveBeenCalledTimes(2);
+  });
+});
+
+const standupSkillColumns = {
+  columns: {
+    skillRepo: true,
+    skillBranch: true,
+  },
+  with: {
+    workflowSettings: {
+      columns: { skillPath: true },
+      where: expect.anything(),
+    },
+  },
+};
+
+describe('generateDailySessions project skill settings', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('loads only the standup skill columns when generating sessions', async () => {
+    mockDb.query.standupConfigs.findMany.mockResolvedValue([]);
+
+    await generateDailySessions();
+
+    expect(mockDb.query.standupConfigs.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        with: { group: true, skillSettings: standupSkillColumns },
+      }),
+    );
+  });
+});
+
+describe('triggerSessionForConfig project skill settings', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.query.standupSessions.findFirst.mockResolvedValue(null);
+    mockDb.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        innerJoin: () => ({
+          where: jest.fn().mockResolvedValue([
+            { userId: 'user-1', displayName: 'User One', email: 'one@example.com' },
+          ]),
+        }),
+      }),
+    });
+  });
+
+  it('loads only the standup skill columns and still passes them to the participant thread', async () => {
+    mockDb.query.standupConfigs.findFirst.mockResolvedValue({
+      id: 'config-1',
+      project: 'AI-Pilot',
+      groupIds: ['group-1'],
+      skillSettingsId: 'skill-1',
+      skillSettings: {
+        skillRepo: 'org/skills',
+        skillBranch: 'main',
+        workflowSettings: [{ skillPath: '.cursor/skills/custom-standup/SKILL.md' }],
+      },
+    });
+
+    await triggerSessionForConfig('config-1');
+
+    expect(mockDb.query.standupConfigs.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ with: { group: true, skillSettings: standupSkillColumns } }),
+    );
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        agentModule: 'standup',
+        repo: 'org/skills',
+        branch: 'main',
+        standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
+        skillSettingsId: 'skill-1',
+      }),
+    );
   });
 });

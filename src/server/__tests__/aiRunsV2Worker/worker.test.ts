@@ -1,7 +1,12 @@
 import { AI_RUN_V2_SCHEMA_VERSION } from '../../../shared/types/aiRunV2';
 import { VisualModelTruncatedError } from '../../services/aiRunsV2Worker/bedrockVisualClient';
 import { CursorExecutionWaitError } from '../../services/cursorExecutionCore';
-import { createV2Worker } from '../../services/aiRunsV2Worker/worker';
+import {
+  createV2Worker,
+  JOB_PROGRESS_GRACE_MS,
+  LOOP_PROGRESS_BUDGET_MS,
+  WORKER_SHUTDOWN_DETAIL,
+} from '../../services/aiRunsV2Worker/worker';
 import type { WorkerServiceBusClient } from '../../services/aiRunsV2Worker/serviceBusClient';
 
 const specRef = { container: 'ai-run-artifacts', key: 'specs/run-1.json' };
@@ -468,6 +473,40 @@ describe('V2 worker run loop', () => {
     await expect(worker.processOnce()).resolves.toBe('idle');
   });
 
+  it('reports progress with the loop budget and with the job deadline plus grace', async () => {
+    const { bus } = fakeBus(command());
+    const stop = new AbortController();
+    const progress: number[] = [];
+    const worker = createV2Worker({
+      bus,
+      execute: async () => ({ files: [] }),
+      artifactContainer: 'ai-run-artifacts',
+      containerAppsExecutionId: 'exec-7',
+      specifications: {
+        read: async () => ({
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          attemptNumber: 1,
+          workloadLane: 'document',
+        }),
+      },
+      resolveCommandDeadlineMs: () => 60_000,
+      signal: stop.signal,
+      sleep: async () => {
+        stop.abort();
+      },
+      onProgress: (nextWithinMs) => progress.push(nextWithinMs),
+    });
+
+    await worker.runLoop();
+
+    expect(progress).toEqual([
+      LOOP_PROGRESS_BUDGET_MS,
+      60_000 + JOB_PROGRESS_GRACE_MS,
+      LOOP_PROGRESS_BUDGET_MS,
+    ]);
+  });
+
   describe('shutdown with a separate execution signal', () => {
     const specification = {
       read: async () => ({
@@ -524,6 +563,110 @@ describe('V2 worker run loop', () => {
 
       await expect(worker.processOnce()).resolves.toBe('failed');
       expect(calls.results).toEqual([expect.objectContaining({ status: 'failed' })]);
+    });
+
+    function abortingWorker(options: {
+      reportShutdownAsWorkerLost?: boolean;
+      abort: 'shutdown' | 'deadline';
+      rejectWith?: Error;
+    }) {
+      const { bus, calls } = fakeBus(command());
+      const stopExecution = new AbortController();
+      const worker = createV2Worker({
+        bus,
+        execute: ({ signal }) =>
+          new Promise((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                if (options.rejectWith) {
+                  reject(options.rejectWith);
+                  return;
+                }
+                const error = new Error(
+                  signal.reason instanceof Error
+                    ? signal.reason.message
+                    : 'This operation was aborted',
+                );
+                error.name = 'AbortError';
+                reject(error);
+              },
+              { once: true },
+            );
+            if (options.abort === 'shutdown') stopExecution.abort();
+          }),
+        artifactContainer: 'ai-run-artifacts',
+        containerAppsExecutionId: 'exec-7',
+        specifications: specification,
+        deadlineMs: options.abort === 'deadline' ? 5 : 60_000,
+        signal: new AbortController().signal,
+        executionSignal: stopExecution.signal,
+        ...(options.reportShutdownAsWorkerLost === undefined
+          ? {}
+          : { reportShutdownAsWorkerLost: options.reportShutdownAsWorkerLost }),
+      });
+      return { worker, calls };
+    }
+
+    it('reports a shutdown abort as worker_lost when the lane opts in', async () => {
+      const { worker, calls } = abortingWorker({
+        reportShutdownAsWorkerLost: true,
+        abort: 'shutdown',
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'worker_lost',
+          detail: WORKER_SHUTDOWN_DETAIL,
+        }),
+      ]);
+    });
+
+    it('keeps internal_error for a non-abort error thrown after shutdown', async () => {
+      const { worker, calls } = abortingWorker({
+        reportShutdownAsWorkerLost: true,
+        abort: 'shutdown',
+        rejectWith: new Error('boom'),
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'internal_error',
+          detail: 'boom',
+        }),
+      ]);
+    });
+
+    it('still reports the run deadline as progress_timeout when the lane opts in', async () => {
+      const { worker, calls } = abortingWorker({
+        reportShutdownAsWorkerLost: true,
+        abort: 'deadline',
+      });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'progress_timeout',
+          detail: 'Execution deadline elapsed',
+        }),
+      ]);
+    });
+
+    it('reports a shutdown abort as progress_timeout when the lane does not opt in', async () => {
+      const { worker, calls } = abortingWorker({ abort: 'shutdown' });
+
+      await expect(worker.processOnce()).resolves.toBe('failed');
+      expect(calls.results).toEqual([
+        expect.objectContaining({
+          status: 'failed',
+          failureCategory: 'progress_timeout',
+        }),
+      ]);
     });
   });
 });

@@ -75,6 +75,9 @@ function isExpectedArtifactPath(
         || /\.prd\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
       );
+    case 'adr':
+      if (segments.length !== 1) return false;
+      return /\.adr\.md$/i.test(name);
     case 'design-doc':
       if (
         segments.length > 2
@@ -208,6 +211,7 @@ async function applyAttempt(
 ): Promise<void> {
   switch (attempt.workflowClass) {
     case 'prd':
+    case 'adr':
     case 'design-doc':
     case 'validation':
     case 'test-cases':

@@ -699,4 +699,36 @@ describe('interactive V2 no-fallback guard', () => {
     );
     expect(enabledBranch).not.toMatch(/shed|race-lost|runInProcess|runLegacy/);
   });
+
+  it('refuses a Brainstorm turn on the legacy path instead of running it in-process', () => {
+    const chatAgent = readFileSync(resolve(SERVICES_ROOT, 'chatAgentService.ts'), 'utf8');
+    const legacyBranch = chatAgent.slice(
+      chatAgent.indexOf('runLegacy: async () => {'),
+      chatAgent.indexOf('const execution = sendMessageLegacy('),
+    );
+    expect(legacyBranch).toMatch(
+      /if \(options\?\.brainstorm \|\| workflowClass === 'brainstorm'\) \{\s+throw Object\.assign\(new Error\('transport_unavailable'\), \{ status: 409 \}\);/,
+    );
+  });
+
+  it('keeps Brainstorm services off the legacy and model-execution paths', () => {
+    const files = [
+      'brainstormOrchestrationService.ts',
+      'brainstormSessionService.ts',
+      'brainstormTurnLedger.ts',
+      'brainstormThread.ts',
+      'brainstormAccessPolicy.ts',
+      'brainstormLimits.ts',
+    ].map((name) => resolve(SERVICES_ROOT, name));
+    files.push(resolve(ROUTES_ROOT, 'brainstorm.ts'));
+    for (const file of files) {
+      const source = readFileSync(file, 'utf8');
+      for (const pattern of FORBIDDEN_DURABLE_IMPORT) {
+        expect(source).not.toMatch(pattern);
+      }
+    }
+    const orchestration = readFileSync(resolve(SERVICES_ROOT, 'brainstormOrchestrationService.ts'), 'utf8');
+    expect(orchestration).toMatch(/durableInteractiveTurnService\.retry\(/);
+    expect(orchestration).toMatch(/if \(submission\.route !== 'durable'\) throw new BrainstormError\('transport_unavailable', 409\)/);
+  });
 });

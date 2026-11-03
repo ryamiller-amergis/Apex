@@ -83,12 +83,29 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
   failureCategory?: import('./aiRunV2').AiRunV2FailureCategory;
   /** Wall-clock duration of the worker execution, when known. */
   durationMs?: number;
+  /** Interactive worker stage durations. Telemetry only; never rejects a terminal. */
+  stageTimings?: InteractiveTurnStageTimings;
   /** Runtime-reported token counts. Omitted when the runtime reported none. */
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
 };
+
+/**
+ * Durations in milliseconds, each measured on the worker's own clock so no
+ * cross-machine timestamp comparison is needed.
+ */
+export type InteractiveTurnStageTimings = Readonly<{
+  workspaceMs?: number;
+  agentAcquireMs?: number;
+  agentMode?: 'warm' | 'resumed' | 'recreated';
+  /** From `send` to the first SDK delta or stream event. */
+  firstEventMs?: number;
+  /** From `send` to the first assistant text token. */
+  firstTokenMs?: number;
+  workerTurnMs?: number;
+}>;
 
 export type AiRunIngestBody =
   | AiRunHeartbeatIngest

@@ -19,7 +19,6 @@
  *   npx ts-node --project tsconfig.server.json scripts/seed-playbook-demos.ts [--project Apex]
  */
 import 'dotenv/config';
-import { isDeepStrictEqual } from 'util';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../src/server/db/drizzle';
 import pool from '../src/server/db';
@@ -30,6 +29,7 @@ import {
   updateDraft,
 } from '../src/server/services/playbookDefinitionService';
 import type { PlaybookGraph } from '../src/shared/types/playbook';
+import { playbookAuthorGraphsMatch } from '../src/shared/utils/playbookGraph';
 
 /**
  * The Skill both demo agent steps run.
@@ -148,10 +148,10 @@ export interface SeedOutcome {
   created: boolean;
 }
 
-function graphsMatch(left: unknown, right: unknown): boolean {
-  // PostgreSQL jsonb does not preserve object-key order, so string comparison would publish an
-  // identical graph again after every database round trip.
-  return isDeepStrictEqual(left, right);
+function graphsMatch(left: PlaybookGraph, right: PlaybookGraph): boolean {
+  // Publish stamps a contract version and a frozen agent policy onto the immutable copy.
+  // Those are not an author edit, and jsonb does not preserve key order.
+  return playbookAuthorGraphsMatch(left, right);
 }
 
 /**

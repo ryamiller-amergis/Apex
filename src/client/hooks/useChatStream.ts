@@ -29,6 +29,7 @@ import {
   isInteractiveWsEnabled,
   openThreadEventStream,
   type ThreadStreamHandle,
+  type ThreadStreamTransport,
 } from '../utils/threadEventStream';
 
 const CONNECTION_ERROR_GRACE_MS = 2_000;
@@ -115,6 +116,8 @@ interface UseChatStreamOptions {
   initialStatus?: ChatThreadStatus;
   /** Set to true when the thread was loaded and a durable PRD file already exists */
   initialPrdReady?: boolean;
+  /** Force SSE or WebSocket. Brainstorm uses SSE so steps are not held behind a socket the dev proxy does not upgrade. */
+  streamTransport?: ThreadStreamTransport;
 }
 
 const MAX_SEEN_EVENT_IDS = 2048;
@@ -176,6 +179,18 @@ function safeTimestamp(value: unknown, fallback = Date.now()): number {
   if (typeof value !== 'string') return fallback;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function mergeThinkingText(previous: string, incoming: string): string {
+  const trimmed = incoming.trim();
+  if (!trimmed) return previous;
+  if (!previous || previous === 'Analyzing') return trimmed;
+  if (trimmed === 'Analyzing') return previous;
+  if (trimmed.startsWith(previous)) return trimmed;
+  if (/^[.,!?;:)'"\]]/.test(trimmed) || /\s$/.test(previous)) {
+    return `${previous}${trimmed}`;
+  }
+  return `${previous} ${trimmed}`;
 }
 
 function progressLabelForPhase(phase: AgentRunPhase, detail?: string): string {
@@ -268,6 +283,7 @@ export function useChatStream(
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
+  const streamTrimOffsetRef = useRef(0);
   const pendingOffsetTokensRef = useRef<
     Map<number, { text: string; key: string }>
   >(new Map());
@@ -282,8 +298,11 @@ export function useChatStream(
   const initialMessagesRef = useRef(options.initialMessages);
   const initialStatusRef = useRef(options.initialStatus);
   const initialPrdReadyRef = useRef(options.initialPrdReady);
+  // eslint-disable-next-line react-hooks/refs -- keep latest seed options in refs without re-triggering stream effects
   initialMessagesRef.current = options.initialMessages;
+  // eslint-disable-next-line react-hooks/refs -- keep latest seed options in refs without re-triggering stream effects
   initialStatusRef.current = options.initialStatus;
+  // eslint-disable-next-line react-hooks/refs -- keep latest seed options in refs without re-triggering stream effects
   initialPrdReadyRef.current = options.initialPrdReady;
 
   useEffect(() => {
@@ -351,6 +370,7 @@ export function useChatStream(
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
+    streamTrimOffsetRef.current = 0;
     pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
@@ -462,7 +482,9 @@ export function useChatStream(
           ) {
             // Legacy tokens without offsets continue append-only.
             streamBufferRef.current += tokenEvent.text;
-            setStreamingText(streamBufferRef.current);
+            setStreamingText(
+              streamBufferRef.current.slice(streamTrimOffsetRef.current)
+            );
           } else {
             const current = streamBufferRef.current;
             const currentLen = current.length;
@@ -512,8 +534,11 @@ export function useChatStream(
                 drained = true;
               }
             }
-            setStreamingText(streamBufferRef.current);
+            setStreamingText(
+              streamBufferRef.current.slice(streamTrimOffsetRef.current)
+            );
           }
+          setThinkingText('');
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
@@ -524,6 +549,7 @@ export function useChatStream(
           const messageEvent = event as SseMessageEvent;
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
@@ -542,13 +568,25 @@ export function useChatStream(
         }
         case 'tool_call': {
           setLastProgressAt(Date.now());
+          streamTrimOffsetRef.current = streamBufferRef.current.length;
+          setStreamingText('');
           setThinkingText('');
           setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
         case 'thinking': {
           const thinkingEvent = event as SseThinkingEvent;
-          setThinkingText(thinkingEvent.text);
+          setThinkingText((prev) => mergeThinkingText(prev, thinkingEvent.text));
+          setProgressPhase((prev) =>
+            prev === null || prev === 'queued' || prev === 'dispatched'
+              ? 'analysis'
+              : prev
+          );
+          setProgressLabel((prev) =>
+            !prev || prev === 'Queued' || prev === 'Dispatched'
+              ? progressLabelForPhase('analysis', thinkingEvent.text)
+              : prev
+          );
           setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
@@ -582,6 +620,11 @@ export function useChatStream(
         case 'tool_status': {
           const toolStatusEvent = event as SseToolStatusEvent;
           setLastProgressAt(Date.now());
+          if (toolStatusEvent.status === 'running') {
+            streamTrimOffsetRef.current = streamBufferRef.current.length;
+            setStreamingText('');
+            setThinkingText('');
+          }
           setToolProgress((prev) => {
             const existing = prev.findIndex(
               (t) => t.callId === toolStatusEvent.callId
@@ -711,6 +754,7 @@ export function useChatStream(
         case 'done': {
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
@@ -762,6 +806,9 @@ export function useChatStream(
         }, CONNECTION_ERROR_GRACE_MS);
       },
       onMessage: handleMessage,
+    }, {
+      ...(options.streamTransport ? { transport: options.streamTransport } : {}),
+      ...(options.streamTransport === 'ws' ? { wsFailuresBeforeSseFallback: 0 } : {}),
     });
 
     streamRef.current = stream;
@@ -774,7 +821,7 @@ export function useChatStream(
       clearRetryTimeout();
       clearPollTimer();
     };
-  }, [threadId, reset, rememberEventId, interactiveWsEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [threadId, reset, rememberEventId, interactiveWsEnabled, options.streamTransport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling fallback: when status is 'running' and SSE is disconnected, poll
   // the server every 5 seconds to detect terminal status from Postgres.
@@ -880,6 +927,7 @@ export function useChatStream(
           setStatus(mappedStatus);
           clearPollTimer();
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);

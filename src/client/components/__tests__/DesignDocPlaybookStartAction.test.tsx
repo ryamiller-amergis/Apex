@@ -1,15 +1,12 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { DesignDocPlaybookStartAction } from '../DesignDocPlaybookStartAction';
-import { useFeatureFlag } from '../../hooks/useFeatureFlags';
 import { useStartDesignDocValidationPlaybook } from '../../hooks/useDesignDocValidationPlaybook';
 
-jest.mock('../../hooks/useFeatureFlags', () => ({ useFeatureFlag: jest.fn() }));
 jest.mock('../../hooks/useDesignDocValidationPlaybook', () => ({
   useStartDesignDocValidationPlaybook: jest.fn(),
 }));
 
-const mockFlag = useFeatureFlag as jest.MockedFunction<typeof useFeatureFlag>;
 const mockStart = useStartDesignDocValidationPlaybook as jest.MockedFunction<
   typeof useStartDesignDocValidationPlaybook
 >;
@@ -17,7 +14,6 @@ const mockStart = useStartDesignDocValidationPlaybook as jest.MockedFunction<
 describe('DesignDocPlaybookStartAction', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockFlag.mockReturnValue(true);
     mockStart.mockReturnValue({
       mutateAsync: jest.fn(),
       isPending: false,
@@ -27,7 +23,7 @@ describe('DesignDocPlaybookStartAction', () => {
     } as unknown as ReturnType<typeof useStartDesignDocValidationPlaybook>);
   });
 
-  it('renders the owner start control when the flag is on', () => {
+  it('renders the owner start control', () => {
     render(
       <MemoryRouter>
         <DesignDocPlaybookStartAction

@@ -14,6 +14,7 @@
 
 import { checkCompatibility } from './foundationSkillCompatibilityService';
 import { listRegisteredSkillRepos } from './foundationSkillTeamsService';
+import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export interface SweepResult {
   scanned: number;
@@ -54,8 +55,11 @@ export async function sweepAllRepos(actorId?: string | null): Promise<SweepResul
 
 export class FoundationSkillScanSchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
-  private isRunning = false;
   private readonly CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+  private readonly runGuard = createSingleFlight({
+    name: 'FoundationSkillScanScheduler',
+    stuckAfterMs: stuckAfterForInterval(this.CHECK_INTERVAL),
+  });
 
   start(): void {
     if (this.intervalId) {
@@ -78,8 +82,8 @@ export class FoundationSkillScanSchedulerService {
   }
 
   private async run(): Promise<void> {
-    if (this.isRunning) return;
-    this.isRunning = true;
+    const runToken = this.runGuard.tryEnter();
+    if (runToken === null) return;
 
     try {
       const result = await sweepAllRepos(null);
@@ -94,7 +98,7 @@ export class FoundationSkillScanSchedulerService {
     } catch (err) {
       console.error('[FoundationSkillScanScheduler] Error during sweep:', (err as Error).message);
     } finally {
-      this.isRunning = false;
+      this.runGuard.exit(runToken);
     }
   }
 }

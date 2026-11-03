@@ -9,6 +9,7 @@ import {
   useRequestableProjectCatalog,
 } from '../hooks/usePlatformAdmin';
 import { IS_BETA_RELEASE } from '../config/release';
+import { sortByLabel } from '../utils/sortByLabel';
 import { BrandLogo } from './BrandLogo';
 import { WhatsNewBanner } from './WhatsNewBanner';
 import { UserMenu } from './UserMenu';
@@ -56,11 +57,16 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 }) => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const { data: projects = [], isLoading, isError } = useProjects();
+  const sortedProjects = useMemo(
+    () => sortByLabel(projects, (project) => project.name),
+    [projects],
+  );
 
   return (
     <div className={styles.page}>
       {onLogout && onThemeChange && (
         <div className={styles.userMenuCorner}>
+          {/* data-testid-exempt — UserMenu owns its menu ids */}
           <UserMenu
             onOpenChangelog={() => onSetShowChangelog?.(true)}
             onThemeChange={onThemeChange}
@@ -82,6 +88,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               type="button"
               className={styles.platformAdminButton}
               onClick={onOpenPlatformAdmin}
+              {...{ 'data-testid': 'project-selector-platform-admin' }}
             >
               Platform Admin
             </button>
@@ -91,6 +98,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               type="button"
               className={styles.requestAccessButton}
               onClick={() => setIsRequestModalOpen(true)}
+              {...{ 'data-testid': 'project-selector-request-access' }}
             >
               Request Access
             </button>
@@ -99,12 +107,15 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       </div>
 
       {hasUnreadChangelog && onSetShowChangelog && onMarkChangelogAsRead && (
-        <WhatsNewBanner
-          currentVersion={whatsNewCurrentVersion}
-          onOpenChangelog={() => onSetShowChangelog(true)}
-          onMarkAsRead={onMarkChangelogAsRead}
-          onToggleShowOnLogin={onToggleShowChangelogOnLogin}
-        />
+        <>
+          {/* data-testid-exempt — WhatsNewBanner owns whats-new-banner root id */}
+          <WhatsNewBanner
+            currentVersion={whatsNewCurrentVersion}
+            onOpenChangelog={() => onSetShowChangelog(true)}
+            onMarkAsRead={onMarkChangelogAsRead}
+            onToggleShowOnLogin={onToggleShowChangelogOnLogin}
+          />
+        </>
       )}
 
       {isLoading ? (
@@ -116,12 +127,13 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         <p className={styles.errorMsg}>Could not load projects. Check your project catalog connection.</p>
       ) : (
         <div className={styles.grid}>
-          {projects.map((project) => (
+          {sortedProjects.map((project) => (
             <button
               key={project.id}
               className={`${styles.card} ${project.name === selectedProject ? styles.cardSelected : ''}`}
               onClick={() => onSelect(project.name)}
               type="button"
+              {...{ 'data-testid': `project-selector-${project.id}` }}
             >
               <div className={styles.cardIcon}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -150,7 +162,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       )}
 
       {isRequestModalOpen && (
-        <RequestAccessModal onClose={() => setIsRequestModalOpen(false)} />
+        <RequestAccessModal onClose={() => setIsRequestModalOpen(false)} {...{ 'data-testid': 'project-request-access-modal' }} />
       )}
     </div>
   );
@@ -158,9 +170,10 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
 interface RequestAccessModalProps {
   onClose: () => void;
+  'data-testid'?: string;
 }
 
-const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
+const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose, 'data-testid': dataTestId }) => {
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const {
     data: requestableProjects = [],
@@ -203,8 +216,8 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className={styles.modalBackdrop}>
-      <div className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="request-access-title">
+    <div className={styles.modalBackdrop} {...(dataTestId ? { 'data-testid': dataTestId } : {})}>
+      <div className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="request-access-title" {...{ 'data-testid': 'project-request-access-dialog' }}>
         <div className={styles.modalHeader}>
           <div>
             <h2 id="request-access-title" className={styles.modalTitle}>Request Project Access</h2>
@@ -212,7 +225,7 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
               Choose one or more ADO or non-ADO projects. A platform admin will review your request.
             </p>
           </div>
-          <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Close request access">
+          <button type="button" className={styles.iconButton} onClick={onClose} aria-label="Close request access" {...{ 'data-testid': 'project-request-access-close' }}>
             &times;
           </button>
         </div>
@@ -236,7 +249,7 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
         ) : catalogIsError ? (
           <p className={styles.errorMsg}>{loadError}</p>
         ) : (
-          <form className={styles.requestForm} onSubmit={(event) => void handleSubmit(onSubmit)(event)}>
+          <form className={styles.requestForm} onSubmit={(event) => void handleSubmit(onSubmit)(event)} {...{ 'data-testid': 'project-request-access-form' }}>
             {requestableProjects.length === 0 ? (
               <p className={styles.emptyText}>No additional projects are available to request.</p>
             ) : (
@@ -254,6 +267,7 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
                         className={styles.projectCheckbox}
                         disabled={pending}
                         {...register('projects')}
+                        {...{ 'data-testid': `project-request-access-${project.id}` }}
                       />
                       <span>
                         <span className={styles.projectOptionName}>{project.name}</span>
@@ -272,13 +286,14 @@ const RequestAccessModal: React.FC<RequestAccessModalProps> = ({ onClose }) => {
             {submitMessage && <p className={styles.successMsg}>{submitMessage}</p>}
 
             <div className={styles.modalActions}>
-              <button type="button" className={styles.secondaryButton} onClick={onClose} disabled={pending}>
+              <button type="button" className={styles.secondaryButton} onClick={onClose} disabled={pending} {...{ 'data-testid': 'project-request-access-cancel' }}>
                 Close
               </button>
               <button
                 type="submit"
                 className={styles.platformAdminButton}
                 disabled={pending || requestableProjects.length === 0}
+                {...{ 'data-testid': 'project-request-access-submit' }}
               >
                 {pending ? 'Requesting...' : 'Submit request'}
               </button>

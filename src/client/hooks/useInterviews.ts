@@ -10,6 +10,8 @@ import type {
   DesignDocStatus,
   DesignDocSummary,
   Interview,
+  InterviewBriefRecord,
+  InterviewBriefSections,
   InterviewStatus,
   InterviewSummary,
   Prd,
@@ -32,12 +34,15 @@ import type {
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { GroupWithMembers } from '../../shared/types/groups';
+import { ApiFetchError, isApiNotFoundError } from '../utils/apiFetch';
+
+const PRD_MAX_RETRIES = 3;
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error ?? `Request failed: ${res.status}`);
+    throw new ApiFetchError((body as any).error ?? `Request failed: ${res.status}`, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -68,6 +73,61 @@ export function useInterview(id: string | null) {
     queryFn: () => apiFetch(`/api/interviews/${id}`),
     enabled: !!id,
     staleTime: 30_000,
+  });
+}
+
+export function useInterviewBrief(interviewId: string | null, enabled = true) {
+  return useQuery<InterviewBriefRecord | null>({
+    queryKey: ['interview-brief', interviewId],
+    queryFn: () => apiFetch(`/api/interviews/${interviewId}/brief`),
+    enabled: enabled && !!interviewId,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveInterviewBrief() {
+  const qc = useQueryClient();
+  return useMutation<
+    InterviewBriefRecord,
+    Error,
+    { interviewId: string; sections: InterviewBriefSections }
+  >({
+    mutationFn: ({ interviewId, sections }) =>
+      apiFetch(`/api/interviews/${interviewId}/brief`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sections }),
+      }),
+    onSuccess: (brief) => {
+      qc.setQueryData(['interview-brief', brief.interviewId], brief);
+    },
+  });
+}
+
+export function useDraftInterviewBrief() {
+  const qc = useQueryClient();
+  return useMutation<InterviewBriefRecord, Error, string>({
+    mutationFn: (interviewId) =>
+      apiFetch(`/api/interviews/${interviewId}/brief/draft`, { method: 'POST' }),
+    onSuccess: (brief) => {
+      qc.setQueryData(['interview-brief', brief.interviewId], brief);
+    },
+  });
+}
+
+export function useApproveInterviewBrief() {
+  const qc = useQueryClient();
+  return useMutation<
+    { version: number; resumed: boolean },
+    Error,
+    string
+  >({
+    mutationFn: (interviewId) =>
+      apiFetch(`/api/interviews/${interviewId}/brief/approve`, { method: 'POST' }),
+    onSuccess: (_result, interviewId) => {
+      void qc.invalidateQueries({ queryKey: ['interview-brief', interviewId] });
+      void qc.invalidateQueries({ queryKey: ['interview', interviewId] });
+    },
   });
 }
 
@@ -109,7 +169,12 @@ export function usePrd(id: string | null) {
     queryFn: () => apiFetch(`/api/interviews/prds/${id}`),
     enabled: !!id,
     staleTime: 30_000,
+    retry: (failureCount, error) => !isApiNotFoundError(error) && failureCount < PRD_MAX_RETRIES,
+    retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 4_000),
+    // Polling keys off the cached PRD, which survives a failed refetch, so a
+    // 404 has to stop it explicitly.
     refetchInterval: (query) => {
+      if (isApiNotFoundError(query.state.error)) return false;
       const data = query.state.data;
       if (!data) return false;
       if (data.status === 'generating' && data.content === '') return 5_000;
@@ -419,6 +484,29 @@ export function useUpdateInterviewStatus() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
+      }),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['interviews'] });
+      qc.invalidateQueries({ queryKey: ['interview', id] });
+    },
+  });
+}
+
+export function useUpdateInterviewPhaseAssignments() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, {
+    id: string;
+    phaseAssignments: {
+      discoveryAssigneeId?: string | null;
+      deliveryAssigneeId?: string | null;
+      technicalAssigneeId?: string | null;
+    };
+  }>({
+    mutationFn: ({ id, phaseAssignments }) =>
+      apiFetch(`/api/interviews/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phaseAssignments }),
       }),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['interviews'] });
@@ -1088,6 +1176,27 @@ export function useOverridePrdReadiness() {
     onSuccess: (_data, { prdId }) => {
       void qc.invalidateQueries({ queryKey: ['prd', prdId] });
       void qc.invalidateQueries({ queryKey: ['prds'] });
+    },
+  });
+}
+
+export function useForceSubmitPrd() {
+  const qc = useQueryClient();
+  return useMutation<
+    { ok: true; reviewerAssignmentError: string | null },
+    Error,
+    { prdId: string; reason: string }
+  >({
+    mutationFn: ({ prdId, reason }) =>
+      apiFetch(`/api/interviews/prds/${prdId}/force-submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: (_data, { prdId }) => {
+      void qc.invalidateQueries({ queryKey: ['prd', prdId] });
+      void qc.invalidateQueries({ queryKey: ['prds'] });
+      void qc.invalidateQueries({ queryKey: ['document-assignments', prdId] });
     },
   });
 }

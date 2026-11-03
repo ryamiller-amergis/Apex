@@ -16,7 +16,8 @@ import {
   WORKTREE_GIT_TIMEOUT_MS,
   ensureGitSafeDirectory,
 } from './repoGitSettings';
-import { materializeWorkspaceFromCache } from './repoWorkspaceService';
+import { materializeWorkspaceFromCache, removeDirectoryAsync } from './repoWorkspaceService';
+import { implementationBranchName } from './implementationDelivery';
 
 export { materializeWorkspaceFromCache } from './repoWorkspaceService';
 
@@ -105,8 +106,8 @@ export async function checkoutDefaultBranch(opts: {
 
   await ensureGitSafeDirectory();
   const remote = resolveGitRemote(provider, project, repo);
-  fs.mkdirSync(CHECKOUT_BASE, { recursive: true });
-  fs.rmSync(workspaceDir, { recursive: true, force: true });
+  await fs.promises.mkdir(CHECKOUT_BASE, { recursive: true });
+  await removeDirectoryAsync(workspaceDir);
 
   try {
     if (process.env.DEV_WORKBENCH_GIT_CACHE_ENABLED === 'false') {
@@ -151,7 +152,7 @@ export async function checkoutDefaultBranch(opts: {
       }
     }
   } catch (err) {
-    fs.rmSync(workspaceDir, { recursive: true, force: true });
+    await removeDirectoryAsync(workspaceDir);
     const raw = err instanceof Error ? err.message : String(err);
     throw new Error(`git clone failed: ${redactSecrets(raw, remote.secret)}`);
   }
@@ -208,8 +209,7 @@ export async function createFeatureBranch(
   baseBranch: string,
   remote?: GitRemote,
 ): Promise<string> {
-  const slug = slugify(workItemTitle);
-  const branchName = `feature/apex-${workItemId}-${slug}`;
+  const branchName = implementationBranchName(workItemId, workItemTitle);
   await checkoutFeatureBranch(workspaceDir, branchName, baseBranch, remote);
   return branchName;
 }

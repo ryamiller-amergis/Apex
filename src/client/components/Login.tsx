@@ -107,7 +107,7 @@ export const Login: React.FC = () => {
           <div className={styles['login-action-content']}>
             <h1 className={styles['login-action-title']}>Sign in</h1>
             <p className={styles['login-action-copy']}>Continue with your Amergis account.</p>
-            <button className={styles['login-button']} onClick={handleLogin}>
+            <button className={styles['login-button']} data-testid="login-sso-button" onClick={handleLogin}>
               Sign in with Amergis SSO
             </button>
 
@@ -121,6 +121,7 @@ export const Login: React.FC = () => {
                     <button
                       key={persona.id}
                       className={styles['dev-login-button']}
+                      data-testid={`dev-login-${persona.id}-button`}
                       onClick={() => handleDevLogin(persona.id)}
                       disabled={devLoggingIn !== null}
                       title={persona.displayName}

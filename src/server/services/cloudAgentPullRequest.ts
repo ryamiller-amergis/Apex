@@ -1,9 +1,14 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { AzureDevOpsService } from './azureDevOps';
+import {
+  buildImplementationPullRequestText,
+  extractAgentPullRequestDescription,
+} from './implementationDelivery';
+import { parsePullRequestNumber } from './workItemPrLinkService';
 
-const DESCRIPTION_LIMIT = 4_000;
-const TITLE_LIMIT = 400;
+/** Azure DevOps pull-request label applied to every Cloud Agent pull request. */
+export const CLOUD_AGENT_PULL_REQUEST_LABEL = 'apex-cloud-agent';
 
 export interface CloudAgentPullRequestTextInput {
   workItemId: number;
@@ -12,6 +17,8 @@ export interface CloudAgentPullRequestTextInput {
   authorEmail?: string | null;
   summary?: string | null;
   sourceBranch: string;
+  /** Branch name used for the pull-request title. Defaults to sourceBranch. */
+  titleBranch?: string | null;
 }
 
 export interface OpenCloudAgentPullRequestInput extends CloudAgentPullRequestTextInput {
@@ -30,39 +37,15 @@ export class CloudAgentPullRequestDeferred extends Error {
   }
 }
 
-function oneLine(value: string | null | undefined): string {
-  return (value ?? '').replace(/[\r\n]+/g, ' ').trim();
-}
-
 export function buildCloudAgentPullRequestText(
   input: CloudAgentPullRequestTextInput,
 ): { title: string; description: string } {
-  const workItemTitle = oneLine(input.workItemTitle);
-  const title = (workItemTitle
-    ? `AB#${input.workItemId}: ${workItemTitle}`
-    : `AB#${input.workItemId}`
-  ).slice(0, TITLE_LIMIT);
-
-  const authorName = oneLine(input.authorName);
-  const authorEmail = oneLine(input.authorEmail);
-  const summary = (input.summary ?? '').trim();
-  const lines = [
-    'Automated implementation via Apex cloud development.',
-    '',
-    `Work item: AB#${input.workItemId}${workItemTitle ? ` — ${workItemTitle}` : ''}`,
-    `Branch: ${input.sourceBranch}`,
-  ];
-  if (authorName) {
-    lines.push(`Started by: ${authorName}${authorEmail ? ` (${authorEmail})` : ''}`);
-  }
-  if (summary) {
-    lines.push('', '## Implementation summary', '', summary);
-  }
-
-  return {
-    title,
-    description: lines.join('\n').slice(0, DESCRIPTION_LIMIT),
-  };
+  return buildImplementationPullRequestText({
+    branchName: input.titleBranch?.trim() || input.sourceBranch,
+    workItemId: input.workItemId,
+    workItemTitle: input.workItemTitle,
+    agentDescription: extractAgentPullRequestDescription(input.summary),
+  });
 }
 
 export async function openCloudAgentPullRequest(
@@ -90,8 +73,29 @@ export async function openCloudAgentPullRequest(
       input.project,
       input.sourceBranch,
     );
-    if (existing) return existing;
-    return ado.createPullRequest({
+    if (existing) {
+      try {
+        await alignExistingPullRequest(ado, {
+          repo: input.repo,
+          project: input.project,
+          prUrl: existing,
+          title,
+          description,
+        });
+      } catch (err) {
+        console.warn(
+          '[cloud-agent] could not mark the existing pull request as a draft',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      await tagCloudAgentPullRequest(ado, {
+        repo: input.repo,
+        project: input.project,
+        prUrl: existing,
+      });
+      return existing;
+    }
+    const prUrl = await ado.createPullRequest({
       repo: input.repo,
       project: input.project,
       sourceBranch: input.sourceBranch,
@@ -100,5 +104,86 @@ export async function openCloudAgentPullRequest(
       description,
       workItemId: input.workItemId,
     });
+    try {
+      await alignExistingPullRequest(ado, {
+        repo: input.repo,
+        project: input.project,
+        prUrl,
+        title,
+        description,
+      });
+    } catch (err) {
+      console.warn(
+        '[cloud-agent] pull request was created but could not be marked as a draft',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    await tagCloudAgentPullRequest(ado, {
+      repo: input.repo,
+      project: input.project,
+      prUrl,
+    });
+    return prUrl;
+  });
+}
+
+async function alignExistingPullRequest(
+  ado: AzureDevOpsService,
+  input: {
+    repo: string;
+    project: string;
+    prUrl: string;
+    title: string;
+    /** Omitted to keep the description already on the pull request. */
+    description?: string;
+  },
+): Promise<void> {
+  const pullRequestId = parsePullRequestNumber(input.prUrl, 'ado');
+  await ado.updatePullRequest({
+    repo: input.repo,
+    project: input.project,
+    pullRequestId,
+    title: input.title,
+    ...(input.description !== undefined ? { description: input.description } : {}),
+  });
+}
+
+async function tagCloudAgentPullRequest(
+  ado: AzureDevOpsService,
+  input: { repo: string; project: string; prUrl: string },
+): Promise<void> {
+  await ado.addPullRequestLabel({
+    repo: input.repo,
+    project: input.project,
+    pullRequestId: parsePullRequestNumber(input.prUrl, 'ado'),
+    name: CLOUD_AGENT_PULL_REQUEST_LABEL,
+  });
+}
+
+/**
+ * Sets the My Work title on an already-opened Azure Repos pull request.
+ * Leaves the description alone: it holds the agent's filled pr-description.md,
+ * and this caller does not have the agent's final message.
+ */
+export async function alignCloudAgentPullRequest(input: {
+  project: string;
+  repo: string;
+  prUrl: string;
+  workItemId: number;
+  sourceBranch: string;
+  titleBranch?: string | null;
+}): Promise<void> {
+  const { title } = buildCloudAgentPullRequestText(input);
+  const ado = new AzureDevOpsService(input.project);
+  await alignExistingPullRequest(ado, {
+    repo: input.repo,
+    project: input.project,
+    prUrl: input.prUrl,
+    title,
+  });
+  await tagCloudAgentPullRequest(ado, {
+    repo: input.repo,
+    project: input.project,
+    prUrl: input.prUrl,
   });
 }

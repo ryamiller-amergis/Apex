@@ -16,9 +16,10 @@
  * refused on a number with those properties would be refused unreproducibly.
  */
 import { and, count, eq, inArray, ne } from 'drizzle-orm';
-import type { ZodError } from 'zod';
+import { z, type ZodError } from 'zod';
 import { db } from '../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../db/schema';
+import { collectStepBindingReferences } from './playbookBindingResolver';
 import { PlaybookStepSchemaError } from './playbookSteps/descriptorValidation';
 import {
   PlaybookStepTypeError,
@@ -164,6 +165,23 @@ export class PlaybookGraphNodeConfigError extends PlaybookStepSchemaError {
   }
 }
 
+export class PlaybookGraphBindingError extends PlaybookStepTypeError {
+  constructor(nodeId: string, placeholder: string, reason: string) {
+    super(`Playbook step "${nodeId}" cannot use binding "${placeholder}": ${reason}.`);
+    this.name = 'PlaybookGraphBindingError';
+  }
+}
+
+export class PlaybookGraphStepVersionError extends PlaybookStepTypeError {
+  constructor(nodeId: string, stepType: string, version: number, currentVersion: number) {
+    super(
+      `Playbook step "${nodeId}" uses ${stepType} contract version ${version}, but this Apex ` +
+        `version supports contract versions 1 through ${currentVersion}.`
+    );
+    this.name = 'PlaybookGraphStepVersionError';
+  }
+}
+
 /**
  * Whether this step type is a human approval checkpoint.
  *
@@ -197,6 +215,54 @@ function canReach(graph: PlaybookGraph, from: string, to: string): boolean {
     pending.push(...graph.edges.filter((edge) => edge.from === current).map((edge) => edge.to));
   }
   return false;
+}
+
+function outputHasField(descriptor: PlaybookStepTypeDescriptor, field: string): boolean {
+  let schema: z.ZodTypeAny = descriptor.outputSchema;
+  while (
+    schema instanceof z.ZodOptional ||
+    schema instanceof z.ZodNullable ||
+    schema instanceof z.ZodDefault
+  ) {
+    schema = (schema._def as unknown as { innerType: z.ZodTypeAny }).innerType;
+  }
+  return schema instanceof z.ZodObject && field in schema.shape;
+}
+
+/** Every cross-step binding names an ancestor and a declared output field. */
+export function assertBindingsResolvable(
+  graph: PlaybookGraph,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): void {
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+
+  for (const target of graph.nodes) {
+    for (const binding of collectStepBindingReferences(target.config ?? {})) {
+      const source = nodes.get(binding.stepId);
+      if (!source) {
+        throw new PlaybookGraphBindingError(
+          target.id,
+          binding.placeholder,
+          `source step "${binding.stepId}" is absent`
+        );
+      }
+      if (source.id === target.id || !canReach(graph, source.id, target.id)) {
+        throw new PlaybookGraphBindingError(
+          target.id,
+          binding.placeholder,
+          `source step "${binding.stepId}" is not a prior step`
+        );
+      }
+      const descriptor = lookup(source.stepType);
+      if (!descriptor || !outputHasField(descriptor, binding.field)) {
+        throw new PlaybookGraphBindingError(
+          target.id,
+          binding.placeholder,
+          `field "${binding.field}" is not declared by step "${binding.stepId}"`
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -299,6 +365,19 @@ export function assertGraphStepsResolvable(
   for (const node of graph.nodes) {
     const descriptor = lookup(node.stepType);
     if (!descriptor) throw new PlaybookGraphStepTypeError(node.id, node.stepType);
+    const stepTypeVersion = node.stepTypeVersion ?? 1;
+    if (
+      !Number.isInteger(stepTypeVersion) ||
+      stepTypeVersion < 1 ||
+      stepTypeVersion > descriptor.schemaVersion
+    ) {
+      throw new PlaybookGraphStepVersionError(
+        node.id,
+        node.stepType,
+        stepTypeVersion,
+        descriptor.schemaVersion
+      );
+    }
 
     // `safeParse` rather than `parse`, and the result discarded: the graph is the author's and is
     // stored as written, so nothing here may hand back a coerced copy of it.
@@ -330,29 +409,13 @@ export function assertGraphStepsResolvable(
 }
 
 /**
- * The publish-time guards, in the order an author most likely tripped.
+ * Topology checks shared by publish and the authoring canvas.
  *
- * Checked at publish rather than per run because a published version's graph cannot change —
- * BR-006 makes it immutable — so re-deriving the same answer on every start would be waste that
- * also puts a graph walk on the run-start latency path.
+ * Step budgets and gate/MCP rules stay on the publish path only. The canvas must allow a
+ * `cursor-agent` → `notify` draft with no gate while the author is still composing.
  */
-export function assertGraphWithinGuards(graph: PlaybookGraph): void {
-  const { maxStepsPerRun, maxAgentStepsPerRun, maxFanOutWidth } = PLAYBOOK_GUARD_LIMITS;
-
-  if (graph.nodes.length > maxStepsPerRun) {
-    throw new PlaybookGuardViolationError(
-      'max-steps',
-      `This Playbook has ${graph.nodes.length} steps, above the limit of ${maxStepsPerRun} per run.`
-    );
-  }
-
-  const agentSteps = countAgentSteps(graph);
-  if (agentSteps > maxAgentStepsPerRun) {
-    throw new PlaybookGuardViolationError(
-      'max-agent-steps',
-      `This Playbook has ${agentSteps} agent steps, above the limit of ${maxAgentStepsPerRun} per run.`
-    );
-  }
+function assertGraphTopologyGuards(graph: PlaybookGraph): void {
+  const { maxFanOutWidth } = PLAYBOOK_GUARD_LIMITS;
 
   const invalidFanOut = graph.nodes.find((node) => {
     const outbound = graph.edges.filter((edge) => edge.from === node.id);
@@ -360,12 +423,11 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
   });
   if (invalidFanOut) {
     const fanOut = graph.edges.filter((edge) => edge.from === invalidFanOut.id).length;
-    throw new PlaybookGuardViolationError(
-      'max-fan-out',
-      `Step "${invalidFanOut.id}" branches to ${fanOut} next steps. Only a branch step may fan ` +
-        `out; other steps have a limit of ${maxFanOutWidth}. A branch must select exactly one ` +
-        'of at most two named continuations.'
-    );
+    const step = `${invalidFanOut.stepType} step "${invalidFanOut.id}"`;
+    const message = isBranchStepType(invalidFanOut.stepType)
+      ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
+      : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
+    throw new PlaybookGuardViolationError('max-fan-out', message);
   }
 
   const inboundCounts = new Map<string, number>();
@@ -388,8 +450,61 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
         'Loops are not permitted; a Playbook must reach an end.'
     );
   }
+}
+
+/**
+ * Authoring-time check when a connection is dropped or the canvas validates the current draft.
+ *
+ * Publish still runs the full guard set, including ungated `leaves-apex` and read-only MCP.
+ */
+export function assertCanvasConnection(graph: PlaybookGraph): void {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const node of graph.nodes) {
+    if (!isRegisteredStepType(node.stepType)) {
+      throw new PlaybookGraphStepTypeError(node.id, node.stepType);
+    }
+  }
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
+      throw new PlaybookGuardViolationError(
+        'join',
+        `Connection from "${edge.from}" to "${edge.to}" references a step that is not on the canvas.`
+      );
+    }
+  }
+  assertGraphTopologyGuards(graph);
+  assertBindingsResolvable(graph);
+}
+
+/**
+ * The publish-time guards, in the order an author most likely tripped.
+ *
+ * Checked at publish rather than per run because a published version's graph cannot change —
+ * BR-006 makes it immutable — so re-deriving the same answer on every start would be waste that
+ * also puts a graph walk on the run-start latency path.
+ */
+export function assertGraphWithinGuards(graph: PlaybookGraph): void {
+  const { maxStepsPerRun, maxAgentStepsPerRun } = PLAYBOOK_GUARD_LIMITS;
+
+  if (graph.nodes.length > maxStepsPerRun) {
+    throw new PlaybookGuardViolationError(
+      'max-steps',
+      `This Playbook has ${graph.nodes.length} steps, above the limit of ${maxStepsPerRun} per run.`
+    );
+  }
+
+  const agentSteps = countAgentSteps(graph);
+  if (agentSteps > maxAgentStepsPerRun) {
+    throw new PlaybookGuardViolationError(
+      'max-agent-steps',
+      `This Playbook has ${agentSteps} agent steps, above the limit of ${maxAgentStepsPerRun} per run.`
+    );
+  }
+
+  assertGraphTopologyGuards(graph);
 
   assertGraphStepsResolvable(graph);
+  assertBindingsResolvable(graph);
 
   const ungated = findUngatedLeavesApexSteps(graph);
   if (ungated.length > 0) throw ungatedViolation(ungated);

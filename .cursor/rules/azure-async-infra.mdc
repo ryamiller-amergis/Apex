@@ -15,7 +15,7 @@ When changing `infra/` or designing async/messaging/storage architecture for Ape
 3. **Do not** put unrelated domains on a single mega-queue. **Do not** use a job queue as a substitute for pub/sub fan-out.
 4. Scope managed-identity RBAC to the **container** (or future queue/subscription) — not the entire account/namespace — unless a cross-cutting operator principal is explicitly justified.
 5. Keep heavy workers on a **separate App Service plan** only when isolation/scale
-   evidence requires it. PDF assembly currently runs in the Apex app with shared
-   Blob — do not provision a PDF worker App Service by default.
+   evidence requires it. Interactive PDF editing now lives in DocHub; Apex still
+   keeps the `pdf-artifacts` container so apply does not destroy existing blobs.
 6. Prefer managed identity and Terraform outputs/app setting names over connection strings and account keys.
 7. During ADR / grill-design / infra interviews that touch Blob, Service Bus, workers, or async jobs, **load and apply** `.cursor/skills/azure-async-infra/SKILL.md` before recommending topology.

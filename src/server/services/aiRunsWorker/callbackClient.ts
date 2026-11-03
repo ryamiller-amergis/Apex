@@ -56,6 +56,15 @@ const RETRYABLE_CALLBACK_STATUSES: ReadonlySet<number> = new Set([
 const MAX_CALLBACK_ATTEMPTS = 4;
 const CALLBACK_RETRY_BASE_DELAY_MS = 500;
 
+/** Longest a retried callback (such as the bootstrap read) can take before it gives up. */
+export function retriedCallbackBudgetMs(requestTimeoutMs: number): number {
+  let backoffMs = 0;
+  for (let attempt = 1; attempt < MAX_CALLBACK_ATTEMPTS; attempt += 1) {
+    backoffMs += CALLBACK_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
+  }
+  return MAX_CALLBACK_ATTEMPTS * requestTimeoutMs + backoffMs;
+}
+
 /**
  * A fence conflict means this worker has been superseded, so a replay can only
  * earn the same rejection. Failures that never reached HTTP (dropped socket,
@@ -146,6 +155,8 @@ export function createAiRunsCallbackClient(options: {
   fetchImpl?: typeof fetch;
   /** Injectable delay so retry backoff does not slow tests down. */
   sleepImpl?: (ms: number) => Promise<void>;
+  /** Per-request limit; a timed-out request is retried like a network error. */
+  requestTimeoutMs?: number;
 }): AiRunsCallbackClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl
@@ -162,6 +173,9 @@ export function createAiRunsCallbackClient(options: {
     );
     return fetchImpl(url, {
       ...init,
+      ...(options.requestTimeoutMs
+        ? { signal: AbortSignal.timeout(options.requestTimeoutMs) }
+        : {}),
       headers: {
         Authorization: `Bearer ${token}`,
         ...(init.headers ?? {}),
@@ -193,10 +207,11 @@ export function createAiRunsCallbackClient(options: {
   /**
    * Replays a call whose failure was unrelated to its content.
    *
-   * Used for the bootstrap read and for terminal ingest only. Repeating a
-   * terminal is a no-op server side when the status matches, so a replay cannot
-   * double-apply the transition. Heartbeat and progress stay unretried: they
-   * are latency-sensitive and losing one costs nothing.
+   * Used for the bootstrap read, terminal ingest, and progress that carries an
+   * `eventId`. Repeating a terminal is a no-op server side when the status
+   * matches, and a repeated `eventId` is dropped, so a replay cannot
+   * double-apply. Heartbeats and progress without an `eventId` stay
+   * unretried: they are latency-sensitive and losing one costs nothing.
    */
   const requestWithRetry = async (
     url: string,
@@ -238,8 +253,10 @@ export function createAiRunsCallbackClient(options: {
       };
       // Losing a terminal report is unrecoverable: the worker exits right after
       // it, so the run falls to the reaper and work that actually succeeded is
-      // recorded as a failure.
-      return (body.kind === 'terminal'
+      // recorded as a failure. A failed transcript post ends the live turn.
+      const retry = body.kind === 'terminal'
+        || (body.kind === 'progress' && body.eventId !== undefined);
+      return (retry
         ? requestWithRetry(url, init)
         : request(url, init)) as Promise<AiRunIngestResponse>;
     },

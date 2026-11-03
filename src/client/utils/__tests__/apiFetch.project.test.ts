@@ -1,5 +1,4 @@
 import { apexProjectHeaders, getSelectedApexProject, notifySelectedProjectChanged, SELECTED_PROJECT_CHANGE_EVENT, withApexProject } from '../apiFetch';
-import { pdfFileUrl } from '../pdfUrls';
 
 describe('apex project helpers', () => {
   afterEach(() => {
@@ -26,17 +25,10 @@ describe('apex project helpers', () => {
 
   it('appends project query param for URL-based loads', () => {
     localStorage.setItem('selectedProject', 'Apex');
-    expect(withApexProject('/api/pdf/sessions/s1/files/f1')).toBe(
-      '/api/pdf/sessions/s1/files/f1?project=Apex',
+    expect(withApexProject('/api/files/s1')).toBe(
+      '/api/files/s1?project=Apex',
     );
-    expect(withApexProject('/api/pdf/x?foo=1')).toBe('/api/pdf/x?foo=1&project=Apex');
-  });
-
-  it('builds project-scoped pdf file urls', () => {
-    localStorage.setItem('selectedProject', 'Apex');
-    expect(pdfFileUrl('sess-1', 'file-1')).toBe(
-      '/api/pdf/sessions/sess-1/files/file-1?project=Apex',
-    );
+    expect(withApexProject('/api/files/x?foo=1')).toBe('/api/files/x?foo=1&project=Apex');
   });
 
   it('notifies same-tab listeners when the selected project changes', () => {

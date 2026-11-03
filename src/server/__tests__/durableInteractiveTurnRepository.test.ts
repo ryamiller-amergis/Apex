@@ -761,6 +761,16 @@ describe('durable interactive turn repository retry', () => {
     expect(harness.attemptInsertCount).toBe(0);
   });
 
+  it('retries a cancelled v2 run', async () => {
+    const harness = retryHarness({ runStatus: 'cancelled', attemptStatus: 'cancelled' });
+    await expect(harness.repository.retry(retryInput())).resolves.toMatchObject({
+      runId: FAILED_RUN_ID,
+      turnId: TURN_ID,
+      status: 'queued',
+    });
+    expect(harness.attemptInsertCount).toBe(1);
+  });
+
   it('rejects non-v2 transport as not retryable', async () => {
     const harness = retryHarness({ transport: 'legacy-in-process' });
     await expect(harness.repository.retry(retryInput())).resolves.toEqual({
@@ -1271,6 +1281,48 @@ describe('durable interactive turn service', () => {
       serverName: 'maxview',
       enableRepoBrowse: false,
     });
+  });
+
+  it('freezes one shared project MCP connection and no other servers', async () => {
+    const connectionId = '20000000-0000-4000-8000-000000000002';
+    const { service, admitted } = durableServiceHarness({
+      maxviewCapability: 'enabled',
+      thread: authoritativeThread({
+        kickoff: {
+          project: 'project-1',
+          repo: 'repo-1',
+          skillProvider: 'github',
+          model: 'model-a',
+          effort: 'low',
+          assistantType: 'mcp-server',
+          mcpServerId: connectionId,
+          pillLabel: 'Clerk',
+        },
+      }),
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'home-chat',
+      turnId: TURN_ID,
+      text: 'Which applications do I have?',
+      attachments: [],
+    });
+
+    expect(admitted[0].specification.grounding).toBeNull();
+    expect(admitted[0].specification.mcpServers).toEqual([{
+      kind: 'internal-proxy',
+      serverName: 'mcp-server',
+      connectionId,
+      boundUserId: USER_ID,
+      enableRepoBrowse: false,
+    }]);
+    expect(admitted[0].specification.currentPrompt).toContain('Clerk');
+    expect(admitted[0].specification.currentPrompt).toContain('read-only tools');
+    expect(admitted[0].specification.currentPrompt).toContain(
+      'at most eight MCP calls',
+    );
   });
 
   it('fails explicitly when registered MaxView is enabled but unavailable', async () => {

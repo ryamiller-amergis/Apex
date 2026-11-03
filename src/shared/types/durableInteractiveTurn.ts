@@ -1,9 +1,21 @@
 import { isAiRunBlobRef, type AiRunBlobRef } from './aiRunV2';
+import {
+  isBrainstormTurnArtifact,
+  isBrainstormTurnIntent,
+  isBrainstormTurnSources,
+} from './aiRunV2BrainstormSpec';
+import type { BrainstormTurnSources } from './brainstormSources';
+import type { BrainstormTurnIntent, FrozenBrainstormArtifact } from './brainstormArtifact';
 import { isEffortLevel, type EffortLevel } from './effort';
 import {
   INTERACTIVE_WORKFLOW_CLASSES,
   type InteractiveWorkflowClass,
 } from './interactiveWorkflow';
+import {
+  GUIDED_INTERVIEW_STEP_PHASES,
+  type GuidedInterviewTurn,
+  type InterviewRepositoryPhase,
+} from './interview';
 
 export const DURABLE_INTERACTIVE_SPEC_VERSION = 1 as const;
 
@@ -46,6 +58,19 @@ export type FrozenInteractiveMcpDescriptor =
       enableRepoBrowse: boolean;
     }>
   | Readonly<{
+      kind: 'internal-proxy';
+      serverName: 'mcp-server';
+      connectionId: string;
+      boundUserId: string;
+      enableRepoBrowse: false;
+    }>
+  | Readonly<{
+      /** Answered in-process by App Service from the attempt's frozen specification. */
+      kind: 'internal-proxy';
+      serverName: 'brainstorm-artifact';
+      enableRepoBrowse: false;
+    }>
+  | Readonly<{
       kind: 'external-http-proxy';
       serverName: string;
       url: string;
@@ -63,6 +88,40 @@ export type FrozenInteractiveToolGrant = Readonly<{
     ciphertext: string;
     authTag: string;
   }>;
+}>;
+
+/**
+ * Server-controlled interview turn resolved on App Service. The worker uses
+ * `phase` to choose repository tools and `turn` to normalize the reply.
+ */
+export type FrozenGuidedInterview = Readonly<{
+  phase: InterviewRepositoryPhase;
+  turn: Readonly<GuidedInterviewTurn>;
+}>;
+
+/**
+ * Server-controlled Brainstorm turn context resolved on App Service. The worker
+ * reads every limit from here and holds no Brainstorm default of its own.
+ */
+export type FrozenBrainstormTurn = Readonly<{
+  sessionId: string;
+  creatorContext: Readonly<{
+    displayName: string;
+    roles: ReadonlyArray<string>;
+    groups: ReadonlyArray<string>;
+    bio: string | null;
+  }>;
+  sourceLimits: Readonly<{
+    workspaceMaxBytes: number;
+    maxConcurrentClones: number;
+    inactivityMs: number;
+  }>;
+  /** Ready clones, unavailable sources, and read-only MCP tools. Required. */
+  sources: BrainstormTurnSources;
+  /** The artifact as of admission; `version` is the base for this turn's artifact changes. Required. */
+  artifact: FrozenBrainstormArtifact;
+  /** Whether the turn's artifact change is a chat edit or a type switch. Required. */
+  intent: BrainstormTurnIntent;
 }>;
 
 export type DurableInteractiveTurnSpecification = Readonly<{
@@ -108,6 +167,10 @@ export type DurableInteractiveTurnSpecification = Readonly<{
   currentPrompt: string;
   recreationPrompt: string;
   deadlines: InteractiveDeadlinePolicy;
+  /** Present only for guided interview turns. */
+  guidedInterview?: FrozenGuidedInterview;
+  /** Present exactly when `workflowClass` is `brainstorm`. */
+  brainstorm?: FrozenBrainstormTurn;
 }>;
 
 export type InteractiveDispatchOutboxPayload = Readonly<{
@@ -293,6 +356,16 @@ function isMcpDescriptor(
   if (!isRecord(value)) return false;
 
   if (value.kind === 'internal-proxy') {
+    if (value.serverName === 'mcp-server') {
+      return (
+        isCanonicalUuid(value.connectionId) &&
+        isDurableUserIdentity(value.boundUserId) &&
+        value.enableRepoBrowse === false
+      );
+    }
+    if (value.serverName === 'brainstorm-artifact') {
+      return value.enableRepoBrowse === false;
+    }
     return (
       (value.serverName === 'ado-skills' ||
         value.serverName === 'calendar-assistant' ||
@@ -348,6 +421,53 @@ function isToolGrant(value: unknown): value is FrozenInteractiveToolGrant {
     isNonEmptyString(value.encryptedAdoToken.iv) &&
     isNonEmptyString(value.encryptedAdoToken.ciphertext) &&
     isNonEmptyString(value.encryptedAdoToken.authTag)
+  );
+}
+
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value);
+}
+
+function isGuidedInterview(value: unknown): value is FrozenGuidedInterview {
+  if (!isRecord(value) || !isRecord(value.turn)) return false;
+  const turn = value.turn;
+  return (
+    (value.phase === 'product' || value.phase === 'technical') &&
+    typeof turn.phase === 'string' &&
+    (GUIDED_INTERVIEW_STEP_PHASES as readonly string[]).includes(turn.phase) &&
+    isNullableNonNegativeInteger(turn.question) &&
+    isNullableNonNegativeInteger(turn.total) &&
+    typeof turn.topic === 'string' &&
+    isNonEmptyString(turn.marker) &&
+    (turn.followUpMarker === undefined ||
+      isNonEmptyString(turn.followUpMarker)) &&
+    typeof turn.instruction === 'string'
+  );
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+export function isFrozenBrainstormTurn(value: unknown): value is FrozenBrainstormTurn {
+  if (!isRecord(value) || !isRecord(value.creatorContext) || !isRecord(value.sourceLimits)) {
+    return false;
+  }
+  const creator = value.creatorContext;
+  const limits = value.sourceLimits;
+  return (
+    isCanonicalUuid(value.sessionId) &&
+    typeof creator.displayName === 'string' &&
+    isStringList(creator.roles) &&
+    isStringList(creator.groups) &&
+    (creator.bio === null || typeof creator.bio === 'string') &&
+    isPositiveFiniteNumber(limits.workspaceMaxBytes) &&
+    Number.isSafeInteger(limits.maxConcurrentClones) &&
+    (limits.maxConcurrentClones as number) > 0 &&
+    isPositiveFiniteNumber(limits.inactivityMs) &&
+    isBrainstormTurnSources(value.sources) &&
+    isBrainstormTurnArtifact(value.artifact) &&
+    isBrainstormTurnIntent(value.intent)
   );
 }
 
@@ -458,7 +578,12 @@ export function isDurableInteractiveTurnSpecification(
     (value.toolGrant === null || isToolGrant(value.toolGrant)) &&
     typeof value.currentPrompt === 'string' &&
     typeof value.recreationPrompt === 'string' &&
-    isDeadlinePolicy(value.deadlines, value.interactiveClass)
+    isDeadlinePolicy(value.deadlines, value.interactiveClass) &&
+    (value.guidedInterview === undefined ||
+      isGuidedInterview(value.guidedInterview)) &&
+    (value.workflowClass === 'brainstorm'
+      ? isFrozenBrainstormTurn(value.brainstorm)
+      : value.brainstorm === undefined)
   );
 }
 

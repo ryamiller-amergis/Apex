@@ -32,6 +32,7 @@ import {
   performEntraSsoLogin,
   saveDeployedStorageState,
 } from './sso-login';
+import { configuredPersonas, personaAuthFile, personaCredentials } from './persona-accounts';
 
 setup('authenticate via Azure AD SSO', async ({ page, browser }) => {
   if (!hasDeployedSsoCreds()) {
@@ -70,3 +71,18 @@ setup('authenticate via Azure AD SSO', async ({ page, browser }) => {
     throw lastVerifyError;
   }
 });
+
+// Each persona with E2E_PERSONA_<ID>_PASSWORD gets its own saved session. A
+// failure names the persona, so a wrong or expired password is easy to spot.
+for (const persona of configuredPersonas()) {
+  setup(`authenticate persona ${persona} via Azure AD SSO`, async ({ page, browser }) => {
+    setup.setTimeout(180_000);
+    const credentials = personaCredentials(persona);
+    if (!credentials) throw new Error(`[E2E setup] No credentials for persona "${persona}".`);
+
+    const file = personaAuthFile(persona);
+    await performEntraSsoLogin(page, credentials);
+    await saveDeployedStorageState(page.context(), file);
+    await assertStorageStateAuthenticates(browser, file);
+  });
+}

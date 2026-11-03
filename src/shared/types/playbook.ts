@@ -11,8 +11,9 @@
  * cache, so nothing here may depend on it being present.
  */
 import type { ZodType } from 'zod';
-import type { ArtifactRef } from './loadTest';
 import type { ApprovalMode, ReviewerDocumentType } from './approvals';
+import type { EffortLevel } from './effort';
+import type { PlaybookAgentRunPolicy } from './playbookExecutionCapability';
 
 // ── Per-project spend admission ──────────────────────────────────────────────
 
@@ -120,8 +121,8 @@ export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
  */
 export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
 
-/** Why a run is parked. Both kinds resume through the same path, per BR-008. */
-export type PlaybookSuspendReason = 'approval_gate' | 'agent_run';
+/** Why a run is parked. Every kind resumes through the same path, per BR-008. */
+export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview' | 'build';
 
 // ── Definition graph ──────────────────────────────────────────────────────────
 
@@ -133,6 +134,15 @@ export type PlaybookSuspendReason = 'approval_gate' | 'agent_run';
 export interface PlaybookGraphNode {
   id: string;
   stepType: string;
+  /**
+   * Immutable contract version stamped when a draft is published.
+   *
+   * Drafts and Playbook versions published before contract versioning may omit this value; those
+   * rows use version 1. Projects version the graph, not the shared step type itself.
+   */
+  stepTypeVersion?: number;
+  /** Frozen execution policy for an agent node on an immutable published version. */
+  agentPolicy?: PlaybookAgentRunPolicy;
   config?: Record<string, unknown>;
 }
 
@@ -149,6 +159,55 @@ export interface PlaybookGraph {
   edges: PlaybookGraphEdge[];
 }
 
+/** Node id → canvas coordinates for one definition version. Not part of `PlaybookGraph`. */
+export type PlaybookLayoutPositions = Record<string, { x: number; y: number }>;
+
+export interface PlaybookVersionLayout {
+  versionId: string;
+  positions: PlaybookLayoutPositions;
+  updatedAt: string;
+}
+
+/** Registry metadata for the authoring canvas step palette. */
+export interface PlaybookStepTypePaletteItem {
+  stepType: string;
+  schemaVersion: number;
+  label: string;
+  sideEffect: PlaybookStepSideEffect;
+  requiredPermissions: readonly string[];
+  inputJsonSchema: Record<string, unknown>;
+  outputJsonSchema: Record<string, unknown>;
+  canSuspend: boolean;
+}
+
+export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch' | 'capability';
+
+export interface PlaybookDryRunIssue {
+  nodeId: string;
+  kind: PlaybookDryRunIssueKind;
+  message: string;
+}
+
+export interface PlaybookDryRunResult {
+  verdict: 'passed' | 'failed';
+  limit: string;
+  manifest: string[];
+  authorFootnote: { held: string[]; missing: string[] };
+  issues: PlaybookDryRunIssue[];
+  capabilityManifest: Array<{
+    nodeId: string;
+    skillPath: string;
+    executionProfile: string;
+    capabilities: string[];
+    skillSha256: string;
+  }>;
+}
+
+export const PLAYBOOK_DRY_RUN_LIMIT =
+  'This check covers structure, classification, authority, and branch reachability. ' +
+  'It cannot tell you whether an agent step will produce usable output, whether an ingested ' +
+  'artifact will parse, or whether an approver pool will still have members when a run reaches it.';
+
 // ── Row shapes (mirror the four Apex-owned tables) ────────────────────────────
 
 /** A definition has identity that outlives any single version, which is why it is its own row. */
@@ -157,6 +216,13 @@ export interface PlaybookDefinition {
   project: string;
   name: string;
   description: string | null;
+  /**
+   * Shipped template that installed this definition. Null for definitions
+   * created in the project rather than copied from a template.
+   */
+  templateKey: string | null;
+  /** Monotonic shipped template version recorded at install. Null when templateKey is null. */
+  templateVersion: number | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -215,10 +281,9 @@ export interface PlaybookStepRun {
   inputInline?: Record<string, unknown> | null;
   gatePoolKey?: ReviewerDocumentType | null;
   gateApprovalMode?: ApprovalMode | null;
-  /** Phase 0 writes only this. */
+  /** Full output for small results, or a safe summary when outputBlobRef is present. */
   outputInline: Record<string, unknown> | null;
-  /** Shaped now so the Phase 1 threshold decision costs no migration. */
-  outputBlobRef: ArtifactRef | null;
+  outputBlobRef: PlaybookStepBlobRef | null;
   /** Every suspension has one; reconciliation ends the run as expired once it passes. */
   expiresAt: string | null;
   startedAt: string | null;
@@ -227,11 +292,32 @@ export interface PlaybookStepRun {
   updatedAt: string;
 }
 
+export interface PlaybookStepBlobRef {
+  schemaVersion: 1;
+  container: string;
+  key: string;
+  sha256: string;
+  sizeBytes: number;
+  contentType: 'application/json';
+}
+
+export interface PlaybookStepOutputEnvelope {
+  schemaVersion: 1;
+  project: string;
+  runId: string;
+  stepRunId: string;
+  stepId: string;
+  stepType: string;
+  completedAt: string;
+  output: Record<string, unknown>;
+}
+
 // ── Reconstruction projection ─────────────────────────────────────────────────
 
 export interface PlaybookRunSummary {
   runId: string;
   project: string;
+  definitionId: string;
   definitionName: string;
   definitionVersionId: string;
   versionNumber: number;
@@ -255,6 +341,8 @@ export interface PlaybookSuspensionDetail {
   stepId: string;
   reason: PlaybookSuspendReason;
   deadline: string | null;
+  /** Resource that completes the wait. Phase 1 uses this for the linked interview id. */
+  actionId?: string | null;
 }
 
 /**
@@ -286,6 +374,8 @@ export interface PlaybookRunDetail extends PlaybookRunSummary {
  */
 interface PlaybookStepTypeDescriptorBase {
   stepType: string;
+  /** Version of the input/output contract. Increment only for a breaking contract change. */
+  schemaVersion: number;
   /**
    * Skill paths this step type may run. Empty or absent means the step type runs no Skill.
    *
@@ -412,6 +502,56 @@ export interface NotifyStepConfig {
   link?: string;
   /** Defaults to the run initiator, who is the only identity Phase 0 can resolve (BR-003). */
   recipientUserId?: string;
+}
+
+export type InterviewStepMode = 'human_led' | 'multi_agent_assisted';
+
+export interface InterviewStepConfig {
+  /** human_led opens the current interview workspace. multi_agent_assisted uses the Lead and Requirements agents. */
+  mode: InterviewStepMode;
+  /**
+   * Stable slug of an interview profile in the target project.
+   * A template stores a slug, never a settings row id or a Skill path.
+   * May be a `${input.interviewProfileKey}` binding.
+   */
+  profileKey: string;
+  deadlineMs?: number;
+  /** First message to the intake agent. Absent means the historical "Begin." */
+  openingMessage?: string;
+  /** Project skill settings row. Absent means the project's default repository. */
+  skillSettingsId?: string;
+}
+
+export interface BuildStepConfig {
+  buildRunId: string;
+  briefId: string;
+  interviewId: string;
+}
+
+export interface BuildStepOutput {
+  buildRunId: string;
+  status: 'accepted' | 'cancelled' | 'failed';
+  pullRequestUrl?: string;
+}
+
+/** Profile fields copied onto the interview when the step starts. Later settings edits do not change it. */
+export interface InterviewProfileSnapshot {
+  mode: InterviewStepMode;
+  key: string;
+  skillPath: string;
+  model: string | null;
+  effort: EffortLevel | null;
+  wantsDesignPrototype: boolean;
+  wantsTestCases: boolean;
+}
+
+export interface InterviewStepOutput {
+  interviewId: string;
+  briefId: string;
+  briefVersion: number;
+  approvedBy: string;
+  approvedAt: string;
+  unresolvedCount: number;
 }
 
 export interface IngestArtifactStepConfig {

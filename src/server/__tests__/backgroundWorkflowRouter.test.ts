@@ -603,7 +603,7 @@ describe('background workflow routing', () => {
 
     expect(decision).toEqual<WorkflowRouteDecision>({
       route: 'worker',
-      workspacePath: 'C:\\grounding-workspaces\\opaque',
+      workspacePath: 'C:\\threads\\thread-1',
       runId: 'run-1',
     });
     expect(dependencies.enqueue).not.toHaveBeenCalled();
@@ -615,6 +615,43 @@ describe('background workflow routing', () => {
         workloadLane: 'document',
         capacityClass: 'batch',
         specification: expect.objectContaining({ workflowClass: 'prd' }),
+      }),
+    );
+  });
+
+  it('with V2 on, sends only the grounded commit and prepares nothing on App Service', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const isUsableBareMirror = jest.fn().mockReturnValue(true);
+    const getRepoCacheDir = jest.fn().mockReturnValue('C:\\repo-cache\\mirror');
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      isUsableBareMirror,
+      getRepoCacheDir,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision.route).toBe('worker');
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(isUsableBareMirror).not.toHaveBeenCalled();
+    expect(getRepoCacheDir).not.toHaveBeenCalled();
+    expect(admitV2Run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        specification: expect.objectContaining({
+          groundedSha: expect.any(String),
+          repository: expect.any(String),
+        }),
       }),
     );
   });
@@ -882,7 +919,7 @@ describe('background workflow routing', () => {
     );
   });
 
-  it('recovers in-process when V2 admission refuses or throws', async () => {
+  it('reports failure without running in process when V2 admission refuses or throws', async () => {
     const conflict = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
       admitV2Run: jest.fn().mockResolvedValue({
@@ -894,8 +931,10 @@ describe('background workflow routing', () => {
     });
     const conflictInput = makeInput();
 
-    await createBackgroundWorkflowRouter(conflict).route(conflictInput);
-    expect(conflictInput.runInProcess).toHaveBeenCalledTimes(1);
+    await expect(createBackgroundWorkflowRouter(conflict).route(conflictInput))
+      .resolves.toEqual({ route: 'failed', reason: 'worker-enqueue-failed' });
+    expect(conflictInput.runInProcess).not.toHaveBeenCalled();
+    expect(conflictInput.reportRecoverablePreparationFailure).toHaveBeenCalledTimes(1);
 
     const thrown = makeDependencies({
       isFeatureEnabled: jest.fn().mockResolvedValue(true),
@@ -904,7 +943,26 @@ describe('background workflow routing', () => {
     const thrownInput = makeInput();
 
     await createBackgroundWorkflowRouter(thrown).route(thrownInput);
-    expect(thrownInput.runInProcess).toHaveBeenCalledTimes(1);
+    expect(thrownInput.runInProcess).not.toHaveBeenCalled();
+    expect(thrownInput.reportRecoverablePreparationFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports failure without running in process when V2 worker preparation throws', async () => {
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run: jest.fn(),
+    });
+    const input = makeInput({
+      prepareWorker: jest.fn().mockRejectedValue(new Error('grounding not ready')),
+    });
+
+    await expect(createBackgroundWorkflowRouter(dependencies).route(input))
+      .resolves.toEqual({ route: 'failed', reason: 'worker-preparation-failed' });
+    expect(input.runInProcess).not.toHaveBeenCalled();
+    expect(input.reportRecoverablePreparationFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'materialization-unavailable' }),
+    );
+    expect(dependencies.admitV2Run).not.toHaveBeenCalled();
   });
 
   it('keeps the V1 transport when the V2 flag cannot be read', async () => {

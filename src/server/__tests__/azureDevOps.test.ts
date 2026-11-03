@@ -1201,6 +1201,126 @@ describe('AzureDevOpsService', () => {
       expect(result.medianDays).toBeNull();
     });
   });
+
+  describe('addPullRequestLabel', () => {
+    it('creates the label when the pull request does not already have it', async () => {
+      const service = new AzureDevOpsService();
+      mockGitApi.getPullRequestLabels = jest.fn().mockResolvedValue([{ name: 'other' }]);
+      mockGitApi.createPullRequestLabel = jest.fn().mockResolvedValue({ name: 'apex-cloud-agent' });
+
+      await service.addPullRequestLabel({
+        repo: 'MaxView',
+        project: 'MaxView',
+        pullRequestId: 9,
+        name: 'apex-cloud-agent',
+      });
+
+      expect(mockGitApi.createPullRequestLabel).toHaveBeenCalledWith(
+        { name: 'apex-cloud-agent' },
+        'MaxView',
+        9,
+        'MaxView',
+      );
+    });
+
+    it('does not create the label again when the name is already present', async () => {
+      const service = new AzureDevOpsService();
+      mockGitApi.getPullRequestLabels = jest.fn().mockResolvedValue([{ name: 'Apex-Cloud-Agent' }]);
+      mockGitApi.createPullRequestLabel = jest.fn();
+
+      await service.addPullRequestLabel({
+        repo: 'MaxView',
+        project: 'MaxView',
+        pullRequestId: 9,
+        name: 'apex-cloud-agent',
+      });
+
+      expect(mockGitApi.createPullRequestLabel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('searchWorkItems', () => {
+    const pbi = {
+      id: 59642,
+      fields: {
+        'System.Title': 'Release item',
+        'System.State': 'Active',
+        'System.AssignedTo': { displayName: 'Dev One' },
+        'System.WorkItemType': 'Product Backlog Item',
+        'System.TeamProject': 'Apex',
+        'System.AreaPath': 'Apex\\Team\\Child',
+      },
+    };
+
+    it('looks up a numeric query directly by ID without a WIQL query', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      const result = await service.searchWorkItems(' 59642 ', 'All');
+
+      expect(mockWitApi.queryByWiql).not.toHaveBeenCalled();
+      expect(mockWitApi.getWorkItems).toHaveBeenCalledWith(
+        [59642],
+        expect.arrayContaining(['System.Title', 'System.WorkItemType']),
+        undefined,
+        undefined,
+        2,
+      );
+      expect(result).toEqual([
+        expect.objectContaining({
+          id: 59642,
+          title: 'Release item',
+          state: 'Active',
+          assignedTo: 'Dev One',
+          workItemType: 'Product Backlog Item',
+        }),
+      ]);
+    });
+
+    it('returns no results when the ID does not exist or does not match the chosen type', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+
+      mockWitApi.getWorkItems.mockResolvedValueOnce([null]);
+      expect(await service.searchWorkItems('99999999', 'All')).toEqual([]);
+
+      mockWitApi.getWorkItems.mockResolvedValueOnce([pbi]);
+      expect(await service.searchWorkItems('59642', 'Bug')).toEqual([]);
+    });
+
+    it('finds an ID in any area of the project but not in another project', async () => {
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      expect(await new AzureDevOpsService('Other', 'Other\\Team').searchWorkItems('59642', 'All')).toEqual([]);
+      expect(await new AzureDevOpsService('Apex', 'Apex\\Teammates').searchWorkItems('59642', 'All')).toHaveLength(1);
+    });
+
+    it('checks release assignments across the whole project, not just the area', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+      const linksSpy = jest
+        .spyOn(service, 'queryWorkItemLinksByWiql')
+        .mockResolvedValue([{ sourceId: 58140, targetId: 59642 }] as any);
+
+      expect(await service.findReleaseAssignments([59642])).toEqual({ 59642: [58140] });
+      const wiql = linksSpy.mock.calls[0][0];
+      expect(wiql).toContain("[Source].[System.TeamProject] = 'Apex'");
+      expect(wiql).not.toContain('AreaPath');
+    });
+
+    it('searches text under the area path and escapes single quotes', async () => {
+      const service = new AzureDevOpsService("Team's Project", "Team's Project\\Area");
+      mockWitApi.queryByWiql.mockResolvedValue({ workItems: [{ id: 59642 }] });
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      const result = await service.searchWorkItems("can't link", "Dev's Type");
+
+      const wiql: string = mockWitApi.queryByWiql.mock.calls[0][0].query;
+      expect(wiql).toContain("[System.TeamProject] = 'Team''s Project'");
+      expect(wiql).toContain("[System.AreaPath] UNDER 'Team''s Project\\Area'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Dev''s Type'");
+      expect(wiql).toContain("[System.Title] CONTAINS 'can''t link'");
+      expect(result).toHaveLength(1);
+    });
+  });
 });
 
 describe('staticSuitePaths', () => {

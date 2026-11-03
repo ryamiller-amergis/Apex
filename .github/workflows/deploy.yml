@@ -20,9 +20,14 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     environment: prd
+    permissions:
+      actions: read
+      contents: read
     outputs:
       ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
+      ai_runs_documents_v2: ${{ steps.image_publish.outputs.ai_runs_documents_v2 }}
+      ai_runs_visual: ${{ steps.image_publish.outputs.ai_runs_visual }}
 
     steps:
       - name: Checkout code
@@ -30,14 +35,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Diff against the last deploy that reached production, not the previous
+      # push: a cancelled or failed deploy must not strand its image changes.
+      # Without that base, diff against the empty tree so every image rebuilds.
       - name: Detect runner image source changes
         id: image_publish
         env:
-          BASE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            BASE_SHA="$(git rev-parse HEAD~1)"
+          BASE_SHA="$(gh run list --repo "${{ github.repository }}" --workflow deploy.yml --branch main --status success --limit 1 --json headSha --jq '.[0].headSha' || true)"
+          if [ -n "${BASE_SHA}" ] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base: last successful deploy ${BASE_SHA}"
+          else
+            echo "::warning::Last successful deploy not found; publishing every runner image."
+            BASE_SHA="$(git hash-object -t tree /dev/null)"
           fi
           export BASE_SHA
           bash scripts/ci/detect-image-publish-changes.sh
@@ -57,8 +69,6 @@ jobs:
       - name: Build application
         env:
           VITE_TEAMS: ${{ vars.VITE_TEAMS }}
-          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
-          VITE_APRYSE_WEBVIEWER_LICENSE_KEY: ${{ secrets.VITE_APRYSE_WEBVIEWER_LICENSE_KEY }}
         run: npm run build
 
       - name: Detect migration changes
@@ -106,6 +116,7 @@ jobs:
           mkdir -p deploy/dist
           cp -r dist/* deploy/dist/
           cp package*.json deploy/
+          cp pr-description.md deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           # Platform Admin APEX Skills reads this at runtime for the skill picker /
@@ -113,6 +124,10 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
           cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
+          # Brainstorm falls back to this bundled skill when the Project Settings
+          # repository has no copy of it.
+          mkdir -p deploy/.cursor/skills
+          cp -r .cursor/skills/brainstorm deploy/.cursor/skills/brainstorm
           cd deploy
           # Native production dependencies (including sqlite3) require lifecycle
           # scripts to install their Linux bindings. prepare tolerates omitted Husky.
@@ -223,7 +238,6 @@ jobs:
               VITE_ADO_ORG="amergis" \
               VITE_ADO_PROJECT="${{ secrets.ADO_PROJECT }}" \
               VITE_TEAMS="${{ vars.VITE_TEAMS }}" \
-              APRYSE_LICENSE_KEY="${{ secrets.APRYSE_LICENSE_KEY }}" \
               AZURE_TENANT_ID="${{ env.AZURE_TENANT_ID }}" \
               AZURE_CLIENT_ID="${{ env.AZURE_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ env.AZURE_CLIENT_SECRET }}" \
@@ -250,8 +264,6 @@ jobs:
               MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              PDF_BLOB_ACCOUNT_NAME="${{ vars.PDF_BLOB_ACCOUNT_NAME }}" \
-              PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
               GROUNDING_BLOB_ACCOUNT_NAME="${{ vars.GROUNDING_BLOB_ACCOUNT_NAME }}" \
               GROUNDING_BLOB_CONTAINER_NAME="${{ vars.GROUNDING_BLOB_CONTAINER_NAME }}" \
               LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \
@@ -281,13 +293,24 @@ jobs:
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
-              WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
+              WEBSITE_SWAP_WARMUP_PING_STATUSES="200" \
+              WEBSITE_HEALTHCHECK_MAXPINGFAILURES="2"
 
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
           # to the staging host and production keeps the production host.
           # Staging DATABASE_URL tracks secrets.DATABASE_URL (set above) and is
           # sticky so a swap cannot move it onto production.
+          # ALLOW_TEST_ACCOUNT_SIGN_IN lets the MFA-exempt test accounts sign in on
+          # staging only; production holds a sticky "false".
+          # GROUNDING_MAINTENANCE_MODE: staging shares production's database, so it
+          # only evicts and compacts its own disk; it never clones production's repos.
+          # Once repo-read runs GROUNDING_MAINTENANCE_MODE=v2-projects, set the repo
+          # variables GROUNDING_MAINTENANCE_MODE_PRODUCTION=legacy-projects and
+          # GROUNDING_MAINTENANCE_MODE_STAGING=disk-only so App Service leaves V2
+          # projects and the workspace share to repo-read.
+          # BACKGROUND_JOBS_MODE: staging shares production's database, so it skips
+          # the sweeps, reapers, recovery, and schedulers that claim production's work.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -298,7 +321,10 @@ jobs:
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
-              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net"
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
+              ALLOW_TEST_ACCOUNT_SIGN_IN="true" \
+              GROUNDING_MAINTENANCE_MODE="${{ vars.GROUNDING_MAINTENANCE_MODE_STAGING || 'cleanup-only' }}" \
+              BACKGROUND_JOBS_MODE="off"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
           # Re-mark the *existing* production DATABASE_URL as sticky — do not write
@@ -319,7 +345,11 @@ jobs:
               DATABASE_URL="$PROD_DATABASE_URL" \
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
-              APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net"
+              APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
+              ALLOW_TEST_ACCOUNT_SIGN_IN="false" \
+              GROUNDING_MAINTENANCE_MODE="${{ vars.GROUNDING_MAINTENANCE_MODE_PRODUCTION || 'full' }}" \
+              BACKGROUND_JOBS_MODE="full" \
+              UV_THREADPOOL_SIZE="${{ vars.UV_THREADPOOL_SIZE || '32' }}"
 
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
@@ -341,6 +371,7 @@ jobs:
               AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
               AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
               AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              WEBSITE_HEALTHCHECK_MAXPINGFAILURES="2" \
               "${REDIS_SETTINGS[@]}"
 
           # The Azure Node/Linux image ships without git, and Dev Workbench
@@ -385,14 +416,16 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --query clientAffinityEnabled -o tsv)
-          if [ "$CURRENT_AFFINITY" = "true" ]; then
-            echo "clientAffinityEnabled already true — skipping."
+          # Sessions live in Postgres, so any instance can serve any user. ARR
+          # affinity would keep a browser pinned to an instance that has hung.
+          if [ "$CURRENT_AFFINITY" = "false" ]; then
+            echo "clientAffinityEnabled already false — skipping."
           else
             az webapp update \
               --name ${{ env.APP_SERVICE_NAME }} \
               --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
               --slot ${{ env.SLOT_NAME }} \
-              --set clientAffinityEnabled=true
+              --set clientAffinityEnabled=false
           fi
 
       - name: Wait for SCM to settle before deploying
@@ -485,6 +518,26 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           SKIP_APP_UPDATE: true
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Publish AI-runs V2 document worker image
+        if: >-
+          steps.image_publish.outputs.ai_runs_documents_v2 == 'true' &&
+          hashFiles('runners/ai-runs-documents-v2/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_APP_UPDATE: true
+        run: bash scripts/ci/publish-ai-runs-documents-v2.sh
+
+      - name: Publish AI-runs V2 visual worker image
+        if: >-
+          steps.image_publish.outputs.ai_runs_visual == 'true' &&
+          hashFiles('runners/ai-runs-visual/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_APP_UPDATE: true
+        run: bash scripts/ci/publish-ai-runs-visual.sh
 
       - name: Publish AI orchestrator image to staging
         if: >-
@@ -585,6 +638,26 @@ jobs:
           SKIP_IMAGE_PUBLISH: true
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
+      - name: Promote V2 document worker image to production
+        if: needs.deploy-staging.outputs.ai_runs_documents_v2 == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME || 'ca-apex-ai-runs-documents-v2-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-runs-documents-v2.sh
+
+      - name: Promote V2 visual worker image to production
+        if: needs.deploy-staging.outputs.ai_runs_visual == 'true'
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_VISUAL_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_VISUAL_CONTAINER_APP_NAME || 'ca-apex-ai-runs-visual-v2-prd' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || env.RESOURCE_GROUP_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          SKIP_IMAGE_PUBLISH: true
+        run: bash scripts/ci/publish-ai-runs-visual.sh
+
       - name: Smoke test production
         id: smoke
         run: |
@@ -648,6 +721,8 @@ jobs:
   #   vars.E2E_PROD_BASE_URL     (optional) prod URL; defaults to app-apex-prd.
   #   secrets.E2E_TEST_USER      dedicated Azure AD E2E test account UPN/email (staging).
   #   secrets.E2E_TEST_PASSWORD  password for that account (staging).
+  #   secrets.E2E_PERSONA_<ID>_PASSWORD (optional) per-persona apex-test-0N password;
+  #     a persona without one reuses the E2E_TEST_USER session.
   deployed-smoke-staging:
     needs: [deploy-staging]
     if: always() && !cancelled() && needs.deploy-staging.result == 'success'
@@ -677,6 +752,12 @@ jobs:
           E2E_BASE_URL: ${{ vars.E2E_STAGING_BASE_URL || format('https://{0}-{1}.azurewebsites.net', env.APP_SERVICE_NAME, env.SLOT_NAME) }}
           E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+          E2E_PERSONA_DEVELOPER_PASSWORD: ${{ secrets.E2E_PERSONA_DEVELOPER_PASSWORD }}
+          E2E_PERSONA_BA_PASSWORD: ${{ secrets.E2E_PERSONA_BA_PASSWORD }}
+          E2E_PERSONA_MANAGER_PASSWORD: ${{ secrets.E2E_PERSONA_MANAGER_PASSWORD }}
+          E2E_PERSONA_PRODUCT_OWNER_PASSWORD: ${{ secrets.E2E_PERSONA_PRODUCT_OWNER_PASSWORD }}
+          E2E_PERSONA_QA_PASSWORD: ${{ secrets.E2E_PERSONA_QA_PASSWORD }}
+          E2E_PERSONA_UI_UX_PASSWORD: ${{ secrets.E2E_PERSONA_UI_UX_PASSWORD }}
         run: npx playwright test --project=deployed-smoke
 
       - name: Upload deployed-smoke results

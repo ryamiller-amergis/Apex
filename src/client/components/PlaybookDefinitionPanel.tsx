@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -185,6 +186,14 @@ export const PlaybookDefinitionPanel: React.FC<PlaybookDefinitionPanelProps> = (
             </div>
           ) : detail.data ? (
             <>
+              <p>
+                <Link
+                  to={`/playbooks/definitions/${detail.data.definition.id}`}
+                  {...{ 'data-testid': 'playbook-open-canvas' }}
+                >
+                  Open authoring canvas
+                </Link>
+              </p>
               <PlaybookDraftEditor
                 project={project}
                 detail={detail.data}

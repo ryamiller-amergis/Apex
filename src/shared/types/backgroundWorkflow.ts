@@ -15,6 +15,7 @@
  */
 export type BackgroundWorkflowClass =
   | 'prd'
+  | 'adr'
   | 'design-doc'
   | 'validation'
   | 'test-cases'
@@ -28,4 +29,5 @@ export type WorkflowRouteDecision =
       route: 'in-process';
       reason: 'materialization-unavailable';
       fallbackStarted: true;
-    };
+    }
+  | { route: 'failed'; reason: string };

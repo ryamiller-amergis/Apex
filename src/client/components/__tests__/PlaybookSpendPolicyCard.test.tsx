@@ -1,12 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { PlaybookSpendPolicyCard } from '../PlaybookSpendPolicyCard';
-import { useFeatureFlag } from '../../hooks/useFeatureFlags';
 import {
   usePlaybookSpendPolicy,
   useUpdatePlaybookSpendPolicy,
 } from '../../hooks/usePlaybookSpendPolicy';
 
-jest.mock('../../hooks/useFeatureFlags', () => ({ useFeatureFlag: jest.fn() }));
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     can: (permission: string) => permission === 'playbooks:admin',
@@ -17,9 +15,6 @@ jest.mock('../../hooks/usePlaybookSpendPolicy', () => ({
   useUpdatePlaybookSpendPolicy: jest.fn(),
 }));
 
-const mockFeatureFlag = useFeatureFlag as jest.MockedFunction<
-  typeof useFeatureFlag
->;
 const mockPolicy = usePlaybookSpendPolicy as jest.MockedFunction<
   typeof usePlaybookSpendPolicy
 >;
@@ -38,17 +33,7 @@ describe('FEAT-015 Project Admin spend policy card', () => {
     } as unknown as ReturnType<typeof useUpdatePlaybookSpendPolicy>);
   });
 
-  it('is absent while playbooks-production-adapters is disabled', () => {
-    mockFeatureFlag.mockReturnValue(false);
-    render(<PlaybookSpendPolicyCard project="Apex" />);
-    expect(
-      screen.queryByTestId('playbook-spend-policy-card')
-    ).not.toBeInTheDocument();
-    expect(mockPolicy).not.toHaveBeenCalled();
-  });
-
   it('shows blocked status, spend values, and the accessible override controls', () => {
-    mockFeatureFlag.mockReturnValue(true);
     mockPolicy.mockReturnValue({
       isLoading: false,
       isError: false,

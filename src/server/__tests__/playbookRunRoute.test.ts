@@ -87,7 +87,7 @@ beforeEach(() => {
 });
 
 describe('FEAT-015 spend admission routes', () => {
-  it('preserves start behavior while the production-adapters flag is off', async () => {
+  it('starts a run for a caller who can run playbooks', async () => {
     grantIn('Apex', 'playbooks:run');
 
     const res = await request(buildApp())
@@ -95,8 +95,9 @@ describe('FEAT-015 spend admission routes', () => {
       .send({ project: 'Apex', definitionId: 'def-1' });
 
     expect(res.status).toBe(201);
-    expect(startRun).toHaveBeenCalledWith(expect.not.objectContaining({
-      spendAdmissionEnabled: expect.anything(),
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({
+      project: 'Apex',
+      definitionId: 'def-1',
     }));
   });
 
@@ -116,7 +117,7 @@ describe('FEAT-015 spend admission routes', () => {
       capUsd: '30.000000',
       requiredPermission: 'playbooks:admin',
     }));
-    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ spendAdmissionEnabled: true }));
+    expect(startRun).toHaveBeenCalled();
   });
 
   it('requires playbooks:admin before applying a project policy patch', async () => {
@@ -201,6 +202,34 @@ describe('starting a run through the endpoint', () => {
       definitionId: 'def-1',
       initiatorUserId: USER_OID,
     });
+  });
+
+  it('forwards run input used by template bindings', async () => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({
+        project: 'Apex',
+        definitionId: 'def-1',
+        runInput: { interviewProfileKey: 'ba-discovery' },
+      });
+
+    expect(res.status).toBe(201);
+    expect(startRun).toHaveBeenCalledWith({
+      project: 'Apex',
+      definitionId: 'def-1',
+      runInput: { interviewProfileKey: 'ba-discovery' },
+      initiatorUserId: USER_OID,
+    });
+  });
+
+  it.each([null, [], 'ba-discovery'])('rejects non-object run input %#', async (runInput) => {
+    const res = await request(buildApp())
+      .post('/api/playbooks/runs')
+      .send({ project: 'Apex', definitionId: 'def-1', runInput });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/runInput/);
+    expect(startRun).not.toHaveBeenCalled();
   });
 
   it('TBI-031 AC-3 / VT-14 forwards an explicit version pin and its reason', async () => {

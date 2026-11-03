@@ -3,6 +3,7 @@ import {
   buildUnusableValidationScorecard,
   collectValidationGaps,
   designDocFeatureSectionScore,
+  isUnusableValidationScorecard,
   normalizeCrossCuttingCheck,
   normalizeValidationGap,
   normalizeValidationScorecard,
@@ -378,6 +379,48 @@ describe('resolveScorecardOverallScore', () => {
     ).toBe(85);
   });
 
+  it('reads alternate overall fields, summary, and "%" strings', () => {
+    expect(resolveScorecardOverallScore({ overall_percent: 91 })).toBe(91);
+    expect(resolveScorecardOverallScore({ summary: { overall_score: '88%' } })).toBe(88);
+    expect(resolveScorecardOverallScore({ scores: { overall: { pct: 93 } } })).toBe(93);
+  });
+
+  it('converts { score, max } entries under scores to percentages', () => {
+    expect(
+      resolveScorecardOverallScore({
+        scores: { prd: { score: 45, max: 50 }, backlog: { score: 40, max: 50 } },
+      }),
+    ).toBe(85);
+  });
+
+  it('prefers an agent-written percentage over section scores', () => {
+    expect(
+      resolveScorecardOverallScore({
+        summary: { overall_score: 92 },
+        prd_sections: [{ section: 'Problem', score: 0 }],
+      }),
+    ).toBe(92);
+  });
+
+  it('applies the weighted 0–3 rubric to prd_sections and backlog_sections', () => {
+    const score = resolveScorecardOverallScore({
+      summary: 'All sections substantive.',
+      prd_sections: [
+        { section: 'Problem', score: 3, weight: 30 },
+        { section: 'Goals', score: 2, weight: 70 },
+      ],
+      backlog_sections: { epics: { score: 3 }, pbis: { score: 3 } },
+    });
+    // PRD: (90 + 140) / 300 = 76.67%; backlog: 100%; overall = average.
+    expect(score).toBeCloseTo((230 / 300 * 100 + 100) / 2);
+  });
+
+  it('ignores section lists whose scores are off the 0–3 rubric', () => {
+    expect(
+      resolveScorecardOverallScore({ prd_sections: [{ section: 'Problem', score: 80 }] }),
+    ).toBeNull();
+  });
+
   it('returns null when no finite score is present', () => {
     expect(resolveScorecardOverallScore({ verdict: 'ready' })).toBeNull();
     expect(resolveScorecardOverallScore({ overall_score: 'n/a' })).toBeNull();
@@ -432,6 +475,8 @@ describe('parseAgentValidationScorecard', () => {
 describe('buildUnusableValidationScorecard', () => {
   it('always produces a persistable 0% card', () => {
     const card = buildUnusableValidationScorecard('Re-run validation.');
+    expect(isUnusableValidationScorecard(card)).toBe(true);
+    expect(isUnusableValidationScorecard({ slug: 'demo' })).toBe(false);
     expect(card.overall_score).toBe(0);
     expect(card.is_ready).toBe(false);
     expect(card.gaps?.[0]?.description).toContain('Re-run');

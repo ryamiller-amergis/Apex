@@ -74,7 +74,7 @@ pr_hint=""
 if [ -f "${example_src}" ]; then
   cp "${example_src}" "${example_copy}"
   pr_hint="
-Read .apex-pr-description.example.md in the repo root. It is a filled example. Notes under each heading say what that section is for. Write this change's description to .apex-pr-description.md using the same headings. Do not copy the sample text or the notes. Do not commit either file. The container deletes them and sends .apex-pr-description.md as the pull request description."
+Read .apex-pr-description.example.md in the repo root. It is a template. The comment under each heading says what that section is for. Write this change's description to .apex-pr-description.md using the same headings, with each comment replaced by real content. Do not commit either file. The container deletes them and sends .apex-pr-description.md as the pull request description."
 fi
 
 summary_file="$(mktemp)"

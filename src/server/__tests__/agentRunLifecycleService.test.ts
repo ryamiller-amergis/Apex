@@ -660,6 +660,36 @@ describe('legacy partitioning (PBI-001 AC-2 / VT-03 / DoD-3)', () => {
     expect(mockRunAdmissionCycle).not.toHaveBeenCalled();
   });
 
+  it('VT-24 stores buildTaskId when enqueue is given one and omits it otherwise', async () => {
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot,
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-build',
+      lane: 'cloud-agent',
+      workflowClass: 'build-task',
+      buildTaskId: '11111111-1111-4111-8111-111111111111',
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowClass: 'build-task',
+        buildTaskId: '11111111-1111-4111-8111-111111111111',
+      }),
+    );
+
+    mockInsertValues.mockClear();
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot,
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-plain',
+      lane: 'background',
+    });
+    expect(mockInsertValues.mock.calls[0][0].buildTaskId).toBeUndefined();
+  });
+
   it('AC-2 / VT-03: worker-aware transition helpers do not backfill legacy rows', async () => {
     mockFindFirst.mockResolvedValue(
       baseRow({

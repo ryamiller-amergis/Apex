@@ -737,6 +737,46 @@ describe('useChatStream', () => {
     expect(result.current.thinkingText).toBe('');
   });
 
+  it('trims pre-tool narration on running tool events without breaking offset token alignment', () => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit(
+        'message',
+        { type: 'token', text: 'Checking', streamOffset: 0, streamEndOffset: 8 },
+        'evt-pre'
+      );
+    });
+    expect(result.current.streamingText).toBe('Checking');
+
+    act(() => {
+      lastES!.emit(
+        'message',
+        {
+          type: 'tool_status',
+          callId: 'call-1',
+          toolName: 'mcp:list_users',
+          status: 'running',
+        },
+        'evt-tool-run'
+      );
+    });
+    expect(result.current.streamingText).toBe('');
+
+    act(() => {
+      lastES!.emit(
+        'message',
+        {
+          type: 'token',
+          text: 'The answer is 42.',
+          streamOffset: 8,
+          streamEndOffset: 25,
+        },
+        'evt-post'
+      );
+    });
+    expect(result.current.streamingText).toBe('The answer is 42.');
+  });
+
   it('tracks tool_status events in toolProgress', () => {
     const { result } = renderHook(() => useChatStream('t1'));
     act(() => {

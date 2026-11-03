@@ -330,11 +330,27 @@ describe('useAgentChatSession', () => {
 
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
+    let sent = true;
     await act(async () => {
-      await result.current.send('Hello');
+      sent = await result.current.send('Hello');
     });
 
+    expect(sent).toBe(false);
     expect(result.current.sendError).toBe('Rate limited');
+  });
+
+  it('returns false when send hits a transport error', async () => {
+    (global.fetch as jest.Mock).mockRejectedValue(new TypeError('network interrupted'));
+
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    let sent = true;
+    await act(async () => {
+      sent = await result.current.send('Hello');
+    });
+
+    expect(sent).toBe(false);
+    expect(result.current.sendError).toBe('network interrupted');
   });
 
   it('clearSendError clears the error', async () => {
@@ -395,6 +411,35 @@ describe('useAgentChatSession', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       '/custom/send',
       expect.anything()
+    );
+  });
+
+  it('sends an opening prompt while the empty thread is still preparing', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'idle', messages: [] };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        createTurnId: () => TURN_ID_1,
+      }),
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+
+    await act(async () => {
+      await result.current.send('Hello');
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.send('Open the ADR', { duringPreparation: true });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('Open the ADR'),
+      }),
     );
   });
 
@@ -621,6 +666,21 @@ describe('useAgentChatSession', () => {
     expect(mockClearRetryableRunId).toHaveBeenCalledTimes(1);
   });
 
+  it('retryFailedRun uses retryEndpoint and an explicit run id when given', async () => {
+    const retryEndpoint = jest.fn((runId: string) => `/api/brainstorm/sessions/s-1/runs/${runId}/retry?project=Apex`);
+    const { result } = renderHook(() => useAgentChatSession('thread-1', { retryEndpoint }));
+
+    await act(async () => {
+      await result.current.retryFailedRun('60000000-0000-4000-8000-000000000001');
+    });
+
+    expect(retryEndpoint).toHaveBeenCalledWith('60000000-0000-4000-8000-000000000001');
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/brainstorm/sessions/s-1/runs/60000000-0000-4000-8000-000000000001/retry?project=Apex',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+    );
+  });
+
   it('keeps retryableRunId when retry POST is non-OK', async () => {
     currentStreamReturn = {
       ...mockStreamReturn,
@@ -761,5 +821,64 @@ describe('useAgentChatSession', () => {
 
     expect(result.current.progressPhase).toBe('dispatched');
     expect(result.current.progressLabel).toBe('Dispatched');
+  });
+
+  it('stays awaiting after sending from an idle-closed thread while status is still closed', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        turnId: TURN_ID_1,
+        runId: '50000000-0000-4000-8000-000000000001',
+        status: 'queued',
+        interactiveClass: 'fast',
+      }),
+    });
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 }),
+    );
+
+    await act(async () => {
+      await result.current.send('Back again');
+    });
+
+    expect(result.current.isSending).toBe(false);
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+  });
+
+  it('clears awaiting when a reopened thread closes again after leaving closed', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1'),
+    );
+
+    await act(async () => {
+      await result.current.send('Back again');
+    });
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'running' };
+    rerender();
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    rerender();
+    expect(result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('clears awaiting when the thread closes after a send started from idle', async () => {
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1'),
+    );
+
+    await act(async () => {
+      await result.current.send('Hello');
+    });
+    expect(result.current.isAwaitingAgentResponse).toBe(true);
+
+    currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
+    rerender();
+    expect(result.current.isAwaitingAgentResponse).toBe(false);
   });
 });

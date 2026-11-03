@@ -7,7 +7,8 @@ const mockUpdateSet = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockLinkWorkItemToPullRequest = jest.fn();
 const mockAddAdoWorkItemHyperlink = jest.fn();
-const mockTransitionWorkItemForPullRequest = jest.fn();
+const mockPrepareCloudAgentKickoff = jest.fn();
+const mockAlignCloudAgentPullRequest = jest.fn();
 const mockGetAdoPullRequestStatus = jest.fn();
 const mockGetGithubPullRequestStatus = jest.fn();
 const mockTrackEvent = jest.fn();
@@ -260,7 +261,8 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     cancelCursorCloudAgentRun: mockVendorCancel,
     linkWorkItemToPullRequest: mockLinkWorkItemToPullRequest,
     addAdoWorkItemHyperlink: mockAddAdoWorkItemHyperlink,
-    transitionWorkItemForPullRequest: mockTransitionWorkItemForPullRequest,
+    prepareCloudAgentKickoff: mockPrepareCloudAgentKickoff,
+    alignCloudAgentPullRequest: mockAlignCloudAgentPullRequest,
     getAdoPullRequestStatus: mockGetAdoPullRequestStatus,
     getGithubPullRequestStatus: mockGetGithubPullRequestStatus,
     retryWithBackoff: async <T>(fn: () => Promise<T>) => fn(),
@@ -285,17 +287,77 @@ describe('getCloudAgentActivityStream', () => {
     })();
     const streamCloudAgentRun = jest.fn().mockReturnValue(stream);
 
-    await expect(getCloudAgentActivityStream(
+    const activity = await getCloudAgentActivityStream(
       SESSION_ID,
       USER_ID,
       RUN_ID,
       makeDeps({ streamCloudAgentRun }),
-    )).resolves.toBe(stream);
+    );
+    const events = [];
+    for await (const event of activity) events.push(event);
+    expect(events).toEqual([{
+      id: '1:status:RUNNING',
+      kind: 'status',
+      title: 'Cloud agent running',
+    }]);
     expect(streamCloudAgentRun).toHaveBeenCalledWith({
       project: 'MaxView',
       cloudAgentId: 'bc-agent-1',
       cursorRunId: 'cursor-run-1',
     });
+  });
+
+  it('does not open a pull request after the streamed agent completes', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(session({ workItemId: 42, currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(run({
+      status: 'running',
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          workItemTitle: 'Implement login',
+          baseBranch: 'development',
+          initiatorName: 'Jane Developer',
+          initiatorEmail: 'jane@example.com',
+        },
+      },
+    }));
+    mockMarkTerminal.mockResolvedValue({ ok: true, run: run({ status: 'completed' }) });
+    const opened = 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9';
+    const openCloudAgentPullRequest = jest.fn().mockResolvedValue(opened);
+    const stream = (async function* () {
+      yield {
+        id: 'status:finished',
+        kind: 'status' as const,
+        title: 'Finished',
+        status: 'completed' as const,
+      };
+    })();
+
+    const activity = await getCloudAgentActivityStream(
+      SESSION_ID,
+      USER_ID,
+      RUN_ID,
+      makeDeps({
+        streamCloudAgentRun: jest.fn().mockReturnValue(stream),
+        getCloudAgentRun: jest.fn().mockResolvedValue({
+          status: 'finished',
+          prUrl: null,
+          resultText: null,
+          branchName: 'feature/apex-42-abc',
+          summary: 'Added the login form.',
+          settled: true,
+        }),
+        openCloudAgentPullRequest,
+      }),
+      'user-token',
+    );
+    const events = [];
+    for await (const event of activity) events.push(event);
+
+    expect(events).toEqual([expect.objectContaining({ status: 'completed' })]);
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('does not expose a stream for another user or a replaced run', async () => {
@@ -398,6 +460,12 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
     }));
 
     expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume' });
+    expect(mockPrepareCloudAgentKickoff).toHaveBeenCalledWith({
+      project: 'MaxView',
+      workItemId: 42,
+      workItemType: 'Feature',
+      state: 'Committed',
+    });
     expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({
         prompt: expect.stringMatching(
@@ -406,6 +474,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         skillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
         cloudAgent: expect.objectContaining({
           skillName: 'dev-orchestrator',
+          branchName: 'feature/apex-42-wi-42',
         }),
       }),
     }));
@@ -629,13 +698,32 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     mockGetGithubPullRequestStatus.mockResolvedValue('open');
   });
 
-  it('AC-0 / DoD-0: instructs GitHub runs to include the AB# mention', async () => {
-    await expect(buildCloudAgentPrompt({
+  it('AC-0 / DoD-0: tells the agent the branch, pull request, and AB# mention', async () => {
+    const prompt = await buildCloudAgentPrompt({
       project: 'MaxView',
       workItemId: 123,
-    })).resolves.toContain(
-      'When the repository is hosted on GitHub, include AB#123 in the pull request title or body.',
-    );
+      workItemTitle: 'Shift Scheduler',
+    });
+
+    expect(prompt).toContain('Work on branch `feature/apex-123-shift-scheduler` and no other branch.');
+    expect(prompt).toContain('Open a pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
+    expect(prompt).toContain('Name the work item as AB#123');
+    expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
+    expect(prompt).not.toContain('Do not open a pull request.');
+  });
+
+  it('tells the agent to open the pull request with the description skeleton', async () => {
+    const prompt = await buildCloudAgentPrompt({
+      project: 'MaxView',
+      workItemId: 123,
+      workItemTitle: 'Shift Scheduler',
+    });
+
+    expect(prompt).toContain('Open a pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
+    expect(prompt).toContain('#### What does this PR do?');
+    expect(prompt).toContain('#### How should this be manually tested?');
   });
 
   it('includes project development skill and model defaults in the kickoff prompt', async () => {
@@ -689,7 +777,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       currentRunPrUrl: null,
     }));
     expect(mockLinkWorkItemToPullRequest).not.toHaveBeenCalled();
-    expect(mockTransitionWorkItemForPullRequest).not.toHaveBeenCalled();
+    expect(mockAlignCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('uses the frozen run repository context to link a reported PR', async () => {
@@ -722,7 +810,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       runId: RUN_ID,
       sessionId: SESSION_ID,
     });
-    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 123);
+    expect(mockAlignCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
   it('does not roll back terminal persistence when external linking fails', async () => {
@@ -1088,7 +1176,7 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     }));
   });
 
-  it('opens the pull request as the developer who started the run once the branch is pushed', async () => {
+  it('does not open the pull request itself once the branch is pushed', async () => {
     mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
     mockAgentRunFindFirst.mockResolvedValue(linkableRun({
       status: 'running',
@@ -1121,22 +1209,10 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
 
     const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps, 'user-token');
 
-    expect(openCloudAgentPullRequest).toHaveBeenCalledWith({
-      project: 'MaxView',
-      repo: 'MaxView',
-      sourceBranch: 'feature/apex-42-abc',
-      targetBranch: 'development',
-      workItemId: 42,
-      workItemTitle: 'Implement login',
-      authorName: 'Jane Developer',
-      authorEmail: 'jane@example.com',
-      summary: 'Added the login form.',
-      adoUserToken: 'user-token',
-    });
+    expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
     expect(summary).toEqual(expect.objectContaining({
-      status: 'completed',
-      prUrl: opened,
-      finishedWithoutPr: false,
+      status: 'running',
+      prUrl: null,
     }));
   });
 
@@ -1182,6 +1258,88 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps, 'user-token');
 
     expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: null,
+      finishedWithoutPr: true,
+    }));
+  });
+
+  it('waits for Cursor to open the pull request when the finished run pushed a branch', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        settled: true,
+      }),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).not.toHaveBeenCalled();
+    expect(mockPersistLeftoverWork).not.toHaveBeenCalled();
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'running',
+      prUrl: null,
+    }));
+  });
+
+  it('picks up the autoCreatePR url on a later poll of the same finished run', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+        branchName: 'feature/apex-42-abc',
+        settled: true,
+      }),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+      finishedWithoutPr: false,
+    }));
+  });
+
+  it('completes without a pull request once the wait for Cursor runs out', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({
+      status: 'running',
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          baseBranch: 'main',
+          pullRequestPendingSince: new Date(Date.now() - 11 * 60_000).toISOString(),
+        },
+      },
+    }));
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'finished',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        settled: true,
+      }),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
     expect(summary).toEqual(expect.objectContaining({
       status: 'completed',
       prUrl: null,
@@ -1265,6 +1423,32 @@ describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => 
       expect.stringContaining('ADO unavailable'),
     );
     errorLog.mockRestore();
+  });
+
+  it('keeps the recorded pull request when a later completion observed none', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({
+      currentRunPrUrl: adoPrUrl,
+      currentRunPrStatus: 'open',
+    }));
+
+    await applyCloudAgentCompletion({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      project: 'MaxView',
+      status: 'completed',
+      prUrl: null,
+    }, makeDeps());
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      cloudPrUrl: adoPrUrl,
+      cloudPrStatus: 'open',
+    }));
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({
+      currentRunPrUrl: null,
+    }));
+    expect(mockPersistLeftoverWork).toHaveBeenCalledWith(expect.objectContaining({
+      summary: null,
+    }));
   });
 
   it('PBI-007 AC-1 / TBI-006 DoD-0: GitHub completion verifies AB# and retries the ADO hyperlink write', async () => {
@@ -1614,7 +1798,7 @@ describe('reconcileRunningCloudAgentRuns', () => {
     mockDevSessionFindFirst.mockResolvedValue(session({ workItemId: 123 }));
     mockPersistLeftoverWork.mockResolvedValue({ firstWrite: true });
     mockLinkWorkItemToPullRequest.mockResolvedValue({ mechanism: 'native-link', verified: true });
-    mockTransitionWorkItemForPullRequest.mockResolvedValue(undefined);
+    mockAlignCloudAgentPullRequest.mockResolvedValue(undefined);
     mockGetAdoPullRequestStatus.mockResolvedValue('open');
   });
 
@@ -1667,6 +1851,32 @@ describe('reconcileRunningCloudAgentRuns', () => {
 
     expect(mockMarkTerminal).not.toHaveBeenCalled();
     expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('completes a pushed branch with no pull request once the wait for Cursor runs out', async () => {
+    mockLiveRows([liveExecution({
+      executionSnapshot: {
+        provider: 'ado',
+        repository: 'MaxView',
+        cloudAgent: {
+          workItemId: 42,
+          baseBranch: 'main',
+          pullRequestPendingSince: new Date(Date.now() - 11 * 60_000).toISOString(),
+        },
+      },
+    })]);
+    const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+      status: 'finished',
+      prUrl: null,
+      branchName: 'feature/apex-42-abc123',
+    }));
+
+    await reconcileRunningCloudAgentRuns(makeDeps({ getCloudAgentRun }));
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+      dispatchMessageId: 'cursor-run-1',
+    }));
   });
 
   it('leaves a still-running execution alone', async () => {

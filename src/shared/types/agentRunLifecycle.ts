@@ -5,6 +5,7 @@
 
 import type { DurableInteractiveTurnSpecification } from './durableInteractiveTurn';
 import type { EffortLevel } from './effort';
+import type { PlaybookAgentRunPolicy } from './playbookExecutionCapability';
 import type { SkillProvider } from './projectSettings';
 
 export type AgentRunStatus =
@@ -26,7 +27,7 @@ export type AgentRunLane = 'background' | 'ai-runs-interactive' | 'cloud-agent';
 /**
  * Closed workflow classification on agent_runs. NULL preserves legacy generation rows.
  */
-export type AgentRunWorkflowClass = 'generation' | 'implementation';
+export type AgentRunWorkflowClass = 'generation' | 'implementation' | 'build-task';
 
 /**
  * Closed terminal-reason set stored alongside domain status
@@ -92,6 +93,8 @@ export interface ExecutionSnapshot {
   cloudAgent?: {
     workItemId: number;
     workItemTitle?: string;
+    /** My Work branch: feature/apex-<workItemId>-<title-slug>. */
+    branchName?: string;
     baseBranch: string;
     initiatorName?: string;
     initiatorEmail?: string;
@@ -103,11 +106,22 @@ export interface ExecutionSnapshot {
      * as the developer.
      */
     userTokenInstance?: string;
+    /**
+     * First time the run was seen finished with a pushed branch but no
+     * autoCreatePR url. Bounds how long the run waits for that url.
+     */
+    pullRequestPendingSince?: string;
   };
   workflowClass: string;
   skillPath: string;
+  /** Frozen Skill markdown for background Playbook execution. */
+  skillContent?: string;
+  /** SHA-256 of skillContent; workers verify it before starting Cursor. */
+  skillSha256?: string;
   projectId: string;
   threadId: string;
+  /** Present on new Playbook agent runs; legacy queued snapshots may omit it. */
+  playbookAgentPolicy?: PlaybookAgentRunPolicy;
 }
 
 export type AgentRunExecutionSnapshot =

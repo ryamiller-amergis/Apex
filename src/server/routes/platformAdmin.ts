@@ -18,6 +18,8 @@ import {
   getDevEnvAllowlistView,
   removeDevEnvAllowlistEntry,
 } from '../services/devEnvAllowlistService';
+import * as buildAccessService from '../services/buildAccessService';
+import type { BuildAllowlistRepositoriesResponse, BuildAllowlistResponse } from '../../shared/types/buildAccess';
 import { listRoles } from '../services/rbacService';
 import { getUserId, getUserEmail, getDisplayName } from '../utils/requestUser';
 import { listProjectCatalog } from '../services/projectCatalogService';
@@ -545,6 +547,82 @@ router.delete('/dev-access/:id', async (req: Request, res: Response): Promise<vo
       return;
     }
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Build allow-list ──────────────────────────────────────────────────────────
+
+function buildAccessErrorStatus(kind: buildAccessService.BuildAccessErrorKind): number {
+  switch (kind) {
+    case 'INVALID':
+      return 400;
+    case 'NOT_FOUND':
+      return 404;
+    case 'DUPLICATE':
+      return 409;
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
+  }
+}
+
+function sendBuildAccessError(res: Response, err: unknown): void {
+  if (err instanceof buildAccessService.BuildAccessError) {
+    res.status(buildAccessErrorStatus(err.kind)).json({ error: err.message });
+    return;
+  }
+  res.status(500).json({ error: 'Internal server error' });
+}
+
+function buildAllowlistActor(req: Request): buildAccessService.BuildAllowlistActor {
+  return { id: getUserId(req), label: getActingUserLabel(req) };
+}
+
+router.get('/build-allowlist', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const body: BuildAllowlistResponse = { entries: await buildAccessService.listBuildAllowlist() };
+    res.json(body);
+  } catch (err) {
+    sendBuildAccessError(res, err);
+  }
+});
+
+router.get('/build-allowlist/repositories', async (req: Request, res: Response): Promise<void> => {
+  const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+  if (!project) {
+    res.status(400).json({ error: 'project is required' });
+    return;
+  }
+  try {
+    const body: BuildAllowlistRepositoriesResponse = {
+      repositories: await buildAccessService.listCandidateRepositories(project),
+    };
+    res.json(body);
+  } catch (err) {
+    sendBuildAccessError(res, err);
+  }
+});
+
+router.post('/build-allowlist', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const entry = await buildAccessService.addBuildAllowlistEntry({
+      project: typeof req.body?.project === 'string' ? req.body.project : '',
+      repository: typeof req.body?.repository === 'string' ? req.body.repository : '',
+      actor: buildAllowlistActor(req),
+    });
+    res.status(201).json(entry);
+  } catch (err) {
+    sendBuildAccessError(res, err);
+  }
+});
+
+router.delete('/build-allowlist/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await buildAccessService.removeBuildAllowlistEntry(req.params.id, buildAllowlistActor(req));
+    res.status(204).send();
+  } catch (err) {
+    sendBuildAccessError(res, err);
   }
 });
 

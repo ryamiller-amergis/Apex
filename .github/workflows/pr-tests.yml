@@ -46,6 +46,10 @@ jobs:
       ai_runs_worker: ${{ steps.image_publish.outputs.ai_runs_worker }}
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
       ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
+      load_test_runner_tag: ${{ steps.image_publish.outputs.load_test_runner_tag }}
+      ai_runs_worker_tag: ${{ steps.image_publish.outputs.ai_runs_worker_tag }}
+      ai_runs_interactive_tag: ${{ steps.image_publish.outputs.ai_runs_interactive_tag }}
+      ai_orchestrator_tag: ${{ steps.image_publish.outputs.ai_orchestrator_tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -177,8 +181,6 @@ jobs:
       - name: Build application
         env:
           VITE_TEAMS: ${{ vars.VITE_TEAMS }}
-          VITE_NUTRIENT_LICENSE_KEY: ${{ secrets.VITE_NUTRIENT_LICENSE_KEY }}
-          VITE_APRYSE_WEBVIEWER_LICENSE_KEY: ${{ secrets.VITE_APRYSE_WEBVIEWER_LICENSE_KEY }}
         run: npm run build
 
       - name: Upload build output
@@ -318,6 +320,12 @@ jobs:
     concurrency:
       group: quick-dev-deploy
       cancel-in-progress: true
+    # Image tags are source fingerprints from detect-changes, so a push that
+    # leaves an image's inputs untouched reuses the image already in ACR.
+    env:
+      REUSE_EXISTING_IMAGE: 'true'
+      IMAGE_BUILD_CACHE: 'true'
+      PARALLEL_ROLLOUT: 'true'
 
     steps:
       - name: Checkout code
@@ -363,6 +371,7 @@ jobs:
           mkdir -p deploy/dist
           cp -r dist/* deploy/dist/
           cp package*.json deploy/
+          cp pr-description.md deploy/
           cp server.js deploy/ 2>/dev/null || true
           cp -r scripts deploy/
           # Platform Admin APEX Skills reads this at runtime for the skill picker /
@@ -448,7 +457,6 @@ jobs:
               VITE_ADO_ORG="amergis" \
               VITE_ADO_PROJECT="${{ secrets.ADO_PROJECT }}" \
               VITE_TEAMS="${{ vars.VITE_TEAMS }}" \
-              APRYSE_LICENSE_KEY="${{ secrets.APRYSE_LICENSE_KEY }}" \
               AZURE_TENANT_ID="${{ env.AZURE_TENANT_ID }}" \
               AZURE_CLIENT_ID="${{ env.AZURE_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ env.AZURE_CLIENT_SECRET }}" \
@@ -474,8 +482,6 @@ jobs:
               MAXVIEW_CLIENTAPP_ROOT="/src/Maxim.TimeClock.Web/ClientApp/js" \
               DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               APPLICATIONINSIGHTS_CONNECTION_STRING="${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" \
-              PDF_BLOB_ACCOUNT_NAME="${{ vars.PDF_BLOB_ACCOUNT_NAME }}" \
-              PDF_BLOB_CONTAINER_NAME="${{ vars.PDF_BLOB_CONTAINER_NAME }}" \
               GROUNDING_BLOB_ACCOUNT_NAME="${{ vars.GROUNDING_BLOB_ACCOUNT_NAME }}" \
               GROUNDING_BLOB_CONTAINER_NAME="${{ vars.GROUNDING_BLOB_CONTAINER_NAME }}" \
               LT_SERVICEBUS_NAMESPACE="${{ vars.LT_SERVICEBUS_NAMESPACE }}" \
@@ -504,6 +510,7 @@ jobs:
               AZURE_ARTIFACTS_FEED="${{ secrets.AZURE_ARTIFACTS_FEED }}" \
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
               E2E_TEST_USER="$E2E_TEST_USER" \
+              ALLOW_TEST_ACCOUNT_SIGN_IN="true" \
               APEX_URL="https://app-scrum-dev.azurewebsites.net"
 
           # The Azure Node/Linux image ships without git, and the Dev Workbench
@@ -605,7 +612,7 @@ jobs:
           LT_ACR_NAME: ${{ vars.LT_ACR_NAME }}
           LT_CONTAINER_APP_JOB_NAME: ${{ vars.LT_CONTAINER_APP_JOB_NAME }}
           LT_RESOURCE_GROUP: ${{ vars.LT_RESOURCE_GROUP || 'rg-scrum-dev' }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ needs.detect-changes.outputs.load_test_runner_tag }}
         run: bash scripts/ci/publish-lt-k6-runner.sh
 
       # FEAT-003 provisions the Job now. FEAT-004 adds the worker host image;
@@ -620,7 +627,7 @@ jobs:
           AI_RUNS_CONTAINER_APP_JOB_NAME: ${{ vars.AI_RUNS_CONTAINER_APP_JOB_NAME }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_RUNS_RUNNER_IMAGE_REPO: ${{ vars.AI_RUNS_RUNNER_IMAGE_REPO }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ needs.detect-changes.outputs.ai_runs_worker_tag }}
         run: bash scripts/ci/publish-ai-runs-runner.sh
 
       # FEAT-007 interactive Dapr actor-host image. Skipped until its Dockerfile
@@ -637,7 +644,7 @@ jobs:
           AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME: ${{ vars.AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME || 'ca-apex-ai-agentic-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ needs.detect-changes.outputs.ai_runs_interactive_tag }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
 
       - name: Publish AI orchestrator image
@@ -649,7 +656,7 @@ jobs:
           AI_ORCHESTRATOR_CONTAINER_APP_NAME: ${{ vars.AI_ORCHESTRATOR_CONTAINER_APP_NAME || 'ca-apex-ai-orchestrator-dev' }}
           AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
           AI_ORCHESTRATOR_IMAGE_REPO: ${{ vars.AI_ORCHESTRATOR_IMAGE_REPO }}
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ needs.detect-changes.outputs.ai_orchestrator_tag }}
         run: bash scripts/ci/publish-ai-orchestrator.sh
 
       - name: Azure logout
@@ -741,6 +748,12 @@ jobs:
           E2E_BASE_URL: ${{ vars.E2E_DEV_BASE_URL || 'https://app-scrum-dev.azurewebsites.net' }}
           E2E_TEST_USER: ${{ secrets.E2E_TEST_USER }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+          E2E_PERSONA_DEVELOPER_PASSWORD: ${{ secrets.E2E_PERSONA_DEVELOPER_PASSWORD }}
+          E2E_PERSONA_BA_PASSWORD: ${{ secrets.E2E_PERSONA_BA_PASSWORD }}
+          E2E_PERSONA_MANAGER_PASSWORD: ${{ secrets.E2E_PERSONA_MANAGER_PASSWORD }}
+          E2E_PERSONA_PRODUCT_OWNER_PASSWORD: ${{ secrets.E2E_PERSONA_PRODUCT_OWNER_PASSWORD }}
+          E2E_PERSONA_QA_PASSWORD: ${{ secrets.E2E_PERSONA_QA_PASSWORD }}
+          E2E_PERSONA_UI_UX_PASSWORD: ${{ secrets.E2E_PERSONA_UI_UX_PASSWORD }}
         run: npx playwright test --project=deployed-smoke
 
       - name: Upload deployed-smoke results

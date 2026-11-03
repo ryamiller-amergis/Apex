@@ -18,6 +18,15 @@ jest.mock('../services/artifactDoneEventService', () => ({
   recordArtifactDoneEvent: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock('../utils/rbacHelpers', () => ({
+  isPlatformAdmin: jest.fn().mockResolvedValue(false),
+  isProjectAdmin: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/rbacService', () => ({
+  getActiveUsers: jest.fn().mockResolvedValue([]),
+}));
+
 // ── DB mock ────────────────────────────────────────────────────────────────────
 
 jest.mock('../db/drizzle', () => {
@@ -47,6 +56,7 @@ jest.mock('../db/drizzle', () => {
       query: {
         interviews: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
+        buildRuns: { findFirst: jest.fn().mockResolvedValue(undefined) },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -61,8 +71,10 @@ import {
   listInterviews,
   getInterview,
   updateInterviewStatus,
+  updateInterviewPhaseAssignments,
   updateInterviewTitle,
   deleteInterview,
+  canCompleteInterviewAndGeneratePrd,
 } from '../services/interviewService';
 
 const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
@@ -70,6 +82,22 @@ const { db: mockDb } = jest.requireMock('../db/drizzle') as { db: any };
 const { createNotification: mockCreateNotification } = jest.requireMock('../services/notificationService') as {
   createNotification: jest.Mock;
 };
+const { getActiveUsers: mockGetActiveUsers } = jest.requireMock('../services/rbacService') as {
+  getActiveUsers: jest.Mock;
+};
+const { isPlatformAdmin: mockIsPlatformAdmin, isProjectAdmin: mockIsProjectAdmin } = jest.requireMock(
+  '../utils/rbacHelpers',
+) as {
+  isPlatformAdmin: jest.Mock;
+  isProjectAdmin: jest.Mock;
+};
+
+const COMPLETE_FORBIDDEN =
+  'Only the author, an interview section owner, a project admin, or a platform admin can complete an interview';
+
+const COMPLETE_INVALID_STATUS = 'Only in-progress interviews can be marked complete';
+
+const AUTHOR_STATUS_FORBIDDEN = 'Only the author can change interview status';
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +110,10 @@ const interviewRow = {
   repo: 'org/repo-alpha',
   status: 'in_progress',
   prototypeStageEnabled: true,
+  prdOwnerId: 'owner-prd',
+  designDocOwnerId: 'owner-dd',
+  designPrototypeOwnerId: 'owner-proto',
+  testCaseOwnerId: 'owner-qa',
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -337,6 +369,99 @@ describe('createInterview', () => {
   });
 });
 
+describe('VT-BRIEF-2 — createInterview persists optional Playbook linkage', () => {
+  const snapshot = {
+    mode: 'human_led' as const,
+    key: 'ba-discovery',
+    skillPath: '.cursor/skills/grill-with-docs/SKILL.md',
+    model: 'claude-sonnet',
+    effort: 'high' as const,
+    wantsDesignPrototype: false,
+    wantsTestCases: true,
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  function mockInsert() {
+    const returningMock = jest.fn().mockResolvedValue([{ id: 'interview-playbook' }]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+    return valuesMock;
+  }
+
+  it('VT-BRIEF-2 stores the run, step run, mode, profile key, and profile snapshot', async () => {
+    const valuesMock = mockInsert();
+
+    const result = await createInterview({
+      userId: 'user-1',
+      project: 'Apex',
+      repo: 'org/apex',
+      title: 'BA discovery',
+      chatThreadId: 'thread-abc',
+      playbookRunId: 'run-1',
+      playbookStepRunId: 'step-run-1',
+      playbookInterviewMode: 'human_led',
+      playbookProfileKey: 'ba-discovery',
+      playbookProfileSnapshot: snapshot,
+    });
+
+    expect(result).toEqual({ interviewId: 'interview-playbook', threadId: 'thread-abc' });
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorId: 'user-1',
+        project: 'Apex',
+        chatThreadId: 'thread-abc',
+        status: 'in_progress',
+        playbookRunId: 'run-1',
+        playbookStepRunId: 'step-run-1',
+        playbookInterviewMode: 'human_led',
+        playbookProfileKey: 'ba-discovery',
+        playbookProfileSnapshot: snapshot,
+      }),
+    );
+  });
+
+  it('VT-BRIEF-2 leaves Playbook columns null for an ordinary interview', async () => {
+    const valuesMock = mockInsert();
+
+    await createInterview({
+      userId: 'user-1',
+      project: 'proj',
+      repo: 'org/repo',
+      chatThreadId: 'thread-abc',
+      title: 'Sprint Planning',
+    });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Sprint Planning',
+        status: 'in_progress',
+        playbookRunId: null,
+        playbookStepRunId: null,
+        playbookInterviewMode: null,
+        playbookProfileKey: null,
+        playbookProfileSnapshot: null,
+      }),
+    );
+  });
+
+  it('VT-BRIEF-2 rejects a partial Playbook snapshot before inserting', async () => {
+    const valuesMock = mockInsert();
+
+    await expect(
+      createInterview({
+        userId: 'user-1',
+        project: 'Apex',
+        repo: 'org/apex',
+        chatThreadId: 'thread-abc',
+        playbookRunId: 'run-1',
+      }),
+    ).rejects.toThrow(/Playbook interview linkage/);
+
+    expect(valuesMock).not.toHaveBeenCalled();
+  });
+});
+
 // ── listInterviews ─────────────────────────────────────────────────────────────
 
 describe('listInterviews', () => {
@@ -562,8 +687,66 @@ describe('getInterview', () => {
 
 // ── updateInterviewStatus ──────────────────────────────────────────────────────
 
+describe('canCompleteInterviewAndGeneratePrd', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsPlatformAdmin.mockResolvedValue(false);
+    mockIsProjectAdmin.mockResolvedValue(false);
+  });
+
+  it('allows the interview author', async () => {
+    await expect(canCompleteInterviewAndGeneratePrd('user-1', interviewRow)).resolves.toBe(true);
+    expect(mockIsPlatformAdmin).not.toHaveBeenCalled();
+    expect(mockIsProjectAdmin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['PRD section owner', 'owner-prd'],
+    ['design doc section owner', 'owner-dd'],
+    ['design prototype section owner', 'owner-proto'],
+    ['QA section owner', 'owner-qa'],
+  ])('allows the %s when they are not the author', async (_label, userId) => {
+    await expect(canCompleteInterviewAndGeneratePrd(userId, interviewRow)).resolves.toBe(true);
+  });
+
+  it('allows a project admin who is not the author or a section owner', async () => {
+    mockIsProjectAdmin.mockResolvedValue(true);
+
+    await expect(canCompleteInterviewAndGeneratePrd('project-admin', interviewRow)).resolves.toBe(true);
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('project-admin', 'proj-alpha');
+  });
+
+  it('allows a platform admin who is not the author or a section owner', async () => {
+    mockIsPlatformAdmin.mockResolvedValue(true);
+
+    await expect(canCompleteInterviewAndGeneratePrd('platform-admin', interviewRow)).resolves.toBe(true);
+    expect(mockIsPlatformAdmin).toHaveBeenCalledWith('platform-admin');
+  });
+
+  it('denies a user who is not the author, a section owner, or an admin', async () => {
+    await expect(canCompleteInterviewAndGeneratePrd('user-other', interviewRow)).resolves.toBe(false);
+  });
+
+  it('does not allow an unrelated user just because they could hold interviews:manage', async () => {
+    await expect(canCompleteInterviewAndGeneratePrd('manage-only', interviewRow)).resolves.toBe(false);
+    expect(mockIsPlatformAdmin).toHaveBeenCalledWith('manage-only');
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('manage-only', 'proj-alpha');
+  });
+});
+
 describe('updateInterviewStatus', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsPlatformAdmin.mockResolvedValue(false);
+    mockIsProjectAdmin.mockResolvedValue(false);
+  });
+
+  function mockStatusPersist() {
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+    return setMock;
+  }
 
   it('DoD-4 persists terminal status before making grounding cleanup-eligible', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
@@ -598,12 +781,130 @@ describe('updateInterviewStatus', () => {
     ).rejects.toMatchObject({ message: 'Interview not found' });
   });
 
-  it('throws 403 when a non-author tries to update status', async () => {
+  it('lets the author set status to complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'user-1', 'complete');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it.each([
+    ['PRD section owner', 'owner-prd'],
+    ['design doc section owner', 'owner-dd'],
+    ['design prototype section owner', 'owner-proto'],
+    ['QA section owner', 'owner-qa'],
+  ])('lets the %s set status to complete when they are not the author', async (_label, userId) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', userId, 'complete');
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it('lets a project admin set status to complete when they are not the author or a section owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsProjectAdmin.mockResolvedValue(true);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'project-admin', 'complete');
+
+    expect(mockIsProjectAdmin).toHaveBeenCalledWith('project-admin', 'proj-alpha');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it('lets a platform admin set status to complete when they are not the author or a section owner', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'platform-admin', 'complete');
+
+    expect(mockIsPlatformAdmin).toHaveBeenCalledWith('platform-admin');
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'complete' }));
+  });
+
+  it('throws 403 when a user who is not the author, a section owner, or an admin sets complete', async () => {
     mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
 
     await expect(
       updateInterviewStatus('interview-1', 'user-other', 'complete'),
-    ).rejects.toMatchObject({ message: 'Only the author can change interview status' });
+    ).rejects.toMatchObject({ status: 403, message: COMPLETE_FORBIDDEN });
+  });
+
+  it.each([
+    ['author', 'user-1'],
+    ['section owner', 'owner-prd'],
+  ])('throws 409 when the %s completes an archived interview', async (_label, userId) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      status: 'archived',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', userId, 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 when a completer marks an already-complete interview complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      status: 'complete',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', 'user-1', 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 when a completer marks a playbook interview complete', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      playbookRunId: 'run-1',
+    });
+
+    await expect(
+      updateInterviewStatus('interview-1', 'user-1', 'complete'),
+    ).rejects.toMatchObject({ status: 409, message: COMPLETE_INVALID_STATUS });
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['in_progress'],
+    ['archived'],
+  ])('throws 403 when a section owner sets status to %s', async (status) => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+
+    await expect(
+      updateInterviewStatus('interview-1', 'owner-prd', status as 'in_progress' | 'archived'),
+    ).rejects.toMatchObject({ status: 403, message: AUTHOR_STATUS_FORBIDDEN });
+  });
+
+  it('lets the author reopen and archive', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    const setMock = mockStatusPersist();
+
+    await updateInterviewStatus('interview-1', 'user-1', 'in_progress');
+    await updateInterviewStatus('interview-1', 'user-1', 'archived');
+
+    expect(setMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ status: 'in_progress' }));
+    expect(setMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ status: 'archived' }));
+  });
+
+  it('still rejects a platform admin who tries to archive or reopen someone else\'s interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsPlatformAdmin.mockResolvedValue(true);
+
+    await expect(
+      updateInterviewStatus('interview-1', 'platform-admin', 'archived'),
+    ).rejects.toMatchObject({ status: 403, message: AUTHOR_STATUS_FORBIDDEN });
+    await expect(
+      updateInterviewStatus('interview-1', 'platform-admin', 'in_progress'),
+    ).rejects.toMatchObject({ status: 403, message: AUTHOR_STATUS_FORBIDDEN });
   });
 });
 
@@ -642,6 +943,137 @@ describe('updateInterviewTitle', () => {
   });
 });
 
+// ── updateInterviewPhaseAssignments ───────────────────────────────────────────
+
+describe('updateInterviewPhaseAssignments', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateNotification.mockResolvedValue({ id: 'notif-1' });
+  });
+
+  it('updates only the supplied phase assignments', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: null,
+      deliveryAssigneeId: null,
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'discovery-1', displayName: 'Discovery User' },
+      { oid: 'technical-1', displayName: 'Technical User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      discoveryAssigneeId: 'discovery-1',
+      technicalAssigneeId: 'technical-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      discoveryAssigneeId: 'discovery-1',
+      technicalAssigneeId: 'technical-1',
+      updatedAt: expect.any(String),
+    });
+    expect(mockCreateNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not clear an existing phase when another phase is assigned', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: null,
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'delivery-1', displayName: 'Delivery User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      deliveryAssigneeId: 'delivery-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      deliveryAssigneeId: 'delivery-1',
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('leaves unspecified phase assignees unchanged', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: null,
+    });
+    mockGetActiveUsers.mockResolvedValue([
+      { oid: 'technical-1', displayName: 'Technical User' },
+    ]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      technicalAssigneeId: 'technical-1',
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      technicalAssigneeId: 'technical-1',
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('clears a phase when the client sends null without touching the others', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({
+      ...interviewRow,
+      discoveryAssigneeId: 'discovery-1',
+      deliveryAssigneeId: 'delivery-1',
+      technicalAssigneeId: 'technical-1',
+    });
+    mockGetActiveUsers.mockResolvedValue([]);
+    const whereMock = jest.fn().mockResolvedValue(undefined);
+    const setMock = jest.fn().mockReturnValue({ where: whereMock });
+    mockDb.update.mockReturnValue({ set: setMock });
+
+    await updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      discoveryAssigneeId: null,
+    });
+
+    expect(setMock).toHaveBeenCalledWith({
+      discoveryAssigneeId: null,
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('rejects a user who is not active in the interview project', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockGetActiveUsers.mockResolvedValue([]);
+
+    await expect(updateInterviewPhaseAssignments('interview-1', 'user-1', {
+      deliveryAssigneeId: 'outside-project',
+    })).rejects.toMatchObject({
+      message: 'Phase assignees must be active users in this project',
+    });
+  });
+
+  it('does not let a section owner assign phases', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockIsPlatformAdmin.mockResolvedValue(false);
+    mockIsProjectAdmin.mockResolvedValue(false);
+
+    await expect(updateInterviewPhaseAssignments('interview-1', 'owner-prd', {
+      discoveryAssigneeId: 'owner-prd',
+    })).rejects.toMatchObject({
+      status: 403,
+      message: 'Only the interview owner, a project admin, or a platform admin can assign phases',
+    });
+  });
+});
+
 // ── deleteInterview ────────────────────────────────────────────────────────────
 
 describe('deleteInterview', () => {
@@ -675,6 +1107,19 @@ describe('deleteInterview', () => {
     await expect(deleteInterview('interview-1', 'user-other')).rejects.toMatchObject({
       message: 'Only the author can delete the interview',
     });
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 and keeps the interview when a build uses it', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockDb.query.buildRuns.findFirst.mockResolvedValueOnce({ id: 'build-1' });
+
+    await expect(deleteInterview('interview-1', 'user-1')).rejects.toMatchObject({
+      status: 409,
+      message: 'This interview belongs to a build. Cancel the build instead.',
+    });
+    const { cancelRun } = jest.requireMock('../services/chatAgentService') as { cancelRun: jest.Mock };
+    expect(cancelRun).not.toHaveBeenCalled();
     expect(mockDb.delete).not.toHaveBeenCalled();
   });
 });
