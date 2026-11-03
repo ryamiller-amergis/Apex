@@ -124,6 +124,7 @@ import {
   getLatestThreadRun,
   getThreadRunStateSnapshot,
   canThisInstanceFailGeneration,
+  reapLostInteractiveTurns,
   reapOrphanedRuns,
   startReaper,
   stopReaper,
@@ -198,6 +199,10 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 describe('startReaper leader election', () => {
+  const sweepLeaseCalls = () => mockWithRepoCacheLease.mock.calls.filter(
+    ([key]) => key !== 'agent-run-reaper:interactive',
+  );
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
@@ -215,9 +220,8 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
-    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
-      1,
+    expect(sweepLeaseCalls()).toHaveLength(1);
+    expect(sweepLeaseCalls()[0]).toEqual([
       'agent-run-reaper:sweep',
       expect.any(Function),
       {
@@ -226,14 +230,13 @@ describe('startReaper leader election', () => {
         waitMs: 0,
         releaseOnComplete: false,
       },
-    );
+    ]);
 
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
-    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
-      2,
+    expect(sweepLeaseCalls()).toHaveLength(2);
+    expect(sweepLeaseCalls()[1]).toEqual([
       'agent-run-reaper:sweep',
       expect.any(Function),
       {
@@ -242,7 +245,25 @@ describe('startReaper leader election', () => {
         waitMs: 0,
         releaseOnComplete: false,
       },
+    ]);
+  });
+
+  it('checks durable interactive turns every 15 seconds on their own lease', async () => {
+    startReaper();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(30_000);
+    await flushAsyncWork();
+
+    const interactiveCalls = mockWithRepoCacheLease.mock.calls.filter(
+      ([key]) => key === 'agent-run-reaper:interactive',
     );
+    expect(interactiveCalls).toHaveLength(2);
+    expect(interactiveCalls[0]?.[2]).toEqual({
+      leaseMs: 14_000,
+      heartbeatMs: 5_000,
+      waitMs: 0,
+      releaseOnComplete: false,
+    });
   });
 
   it('skips quietly when another instance holds the reaper lease', async () => {
@@ -254,7 +275,7 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(sweepLeaseCalls()).toHaveLength(1);
     expect(consoleSpy).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
@@ -272,14 +293,14 @@ describe('startReaper leader election', () => {
     await jest.advanceTimersByTimeAsync(120_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(sweepLeaseCalls()).toHaveLength(1);
 
     leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(sweepLeaseCalls()).toHaveLength(2);
   });
 
   it('logs unexpected failures and still allows the next cycle to run', async () => {
@@ -299,7 +320,7 @@ describe('startReaper leader election', () => {
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(sweepLeaseCalls()).toHaveLength(2);
     consoleSpy.mockRestore();
   });
 
@@ -319,21 +340,21 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(sweepLeaseCalls()).toHaveLength(1);
 
     leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(sweepLeaseCalls()).toHaveLength(2);
   });
 
   it('runs reaper work exactly once when the lease holder callback executes', async () => {
     startReaper();
     await flushAsyncWork();
 
-    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+    const mainOperation = sweepLeaseCalls()[0]?.[1] as ((lease: {
       signal: AbortSignal;
       assertOwned(): Promise<void>;
     }) => Promise<void>) | undefined;
@@ -364,7 +385,7 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+    const mainOperation = sweepLeaseCalls()[0]?.[1] as ((lease: {
       signal: AbortSignal;
       assertOwned(): Promise<void>;
     }) => Promise<void>) | undefined;
@@ -1220,6 +1241,47 @@ describe('reapOrphanedRuns', () => {
       expect(lostTurnRetry.retry).toHaveBeenCalledWith(
         expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
       );
+    });
+
+    it('the 15-second check re-runs a lost turn the same way as the full sweep', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
+        retry: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await reapLostInteractiveTurns({ now: () => now, config, lostTurnRetry });
+
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          detail: 'Interactive agent stopped responding. Restarting automatically.',
+          events: [expect.objectContaining({ type: 'health' }), autoRetryDone],
+        }),
+      );
+      expect(lostTurnRetry.retry).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
+      );
+    });
+
+    it('the 15-second check leaves a turn alone while its heartbeat is fresh', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(15_000),
+        requestedByUserId: 'user-1',
+      })]);
+
+      await reapLostInteractiveTurns({ now: () => now, config });
+
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
     });
 
     it('ends the turn with a failed done when the re-run cannot start', async () => {
