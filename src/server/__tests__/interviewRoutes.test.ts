@@ -1339,7 +1339,7 @@ describe('POST /api/interviews/:interviewId/prds', () => {
   it('returns 201 with prdId and threadId and starts the watcher', async () => {
     mockInterviewService.getInterview.mockResolvedValue(interview);
     mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
-    mockPrdService.startPrdWatcher.mockReturnValue(undefined);
+    mockPrdService.startPrdGenerationWatcher.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
       .post('/api/interviews/interview-1/prds')
@@ -1356,7 +1356,12 @@ describe('POST /api/interviews/:interviewId/prds', () => {
       skillSettingsId: null,
       model: undefined,
     });
-    expect(mockPrdService.startPrdWatcher).toHaveBeenCalledWith('prd-new', 'thread-new');
+    expect(mockPrdService.startPrdGenerationWatcher).toHaveBeenCalledWith({
+      prdId: 'prd-new',
+      chatThreadId: 'thread-new',
+      userId: 'user-test',
+      project: 'proj-alpha',
+    });
   });
 
   it('BR-012 / AC-0 routes authorized PRD kickoff through the service seam', async () => {

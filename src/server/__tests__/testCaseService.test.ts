@@ -68,6 +68,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
     await input.runInProcess();
     return { route: 'in-process', reason: 'flag-disabled' };
   }),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/runGroundingService', () => ({
@@ -527,6 +528,48 @@ describe('testCaseService', () => {
         mockDb.query.testCases.findFirst.mockResolvedValue(null);
         jest.advanceTimersByTime(5_000);
         for (let i = 0; i < 10; i++) await Promise.resolve();
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not start a share watcher when the run goes to the V2 worker', async () => {
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-v2-'));
+      mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        id: 'prd-1',
+        project: 'proj-alpha',
+        authorId: 'user-1',
+        title: 'Feature PRD',
+        content: '# PRD',
+        backlogJson: {},
+      });
+      mockDb.query.testCases.findFirst.mockResolvedValue(null);
+      mockGetSkillConfig.mockResolvedValue({
+        skillRepo: 'org/skills',
+        testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+      });
+      mockRouteBackgroundWorkflow.mockResolvedValueOnce({
+        route: 'worker',
+        workspacePath: '/pinned',
+        runId: 'thread-tc',
+      });
+      const usesV2 = jest.requireMock('../services/backgroundWorkflowRouter')
+        .usesV2DocumentTransport as jest.Mock;
+      usesV2.mockResolvedValueOnce(true);
+
+      try {
+        await expect(
+          triggerTestCaseGeneration('prd-1', 'source-thread'),
+        ).resolves.toBe(true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+
+        expect(usesV2).toHaveBeenCalledWith({
+          userId: 'user-1',
+          project: 'proj-alpha',
+          workflowClass: 'test-cases',
+        });
+        expect(isTestCaseWatcherActive('tc-new')).toBe(false);
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
