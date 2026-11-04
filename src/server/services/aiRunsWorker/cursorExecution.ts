@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Agent } from '@cursor/sdk';
+import { Agent, type ToolName } from '@cursor/sdk';
 import type { LocalAgentOptions } from '@cursor/sdk/dist/cjs/options.js';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import { isPlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
@@ -100,14 +100,21 @@ export async function createLocalCursorExecution(
   const nativeReadsAllowed =
     policy?.enforcement !== 'enforce'
     || policy.localAgent.customTools === 'native-read-only';
-  // The sandbox blocks the shell. A Skill that declared azure-cli needs that shell
-  // for `az`. Repository writes stay refused by the policy check above.
-  const shellAllowed = Boolean(enforcing && policy?.capabilities.includes('azure-cli'));
+  // The worker container has no local sandbox. enabled: false also overrides
+  // ~/.cursor/sandbox.json, which otherwise requests sandboxing and fails the turn.
+  // A Skill that declared azure-cli, and the MaxView investigation skill, need the
+  // shell for `az`. Every other enforced Skill has the shell tool removed.
+  const investigationSkill = [snapshot.skillPath, policy?.skill.path].some((skillPath) =>
+    (skillPath ?? '').replace(/\\/g, '/').includes('maxview-incident-investigation'),
+  );
+  const shellAllowed = !enforcing
+    || Boolean(policy?.capabilities.includes('azure-cli'))
+    || investigationSkill;
 
   const local = {
     cwd: snapshot.workspaceRef,
     settingSources: enforcing ? [] : ['project'],
-    ...(enforcing && !shellAllowed ? { sandboxOptions: { enabled: true } } : {}),
+    sandboxOptions: { enabled: false },
     ...(checkout && nativeReadsAllowed ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 
@@ -117,6 +124,7 @@ export async function createLocalCursorExecution(
       local,
       // The worker never resolves live repository MCP servers.
       mcpServers: {},
+      ...(shellAllowed ? {} : { disallowedTools: ['shell' as ToolName] }),
     });
   const agent = await raceCursorStartup(
     createAgent,

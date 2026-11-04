@@ -608,6 +608,7 @@ export async function executeCursorExecutionCore(
   let turnEndWait: Promise<CursorExecutionWaitResult> | null = null;
   let terminalStatusMessage: string | undefined;
   const identicalToolCallCounts = new Map<string, number>();
+  let thinkingSeq = 0;
 
   const publish = async (event: SseEvent, phase?: AgentRunPhase): Promise<void> => {
     const envelope = createCursorRunEventEnvelope({
@@ -775,11 +776,11 @@ export async function executeCursorExecutionCore(
           firstFragment,
           durationMs: thinkingEvent.thinking_duration_ms,
         });
-        const realText = typeof thinkingEvent.text === 'string' && thinkingEvent.text.trim()
-          ? thinkingEvent.text.trim()
-          : '';
-        if (realText) {
-          await publish({ type: 'thinking', text: realText });
+        const piece = typeof thinkingEvent.text === 'string' ? thinkingEvent.text : '';
+        if (piece.trim()) {
+          // Pieces split words, so the spacing is kept; `seq` lets clients drop repeats.
+          thinkingSeq += 1;
+          await publish({ type: 'thinking', text: piece, seq: thinkingSeq });
         } else if (firstFragment) {
           await publish({ type: 'thinking', text: 'Analyzing' });
         }

@@ -707,7 +707,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     });
 
     expect(prompt).toContain('Work on branch `feature/apex-123-shift-scheduler` and no other branch.');
-    expect(prompt).toContain('Open a pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Open a pull request titled `Work item 123: Shift Scheduler`');
     expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
     expect(prompt).toContain('Name the work item as AB#123');
     expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
@@ -737,7 +737,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       workItemTitle: 'Shift Scheduler',
     });
 
-    expect(prompt).toContain('Open a pull request titled `[APEX] apex-123-shift-scheduler`');
+    expect(prompt).toContain('Open a pull request titled `Work item 123: Shift Scheduler`');
     expect(prompt).toContain('Add the pull request label `apex-cloud-agent`');
     expect(prompt).toContain('#### What does this PR do?');
     expect(prompt).toContain('#### How should this be manually tested?');
@@ -1301,6 +1301,33 @@ describe('getCloudAgentRunStatus check projection (TBI-005 DoD-0/DoD-1/DoD-2; PB
     expect(summary).toEqual(expect.objectContaining({
       status: 'running',
       prUrl: null,
+    }));
+  });
+
+  it('completes a still-running agent once its pull request is open in Azure DevOps', async () => {
+    mockDevSessionFindFirst.mockResolvedValue(linkableSession({ currentRunPrUrl: null }));
+    mockAgentRunFindFirst.mockResolvedValue(linkableRun({ status: 'running' }));
+    mockGetAdoPullRequestStatus.mockResolvedValue('open');
+    const deps = makeDeps({
+      getCloudAgentRun: jest.fn().mockResolvedValue({
+        status: 'running',
+        prUrl: null,
+        branchName: 'feature/apex-42-abc',
+        agentFinished: false,
+      }),
+      findWorkItemPullRequest: jest.fn().mockResolvedValue(
+        'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
+      ),
+    });
+
+    const summary = await getCloudAgentRunStatus(SESSION_ID, USER_ID, deps);
+
+    expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+      status: 'completed',
+    }));
+    expect(summary).toEqual(expect.objectContaining({
+      status: 'completed',
+      prUrl: 'https://dev.azure.com/amergis/MaxView/_git/MaxView/pullrequest/9',
     }));
   });
 

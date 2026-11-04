@@ -98,6 +98,7 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
+const QaLabView = lazy(() => import('./components/QaLabView').then(m => ({ default: m.QaLabView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
@@ -209,7 +210,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -245,6 +246,8 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
+                    : location.pathname === '/qa-lab'
+                    ? 'qa-lab'
                     : location.pathname === '/ai-cost'
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
@@ -603,6 +606,7 @@ function App() {
       });
       if (access === 'deny') navigate(fallback);
     }
+    if (currentView === 'qa-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('qa-lab')    || !can('planning:qa')))       navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
@@ -1041,6 +1045,7 @@ function App() {
             onNavigateMyWork={() => navigateAwayFromHome('/my-work')}
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
             onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
@@ -1102,6 +1107,7 @@ function App() {
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
             onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
@@ -1503,6 +1509,12 @@ function App() {
                     hasWorkspaceAccess={uiLabWorkspaceAccess}
                   />
                 </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'qa-lab' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <QaLabView project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'design-module' ? (

@@ -1094,8 +1094,22 @@ export function createInteractiveSessionActor(
       }
     };
 
+    const heartbeatStats = { lastAcceptedAt: now(), maxGapMs: 0, sent: 0, failed: 0 };
+    const recordHeartbeatGap = (at: number): void => {
+      heartbeatStats.maxGapMs = Math.max(heartbeatStats.maxGapMs, at - heartbeatStats.lastAcceptedAt);
+    };
     const heartbeat = (): void => {
-      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).catch(() => {});
+      heartbeatStats.sent += 1;
+      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).then(
+        () => {
+          const at = now();
+          recordHeartbeatGap(at);
+          heartbeatStats.lastAcceptedAt = at;
+        },
+        () => {
+          heartbeatStats.failed += 1;
+        },
+      );
     };
     heartbeat();
     const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
@@ -1777,6 +1791,19 @@ export function createInteractiveSessionActor(
     } finally {
       activeDurableThreads.delete(threadId);
       clearInterval(heartbeatTimer);
+      recordHeartbeatGap(now());
+      try {
+        telemetry.interactiveHeartbeats(
+          { runId, dispatchMessageId, project: projectId, lane: INTERACTIVE_LANE },
+          {
+            maxGapMs: heartbeatStats.maxGapMs,
+            sent: heartbeatStats.sent,
+            failed: heartbeatStats.failed,
+          },
+        );
+      } catch {
+        // Telemetry must not change the turn outcome.
+      }
       clearTimeout(absoluteTimer);
       clearToolTimer();
       clearEventTimers();

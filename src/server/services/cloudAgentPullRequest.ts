@@ -13,6 +13,7 @@ export const CLOUD_AGENT_PULL_REQUEST_LABEL = 'apex-cloud-agent';
 export interface CloudAgentPullRequestTextInput {
   workItemId: number;
   workItemTitle?: string | null;
+  workItemType?: string | null;
   authorName?: string | null;
   authorEmail?: string | null;
   summary?: string | null;
@@ -44,6 +45,7 @@ export function buildCloudAgentPullRequestText(
     branchName: input.titleBranch?.trim() || input.sourceBranch,
     workItemId: input.workItemId,
     workItemTitle: input.workItemTitle,
+    workItemType: input.workItemType,
     agentDescription: extractAgentPullRequestDescription(input.summary),
   });
 }
@@ -170,6 +172,8 @@ export async function alignCloudAgentPullRequest(input: {
   repo: string;
   prUrl: string;
   workItemId: number;
+  workItemTitle?: string | null;
+  workItemType?: string | null;
   sourceBranch: string;
   titleBranch?: string | null;
   /** When set, the pull request is pointed at this branch. */

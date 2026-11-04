@@ -230,6 +230,9 @@ export function friendlyChatErrorMessage(raw: string | null | undefined): string
   if (text.startsWith('Interactive turn failed:')) {
     return 'Something went wrong while answering. Please retry.';
   }
+  if (text.startsWith('Interactive agent ')) {
+    return "This answer didn't finish. Please try again.";
+  }
   return text;
 }
 

@@ -125,6 +125,35 @@ describe('V2 document artifact harvest', () => {
     });
   });
 
+  it('skips the worker agent reply instead of rejecting the attempt', async () => {
+    const currentAttempt = attempt({ workflowClass: 'test-cases' });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/agent-reply.md': 'Wrote the test cases.',
+      'output/item.backlog.json': '{"epics":[]}',
+      'output/item.test-cases.json': '{"suites":[]}',
+    });
+    const applyWorkspace = jest.fn(async ({ workspacePath, failureDetail }) => {
+      expect(failureDetail).toBeUndefined();
+      const outputDir = path.join(workspacePath, '.ai-pilot', 'output');
+      await expect(fs.readdir(outputDir)).resolves.toEqual([
+        'item.backlog.json',
+        'item.test-cases.json',
+      ]);
+    });
+
+    await expect(
+      harvestFinishedV2Documents({
+        finishedAttempts,
+        artifacts,
+        applyWorkspace,
+        applySmartTagging: jest.fn(),
+      }),
+    ).resolves.toBe(1);
+
+    expect(applyWorkspace).toHaveBeenCalledTimes(1);
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
   it('materializes documented nested design-spec artifacts', async () => {
     const currentAttempt = attempt({ workflowClass: 'design-doc' });
     const files = {

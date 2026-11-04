@@ -135,6 +135,7 @@ function makeTelemetry(): WorkerTierTelemetry {
     interactiveActorHealth: jest.fn(),
     interactiveReplay: jest.fn(),
     interactiveStage: jest.fn(),
+    interactiveHeartbeats: jest.fn(),
   } as unknown as WorkerTierTelemetry;
 }
 
@@ -1598,6 +1599,56 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(beats).toBeGreaterThanOrEqual(3);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(posted.filter((body) => body.kind === 'heartbeat')).toHaveLength(beats);
+  });
+
+  it('reports the longest heartbeat gap and failed heartbeats when a durable turn ends', async () => {
+    const telemetry = makeTelemetry();
+    let clock = 0;
+    let heartbeatCalls = 0;
+    const waitGate = deferred();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        if (body.kind === 'heartbeat') {
+          heartbeatCalls += 1;
+          clock += 1_000;
+          if (heartbeatCalls === 2) throw new Error('ingest unavailable');
+        }
+        return { ok: true, cancelRequested: false };
+      },
+      durableHeartbeatMs: 20,
+      now: () => clock,
+      telemetry,
+    });
+
+    const turn = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    for (let i = 0; i < 200 && heartbeatCalls < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    waitGate.resolve();
+    await turn;
+
+    expect(telemetry.interactiveHeartbeats).toHaveBeenCalledTimes(1);
+    const [context, measurements] = jest.mocked(telemetry.interactiveHeartbeats).mock.calls[0]!;
+    expect(context).toMatchObject({ lane: 'ai-runs-interactive' });
+    expect(measurements.failed).toBe(1);
+    expect(measurements.sent).toBeGreaterThanOrEqual(3);
+    expect(measurements.maxGapMs).toBeGreaterThanOrEqual(2_000);
   });
 
   it('fails with hard_timeout when the Cursor run never settles past the absolute deadline', async () => {

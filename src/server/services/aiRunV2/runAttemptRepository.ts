@@ -1433,6 +1433,53 @@ export function createRunAttemptRepository(options?: {
             `);
           }
         }
+        if (
+          checkpoint.kind === 'progress'
+          && checkpoint.progress?.kind === 'activity_event'
+        ) {
+          const activity = checkpoint.progress;
+          const sourceInstance = `ai-run-v2-checkpoint:${checkpoint.attemptId}`;
+          // Postgres rejects \u0000 inside jsonb, and an agent reply can carry one.
+          const eventJson = JSON.stringify(activity.event).split('\\u0000').join('');
+          const detail = activity.detail?.split('\u0000').join('') || null;
+          await executor.execute(sql`
+            INSERT INTO agent_run_events (
+              event_id,
+              thread_id,
+              run_id,
+              source_instance,
+              sequence,
+              event_timestamp,
+              event_type,
+              phase,
+              status,
+              detail,
+              event
+            ) VALUES (
+              ${checkpoint.eventId}::uuid,
+              ${attempt.thread_id},
+              ${checkpoint.runId},
+              ${sourceInstance},
+              ${checkpoint.checkpointSequence},
+              ${checkpoint.timestamp},
+              ${activity.eventType},
+              ${activity.phase},
+              ${activity.status},
+              ${detail},
+              ${eventJson}::jsonb
+            )
+            ON CONFLICT (event_id) DO NOTHING
+          `);
+          await executor.execute(sql`
+            SELECT pg_notify(
+              'agent_run_events',
+              json_build_object(
+                'threadId', ${attempt.thread_id}::text,
+                'eventId', ${checkpoint.eventId}::text
+              )::text
+            )
+          `);
+        }
 
         // The started checkpoint carries the only execution id the reconciler
         // can probe, so fold it into spec_ref rather than leaving it in inbox.

@@ -93,6 +93,8 @@ export interface ExecutionSnapshot {
   cloudAgent?: {
     workItemId: number;
     workItemTitle?: string;
+    /** Used to give the pull request title a professional, non-slug form. */
+    workItemType?: string;
     /** Cloud Agent branch: bug/<id>-<name> for a bug, otherwise a type prefix. */
     branchName?: string;
     /** Branch the work is cut from and the pull request merges into. */

@@ -62,6 +62,7 @@ const BACKGROUND_WORKFLOW_KICKOFF_MARKERS = [
   'document_operation: validation',
   '# Design Doc Validation Context',
   '# Test Case Generation Context',
+  '# Test Case Regeneration Context',
   '# Design Doc Generation — Single Feature',
 ] as const;
 

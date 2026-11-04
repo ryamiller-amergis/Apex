@@ -77,6 +77,7 @@ import {
 import { prepareCloudAgentKickoff, type CloudAgentKickoffInput } from './cloudAgentKickoff';
 import {
   buildPullRequestDescriptionInstructions,
+  buildPullRequestTitle,
   cloudAgentBranchName,
   implementationBranchName,
 } from './implementationDelivery';
@@ -290,7 +291,15 @@ function toRunSummary(
   };
 }
 
-async function pullRequestForFinishedRun(
+/**
+ * The pull request for this run, from Cursor's own git metadata or Azure DevOps.
+ *
+ * The agent is told to open the pull request as its last action, so an open
+ * pull request on the run's branch means the work arrived. Waiting for Cursor to
+ * also report the run finished left steps sitting on a pull request that already
+ * existed, sometimes for a long time.
+ */
+async function pullRequestForRun(
   observed: { prUrl: string | null; agentFinished?: boolean; branchName?: string | null },
   input: {
     project: string;
@@ -301,7 +310,7 @@ async function pullRequestForFinishedRun(
   deps: CloudAgentServiceDeps,
 ): Promise<string | null> {
   if (observed.prUrl) return observed.prUrl;
-  if (!observed.agentFinished || !input.repo || !input.workItemId) return null;
+  if (!input.repo || !input.workItemId) return null;
   try {
     return await deps.findWorkItemPullRequest({
       project: input.project,
@@ -311,7 +320,7 @@ async function pullRequestForFinishedRun(
     });
   } catch (err) {
     console.warn(
-      '[cloud-agent] could not look up the pull request for a finished run',
+      '[cloud-agent] could not look up the pull request for a run',
       err instanceof Error ? err.message : String(err),
     );
     return null;
@@ -438,7 +447,12 @@ export async function buildCloudAgentPrompt(input: {
     || (input.workItemType?.trim()
       ? cloudAgentBranchName(input.workItemId, workItemTitle, input.workItemType)
       : implementationBranchName(input.workItemId, workItemTitle));
-  const pullRequestTitle = `[APEX] ${branchName.replace(/^[^/]+\//, '')}`;
+  const pullRequestTitle = buildPullRequestTitle({
+    branchName,
+    workItemId: input.workItemId,
+    workItemTitle: input.workItemTitle?.trim() || null,
+    workItemType: input.workItemType,
+  });
   const targetBranch = input.targetBranch?.trim();
   const creator = input.createdByName?.trim();
   const files = pack.files
@@ -636,18 +650,23 @@ interface PersistedCloudAgentRun {
   executionPrompt: string;
 }
 
-async function readWorkItemCreator(
+/**
+ * Creator and title from Azure DevOps. A Playbook step starts a run with only a
+ * work item id, so without this read the branch and pull request would be named
+ * from `wi-<id>` rather than the work item.
+ */
+async function readWorkItemFacts(
   project: string,
   workItemId: number,
-): Promise<{ name: string; email: string | null } | null> {
+): Promise<{ name: string | null; email: string | null; title: string | null }> {
   try {
-    return await new AzureDevOpsService(project).getWorkItemCreator(workItemId);
+    return await new AzureDevOpsService(project).getWorkItemCreatorAndTitle(workItemId);
   } catch (err) {
     console.warn(
-      '[cloud-agent] could not read the work item creator',
+      '[cloud-agent] could not read the work item creator and title',
       err instanceof Error ? err.message : String(err),
     );
-    return null;
+    return { name: null, email: null, title: null };
   }
 }
 
@@ -659,24 +678,25 @@ async function persistQueuedRun(
   const lockKey = `cloud-agent:${input.project}:${input.workItemId}:${input.userId}`;
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
-  const workItemTitle = input.workItemTitle?.trim() || `wi-${input.workItemId}`;
   const delivery = skillConfig.id
     ? await getCloudAgentDelivery(skillConfig.id).catch(() => ({ targetBranch: null, requiredReviewers: [] as string[] }))
     : { targetBranch: null, requiredReviewers: [] as string[] };
   const targetBranch = delivery.targetBranch || skillConfig.skillBranch;
+  const facts = await readWorkItemFacts(input.project, input.workItemId);
+  const resolvedTitle = input.workItemTitle?.trim() || facts.title;
+  const workItemTitle = resolvedTitle || `wi-${input.workItemId}`;
   const branchName = input.item.workItemType?.trim()
     ? cloudAgentBranchName(input.workItemId, workItemTitle, input.item.workItemType)
     : implementationBranchName(input.workItemId, workItemTitle);
-  const creator = await readWorkItemCreator(input.project, input.workItemId);
   const basePrompt = await deps.buildPrompt({
     project: input.project,
     workItemId: input.workItemId,
-    workItemTitle,
+    ...(resolvedTitle ? { workItemTitle: resolvedTitle } : {}),
     workItemType: input.item.workItemType,
     branchName,
     targetBranch,
-    createdByName: creator?.name,
-    createdByEmail: creator?.email,
+    createdByName: facts.name,
+    createdByEmail: facts.email,
   });
   const development = resolveDevelopmentSettings(skillConfig);
   const model = input.model?.trim() || development.model;
@@ -748,7 +768,8 @@ async function persistQueuedRun(
           repository: skillConfig.skillRepo,
           cloudAgent: {
             workItemId: input.workItemId,
-            workItemTitle: input.workItemTitle,
+            ...(resolvedTitle ? { workItemTitle: resolvedTitle } : {}),
+            ...(input.item.workItemType?.trim() ? { workItemType: input.item.workItemType.trim() } : {}),
             branchName,
             baseBranch: targetBranch,
             ...(delivery.requiredReviewers.length ? { requiredReviewers: delivery.requiredReviewers } : {}),
@@ -1123,15 +1144,13 @@ export async function reconcileRunningCloudAgentRuns(
           cursorRunId: row.dispatchMessageId,
         });
         const snapshot = backgroundSnapshot(row.executionSnapshot);
-        const prUrl = await pullRequestForFinishedRun(observed, {
+        const prUrl = await pullRequestForRun(observed, {
           project: row.projectId,
           repo: snapshot?.repository ?? null,
           workItemId: snapshot?.cloudAgent?.workItemId ?? null,
           sourceBranch: metaBranchName(row.executionSnapshot) ?? observed.branchName ?? null,
         }, deps);
-        const mapped = observed.agentFinished && prUrl
-          ? 'completed'
-          : mapObservedStatus(observed.status);
+        const mapped = prUrl ? 'completed' : mapObservedStatus(observed.status);
         if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
         if (
           awaitingCloudAgentPullRequest({
@@ -1254,6 +1273,8 @@ async function writeWorkItemPullRequest(
     repository: string;
     prUrl: string;
     workItemId: number;
+    workItemTitle?: string | null;
+    workItemType?: string | null;
     runId: string;
     sessionId: string;
     titleBranch?: string | null;
@@ -1279,6 +1300,8 @@ async function writeWorkItemPullRequest(
         repo: input.repository,
         prUrl: input.prUrl,
         workItemId: input.workItemId,
+        workItemTitle: input.workItemTitle,
+        workItemType: input.workItemType,
         sourceBranch: input.titleBranch,
         titleBranch: input.titleBranch,
         targetBranch: input.targetBranch,
@@ -1465,6 +1488,8 @@ export async function applyCloudAgentCompletion(input: {
       repository,
       prUrl,
       workItemId: session.workItemId,
+      workItemTitle: terminalSnapshot?.cloudAgent?.workItemTitle ?? null,
+      workItemType: terminalSnapshot?.cloudAgent?.workItemType ?? null,
       runId: input.runId,
       sessionId,
       titleBranch: terminalSnapshot?.cloudAgent?.branchName ?? session.branchName ?? null,
@@ -1519,15 +1544,13 @@ export async function getCloudAgentRunStatus(
         cursorRunId: run.dispatchMessageId,
       });
       const statusSnapshot = backgroundSnapshot(run.executionSnapshot);
-      const prUrl = await pullRequestForFinishedRun(observed, {
+      const prUrl = await pullRequestForRun(observed, {
         project: session.project,
         repo: statusSnapshot?.repository ?? null,
         workItemId: statusSnapshot?.cloudAgent?.workItemId ?? session.workItemId ?? null,
         sourceBranch: metaBranchName(run.executionSnapshot) ?? observed.branchName ?? null,
       }, deps);
-      const mapped = observed.agentFinished && prUrl
-        ? 'completed'
-        : mapObservedStatus(observed.status);
+      const mapped = prUrl ? 'completed' : mapObservedStatus(observed.status);
       const canonicalBranch = metaBranchName(run.executionSnapshot);
       const pushedBranch = observed.noChanges ? null : observed.branchName ?? run.cloudBranchName;
       if (canonicalBranch && pushedBranch && pushedBranch !== canonicalBranch) {

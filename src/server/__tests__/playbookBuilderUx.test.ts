@@ -131,11 +131,18 @@ describe('runEventActivityEntries', () => {
         event: { type: 'tool_call', toolName: 'Shell', input: { keys: ['command'], target: 'az account show' } },
         at: 't3',
       },
+      {
+        eventId: '4',
+        detail: null,
+        event: { type: 'token', text: 'The affected request fails in production.' },
+        at: 't4',
+      },
     ]);
     expect(entries.map((entry) => [entry.kind, entry.title, entry.detail])).toEqual([
       ['status', 'preparing', undefined],
       ['tool', 'Shell', 'az account show'],
       ['tool', 'Shell', 'az account show'],
+      ['message', 'Agent', 'The affected request fails in production.'],
     ]);
   });
 });
