@@ -29,6 +29,7 @@ import {
 import styles from './AdminProjectSettings.module.css';
 import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
 import { BuildProfileSection } from './BuildProfileSection';
+import { DesignPreferenceProfileSection } from './DesignPreferenceProfileSection';
 import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
 import type { UserWithRoles } from '../../shared/types/rbac';
 
@@ -67,6 +68,7 @@ const BranchCombobox: React.FC<BranchComboboxProps> = ({ value, branches, isLoad
     if (open) {
       setTimeout(() => searchRef.current?.focus(), 0);
       const selectedIdx = branches.indexOf(value);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- highlight the current branch when the menu opens
       if (selectedIdx >= 0) setActiveIdx(selectedIdx);
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1677,6 +1679,26 @@ const BuildProfileAccordion: React.FC<BuildProfileAccordionProps> = ({ expanded,
   // @feature-flag:build-from-prompt end
 };
 
+const DesignPreferenceProfileAccordion: React.FC<{
+  settingsId: string;
+  project: string;
+  expanded: boolean;
+  onToggle: () => void;
+}> = ({ settingsId, project, expanded, onToggle }) => {
+  const enabled = useFeatureFlag(BUILD_FROM_PROMPT_FLAG, project);
+  if (!enabled) return null;
+  return (
+    <AccordionSection
+      title="Design Preferences"
+      hint="Project identity and visual defaults for Build"
+      expanded={expanded}
+      onToggle={onToggle}
+    >
+      <DesignPreferenceProfileSection settingsId={settingsId} project={project} />
+    </AccordionSection>
+  );
+};
+
 const RepoCheckoutControls: React.FC<RepoCheckoutControlsProps & { project: string }> = ({
   config,
   project,
@@ -1731,6 +1753,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     pills: false,
     mcpPills: false,
     buildProfile: false,
+    designPreference: false,
   });
 
   // Optional pipeline stages start collapsed; core stages start open
@@ -3374,6 +3397,13 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
               users={allUsers}
               skillsLoading={isLoadingSkills || !edit.skillRepo}
               modelsLoading={isLoadingModels}
+            />
+
+            <DesignPreferenceProfileAccordion
+              settingsId={edit.id}
+              project={edit.project || selectedProject}
+              expanded={expandedSections.designPreference}
+              onToggle={() => toggleSection('designPreference')}
             />
 
             {formError && <p className={styles.formError}>{formError}</p>}

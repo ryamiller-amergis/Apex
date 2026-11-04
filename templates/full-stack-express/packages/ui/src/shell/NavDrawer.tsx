@@ -4,7 +4,9 @@ import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
+import type { ReactNode } from 'react';
 import { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router';
 import { testId } from '../testing/testId.js';
@@ -15,6 +17,7 @@ export interface NavItem {
   id: string;
   label: string;
   to: string;
+  icon?: ReactNode;
 }
 
 export const DRAWER_ID = 'app-shell-drawer';
@@ -59,6 +62,9 @@ const NavList: React.FC<NavListProps> = ({
               },
             }}
           >
+            {item.icon ? (
+              <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
+            ) : null}
             <ListItemText
               primary={item.label}
               slotProps={{ primary: { sx: { fontWeight: 'inherit' } } }}

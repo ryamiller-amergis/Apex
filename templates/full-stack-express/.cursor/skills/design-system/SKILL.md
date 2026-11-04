@@ -10,7 +10,7 @@ Always read this skill alongside `.cursor/skills/ui-standards/SKILL.md`, `docs/d
 ## Component Library (`@project-scope/ui` & `@mui/material`)
 
 - Import shared layout, request-state components, tokens, and `testId` from `@project-scope/ui` (`packages/ui/src/index.ts`):
-  - **Layout**: `AppShell` (`appName`, `navItems`, `headerActions`, `children`), `NavItem` (`id`, `label`, `to`).
+  - **Layout**: `AppShell` (`appName`, `navItems`, `headerActions`, `children`), `NavItem` (`id`, `label`, `to`, optional MUI `icon`), `PageHeader`, `ContentSurface`.
   - **Request states**:
     - `LoadingState` (`label`, `variant`: `'page' | 'inline'`, `testId`) — announces with `role="status"`.
     - `EmptyState` (`title`, `description`, `action`: `{ label, onClick }`) — announces with `role="status"`.
@@ -18,7 +18,7 @@ Always read this skill alongside `.cursor/skills/ui-standards/SKILL.md`, `docs/d
     - `AppErrorBoundary` (`children`, `onError`, `resetKeys`).
   - **Theme & colour mode**: `AppThemeProvider`, `useColorMode`, `createAppTheme`, `COLOR_MODE_STORAGE_KEY`.
   - **Test IDs**: `testId(scope, ...parts)` and `TEST_ID_PATTERN` (`{scope}-{element}[-{qualifier}]`).
-- Use theme-styled `@mui/material` primitives (`Button`, `TextField`, `Alert`, `Box`, `Stack`, `Typography`, `Paper`, `Container`) for form controls and layout. Do not add a second component library or create one-off styled components with hard-coded colours or spacing.
+- Use theme-styled `@mui/material` primitives (`Button`, `TextField`, `Alert`, `Box`, `Stack`, `Typography`, `Paper`, `Container`) for form controls and layout. Prefer `@mui/icons-material` for navigation and actions when it improves scanability. Use `@mui/x-date-pickers` with `dayjs` for calendar or date-range inputs instead of hand-rolling grids. Do not add a second component library or create one-off styled components with hard-coded colours or spacing.
 
 ## Tokens (`packages/ui/src/tokens/`)
 

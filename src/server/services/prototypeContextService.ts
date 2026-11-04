@@ -89,8 +89,20 @@ export async function resolvePrototypeContext(
   const orgUrl = process.env.ADO_ORG;
   const pat = process.env.ADO_PAT;
 
-  // Derive the app name from the project identifier (last path segment, title-cased).
-  const appName = project.split(/[/\\]/).pop()?.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) ?? project;
+  let appName =
+    project.split(/[/\\]/).pop()?.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) ??
+    project;
+  if (cfg?.id) {
+    const { getApprovedDesignPreferenceProfile } = await import('./designPreferenceProfileService');
+    const profile = await getApprovedDesignPreferenceProfile(cfg.id);
+    if (profile?.profile.appName?.trim()) {
+      appName = profile.profile.appName.trim();
+    } else if (profile?.profile.productName?.trim()) {
+      appName = profile.profile.productName.trim();
+    } else if (cfg.friendlyName?.trim()) {
+      appName = cfg.friendlyName.trim();
+    }
+  }
 
   // Parse repo coordinates from skillRepo using the Project Settings provider
   // (GitHub `org/repo` vs Azure DevOps `ADOProject/RepoName` or `RepoName`).

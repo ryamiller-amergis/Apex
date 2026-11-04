@@ -13,6 +13,7 @@ import {
   type BuildTaskRole,
 } from '../../../shared/types/build';
 import type { BuildLaunchSnapshot } from '../../../shared/types/buildLaunchSnapshot';
+import { formatVisualBriefForPrompt, type BuildVisualBrief } from '../../../shared/buildVisualBrief';
 import { db } from '../../db/drizzle';
 import { buildRevisions, buildRuns, buildTasks } from '../../db/schema';
 import {
@@ -51,6 +52,7 @@ export interface TaskPromptEnvelopeInput {
     codeMap: { path: string; contentHash: string };
   };
   skillPath: string;
+  visualBriefSection?: string | null;
 }
 
 export function buildTaskExecutionPrompt(
@@ -105,6 +107,14 @@ export function buildTaskExecutionPrompt(
     'Add or update automated tests, run the quality commands below, and repair failures before finishing.',
     'Apex will open the pull request after verification; do not open or complete one yourself.',
     '',
+    '## Runtime',
+    'Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type-check, lint, or test command:',
+    '1. Read `package.json` `engines.node` and `.nvmrc`.',
+    '2. If `node -v` does not satisfy that range, install the required major version and put its `node`, `npm`, and `pnpm` first on `PATH`, ahead of `/exec-daemon`.',
+    '3. Install dependencies with the repository package manager.',
+    '4. Never lower `engines.node` to silence an engine error.',
+    '5. If the required Node version cannot be installed, stop and say which version the repository requires and which version is installed. Do not commit a partial feature.',
+    '',
     '## Execution Envelope',
     `- Build Run ID: \`${input.buildRunId}\``,
     `- Revision: \`${input.revisionNumber}\``,
@@ -141,6 +151,7 @@ export function buildTaskExecutionPrompt(
     `- codingRules: \`${input.standards.codingRules.path}\` (sha256: \`${input.standards.codingRules.contentHash}\`)`,
     `- codeMap: \`${input.standards.codeMap.path}\` (sha256: \`${input.standards.codeMap.contentHash}\`)`,
     '',
+    ...(input.visualBriefSection ? [input.visualBriefSection, ''] : []),
     'Commit your work to the target branch and end your final message with the required fenced `apex-evidence` JSON block.',
   ].join('\n');
 }
@@ -244,6 +255,13 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
     },
   };
 
+  const planRecord = revRow.plan as Record<string, unknown> | null;
+  const visualBrief = planRecord?.visualBrief as BuildVisualBrief | null;
+  const visualBriefSection =
+    visualBrief && typeof visualBrief === 'object'
+      ? formatVisualBriefForPrompt(visualBrief)
+      : null;
+
   const promptText = buildTaskExecutionPrompt({
     buildRunId: runRow.id,
     revisionNumber: revRow.revisionNumber,
@@ -262,6 +280,7 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
     qualityManifest: runRow.qualityManifestSnapshot,
     standards,
     skillPath: roleSkill.path,
+    visualBriefSection,
   });
 
   const container =

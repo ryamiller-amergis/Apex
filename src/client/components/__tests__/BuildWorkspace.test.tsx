@@ -513,7 +513,7 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     );
     expect(
       screen.getByTestId('build-workspace-stage-headline')
-    ).toHaveTextContent('Preparing your repository and build instructions');
+    ).toHaveTextContent('Preparing your build');
     expect(
       screen.queryByTestId('build-workspace-task-pill-t-impl-1')
     ).not.toBeInTheDocument();

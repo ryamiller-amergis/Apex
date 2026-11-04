@@ -11,6 +11,7 @@ import { AzureDevOpsService } from '../azureDevOps';
 import { appendBuildEvent } from '../buildEventsService';
 import { buildContextNotesPath } from '../buildPlanning';
 import { dispatchNext } from './dispatchWiring';
+import { prepareVisualContract } from '../buildVisualBriefService';
 
 const SINGLE_AGENT_TASK_KEY = 'build-feature';
 
@@ -152,10 +153,20 @@ export async function startSingleAgentBuild(
     integrationBranch,
     existingBaseCommit: row.run.baseCommit,
   });
+
+  const visualContract = await prepareVisualContract({
+    buildRunId: row.run.id,
+    project: row.run.project,
+    prompt: row.run.prompt,
+    requirements: row.revision.requirements ?? [],
+    riskDecisions: row.revision.riskDecisions ?? [],
+    skillSettingsId: row.run.skillSettingsId,
+  });
+
   const plan = createSingleAgentPlan(
     row.run.id,
-    row.revision.requirements ?? [],
-    row.revision.riskDecisions ?? []
+    visualContract.requirements,
+    row.revision.riskDecisions ?? [],
   );
   const now = new Date().toISOString();
 
@@ -182,7 +193,12 @@ export async function startSingleAgentBuild(
       .update(buildRevisions)
       .set({
         classification: 'small',
-        plan: plan as unknown as Record<string, unknown>,
+        requirements: visualContract.requirements,
+        plan: {
+          ...(plan as unknown as Record<string, unknown>),
+          visualBrief: visualContract.brief,
+          taskDomain: visualContract.domain,
+        },
         planValidation: { status: 'pass', violations: [] },
         contextNotesPath: plan.contextNotesPath,
         updatedAt: now,
@@ -256,7 +272,8 @@ export async function startSingleAgentBuild(
     detail: {
       executionMode: 'single_agent',
       classification: 'small',
-      requirementIds: (row.revision.requirements ?? [])
+      taskDomain: visualContract.domain,
+      requirementIds: visualContract.requirements
         .filter((requirement) => !requirement.retired)
         .map((requirement) => requirement.id),
       riskDecisionIds: (row.revision.riskDecisions ?? []).map(

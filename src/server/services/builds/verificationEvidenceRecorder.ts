@@ -25,6 +25,9 @@ import type {
 } from '../../../shared/types/build';
 import { db } from '../../db/drizzle';
 import { buildRevisions, buildRuns, buildTasks, buildVerificationRows } from '../../db/schema';
+import { describeRuntimeFailure, missingChecksMessage } from '../../../shared/buildRuntimeFailure';
+import type { BuildVisualBrief } from '../../../shared/buildVisualBrief';
+import { evaluateVisualQualityFromEvidence } from '../buildVisualVerificationService';
 import { appendBuildEvent, type AppendBuildEventInput } from '../buildEventsService';
 import { redactText, type KnownSecretSource } from '../buildRedactionService';
 import {
@@ -337,6 +340,7 @@ export async function recordTaskEvidence(
 
   let decision: DecideTaskDoneResult;
   let standardsReview: { completed: boolean; findings: string[] } | null = null;
+  let visualGateFindings: string[] = [];
 
   if (!parsed.ok) {
     const activeSpecs = ownedIds.filter((spec) => !spec.retired);
@@ -374,6 +378,30 @@ export async function recordTaskEvidence(
       manifest: run.qualityManifestSnapshot,
       ownedFiles,
     });
+
+    if (decision.outcome === 'done') {
+      const planRecord = revision.plan as Record<string, unknown> | null;
+      const visualBrief = (planRecord?.visualBrief ?? null) as BuildVisualBrief | null;
+      const visual = evaluateVisualQualityFromEvidence({
+        visualBrief,
+        block: parsed.block,
+      });
+      if (!visual.passed) {
+        visualGateFindings = visual.findings;
+        decision = {
+          ...decision,
+          outcome: 'refused',
+          mayReportDone: false,
+          violations: [
+            ...decision.violations,
+            ...visual.findings.map((_finding) => ({
+              code: 'check_failed' as const,
+              requirementId: null,
+            })),
+          ],
+        };
+      }
+    }
   }
 
   // Upload redacted Blob evidence before starting the DB transaction
@@ -511,11 +539,16 @@ export async function recordTaskEvidence(
       buildRevisionId: revision.id,
       eventType: 'verification.refused',
       severity: 'warn',
-      message: `Verification evidence for task ${task.taskKey} was refused.`,
+      message:
+        visualGateFindings.length > 0
+          ? `Visual quality checks failed: ${visualGateFindings.join(' ')}`
+          : describeRuntimeFailure(input.message) ??
+            missingChecksMessage(decision.violations.map((violation) => violation.requirementId)),
       detail: {
         taskKey: task.taskKey,
         attemptNumber: input.attemptNumber,
         violations: decision.violations,
+        visualFindings: visualGateFindings.length > 0 ? visualGateFindings : undefined,
       },
       correlation,
       dedupeKey: outcomeDedupeKey,

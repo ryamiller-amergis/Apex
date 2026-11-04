@@ -21,6 +21,10 @@ import {
   BuildRevisionError,
   defaultBuildRevisionService,
 } from '../services/buildRevisionService';
+import {
+  DesignPreferenceProfileError,
+  proposeFromBuildFeedback,
+} from '../services/designPreferenceProfileService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import {
   listBuildRepositories,
@@ -558,6 +562,55 @@ router.post(
       next(error);
     }
   }
+);
+
+router.post(
+  '/:id/design-preference-proposal',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:run'),
+  async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const project = resolveRequestProject(req) as string;
+      const row = await loadBuild(req.params.id);
+      if (!row || row.project !== project) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      if (!row.skillSettingsId) {
+        res.status(400).json({
+          error: 'This build has no repository configuration for design preferences.',
+        });
+        return;
+      }
+      const feedback =
+        typeof (req.body as { feedback?: unknown })?.feedback === 'string'
+          ? (req.body as { feedback: string }).feedback.trim()
+          : '';
+      if (!feedback) {
+        res.status(400).json({ error: 'Feedback is required.' });
+        return;
+      }
+      const proposal = await proposeFromBuildFeedback({
+        settingsId: row.skillSettingsId,
+        buildRunId: row.id,
+        feedback,
+        actorOid: userId,
+      });
+      res.status(201).json({ proposal });
+    } catch (error) {
+      if (error instanceof DesignPreferenceProfileError) {
+        res.status(error.kind === 'not_found' ? 404 : 400).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
+  },
 );
 
 router.use(buildRunControlsRouter);

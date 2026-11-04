@@ -8,7 +8,6 @@ import type { BuildSuspendReason } from '../../../shared/types/build';
 import { db } from '../../db/drizzle';
 import { buildRuns, buildTasks, playbookStepRuns } from '../../db/schema';
 import { markTerminal, requestCancel } from '../agentRunLifecycleService';
-import { AzureDevOpsService } from '../azureDevOps';
 import { mergeTaskBranch } from '../build/buildMergeService';
 import { applyMergeOutcome } from '../build/mergeOutcome';
 import { createMayReportDone } from '../builds/buildVerificationApply';
@@ -84,34 +83,7 @@ const defaultMayReportDone: CompletionDeps['mayReportDone'] = async (input) => {
     }
   }
 
-  if (await baseMayReportDone(input)) return true;
-
-  // Fallback for POC runs: if the agent pushed its task branch to Azure DevOps, allow merge
-  try {
-    const [headTask] = await db
-      .select({ branchName: buildTasks.branchName })
-      .from(buildTasks)
-      .where(eq(buildTasks.id, input.taskIds[0]))
-      .limit(1);
-    const [runRow] = await db
-      .select({ project: buildRuns.project, repository: buildRuns.repository })
-      .from(buildRuns)
-      .where(eq(buildRuns.id, input.buildRunId))
-      .limit(1);
-    if (headTask?.branchName && runRow) {
-      const ado = new AzureDevOpsService(runRow.project);
-      const branchHead = await ado.getBranchHeadCommit(
-        runRow.repository,
-        runRow.project,
-        headTask.branchName
-      );
-      if (branchHead) return true;
-    }
-  } catch {
-    // Fall through
-  }
-
-  return false;
+  return baseMayReportDone(input);
 };
 
 const defaultPorts: BuildDispatchPorts = {
@@ -237,13 +209,15 @@ async function reconcileAcceptedBuilds(): Promise<void> {
       eq(playbookStepRuns.id, buildRuns.playbookStepRunId)
     )
     .where(
-      and(
-        eq(buildRuns.status, 'accepted'),
-        or(
-          isNull(buildRuns.pullRequestUrl),
-          and(
-            isNotNull(buildRuns.playbookStepRunId),
-            eq(playbookStepRuns.status, 'suspended')
+      or(
+        and(
+          eq(buildRuns.status, 'accepted'),
+          or(
+            isNull(buildRuns.pullRequestUrl),
+            and(
+              isNotNull(buildRuns.playbookStepRunId),
+              eq(playbookStepRuns.status, 'suspended')
+            )
           )
         )
       )

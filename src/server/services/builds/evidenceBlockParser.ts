@@ -63,6 +63,13 @@ export interface EvidenceStandardsReview {
   findings: string[];
 }
 
+export interface EvidenceVisualReview {
+  completed: boolean;
+  findings: string[];
+  screenshotPaths: string[];
+  componentReuseRationale: string | null;
+}
+
 export interface EvidenceEscalation {
   reason: string;
   planPath: string;
@@ -75,6 +82,7 @@ export interface EvidenceBlock {
   entries: EvidenceEntry[];
   checks: EvidenceChecks;
   standardsReview: EvidenceStandardsReview | null;
+  visualReview: EvidenceVisualReview | null;
   escalation: EvidenceEscalation | null;
 }
 
@@ -306,6 +314,40 @@ function parseStandardsReview(
   };
 }
 
+function parseVisualReview(
+  raw: unknown,
+): { valid: true; value: EvidenceVisualReview | null } | { valid: false } {
+  if (raw === undefined || raw === null) {
+    return { valid: true, value: null };
+  }
+  if (
+    !isPlainObject(raw) ||
+    typeof raw.completed !== 'boolean' ||
+    !isStringArray(raw.findings) ||
+    !isStringArray(raw.screenshotPaths)
+  ) {
+    return { valid: false };
+  }
+  const rationale =
+    raw.componentReuseRationale === undefined || raw.componentReuseRationale === null
+      ? null
+      : typeof raw.componentReuseRationale === 'string'
+        ? raw.componentReuseRationale
+        : null;
+  if (raw.componentReuseRationale != null && rationale === null) {
+    return { valid: false };
+  }
+  return {
+    valid: true,
+    value: {
+      completed: raw.completed,
+      findings: raw.findings,
+      screenshotPaths: raw.screenshotPaths,
+      componentReuseRationale: rationale,
+    },
+  };
+}
+
 function parseEscalation(
   raw: unknown,
 ): { valid: true; value: EvidenceEscalation | null } | { valid: false } {
@@ -396,6 +438,11 @@ export function parseEvidenceBlock(message: string): EvidenceParseResult {
     return { ok: false, code: 'invalid_shape' };
   }
 
+  const visualReview = parseVisualReview(parsed.visualReview);
+  if (!visualReview.valid) {
+    return { ok: false, code: 'invalid_shape' };
+  }
+
   const escalation = parseEscalation(parsed.escalation);
   if (!escalation.valid) {
     return { ok: false, code: 'invalid_shape' };
@@ -410,6 +457,7 @@ export function parseEvidenceBlock(message: string): EvidenceParseResult {
       entries,
       checks,
       standardsReview: standardsReview.value,
+      visualReview: visualReview.value,
       escalation: escalation.value,
     },
   };

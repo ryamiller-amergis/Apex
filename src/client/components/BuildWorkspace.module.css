@@ -123,6 +123,17 @@
     var(--success-color, #12b76a) 14%,
     var(--bg-secondary)
   );
+  color: var(--text-primary);
+}
+
+.statusChipFailed {
+  border-color: var(--danger-color, #b42318);
+  background: color-mix(
+    in srgb,
+    var(--danger-color, #b42318) 12%,
+    var(--bg-secondary)
+  );
+  color: var(--text-primary);
 }
 
 .split {
@@ -442,6 +453,14 @@
   gap: 8px;
 }
 
+.rememberPreference {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
 .composerEmbed {
   padding: 0;
   border-top: 0;
@@ -626,6 +645,11 @@
 
 .stepperItemDone {
   opacity: 0.85;
+}
+
+.stepperItemFailed {
+  border-color: var(--danger-color, #b42318);
+  font-weight: 600;
 }
 
 .metricsRow {

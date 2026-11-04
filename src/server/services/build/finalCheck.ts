@@ -363,12 +363,12 @@ export async function markValidated(
 
     targetBuildRunId = rev.buildRunId;
     const now = new Date().toISOString();
-    // The Build POC ends at an opened PR. Do not claim a deployment or preview
-    // succeeded when no deployment pipeline supplied a real preview URL.
+    // Checks passed. Stay on `checking` until the pull request URL and end
+    // time are stored together. `accepted` is rejected without both.
     await tx
       .update(buildRuns)
       .set({
-        status: 'accepted',
+        status: 'checking',
         acceptedRevisionNumber: rev.revisionNumber,
         updatedAt: now,
       })
@@ -386,7 +386,7 @@ export async function markValidated(
   });
 
   if (targetBuildRunId && process.env.NODE_ENV !== 'test') {
-    void autoOpenPullRequestForPoc(targetBuildRunId);
+    // Pull request creation runs only after preview acceptance (see acceptBuild).
   }
 }
 

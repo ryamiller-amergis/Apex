@@ -128,9 +128,7 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
             buildRunId,
             buildRevisionId: revisionId,
             eventType: DISPATCH_EVENT_TYPES.taskLaunched,
-            message: unit.mode === 'chain'
-              ? `Tasks ${unit.taskKeys.join(', ')} started in one agent.`
-              : `Task ${unit.headKey} started.`,
+            message: 'Building and testing the feature.',
             detail: { taskKeys: unit.taskKeys, attempt: claimed.attempt },
             correlation: { kind: 'agent_run', id: result.agentRunId },
             dedupeKey: `launched:${result.agentRunId}`,

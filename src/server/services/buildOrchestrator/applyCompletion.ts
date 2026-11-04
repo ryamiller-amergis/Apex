@@ -117,7 +117,7 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
         buildRunId: run.id,
         buildRevisionId: context.revisionId,
         eventType: DISPATCH_EVENT_TYPES.taskCompleted,
-        message: `Task ${context.task.key} finished and is waiting to merge.`,
+        message: 'The feature passed its checks.',
         detail: { taskKeys: members.map((task) => task.key) },
         correlation: { kind: 'agent_run', id: agentRunId },
         dedupeKey,

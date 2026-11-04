@@ -50,6 +50,10 @@ The per-task envelope supplies these inputs. Read the repository files before th
 | IMP-R06 | Never put a hard-coded secret, bearer token, connection string, or personal identity value in code, tests, commit messages, or evidence output. Use synthetic `example.test` values.                 | Redaction & evidence check   |
 | IMP-R07 | On the `small` path, if the feature requires more than two tasks, a database migration, or a high-risk decision, keep the committed red tests on the branch, write the full plan to `planPath`, and escalate. | Small-path escalation check |
 
+## Runtime
+
+Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type-check, lint, or test command, read `package.json` `engines.node` and `.nvmrc`. If `node -v` does not satisfy that range, install the required major version and put its `node`, `npm`, and `pnpm` first on `PATH`, ahead of `/exec-daemon`. Then install dependencies. Never lower `engines.node` to silence an engine error. If the required Node version cannot be installed, stop and say which version the repository requires and which version is installed. Do not commit a partial feature.
+
 ## Procedure
 
 1. **Search and load domain skills before creating**:
@@ -73,7 +77,12 @@ The per-task envelope supplies these inputs. Read the repository files before th
 6. **Review against the standards contract**:
    - Read the frozen standards contract files (design-system file, coding rules, and code map) and check the diff against [standards-review.md](../build-final-check/standards-review.md).
    - Fix every finding before finishing, then set `standardsReview: { "completed": true, "findings": [] }`.
-7. **Emit the `apex-evidence` block**:
+7. **Visual self-review (UI work)**:
+   - Render the changed screen at phone and desktop widths in light and dark modes.
+   - Add Playwright visual snapshot tests for the primary route and reference them in evidence.
+   - Prefer `PageHeader`, `ContentSurface`, catalog components, and `@mui/x-date-pickers` when appropriate; record reuse rationale.
+   - Set `visualReview: { "completed": true, "findings": [], "screenshotPaths": ["..."], "componentReuseRationale": "..." }`.
+8. **Emit the `apex-evidence` block**:
    - End your final message with one fenced `apex-evidence` JSON block matching version `1`.
    - Keep each `red.output` and `green.output` string to at most the last 100 KB.
 
@@ -189,6 +198,12 @@ When running on the `small` path, if you find that the feature requires more tha
   "standardsReview": {
     "completed": true,
     "findings": []
+  },
+  "visualReview": {
+    "completed": true,
+    "findings": [],
+    "screenshotPaths": ["apps/web/e2e/__screenshots__/home-light-desktop.png"],
+    "componentReuseRationale": "Used PageHeader and ContentSurface from @project-scope/ui."
   },
   "escalation": null
 }

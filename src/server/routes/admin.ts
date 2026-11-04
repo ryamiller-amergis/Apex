@@ -12,6 +12,8 @@ import {
 } from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
 import * as buildProfileService from '../services/buildProfileService';
+import * as designPreferenceProfileService from '../services/designPreferenceProfileService';
+import { parseDesignPreferenceProfile } from '../../shared/designPreferenceProfileSchema';
 import { isBuildFromPromptEnabled } from '../services/buildAccessService';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { parseBuildProfile } from '../../shared/buildProfileSchema';
@@ -695,6 +697,121 @@ router.put('/project-settings/:id/build-profile', async (req: Request, res: Resp
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+router.get('/project-settings/:id/design-preference-profile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await projectSettingsService.getSkillConfigById(req.params.id);
+    if (!row) {
+      res.status(404).json({ error: 'Repository configuration not found' });
+      return;
+    }
+    if (!(await canAdministerRowProject(req, row.project))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const profile = await designPreferenceProfileService.getApprovedDesignPreferenceProfile(row.id);
+    const proposals = await designPreferenceProfileService.listPendingProposals(row.id);
+    res.json({ profile, proposals });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/project-settings/:id/design-preference-profile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await projectSettingsService.getSkillConfigById(req.params.id);
+    if (!row) {
+      res.status(404).json({ error: 'Repository configuration not found' });
+      return;
+    }
+    if (!(await canAdministerRowProject(req, row.project))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid ?? null;
+    const parsed = parseDesignPreferenceProfile(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: 'validation_failed', fieldErrors: parsed.fieldErrors });
+      return;
+    }
+    const saved = await designPreferenceProfileService.saveApprovedDesignPreferenceProfile({
+      settingsId: row.id,
+      profile: parsed.profile,
+      actorOid: oid,
+    });
+    res.json(saved);
+  } catch (err) {
+    if (err instanceof designPreferenceProfileService.DesignPreferenceProfileError) {
+      if (err.kind === 'not_found') {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      res.status(400).json({ error: 'validation_failed', fieldErrors: err.fieldErrors });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post(
+  '/project-settings/:id/design-preference-proposals/:proposalId/accept',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const row = await projectSettingsService.getSkillConfigById(req.params.id);
+      if (!row) {
+        res.status(404).json({ error: 'Repository configuration not found' });
+        return;
+      }
+      if (!(await canAdministerRowProject(req, row.project))) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+      const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid ?? null;
+      const saved = await designPreferenceProfileService.acceptDesignPreferenceProposal({
+        settingsId: row.id,
+        proposalId: req.params.proposalId,
+        actorOid: oid,
+      });
+      res.json(saved);
+    } catch (err) {
+      if (err instanceof designPreferenceProfileService.DesignPreferenceProfileError) {
+        res.status(err.kind === 'not_found' ? 404 : 409).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/project-settings/:id/design-preference-proposals/:proposalId/reject',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const row = await projectSettingsService.getSkillConfigById(req.params.id);
+      if (!row) {
+        res.status(404).json({ error: 'Repository configuration not found' });
+        return;
+      }
+      if (!(await canAdministerRowProject(req, row.project))) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+      const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid ?? null;
+      await designPreferenceProfileService.rejectDesignPreferenceProposal({
+        settingsId: row.id,
+        proposalId: req.params.proposalId,
+        actorOid: oid,
+      });
+      res.status(204).end();
+    } catch (err) {
+      if (err instanceof designPreferenceProfileService.DesignPreferenceProfileError) {
+        res.status(err.kind === 'not_found' ? 404 : 409).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+);
 
 // ── Available Approver Pool (grouped) ─────────────────────────────────────
 router.get('/project-settings/:id/approver-pool/:documentType', async (req: Request, res: Response): Promise<void> => {

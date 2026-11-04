@@ -128,6 +128,11 @@ import type {
 } from '../../shared/types/build';
 import type { BuildLaunchSnapshot } from '../../shared/types/buildLaunchSnapshot';
 import type {
+  DesignPreferenceProfile,
+  DesignPreferenceProposalSource,
+  DesignPreferenceProposalStatus,
+} from '../../shared/types/designPreferenceProfile';
+import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
@@ -1234,8 +1239,13 @@ export const projectSkillWorkflowSettings = pgTable('project_skill_workflow_sett
   pk: primaryKey({ columns: [t.settingsId, t.workflow] }),
 }));
 
-export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ many }) => ({
+export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ many, one }) => ({
   workflowSettings: many(projectSkillWorkflowSettings),
+  designPreferenceProfile: one(projectDesignPreferenceProfiles, {
+    fields: [projectSkillSettings.id],
+    references: [projectDesignPreferenceProfiles.settingsId],
+  }),
+  designPreferenceProposals: many(projectDesignPreferenceProposals),
 }));
 
 /** Cloud Agent branch target and required reviewers for one repository config. */
@@ -1245,6 +1255,67 @@ export const projectCloudAgentDelivery = pgTable('project_cloud_agent_delivery',
   requiredReviewers: jsonb('required_reviewers').$type<string[]>().notNull().default([]),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+/** User-approved design preferences for Build and prototype generation. */
+export const projectDesignPreferenceProfiles = pgTable('project_design_preference_profiles', {
+  settingsId: uuid('settings_id').primaryKey().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  profile: jsonb('profile').$type<DesignPreferenceProfile>().notNull(),
+  version: integer('version').notNull().default(1),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedBy: text('updated_by'),
+}, (t) => ({
+  profileObjectCheck: check(
+    'project_design_preference_profiles_object_check',
+    sql`jsonb_typeof(${t.profile}) = 'object'`,
+  ),
+}));
+
+export const projectDesignPreferenceProposals = pgTable('project_design_preference_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  proposedProfile: jsonb('proposed_profile').$type<DesignPreferenceProfile>().notNull(),
+  source: text('source').$type<DesignPreferenceProposalSource>().notNull(),
+  sourceRef: text('source_ref'),
+  feedbackExcerpt: text('feedback_excerpt'),
+  status: text('status').$type<DesignPreferenceProposalStatus>().notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  createdBy: text('created_by'),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+  decidedBy: text('decided_by'),
+}, (t) => ({
+  proposedProfileObjectCheck: check(
+    'project_design_preference_proposals_object_check',
+    sql`jsonb_typeof(${t.proposedProfile}) = 'object'`,
+  ),
+  statusCheck: check(
+    'project_design_preference_proposals_status_check',
+    sql`${t.status} IN ('pending', 'approved', 'rejected', 'superseded')`,
+  ),
+  settingsStatusIdx: index('project_design_preference_proposals_settings_status_idx').on(
+    t.settingsId,
+    t.status,
+  ),
+}));
+
+export const projectDesignPreferenceProfilesRelations = relations(
+  projectDesignPreferenceProfiles,
+  ({ one }) => ({
+    settings: one(projectSkillSettings, {
+      fields: [projectDesignPreferenceProfiles.settingsId],
+      references: [projectSkillSettings.id],
+    }),
+  }),
+);
+
+export const projectDesignPreferenceProposalsRelations = relations(
+  projectDesignPreferenceProposals,
+  ({ one }) => ({
+    settings: one(projectSkillSettings, {
+      fields: [projectDesignPreferenceProposals.settingsId],
+      references: [projectSkillSettings.id],
+    }),
+  }),
+);
 
 export const projectSkillWorkflowSettingsRelations = relations(projectSkillWorkflowSettings, ({ one }) => ({
   settings: one(projectSkillSettings, {

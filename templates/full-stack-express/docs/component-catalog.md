@@ -8,7 +8,13 @@ Every public export of `@project-scope/ui`, grouped by purpose. The entry file i
 | --------------- | --------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `AppShell`      | Component | `packages/ui/src/shell/AppShell.tsx`  | Frame every route: skip link, header with the app name and "Dark mode" switch, primary navigation, and the `main` landmark. Props: `appName`, `navItems`, optional `headerActions`, `children` |
 | `AppShellProps` | Type      | `packages/ui/src/shell/AppShell.tsx`  | Props of `AppShell`                                                                                                                                                                            |
-| `NavItem`       | Type      | `packages/ui/src/shell/NavDrawer.tsx` | One navigation entry: a unique, stable `id`, a `label`, and a `to` path. A duplicate `id` throws                                                                                               |
+| `NavItem`       | Type      | `packages/ui/src/shell/NavDrawer.tsx` | One navigation entry: a unique, stable `id`, a `label`, a `to` path, and optional MUI `icon` for the drawer. A duplicate `id` throws                                                           |
+| `PageHeader`    | Component | `packages/ui/src/layout/PageHeader.tsx` | Title, optional subtitle, and right-aligned actions for a route body                                                                                                                         |
+| `PageHeaderProps` | Type    | `packages/ui/src/layout/PageHeader.tsx` | Props of `PageHeader`                                                                                                                                                                        |
+| `ContentSurface` | Component | `packages/ui/src/layout/ContentSurface.tsx` | Padded card-like surface for page content using theme tokens                                                                                                                             |
+| `ContentSurfaceProps` | Type | `packages/ui/src/layout/ContentSurface.tsx` | Props of `ContentSurface`                                                                                                                                                                    |
+
+Optional dependencies for richer UI (install only when a feature needs them): `@mui/icons-material`, `@mui/x-date-pickers`, and `dayjs` in `apps/web`.
 
 ## Request states
 

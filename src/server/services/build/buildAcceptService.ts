@@ -732,16 +732,23 @@ export function createBuildAcceptService(
     async continueAccept(runId: string): Promise<void> {
       await deps.withAcceptLock(runId, async () => {
         const run = await deps.loadRun(runId);
-        if (!run || run.status !== 'accepted') {
-          return;
-        }
+        if (!run) return;
         // The PR is durable before the Playbook step resumes. If reporting the
         // terminal failed previously, a repeat can safely retry only that seam.
         if (run.pullRequestUrl) {
-          await deps.reportBuildTerminal?.({
-            buildRunId: run.id,
-            pullRequestUrl: run.pullRequestUrl,
-          });
+          if (run.status === 'accepted') {
+            await deps.reportBuildTerminal?.({
+              buildRunId: run.id,
+              pullRequestUrl: run.pullRequestUrl,
+            });
+          }
+          return;
+        }
+        if (
+          run.status !== 'accepted' &&
+          run.status !== 'checking' &&
+          run.status !== 'preview_ready'
+        ) {
           return;
         }
 

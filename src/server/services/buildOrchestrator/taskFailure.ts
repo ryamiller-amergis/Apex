@@ -33,7 +33,7 @@ export function createTaskFailurePolicy(deps: {
       buildRevisionId: input.revisionId,
       eventType: DISPATCH_EVENT_TYPES.taskFailed,
       severity: 'error',
-      message: `Task ${input.headKey} failed. ${input.detail}`,
+      message: input.detail,
       detail: { taskKey: input.headKey },
       dedupeKey: input.dedupeKey,
     });
@@ -51,7 +51,7 @@ export function createTaskFailurePolicy(deps: {
       buildRunId: input.buildRunId,
       buildRevisionId: input.revisionId,
       eventType: DISPATCH_EVENT_TYPES.taskRequeued,
-      message: `Task ${input.headKey} will run again.`,
+      message: 'Apex is trying the build again.',
       detail: { taskKey: input.headKey },
       dedupeKey: `${input.dedupeKey}:requeued`,
     });

@@ -46,6 +46,7 @@ import { stripInterviewPhaseMarkers } from '../utils/interviewPhaseProgress';
 import { AgentComposer } from './agentChat';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
+import { buildProgressHeadline, userFacingBuildEvent } from './buildProgressCopy';
 import styles from './BuildWorkspace.module.css';
 
 export interface BuildWorkspaceProps {
@@ -407,7 +408,7 @@ function BuildAgentWork({
 interface PipelineStepItem {
   key: string;
   label: string;
-  state: 'done' | 'active' | 'pending';
+  state: 'done' | 'active' | 'pending' | 'failed';
 }
 
 export function derivePipelineSteps(
@@ -438,21 +439,39 @@ export function derivePipelineSteps(
     activeIndex = 3;
   } else if (hasPullRequest) {
     activeIndex = 4;
+  } else if (
+    status === 'failed' ||
+    status === 'deployment_failed' ||
+    status === 'suspended' ||
+    status === 'needs_developer'
+  ) {
+    activeIndex = 2;
   } else {
     activeIndex = 2;
   }
 
   const allComplete = hasPullRequest;
+  const stopped =
+    status === 'failed' ||
+    status === 'deployment_failed' ||
+    status === 'suspended' ||
+    status === 'needs_developer' ||
+    status === 'cancelled';
 
   return order.map((item, idx) => ({
     key: item.key,
     label: item.label,
-    state:
-      allComplete || idx < activeIndex
-        ? 'done'
-        : idx === activeIndex
-          ? 'active'
-          : 'pending',
+    state: allComplete
+      ? 'done'
+      : stopped && idx === activeIndex
+        ? 'failed'
+        : stopped && idx < activeIndex
+          ? 'done'
+          : idx < activeIndex
+            ? 'done'
+            : idx === activeIndex
+              ? 'active'
+              : 'pending',
   }));
 }
 
@@ -483,6 +502,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const [selectedRepo, setSelectedRepo] = useState('');
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
   const [draft, setDraft] = useState('');
+  const [rememberForProject, setRememberForProject] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -570,6 +590,19 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     Boolean(streamingText) ||
     pendingActivity.length > 0;
   const intakeBusy = isTurnStreaming || confirmIntakeMutation.isPending;
+  const prUrl = detail?.pullRequest?.url ?? null;
+  const hasPr = Boolean(prUrl);
+  const live = isBuildLive(buildStatus);
+  const tasks = detail?.currentRevision?.tasks ?? [];
+  const events = eventsQuery.data?.events ?? [];
+  const progress = buildProgressHeadline({
+    status: buildStatus,
+    events,
+    hasPullRequest: hasPr,
+    // eslint-disable-next-line react-hooks/purity -- staleness uses the time of this render
+    nowMs: Date.now(),
+  });
+  const canAskBuildQuestion = progress.stale && Boolean(chatThreadId);
 
   const handleThreadScroll = () => {
     const el = threadRef.current;
@@ -686,10 +719,31 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       return;
     }
 
+    if (canAskBuildQuestion) {
+      if (!chatThreadId) return;
+      setDraft('');
+      await chatSession.send(
+        `Build status question: ${text}\n\nThe repository build is still running. Answer the requester in plain language using the build request and latest known context. Do not change the build or open a pull request.`,
+        { model: selectedModel },
+      );
+      return;
+    }
+
     if (buildStatus === 'preview_ready' || buildStatus === 'accepted') {
       try {
         setDraft('');
         await revisionMutation.mutateAsync({ feedback: text });
+        if (rememberForProject && buildId) {
+          await fetch(
+            `/api/builds/${encodeURIComponent(buildId)}/design-preference-proposal?project=${encodeURIComponent(project)}`,
+            {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ feedback: text }),
+            },
+          );
+        }
         await buildQuery.refetch();
       } catch (err) {
         setDraft(text);
@@ -699,8 +753,10 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       }
     }
   }, [
+    buildId,
     buildQuery,
     buildStatus,
+    canAskBuildQuestion,
     chatSession,
     chatThreadId,
     draft,
@@ -708,6 +764,8 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     handleConfirmAndBuild,
     isNewMode,
     navigate,
+    project,
+    rememberForProject,
     revisionMutation,
     selectedModel,
     speech,
@@ -734,11 +792,6 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     startBuildMutation.error instanceof BuildApiError
       ? startBuildMutation.error
       : null;
-  const prUrl = detail?.pullRequest?.url ?? null;
-  const hasPr = Boolean(prUrl);
-  const live = isBuildLive(buildStatus);
-  const tasks = detail?.currentRevision?.tasks ?? [];
-  const events = eventsQuery.data?.events ?? [];
   const pipelineSteps = derivePipelineSteps(buildStatus, hasPr);
   const previewUrl = detail?.currentRevision
     ? (detail.revisions.find(
@@ -753,29 +806,47 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     (Boolean(buildId) &&
       buildStatus !== 'intake' &&
       buildStatus !== 'preview_ready' &&
-      buildStatus !== 'accepted');
+      buildStatus !== 'accepted' &&
+      buildStatus !== 'failed' &&
+      buildStatus !== 'cancelled' &&
+      buildStatus !== 'deployment_failed' &&
+      buildStatus !== 'suspended' &&
+      buildStatus !== 'needs_developer');
+
+  const composerDisabled = composerBusy && !canAskBuildQuestion;
 
   const canSend =
     draft.trim().length > 0 &&
     draft.trim().length <= BUILD_PROMPT_MAX_LENGTH &&
-    !composerBusy &&
+    !composerDisabled &&
     (isNewMode ? Boolean(effectiveRepo) : true);
 
   const composerPlaceholder = isNewMode
     ? 'Describe what you want to build (e.g. Add a calendar component to the home page)…'
     : buildStatus === 'intake'
       ? 'Reply to the collaborator, or click Confirm & Start Build…'
+      : canAskBuildQuestion
+        ? 'Ask what is happening with this build…'
       : buildStatus === 'preview_ready' || buildStatus === 'accepted'
         ? 'Ask for a change or revision to this build…'
-        : 'Apex is building and checking your feature…';
+        : buildStatus === 'failed' ||
+            buildStatus === 'deployment_failed' ||
+            buildStatus === 'suspended' ||
+            buildStatus === 'needs_developer'
+          ? 'This build stopped. You can review what happened above.'
+          : 'Apex is building and testing your feature…';
 
   const statusText = isNewMode
     ? 'New Build'
     : hasPr
-      ? 'Pull Request Created'
-      : buildStatus
-        ? buildStatusLabel(buildStatus)
-        : 'Loading…';
+      ? 'Ready to review'
+      : progress.failed
+        ? 'Failed'
+        : buildStatus === 'cancelled'
+          ? 'Cancelled'
+          : buildStatus
+            ? buildStatusLabel(buildStatus)
+            : 'Loading…';
 
   const fallbackStageLabel =
     buildStatus === 'planning'
@@ -852,10 +923,12 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
           <span
             role="status"
             aria-live="polite"
-            className={`${styles.statusChip}${live ? ` ${styles.statusChipLive}` : ''}${hasPr ? ` ${styles.statusChipDone}` : ''}`}
+            className={`${styles.statusChip}${live && !progress.failed && !progress.stale ? ` ${styles.statusChipLive}` : ''}${hasPr ? ` ${styles.statusChipDone}` : ''}${progress.failed ? ` ${styles.statusChipFailed}` : ''}`}
             {...{ 'data-testid': 'build-workspace-status-chip' }}
           >
-            {live && <span className={styles.spinner} aria-hidden="true" />}
+            {live && !progress.stale && !progress.failed && (
+              <span className={styles.spinner} aria-hidden="true" />
+            )}
             {statusText}
           </span>
           {detail && (
@@ -1040,24 +1113,13 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 >
                   <div className={styles.liveWorkBox}>
                     <p className={styles.activity}>
-                      {live && !isTurnStreaming && (
+                      {live && !isTurnStreaming && !progress.stale && !progress.failed && (
                         <span className={styles.spinner} aria-hidden="true" />
                       )}
                       <span
                         {...{ 'data-testid': 'build-workspace-stage-headline' }}
                       >
-                        {buildStatus === 'planning'
-                          ? 'Preparing your repository and build instructions…'
-                          : buildStatus === 'building'
-                            ? 'Building your feature, running checks, and fixing errors…'
-                            : buildStatus === 'checking' ||
-                                buildStatus === 'deploying'
-                              ? 'Checking the finished feature and preparing the pull request…'
-                              : hasPr
-                                ? 'Your feature is ready to review in Azure DevOps.'
-                                : buildStatus === 'preview_ready'
-                                  ? 'Your feature passed its checks. Opening the pull request…'
-                                  : `Build status: ${buildStatusLabel(buildStatus)}`}
+                        {progress.headline}
                       </span>
                     </p>
 
@@ -1106,7 +1168,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                                 •
                               </span>
                               <span>
-                                <span>{ev.message}</span>
+                                <span>{userFacingBuildEvent(ev.message)}</span>
                               </span>
                             </div>
                           ))
@@ -1220,6 +1282,18 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 </div>
               )}
 
+              {(buildStatus === 'preview_ready' || buildStatus === 'accepted') && (
+                <label className={styles.rememberPreference}>
+                  <input
+                    type="checkbox"
+                    checked={rememberForProject}
+                    onChange={(event) => setRememberForProject(event.target.checked)}
+                    data-testid="build-workspace-remember-preference"
+                  />
+                  Remember this feedback as a design preference proposal for project admins
+                </label>
+              )}
+
               {/* data-testid-exempt — AgentComposer owns build-workspace-composer testids */}
               <AgentComposer
                 className={styles.composerEmbed}
@@ -1235,12 +1309,12 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 onCancel={() => {
                   void chatSession.cancel();
                 }}
-                disabled={composerBusy}
+                disabled={composerDisabled}
                 isRunning={chatSession.isRunning}
                 isSending={
                   startBuildMutation.isPending || chatSession.isSending
                 }
-                isBusy={composerBusy}
+                isBusy={composerDisabled}
                 isCancelling={chatSession.isCancelling}
                 canSend={canSend}
                 rows={3}
@@ -1374,11 +1448,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     ) : (
                       <>
                         <h3 className={styles.sectionHeading}>
-                          Your preview will appear here
+                          {previewUrl
+                            ? 'Preview'
+                            : progress.failed
+                              ? 'No preview'
+                              : 'Your preview will appear here'}
                         </h3>
                         <p className={styles.emptySub}>
-                          Apex is building and testing your feature. A live
-                          preview will appear if this project provides one.
+                          {progress.failed
+                            ? 'This build stopped before a preview was available.'
+                            : 'A preview appears here when this project provides one.'}
                         </p>
                         <ol
                           className={styles.stepperList}
@@ -1389,7 +1468,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                           {pipelineSteps.map((step) => (
                             <li
                               key={step.key}
-                              className={`${styles.stepperItem}${step.state === 'active' ? ` ${styles.stepperItemActive}` : ''}${step.state === 'done' ? ` ${styles.stepperItemDone}` : ''}`}
+                              className={`${styles.stepperItem}${step.state === 'active' ? ` ${styles.stepperItemActive}` : ''}${step.state === 'done' ? ` ${styles.stepperItemDone}` : ''}${step.state === 'failed' ? ` ${styles.stepperItemFailed}` : ''}`}
                               {...{
                                 'data-testid': `build-workspace-step-${step.key}`,
                               }}
@@ -1397,9 +1476,11 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                               <span aria-hidden="true">
                                 {step.state === 'done'
                                   ? '✓'
-                                  : step.state === 'active'
-                                    ? '●'
-                                    : '○'}
+                                  : step.state === 'failed'
+                                    ? '!'
+                                    : step.state === 'active'
+                                      ? '●'
+                                      : '○'}
                               </span>
                               <span>{step.label}</span>
                             </li>

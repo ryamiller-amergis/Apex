@@ -134,8 +134,35 @@ export async function resolveSkillConfig(opts: {
   project: string;
   settingsId?: string;
 }): Promise<ProjectSkillConfig | null> {
-  if (opts.settingsId) return getSkillConfigById(opts.settingsId);
+  if (opts.settingsId) {
+    const row = await getSkillConfigById(opts.settingsId);
+    if (!row) return null;
+    if (row.project !== opts.project) return null;
+    return row;
+  }
   return getSkillConfig(opts.project);
+}
+
+/** Throws when settingsId does not belong to the given project. */
+export async function assertSkillSettingsBelongsToProject(
+  settingsId: string,
+  project: string,
+): Promise<ProjectSkillConfig> {
+  const row = await getSkillConfigById(settingsId);
+  if (!row || row.project !== project) {
+    throw new ProjectSettingsMismatchError(settingsId, project);
+  }
+  return row;
+}
+
+export class ProjectSettingsMismatchError extends Error {
+  constructor(
+    readonly settingsId: string,
+    readonly project: string,
+  ) {
+    super('Repository configuration does not belong to this project');
+    this.name = 'ProjectSettingsMismatchError';
+  }
 }
 
 export async function listSkillConfigs(): Promise<ProjectSkillConfig[]> {

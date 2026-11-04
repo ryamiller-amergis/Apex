@@ -35,6 +35,8 @@ export {
   type AppShellProps,
   type NavItem,
 } from './shell/AppShell.js';
+export { PageHeader, type PageHeaderProps } from './layout/PageHeader.js';
+export { ContentSurface, type ContentSurfaceProps } from './layout/ContentSurface.js';
 export {
   APP_ERROR_MESSAGE,
   AppErrorBoundary,
