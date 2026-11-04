@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import styles from './QaLabAssistantPanel.module.css';
 
 /** What owns the cases in view; the assistant thread is scoped to it. */
@@ -26,56 +24,26 @@ const MIN_PANEL_WIDTH = 300;
 const MAX_PANEL_WIDTH = 820;
 const DEFAULT_PANEL_WIDTH = 400;
 
-interface QuickPrompt {
-  label: string;
-  prompt: string;
-}
+const PRD_SUGGESTIONS = [
+  'Add cases for any acceptance criterion or business rule with no coverage yet',
+  'Add negative and authorization cases where the actor is blocked or the input is invalid',
+  'Add boundary and edge cases for limits, empty states, and maximum values',
+] as const;
 
-/** Canned openers so QA does not have to phrase prompts from scratch. */
-const PRD_QUICK_PROMPTS: QuickPrompt[] = [
-  {
-    label: 'Fill coverage gaps',
-    prompt:
-      'Review the generated test cases for this requirement and add cases for any acceptance criterion or business rule that has no coverage yet. Use add_test_case for each one.',
-  },
-  {
-    label: 'Add negative cases',
-    prompt:
-      'Add negative and authorization test cases for this requirement — scenarios where the actor is blocked or the input is invalid. Use add_test_case for each one.',
-  },
-  {
-    label: 'Add edge cases',
-    prompt:
-      'Add boundary and edge-case tests for this requirement, covering limits, empty states, and maximum values. Use add_test_case for each one.',
-  },
-];
-
-const SUITE_QUICK_PROMPTS: QuickPrompt[] = [
-  {
-    label: 'Review cases',
-    prompt:
-      "Review the unpublished cases against this project's test-case skill and the work items. List the problems by case id. Do not change anything yet.",
-  },
-  {
-    label: 'Fill coverage gaps',
-    prompt:
-      'Find acceptance criteria that no case covers yet and add a case for each one with qa_lab_add_case, in the format the skill sets.',
-  },
-  {
-    label: 'Fix login steps',
-    prompt:
-      'In every unpublished case, make the login step sign in as the user type the case tests. Move setup done by other user types into the precondition step. Use qa_lab_update_case.',
-  },
-];
+const SUITE_SUGGESTIONS = [
+  'Review the unpublished cases against the skill and list the problems by case id. Do not change anything yet.',
+  'Add a case for each acceptance criterion that no case covers yet',
+  'Make each login step sign in as the role the case tests, and move other roles\' setup into the precondition step',
+] as const;
 
 interface TargetConfig {
   title: string;
   threadUrl: string;
   storageKey: string | null;
-  quickPrompts: QuickPrompt[];
+  suggestions: readonly string[];
   invalidateKeys: unknown[][];
-  emptyTitle: string;
-  emptyBody: string;
+  welcomeTitle: string;
+  welcomeBody: string;
   placeholder: string;
 }
 
@@ -87,10 +55,10 @@ function configFor(target: QaLabAssistantTarget): TargetConfig {
         // The PRD assistant thread carries the add_test_case tool, so QA Lab reuses it.
         threadUrl: `/api/interviews/prds/${target.prdId}/assistant-thread`,
         storageKey: null,
-        quickPrompts: PRD_QUICK_PROMPTS,
+        suggestions: PRD_SUGGESTIONS,
         invalidateKeys: [['prd-test-cases', target.prdId], ['qa-lab']],
-        emptyTitle: 'Generate test cases on demand',
-        emptyBody: 'Ask for extra coverage in plain language, or use a shortcut below. New cases are traced back to their acceptance criteria and appear in the grid automatically.',
+        welcomeTitle: 'Generate test cases on demand',
+        welcomeBody: 'Ask for extra coverage in plain language, or use a shortcut below. New cases are traced back to their acceptance criteria and appear in the grid automatically.',
         placeholder: 'Ask for more test cases… (Enter to send)',
       };
     case 'suite':
@@ -98,10 +66,10 @@ function configFor(target: QaLabAssistantTarget): TargetConfig {
         title: 'Ask Apex',
         threadUrl: `/api/interviews/ado-test-suites/${target.suiteId}/assistant-thread`,
         storageKey: `qa-lab-assistant-thread:${target.suiteId}`,
-        quickPrompts: SUITE_QUICK_PROMPTS,
+        suggestions: SUITE_SUGGESTIONS,
         invalidateKeys: [['qa-lab']],
-        emptyTitle: 'Change these cases in plain language',
-        emptyBody: 'Ask Apex can explain, edit, add, delete, comment on, or regenerate the unpublished cases. Edits show what changed on the case and can be restored. Publishing stays with you.',
+        welcomeTitle: 'Change these cases in plain language',
+        welcomeBody: 'Ask Apex can explain, edit, add, delete, comment on, or regenerate the unpublished cases. Edits show what changed on the case and can be restored. Publishing stays with you.',
         placeholder: 'Ask Apex to change the cases… (Enter to send)',
       };
     default: {
@@ -142,7 +110,6 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const wasRunningRef = useRef(false);
   const dragStartXRef = useRef(0);
@@ -155,7 +122,16 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   const { data: globalDefaultModel } = useGlobalDefaultModel();
 
   const session = useAgentChatSession(threadId);
-  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
+  const {
+    messages,
+    streamingText,
+    isRunning,
+    isSending,
+    showTypingIndicator,
+    progressLabel,
+    progressPhase,
+    toolProgress,
+  } = session;
 
   // Seed the picker from the global default once models resolve.
   useEffect(() => {
@@ -231,22 +207,17 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
     };
   }, [isDragging]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, streamingText]);
-
-  const sendPrompt = useCallback(async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    await session.send(trimmed, selectedModel ? { model: selectedModel } : undefined);
-  }, [session, selectedModel]);
+  const fillComposer = useCallback((prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
     setInput('');
-    await sendPrompt(text);
-  }, [input, sendPrompt]);
+    await session.send(text, selectedModel ? { model: selectedModel } : undefined);
+  }, [input, session, selectedModel]);
 
   const visibleMessages = messages.filter(
     (message) =>
@@ -299,79 +270,27 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
             models={availableModels}
             modelsLoading={modelsLoading}
             onModelChange={setSelectedModel}
-            before={(
-              <div className={styles.quickPrompts}>
-                {config.quickPrompts.map((quick) => (
-                  <button
-                    key={quick.label}
-                    type="button"
-                    className={styles.quickPrompt}
-                    disabled={composerBusy}
-                    onClick={() => void sendPrompt(quick.prompt)}
-                    {...{ 'data-testid': `qa-lab-quick-${quick.label.toLowerCase().replace(/\s+/g, '-')}` }}
-                  >
-                    {quick.label}
-                  </button>
-                ))}
-              </div>
-            )}
             {...{ 'data-testid': 'qa-lab-assistant-composer' }}
           />
         )}
       >
-        <div className={styles.messages}>
-          {isCreating && (
-            <div className={styles.initializing}>
-              <span className={styles.spinner} aria-hidden="true" />
-              <span>Starting assistant…</span>
-            </div>
-          )}
-          {createError && <div className={styles.messageBubbleSystem}>{createError}</div>}
-          {!isCreating && !createError && visibleMessages.length === 0 && (
-            <div className={styles.emptyState}>
-              <p className={styles.emptyTitle}>{config.emptyTitle}</p>
-              <p className={styles.emptyBody}>{config.emptyBody}</p>
-            </div>
-          )}
-          {visibleMessages.map((message) => {
-            if (message.role === 'system') {
-              return (
-                <div key={message.id} className={styles.messageBubbleSystem}>{message.text}</div>
-              );
-            }
-            if (message.role === 'user') {
-              return (
-                <div
-                  key={message.id}
-                  className={`${styles.messageBubble} ${styles.messageBubbleUser}`}
-                >
-                  {message.text}
-                </div>
-              );
-            }
-            return (
-              <div
-                key={message.id}
-                className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}
-              >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
-              </div>
-            );
-          })}
-          {showTypingIndicator && (
-            <div className={styles.typingIndicator}>
-              <span className={styles.typingDot} />
-              <span className={styles.typingDot} />
-              <span className={styles.typingDot} />
-            </div>
-          )}
-          {streamingText && (
-            <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
+        <AssistantConversation
+          messages={visibleMessages}
+          streamingText={streamingText}
+          isWorking={showTypingIndicator}
+          isStarting={isCreating}
+          startError={createError}
+          progressLabel={progressLabel}
+          progressPhase={progressPhase}
+          toolProgress={toolProgress}
+          welcome={{
+            title: config.welcomeTitle,
+            description: config.welcomeBody,
+            suggestions: config.suggestions,
+            onSuggestion: fillComposer,
+          }}
+          testIdPrefix="qa-lab-assistant"
+        />
       </AgentPanelShell>
     </div>
   );

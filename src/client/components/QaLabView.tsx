@@ -77,15 +77,16 @@ function userTypeOf(testCase: QaLabTestCase): string {
 }
 
 /**
- * Manual holds every scenario a QA person runs by hand, including the ones
- * also marked for Playwright. Unit and integration checks belong to developers,
- * so QA Lab does not show them.
+ * Manual and E2E split the QA cases by whether they are marked for Playwright;
+ * All shows both. Unit and integration checks belong to developers, so QA Lab
+ * does not show them.
  */
-type CaseKind = 'manual' | 'e2e';
+type CaseKind = 'all' | 'manual' | 'e2e';
 
 const CASE_TABS: { key: CaseKind; label: string; hint: string }[] = [
-  { key: 'manual', label: 'Manual', hint: 'Scenarios QA runs by hand, including those also marked for E2E' },
-  { key: 'e2e', label: 'E2E', hint: 'Manual scenarios to automate as Playwright tests' },
+  { key: 'all', label: 'All', hint: 'Every case QA runs, manual and E2E' },
+  { key: 'manual', label: 'Manual', hint: 'Scenarios QA runs by hand only' },
+  { key: 'e2e', label: 'E2E', hint: 'Scenarios to automate as Playwright tests' },
 ];
 
 const COVERAGE_TIERS = ['happy', 'error', 'edge', 'negative'] as const;
@@ -97,8 +98,10 @@ function isQaCase(testCase: QaLabTestCase): boolean {
 function isOnTab(testCase: QaLabTestCase, tab: CaseKind): boolean {
   if (!isQaCase(testCase)) return false;
   switch (tab) {
-    case 'manual':
+    case 'all':
       return true;
+    case 'manual':
+      return testCase.automationTier !== 'e2e-playwright';
     case 'e2e':
       return testCase.automationTier === 'e2e-playwright';
     default: {
@@ -348,7 +351,7 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
 interface SuiteGroupProps {
   suite: QaLabSuite;
   cases: QaLabTestCase[];
-  /** Manual-tab cases for this suite, used for the coverage strip. */
+  /** All- or Manual-tab cases for this suite, used for the coverage strip. */
   manualCases: QaLabTestCase[] | null;
   expandedIds: Set<string>;
   onToggleCase: (id: string) => void;
@@ -453,7 +456,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [filters, setFilters] = useState<Partial<Record<FilterKey, string>>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<CaseKind>('manual');
+  const [activeTab, setActiveTab] = useState<CaseKind>('all');
   const [activeUserType, setActiveUserType] = useState(ALL_USER_TYPES);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [scopeSelection, setScopeSelection] = useState<Set<string> | null>(null);
@@ -549,7 +552,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   );
 
   const tabCounts = useMemo(() => {
-    const counts: Record<CaseKind, number> = { manual: 0, e2e: 0 };
+    const counts: Record<CaseKind, number> = { all: 0, manual: 0, e2e: 0 };
     for (const tab of CASE_TABS) {
       counts[tab.key] = allCases.filter((entry) => isOnTab(entry, tab.key)).length;
     }
@@ -1444,9 +1447,9 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 cases={suite.testCases.filter(
                   (entry) => isOnTab(entry, activeTab) && matchesUserType(entry) && matchesFilters(entry),
                 )}
-                manualCases={activeTab === 'manual'
-                  ? suite.testCases.filter((entry) => isOnTab(entry, 'manual') && matchesUserType(entry))
-                  : null}
+                manualCases={activeTab === 'e2e'
+                  ? null
+                  : suite.testCases.filter((entry) => isOnTab(entry, activeTab) && matchesUserType(entry))}
                 expandedIds={expandedIds}
                 onToggleCase={toggleCase}
                 selection={caseSelection}
