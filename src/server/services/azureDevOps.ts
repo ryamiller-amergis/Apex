@@ -122,7 +122,8 @@ async function mapWithConcurrency<T, R>(
  * Static suites of one plan with paths below the plan's root suite. A suite
  * whose parent chain breaks (a parent outside the page) is left out.
  */
-export function staticSuitePaths(suites: TestSuite[]): QaAdoTestSuiteOption[] {
+/** Static and requirement suites with their paths below the plan root. Query-based suites are left out. */
+export function placeableSuitePaths(suites: TestSuite[]): QaAdoTestSuiteOption[] {
   const byId = new Map(suites.map((suite) => [suite.id, suite]));
   const pathOf = (suite: TestSuite): string[] | null => {
     const names: string[] = [];
@@ -136,9 +137,15 @@ export function staticSuitePaths(suites: TestSuite[]): QaAdoTestSuiteOption[] {
   };
   const options: QaAdoTestSuiteOption[] = [];
   for (const suite of suites) {
-    if (suite.suiteType !== TestSuiteType.StaticTestSuite) continue;
+    const requirement = suite.suiteType === TestSuiteType.RequirementTestSuite;
+    if (suite.suiteType !== TestSuiteType.StaticTestSuite && !requirement) continue;
     const names = pathOf(suite);
-    if (names) options.push({ id: suite.id, path: names.join(' > ') });
+    if (!names) continue;
+    options.push({
+      id: suite.id,
+      path: names.join(' > '),
+      ...(requirement && typeof suite.requirementId === 'number' ? { requirementId: suite.requirementId } : {}),
+    });
   }
   return options.sort((left, right) => left.path.localeCompare(right.path));
 }
@@ -6290,8 +6297,8 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Active Test Plans with their static suites. Requirement and query-based
-   * suites are left out because Test Cases cannot be added to them directly.
+   * Active Test Plans with their static and requirement suites. Query-based
+   * suites are left out because their cases come from a query.
    */
   async listStaticTestPlanSuites(): Promise<QaAdoTestPlanOption[]> {
     const testPlanApi = await this.connection.getTestPlanApi();
@@ -6314,9 +6321,59 @@ export class AzureDevOpsService {
         suites.push(...(page ?? []));
         suiteToken = page?.continuationToken || undefined;
       } while (suiteToken);
-      options.push({ id: plan.id, name: plan.name, suites: staticSuitePaths(suites) });
+      options.push({ id: plan.id, name: plan.name, suites: placeableSuitePaths(suites) });
     }
     return options;
+  }
+
+  /**
+   * Creates an active Test Plan with the area path and iteration most active
+   * plans in the project use, so it is set up like the plans QA already has.
+   */
+  async createTestPlan(name: string): Promise<{ id: number; rootSuiteId: number }> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const counts = new Map<string, { areaPath?: string; iteration: string; count: number }>();
+    let token: string | undefined;
+    do {
+      const page = await testPlanApi.getTestPlans(this.project, undefined, token, true, true);
+      for (const plan of page ?? []) {
+        if (!plan.iteration) continue;
+        const key = `${plan.areaPath ?? ''}\u0000${plan.iteration}`;
+        const entry = counts.get(key) ?? { areaPath: plan.areaPath, iteration: plan.iteration, count: 0 };
+        entry.count += 1;
+        counts.set(key, entry);
+      }
+      token = page?.continuationToken || undefined;
+    } while (token);
+    const common = [...counts.values()].sort((left, right) => right.count - left.count)[0];
+    const created = await testPlanApi.createTestPlan({
+      name,
+      iteration: common?.iteration ?? this.project,
+      areaPath: common?.areaPath ?? this.project,
+    }, this.project);
+    const rootSuiteId = created?.rootSuite?.id;
+    if (!created?.id || typeof rootSuiteId !== 'number') {
+      throw new Error(`Failed to create Test Plan "${name}"`);
+    }
+    return { id: created.id, rootSuiteId };
+  }
+
+  /** Creates a static suite, or a requirement suite for `requirementId`, under `parentSuiteId`. */
+  async createTestSuite(
+    planId: number,
+    parentSuiteId: number,
+    spec: { name: string; requirementId?: number },
+  ): Promise<number> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const created = await testPlanApi.createTestSuite({
+      name: spec.name,
+      parentSuite: { id: parentSuiteId, name: '' },
+      ...(spec.requirementId !== undefined
+        ? { suiteType: TestSuiteType.RequirementTestSuite, requirementId: spec.requirementId }
+        : { suiteType: TestSuiteType.StaticTestSuite }),
+    }, this.project, planId);
+    if (typeof created?.id !== 'number') throw new Error(`Failed to create Test Suite "${spec.name}"`);
+    return created.id;
   }
 
   async addTestCasesToSuite(planId: number, suiteId: number, testCaseIds: number[]): Promise<void> {

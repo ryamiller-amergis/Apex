@@ -42,9 +42,26 @@
       "type": "array",
       "items": { "type": "string" }
     },
-    "placement": { "$ref": "#/definitions/placement" }
+    "placement": { "$ref": "#/definitions/placement" },
+    "newPlacements": {
+      "type": "array",
+      "description": "Test Plans or suites to create because none in .ai-pilot/test-plans.md fits. QA approves each in Apex before it is created.",
+      "items": { "$ref": "#/definitions/newPlacement" }
+    }
   },
   "definitions": {
+    "newPlacement": {
+      "type": "object",
+      "required": ["testPlan", "createPlan", "suiteType", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "testPlan": { "type": "string", "minLength": 1 },
+        "testSuite": { "type": "string", "description": "Static suite path `A > B`. Omit for requirement suites." },
+        "createPlan": { "type": "boolean" },
+        "suiteType": { "enum": ["static", "requirement"] },
+        "reason": { "type": "string" }
+      }
+    },
     "placement": {
       "type": "object",
       "description": "Where Apex files published Test Cases in Azure DevOps. Omit to link each case to its requirement with Tested By. A case-level placement overrides this one; tags from both are combined.",

@@ -134,6 +134,8 @@ export interface QaLabExternalSuite {
   publishedCases: QaLabPublishedCase[];
   /** The project's skill requires a confirmed Test Plan suite for every case. */
   requireSuite: boolean;
+  /** Plans or suites the skill proposed creating. */
+  newPlacements: QaLabNewPlacement[];
   /** Agent thread that generates the suite, for live progress. */
   threadId: string | null;
 }
@@ -242,6 +244,8 @@ export interface QaAdoTestSuiteOption {
   id: number;
   /** Path below the plan's root suite, `Suite > Child`. Empty for the root suite. */
   path: string;
+  /** Set for a requirement suite, which shows every case linked to its PBI by Tested By. */
+  requirementId?: number;
 }
 
 export interface QaAdoTestPlanOption {
@@ -254,7 +258,26 @@ export interface QaAdoTestPlanOption {
 export interface QaAdoSuiteSelection {
   planId: number;
   suiteId: number;
+  /** A requirement suite: the Tested By link places the case, so publish does not add it. */
+  requirement?: boolean;
 }
+
+export type QaLabNewPlacementSuiteType = 'static' | 'requirement';
+
+/** A Test Plan or suite the skill proposed because none in Azure DevOps fits. */
+export interface QaLabNewPlacement {
+  /** Stable id for the proposal within its generated suite. */
+  key: string;
+  testPlan: string;
+  /** Static suite path, `Suite > Child`. Absent for requirement suites, which are named after the PBI. */
+  testSuite?: string;
+  createPlan: boolean;
+  suiteType: QaLabNewPlacementSuiteType;
+  reason: string;
+}
+
+/** A proposal QA approved, with the names QA may have edited. */
+export type QaLabNewPlacementApproval = Omit<QaLabNewPlacement, 'reason'>;
 
 export interface QaLabPublishRequest {
   /** Confirmed suites keyed by local case id. */
@@ -263,6 +286,10 @@ export interface QaLabPublishRequest {
   localCaseIds?: string[];
   /** Needs-update cases whose suggestion QA chose to apply to the existing Test Case. */
   updateLocalCaseIds?: string[];
+  /** Proposals QA approved; Apex creates them before publishing. */
+  newPlacements?: QaLabNewPlacementApproval[];
+  /** Local case id to the key of the approved proposal it goes to. */
+  newPlacementSelections?: Record<string, string>;
 }
 
 export interface QaLabDeleteCasesRequest {

@@ -54,6 +54,7 @@ Apex files published cases in Azure DevOps by the `placement` block in the JSON 
 2. Use only area paths, iteration paths, and tags the adapter lists. Never invent a path.
 3. If the project files cases in Azure Test Plans, set `testPlan` and `testSuite` on each case, copied exactly from the "Azure Test Plans" list in the kickoff context. Set top-level `requireSuite: true` when every case must be in a suite. QA confirms the plan and suite in Apex before publishing.
 4. If the adapter states no rule, omit `placement`. Apex then links each case to its requirement with Tested By.
+5. If no plan or suite in the "Azure Test Plans" list fits, propose one in top-level `newPlacements`: plan name, `createPlan`, `suiteType` (`static` with a `testSuite` path, or `requirement`, which Apex names after each PBI), and a one-line `reason`. Follow the adapter's naming rule and never propose a name already in the list. Point each case's `testPlan`/`testSuite` at it. Apex creates it only after QA approves it.
 
 ## Existing test cases
 

@@ -27,6 +27,7 @@ import { QaLabCaseDiff } from './QaLabCaseDiff';
 import { QaLabGenerationStatus } from './QaLabGenerationStatus';
 import {
   QaLabPublishReview,
+  type QaLabPublishNewPlacements,
   type QaLabPublishReviewCase,
   type QaLabPublishUpdateCase,
 } from './QaLabPublishReview';
@@ -905,6 +906,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const publishSuite = useCallback(async (
     selections?: Record<string, QaAdoSuiteSelection>,
     updateLocalCaseIds: string[] = [],
+    created?: QaLabPublishNewPlacements,
   ) => {
     if (!externalSuite) return;
     const newCaseIds = hasSelection
@@ -920,6 +922,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         selections,
         ...(newCaseIds ? { localCaseIds: newCaseIds } : {}),
         ...(updateLocalCaseIds.length > 0 ? { updateLocalCaseIds } : {}),
+        ...(created?.newPlacements.length ? created : {}),
       });
       setPublishReviewOpen(false);
       setSelectedCaseIds(new Set());
@@ -1236,10 +1239,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                 suiteId={externalSuite.id}
                 cases={publishTargets}
                 updates={updateTargets}
+                newPlacements={externalSuite.newPlacements ?? []}
                 requireSuite={externalSuite.requireSuite}
                 isPublishing={publishAdoSuite.isPending}
                 onCancel={() => setPublishReviewOpen(false)}
-                onPublish={(selections, updateIds) => void publishSuite(selections, updateIds)}
+                onPublish={(selections, updateIds, created) => void publishSuite(selections, updateIds, created)}
               />
             )}
 

@@ -18,6 +18,8 @@ const plans = [
   },
 ];
 
+const NO_NEW_PLACEMENTS = { newPlacements: [], newPlacementSelections: {} };
+
 beforeEach(() => {
   jest.mocked(useAdoTestPlanOptions).mockReturnValue({
     data: { plans },
@@ -50,7 +52,7 @@ describe('QaLabPublishReview', () => {
     expect(screen.getByText('Clock in inside the geofence radius')).toBeTruthy();
     fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
 
-    expect(onPublish).toHaveBeenCalledWith({ 'TC-1': { planId: 15, suiteId: 152 } }, []);
+    expect(onPublish).toHaveBeenCalledWith({ 'TC-1': { planId: 15, suiteId: 152 } }, [], NO_NEW_PLACEMENTS);
   });
 
   it('blocks publish until every case has a suite when the skill requires one', () => {
@@ -106,7 +108,7 @@ describe('QaLabPublishReview', () => {
     expect(onPublish).toHaveBeenCalledWith({
       'TC-4': { planId: 15, suiteId: 152 },
       'TC-5': { planId: 15, suiteId: 152 },
-    }, []);
+    }, [], NO_NEW_PLACEMENTS);
   });
 
   it('lets cases publish without a suite when the skill does not require one', () => {
@@ -124,7 +126,82 @@ describe('QaLabPublishReview', () => {
 
     fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
 
-    expect(onPublish).toHaveBeenCalledWith({}, []);
+    expect(onPublish).toHaveBeenCalledWith({}, [], NO_NEW_PLACEMENTS);
+  });
+
+  it('creates a proposed plan only after QA approves it, with the edited name', () => {
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[{ id: 'TC-7', title: 'Delete a user', proposedTestPlan: 'Delete User - Functional Testing' }]}
+        newPlacements={[{
+          key: 'delete user - functional testing|',
+          testPlan: 'Delete User - Functional Testing',
+          createPlan: true,
+          suiteType: 'requirement',
+          reason: 'No plan covers Delete User',
+        }]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    const confirm = screen.getByTestId('qa-lab-publish-review-confirm');
+    expect(screen.getByText('No plan covers Delete User')).toBeTruthy();
+    expect(screen.getByText(/new; approve it above/)).toBeTruthy();
+    expect(confirm).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-create-0'));
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-create-0-plan'), {
+      target: { value: 'Delete Users - Functional Testing' },
+    });
+    fireEvent.click(confirm);
+
+    expect(onPublish).toHaveBeenCalledWith({}, [], {
+      newPlacements: [{
+        key: 'delete user - functional testing|',
+        testPlan: 'Delete Users - Functional Testing',
+        createPlan: true,
+        suiteType: 'requirement',
+      }],
+      newPlacementSelections: { 'TC-7': 'delete user - functional testing|' },
+    });
+  });
+
+  it('marks a chosen requirement suite so publish does not add the case to it', () => {
+    jest.mocked(useAdoTestPlanOptions).mockReturnValue({
+      data: { plans: [{ id: 20, name: 'Delete User - Functional Testing', suites: [{ id: 200, path: '' }, { id: 201, path: '40249 : Add Delete User Button', requirementId: 40249 }] }] },
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof useAdoTestPlanOptions>);
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[{
+          id: 'TC-8',
+          title: 'Delete a user',
+          proposedTestPlan: 'Delete User - Functional Testing',
+          proposedTestSuite: '40249 : Add Delete User Button',
+        }]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
+
+    expect(onPublish).toHaveBeenCalledWith(
+      { 'TC-8': { planId: 20, suiteId: 201, requirement: true } },
+      [],
+      { newPlacements: [], newPlacementSelections: {} },
+    );
   });
 
   it('leaves existing-case updates unchecked until QA chooses them', () => {
@@ -148,6 +225,6 @@ describe('QaLabPublishReview', () => {
     fireEvent.click(screen.getByTestId('qa-lab-publish-review-update-TC-6'));
     fireEvent.click(confirm);
 
-    expect(onPublish).toHaveBeenCalledWith({}, ['TC-6']);
+    expect(onPublish).toHaveBeenCalledWith({}, ['TC-6'], NO_NEW_PLACEMENTS);
   });
 });

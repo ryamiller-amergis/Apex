@@ -236,6 +236,8 @@ Apex files published cases in Azure DevOps by the `placement` block in the JSON 
 | `testPlan`, `testSuite` | Proposed Azure Test Plan and static suite (`Feature > Sub-feature`). Copy names exactly from the "Azure Test Plans" list in the kickoff context. QA confirms them in Apex, then Apex adds the case to the suite |
 | `requireSuite` | Top level only. `true` when the project files every case in a suite; Apex then refuses to publish a case without a confirmed suite |
 
+When no plan or suite in `.ai-pilot/test-plans.md` fits, propose one in top-level `newPlacements` (see `definitions.newPlacement`): the plan name, `createPlan`, `suiteType` (`static` with a `testSuite` path, or `requirement`, which Apex names after each PBI), and a one-line `reason`. Follow the project's naming rule and never propose a name already in the file. Point each case's `testPlan`/`testSuite` at the proposal. Apex creates it only after QA approves it in the publish window.
+
 ### Existing test cases
 
 When Apex generates from Azure DevOps, the kickoff context has an `## Existing test cases` section and two files: `.ai-pilot/existing-test-cases.json` (Test Cases already linked to each PBI, with steps) and `.ai-pilot/test-case-index.md` (every case in the static suites). Check both before writing a case.

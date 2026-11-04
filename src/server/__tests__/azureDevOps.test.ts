@@ -1,4 +1,4 @@
-import { AzureDevOpsService, parseTestCaseStepsXml, staticSuitePaths } from '../services/azureDevOps';
+import { AzureDevOpsService, parseTestCaseStepsXml, placeableSuitePaths } from '../services/azureDevOps';
 import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import * as azdev from 'azure-devops-node-api';
 import { retryWithBackoff } from '../utils/retry';
@@ -1423,6 +1423,41 @@ describe('AzureDevOpsService', () => {
       expect(getTestCaseList.mock.calls[1][6]).toBe('next');
     });
   });
+
+  describe('creating Test Plans and suites', () => {
+    it('creates a plan with the area and iteration most plans use', async () => {
+      const getTestPlans = jest.fn().mockResolvedValue([
+        { id: 1, name: 'A', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        { id: 2, name: 'B', areaPath: 'MatterWorx\\QA Automation', iteration: 'MatterWorx' },
+        { id: 3, name: 'C', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+      ]);
+      const createTestPlan = jest.fn().mockResolvedValue({ id: 50, rootSuite: { id: 500 } });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getTestPlans, createTestPlan });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.createTestPlan('Delete User - Functional Testing'))
+        .resolves.toEqual({ id: 50, rootSuiteId: 500 });
+      expect(createTestPlan).toHaveBeenCalledWith(
+        { name: 'Delete User - Functional Testing', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        'MatterWorx',
+      );
+    });
+
+    it('creates a requirement suite for a PBI', async () => {
+      const createTestSuite = jest.fn().mockResolvedValue({ id: 501 });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ createTestSuite });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.createTestSuite(50, 500, { name: '18452 : Delete user', requirementId: 18452 }))
+        .resolves.toBe(501);
+      expect(createTestSuite).toHaveBeenCalledWith({
+        name: '18452 : Delete user',
+        parentSuite: { id: 500, name: '' },
+        suiteType: TestSuiteType.RequirementTestSuite,
+        requirementId: 18452,
+      }, 'MatterWorx', 50);
+    });
+  });
 });
 
 describe('parseTestCaseStepsXml', () => {
@@ -1434,18 +1469,20 @@ describe('parseTestCaseStepsXml', () => {
   });
 });
 
-describe('staticSuitePaths', () => {
-  it('builds paths below the plan root and keeps only static suites', () => {
+describe('placeableSuitePaths', () => {
+  it('builds paths below the plan root for static and requirement suites', () => {
     const suites = [
       { id: 1, name: '15 Timesheets', suiteType: TestSuiteType.StaticTestSuite },
       { id: 2, name: 'Geofence', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
       { id: 3, name: 'Inside Distance', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 2, name: 'Geofence' } },
-      { id: 4, name: 'By requirement', suiteType: TestSuiteType.RequirementTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 4, name: '40249 : Delete User', suiteType: TestSuiteType.RequirementTestSuite, requirementId: 40249, parentSuite: { id: 1, name: '15 Timesheets' } },
       { id: 5, name: 'Orphan', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 99, name: 'Missing' } },
+      { id: 6, name: 'By query', suiteType: TestSuiteType.DynamicTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
     ] as TestSuite[];
 
-    expect(staticSuitePaths(suites)).toEqual([
+    expect(placeableSuitePaths(suites)).toEqual([
       { id: 1, path: '' },
+      { id: 4, path: '40249 : Delete User', requirementId: 40249 },
       { id: 2, path: 'Geofence' },
       { id: 3, path: 'Geofence > Inside Distance' },
     ]);

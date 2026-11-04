@@ -29,6 +29,7 @@ import {
   inferUserTypes,
   isAdoTestSuiteWatcherActive,
   listAdoGenerationCandidates,
+  newPlacementsFrom,
   publishAdoTestCases,
   resetAdoTestSuiteWatchersForTests,
   syncAdoTestSuiteOutput,
@@ -1014,6 +1015,133 @@ describe('ADO test suite generation and publish', () => {
         action: 'updated',
       })]);
       expect(retried.skippedLocalCaseIds).toEqual(['TC-2']);
+    });
+
+    describe('approved new Test Plans and suites', () => {
+      const existingPlans = [{
+        id: 15,
+        name: '15 Timesheets',
+        suites: [{ id: 150, path: '' }, { id: 151, path: 'Geofence' }],
+      }];
+      const planWriter = () => ({
+        createTestCaseWorkItem: jest.fn()
+          .mockResolvedValueOnce({ id: 9001, url: 'https://ado.example/9001' })
+          .mockResolvedValueOnce({ id: 9002, url: 'https://ado.example/9002' }),
+        addTestCasesToSuite: jest.fn().mockResolvedValue(undefined),
+        listStaticTestPlanSuites: jest.fn().mockResolvedValue(existingPlans),
+        createTestPlan: jest.fn().mockResolvedValue({ id: 50, rootSuiteId: 500 }),
+        createTestSuite: jest.fn()
+          .mockResolvedValueOnce(501)
+          .mockResolvedValueOnce(502),
+      });
+
+      it('creates a plan with a requirement suite once and links the cases without adding them', async () => {
+        const ado = planWriter();
+        dbMock.state.suiteRow = {
+          ...twoCaseSuite(),
+          sourceSnapshot: {
+            root: { id: 18452, areaPath: 'Apex\\QA', title: 'Delete user', workItemType: 'Product Backlog Item' },
+            targets: [{ id: 18452, title: 'Delete user', workItemType: 'Product Backlog Item' }],
+          },
+        };
+        const approval = {
+          key: 'delete user - functional testing|',
+          testPlan: 'Delete User - Functional Testing',
+          createPlan: true,
+          suiteType: 'requirement' as const,
+        };
+
+        const result = await publishAdoTestCases('suite-1', {
+          ado,
+          newPlacements: [approval],
+          newPlacementSelections: { 'TC-1': approval.key, 'TC-2': approval.key },
+        });
+
+        expect(result.failures).toEqual([]);
+        expect(ado.createTestPlan).toHaveBeenCalledTimes(1);
+        expect(ado.createTestPlan).toHaveBeenCalledWith('Delete User - Functional Testing');
+        expect(ado.createTestSuite).toHaveBeenCalledTimes(1);
+        expect(ado.createTestSuite).toHaveBeenCalledWith(50, 500, { name: '18452 : Delete user', requirementId: 18452 });
+        expect(ado.addTestCasesToSuite).not.toHaveBeenCalled();
+        expect(ado.createTestCaseWorkItem).toHaveBeenCalledWith(expect.objectContaining({ linkType: 'tested-by' }));
+        expect(result.published).toEqual([
+          expect.objectContaining({ localCaseId: 'TC-1', testPlanId: 50, testSuiteId: 501 }),
+          expect.objectContaining({ localCaseId: 'TC-2', testPlanId: 50, testSuiteId: 501 }),
+        ]);
+      });
+
+      it('reuses an existing plan and creates only the missing static suite segments', async () => {
+        const ado = planWriter();
+        dbMock.state.suiteRow = twoCaseSuite();
+        const approval = {
+          key: 'k',
+          testPlan: '15 timesheets',
+          testSuite: 'Geofence > Outside Radius',
+          createPlan: true,
+          suiteType: 'static' as const,
+        };
+
+        const result = await publishAdoTestCases('suite-1', {
+          ado,
+          localCaseIds: ['TC-1'],
+          newPlacements: [approval],
+          newPlacementSelections: { 'TC-1': 'k' },
+        });
+
+        expect(result.failures).toEqual([]);
+        expect(ado.createTestPlan).not.toHaveBeenCalled();
+        expect(ado.createTestSuite).toHaveBeenCalledTimes(1);
+        expect(ado.createTestSuite).toHaveBeenCalledWith(15, 151, { name: 'Outside Radius' });
+        expect(ado.addTestCasesToSuite).toHaveBeenCalledWith(15, 501, [9001]);
+      });
+
+      it('fails only the cases whose plan could not be created, and refuses unapproved keys', async () => {
+        const ado = { ...planWriter(), createTestPlan: jest.fn().mockRejectedValue(new Error('Access denied')) };
+        dbMock.state.suiteRow = twoCaseSuite();
+        const approval = { key: 'k', testPlan: 'New Plan', createPlan: true, suiteType: 'requirement' as const };
+
+        const result = await publishAdoTestCases('suite-1', {
+          ado,
+          newPlacements: [approval],
+          newPlacementSelections: { 'TC-1': 'k', 'TC-2': 'not-approved' },
+        });
+
+        expect(ado.createTestPlan).toHaveBeenCalledTimes(1);
+        expect(ado.createTestCaseWorkItem).not.toHaveBeenCalled();
+        expect(result.failures).toEqual([
+          { localCaseId: 'TC-1', message: 'Could not create the Test Plan or suite "New Plan": Access denied' },
+          { localCaseId: 'TC-2', message: 'Approve the new Test Plan or suite for this case before publishing' },
+        ]);
+      });
+    });
+
+    it('keeps valid skill proposals and drops malformed ones', () => {
+      expect(newPlacementsFrom({
+        newPlacements: [
+          { testPlan: 'Delete User - Functional Testing', createPlan: true, suiteType: 'requirement', reason: 'New feature' },
+          { testPlan: '15 Timesheets', testSuite: 'Geofence > Radius', createPlan: false, suiteType: 'static', reason: 'r' },
+          { testPlan: '15 Timesheets', createPlan: false, suiteType: 'static' },
+          { testPlan: 'X', createPlan: 'yes', suiteType: 'static', testSuite: 'A' },
+          { testPlan: 'X', createPlan: true, suiteType: 'query' },
+          { testPlan: 'delete user - functional testing', createPlan: true, suiteType: 'requirement' },
+        ],
+      })).toEqual([
+        {
+          key: 'delete user - functional testing|',
+          testPlan: 'Delete User - Functional Testing',
+          createPlan: true,
+          suiteType: 'requirement',
+          reason: 'New feature',
+        },
+        {
+          key: '15 timesheets|geofence > radius',
+          testPlan: '15 Timesheets',
+          testSuite: 'Geofence > Radius',
+          createPlan: false,
+          suiteType: 'static',
+          reason: 'r',
+        },
+      ]);
     });
 
     it('removes unpublished cases and updates the suite count', async () => {
