@@ -959,7 +959,7 @@ describe('ADO test suite generation and publish', () => {
     expect(result.published.map((item) => item.parentWorkItemId)).toEqual([18000, 18000]);
   });
 
-  it('defaults to a Tested By link on the requirement when the skill sets no placement', async () => {
+  it('defaults to a Tested By link and the root area when the skill sets no placement', async () => {
     const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9201, url: 'https://ado.example/9201' });
     dbMock.state.suiteRow = {
       id: 'suite-1',
@@ -975,8 +975,11 @@ describe('ADO test suite generation and publish', () => {
     await publishAdoTestCases('suite-1', { ado: { createTestCaseWorkItem } });
 
     const spec = createTestCaseWorkItem.mock.calls[0][0];
-    expect(spec).toEqual(expect.objectContaining({ parentId: 18452, linkType: 'tested-by' }));
-    expect(spec).not.toHaveProperty('areaPath');
+    expect(spec).toEqual(expect.objectContaining({
+      parentId: 18452,
+      linkType: 'tested-by',
+      areaPath: 'Apex\\QA',
+    }));
     expect(spec).not.toHaveProperty('tags');
   });
 

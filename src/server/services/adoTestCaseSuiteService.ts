@@ -672,6 +672,8 @@ export async function publishAdoTestCases(
   const requested = options.localCaseIds
     ?? cases.filter((testCase) => !testCase.developerOnly).map((testCase) => testCase.localCaseId);
   const writer = await resolveTestCaseWriter(row.project, row.sourceSnapshot, options);
+  // A writer passed in may carry the server's default area, which can belong to another project.
+  const rootAreaPath = areaPathFromSnapshot(row.sourceSnapshot);
   const context = generationContextFrom(row.sourceSnapshot);
   const published: QaAdoPublishedCase[] = [];
   const skippedLocalCaseIds: string[] = [];
@@ -762,7 +764,7 @@ export async function publishAdoTestCases(
         stepsHtml: buildTestCaseStepsXml(testCase.steps),
         parentId: linkTarget.id,
         linkType: placement.linkType ?? 'tested-by',
-        ...(placement.areaPath ? { areaPath: placement.areaPath } : {}),
+        ...((placement.areaPath ?? rootAreaPath) ? { areaPath: placement.areaPath ?? rootAreaPath } : {}),
         ...(placement.iterationPath ? { iterationPath: placement.iterationPath } : {}),
         ...(placement.tags?.length ? { tags: placement.tags } : {}),
         ...(options.assignedTo ? { assignedTo: options.assignedTo } : {}),
