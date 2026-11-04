@@ -55,7 +55,9 @@ export function useAskApex() {
   const [isConnected, setIsConnected] = useState(false);
   /** Set when the session is a chat thread on the V2 host. */
   const [threadId, setThreadId] = useState<string | null>(null);
-  const chat = useAgentChatSession(threadId, { enablePreparationState: true });
+  // Ask Apex threads wait for the user's first message, so an empty thread is
+  // not a thread that is still preparing.
+  const chat = useAgentChatSession(threadId);
   const chatStalled = useRunStalled(
     Boolean(threadId) && chat.isRunning && !chat.isRetrying,
     chat.lastProgressAt,

@@ -63,7 +63,7 @@ import {
   reviewPrd,
   reopenForReview,
   routePrdGenerationKickoff,
-  startPrdWatcher,
+  startPrdGenerationWatcher,
   submitForReview,
   syncPrdContent,
   updatePrdBacklog,
@@ -97,7 +97,7 @@ import {
   listDesignDocs,
   reviewDesignDoc,
   routeDesignDocGenerationKickoff,
-  startSingleFeatureDocWatcher,
+  startDesignDocGenerationWatcher,
   submitForReview as submitDesignDocForReview,
   syncDesignDocContent,
   triggerFixValidation,
@@ -1225,7 +1225,13 @@ async function startDesignDocsForApprovedPrd(
         skillSettingsId: prd.skillSettingsId ?? null,
       });
 
-      startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+      await startDesignDocGenerationWatcher({
+        designDocId,
+        chatThreadId: thread.id,
+        prdId,
+        project: prd.project,
+        userId,
+      });
       // Fire-and-forget — grounding/materialization happens inside kickoff.
       void Promise.resolve(
         routeDesignDocGenerationKickoff({
@@ -2363,7 +2369,13 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       .set({ chatThreadId: thread.id, model, generationError: null, status: 'generating', updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    startSingleFeatureDocWatcher(req.params.id, thread.id, doc.prdId, doc.project);
+    await startDesignDocGenerationWatcher({
+      designDocId: req.params.id,
+      chatThreadId: thread.id,
+      prdId: doc.prdId,
+      project: doc.project,
+      userId,
+    });
 
     const kickoffMessage =
       `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`;
@@ -4022,7 +4034,12 @@ router.post('/:interviewId/prds', async (req, res, next) => {
     // Return immediately so the client can navigate to the generating skeleton.
     // Grounding + agent kickoff run after the response (may take minutes on cold
     // checkout) — they must not block the Create PRD HTTP request.
-    startPrdWatcher(result.prdId, chatThreadId);
+    await startPrdGenerationWatcher({
+      prdId: result.prdId,
+      chatThreadId,
+      userId,
+      project: interview.project,
+    });
     if (kickoffGeneration) {
       void Promise.resolve(
         routePrdGenerationKickoff({

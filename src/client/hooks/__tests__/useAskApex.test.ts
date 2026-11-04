@@ -434,7 +434,9 @@ describe('useAskApex on the V2 chat host', () => {
     });
 
     expect(MockEventSource.instances).toHaveLength(0);
-    expect(mockUseAgentChatSession).toHaveBeenLastCalledWith('thread-ask', { enablePreparationState: true });
+    // The thread waits for the user's first message; treating it as preparing
+    // would lock the composer.
+    expect(mockUseAgentChatSession).toHaveBeenLastCalledWith('thread-ask', undefined);
 
     await act(async () => {
       await result.current.sendMessage('What is a PBI?');

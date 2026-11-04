@@ -1,5 +1,5 @@
 const mockFindMany = jest.fn();
-const mockIsV2ValidationThread = jest.fn().mockResolvedValue(false);
+const mockIsV2RunThread = jest.fn().mockResolvedValue(false);
 const mockAgentRunsFindMany = jest.fn();
 const mockPrdsFindMany = jest.fn();
 const mockPrdsFindFirst = jest.fn();
@@ -84,7 +84,7 @@ jest.mock('../services/v2HarvestTrigger', () => ({
 }));
 jest.mock('../services/documentValidationService', () => ({
   routeDocumentValidationKickoff: jest.fn(),
-  isV2ValidationThread: (...args: unknown[]) => mockIsV2ValidationThread(...args),
+  isV2RunThread: (...args: unknown[]) => mockIsV2RunThread(...args),
 }));
 jest.mock('../services/designPrototypeService', () => ({
   failStalePrototypes: jest.fn(),
@@ -509,11 +509,11 @@ describe('recovery cooperative aborts', () => {
         authorId: 'user-1',
         project: 'Apex',
       }]);
-    mockIsV2ValidationThread.mockResolvedValueOnce(true);
+    mockIsV2RunThread.mockResolvedValueOnce(true);
 
     await recoverInFlightWork({ signal: new AbortController().signal });
 
-    expect(mockIsV2ValidationThread).toHaveBeenCalledWith('thread-validation');
+    expect(mockIsV2RunThread).toHaveBeenCalledWith('thread-validation');
     expect(mockedHydrate).not.toHaveBeenCalledWith('thread-validation');
     expect(jest.mocked(routeDocumentValidationKickoff)).not.toHaveBeenCalled();
   });
@@ -695,6 +695,20 @@ describe('design-doc generation recovery claim', () => {
     expect(tryStartDocWatcher).not.toHaveBeenCalled();
   });
 
+  it('does not adopt a doc whose run went to the V2 worker', async () => {
+    (isDocWatcherActive as jest.Mock).mockReturnValue(false);
+    mockIsV2RunThread.mockImplementation(async (threadId: string) => threadId === 'thread-design');
+
+    try {
+      await recoverInFlightWork();
+    } finally {
+      mockIsV2RunThread.mockResolvedValue(false);
+    }
+
+    expect(tryStartDocWatcher).not.toHaveBeenCalled();
+    expect(routeDesignDoc).not.toHaveBeenCalled();
+  });
+
   it('adopts a doc whose watcher was lost with the process', async () => {
     (isDocWatcherActive as jest.Mock).mockReturnValue(false);
     // Lose the re-kick claim: this test is only about adopting the watcher.
@@ -845,6 +859,34 @@ describe('test-case generation recovery routing', () => {
       sourceThreadId: 'thread-prd',
     }));
     expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not reattach watchers for V2 test-case and PRD runs', async () => {
+    const prdService = jest.requireMock('../services/prdService');
+    const testCaseService = jest.requireMock('../services/testCaseService');
+    prdService.isPrdWatcherActive.mockReturnValue(false);
+    mockPrdsFindMany.mockResolvedValueOnce([{
+      id: 'prd-gen',
+      chatThreadId: 'thread-prd-gen',
+      interviewId: 'interview-1',
+      project: 'Apex',
+      authorId: 'user-1',
+      updatedAt: '2026-08-11T05:00:00.000Z',
+    }]);
+    mockIsV2RunThread.mockImplementation(
+      async (threadId: string) => threadId === 'thread-tc' || threadId === 'thread-prd-gen',
+    );
+
+    try {
+      await recoverInFlightWork();
+    } finally {
+      mockIsV2RunThread.mockResolvedValue(false);
+    }
+
+    expect(prdService.startPrdWatcher).not.toHaveBeenCalled();
+    expect(testCaseService.startTestCaseWatcher).not.toHaveBeenCalled();
+    expect(routeTestCases).not.toHaveBeenCalled();
+    expect(mockedHydrate).not.toHaveBeenCalledWith('thread-tc');
   });
 });
 

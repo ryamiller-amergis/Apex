@@ -25,7 +25,7 @@ import {
   routeDesignDocGenerationKickoff,
 } from './designDocService';
 import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationKickoff } from './testCaseService';
-import { isV2ValidationThread, routeDocumentValidationKickoff } from './documentValidationService';
+import { isV2RunThread, routeDocumentValidationKickoff } from './documentValidationService';
 import { failStalePrototypes } from './designPrototypeService';
 import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
 import { harvestFinishedV2UiLabDesigns } from './uiLabV2Harvest';
@@ -377,6 +377,7 @@ export async function recoverInFlightWork(
     throwIfAborted(signal);
     if (!prd.chatThreadId) continue;
     if (isPrdWatcherActive(prd.id)) continue;
+    if (await isV2RunThread(prd.chatThreadId)) continue;
     const ok = await hydrateThread(prd.chatThreadId);
     if (ok) {
       throwIfAborted(signal);
@@ -448,6 +449,7 @@ export async function recoverInFlightWork(
     // only adopt docs that are not already being watched here — as the PRD,
     // test-case, and validation loops do.
     if (isDocWatcherActive(doc.id)) continue;
+    if (await isV2RunThread(doc.chatThreadId)) continue;
     throwIfAborted(signal);
     const started = await tryStartSingleFeatureDocWatcher(
       doc.id,
@@ -531,7 +533,7 @@ export async function recoverInFlightWork(
     // watcher that was just started by autoStartValidation or acceptFixValidation.
     if (isValidationWatcherActive(doc.id)) continue;
     throwIfAborted(signal);
-    if (await isV2ValidationThread(doc.validationThreadId)) continue;
+    if (await isV2RunThread(doc.validationThreadId)) continue;
     const ok = await hydrateThread(doc.validationThreadId);
     if (ok) {
       throwIfAborted(signal);
@@ -624,7 +626,7 @@ export async function recoverInFlightWork(
     }
     if (isPrdValidationWatcherActive(prd.id)) continue;
     throwIfAborted(signal);
-    if (await isV2ValidationThread(prd.validationThreadId)) continue;
+    if (await isV2RunThread(prd.validationThreadId)) continue;
     const ok = await hydrateThread(prd.validationThreadId);
     if (ok) {
       throwIfAborted(signal);
@@ -694,6 +696,7 @@ export async function recoverInFlightWork(
     throwIfAborted(signal);
     if (!testCase.chatThreadId) continue;
     if (isTestCaseWatcherActive(testCase.id)) continue;
+    if (await isV2RunThread(testCase.chatThreadId)) continue;
     throwIfAborted(signal);
     const ok = await hydrateThread(testCase.chatThreadId);
     if (ok) {

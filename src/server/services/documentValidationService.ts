@@ -272,8 +272,8 @@ export async function routeDocumentValidationKickoff(opts: {
   }
 }
 
-/** A V2 validation run is applied by harvest, so it needs no share watcher. */
-export async function isV2ValidationThread(threadId: string): Promise<boolean> {
+/** A V2 run is applied by harvest, so its thread needs no share watcher. */
+export async function isV2RunThread(threadId: string): Promise<boolean> {
   const run = await db.query.agentRuns.findFirst({
     where: and(
       eq(agentRuns.threadId, threadId),
