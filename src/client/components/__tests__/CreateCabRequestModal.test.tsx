@@ -1,0 +1,95 @@
+import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { CreateCabRequestModal } from '../CreateCabRequestModal';
+
+describe('CreateCabRequestModal', () => {
+  const onCancel = jest.fn();
+  const onConfirm = jest.fn();
+
+  const renderModal = () =>
+    render(
+      <CreateCabRequestModal
+        targetVersion="2026.13.0"
+        defaultPreviousBranch="Release/2026.12.0"
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />,
+    );
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('shows the target version and default previous branch', () => {
+    renderModal();
+    expect(screen.getByTestId('create-cab-target-version')).toHaveTextContent('2026.13.0');
+    expect(screen.getByTestId('create-cab-previous-branch')).toHaveValue('Release/2026.12.0');
+  });
+
+  it('confirms dry-run and no branch cut by default', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    expect(onConfirm).toHaveBeenCalledWith({
+      previousReleaseBranch: 'Release/2026.12.0',
+      snowMode: 'dry-run',
+      cutReleaseBranch: false,
+    });
+  });
+
+  it('confirms prod run and cut-branch when selected', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(screen.getByLabelText(/Run \(prod snow/i));
+    await user.click(screen.getByTestId('create-cab-cut-branch'));
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    expect(onConfirm).toHaveBeenCalledWith({
+      previousReleaseBranch: 'Release/2026.12.0',
+      snowMode: 'run',
+      cutReleaseBranch: true,
+    });
+  });
+
+  it('rejects a previous branch that is not a release version', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    const input = screen.getByTestId('create-cab-previous-branch');
+    await user.clear(input);
+    await user.type(input, 'development');
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByText('Previous branch must be a release version such as Release/2026.14.0')).toBeInTheDocument();
+  });
+
+  it('cancels without confirming', () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId('create-cab-cancel'));
+    expect(onCancel).toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('shows the normalized release branch when the epic title includes a product label', () => {
+    render(
+      <CreateCabRequestModal
+        targetVersion="MV 2026.15.0"
+        defaultPreviousBranch="Release/2026.14.0"
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />,
+    );
+    expect(screen.getByText(/Cutting/)).toHaveTextContent('Release/2026.15.0');
+    expect(screen.getByTestId('create-cab-cut-branch').parentElement).toHaveTextContent('Release/2026.15.0');
+    expect(screen.getByText(/Cutting/)).not.toHaveTextContent('Release/MV');
+  });
+
+  it('rejects a whitespace-only previous branch', async () => {
+    const user = userEvent.setup();
+    renderModal();
+    const input = screen.getByTestId('create-cab-previous-branch');
+    await user.clear(input);
+    await user.type(input, '   ');
+    await user.click(screen.getByTestId('create-cab-confirm'));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByText('Previous shipped release branch is required')).toBeInTheDocument();
+  });
+});

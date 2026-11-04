@@ -1561,6 +1561,43 @@ describe('canonical durable send wrapper', () => {
     }
   });
 
+  it('refuses a cab-release turn on the legacy route instead of running it in the web app', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+    const { Agent } = jest.requireMock('@cursor/sdk') as {
+      Agent: { create: jest.Mock; resume: jest.Mock };
+    };
+    Agent.create.mockClear();
+    Agent.resume.mockClear();
+    const thread = await createThread(
+      'developer-1',
+      {
+        ...baseKickoff(),
+        skillPath: '.cursor/skills/cab-release/SKILL.md',
+        pillLabel: 'Create CAB request',
+      },
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Run the confirmed dry-run', undefined, [], {
+          legacyCompletion: 'detach',
+          turnIdPolicy: 'required',
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        message: 'INTERACTIVE_V2_REQUIRED',
+      });
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(Agent.create).not.toHaveBeenCalled();
+      expect(Agent.resume).not.toHaveBeenCalled();
+    } finally {
+      await closeThread(thread.id);
+    }
+  });
+
   it('runs the stale-thread gate only inside the detached legacy callback', async () => {
     mockCanonicalInteractiveWorkflowRoute.mockImplementation(
       mockCanonicalLegacyRoute,
