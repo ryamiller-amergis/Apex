@@ -3,8 +3,7 @@ import { useEffect, useState } from 'react';
 export const RUN_STALLED_AFTER_MS = 30_000;
 const CHECK_INTERVAL_MS = 5_000;
 
-export const RUN_STALLED_NOTICE =
-  'No updates for a bit. The agent is still working — if it was interrupted, it will restart on its own. No need to refresh.';
+export const RUN_STALLED_NOTICE = 'Taking longer than usual…';
 
 /**
  * True while a run is active and nothing has arrived for
