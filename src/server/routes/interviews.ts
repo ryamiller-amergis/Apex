@@ -583,12 +583,18 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       res.status(404).json({ error: 'QA suite not found' });
       return;
     }
-    const { selections, localCaseIds } = (req.body ?? {}) as QaLabPublishRequest;
+    const { selections, localCaseIds, updateLocalCaseIds } = (req.body ?? {}) as QaLabPublishRequest;
     if (selections !== undefined && !isSuiteSelectionMap(selections)) {
       res.status(400).json({ error: 'selections must map case ids to { planId, suiteId }' });
       return;
     }
-    if (localCaseIds !== undefined && !isCaseIdList(localCaseIds)) {
+    if (updateLocalCaseIds !== undefined && !isCaseIdList(updateLocalCaseIds)) {
+      res.status(400).json({ error: 'updateLocalCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const onlyUpdates = updateLocalCaseIds !== undefined
+      && Array.isArray(localCaseIds) && localCaseIds.length === 0;
+    if (localCaseIds !== undefined && !onlyUpdates && !isCaseIdList(localCaseIds)) {
       res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
       return;
     }
@@ -597,6 +603,7 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       ado: adoService,
       ...(selections ? { selections } : {}),
       ...(localCaseIds ? { localCaseIds } : {}),
+      ...(updateLocalCaseIds ? { updateLocalCaseIds } : {}),
     }));
   } catch (err) {
     if (isAdoUserAuthError(err)) {

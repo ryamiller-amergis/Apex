@@ -238,6 +238,8 @@ export async function readDocumentScratchInputs(
     '.ai-pilot/kickoff-transcript.md',
     '.ai-pilot/session.json',
     '.ai-pilot/test-plans.md',
+    '.ai-pilot/existing-test-cases.json',
+    '.ai-pilot/test-case-index.md',
   ]) {
     if (!isAllowedDocumentScratchInputPath(workflowClass, relativePath)) {
       continue;

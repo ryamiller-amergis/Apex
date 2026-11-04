@@ -158,9 +158,14 @@ export function usePublishAdoTestSuite() {
       failures: Array<{ localCaseId: string; message: string }>;
     },
     Error,
-    { suiteId: string; selections?: Record<string, QaAdoSuiteSelection>; localCaseIds?: string[] }
+    {
+      suiteId: string;
+      selections?: Record<string, QaAdoSuiteSelection>;
+      localCaseIds?: string[];
+      updateLocalCaseIds?: string[];
+    }
   >({
-    mutationFn: async ({ suiteId, selections, localCaseIds }) => {
+    mutationFn: async ({ suiteId, selections, localCaseIds, updateLocalCaseIds }) => {
       const result = await apiFetch<{
         published: QaLabPublishedCase[];
         skippedLocalCaseIds: string[];
@@ -171,6 +176,7 @@ export function usePublishAdoTestSuite() {
         body: JSON.stringify({
           ...(selections ? { selections } : {}),
           ...(localCaseIds ? { localCaseIds } : {}),
+          ...(updateLocalCaseIds ? { updateLocalCaseIds } : {}),
         }),
       });
       if (result.failures.length > 0) {

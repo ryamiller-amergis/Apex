@@ -13,13 +13,22 @@ export interface QaLabPublishReviewCase {
   suiteError?: string;
 }
 
+/** A needs-update case whose suggestion can be applied to its existing Test Case. */
+export interface QaLabPublishUpdateCase {
+  id: string;
+  title: string;
+  adoTestCaseId: number;
+  reason: string;
+}
+
 interface QaLabPublishReviewProps {
   suiteId: string;
   cases: QaLabPublishReviewCase[];
+  updates?: QaLabPublishUpdateCase[];
   requireSuite: boolean;
   isPublishing: boolean;
   onCancel: () => void;
-  onPublish: (selections: Record<string, QaAdoSuiteSelection>) => void;
+  onPublish: (selections: Record<string, QaAdoSuiteSelection>, updateLocalCaseIds: string[]) => void;
 }
 
 interface RowSelection {
@@ -49,12 +58,22 @@ function suiteLabel(path: string): string {
 export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
   suiteId,
   cases,
+  updates = [],
   requireSuite,
   isPublishing,
   onCancel,
   onPublish,
 }) => {
   const plansQuery = useAdoTestPlanOptions(suiteId, true);
+  const [chosenUpdates, setChosenUpdates] = useState<Set<string>>(new Set());
+  const toggleUpdate = (caseId: string) =>
+    setChosenUpdates((previous) => {
+      const next = new Set(previous);
+      if (next.has(caseId)) next.delete(caseId);
+      else next.add(caseId);
+      return next;
+    });
+  const updateIds = updates.filter((entry) => chosenUpdates.has(entry.id)).map((entry) => entry.id);
   const plans = useMemo(() => plansQuery.data?.plans ?? [], [plansQuery.data?.plans]);
   const [rows, setRows] = useState<Record<string, RowSelection>>({});
   const [bulk, setBulk] = useState<RowSelection>(EMPTY_ROW);
@@ -78,7 +97,9 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
   };
 
   const missingCount = cases.filter((entry) => rowFor(entry.id).suiteId === null).length;
-  const canPublish = !isPublishing && !plansQuery.isLoading && (!requireSuite || missingCount === 0);
+  const actionCount = cases.length + updateIds.length;
+  const canPublish = !isPublishing && !plansQuery.isLoading && actionCount > 0
+    && (!requireSuite || missingCount === 0);
 
   const handlePublish = () => {
     const selections: Record<string, QaAdoSuiteSelection> = {};
@@ -88,7 +109,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
         selections[entry.id] = { planId: row.planId, suiteId: row.suiteId };
       }
     }
-    onPublish(selections);
+    onPublish(selections, updateIds);
   };
 
   const renderSelects = (
@@ -149,11 +170,36 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
           {plansQuery.error instanceof Error ? plansQuery.error.message : 'Could not load Test Plans.'}
         </p>
       )}
-      {!plansQuery.isLoading && !plansQuery.isError && plans.length === 0 && (
+      {!plansQuery.isLoading && !plansQuery.isError && plans.length === 0 && cases.length > 0 && (
         <p className={styles.status}>No active Test Plans were found in this project.</p>
       )}
 
-      {plans.length > 0 && (
+      {updates.length > 0 && (
+        <div className={styles.updates}>
+          <span className={styles.bulkLabel}>Update existing Test Cases</span>
+          <ul className={styles.list}>
+            {updates.map((entry) => (
+              <li key={entry.id} className={styles.row}>
+                <label className={styles.updateLabel}>
+                  <input
+                    type="checkbox"
+                    checked={chosenUpdates.has(entry.id)}
+                    onChange={() => toggleUpdate(entry.id)}
+                    {...{ 'data-testid': `qa-lab-publish-review-update-${entry.id}` }}
+                  />
+                  <span className={styles.caseText}>
+                    <span className={styles.caseTitle}>Update existing #{entry.adoTestCaseId}</span>
+                    <span className={styles.caseMeta}>{entry.id} · {entry.title}</span>
+                    {entry.reason && <span className={styles.caseReason}>{entry.reason}</span>}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {plans.length > 0 && cases.length > 0 && (
         <>
           <div className={styles.bulkRow}>
             <span className={styles.bulkLabel}>Set all</span>
@@ -209,7 +255,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
           disabled={!canPublish}
           {...{ 'data-testid': 'qa-lab-publish-review-confirm' }}
         >
-          {isPublishing ? 'Publishing…' : `Publish ${cases.length} to ADO`}
+          {isPublishing ? 'Publishing…' : `Publish ${actionCount} to ADO`}
         </button>
       </div>
     </section>

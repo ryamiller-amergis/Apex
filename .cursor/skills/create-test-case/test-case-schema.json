@@ -135,6 +135,18 @@
         "rationale": { "type": "string" }
       }
     },
+    "existingCase": {
+      "type": "object",
+      "description": "Set when an Azure DevOps Test Case already covers this scenario. Ids come only from .ai-pilot/existing-test-cases.json or .ai-pilot/test-case-index.md.",
+      "required": ["adoTestCaseId", "status", "reason", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "adoTestCaseId": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["up-to-date", "needs-update"] },
+        "reason": { "type": "string" },
+        "source": { "enum": ["linked", "suite"] }
+      }
+    },
     "testCase": {
       "type": "object",
       "required": ["id", "title", "type", "tier", "priority", "persona", "preconditions", "steps", "expectedResult", "traceability", "automation"],
@@ -154,7 +166,8 @@
         "expectedResult": { "type": "string" },
         "traceability": { "$ref": "#/definitions/traceability" },
         "automation": { "$ref": "#/definitions/automation" },
-        "placement": { "$ref": "#/definitions/placement" }
+        "placement": { "$ref": "#/definitions/placement" },
+        "existing": { "$ref": "#/definitions/existingCase" }
       }
     },
     "suite": {

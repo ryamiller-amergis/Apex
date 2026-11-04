@@ -2,13 +2,19 @@ import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
+import { ExcludeFlags, TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
 import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
-import type { QaAdoTestPlanOption, QaAdoTestSuiteOption } from '../../shared/types/qaLab';
+import type {
+  QaAdoExistingTestCase,
+  QaAdoSuiteCaseIndex,
+  QaAdoSuiteCaseIndexEntry,
+  QaAdoTestPlanOption,
+  QaAdoTestSuiteOption,
+} from '../../shared/types/qaLab';
 import {
   computeLastEnterInProgressToDone,
   summarizeRelatedItemCycleTimes,
@@ -47,6 +53,70 @@ function computeDepth(id: number, parentMap: Map<number, number | null>): number
 }
 
 const MAX_TEST_PLANS = 200;
+export const MAX_SUITE_CASE_INDEX_ENTRIES = 5_000;
+const SUITE_CASE_INDEX_CONCURRENCY = 8;
+const TESTED_BY_FORWARD = 'Microsoft.VSTS.Common.TestedBy-Forward';
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCharCode(Number(code)))
+    .replace(/&amp;/gi, '&');
+}
+
+/** Step text is HTML inside XML; return what a tester reads. */
+function stepText(raw: string): string {
+  return decodeEntities(
+    decodeEntities(raw)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div)>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Parses `Microsoft.VSTS.TCM.Steps` into action and expected pairs. Shared-step
+ * references (`<compref>`) have no text of their own and are skipped.
+ */
+export function parseTestCaseStepsXml(
+  xml: string | null | undefined,
+): Array<{ order: number; action: string; expected: string }> {
+  if (!xml) return [];
+  const steps: Array<{ order: number; action: string; expected: string }> = [];
+  for (const match of xml.matchAll(/<step\b[^>]*>([\s\S]*?)<\/step>/gi)) {
+    const strings = [...match[1].matchAll(/<parameterizedString\b[^>]*>([\s\S]*?)<\/parameterizedString>/gi)]
+      .map((part) => stepText(part[1]));
+    const action = strings[0] ?? '';
+    if (!action) continue;
+    steps.push({ order: steps.length + 1, action, expected: strings[1] ?? '' });
+  }
+  return steps;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  map: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await map(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 /**
  * Static suites of one plan with paths below the plan's root suite. A suite
@@ -6180,6 +6250,46 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Replaces an existing Test Case's title and steps, and links it to `testedById`
+   * by Tested By when no such link exists yet.
+   */
+  async updateTestCaseWorkItem(spec: {
+    id: number;
+    title: string;
+    stepsHtml: string;
+    testedById?: number;
+  }): Promise<{ id: number; url: string }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const patch: any[] = [
+      { op: 'add', path: '/fields/System.Title', value: spec.title },
+      { op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: spec.stepsHtml },
+    ];
+    if (spec.testedById !== undefined) {
+      const current = await witApi.getWorkItem(spec.id, undefined, undefined, WorkItemExpand.Relations, this.project);
+      const linked = (current?.relations ?? []).some((relation) =>
+        relation.rel === 'Microsoft.VSTS.Common.TestedBy-Reverse'
+        && Number(relation.url?.split('/').pop()) === spec.testedById);
+      if (!linked) {
+        patch.push({
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'Microsoft.VSTS.Common.TestedBy-Reverse',
+            url: `${orgUrl}/_apis/wit/workItems/${spec.testedById}`,
+          },
+        });
+      }
+    }
+    const wi = await witApi.updateWorkItem({}, patch, spec.id, this.project);
+    if (!wi?.id) throw new Error(`Failed to update Test Case ${spec.id}`);
+    return {
+      id: wi.id,
+      url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
+    };
+  }
+
+  /**
    * Active Test Plans with their static suites. Requirement and query-based
    * suites are left out because Test Cases cannot be added to them directly.
    */
@@ -6217,6 +6327,112 @@ export class AzureDevOpsService {
       planId,
       suiteId,
     );
+  }
+
+  /** Test Cases linked to each work item by Tested By, keyed by work item id. */
+  async listLinkedTestCases(workItemIds: number[]): Promise<Map<number, QaAdoExistingTestCase[]>> {
+    const result = new Map<number, QaAdoExistingTestCase[]>();
+    if (workItemIds.length === 0) return result;
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const linkedByOwner = new Map<number, number[]>();
+    for (let i = 0; i < workItemIds.length; i += this.WORK_ITEM_BATCH_SIZE) {
+      const batch = workItemIds.slice(i, i + this.WORK_ITEM_BATCH_SIZE);
+      const items = await retryWithBackoff(() =>
+        witApi.getWorkItems(batch, undefined, undefined, WorkItemExpand.Relations, WorkItemErrorPolicy.Omit));
+      for (const item of items ?? []) {
+        if (typeof item?.id !== 'number') continue;
+        const linked = (item.relations ?? [])
+          .filter((relation) => relation.rel === TESTED_BY_FORWARD)
+          .map((relation) => Number(relation.url?.match(/\/(\d+)$/)?.[1]))
+          .filter((id) => Number.isInteger(id) && id > 0);
+        linkedByOwner.set(item.id, [...new Set(linked)]);
+      }
+    }
+    const cases = new Map(
+      (await this.getTestCasesById([...new Set([...linkedByOwner.values()].flat())]))
+        .map((testCase) => [testCase.id, testCase]),
+    );
+    for (const id of workItemIds) {
+      result.set(id, (linkedByOwner.get(id) ?? []).flatMap((caseId) => {
+        const testCase = cases.get(caseId);
+        return testCase ? [testCase] : [];
+      }));
+    }
+    return result;
+  }
+
+  /** Title, state, and steps of Test Cases; ids that are missing or not Test Cases are left out. */
+  async getTestCasesById(ids: number[]): Promise<QaAdoExistingTestCase[]> {
+    if (ids.length === 0) return [];
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const cases: QaAdoExistingTestCase[] = [];
+    for (let i = 0; i < ids.length; i += this.WORK_ITEM_BATCH_SIZE) {
+      const batch = ids.slice(i, i + this.WORK_ITEM_BATCH_SIZE);
+      const items = await retryWithBackoff(() => witApi.getWorkItems(
+        batch,
+        ['System.Title', 'System.State', 'System.WorkItemType', 'Microsoft.VSTS.TCM.Steps'],
+        undefined,
+        undefined,
+        WorkItemErrorPolicy.Omit,
+      ));
+      for (const item of items ?? []) {
+        if (typeof item?.id !== 'number' || item.fields?.['System.WorkItemType'] !== 'Test Case') continue;
+        cases.push({
+          id: item.id,
+          title: String(item.fields?.['System.Title'] ?? ''),
+          state: String(item.fields?.['System.State'] ?? ''),
+          steps: parseTestCaseStepsXml(item.fields?.['Microsoft.VSTS.TCM.Steps']),
+          url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${item.id}`,
+        });
+      }
+    }
+    return cases;
+  }
+
+  /**
+   * Case ids and titles in every static suite, for the agent to compare new
+   * cases against. Stops at MAX_SUITE_CASE_INDEX_ENTRIES.
+   */
+  async listSuiteCaseIndex(plans: QaAdoTestPlanOption[]): Promise<QaAdoSuiteCaseIndex> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const targets = plans.flatMap((plan) => plan.suites.map((suite) => ({ plan, suite })));
+    let collected = 0;
+    let truncated = false;
+    const perSuite = await mapWithConcurrency(targets, SUITE_CASE_INDEX_CONCURRENCY, async ({ plan, suite }) => {
+      const entries: QaAdoSuiteCaseIndexEntry[] = [];
+      let token: string | undefined;
+      do {
+        if (collected >= MAX_SUITE_CASE_INDEX_ENTRIES) {
+          truncated = true;
+          return entries;
+        }
+        const page = await retryWithBackoff(() => testPlanApi.getTestCaseList(
+          this.project,
+          plan.id,
+          suite.id,
+          undefined,
+          undefined,
+          undefined,
+          token,
+          false,
+          false,
+          ExcludeFlags.PointAssignments | ExcludeFlags.ExtraInformation,
+          false,
+        ));
+        for (const testCase of page ?? []) {
+          const item = testCase.workItem;
+          if (typeof item?.id !== 'number') continue;
+          entries.push({ id: item.id, title: item.name ?? '', planName: plan.name, suitePath: suite.path });
+          collected += 1;
+        }
+        token = page?.continuationToken || undefined;
+      } while (token);
+      return entries;
+    });
+    const entries = perSuite.flat();
+    if (entries.length > MAX_SUITE_CASE_INDEX_ENTRIES) truncated = true;
+    return { entries: entries.slice(0, MAX_SUITE_CASE_INDEX_ENTRIES), truncated };
   }
 
   /**

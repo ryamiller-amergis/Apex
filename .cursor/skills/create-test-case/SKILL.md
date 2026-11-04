@@ -236,6 +236,14 @@ Apex files published cases in Azure DevOps by the `placement` block in the JSON 
 | `testPlan`, `testSuite` | Proposed Azure Test Plan and static suite (`Feature > Sub-feature`). Copy names exactly from the "Azure Test Plans" list in the kickoff context. QA confirms them in Apex, then Apex adds the case to the suite |
 | `requireSuite` | Top level only. `true` when the project files every case in a suite; Apex then refuses to publish a case without a confirmed suite |
 
+### Existing test cases
+
+When Apex generates from Azure DevOps, the kickoff context has an `## Existing test cases` section and two files: `.ai-pilot/existing-test-cases.json` (Test Cases already linked to each PBI, with steps) and `.ai-pilot/test-case-index.md` (every case in the static suites). Check both before writing a case.
+
+1. If an existing case covers the scenario, set `existing` on the case (see `definitions.existingCase`): `up-to-date` when it still matches the work item (copy its title and steps; it does not count toward the case limit), or `needs-update` when it no longer matches (write the suggested title and steps and say in `reason` what changed).
+2. Write a new case only when nothing covers the scenario. Use only ids from those two files.
+3. If the kickoff says existing cases were not checked, write every case as new and add the `coverageMatrix` gap it names.
+
 ### Markdown template (`{slug}.test-cases.md`)
 
 ```markdown

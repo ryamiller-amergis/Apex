@@ -13,6 +13,7 @@ import {
   isThreadIdle,
   prepareBackgroundWorkflowTurn,
   sendMessage,
+  updateThreadKickoffContext,
 } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { readRemoteBranchTip } from '../services/repoCacheService';
@@ -502,6 +503,64 @@ describe('ADO test suite generation and publish', () => {
     expect(isAdoTestSuiteWatcherActive('suite-new')).toBe(true);
   });
 
+  it('writes the existing Test Cases and suite index the skill checks before writing new cases', async () => {
+    const plans = [{ planId: 7, planName: 'Release 1', suites: [] }];
+    const linkedCase = {
+      id: 900,
+      title: 'Sends a notification',
+      state: 'Design',
+      steps: [{ action: 'Open', expected: 'Opens' }],
+      url: 'https://dev.azure.com/org/Apex/_workitems/edit/900',
+    };
+    const ado = {
+      getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()),
+      listStaticTestPlanSuites: jest.fn().mockResolvedValue(plans),
+      listLinkedTestCases: jest.fn().mockResolvedValue(new Map([[18452, [linkedCase]], [18499, []]])),
+      listSuiteCaseIndex: jest.fn().mockResolvedValue({
+        entries: [
+          { id: 901, title: 'Mutes a channel', planName: 'Release 1', suitePath: 'Settings' },
+          { id: 902, title: 'Opens the bell', planName: 'Release 1', suitePath: '' },
+        ],
+        truncated: true,
+      }),
+    };
+
+    await triggerAdoTestCaseGeneration({ project: 'Apex', rootWorkItemId: 100, userId: 'user-1', ado });
+    await settleBackgroundDispatch();
+
+    expect(ado.listLinkedTestCases).toHaveBeenCalledWith([18452, 18499]);
+    expect(ado.listSuiteCaseIndex).toHaveBeenCalledWith(plans);
+    expect(JSON.parse(fs.readFileSync(
+      path.join(workspaceDir, '.ai-pilot', 'existing-test-cases.json'),
+      'utf-8',
+    ))).toEqual({ 'PBI-18452': [linkedCase] });
+    const index = fs.readFileSync(path.join(workspaceDir, '.ai-pilot', 'test-case-index.md'), 'utf-8');
+    expect(index).toContain('## Release 1');
+    expect(index).toContain('- 901 | Settings | Mutes a channel');
+    expect(index).toContain('- 902 | (plan root) | Opens the bell');
+    const kickoff = jest.mocked(updateThreadKickoffContext).mock.lastCall?.[1] as string;
+    expect(kickoff).toContain('## Existing test cases');
+    expect(kickoff).toContain('.ai-pilot/existing-test-cases.json');
+    expect(kickoff).toContain('Suite case index incomplete');
+  });
+
+  it('tells the skill existing cases were not checked when Azure DevOps cannot list them', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ado = {
+      getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()),
+      listLinkedTestCases: jest.fn().mockRejectedValue(new Error('403')),
+      listSuiteCaseIndex: jest.fn().mockResolvedValue({ entries: [], truncated: false }),
+    };
+
+    const result = await triggerAdoTestCaseGeneration({ project: 'Apex', rootWorkItemId: 100, userId: 'user-1', ado });
+    await settleBackgroundDispatch();
+
+    expect(result).toEqual(expect.objectContaining({ started: true }));
+    expect(fs.existsSync(path.join(workspaceDir, '.ai-pilot', 'existing-test-cases.json'))).toBe(false);
+    const kickoff = jest.mocked(updateThreadKickoffContext).mock.lastCall?.[1] as string;
+    expect(kickoff).toContain('Existing cases not checked');
+  });
+
   describe('commit pin before routing', () => {
     const SHA = 'a'.repeat(40);
     const pinned = {
@@ -707,6 +766,51 @@ describe('ADO test suite generation and publish', () => {
     expect(adoWriteForRequest).not.toHaveBeenCalled();
   });
 
+  it('stores the current version of flagged existing cases and treats unknown ids as new', async () => {
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+    const flag = (adoTestCaseId: number) => ({
+      adoTestCaseId,
+      status: 'needs-update',
+      reason: 'Steps changed',
+      source: 'suite',
+    });
+    fs.writeFileSync(
+      path.join(outputDir, 'notifications.test-cases.json'),
+      JSON.stringify({
+        suites: [{
+          pbiId: 'PBI-18452',
+          testCases: [
+            { id: 'TC-1', title: 'Saves', steps: [], existing: flag(900) },
+            { id: 'TC-2', title: 'Mutes', steps: [], existing: flag(404) },
+            { id: 'TC-3', title: 'Opens', steps: [], existing: { adoTestCaseId: 'abc' } },
+          ],
+        }],
+      }),
+    );
+    dbMock.state.threadRow = { workspaceDir };
+    dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating', project: 'Apex' };
+    const current = {
+      id: 900,
+      title: 'Saves the form',
+      state: 'Ready',
+      steps: [{ order: 1, action: 'Click save', expected: 'Saved' }],
+      url: 'https://dev.azure.com/org/Apex/_workitems/edit/900',
+    };
+    const ado = { getTestCasesById: jest.fn().mockResolvedValue([current]) };
+
+    await expect(syncAdoTestSuiteOutput('suite-1', 'thread-ado', undefined, ado)).resolves.toBe(true);
+
+    expect(ado.getTestCasesById).toHaveBeenCalledWith([900, 404]);
+    const stored = dbMock.state.updates[0].testCasesJson as {
+      suites: Array<{ testCases: Array<Record<string, unknown>> }>;
+    };
+    const [saves, mutes, opens] = stored.suites[0].testCases;
+    expect(saves.existing).toEqual({ ...flag(900), current });
+    expect(mutes).not.toHaveProperty('existing');
+    expect(opens).not.toHaveProperty('existing');
+  });
+
   it('syncs worker-harvested output from a workspace other than the thread workspace', async () => {
     const harvestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ado-suite-harvest-'));
     try {
@@ -873,6 +977,43 @@ describe('ADO test suite generation and publish', () => {
         message: 'Unit and integration checks are not published as Test Cases',
       }]);
       expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips existing cases and updates a needs-update case only when QA chooses it', async () => {
+      const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9001, url: 'https://ado.example/9001' });
+      const updateTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 700, url: 'https://ado.example/700' });
+      const ado = { createTestCaseWorkItem, updateTestCaseWorkItem };
+      const row = twoCaseSuite();
+      const testCases = (row.testCasesJson.suites[0].testCases as Array<Record<string, unknown>>);
+      testCases[0].existing = { adoTestCaseId: 600, status: 'up-to-date', reason: 'Same', source: 'linked' };
+      testCases[1].existing = { adoTestCaseId: 700, status: 'needs-update', reason: 'New step', source: 'suite' };
+      dbMock.state.suiteRow = row;
+
+      const all = await publishAdoTestCases('suite-1', { ado });
+      const forced = await publishAdoTestCases('suite-1', { ado, localCaseIds: ['TC-1', 'TC-2'] });
+      const wrongUpdate = await publishAdoTestCases('suite-1', { ado, localCaseIds: [], updateLocalCaseIds: ['TC-1'] });
+      const updated = await publishAdoTestCases('suite-1', { ado, localCaseIds: [], updateLocalCaseIds: ['TC-2'] });
+      const retried = await publishAdoTestCases('suite-1', { ado, localCaseIds: [], updateLocalCaseIds: ['TC-2'] });
+
+      expect(all.published).toEqual([]);
+      expect(forced.skippedLocalCaseIds).toEqual(['TC-1', 'TC-2']);
+      expect(wrongUpdate.failures).toEqual([{
+        localCaseId: 'TC-1',
+        message: 'Only cases that need an update can update an existing Test Case',
+      }]);
+      expect(createTestCaseWorkItem).not.toHaveBeenCalled();
+      expect(updateTestCaseWorkItem).toHaveBeenCalledTimes(1);
+      expect(updateTestCaseWorkItem).toHaveBeenCalledWith(expect.objectContaining({
+        id: 700,
+        title: 'Drop me',
+        testedById: 18452,
+      }));
+      expect(updated.published).toEqual([expect.objectContaining({
+        localCaseId: 'TC-2',
+        adoTestCaseId: 700,
+        action: 'updated',
+      })]);
+      expect(retried.skippedLocalCaseIds).toEqual(['TC-2']);
     });
 
     it('removes unpublished cases and updates the suite count', async () => {

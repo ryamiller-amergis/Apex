@@ -50,7 +50,7 @@ describe('QaLabPublishReview', () => {
     expect(screen.getByText('Clock in inside the geofence radius')).toBeTruthy();
     fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
 
-    expect(onPublish).toHaveBeenCalledWith({ 'TC-1': { planId: 15, suiteId: 152 } });
+    expect(onPublish).toHaveBeenCalledWith({ 'TC-1': { planId: 15, suiteId: 152 } }, []);
   });
 
   it('blocks publish until every case has a suite when the skill requires one', () => {
@@ -106,7 +106,7 @@ describe('QaLabPublishReview', () => {
     expect(onPublish).toHaveBeenCalledWith({
       'TC-4': { planId: 15, suiteId: 152 },
       'TC-5': { planId: 15, suiteId: 152 },
-    });
+    }, []);
   });
 
   it('lets cases publish without a suite when the skill does not require one', () => {
@@ -124,6 +124,30 @@ describe('QaLabPublishReview', () => {
 
     fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
 
-    expect(onPublish).toHaveBeenCalledWith({});
+    expect(onPublish).toHaveBeenCalledWith({}, []);
+  });
+
+  it('leaves existing-case updates unchecked until QA chooses them', () => {
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[]}
+        updates={[{ id: 'TC-6', title: 'Mute a channel', adoTestCaseId: 700, reason: 'A new step was added' }]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    const confirm = screen.getByTestId('qa-lab-publish-review-confirm');
+    expect(screen.getByText('Update existing #700')).toBeTruthy();
+    expect(confirm).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-update-TC-6'));
+    fireEvent.click(confirm);
+
+    expect(onPublish).toHaveBeenCalledWith({}, ['TC-6']);
   });
 });

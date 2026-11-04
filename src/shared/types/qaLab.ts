@@ -42,6 +42,8 @@ export interface QaLabTestCase {
   proposedTestSuite?: string;
   /** One line from the skill on why it chose that plan and suite. */
   placementReason?: string;
+  /** Set when an Azure DevOps case already covers this scenario. */
+  existing?: QaLabExistingCase;
 }
 
 export interface QaLabSuite {
@@ -121,6 +123,8 @@ export interface QaLabPublishedCase {
   testSuiteId?: number;
   /** Set when the Test Case was created but adding it to the suite failed. */
   suiteError?: string;
+  /** `updated` when publish applied the suggestion to an existing Test Case. Absent means created. */
+  action?: 'updated';
 }
 
 /** State for a suite generated directly from an ADO work item. */
@@ -198,6 +202,41 @@ export interface QaAdoPlacement {
   requireSuite?: boolean;
 }
 
+/** A Test Case that already exists in Azure DevOps, with its current steps. */
+export interface QaAdoExistingTestCase {
+  id: number;
+  title: string;
+  state: string;
+  steps: QaLabTestCaseStep[];
+  url: string;
+}
+
+/** One line of the static-suite case index the agent compares against. */
+export interface QaAdoSuiteCaseIndexEntry {
+  id: number;
+  title: string;
+  planName: string;
+  suitePath: string;
+}
+
+export interface QaAdoSuiteCaseIndex {
+  entries: QaAdoSuiteCaseIndexEntry[];
+  /** True when the index stopped at its size cap. */
+  truncated: boolean;
+}
+
+export type QaLabExistingStatus = 'up-to-date' | 'needs-update';
+
+/** The agent's verdict that a case already exists in Azure DevOps. */
+export interface QaLabExistingCase {
+  adoTestCaseId: number;
+  status: QaLabExistingStatus;
+  reason: string;
+  source: 'linked' | 'suite';
+  /** The case as it is in Azure DevOps now; absent when it could not be read. */
+  current?: QaAdoExistingTestCase;
+}
+
 /** A static Test Suite a published case can be added to. */
 export interface QaAdoTestSuiteOption {
   id: number;
@@ -222,6 +261,8 @@ export interface QaLabPublishRequest {
   selections?: Record<string, QaAdoSuiteSelection>;
   /** Publish only these cases. Omit to publish every unpublished case. */
   localCaseIds?: string[];
+  /** Needs-update cases whose suggestion QA chose to apply to the existing Test Case. */
+  updateLocalCaseIds?: string[];
 }
 
 export interface QaLabDeleteCasesRequest {

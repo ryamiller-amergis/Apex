@@ -12,6 +12,9 @@ import type {
   QaAdoPlacement,
   QaAdoPlacementLinkTo,
   QaAdoPlacementLinkType,
+  QaAdoExistingTestCase,
+  QaAdoSuiteCaseIndex,
+  QaLabExistingStatus,
   QaAdoSuiteSelection,
   QaAdoTestPlanOption,
   QaLabGenerationCandidates,
@@ -37,6 +40,7 @@ import {
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { readRemoteBranchTip } from './repoCacheService';
+import { existingAdoTestCaseId, rawTestCaseRecords } from './testCaseLookupService';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -75,6 +79,17 @@ export interface AdoQaContextReader {
   ): Promise<QaAdoGenerationContext | null>;
   /** Lets the skill propose real Test Plan and suite names. */
   listStaticTestPlanSuites?(): Promise<QaAdoTestPlanOption[]>;
+  /** Lets the skill mark scenarios Azure DevOps already covers. */
+  listLinkedTestCases?(workItemIds: number[]): Promise<Map<number, QaAdoExistingTestCase[]>>;
+  listSuiteCaseIndex?(plans: QaAdoTestPlanOption[]): Promise<QaAdoSuiteCaseIndex>;
+}
+
+export interface ExistingCaseContext {
+  /** Linked Test Cases keyed by backlog id (`PBI-{adoId}`). */
+  linked: Record<string, QaAdoExistingTestCase[]>;
+  index: QaAdoSuiteCaseIndex;
+  /** False when Azure DevOps could not be read; the agent then writes every case as new. */
+  checked: boolean;
 }
 
 export interface TriggerAdoTestCaseGenerationInput {
@@ -180,11 +195,19 @@ export interface AdoTestCaseWriter {
     tags?: string[];
   }): Promise<{ id: number; url: string }>;
   addTestCasesToSuite?(planId: number, suiteId: number, testCaseIds: number[]): Promise<void>;
+  updateTestCaseWorkItem?(spec: {
+    id: number;
+    title: string;
+    stepsHtml: string;
+    testedById?: number;
+  }): Promise<{ id: number; url: string }>;
 }
 
 export interface PublishAdoTestCasesOptions {
-  /** Local case ids to publish. Omit to publish every unpublished case. */
+  /** Local case ids to publish. Omit to publish every unpublished new case. */
   localCaseIds?: string[];
+  /** Needs-update cases to apply to their existing Test Case. */
+  updateLocalCaseIds?: string[];
   /** Test Plan suites QA confirmed, keyed by local case id. */
   selections?: Record<string, QaAdoSuiteSelection>;
   assignedTo?: string;
@@ -210,6 +233,7 @@ interface PublishableCase {
   parentWorkItemId: number;
   placement: QaAdoPlacement;
   placementError: string | null;
+  existing: { adoTestCaseId: number; status: QaLabExistingStatus } | null;
 }
 
 const PLACEMENT_LINK_TO: readonly QaAdoPlacementLinkTo[] = ['requirement', 'parent', 'root'];
@@ -218,6 +242,8 @@ const MAX_PLACEMENT_TAGS = 20;
 const MAX_TAG_LENGTH = 100;
 const MAX_CLASSIFICATION_PATH_LENGTH = 256;
 const TEST_PLANS_FILE = '.ai-pilot/test-plans.md';
+const EXISTING_CASES_FILE = '.ai-pilot/existing-test-cases.json';
+const SUITE_CASE_INDEX_FILE = '.ai-pilot/test-case-index.md';
 
 /** Backlog id the create-test-case skill can trace. The number is the ADO work item id. */
 export function adoBacklogPbiId(adoWorkItemId: number): string {
@@ -383,6 +409,11 @@ export async function triggerAdoTestCaseGeneration(
   const prdMarkdown = renderSyntheticPrd(context, pbiIds);
   const kickoffMessage = buildKickoffMessage(pbiIds);
   const testPlans = await readTestPlanOptions(reader);
+  const existingCases = await readExistingCaseContext(
+    reader,
+    context.targets.map((target) => target.id),
+    testPlans,
+  );
   const freeformContext = renderGenerationContext({
     project,
     rootWorkItemId: input.rootWorkItemId,
@@ -390,6 +421,7 @@ export async function triggerAdoTestCaseGeneration(
     prdMarkdown,
     backlog,
     testPlans,
+    existing: existingCases,
   });
   const model = input.model
     ?? skillConfig.testCaseModel
@@ -425,6 +457,7 @@ export async function triggerAdoTestCaseGeneration(
     freeformContext,
   });
   writeTestPlanFile(thread.workspaceDir, testPlans);
+  writeExistingCaseFiles(thread.workspaceDir, existingCases);
   updateThreadKickoffContext(thread.id, freeformContext);
 
   const [inserted] = await db
@@ -661,16 +694,21 @@ export async function publishAdoTestCases(
   }
 
   const cases = collectPublishableCases(row.testCasesJson);
-  if (cases.length === 0 && options.localCaseIds === undefined) {
+  const updateIds = new Set(options.updateLocalCaseIds ?? []);
+  if (cases.length === 0 && options.localCaseIds === undefined && updateIds.size === 0) {
     throw new Error(`ADO test suite ${suiteId} has no generated test cases to publish`);
   }
-  if (options.localCaseIds?.length === 0) {
+  if (options.localCaseIds?.length === 0 && updateIds.size === 0) {
     return { published: [], skippedLocalCaseIds: [], failures: [] };
   }
 
   const byId = new Map(cases.map((testCase) => [testCase.localCaseId, testCase]));
-  const requested = options.localCaseIds
-    ?? cases.filter((testCase) => !testCase.developerOnly).map((testCase) => testCase.localCaseId);
+  const requested = [
+    ...(options.localCaseIds ?? cases
+      .filter((testCase) => !testCase.developerOnly && !testCase.existing)
+      .map((testCase) => testCase.localCaseId)),
+    ...updateIds,
+  ];
   const writer = await resolveTestCaseWriter(row.project, row.sourceSnapshot, options);
   // A writer passed in may carry the server's default area, which can belong to another project.
   const rootAreaPath = areaPathFromSnapshot(row.sourceSnapshot);
@@ -721,6 +759,24 @@ export async function publishAdoTestCases(
         localCaseId,
         message: 'Unit and integration checks are not published as Test Cases',
       });
+      continue;
+    }
+    if (updateIds.has(localCaseId) && testCase.existing?.status !== 'needs-update') {
+      failures.push({ localCaseId, message: 'Only cases that need an update can update an existing Test Case' });
+      continue;
+    }
+    if (testCase.existing && !updateIds.has(localCaseId)) {
+      skippedLocalCaseIds.push(localCaseId);
+      continue;
+    }
+    if (testCase.existing) {
+      const result = await applyExistingCaseUpdate(writer, testCase, testCase.existing.adoTestCaseId, context);
+      if ('error' in result) {
+        failures.push({ localCaseId, message: result.error });
+      } else {
+        await savePublishedCase(suiteId, result.entry);
+        published.push(result.entry);
+      }
       continue;
     }
 
@@ -792,6 +848,41 @@ export async function publishAdoTestCases(
   }
 
   return { published, skippedLocalCaseIds, failures };
+}
+
+async function applyExistingCaseUpdate(
+  writer: AdoTestCaseWriter,
+  testCase: PublishableCase,
+  adoTestCaseId: number,
+  context: QaAdoGenerationContext,
+): Promise<{ entry: QaAdoPublishedCase } | { error: string }> {
+  if (!writer.updateTestCaseWorkItem) {
+    return { error: 'This Azure DevOps client cannot update existing Test Cases' };
+  }
+  const linkTarget = resolveLinkTarget(testCase, context);
+  if ('error' in linkTarget) return { error: linkTarget.error };
+  try {
+    const updated = await writer.updateTestCaseWorkItem({
+      id: adoTestCaseId,
+      title: testCase.title,
+      stepsHtml: buildTestCaseStepsXml(testCase.steps),
+      testedById: linkTarget.id,
+    });
+    return {
+      entry: {
+        localCaseId: testCase.localCaseId,
+        adoTestCaseId: updated.id,
+        adoTestCaseUrl: updated.url,
+        parentWorkItemId: linkTarget.id,
+        publishedAt: new Date().toISOString(),
+        action: 'updated',
+      },
+    };
+  } catch (error) {
+    return {
+      error: `Could not update Test Case ${adoTestCaseId}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 function isValidSelection(selection: QaAdoSuiteSelection): boolean {
@@ -1047,22 +1138,65 @@ export async function syncAdoTestSuiteRunOutput(
   return true;
 }
 
+export interface ExistingCaseDetailsReader {
+  getTestCasesById(ids: number[]): Promise<QaAdoExistingTestCase[]>;
+}
+
+/**
+ * Stores each flagged case's current Azure DevOps version on `existing.current`, and drops
+ * the flag when the id is not a Test Case, so the case is treated as new.
+ */
+export async function attachExistingCaseDetails(
+  testCasesJson: unknown,
+  createReader: () => ExistingCaseDetailsReader,
+): Promise<void> {
+  const flagged = rawTestCaseRecords(testCasesJson).flatMap((record) => {
+    const id = existingAdoTestCaseId(record);
+    if (id !== null) return [{ record, id }];
+    delete record.existing;
+    return [];
+  });
+  if (flagged.length === 0) return;
+
+  let found: QaAdoExistingTestCase[];
+  try {
+    found = await createReader().getTestCasesById([...new Set(flagged.map((entry) => entry.id))]);
+  } catch (error) {
+    console.warn(
+      `[adoTestSuite] Could not read existing Test Cases: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  const byId = new Map(found.map((testCase) => [testCase.id, testCase]));
+  for (const { record, id } of flagged) {
+    const current = byId.get(id);
+    if (current) {
+      (record.existing as Record<string, unknown>).current = current;
+    } else {
+      delete record.existing;
+    }
+  }
+}
+
 export async function syncAdoTestSuiteOutput(
   suiteId: string,
   chatThreadId: string,
   workspaceDirOverride?: string,
+  ado?: ExistingCaseDetailsReader,
 ): Promise<boolean> {
   const testCasesJson = await readOutputTestCases(chatThreadId, workspaceDirOverride);
   if (testCasesJson === null) return false;
 
   const row = await db.query.qaAdoTestSuites.findFirst({
     where: eq(qaAdoTestSuites.id, suiteId),
-    columns: { chatThreadId: true, status: true },
+    columns: { chatThreadId: true, status: true, project: true },
   });
   if (!row || row.chatThreadId !== chatThreadId || row.status !== 'generating') {
     await cleanupWorkspace(chatThreadId);
     return false;
   }
+
+  await attachExistingCaseDetails(testCasesJson, () => ado ?? new AzureDevOpsService(row.project));
 
   const testCasesMd = await readOutputTestCasesMd(chatThreadId, workspaceDirOverride);
   const coverageSummary = summarizeCoverage(testCasesJson);
@@ -1280,6 +1414,7 @@ function renderGenerationContext(input: {
   prdMarkdown: string;
   backlog: SyntheticAdoBacklog;
   testPlans: QaAdoTestPlanOption[];
+  existing: ExistingCaseContext;
 }): string {
   return [
     '# Test Case Generation Context',
@@ -1307,6 +1442,7 @@ function renderGenerationContext(input: {
     'and how many cases to write, is set by the skill.',
     '',
     ...renderTestPlanSection(input.testPlans),
+    ...renderExistingCasesSection(input.existing),
     '## Synthetic PRD',
     input.prdMarkdown,
     '',
@@ -1327,6 +1463,87 @@ export async function readTestPlanOptions(reader: AdoQaContextReader): Promise<Q
     );
     return [];
   }
+}
+
+export async function readExistingCaseContext(
+  reader: AdoQaContextReader,
+  targetIds: number[],
+  testPlans: QaAdoTestPlanOption[],
+): Promise<ExistingCaseContext> {
+  const unchecked: ExistingCaseContext = {
+    linked: {},
+    index: { entries: [], truncated: false },
+    checked: false,
+  };
+  if (!reader.listLinkedTestCases || !reader.listSuiteCaseIndex) return unchecked;
+  try {
+    const [linkedById, index] = await Promise.all([
+      reader.listLinkedTestCases(targetIds),
+      testPlans.length > 0
+        ? reader.listSuiteCaseIndex(testPlans)
+        : Promise.resolve({ entries: [], truncated: false }),
+    ]);
+    const linked: Record<string, QaAdoExistingTestCase[]> = {};
+    for (const [id, cases] of linkedById) {
+      if (cases.length > 0) linked[adoBacklogPbiId(id)] = cases;
+    }
+    return { linked, index, checked: true };
+  } catch (error) {
+    console.warn(
+      `[adoTestSuite] Existing Test Cases unavailable for generation context: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return unchecked;
+  }
+}
+
+/** Writes the linked cases and the suite index the kickoff points at; no-op when unchecked. */
+export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingCaseContext): void {
+  if (!existing.checked) return;
+  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspaceDir, EXISTING_CASES_FILE),
+    `${JSON.stringify(existing.linked, null, 2)}\n`,
+    'utf-8',
+  );
+  const lines = ['# Test Cases in static suites', '', '`{id} | {suite path} | {title}`, grouped by Test Plan.'];
+  let plan: string | null = null;
+  for (const entry of existing.index.entries) {
+    if (entry.planName !== plan) {
+      plan = entry.planName;
+      lines.push('', `## ${plan}`);
+    }
+    lines.push(`- ${entry.id} | ${entry.suitePath || '(plan root)'} | ${entry.title}`);
+  }
+  fs.writeFileSync(path.join(workspaceDir, SUITE_CASE_INDEX_FILE), `${lines.join('\n')}\n`, 'utf-8');
+}
+
+export function renderExistingCasesSection(existing: ExistingCaseContext): string[] {
+  if (!existing.checked) {
+    return [
+      '## Existing test cases',
+      '',
+      'Existing Azure DevOps Test Cases could not be read for this run. Write every case as new,',
+      'and add a `coverageMatrix` gap: "Existing cases not checked".',
+      '',
+    ];
+  }
+  return [
+    '## Existing test cases',
+    '',
+    'Azure DevOps may already cover some scenarios. Before writing a case, check:',
+    `- \`${EXISTING_CASES_FILE}\`: Test Cases already linked to each target PBI by Tested By, with their steps, keyed by backlog id.`,
+    `- \`${SUITE_CASE_INDEX_FILE}\`: every case in the static suites, \`{id} | {suite path} | {title}\`, grouped by Test Plan. Search it within the suite you pick for the case.`,
+    ...(existing.index.truncated
+      ? ['  The index stopped at its size limit, so it is incomplete. Add a `coverageMatrix` gap: "Suite case index incomplete".']
+      : []),
+    '',
+    'When an existing case covers the scenario, set the case\'s `existing` to',
+    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`:',
+    '- `up-to-date`: it still matches the work item. Copy its title and steps. It does not count toward the case limit.',
+    '- `needs-update`: it covers the scenario but no longer matches. Write the suggested title and steps, and say in `reason` what changed.',
+    'Write a new case only when no existing case covers the scenario. Only use ids from these two files.',
+    '',
+  ];
 }
 
 export function renderTestPlanSection(testPlans: QaAdoTestPlanOption[]): string[] {
@@ -1650,6 +1867,8 @@ function toPublishableCase(
   const casePlacement = parsePlacement(record.placement);
   const automationTier = stringFrom(asRecord(record.automation)?.recommendedTier)
     ?? stringFrom(record.automationTier);
+  const existingId = existingAdoTestCaseId(record);
+  const existingStatus = asRecord(record.existing)?.status;
   return {
     localCaseId,
     title,
@@ -1658,6 +1877,9 @@ function toPublishableCase(
     parentWorkItemId,
     placement: mergePlacements(defaultPlacement.placement, casePlacement.placement),
     placementError: defaultPlacement.error ?? casePlacement.error,
+    existing: existingId !== null && (existingStatus === 'up-to-date' || existingStatus === 'needs-update')
+      ? { adoTestCaseId: existingId, status: existingStatus }
+      : null,
   };
 }
 
@@ -1826,6 +2048,7 @@ export function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
       ...(testPlanId !== null ? { testPlanId } : {}),
       ...(testSuiteId !== null ? { testSuiteId } : {}),
       ...(suiteError ? { suiteError } : {}),
+      ...(record?.action === 'updated' ? { action: 'updated' as const } : {}),
     });
   }
   return cases;
