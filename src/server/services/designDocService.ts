@@ -13,7 +13,7 @@ import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding'
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration, getThreadRunStateSnapshot } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
@@ -1937,8 +1937,22 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     })
     .where(eq(designDocs.id, designDocId));
 
-
-  startValidationWatcher(designDocId, thread.id);
+  const v2Transport = await usesV2DocumentTransport({
+    userId: doc.authorId,
+    project: doc.project,
+    workflowClass: 'validation',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing scorecards.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startValidationWatcher(designDocId, thread.id);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 
   const kickoffMessage =
     'Score the design doc in `.ai-pilot/kickoff-context.md` using the validation skill. ' +

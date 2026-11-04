@@ -1,4 +1,5 @@
 const mockFindMany = jest.fn();
+const mockIsV2ValidationThread = jest.fn().mockResolvedValue(false);
 const mockAgentRunsFindMany = jest.fn();
 const mockPrdsFindMany = jest.fn();
 const mockPrdsFindFirst = jest.fn();
@@ -78,6 +79,7 @@ jest.mock('../services/testCaseService', () => ({
 }));
 jest.mock('../services/documentValidationService', () => ({
   routeDocumentValidationKickoff: jest.fn(),
+  isV2ValidationThread: (...args: unknown[]) => mockIsV2ValidationThread(...args),
 }));
 jest.mock('../services/designPrototypeService', () => ({
   failStalePrototypes: jest.fn(),
@@ -486,6 +488,28 @@ describe('recovery cooperative aborts', () => {
       recoverInFlightWork({ signal: controller.signal }),
     ).rejects.toBeInstanceOf(RepoCacheLeaseLostError);
 
+    expect(jest.mocked(routeDocumentValidationKickoff)).not.toHaveBeenCalled();
+  });
+
+  it('does not reattach a share watcher for a V2 validation thread', async () => {
+    mockPrdsFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    mockDesignDocsFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'doc-1',
+        validationThreadId: 'thread-validation',
+        chatThreadId: 'thread-source',
+        authorId: 'user-1',
+        project: 'Apex',
+      }]);
+    mockIsV2ValidationThread.mockResolvedValueOnce(true);
+
+    await recoverInFlightWork({ signal: new AbortController().signal });
+
+    expect(mockIsV2ValidationThread).toHaveBeenCalledWith('thread-validation');
+    expect(mockedHydrate).not.toHaveBeenCalledWith('thread-validation');
     expect(jest.mocked(routeDocumentValidationKickoff)).not.toHaveBeenCalled();
   });
 

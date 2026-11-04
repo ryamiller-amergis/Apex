@@ -82,6 +82,8 @@ function finishedAttempts(value: FinishedV2Attempt | null) {
     ),
     listFinishedDocuments: jest.fn(async () => []),
     isDocumentHarvestPending: jest.fn(async () => false),
+
+    isThreadDocumentHarvestPending: jest.fn(async () => false),
     recordHarvestFailure: jest.fn(async () => 1),
     claimHarvest: jest.fn(
       async (): Promise<'claimed' | 'already_harvested'> => 'claimed',

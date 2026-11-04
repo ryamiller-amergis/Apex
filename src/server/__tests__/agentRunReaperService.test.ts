@@ -99,7 +99,7 @@ jest.mock('../services/workerTierTelemetry', () => ({
   },
 }));
 jest.mock('../services/aiRunV2/finishedAttemptReader', () => ({
-  isDocumentHarvestPendingForRun: (...args: unknown[]) =>
+  isDocumentHarvestPendingForThread: (...args: unknown[]) =>
     mockIsDocumentHarvestPending(...args),
 }));
 jest.mock('../services/cloudAgentQueueScheduler', () => ({
@@ -2336,7 +2336,7 @@ describe('getThreadRunStateSnapshot', () => {
       canFailGeneration: false,
     });
     expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
-      'run-v2-document',
+      'thread-1',
     );
   });
 
@@ -2502,8 +2502,25 @@ describe('canThisInstanceFailGeneration', () => {
       canThisInstanceFailGeneration('thread-1'),
     ).resolves.toBe(false);
     expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
-      'run-v2-document',
+      'thread-1',
     );
+  });
+
+  it('keeps waiting for harvest when a chat run follows the V2 document run', async () => {
+    mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+    mockFindFirst.mockResolvedValue({
+      id: 'run-chat',
+      status: 'completed',
+      ownerInstance: null,
+      updatedAt: timestamp(0),
+      timeoutAt: null,
+      transportVersion: 'dapr-actor-v2',
+    });
+
+    await expect(
+      canThisInstanceFailGeneration('thread-1'),
+    ).resolves.toBe(false);
+    expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith('thread-1');
   });
 
   it('returns true when ownerInstance is null (legacy/reaped)', async () => {
