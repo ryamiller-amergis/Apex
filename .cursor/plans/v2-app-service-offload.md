@@ -76,7 +76,21 @@ Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" 
 - Ask Apex bug (fixed in #271): `useAskApex` passed `enablePreparationState: true`, so the empty Ask Apex thread (user speaks first) counted as preparing and the composer stayed locked on "Preparing…". Dropped the option.
 - Seen in dev (not #271): App Service still runs repo-cache maintenance for MaxView; its mirror has a bad object (f364d692…) and repo-cache disk is 8.9 GB free of the 10 GB wanted. Belongs to workstream D/E (stop App Service repo work).
 - `az monitor app-insights query -o table` prints nothing in this shell; use `-o json` piped through node to print rows. Recheck: prod `grounding.notification` in 30 days = 1 event, repo-read only, 0 AI checks; dev none.
-- Still to test: Ask Apex on dev. Then: mark #271 ready, merge, prod deploy.
+- Dev test 3 (9de2dff2): PRD 5460a0b3, its test cases and validation, design doc 1f65989a and its validation all ran on the V2 worker with no App Service watcher; Ask Apex turns route `ask-apex` durable to `ca-apex-ai-agentic-dev` (first turn ~60 s cold). #271 merged to main (af873826) 2026-11-04; user handles the prod deploy.
+
+## Status 2026-11-04 (after #271)
+- Dev App Service had no `GROUNDING_MAINTENANCE_MODE` (so `full`); set it to `legacy-projects` with `az webapp config appsettings set` (user OK). `deploy-dev-quick.yml` does not set it, so it stays. Dev repo-read already runs `v2-projects`. App Service MaxView upkeep stopped after the 18:40:53Z restart.
+- D inventory (dev, read-only):
+  - No share mount: V2 document worker, V2 visual worker, orchestrator (already Blob-only).
+  - Share mounted on `ca-apex-ai-agentic-*` and `ca-apex-ai-fast-interactive-*` at `/home/data/ai-pilot` (share root = App Service's `.../workspaces`), on the old `ca-apex-ai-interactive-*` at `.../workspaces`, and on repo-read at `/tmp/ai-pilot/workspaces` (repo-read mirrors are local `/tmp/ai-pilot/repo-cache`).
+  - Chat host durable turns: thread workspace and grounded checkout cache are local (`os.tmpdir()` unless `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT`); attachments from Blob; outputs uploaded to Blob. `openLocalBareMirrorReader` looks in `<dataRoot>/repo-cache` (on the share in the cloud, nothing writes there; it serves local dev via `scripts/dev/run-interactive-host.mjs`, a55fe586). Keep it.
+  - Brainstorm source mounts are the only real chat-host share use (App Service clones catalog/temp repos onto the share; `brainstormSourceMount.candidateSourcePaths`). = old E.3.
+  - App Service writes kickoff files to the thread folder on the share for every thread, and `backgroundWorkflowRouter.readDocumentScratchInputs` reads them back (plus PRD outputs for test cases) into the V2 spec. Needed; only App Service touches it. Not worth moving.
+  - So D = Brainstorm repos via repo-read + Blob, then unmount the share from the V2 chat hosts (Terraform, user OK) after a dev pass.
+- Old chat host `ca-apex-ai-interactive-{dev,prd}` (legacy `ai-runs-interactive` lane, Dapr app id `apex-ai-interactive`, same image as agentic): 4 replicas × 2 vCPU/4 GiB min in both envs. App Service `AI_RUNS_INTERACTIVE_DISPATCH_URL` still points at it (used only when the legacy flag is on; `interactiveWorkflowRouter` admission is legacy-only). No App Insights telemetry from it in either env (same connection-string setting name; cause unknown), no App Service dependency calls in 14 d, Requests 0–13/day. CPU: prod never above 0.27 cores in 30 d (agentic prd peaks 1.2); dev did real work Oct 28–30 (peaks 1.2–1.3) and Nov 2 14:06, idle since.
+  - Prod scale: `infra/terraform.prd.tfvars` (main checkout, untracked) has `ai_runs_interactive_reserved = 4`. Proposal: set 0 there, `terraform plan` only, user applies. Keep the module: it also owns the Redis live bus (and likely the Dapr state store).
+  - Dev Terraform risk: `infra/terraform.tfvars` (main checkout) has `enable_ai_runs_interactive` commented (default false) though the dev app is tagged ManagedBy Terraform. A dev plan from that file would destroy the old host and Redis. Find the real dev tfvars before any dev plan.
+  - Waiting on: user confirms `ai-runs-interactive` flag is off (Platform Admin → Feature Flags).
 
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.
