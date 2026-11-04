@@ -12,6 +12,13 @@ import {
   summarizeRelatedItemCycleTimes,
 } from './relatedItemCycleTime';
 
+function adoParentId(fields: Record<string, unknown>): number | null {
+  const raw = fields['System.Parent'];
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
+  return null;
+}
+
 /**
  * Ensures the canonical APEX origin tag is present in a tag list without
  * duplicating it (case-insensitive). Applied only to Features APEX creates so
@@ -6025,22 +6032,27 @@ export class AzureDevOpsService {
         wiql += ` AND [System.State] NOT IN ('Done', 'Closed', 'Removed')`;
       }
 
+      const fields = [
+        'System.Id',
+        'System.Title',
+        'System.WorkItemType',
+        'System.State',
+        'System.AssignedTo',
+        'System.AreaPath',
+        'System.IterationPath',
+        'System.Tags',
+        'System.Parent',
+      ];
       const result = await this.queryWorkItemsByWiql({
         wiql,
-        fields: [
-          'System.Id',
-          'System.Title',
-          'System.WorkItemType',
-          'System.State',
-          'System.AssignedTo',
-          'System.AreaPath',
-          'System.IterationPath',
-          'System.Tags',
-        ],
+        fields,
         maxResults: 200,
       });
 
-      const items = result.items.map((wi) => ({
+      const toItem = (
+        wi: { id: number; fields: Record<string, any> },
+        groupingOnly = false,
+      ): import('../../shared/types/devWorkbench').AssignedWorkItem => ({
         id: wi.id,
         title: (wi.fields['System.Title'] ?? '') as string,
         workItemType: (wi.fields['System.WorkItemType'] ?? '') as string,
@@ -6050,10 +6062,68 @@ export class AzureDevOpsService {
         areaPath: (wi.fields['System.AreaPath'] ?? undefined) as string | undefined,
         iterationPath: (wi.fields['System.IterationPath'] ?? undefined) as string | undefined,
         tags: (wi.fields['System.Tags'] ?? '') as string,
-      }));
+        parentId: adoParentId(wi.fields),
+        ...(groupingOnly ? { groupingOnly: true } : {}),
+      });
 
-      console.log(`=== getWorkItemsAssignedToUser END === found ${items.length} items`);
-      return items;
+      const items = result.items.map((wi) => toItem(wi));
+      const byId = new Map(items.map((item) => [item.id, item]));
+
+      const loadByIds = async (ids: number[]) => {
+        const missing = [...new Set(ids.filter((id) => !byId.has(id)))];
+        if (missing.length === 0) return;
+        const loaded = await this.queryWorkItemsByWiql({
+          wiql: `SELECT [System.Id] FROM WorkItems WHERE [System.Id] IN (${missing.join(',')})`,
+          fields,
+          maxResults: missing.length,
+        });
+        for (const wi of loaded.items) {
+          if (!byId.has(wi.id)) byId.set(wi.id, toItem(wi, true));
+        }
+      };
+
+      // One hop for a PBI under a Feature, a second for a Bug under that PBI.
+      await loadByIds(items.flatMap((item) => (item.parentId ? [item.parentId] : [])));
+      await loadByIds(
+        [...byId.values()].flatMap((item) => (
+          item.workItemType !== 'Feature' && item.parentId ? [item.parentId] : []
+        )),
+      );
+
+      const featureIdFor = (parentId: number | null | undefined): number | null => {
+        const seen = new Set<number>();
+        let current = parentId ?? null;
+        while (current && !seen.has(current)) {
+          seen.add(current);
+          const parent = byId.get(current);
+          if (!parent) return null;
+          if (parent.workItemType === 'Feature') return parent.id;
+          current = parent.parentId ?? null;
+        }
+        return null;
+      };
+
+      for (const item of items) {
+        if (item.workItemType === 'Feature') continue;
+        const featureId = featureIdFor(item.parentId);
+        if (featureId) item.parentId = featureId;
+      }
+
+      const stacked = [...items];
+      for (const item of items) {
+        if (item.workItemType === 'Feature' || !item.parentId) continue;
+        const feature = byId.get(item.parentId);
+        if (
+          feature?.workItemType === 'Feature'
+          && feature.groupingOnly
+          && !stacked.some((row) => row.id === feature.id)
+        ) {
+          stacked.push(feature);
+        }
+      }
+
+      console.log(`=== getWorkItemsAssignedToUser END === found ${stacked.length} items`);
+      return stacked;
     });
   }
 

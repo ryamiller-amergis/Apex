@@ -279,6 +279,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'prod-support': {
+    pageEntries: [
+      {
+        component: 'src/client/components/GuidedCloudJobs.tsx',
+        routePattern: '/prod-support',
+        suggestedRoute: '/prod-support',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

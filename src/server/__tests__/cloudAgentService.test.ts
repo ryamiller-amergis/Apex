@@ -6,6 +6,7 @@ const mockVendorCancel = jest.fn();
 const mockUpdateSet = jest.fn();
 const mockUpdateWhere = jest.fn();
 const mockLinkWorkItemToPullRequest = jest.fn();
+const mockTransitionWorkItemForPullRequest = jest.fn();
 const mockAddAdoWorkItemHyperlink = jest.fn();
 const mockPrepareCloudAgentKickoff = jest.fn();
 const mockAlignCloudAgentPullRequest = jest.fn();
@@ -111,12 +112,10 @@ describe('cloudAgentPreIdentityTimeoutAt', () => {
 });
 
 describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => {
-  it('allows an APEX Feature when flag, skill settings, and uniqueness are satisfied', () => {
+  it('allows a start when flag, skill settings, and uniqueness are satisfied', () => {
     expect(evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: 'MaxView',
-      item: eligibleItem,
-      isSuperAdmin: false,
       skillProvider: 'ado',
       skillRepo: 'MaxView',
       skillBranch: 'main',
@@ -128,8 +127,6 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
     expect(evaluateCloudAgentEligibility({
       flagEnabled: false,
       project: 'MaxView',
-      item: eligibleItem,
-      isSuperAdmin: false,
       skillProvider: 'ado',
       skillRepo: 'MaxView',
       skillBranch: 'main',
@@ -140,12 +137,10 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
     });
   });
 
-  it('rejects app-native projects before ADO type checks', () => {
+  it('rejects app-native projects before skill checks', () => {
     expect(evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: 'Apex',
-      item: eligibleItem,
-      isSuperAdmin: false,
       skillProvider: 'ado',
       skillRepo: 'Apex',
       skillBranch: 'main',
@@ -153,25 +148,10 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
     }).reason).toMatch(/Azure DevOps-configured projects/);
   });
 
-  it('reuses Start Development type and origin rules for non-admins', () => {
-    expect(evaluateCloudAgentEligibility({
-      flagEnabled: true,
-      project: 'MaxView',
-      item: { ...eligibleItem, workItemType: 'Bug' },
-      isSuperAdmin: false,
-      skillProvider: 'ado',
-      skillRepo: 'MaxView',
-      skillBranch: 'main',
-      hasLiveRun: false,
-    }).reason).toMatch(/only available on Features/);
-  });
-
   it('names the missing skillRepo field', () => {
     expect(evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: 'MaxView',
-      item: eligibleItem,
-      isSuperAdmin: false,
       skillProvider: 'ado',
       skillRepo: '',
       skillBranch: 'main',
@@ -186,8 +166,6 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
     expect(evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: 'MaxView',
-      item: eligibleItem,
-      isSuperAdmin: false,
       skillProvider: 'github',
       skillRepo: 'org/repo',
       skillBranch: 'main',
@@ -202,8 +180,6 @@ describe('evaluateCloudAgentEligibility (VT-01 / VT-02 / VT-05 / VT-11)', () => 
     expect(evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: 'MaxView',
-      item: eligibleItem,
-      isSuperAdmin: false,
       skillProvider: 'github',
       skillRepo: 'org/repo',
       skillBranch: 'main',
@@ -264,6 +240,7 @@ function makeDeps(overrides: Partial<CloudAgentServiceDeps> = {}): CloudAgentSer
     streamCloudAgentRun: jest.fn(),
     cancelCursorCloudAgentRun: mockVendorCancel,
     linkWorkItemToPullRequest: mockLinkWorkItemToPullRequest,
+    transitionWorkItemForPullRequest: mockTransitionWorkItemForPullRequest,
     addAdoWorkItemHyperlink: mockAddAdoWorkItemHyperlink,
     prepareCloudAgentKickoff: mockPrepareCloudAgentKickoff,
     alignCloudAgentPullRequest: mockAlignCloudAgentPullRequest,
@@ -451,7 +428,6 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
       userId: USER_ID,
       project: 'MaxView',
       workItemId: 42,
-      isSuperAdmin: false,
       item: eligibleItem,
       customPrompt: 'Keep the public API stable.',
     }, makeDeps({
@@ -554,7 +530,6 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         userId: USER_ID,
         project: 'MaxView',
         workItemId: 42,
-        isSuperAdmin: false,
         item: eligibleItem,
       }, makeDeps({
         getSkillConfig: jest.fn().mockResolvedValue({
@@ -656,7 +631,6 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         userId: USER_ID,
         project: 'MaxView',
         workItemId: 42,
-        isSuperAdmin: false,
         item: eligibleItem,
       }, makeDeps({
         getSkillConfig: jest.fn().mockResolvedValue({
@@ -783,6 +757,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       currentRunPrUrl: null,
     }));
     expect(mockLinkWorkItemToPullRequest).not.toHaveBeenCalled();
+    expect(mockTransitionWorkItemForPullRequest).not.toHaveBeenCalled();
     expect(mockRecordCloudAgentUsage).toHaveBeenCalledWith(expect.objectContaining({
       runId: RUN_ID,
       project: 'MaxView',
@@ -821,6 +796,7 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       runId: RUN_ID,
       sessionId: SESSION_ID,
     });
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 123);
     expect(mockAlignCloudAgentPullRequest).not.toHaveBeenCalled();
   });
 
@@ -854,6 +830,8 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       'cloud_agent_run.work_item_reference_failed',
       expect.objectContaining({ runId: RUN_ID, sessionId: SESSION_ID }),
     );
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledTimes(1);
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 123);
     errorLog.mockRestore();
   });
 });
@@ -1412,6 +1390,8 @@ describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => 
     }, makeDeps({ retryWithBackoff: immediateThreeAttemptRetry }));
 
     expect(mockLinkWorkItemToPullRequest).toHaveBeenCalledTimes(3);
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledTimes(1);
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 42);
     expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
       currentRunPrUrl: adoPrUrl,
       currentRunPrStatus: 'open',
@@ -1496,6 +1476,31 @@ describe('Cloud Agent PR write-back and host status (PBI-007 / TBI-006)', () => 
       githubPrUrl,
       'Implementation PR',
     );
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledTimes(1);
+    expect(mockTransitionWorkItemForPullRequest).toHaveBeenCalledWith('MaxView', 42);
+  });
+
+  it('still records the pull request when the work item state update fails', async () => {
+    const warning = jest.spyOn(console, 'warn').mockImplementation();
+    mockTransitionWorkItemForPullRequest.mockRejectedValueOnce(new Error('state down'));
+
+    await expect(applyCloudAgentCompletion({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      project: 'MaxView',
+      status: 'completed',
+      prUrl: adoPrUrl,
+    }, makeDeps())).resolves.toBeUndefined();
+
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      currentRunPrUrl: adoPrUrl,
+      currentRunPrStatus: 'open',
+    }));
+    expect(warning).toHaveBeenCalledWith(
+      '[cloud-agent] work item state update failed',
+      expect.stringContaining('state down'),
+    );
+    warning.mockRestore();
   });
 
   it('PBI-007 AC-2 / TBI-006 DoD-1 / VT-05: ADO status active=>open in summary', async () => {

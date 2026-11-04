@@ -19,10 +19,6 @@ const mockDashboardData = {
   devToProduction: null,
 };
 
-jest.mock('../GuidedCloudJobs', () => ({
-  GuidedCloudJobs: () => <button type="button" data-testid="home-guided-jobs">Report an issue</button>,
-}));
-
 jest.mock('../../hooks/useHomeDashboard', () => ({
   useHomeDashboard: () => ({
     data: mockDashboardData,
@@ -78,11 +74,12 @@ describe('AgentHome tabs', () => {
     expect(screen.getByTestId('home-view-chat')).toBeInTheDocument();
   });
 
-  it('keeps Report an issue out of the chat tab row and shows it on Project status', () => {
-    render(<AgentHome selectedProject="Apex" canStartGuidedJobs />, { wrapper });
+  it('does not put Prod Support on Home', () => {
+    render(<AgentHome selectedProject="Apex" />, { wrapper });
     expect(screen.queryByTestId('home-guided-jobs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('home-view-status'));
-    expect(screen.getByTestId('home-guided-jobs')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
   });
 
   it('does not render the removed edge Chat toggle', () => {

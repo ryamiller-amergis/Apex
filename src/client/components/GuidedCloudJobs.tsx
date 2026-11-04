@@ -11,7 +11,6 @@ import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import { CloudAgentLaunchDialog } from './CloudAgentLaunchDialog';
 import { DataGridToolbar } from './DataGridToolbar';
 import gridStyles from './DataGrid.module.css';
-import { useDialogFocus } from '../hooks/useDialogFocus';
 import styles from './GuidedCloudJobs.module.css';
 
 const SITE_ISSUE_REPORT_TEMPLATE = [
@@ -30,6 +29,62 @@ const SITE_ISSUE_REPORT_TEMPLATE = [
   '',
 ].join('\n');
 
+const PROD_INVESTIGATION_TEMPLATE = [
+  'Environment: production',
+  '',
+  'Page:',
+  '',
+  'When it started:',
+  '',
+  'Who is affected:',
+  '',
+  'What they were doing:',
+  '',
+  'What happened:',
+  '',
+  'What they expected:',
+  '',
+  'What you already checked:',
+  '',
+].join('\n');
+
+const REPORT_TEMPLATES: Record<string, string> = {
+  'site-issue': SITE_ISSUE_REPORT_TEMPLATE,
+  'prod-investigation': PROD_INVESTIGATION_TEMPLATE,
+};
+
+function templateFor(jobId: string): string {
+  return REPORT_TEMPLATES[jobId] ?? SITE_ISSUE_REPORT_TEMPLATE;
+}
+
+function launchCopy(job: GuidedCloudJobOption, intent: 'start' | 'retry'): {
+  title: string;
+  reason: string;
+  taskLabel: string;
+} {
+  if (intent === 'retry') {
+    return {
+      title: 'Try again',
+      reason: job.opensBug
+        ? 'Describe the problem. Apex opens a Bug, and the agent prepares a fix for a developer to review.'
+        : 'Add any context you have. The investigation skill gathers evidence and does not open a Bug.',
+      taskLabel: 'What should the agent look at?',
+    };
+  }
+  if (job.id === 'prod-investigation') {
+    return {
+      title: job.title,
+      reason: 'Describe the production problem with as much context as you have. The prod-investigation skill gathers evidence. It does not open a Bug. A playbook decides whether this is an issue.',
+      taskLabel: 'What happened in production?',
+    };
+  }
+  return {
+    title: job.title,
+    reason: 'Describe the problem. Apex opens a Bug, and the agent prepares a fix for a developer to review.',
+    taskLabel: "What's wrong on the site?",
+  };
+}
+
 function reportIsWorking(report: GuidedCloudAgentSession): boolean {
   const run = report.run;
   return !run || !isAgentRunTerminalStatus(run.status);
@@ -44,17 +99,14 @@ function reportedOn(value: string): string {
 
 interface GuidedCloudJobsProps {
   project: string;
-  /** Right-align in the home tab strip. The chat header keeps it in the action row. */
-  alignEnd?: boolean;
 }
 
-export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, alignEnd = true }) => {
+export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => {
   const { flags } = useFeatureFlags(project);
   const enabled = flags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true;
   const jobsQuery = useGuidedCloudJobs(project, enabled && flags[MY_WORK_CLOUD_AGENT_FLAG] === true);
   const startJob = useStartGuidedCloudAgentRun();
   const cancelJob = useCancelGuidedCloudAgentRun();
-  const [open, setOpen] = useState(false);
   const [job, setJob] = useState<GuidedCloudJobOption | null>(null);
   const [intent, setIntent] = useState<'start' | 'retry'>('start');
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -64,9 +116,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
   const [actionError, setActionError] = useState<string | null>(null);
   const [bugAlreadyOpened, setBugAlreadyOpened] = useState(false);
   const [search, setSearch] = useState('');
-  const panelRef = useDialogFocus<HTMLDivElement>(open, () => setOpen(false), job !== null);
   const data = jobsQuery.data;
-  const siteIssueJob = data?.jobs[0] ?? null;
 
   const reports = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -77,17 +127,25 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
     });
   }, [data?.runs, search]);
 
+  const jobById = (id: string) => data?.jobs.find((item) => item.id === id) ?? null;
+
   // @feature-flag:cloud-agent-guided-launch start winner=enabled
   if (!enabled || flags[MY_WORK_CLOUD_AGENT_FLAG] !== true) {
     // @feature-flag:cloud-agent-guided-launch disabled-start
-    return null;
+    return (
+      <main className={styles.page} {...{ 'data-testid': 'prod-support-page' }}>
+        <h1 className={styles.heading}>Prod Support</h1>
+        <p className={styles.intro}>Prod Support is not turned on for this project.</p>
+      </main>
+    );
     // @feature-flag:cloud-agent-guided-launch disabled-end
   }
 
   // @feature-flag:cloud-agent-guided-launch enabled-start
-  const openStart = () => {
-    if (!siteIssueJob) return;
-    setJob(siteIssueJob);
+  const openStart = (id: string) => {
+    const match = jobById(id);
+    if (!match) return;
+    setJob(match);
     setIntent('start');
     setSessionId(null);
     setPriorSkillPath(null);
@@ -98,7 +156,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
   };
 
   const openRetry = (report: GuidedCloudAgentSession) => {
-    const match = data?.jobs.find((item) => item.id === report.jobId) ?? siteIssueJob;
+    const match = data?.jobs.find((item) => item.id === report.jobId) ?? jobById('site-issue');
     if (!match) return;
     setJob(match);
     setIntent('retry');
@@ -112,8 +170,9 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
 
   const confirm = async (value: { skillPath: string; model: string; task: string; images?: Array<{ name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }> }) => {
     if (!job || bugAlreadyOpened) return;
-    if (!value.task || value.task.trim() === SITE_ISSUE_REPORT_TEMPLATE.trim()) {
-      setActionError('Fill in the page, the problem, and what you expected.');
+    const template = templateFor(job.id);
+    if (!value.task || value.task.trim() === template.trim()) {
+      setActionError('Fill in what you know before sending.');
       return;
     }
     setActionError(null);
@@ -138,137 +197,133 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
   };
 
   const hasReports = (data?.runs ?? []).length > 0;
+  const copy = job ? launchCopy(job, intent) : null;
+  const prodJob = jobById('prod-investigation');
+  const siteJob = jobById('site-issue');
 
   return (
-    <>
-      <button
-        type="button"
-        className={alignEnd ? `${styles.tabButton} ${styles.tabButtonEnd}` : styles.tabButton}
-        onClick={() => setOpen(true)}
-        data-testid="home-guided-jobs"
-      >
-        Report an issue
-      </button>
-      {open ? (
-        <div className={styles.overlay} role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setOpen(false);
-        }}
-        >
-          <div
-            ref={panelRef}
-            className={styles.panel}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="guided-jobs-title"
-            data-testid="home-guided-jobs-panel"
+    <main className={styles.page} {...{ 'data-testid': 'prod-support-page' }}>
+      <header className={styles.header}>
+        <div>
+          <h1 className={styles.heading}>Prod Support</h1>
+          <p className={styles.intro}>
+            Describe a production problem. The investigation skill gathers context. A playbook decides whether it becomes a Bug.
+          </p>
+        </div>
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={gridStyles.buttonPrimary}
+            onClick={() => openStart('prod-investigation')}
+            disabled={!prodJob}
+            {...{ 'data-testid': 'prod-support-prod' }}
           >
-            <div className={styles.header}>
-              <div>
-                <h2 id="guided-jobs-title">Report an issue</h2>
-                <p>Describe a problem on the site. Apex opens a Bug, and the agent prepares a fix for a developer to review.</p>
-              </div>
-              <div className={styles.headerActions}>
-                <button
-                  type="button"
-                  className={gridStyles.buttonPrimary}
-                  onClick={openStart}
-                  disabled={!siteIssueJob}
-                  data-testid="home-guided-job-site-issue"
-                >
-                  New report
-                </button>
-                <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="Close" data-testid="home-guided-jobs-close">
-                  ×
-                </button>
-              </div>
-            </div>
-            <div className={styles.body}>
-              <DataGridToolbar
-                searchValue={search}
-                onSearchChange={setSearch}
-                searchPlaceholder="Search reports or Bug number"
-                searchTestId="home-guided-reports-search"
-              />
-              {jobsQuery.isLoading ? <p className={gridStyles.loading}>Loading reports…</p> : null}
-              {jobsQuery.error ? (
-                <p className={gridStyles.error} role="alert">{jobsQuery.error.message}</p>
-              ) : null}
-              {!jobsQuery.isLoading && !jobsQuery.error && reports.length === 0 ? (
-                <p className={gridStyles.empty}>
-                  {hasReports ? 'No reports match this search.' : 'No reports yet. Choose New report to describe a problem.'}
-                </p>
-              ) : null}
-              {reports.length > 0 ? (
-                <div className={`${gridStyles.tableWrap} ${styles.tableScroll}`}>
-                  <table className={`${gridStyles.table} ${styles.table}`} data-testid="home-guided-reports-table">
-                    <thead>
-                      <tr>
-                        <th>Report</th>
-                        <th>Reported</th>
-                        <th>Links</th>
-                        <th aria-label="Actions" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reports.map((report) => {
-                        const working = reportIsWorking(report);
-                        return (
-                          <tr key={report.sessionId} data-testid={`home-guided-run-${report.sessionId}`}>
-                            <td className={styles.titleCell} title={report.title}>{report.title}</td>
-                            <td className={styles.dateCell}>{reportedOn(report.updatedAt)}</td>
-                            <td>
-                              <div className={styles.links}>
-                                {report.bugUrl ? (
-                                  <a href={report.bugUrl} target="_blank" rel="noreferrer" data-testid={`home-guided-bug-${report.sessionId}`}>
-                                    Bug {report.bugWorkItemId}
-                                  </a>
-                                ) : null}
-                                {report.run?.prUrl ? (
-                                  <a href={report.run.prUrl} target="_blank" rel="noreferrer" data-testid={`home-guided-pr-${report.sessionId}`}>
-                                    Pull request
-                                  </a>
-                                ) : null}
-                              </div>
-                            </td>
-                            <td>
-                              <div className={gridStyles.rowActions}>
-                                {working ? (
-                                  <button
-                                    type="button"
-                                    className={gridStyles.buttonGhost}
-                                    onClick={() => void cancelJob.mutateAsync({ project, sessionId: report.sessionId }).then(() => jobsQuery.refetch())}
-                                    data-testid={`home-guided-cancel-${report.sessionId}`}
-                                  >
-                                    Cancel
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    className={gridStyles.buttonGhost}
-                                    onClick={() => openRetry(report)}
-                                    data-testid={`home-guided-retry-${report.sessionId}`}
-                                  >
-                                    Try again
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-            </div>
+            Investigate production
+          </button>
+          <button
+            type="button"
+            className={gridStyles.button}
+            onClick={() => openStart('site-issue')}
+            disabled={!siteJob}
+            {...{ 'data-testid': 'home-guided-job-site-issue' }}
+          >
+            New report
+          </button>
+        </div>
+      </header>
+      <section className={gridStyles.section} aria-labelledby="prod-support-list-heading">
+        <div className={gridStyles.header}>
+          <div>
+            <h2 id="prod-support-list-heading" className={gridStyles.title}>Requests</h2>
+            <p className={gridStyles.hint}>Search by what was reported or by Bug number.</p>
           </div>
         </div>
-      ) : null}
-      {job ? (
+        <DataGridToolbar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="Search reports or Bug number"
+          searchTestId="home-guided-reports-search"
+        />
+        {jobsQuery.isLoading ? <p className={gridStyles.loading}>Loading reports…</p> : null}
+        {jobsQuery.error ? (
+          <p className={gridStyles.error} role="alert">{jobsQuery.error.message}</p>
+        ) : null}
+        {!jobsQuery.isLoading && !jobsQuery.error && reports.length === 0 ? (
+          <p className={gridStyles.empty}>
+            {hasReports ? 'No reports match this search.' : 'No reports yet. Start an investigation or a new report.'}
+          </p>
+        ) : null}
+        {reports.length > 0 ? (
+          <div className={`${gridStyles.tableWrap} ${styles.tableScroll}`}>
+            <table className={`${gridStyles.table} ${styles.table}`} {...{ 'data-testid': 'home-guided-reports-table' }}>
+              <thead>
+                <tr>
+                  <th>Report</th>
+                  <th>Kind</th>
+                  <th>Reported</th>
+                  <th>Links</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((report) => {
+                  const working = reportIsWorking(report);
+                  const kind = data?.jobs.find((item) => item.id === report.jobId)?.title ?? 'Report';
+                  return (
+                    <tr key={report.sessionId} {...{ 'data-testid': `home-guided-run-${report.sessionId}` }}>
+                      <td className={styles.titleCell} title={report.title}>{report.title}</td>
+                      <td>{kind}</td>
+                      <td className={styles.dateCell}>{reportedOn(report.updatedAt)}</td>
+                      <td>
+                        <div className={styles.links}>
+                          {report.bugUrl ? (
+                            <a href={report.bugUrl} target="_blank" rel="noreferrer" {...{ 'data-testid': `home-guided-bug-${report.sessionId}` }}>
+                              Bug {report.bugWorkItemId}
+                            </a>
+                          ) : null}
+                          {report.run?.prUrl ? (
+                            <a href={report.run.prUrl} target="_blank" rel="noreferrer" {...{ 'data-testid': `home-guided-pr-${report.sessionId}` }}>
+                              Pull request
+                            </a>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <div className={gridStyles.rowActions}>
+                          {working ? (
+                            <button
+                              type="button"
+                              className={gridStyles.buttonGhost}
+                              onClick={() => void cancelJob.mutateAsync({ project, sessionId: report.sessionId }).then(() => jobsQuery.refetch())}
+                              {...{ 'data-testid': `home-guided-cancel-${report.sessionId}` }}
+                            >
+                              Cancel
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className={gridStyles.buttonGhost}
+                              onClick={() => openRetry(report)}
+                              {...{ 'data-testid': `home-guided-retry-${report.sessionId}` }}
+                            >
+                              Try again
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+      {job && copy ? (
         <CloudAgentLaunchDialog
-          data-testid="home-guided-launch-dialog"
-          title={intent === 'retry' ? 'Try the report again' : job.title}
-          reason="Describe the problem. Apex opens a Bug, and the agent prepares a fix for a developer to review."
+          {...{ 'data-testid': 'home-guided-launch-dialog' }}
+          title={copy.title}
+          reason={copy.reason}
           skills={data?.skills ?? []}
           models={data?.models ?? []}
           defaultSkillPath={
@@ -281,7 +336,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
               ? (priorModel ?? data?.recommendedModel ?? 'composer-2.5')
               : (data?.recommendedModel ?? 'composer-2.5')
           }
-          defaultTask={intent === 'retry' ? priorTask : SITE_ISSUE_REPORT_TEMPLATE}
+          defaultTask={intent === 'retry' ? priorTask : templateFor(job.id)}
           taskRows={12}
           requireTask
           chooseSkillAndModel={false}
@@ -290,7 +345,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
           imageHint={intent === 'retry'
             ? 'Leave this empty to keep the screenshots from the last try. PNG, JPEG, or WebP. Up to 3 images, 400 KB each.'
             : 'PNG, JPEG, or WebP. Up to 3 images, 400 KB each.'}
-          taskLabel="What's wrong on the site?"
+          taskLabel={copy.taskLabel}
           emptyTaskMessage="Describe the issue"
           loading={jobsQuery.isLoading}
           loadError={bugAlreadyOpened ? actionError : (jobsQuery.error?.message ?? null)}
@@ -300,7 +355,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project, align
           onConfirm={(value) => { void confirm(value); }}
         />
       ) : null}
-    </>
+    </main>
   );
   // @feature-flag:cloud-agent-guided-launch enabled-end
   // @feature-flag:cloud-agent-guided-launch end

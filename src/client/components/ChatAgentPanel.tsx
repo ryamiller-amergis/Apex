@@ -23,7 +23,6 @@ import { ThreadHistorySidebar } from './ThreadHistorySidebar';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import { BrandLogo } from './BrandLogo';
 import { BuildAgentHomePill } from './BuildAgentHomePill';
-import { GuidedCloudJobs } from './GuidedCloudJobs';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
@@ -310,7 +309,6 @@ interface ChatAgentPanelProps {
   selectedProject?: string;
   selectedSkillSettingsId?: string | null;
   launchedFromHome?: boolean;
-  canStartGuidedJobs?: boolean;
 }
 
 export interface StartPanelChatOptions {
@@ -336,7 +334,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   selectedProject,
   selectedSkillSettingsId,
   launchedFromHome = false,
-  canStartGuidedJobs = false,
 }) => {
   const [input, setInput] = useState('');
   const [showHistory, setShowHistory] = useState(false);
@@ -855,9 +852,6 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             >
               {isFullWidth ? '⇥⇤' : '⇤⇥'}
             </button>
-          )}
-          {launchedFromHome && canStartGuidedJobs && selectedProject && (
-            <GuidedCloudJobs project={selectedProject} alignEnd={false} />
           )}
           {onSelectThread && (
             <button

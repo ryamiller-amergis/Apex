@@ -14,7 +14,7 @@ import {
   GUIDED_CLOUD_JOBS,
   parseCloudAgentLaunchIntent,
   parseSiteIssueImages,
-  recommendGuidedSiteSkill,
+  recommendGuidedJobSkill,
 } from '../../shared/utils/cloudAgentLaunch';
 import { DEFAULT_DEVELOPMENT_MODEL } from '../../shared/utils/developmentKickoff';
 import { getSkillConfig } from '../services/projectSettingsService';
@@ -106,7 +106,8 @@ router.get(
       res.json({
         jobs: GUIDED_CLOUD_JOBS.map((job) => ({
           ...job,
-          skillPath: recommendGuidedSiteSkill({
+          skillPath: recommendGuidedJobSkill({
+            skillName: job.skillName,
             skills,
             configuredSkillPath: skillConfig?.developmentSkillPath,
           }).skillPath,

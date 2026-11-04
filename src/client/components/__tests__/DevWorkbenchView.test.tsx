@@ -68,6 +68,20 @@ jest.mock('../StartLocalDevModal', () => ({
   ),
 }));
 
+jest.mock('../WorkItemContextModal', () => ({
+  __esModule: true,
+  default: ({ workItemId, title, onClose }: {
+    workItemId: number;
+    title: string;
+    onClose: () => void;
+  }) => (
+    <div data-testid="my-work-item-context-modal">
+      <span>Context for #{workItemId} {title}</span>
+      <button type="button" onClick={onClose}>Close Item Context</button>
+    </div>
+  ),
+}));
+
 jest.mock('../FeatureContextModal', () => ({
   __esModule: true,
   default: ({ feature, intakeItem, viewMode, onClose }: {
@@ -441,6 +455,60 @@ describe('DevWorkbenchView', () => {
     expect(screen.getByText('Implement login')).toBeInTheDocument();
   });
 
+  it('filters assigned work items by Bug, TBI, PBI, and Feature', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [
+        ...workItems,
+        {
+          id: 77,
+          title: 'Review comments',
+          workItemType: 'Product Backlog Item',
+          state: 'In Pull Request',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+        },
+        {
+          id: 12,
+          title: 'Index the queue',
+          workItemType: 'Technical Backlog Item',
+          state: 'New',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    expect(within(screen.getByTestId('my-work-ado-type-filters')).getByRole('button', { name: /^Any$/i }))
+      .toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-bug'));
+    expect(screen.getByText('Fix crash')).toBeInTheDocument();
+    expect(screen.queryByText('Implement login')).not.toBeInTheDocument();
+    expect(screen.queryByText('Review comments')).not.toBeInTheDocument();
+    expect(screen.queryByText('Index the queue')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-tbi'));
+    expect(screen.getByText('Index the queue')).toBeInTheDocument();
+    expect(screen.queryByText('Fix crash')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-pbi'));
+    expect(screen.getByText('Review comments')).toBeInTheDocument();
+    expect(screen.queryByText('Index the queue')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-feature'));
+    expect(screen.getByText('Implement login')).toBeInTheDocument();
+    expect(screen.queryByText('Review comments')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-clear-filters'));
+    expect(screen.getByText('Fix crash')).toBeInTheDocument();
+    expect(screen.getByText('Index the queue')).toBeInTheDocument();
+    expect(screen.getByText('Review comments')).toBeInTheDocument();
+  });
+
   it('holds cloud controls until active sessions load', () => {
     mockUseFeatureFlag.mockReturnValue(true);
     (useActiveSessions as jest.Mock).mockReturnValue({
@@ -454,7 +522,8 @@ describe('DevWorkbenchView', () => {
     expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
     expect(screen.getByTestId('my-work-cloud-status-loading-42')).toHaveTextContent('Loading cloud status…');
     expect(screen.getByTestId('my-work-cloud-status-loading-99')).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /^Start Local Development$/i })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /^View Context$/i })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /^Start Local Development$/i })).not.toBeInTheDocument();
   });
 
   it('does not offer Start cloud agent when active sessions fail to load', () => {
@@ -473,26 +542,32 @@ describe('DevWorkbenchView', () => {
     );
   });
 
-  it('PBI-002 VT flag-off: hides cloud controls and keeps local development available', () => {
+  it('PBI-002 VT flag-off: hides cloud controls and keeps View Context available', () => {
     renderView();
     expect(screen.queryByRole('button', { name: /^Start cloud agent$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Start Local Development$/i })).not.toBeInTheDocument();
     expect(screen.queryByTestId('my-work-ado-cloud-filters')).not.toBeInTheDocument();
     expect(screen.queryByText('Cloud agent')).not.toBeInTheDocument();
+    expect(screen.getByTestId('my-work-ado-type-filters')).toBeInTheDocument();
     expect(screen.getByTestId('my-work-ado-status-filter-in_pr')).toHaveAttribute(
       'title',
       'State is In Pull Request',
     );
-    expect(screen.getAllByRole('button', { name: /^Start Local Development$/i })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /^View Context$/i })).toHaveLength(2);
   });
 
-  it('PBI-002 AC-1 / VT-12: disables cloud agent start and visibly exposes the server reason', () => {
-    const reason = 'Skill settings are incomplete: skillRepo is not set.';
+  it('keeps Start cloud agent enabled for an ineligible work item', async () => {
     mockUseFeatureFlag.mockReturnValue(true);
+    mockStartCloudMutateAsync.mockResolvedValue({ sessionId: 'cloud-session', runId: 'run-1' });
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
       data: [{
         ...workItems[0],
-        cloudAgentEligibility: { allowed: false, reason },
+        state: 'In Pull Request',
+        cloudAgentEligibility: {
+          allowed: false,
+          reason: 'Start Development is only available for New, Approved, Committed, In Progress, Active work items (current state: In Pull Request).',
+        },
       }],
       isLoading: false,
       error: null,
@@ -500,13 +575,20 @@ describe('DevWorkbenchView', () => {
 
     renderView();
 
+    expect(screen.queryByRole('button', { name: /why can't i start this/i })).not.toBeInTheDocument();
     const button = screen.getByRole('button', { name: /^Start cloud agent$/i });
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute('aria-describedby', 'my-work-start-cloud-dev-reason-42');
-    expect(screen.getByTestId('my-work-start-cloud-dev-reason-42')).toHaveTextContent(reason);
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(mockStartCloudMutateAsync).toHaveBeenCalledWith({
+        workItemId: 42,
+        project: 'MaxView',
+      });
+    });
   });
 
-  it('PBI-002 AC-0: shows enabled cloud start beside local development', async () => {
+  it('PBI-002 AC-0: shows enabled cloud start beside View Context', async () => {
     mockUseFeatureFlag.mockReturnValue(true);
     mockStartCloudMutateAsync.mockResolvedValue({ sessionId: 'cloud-session', runId: 'run-1' });
     (useAssignedWorkItems as jest.Mock).mockReturnValue({
@@ -520,7 +602,8 @@ describe('DevWorkbenchView', () => {
 
     renderView();
     expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Start Local Development$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Start Local Development$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^View Context$/i })).toBeInTheDocument();
     const cloudStart = screen.getByTestId('my-work-start-cloud-dev-btn');
     expect(cloudStart).toBeEnabled();
     fireEvent.click(cloudStart);
@@ -534,6 +617,183 @@ describe('DevWorkbenchView', () => {
       expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
     });
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('stacks assigned children under their feature, including a feature you are not assigned', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 21,
+          title: 'Complete WOTC During Onboarding',
+          workItemType: 'Product Backlog Item',
+          state: 'In Pull Request',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+          parentId: 20,
+        },
+        {
+          id: 22,
+          title: 'Extend Document Management',
+          workItemType: 'Technical Backlog Item',
+          state: 'In Pull Request',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+          parentId: 20,
+        },
+        {
+          id: 20,
+          title: 'WOTC lifecycle',
+          workItemType: 'Feature',
+          state: 'In Progress',
+          assignedTo: 'someone-else@example.com',
+          project: 'MaxView',
+          groupingOnly: true,
+        },
+        {
+          id: 99,
+          title: 'Fix crash',
+          workItemType: 'Bug',
+          state: 'New',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    const stack = screen.getByTestId('my-work-work-item-stack-20');
+    expect(within(stack).getAllByTestId(/my-work-work-item-/).map((row) => row.getAttribute('data-testid'))).toEqual([
+      'my-work-work-item-20',
+      'my-work-work-item-21',
+      'my-work-work-item-22',
+    ]);
+    expect(within(stack).getByText('WOTC lifecycle')).toBeInTheDocument();
+    expect(within(stack).getByText('Not assigned to you')).toBeInTheDocument();
+    expect(within(stack).queryByTestId('my-work-view-context-20')).not.toBeInTheDocument();
+    expect(within(stack).getByTestId('my-work-view-context-21')).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-work-item-99')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-work-work-item-stack-99')).not.toBeInTheDocument();
+  });
+
+  it('starts a cloud agent on a parent feature that is not assigned to you', async () => {
+    mockUseFeatureFlag.mockReturnValue(true);
+    mockStartCloudMutateAsync.mockResolvedValue({ sessionId: 'cloud-session', runId: 'run-feature' });
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 21,
+          title: 'Complete WOTC During Onboarding',
+          workItemType: 'Product Backlog Item',
+          state: 'In Pull Request',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+          parentId: 20,
+        },
+        {
+          id: 20,
+          title: 'WOTC lifecycle',
+          workItemType: 'Feature',
+          state: 'In Progress',
+          assignedTo: 'someone-else@example.com',
+          project: 'MaxView',
+          groupingOnly: true,
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    const featureRow = screen.getByTestId('my-work-work-item-20');
+    const start = within(featureRow).getByRole('button', { name: /^Start cloud agent$/i });
+    expect(start).toBeEnabled();
+    fireEvent.click(start);
+
+    await waitFor(() => {
+      expect(mockStartCloudMutateAsync).toHaveBeenCalledWith({
+        workItemId: 20,
+        project: 'MaxView',
+      });
+    });
+  });
+
+  it('opens the feature group when filtering to PBI, TBI, or Bug', () => {
+    (useAssignedWorkItems as jest.Mock).mockReturnValue({
+      data: [
+        {
+          id: 20,
+          title: 'WOTC lifecycle',
+          workItemType: 'Feature',
+          state: 'In Progress',
+          assignedTo: 'someone-else@example.com',
+          project: 'MaxView',
+          groupingOnly: true,
+        },
+        {
+          id: 21,
+          title: 'Complete WOTC During Onboarding',
+          workItemType: 'Product Backlog Item',
+          state: 'In Pull Request',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+          parentId: 20,
+        },
+        {
+          id: 22,
+          title: 'Extend Document Management',
+          workItemType: 'Technical Backlog Item',
+          state: 'New',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+          parentId: 20,
+        },
+        {
+          id: 23,
+          title: 'Onboarding form crashes',
+          workItemType: 'Bug',
+          state: 'New',
+          assignedTo: 'jane@example.com',
+          project: 'MaxView',
+          parentId: 20,
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderView();
+
+    fireEvent.click(screen.getByTestId('my-work-stack-toggle-20'));
+    expect(screen.queryByText('Complete WOTC During Onboarding')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-pbi'));
+    expect(screen.getByText('WOTC lifecycle')).toBeInTheDocument();
+    expect(screen.getByText('Complete WOTC During Onboarding')).toBeInTheDocument();
+    expect(screen.queryByText('Extend Document Management')).not.toBeInTheDocument();
+    expect(screen.queryByText('Onboarding form crashes')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-bug'));
+    expect(screen.getByText('Onboarding form crashes')).toBeInTheDocument();
+    expect(screen.queryByText('Complete WOTC During Onboarding')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('my-work-ado-type-filter-tbi'));
+    expect(screen.getByText('Extend Document Management')).toBeInTheDocument();
+    expect(screen.queryByText('Onboarding form crashes')).not.toBeInTheDocument();
+  });
+
+  it('opens View Context for an assigned work item', () => {
+    renderView();
+
+    expect(screen.queryByTestId('my-work-item-context-modal')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('my-work-view-context-42'));
+
+    expect(screen.getByTestId('my-work-item-context-modal')).toHaveTextContent('Context for #42 Implement login');
+    fireEvent.click(screen.getByRole('button', { name: 'Close Item Context' }));
+    expect(screen.queryByTestId('my-work-item-context-modal')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -563,7 +823,7 @@ describe('DevWorkbenchView', () => {
     },
   );
 
-  it('a cloud-only session keeps local controls available without the legacy start action', () => {
+  it('a cloud-only session keeps View Context available without the legacy start action', () => {
     mockUseFeatureFlag.mockReturnValue(true);
     mockCloudSession(cloudRun('running'));
 
@@ -572,7 +832,8 @@ describe('DevWorkbenchView', () => {
     expect(within(workItemRow(42)).queryByRole('button', { name: 'Start Development' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close Session' })).not.toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Start Local Development' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Start Local Development' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'View Context' })).toHaveLength(2);
     expect(screen.getByTestId('my-work-cancel-cloud-run-42')).toBeInTheDocument();
   });
 
@@ -1075,7 +1336,7 @@ describe('DevWorkbenchView', () => {
     renderView();
     fireEvent.click(screen.getByTestId('my-work-start-cloud-dev-btn'));
 
-    expect(screen.getByTestId('cloud-agent-launch-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('my-work-cloud-agent-launch-dialog')).toBeInTheDocument();
     expect(screen.getByText('Feature work uses dev-orchestrator.')).toBeInTheDocument();
     expect(mockStartCloudMutateAsync).not.toHaveBeenCalled();
     fireEvent.change(screen.getByTestId('cloud-agent-launch-custom-prompt'), {
@@ -1433,6 +1694,137 @@ describe('filterAssignedWorkItems', () => {
     expect(filter({ search: 'badge', status: 'in_progress' })).toEqual([12]);
     expect(filter({ search: 'badge', status: 'new' })).toEqual([]);
   });
+
+  it('filters by Bug, TBI, PBI, and Feature', () => {
+    const withTbi = [
+      ...items,
+      {
+        id: 8,
+        title: 'Index the queue',
+        workItemType: 'Technical Backlog Item',
+        state: 'New',
+        assignedTo: 'jane@example.com',
+        project: 'MaxView',
+      },
+    ];
+    const ids = (type: 'all' | 'bug' | 'tbi' | 'pbi' | 'feature') => filterAssignedWorkItems(withTbi, {
+      status: 'all',
+      type,
+      cloud: 'all',
+      search: '',
+    }).map((item) => item.id);
+
+    expect(ids('all')).toEqual([42, 99, 77, 12, 55, 8]);
+    expect(ids('bug')).toEqual([99]);
+    expect(ids('tbi')).toEqual([8]);
+    expect(ids('pbi')).toEqual([77, 12]);
+    expect(ids('feature')).toEqual([42, 55]);
+    expect(filterAssignedWorkItems(withTbi, {
+      status: 'new',
+      type: 'feature',
+      cloud: 'all',
+      search: '',
+    }).map((item) => item.id)).toEqual([42, 55]);
+  });
+
+  it('leaves parent features that are only there for grouping out of the filter', () => {
+    const ids = filterAssignedWorkItems([
+      ...items,
+      {
+        id: 20,
+        title: 'Parent only',
+        workItemType: 'Feature',
+        state: 'New',
+        assignedTo: 'someone-else@example.com',
+        project: 'MaxView',
+        groupingOnly: true,
+      },
+    ], {
+      status: 'all',
+      type: 'all',
+      cloud: 'all',
+      search: '',
+    }).map((item) => item.id);
+
+    expect(ids).not.toContain(20);
+  });
+});
+
+describe('stackAssignedWorkItems', () => {
+  const { stackAssignedWorkItems } = jest.requireActual('../DevWorkbenchView') as typeof import('../DevWorkbenchView');
+
+  const item = (
+    id: number,
+    workItemType: string,
+    parentId: number | null = null,
+    groupingOnly = false,
+  ) => ({
+    id,
+    title: `${workItemType} ${id}`,
+    workItemType,
+    state: 'New',
+    assignedTo: 'me',
+    project: 'MaxView',
+    parentId,
+    ...(groupingOnly ? { groupingOnly: true } : {}),
+  });
+
+  it('puts PBIs, TBIs, and bugs under their feature', () => {
+    const stacks = stackAssignedWorkItems([
+      item(10, 'Feature'),
+      item(11, 'Product Backlog Item', 10),
+      item(12, 'Technical Backlog Item', 10),
+      item(13, 'Bug', 10),
+      item(14, 'Bug'),
+    ]);
+
+    expect(stacks).toEqual([
+      {
+        feature: expect.objectContaining({ id: 10 }),
+        children: [
+          expect.objectContaining({ id: 11 }),
+          expect.objectContaining({ id: 12 }),
+          expect.objectContaining({ id: 13 }),
+        ],
+      },
+      {
+        feature: null,
+        children: [expect.objectContaining({ id: 14 })],
+      },
+    ]);
+  });
+
+  it('keeps a parent feature that is not assigned to you', () => {
+    const stacks = stackAssignedWorkItems([
+      item(21, 'Product Backlog Item', 20),
+      item(20, 'Feature', null, true),
+    ]);
+
+    expect(stacks).toEqual([
+      {
+        feature: expect.objectContaining({ id: 20, groupingOnly: true }),
+        children: [expect.objectContaining({ id: 21 })],
+      },
+    ]);
+  });
+
+  it('walks a bug up through its PBI to the feature', () => {
+    const stacks = stackAssignedWorkItems([
+      item(30, 'Feature'),
+      item(31, 'Product Backlog Item', 30),
+      item(32, 'Bug', 31),
+    ]);
+
+    expect(stacks).toEqual([
+      {
+        feature: expect.objectContaining({ id: 30 }),
+        children: [
+          expect.objectContaining({ id: 31 }),
+          expect.objectContaining({ id: 32 }),
+        ],
+      },
+    ]);
+  });
 });
 
 describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
@@ -1576,21 +1968,21 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     });
   });
 
-  it('hides Start Local Development immediately after Mark Complete', async () => {
+  it('keeps View Context and hides Start Local Development after Mark Complete', async () => {
     mockCompleteMutateAsync.mockResolvedValue({ ok: true, sessionId: 'session-new' });
 
     renderView();
     expandPrdAndEpic();
 
-    expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /start local development/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /view context/i }).length).toBeGreaterThanOrEqual(2);
 
     fireEvent.click(screen.getAllByRole('button', { name: /mark complete/i })[0]);
 
     await waitFor(() => {
       expect(screen.getByText('Done')).toBeInTheDocument();
     });
-    // Completed feature no longer offers Start Local; remaining Ready feature still does
-    expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /start local development/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Start Development$/i })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /view context/i }).length).toBeGreaterThanOrEqual(2);
   });
@@ -1611,7 +2003,7 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expect(screen.getAllByText('Done')).toHaveLength(1);
   });
 
-  it('hides Start Local Development when a feature already has a completed session', () => {
+  it('keeps View Context and hides Start Local Development when a feature is already complete', () => {
     (useActiveSessions as jest.Mock).mockReturnValue({
       data: [
         {
@@ -1632,8 +2024,8 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expandPrdAndEpic();
 
     expect(screen.getByText('Done')).toBeInTheDocument();
-    // FEAT-002 still Ready — only one Start Local remains
-    expect(screen.getAllByRole('button', { name: /start local development/i })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /start local development/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /view context/i }).length).toBeGreaterThanOrEqual(2);
   });
 
   it('shows Complete badge and Done label when a feature has a completed session', () => {
@@ -1715,20 +2107,12 @@ describe('DevWorkbenchView — Apex backlog (Mark Complete)', () => {
     expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(3);
   });
 
-  it('marks In Progress via Start Local Development', async () => {
-    mockStartLocalMutateAsync.mockResolvedValue({ ok: true, sessionId: 'local-1', status: 'in_progress' });
-
+  it('does not mark a feature In Progress from My Work', () => {
     renderView();
     expandPrdAndEpic();
-    fireEvent.click(screen.getAllByRole('button', { name: /start local development/i })[0]);
 
-    await waitFor(() => {
-      expect(mockStartLocalMutateAsync).toHaveBeenCalledWith({
-        prdId: 'prd-1',
-        featureId: 'FEAT-001',
-        project: 'Apex',
-      });
-    });
+    expect(screen.queryByRole('button', { name: /start local development/i })).not.toBeInTheDocument();
+    expect(mockStartLocalMutateAsync).not.toHaveBeenCalled();
   });
 
   it('allows Mark Complete while a feature is In Progress', async () => {

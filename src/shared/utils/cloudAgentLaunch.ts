@@ -20,11 +20,13 @@ export interface GuidedCloudJob {
   title: string;
   description: string;
   skillName: string;
+  /** Site reports open a Bug and a pull request. Investigations only gather context. */
+  opensBug: boolean;
 }
 
 /**
- * One Home job for someone who is not writing code. They describe a site
- * problem. The development skill investigates it and opens a pull request.
+ * Jobs from the Prod Support page. Site reports open a Bug.
+ * A production investigation follows its own skill and does not.
  */
 export const GUIDED_CLOUD_JOBS: readonly GuidedCloudJob[] = [
   {
@@ -32,6 +34,14 @@ export const GUIDED_CLOUD_JOBS: readonly GuidedCloudJob[] = [
     title: "There's an issue on the site",
     description: 'Explain what you saw. The agent looks into it and opens a pull request for a developer to review.',
     skillName: 'bug-fix',
+    opensBug: true,
+  },
+  {
+    id: 'prod-investigation',
+    title: 'Investigate production',
+    description: 'Describe a production problem. The prod-investigation skill gathers context. It does not open a Bug.',
+    skillName: 'prod-investigation',
+    opensBug: false,
   },
 ];
 
@@ -106,6 +116,17 @@ export function recommendGuidedSiteSkill(input: {
     skillPath: DEFAULT_DEVELOPMENT_SKILL_PATH,
     skillName: skillNameFromPath(DEFAULT_DEVELOPMENT_SKILL_PATH),
   };
+}
+
+/** Prefer the job's installed skill. Fall back to the site-report skill when it is not installed. */
+export function recommendGuidedJobSkill(input: {
+  skillName: string;
+  skills: ReadonlyArray<Pick<CloudAgentSkillChoice, 'name' | 'path'>>;
+  configuredSkillPath?: string | null;
+}): { skillPath: string; skillName: string | null } {
+  const named = installedSkillPath(input.skills, input.skillName);
+  if (named) return { skillPath: named, skillName: input.skillName };
+  return recommendGuidedSiteSkill(input);
 }
 
 export function recommendImplementationSkill(input: {
@@ -346,6 +367,33 @@ export function injectCloudAgentCustomPrompt(
   ].join('\n\n');
 }
 
+function buildGuidedInvestigationPrompt(input: {
+  title: string;
+  skillPath: string;
+  skillName: string | null;
+  task: string;
+  requestedSkillName?: string | null;
+}): string {
+  const requested = input.requestedSkillName?.trim();
+  const spoken = requested || input.skillName;
+  const invocation = spoken ? `/${spoken}\n\n` : '';
+  const followRequested = requested && requested !== input.skillName
+    ? `If \`${requested}\` is in the repository, follow that skill instead of \`${input.skillPath}\`.`
+    : null;
+  return [
+    `${invocation}A person asked for an investigation: ${input.title}.`,
+    `Load \`${input.skillPath}\` from the repository and follow it.`,
+    ...(followRequested ? [followRequested] : []),
+    '- Do not change production code.',
+    '- Do not open a pull request.',
+    '- Do not create or edit an Azure DevOps work item. A playbook decides later whether this is a Bug.',
+    '- Write what you found, what is still unknown, and the evidence you used.',
+    '',
+    'What they reported:',
+    input.task.trim(),
+  ].join('\n');
+}
+
 export function buildGuidedCloudAgentPrompt(input: {
   title: string;
   skillPath: string;
@@ -357,7 +405,14 @@ export function buildGuidedCloudAgentPrompt(input: {
   bugUrl?: string | null;
   /** The repository's pull request description instructions, when it has a template. */
   pullRequestInstructions?: string | null;
+  /** Investigations gather context. They do not open a Bug or a pull request. */
+  mode?: 'fix' | 'investigate';
+  /** Skill the job asked for, when the resolved file is a fallback. */
+  requestedSkillName?: string | null;
 }): string {
+  if (input.mode === 'investigate') {
+    return buildGuidedInvestigationPrompt(input);
+  }
   const invocation = input.skillName ? `/${input.skillName}\n\n` : '';
   const pullRequestTitle = `[APEX] ${input.branchName.replace('feature/', '')}`;
   const imageCount = input.imageCount ?? 0;

@@ -34,7 +34,7 @@ import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
-import { BUILD_FROM_PROMPT_FLAG } from '../shared/types/featureFlags';
+import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
 import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
@@ -141,6 +141,9 @@ const BrainstormSessionsPage = lazy(() =>
 const BrainstormWorkspace = lazy(() =>
   import('./components/BrainstormWorkspace').then((m) => ({ default: m.BrainstormWorkspace })),
 );
+const ProdSupportPage = lazy(() =>
+  import('./components/GuidedCloudJobs').then((m) => ({ default: m.GuidedCloudJobs })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
@@ -213,7 +216,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -267,6 +270,8 @@ function App() {
                     ? 'mcp-servers'
                     : location.pathname === '/brainstorm' || location.pathname.startsWith('/brainstorm/')
                     ? 'brainstorm'
+                    : location.pathname === '/prod-support'
+                    ? 'prod-support'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -442,6 +447,15 @@ function App() {
     effectiveEnabledViews.includes('mcp-servers') &&
     (isSuperAdmin || can('mcp-servers:view'));
   const brainstormFlagOn = !homeFlagsLoading && homeFlags[BRAINSTORM_FLAG] === true;
+  const reportIssueEnabled = !homeFlagsLoading
+    && homeFlags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true
+    && homeFlags[MY_WORK_CLOUD_AGENT_FLAG] === true;
+  const canAccessReportIssue =
+    reportIssueEnabled &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('prod-support') &&
+    (isSuperAdmin || can('chat:create'));
   const canAccessBrainstorm =
     brainstormFlagOn &&
     menuConfigReady &&
@@ -1007,7 +1021,11 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm)) {
+  if (currentView === 'prod-support' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1056,6 +1074,8 @@ function App() {
             buildsEnabled={buildsEnabled}
             onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
             brainstormEnabled={brainstormFlagOn}
+            onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
+            reportIssueEnabled={reportIssueEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
@@ -1117,6 +1137,8 @@ function App() {
             buildsEnabled={buildsEnabled}
             onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
             brainstormEnabled={brainstormFlagOn}
+            onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
+            reportIssueEnabled={reportIssueEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -1170,7 +1192,6 @@ function App() {
                 <FeatureFlagDemo project={selectedProject} />
                 <AgentHome
                   selectedProject={selectedProject}
-                  canStartGuidedJobs={isSuperAdmin || can('chat:create')}
                   isActive={currentView === 'home' && !documentProjectOpening}
                   onHomeViewChange={handleHomeViewChange}
                   onRestoreThread={handleRestoreHomeThread}
@@ -1203,7 +1224,6 @@ function App() {
                   }
                   onClearNewChatError={() => setFirstMessageError(null)}
                   launchedFromHome
-                  canStartGuidedJobs={isSuperAdmin || can('chat:create')}
                   selectedSkillSettingsId={selectedSkillSettingsId}
                 />
               </ErrorBoundary>
@@ -1594,6 +1614,12 @@ function App() {
                     <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
                   )}
                 </BuildsRouteGuard>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'prod-support' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ProdSupportPage project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'brainstorm' ? (

@@ -9,10 +9,6 @@ jest.mock('../BrainstormHomeEntry', () => ({
   BrainstormHomeEntry: () => null,
 }));
 
-jest.mock('../GuidedCloudJobs', () => ({
-  GuidedCloudJobs: () => <button type="button" data-testid="home-guided-jobs">Report an issue</button>,
-}));
-
 const mockRetryLast = jest.fn();
 const mockRetryFailedRun = jest.fn();
 const mockSend = jest.fn();
@@ -225,7 +221,7 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('thread-history-sidebar-mock')).toBeInTheDocument();
   });
 
-  it('places Report an issue beside History in the home header', () => {
+  it('does not put Prod Support in the home chat header', () => {
     render(
       <ChatAgentPanel
         thread={null}
@@ -234,15 +230,13 @@ describe('ChatAgentPanel shared Home shell', () => {
         onNewChat={jest.fn()}
         onSelectThread={jest.fn()}
         launchedFromHome
-        canStartGuidedJobs
         selectedProject="Apex"
       />,
     );
 
-    const report = screen.getByTestId('home-guided-jobs');
-    const history = screen.getByTestId('chat-agent-history-btn');
-    expect(report.parentElement).toBe(history.parentElement);
-    expect(report.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('home-guided-jobs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-history-btn')).toBeInTheDocument();
   });
 
   it('PBI-007 AC-3 excludes Home-only content outside Home', () => {

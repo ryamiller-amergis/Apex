@@ -10,8 +10,39 @@ export interface AssignedWorkItem {
   url?: string;
   /** Raw ADO System.Tags value (semicolon-separated). */
   tags?: string;
+  /** Azure DevOps parent. Child PBIs, TBIs, and Bugs point at their Feature. */
+  parentId?: number | null;
+  /**
+   * Parent Feature included so assigned children can stack under it.
+   * The signed-in user is not assigned to this row.
+   */
+  groupingOnly?: boolean;
   /** Server-derived Cloud Agent start eligibility. Absent when the flag is off. */
   cloudAgentEligibility?: CloudAgentEligibility;
+}
+
+/** One child of a Feature shown in the My Work View Context section. */
+export interface MyWorkItemContextChild {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+}
+
+/**
+ * Read-only Azure DevOps context for a My Work row.
+ * Text fields are plain text. `children` is empty unless the item is a Feature.
+ */
+export interface MyWorkItemContext {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+  description: string;
+  acceptanceCriteria: string;
+  reproSteps: string;
+  design: string;
+  children: MyWorkItemContextChild[];
 }
 
 /**
@@ -214,6 +245,8 @@ export interface GuidedCloudJobOption {
   description: string;
   skillName: string;
   skillPath: string | null;
+  /** Site reports open a Bug. Investigations only gather context. */
+  opensBug: boolean;
 }
 
 export interface GuidedCloudAgentSession {

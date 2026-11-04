@@ -56,6 +56,7 @@ import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/proje
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
 import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
+import { getMyWorkItemContext } from '../services/myWorkItemContextService';
 import {
   attachCloudAgentEligibility,
   cancelCloudAgentRun,
@@ -128,13 +129,42 @@ router.get('/workitems', async (req: Request, res: Response) => {
     const withEligibility = await attachCloudAgentEligibility(items, {
       userId,
       project,
-      isSuperAdmin: isSuperAdminRequest(req),
     });
 
     res.json(withEligibility);
   } catch (err) {
     console.error('[dev-workbench] getWorkItems failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch assigned work items' });
+  }
+});
+
+// GET /workitems/:id/context?project= — read-only work item and Feature children
+router.get('/workitems/:id/context', async (req: Request, res: Response) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project : '';
+    const workItemId = Number(req.params.id);
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (!Number.isSafeInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'Invalid work item ID' });
+      return;
+    }
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'This project uses app-native PRD requirements' });
+      return;
+    }
+
+    const context = await getMyWorkItemContext(project, workItemId);
+    if (!context) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+    res.json(context);
+  } catch (err) {
+    console.error('[dev-workbench] getWorkItemContext failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch work item context' });
   }
 });
 
@@ -981,7 +1011,6 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       initiatorName: displayName,
       initiatorEmail: getUserEmail(req),
       adoUserToken,
-      isSuperAdmin: isSuperAdminRequest(req),
       item: {
         state: (fields['System.State'] ?? '') as string,
         workItemType: (fields['System.WorkItemType'] ?? '') as string,

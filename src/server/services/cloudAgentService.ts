@@ -12,7 +12,7 @@ import {
   buildGuidedCloudAgentPrompt,
   guidedSiteIssueBranchName,
   parseSiteIssueReport,
-  recommendGuidedSiteSkill,
+  recommendGuidedJobSkill,
   SITE_ISSUE_BUG_TAGS,
   type SiteIssueImage,
   customPromptForCloudAgentLaunch,
@@ -27,7 +27,6 @@ import { skillNameFromPath } from '../../shared/skillPaths';
 import * as skillCatalog from './skillCatalogFacade';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import {
-  evaluateDevStartEligibility,
   isAppNativeRequirementsProject,
   type AssignedWorkItem,
   type CloudAgentEligibility,
@@ -72,6 +71,7 @@ import {
   buildWorkItemReferenceText,
   linkWorkItemToPullRequest,
   parsePullRequestNumber,
+  transitionWorkItemForPullRequest as applyPullRequestWorkItemState,
 } from './workItemPrLinkService';
 import { AzureDevOpsService } from './azureDevOps';
 import { getPullRequestStatus as getGithubPullRequestStatus } from './skillCatalogGitHub';
@@ -154,14 +154,13 @@ export class CloudAgentConflictError extends Error {
 export interface EvaluateCloudAgentEligibilityInput {
   flagEnabled: boolean;
   project: string;
-  item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
-  isSuperAdmin: boolean;
   skillProvider?: string | null;
   skillRepo?: string | null;
   skillBranch?: string | null;
   hasLiveRun: boolean;
 }
 
+/** Work item state, type, and APEX origin do not gate a Cloud Agent start. */
 export function evaluateCloudAgentEligibility(
   input: EvaluateCloudAgentEligibilityInput,
 ): CloudAgentEligibility {
@@ -173,12 +172,6 @@ export function evaluateCloudAgentEligibility(
       allowed: false,
       reason: 'Cloud Development is only available on Azure DevOps-configured projects.',
     };
-  }
-  const startEligibility = evaluateDevStartEligibility(input.item, {
-    isSuperAdmin: input.isSuperAdmin,
-  });
-  if (!startEligibility.allowed) {
-    return startEligibility;
   }
   const missingField = missingSkillField(input);
   if (missingField) {
@@ -342,6 +335,11 @@ export interface CloudAgentServiceDeps {
   streamCloudAgentRun: typeof streamCloudAgentRun;
   cancelCursorCloudAgentRun: typeof cancelCursorCloudAgentRun;
   linkWorkItemToPullRequest: typeof linkWorkItemToPullRequest;
+  /**
+   * Feature stays In Progress. Children still New, Approved, Committed, or
+   * In Progress move to In Pull Request. A leaf work item moves itself.
+   */
+  transitionWorkItemForPullRequest: (project: string, workItemId: number) => Promise<void>;
   addAdoWorkItemHyperlink: (
     project: string,
     workItemId: number,
@@ -378,6 +376,9 @@ const defaultDeps: CloudAgentServiceDeps = {
   streamCloudAgentRun,
   cancelCursorCloudAgentRun,
   linkWorkItemToPullRequest,
+  transitionWorkItemForPullRequest: async (project, workItemId) => {
+    await applyPullRequestWorkItemState(new AzureDevOpsService(project), workItemId);
+  },
   addAdoWorkItemHyperlink: async (project, workItemId, prUrl, comment) => {
     await new AzureDevOpsService(project).addWorkItemHyperlink(workItemId, prUrl, comment);
   },
@@ -447,7 +448,7 @@ export async function buildCloudAgentPrompt(input: {
 
 export async function attachCloudAgentEligibility(
   items: AssignedWorkItem[],
-  opts: { userId: string; project: string; isSuperAdmin: boolean },
+  opts: { userId: string; project: string },
   deps: CloudAgentServiceDeps = defaultDeps,
 ): Promise<AssignedWorkItem[]> {
   const flagEnabled = await deps.isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
@@ -472,8 +473,6 @@ export async function attachCloudAgentEligibility(
     cloudAgentEligibility: evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: opts.project,
-      item,
-      isSuperAdmin: opts.isSuperAdmin,
       skillProvider: skillConfig?.skillProvider,
       skillRepo: skillConfig?.skillRepo,
       skillBranch: skillConfig?.skillBranch,
@@ -522,7 +521,6 @@ export interface StartCloudAgentRunInput {
   initiatorName?: string;
   initiatorEmail?: string;
   adoUserToken?: string | null;
-  isSuperAdmin: boolean;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
   /** Set by the route when cloud-agent-guided-launch is on. */
   launchChooser?: boolean;
@@ -548,8 +546,6 @@ export async function startCloudAgentRun(
   const eligibility = evaluateCloudAgentEligibility({
     flagEnabled,
     project: input.project,
-    item: input.item,
-    isSuperAdmin: input.isSuperAdmin,
     skillProvider: skillConfig?.skillProvider,
     skillRepo: skillConfig?.skillRepo,
     skillBranch: skillConfig?.skillBranch,
@@ -806,7 +802,8 @@ export async function startGuidedCloudAgentRun(
   if ((intent === 'resume' || intent === 'retry') && !input.sessionId) {
     throw new CloudAgentLaunchError('Resume and retry need the original guided job.');
   }
-  const recommendedPath = recommendGuidedSiteSkill({
+  const recommendedPath = recommendGuidedJobSkill({
+    skillName: job.skillName,
     skills: input.availableSkills,
     configuredSkillPath: skillConfig?.developmentSkillPath,
   }).skillPath;
@@ -846,6 +843,8 @@ export async function startGuidedCloudAgentRun(
     imageCount: images.length,
     bugWorkItemId: bug.bugWorkItemId,
     bugUrl: bug.bugUrl,
+    mode: job.opensBug ? 'fix' : 'investigate',
+    requestedSkillName: job.skillName,
     pullRequestInstructions: bug.bugWorkItemId
       ? buildPullRequestDescriptionInstructions({
         workItemId: bug.bugWorkItemId,
@@ -855,13 +854,13 @@ export async function startGuidedCloudAgentRun(
       : null,
   });
   const nowIso = new Date().toISOString();
-  // A new site-issue run is owned by this process until the Bug is stored.
+  // A new report that opens a Bug is owned by this process until the Bug is stored.
   // The queue pump claims queued runs with a null owner, including during the
   // Azure DevOps call, so the run must not be claimable until the prompt,
   // branch, and Bug id are on the snapshot. The short pre-identity deadline
   // starts only when this process is about to launch; the reaper would
   // otherwise fail the run while Azure DevOps is still creating the Bug.
-  const holdUntilBugIsStored = intent === 'start';
+  const holdUntilBugIsStored = intent === 'start' && job.opensBug;
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
   const lockKey = `cloud-agent-guided:${input.project}:${sessionId}`;
 
@@ -928,7 +927,7 @@ export async function startGuidedCloudAgentRun(
           initiatorName: input.initiatorName,
           initiatorEmail: input.initiatorEmail,
           delivery: 'guided',
-          opensPullRequest: true,
+          opensPullRequest: job.opensBug,
           guidedJobId: job.id,
           task: taskText,
           ...(images.length ? { images } : {}),
@@ -955,7 +954,7 @@ export async function startGuidedCloudAgentRun(
     return { sessionId, runId, bugWorkItemId: bug.bugWorkItemId, bugUrl: bug.bugUrl };
   });
 
-  if (intent === 'start') {
+  if (intent === 'start' && job.opensBug) {
     let created: { bugWorkItemId: number; bugUrl: string };
     try {
       created = await createSiteIssueBug({
@@ -1900,51 +1899,73 @@ async function writeWorkItemPullRequest(
     sessionId: input.sessionId,
   };
 
-  if (input.provider !== 'github' && input.titleBranch) {
-    try {
-      await deps.alignCloudAgentPullRequest({
-        project: input.project,
-        repo: input.repository,
-        prUrl: input.prUrl,
-        workItemId: input.workItemId,
-        sourceBranch: input.titleBranch,
-        titleBranch: input.titleBranch,
-      });
-    } catch (err) {
-      console.warn('[cloud-agent] could not set the pull request title', JSON.stringify({
-        runId: input.runId,
-        sessionId: input.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+  try {
+    if (input.provider !== 'github' && input.titleBranch) {
+      try {
+        await deps.alignCloudAgentPullRequest({
+          project: input.project,
+          repo: input.repository,
+          prUrl: input.prUrl,
+          workItemId: input.workItemId,
+          sourceBranch: input.titleBranch,
+          titleBranch: input.titleBranch,
+        });
+      } catch (err) {
+        console.warn('[cloud-agent] could not set the pull request title', JSON.stringify({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
     }
-  }
 
-  if (input.provider === 'github') {
-    try {
-      await deps.linkWorkItemToPullRequest(linkInput);
-    } catch (err) {
-      console.warn('[cloud-agent] GitHub AB# verification failed', JSON.stringify({
-        runId: input.runId,
-        sessionId: input.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+    if (input.provider === 'github') {
+      try {
+        await deps.linkWorkItemToPullRequest(linkInput);
+      } catch (err) {
+        console.warn('[cloud-agent] GitHub AB# verification failed', JSON.stringify({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+      await deps.retryWithBackoff(
+        () => deps.addAdoWorkItemHyperlink(
+          input.project,
+          input.workItemId,
+          input.prUrl,
+          'Implementation PR',
+        ),
+        { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
+      );
+      return;
     }
+
     await deps.retryWithBackoff(
-      () => deps.addAdoWorkItemHyperlink(
-        input.project,
-        input.workItemId,
-        input.prUrl,
-        'Implementation PR',
-      ),
+      () => deps.linkWorkItemToPullRequest(linkInput),
       { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
     );
-    return;
+  } finally {
+    // The pull request already exists. A failed link must not leave the
+    // Feature's children in New or In Progress.
+    await movePullRequestWorkItemState(input, deps);
   }
+}
 
-  await deps.retryWithBackoff(
-    () => deps.linkWorkItemToPullRequest(linkInput),
-    { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
-  );
+async function movePullRequestWorkItemState(
+  input: { project: string; workItemId: number; runId: string; sessionId: string },
+  deps: CloudAgentServiceDeps,
+): Promise<void> {
+  try {
+    await deps.transitionWorkItemForPullRequest(input.project, input.workItemId);
+  } catch (err) {
+    console.warn('[cloud-agent] work item state update failed', JSON.stringify({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      workItemId: input.workItemId,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+  }
 }
 
 function cloudAgentWasLaunched(run: {
