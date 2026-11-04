@@ -337,7 +337,10 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
   };
   const callerAssignedTo = { displayName: 'Jane Developer', uniqueName: 'jane@example.com' };
 
-  function mockWorkItemLookup(fields: Record<string, unknown>) {
+  function mockWorkItemLookup(
+    fields: Record<string, unknown>,
+    children: Array<{ assignedTo?: string }> = [],
+  ) {
     MockAzureDevOpsService.mockImplementation(() => ({
       queryWorkItemsByWiql: jest.fn().mockResolvedValue({
         items: [{
@@ -352,6 +355,7 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
           },
         }],
       }),
+      getFeatureChildren: jest.fn().mockResolvedValue(children),
     }) as unknown as AzureDevOpsService);
   }
 
@@ -412,6 +416,25 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/assigned to you/i);
     expect(mockStartCloudAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('starts a feature that is not assigned to you when one of your items sits under it', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': { displayName: 'Other Developer', uniqueName: 'other@example.com' },
+      'System.WorkItemType': 'Feature',
+    }, [
+      { assignedTo: 'Jane Developer' },
+    ]);
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
+      workItemId: 42,
+      project: 'MaxView',
+    }));
   });
 
   it('returns 200 with sessionId and runId', async () => {
