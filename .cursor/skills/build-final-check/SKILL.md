@@ -1,12 +1,47 @@
 ---
 name: build-final-check
-description: Runs the final check, standards review, or accept sync on a build's integration branch and emits a structured report block.
+description: Runs the combined final check, standards review, or default-branch sync on a build's integration branch and emits a structured apex-final-check-report readiness block.
 disable-model-invocation: true
 ---
 
 # Build Final Check and Standards Review
 
-You verify the combined changes on a build's integration branch before deployment (mode `final-check`) or merge the default branch into the integration branch at accept time (mode `sync`).
+## Purpose
+
+The `build-final-check` skill serves the Check (Integration & Standards Readiness) role in a Build from prompt run. After all task branches have merged into the integration branch on the full path, it reads the frozen standards contract, runs every quality manifest gate (`unit_full`, `unit_related`, `type_check`, `lint`), reviews the combined diff against the standards checklist, repairs combined breaks when repair budget remains, and emits a fenced `apex-final-check-report` block. In `sync` mode (at Accept time), it merges the repository's default branch into the integration branch, runs the full unit suite, and pushes the synced branch.
+
+## When to use
+
+Use this skill for the `check` role in a project's Build profile (`final-check` mode after task merges, or `sync` mode when accepting a preview whose default branch has moved). Do not use it to deploy or to complete a pull request into the default branch.
+
+## Inputs
+
+Read these inputs from the prompt and the repository before running checks:
+
+- **Integration branch and base commit**: the build's integration branch (`apex/build/<runId>`) and `baseCommit`.
+- **Quality manifest commands**:
+  - `unit_full`: full unit test suite command.
+  - `unit_related`: related tests command for all files changed since `baseCommit`.
+  - `type_check`: TypeScript type-check command.
+  - `lint`: linter command.
+- **Frozen standards contract** (read these three files first):
+  - `designSystemFile`: design-system file path and content hash.
+  - `codingRules`: coding rules path and content hash.
+  - `codeMap`: repository code map path and content hash.
+- **Context notes**: `contextNotesPath` containing the plan overview, task ownership, reuse list, and risk constraints.
+- **Repair budget**: `repairAttemptsLeft` (`0`, `1`, or `2`) and optional `Prior Check Report Summary`.
+
+## Rules
+
+| ID      | Rule                                                                                                                                                                                                 | Enforced by          |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| CHK-R01 | Open and read the three frozen standards files (`designSystemFile`, `codingRules`, `codeMap`) before running checks. If any cannot be read, stop and report `status: "unreadable_input"` with its path. | Final check parser   |
+| CHK-R02 | Run all four quality manifest gates on the integration branch: **full unit suite** (`unit_full`), **related tests** for changed files (`unit_related`), **type-check** (`type_check`), and **lint** (`lint`). | Final check parser   |
+| CHK-R03 | Review the combined diff against the standards contract for `duplicate_helper`, `hard_coded_colour`, `off_library_component` (requires `exceptionReason` when `resolution: "exception"`), and `missing_accessibility`. | Final check parser |
+| CHK-R04 | When a check fails and `repairAttemptsLeft > 0`, fix the break on the check branch, set `repairedInSession: true`, and **re-run** all checks. Never delete, skip or weaken a test to pass.           | Final check handler  |
+| CHK-R05 | When `repairAttemptsLeft === 0`, run in **report-only** mode: change no files and set `repairedInSession: false`.                                                                                    | Final check handler  |
+| CHK-R06 | Record `validatedCommit` as the 40-character git HEAD SHA of the branch on which the final checks ran.                                                                                               | Final check handler  |
+| CHK-R07 | The report contains no secrets, bearer tokens, connection strings, or code excerpts. Free-text summaries and finding details are plain text (at most 500 characters).                                | Redaction & parser   |
 
 ## Mode: `final-check`
 
@@ -28,6 +63,36 @@ Follow these steps in order:
    - Always **re-run** the checks after any fix so the reported outcomes reflect the final commit on your branch.
 5. **Emit the `apex-final-check-report` block**:
    - End your final message with a fenced `apex-final-check-report` JSON block matching `schemaVersion: 1`.
+
+## Mode: `sync` (Accept default-branch sync)
+
+1. Merge the repository's default branch into the integration branch.
+2. Resolve any merge conflicts while preserving the brief's requirements and risk decisions.
+3. Run the **full unit suite** (`unit_full`), **type-check**, and **lint**.
+4. Push the merged commit to the integration branch and emit the `apex-final-check-report` block with the new `validatedCommit` SHA.
+
+## Review checklist
+
+| Item                                                                                     | Evidence source                  | Met? (yes, no, not applicable) |
+| ---------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------ |
+| Frozen standards files were read first, or `unreadable_input` was reported (CHK-R01)     | `standards.status`               |                                |
+| `unit_full`, `unit_related`, `type_check`, and `lint` were executed (CHK-R02)            | `checks` array                   |                                |
+| Combined diff reviewed for all four standards rules (CHK-R03)                            | `standards.findings`             |                                |
+| Any `exception` finding includes a non-empty `exceptionReason` (CHK-R03)                 | `standards.findings`             |                                |
+| Checks were re-run after any in-session fix without weakening tests (CHK-R04)            | `checks` and git log             |                                |
+| Report-only mode respected when `repairAttemptsLeft === 0` (CHK-R05)                     | `repairedInSession: false`       |                                |
+| Report contains no secrets, identity values, or code excerpts (CHK-R07)                  | `apex-final-check-report` JSON   |                                |
+
+## Stop conditions
+
+- Any of `designSystemFile`, `codingRules`, or `codeMap` cannot be read — stop immediately, make no edits, and report `standards: { "status": "unreadable_input", "path": "<file path>" }`.
+- `repairAttemptsLeft === 0` and a check fails — report the failure in `checks` with `repairedInSession: false` and make no code changes.
+
+## Boundaries
+
+- Do not run a deployment pipeline or deploy the application.
+- Do not open, approve, or complete a pull request into the default branch.
+- Do not delete, skip, or weaken tests.
 
 ```apex-final-check-report
 {
