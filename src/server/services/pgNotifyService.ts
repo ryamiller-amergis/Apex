@@ -81,6 +81,34 @@ export function nextRunEventSequence(
   return sequence;
 }
 
+/** The terminal `done` a client treats as the end of a run, whatever ended it. */
+export function buildRunDoneEnvelope(input: {
+  runId: string;
+  threadId: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  detail?: string;
+  timestamp?: string;
+  autoRetry?: boolean;
+}): AgentRunEventEnvelope {
+  return {
+    eventId: randomUUID(),
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
+    sequence: nextRunEventSequence(input.runId),
+    timestamp: input.timestamp ?? new Date().toISOString(),
+    type: 'done',
+    phase: 'completion',
+    status: input.status,
+    detail: input.detail,
+    event: {
+      type: 'done',
+      runId: input.runId,
+      ...(input.autoRetry ? { autoRetry: true } : {}),
+    },
+  };
+}
+
 export function clearRunEventSequence(
   runId: string,
   sourceInstance = RUN_EVENT_SOURCE_INSTANCE,
@@ -295,6 +323,7 @@ async function finalizeAgentRun(
   ownerInstance?: string,
 ): Promise<boolean> {
   const client = await pool.connect();
+  let terminalEvents: AgentRunEventEnvelope[] = input.events;
   try {
     await client.query('BEGIN');
     const terminalDetail = input.detail ? stripNullBytes(input.detail) : input.detail;
@@ -347,7 +376,21 @@ async function finalizeAgentRun(
       return false;
     }
 
-    for (const event of input.events) {
+    // Clients end a turn on `done`; reaper terminals pass only a health or
+    // cancel event, so without this the page never learns the run ended.
+    terminalEvents = input.events.some((event) => event.type === 'done')
+      ? input.events
+      : [
+          ...input.events,
+          buildRunDoneEnvelope({
+            runId: input.runId,
+            threadId: input.threadId,
+            status: input.status,
+            detail: terminalDetail,
+          }),
+        ];
+
+    for (const event of terminalEvents) {
       const safe = sanitizeRunEventEnvelope(event);
       await client.query(
         `INSERT INTO agent_run_events (
@@ -399,7 +442,7 @@ async function finalizeAgentRun(
     client.release();
   }
 
-  for (const event of input.events) {
+  for (const event of terminalEvents) {
     await notifyRunEvent(event, { persist: false }).catch((error) => {
       console.error(
         `[pgNotify] Terminal event ${event.eventId} persisted but fan-out failed:`,

@@ -265,6 +265,8 @@ export interface SseDoneEvent {
   runId?: string;
   prdReady?: boolean;
   backlogReady?: boolean;
+  /** The failed attempt is being re-run under the same run id; the turn has not ended. */
+  autoRetry?: boolean;
 }
 
 export interface SseThinkingEvent {
