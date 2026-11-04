@@ -193,7 +193,7 @@ function mergeThinkingText(previous: string, incoming: string): string {
   return `${previous} ${trimmed}`;
 }
 
-const RESTARTING_LABEL = 'Restarting the agent…';
+const RESTARTING_LABEL = "The agent was interrupted, so it's starting your answer over.";
 const RESTART_GIVE_UP_MS = 3 * 60_000;
 const RESTART_GAVE_UP_DETAIL = 'The agent did not restart. Please retry.';
 

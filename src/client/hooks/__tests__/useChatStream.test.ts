@@ -1389,7 +1389,7 @@ describe('useChatStream run endings', () => {
         act(() => lastES!.emit('message', restartDone('run-1'), nextId()));
         expect(result.current.status).toBe('running');
         expect(result.current.isRetrying).toBe(true);
-        expect(result.current.retryReason).toBe('Restarting the agent…');
+        expect(result.current.retryReason).toBe("The agent was interrupted, so it's starting your answer over.");
         expect(result.current.streamingText).toBe('');
         expect(result.current.retryableRunId).toBeNull();
         expect(errorMessages(result)).toBe(0);
