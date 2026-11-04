@@ -5,6 +5,7 @@ import {
   sendMessage,
   getSessionMessages,
   closeSession,
+  openAskApexThread,
 } from '../services/askApexService';
 import { getUserId } from '../utils/requestUser';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
@@ -13,11 +14,18 @@ const router = Router();
 
 /**
  * POST /api/ask-apex/sessions
- * Create a new Ask Apex chat session.
+ * Create a new Ask Apex chat session. Returns `threadId` when the session is a
+ * chat thread on the V2 host; the client then uses the chat thread API.
  */
-router.post('/sessions', (req: Request, res: Response) => {
+router.post('/sessions', async (req: Request, res: Response) => {
   try {
-    const sessionId = createSession(getUserId(req));
+    const userId = getUserId(req);
+    const thread = await openAskApexThread(userId);
+    if (thread) {
+      res.status(201).json({ sessionId: thread.threadId, threadId: thread.threadId });
+      return;
+    }
+    const sessionId = createSession(userId);
     res.status(201).json({ sessionId });
   } catch (err: any) {
     console.error('[ask-apex] createSession error:', err.message);

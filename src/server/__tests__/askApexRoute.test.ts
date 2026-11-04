@@ -16,6 +16,7 @@ jest.mock('../services/askApexService', () => ({
   sendMessage: jest.fn(),
   getSessionMessages: jest.fn(),
   closeSession: jest.fn(),
+  openAskApexThread: jest.fn(),
 }));
 
 import askApexRouter from '../routes/askApex';
@@ -39,7 +40,21 @@ function buildApp() {
 // ── Tests ───────────────────────────────────────────────────────────────────────
 
 describe('POST /api/ask-apex/sessions', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockService.openAskApexThread.mockResolvedValue(null);
+  });
+
+  it('returns the chat thread when Ask Apex runs on the V2 host', async () => {
+    mockService.openAskApexThread.mockResolvedValue({ threadId: 'thread-ask' });
+    const app = buildApp();
+
+    const res = await request(app).post('/api/ask-apex/sessions').send();
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ sessionId: 'thread-ask', threadId: 'thread-ask' });
+    expect(mockService.createSession).not.toHaveBeenCalled();
+  });
 
   it('returns 201 with a sessionId', async () => {
     mockService.createSession.mockReturnValue('sess-abc');

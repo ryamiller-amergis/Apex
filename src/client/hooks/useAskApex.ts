@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { ChatMessage } from '../../shared/types/chat';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
+import { useAgentChatSession } from './useAgentChatSession';
+import { RUN_STALLED_NOTICE, useRunStalled } from './useRunStalled';
 import {
   openInteractiveStream,
   type ThreadStreamHandle,
@@ -22,6 +25,19 @@ interface AskApexSseEvent {
   error?: string;
 }
 
+function toAskApexMessage(message: ChatMessage): AskApexMessage {
+  return {
+    id: message.id,
+    role: message.role === 'user' ? 'user' : 'assistant',
+    text: message.text,
+    ts: message.ts,
+  };
+}
+
+function isConversationMessage(message: ChatMessage): boolean {
+  return !message.hidden && message.role !== 'tool';
+}
+
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
   if (!res.ok) {
@@ -37,6 +53,13 @@ export function useAskApex() {
   const [streamingText, setStreamingText] = useState('');
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [isConnected, setIsConnected] = useState(false);
+  /** Set when the session is a chat thread on the V2 host. */
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const chat = useAgentChatSession(threadId, { enablePreparationState: true });
+  const chatStalled = useRunStalled(
+    Boolean(threadId) && chat.isRunning && !chat.isRetrying,
+    chat.lastProgressAt,
+  );
 
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   const streamBufferRef = useRef('');
@@ -106,16 +129,20 @@ export function useAskApex() {
 
   const startSession = useCallback(async () => {
     try {
-      const { sessionId: sid } = await apiFetch<{ sessionId: string }>(
+      const { sessionId: sid, threadId: tid } = await apiFetch<{
+        sessionId: string;
+        threadId?: string;
+      }>(
         '/api/ask-apex/sessions',
         { method: 'POST', headers: { 'Content-Type': 'application/json' } }
       );
       setSessionId(sid);
+      setThreadId(tid ?? null);
       setMessages([]);
       setStreamingText('');
       setStatus('idle');
       streamBufferRef.current = '';
-      connectSse(sid);
+      if (!tid) connectSse(sid);
       return sid;
     } catch (err) {
       console.error('[useAskApex] startSession error:', err);
@@ -126,6 +153,10 @@ export function useAskApex() {
   const sendMessage = useCallback(
     async (text: string) => {
       if (!sessionId || !text.trim()) return;
+      if (threadId) {
+        await chat.send(text.trim());
+        return;
+      }
       setStatus('streaming');
       try {
         await apiFetch(`/api/ask-apex/sessions/${sessionId}/messages`, {
@@ -138,7 +169,7 @@ export function useAskApex() {
         setStatus('error');
       }
     },
-    [sessionId]
+    [sessionId, threadId, chat]
   );
 
   const closeSession = useCallback(() => {
@@ -146,19 +177,20 @@ export function useAskApex() {
       streamRef.current.close();
       streamRef.current = null;
     }
-    if (sessionId) {
+    if (sessionId && !threadId) {
       fetch(`/api/ask-apex/sessions/${sessionId}`, {
         method: 'DELETE',
         credentials: 'include',
       }).catch(() => {});
     }
     setSessionId(null);
+    setThreadId(null);
     setMessages([]);
     setStreamingText('');
     setStatus('idle');
     setIsConnected(false);
     streamBufferRef.current = '';
-  }, [sessionId]);
+  }, [sessionId, threadId]);
 
   useEffect(() => {
     return () => {
@@ -169,6 +201,36 @@ export function useAskApex() {
     };
   }, []);
 
+  if (threadId) {
+    const chatStatus: SessionStatus = chat.isPreparing
+      ? 'preparing'
+      : chat.isInteractionBusy
+        ? 'streaming'
+        : chat.status === 'error'
+          ? 'error'
+          : 'idle';
+    return {
+      sessionId,
+      messages: chat.visibleMessages.filter(isConversationMessage).map(toAskApexMessage),
+      streamingText: chat.streamingText,
+      status: chatStatus,
+      preparationMessage: chat.isPreparing ? chat.preparationMessage : null,
+      notice: chat.isRetrying
+        ? chat.retryReason
+        : chatStalled
+          ? RUN_STALLED_NOTICE
+          : null,
+      retryFailedRun:
+        chat.retryableRunId && !chat.isInteractionBusy
+          ? () => { void chat.retryFailedRun(); }
+          : null,
+      isConnected: chat.isConnected,
+      startSession,
+      sendMessage,
+      closeSession,
+    };
+  }
+
   return {
     sessionId,
     messages,
@@ -178,6 +240,8 @@ export function useAskApex() {
       status === 'preparing'
         ? friendlyChatProgressLabel('Preparing project repository…', 'setup')
         : null,
+    notice: null,
+    retryFailedRun: null,
     isConnected,
     startSession,
     sendMessage,

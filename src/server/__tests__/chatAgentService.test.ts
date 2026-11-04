@@ -2072,6 +2072,7 @@ describe('document assistant MCP wiring', () => {
     [{ assistantType: 'design-doc' as const }, 'assistant'],
     [{ skillPath: '.cursor/skills/adr-finalize/SKILL.md' }, 'adr'],
     [{ isDevSession: true }, 'assistant'],
+    [{ askApex: true, skillPath: '.cursor/skills/app-knowledge/SKILL.md' }, 'ask-apex'],
     [{}, 'home-chat'],
   ])(
     'routes interactive class %j as %s',
@@ -2081,6 +2082,7 @@ describe('document assistant MCP wiring', () => {
         isDevSession?: boolean;
         assistantType?: 'prd' | 'design-doc';
         skillPath?: string;
+        askApex?: boolean;
       },
       expected
     ) => {
@@ -2092,6 +2094,7 @@ describe('document assistant MCP wiring', () => {
             kickoff: baseKickoff({
               assistantType: overrides.assistantType,
               skillPath: overrides.skillPath,
+              askApex: overrides.askApex,
             }),
           },
         } as Parameters<typeof resolveInteractiveWorkflowClass>[0]),
