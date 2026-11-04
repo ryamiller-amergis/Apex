@@ -8,7 +8,7 @@
  */
 import { db } from '../db/drizzle';
 import { agentRuns, aiRunAttempts, chatThreads } from '../db/schema';
-import { and, count, desc, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 import type {
   AgentRunEventEnvelope,
@@ -18,11 +18,13 @@ import type {
   SseHealthEvent,
 } from '../../shared/types/chat';
 import {
+  buildRunDoneEnvelope,
   finalizeReconciledAgentRun,
   nextRunEventSequence,
   notifyRunEvent,
   RUN_EVENT_SOURCE_INSTANCE,
 } from './pgNotifyService';
+import { trackEvent } from './telemetry';
 import { getMyWorkSessionContext, logMyWorkSession } from './myWorkSessionLogger';
 import { isFeatureEnabled } from './featureFlagService';
 import {
@@ -34,7 +36,10 @@ import {
   resolveBackgroundDispatchTtlMs,
 } from './admissionGovernorService';
 import { workerTierTelemetry } from './workerTierTelemetry';
-import { INTERACTIVE_LANE } from '../../shared/types/interactiveWorkflow';
+import {
+  INTERACTIVE_LANE,
+  type InteractiveWorkflowClass,
+} from '../../shared/types/interactiveWorkflow';
 import {
   NonblockingRepoCacheLeaseUnavailableError,
   RepoCacheLeaseLostError,
@@ -63,8 +68,14 @@ const DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS = 60_000;
 const DEFAULT_WORKER_PROGRESS_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CANCEL_GRACE_MS = 60_000;
 
+const INTERACTIVE_REAP_INTERVAL_MS = 15_000;
+const INTERACTIVE_REAPER_LEASE_KEY = 'agent-run-reaper:interactive';
+const INTERACTIVE_REAPER_LEASE_MS = 14_000;
+
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
 let reaperCyclePromise: Promise<void> | null = null;
+let interactiveReaperTimer: ReturnType<typeof setInterval> | null = null;
+let interactiveReaperRunning = false;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -96,6 +107,29 @@ async function tryRunRetireReconcileDue(signal: AbortSignal): Promise<boolean> {
       return false;
     }
     throw error;
+  }
+}
+
+async function runInteractiveReaperCycle(): Promise<void> {
+  if (interactiveReaperRunning) return;
+  interactiveReaperRunning = true;
+  try {
+    await withRepoCacheLease(
+      INTERACTIVE_REAPER_LEASE_KEY,
+      (lease) => reapLostInteractiveTurns({ signal: lease.signal }),
+      {
+        leaseMs: INTERACTIVE_REAPER_LEASE_MS,
+        heartbeatMs: 5_000,
+        waitMs: 0,
+        releaseOnComplete: false,
+      },
+    );
+  } catch (error) {
+    if (!isExpectedSweepStop(error)) {
+      console.error('[reaper] Interactive reap failed:', error);
+    }
+  } finally {
+    interactiveReaperRunning = false;
   }
 }
 
@@ -190,31 +224,94 @@ export interface ReaperOptions {
   eventDrivenTerminationEnabled?: (threadId: string) => Promise<boolean>;
   retireReconcileDue?: boolean;
   signal?: AbortSignal;
-  neverStartedTurnRetry?: NeverStartedTurnRetry;
+  lostTurnRetry?: LostTurnRetry;
 }
 
-export interface NeverStartedTurn {
+export interface LostTurn {
   runId: string;
   threadId: string;
   userId: string;
+  reason: 'never_started' | 'host_lost';
 }
 
-/** Retries, once, a durable interactive turn whose worker never picked it up. */
-export interface NeverStartedTurnRetry {
-  isEligible(turn: NeverStartedTurn): Promise<boolean>;
-  retry(turn: NeverStartedTurn): Promise<void>;
+export type LostTurnEligibility =
+  | { eligible: true }
+  | {
+      eligible: false;
+      skippedReason:
+        | 'not_first_attempt'
+        | 'no_specification'
+        | 'tool_grant'
+        | 'workflow_class'
+        | 'mcp_tool_call';
+    };
+
+/** Re-runs, once, a durable interactive turn whose host never started it or died mid-turn. */
+export interface LostTurnRetry {
+  isEligible(turn: LostTurn): Promise<LostTurnEligibility>;
+  retry(turn: LostTurn): Promise<void>;
 }
 
-const defaultNeverStartedTurnRetry: NeverStartedTurnRetry = {
+/** Workflows whose turn applies its result only when it finishes, so a re-run repeats nothing. */
+export function workflowAllowsAutomaticRerun(workflowClass: InteractiveWorkflowClass): boolean {
+  switch (workflowClass) {
+    case 'assistant':
+    case 'home-chat':
+    case 'ask-apex':
+      return true;
+    case 'interview':
+    case 'adr':
+    case 'brainstorm':
+      return false;
+    default: {
+      const unhandled: never = workflowClass;
+      throw new Error(`Unhandled interactive workflow class: ${String(unhandled)}`);
+    }
+  }
+}
+
+async function lostAttemptCalledMcp(runId: string): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT 1
+      FROM agent_run_events
+     WHERE run_id = ${runId}
+       AND (
+         lower(event->>'toolName') = 'mcp'
+         OR lower(event->>'toolName') LIKE 'mcp:%'
+         OR coalesce(event->'args'->>'providerIdentifier', '') <> ''
+       )
+     LIMIT 1
+  `);
+  const rows = Array.isArray(result)
+    ? result
+    : (result as { rows?: unknown[] } | undefined)?.rows ?? [];
+  return rows.length > 0;
+}
+
+export const defaultLostTurnRetry: LostTurnRetry = {
   async isEligible(turn) {
     const [attempts] = await db
       .select({ total: count() })
       .from(aiRunAttempts)
       .where(eq(aiRunAttempts.runId, turn.runId));
-    if (Number(attempts?.total ?? 0) !== 1) return false;
+    if (Number(attempts?.total ?? 0) !== 1) {
+      return { eligible: false, skippedReason: 'not_first_attempt' };
+    }
     const source = await loadDurableInteractiveRetrySource(turn);
+    if (!source) return { eligible: false, skippedReason: 'no_specification' };
     // A delegated Azure DevOps token cannot be re-issued without the user.
-    return source !== null && source.specification.toolGrant === null;
+    if (source.specification.toolGrant !== null) {
+      return { eligible: false, skippedReason: 'tool_grant' };
+    }
+    if (!workflowAllowsAutomaticRerun(source.specification.workflowClass)) {
+      return { eligible: false, skippedReason: 'workflow_class' };
+    }
+    // MCP servers (ADO, calendar, MaxView, user connections) can write outside
+    // Apex; a re-run could repeat that write.
+    if (await lostAttemptCalledMcp(turn.runId)) {
+      return { eligible: false, skippedReason: 'mcp_tool_call' };
+    }
+    return { eligible: true };
   },
   async retry(turn) {
     await durableInteractiveTurnService.retry(turn);
@@ -860,6 +957,170 @@ function workerCancelEvent(input: {
 /**
  * Reap failed runs and persist non-terminal progress warnings.
  */
+interface LostInteractiveRowContext {
+  config: AgentRunHealthConfig;
+  dispatchColdStartMs: number;
+  lostTurnRetry: LostTurnRetry;
+  nowMs: number;
+  updatedAt: string;
+  signal?: AbortSignal;
+}
+
+/** Returns true when the row is an interactive turn this check owns. */
+async function reapLostInteractiveRow(
+  row: typeof agentRuns.$inferSelect,
+  { config, dispatchColdStartMs, lostTurnRetry, nowMs, updatedAt, signal }: LostInteractiveRowContext,
+): Promise<boolean> {
+  // Interactive dispatch is acknowledged before the Dapr actor invocation
+  // finishes. A process crash can therefore bypass the host's rejection
+  // handler and leave the fenced row dispatched forever. Unlike background
+  // work, this lane has nothing to republish, so terminate it after the
+  // cold-start budget. Durable turns heartbeat on a timer, so a replica that
+  // dies mid-turn is detected within a minute. Either way an eligible
+  // durable turn is re-run once under the same run id.
+  const durableInteractive =
+    row.lane === INTERACTIVE_LANE && row.transportVersion === 'dapr-actor-v2';
+  if (
+    row.lane === INTERACTIVE_LANE
+    && (row.status === 'dispatched' || (durableInteractive && row.status === 'running'))
+  ) {
+    let lostReason: LostTurn['reason'] | null = null;
+    if (row.status === 'dispatched') {
+      const startBudgetMs = durableInteractive
+        ? config.durableInteractiveStartTimeoutMs ?? DEFAULT_DURABLE_INTERACTIVE_START_TIMEOUT_MS
+        : dispatchColdStartMs;
+      if (ageMs(row.dispatchedAt, nowMs) >= startBudgetMs) lostReason = 'never_started';
+    } else if (
+      ageMs(row.heartbeatAt ?? row.startedAt ?? row.dispatchedAt, nowMs)
+        >= (config.durableInteractiveHeartbeatTimeoutMs
+          ?? DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS)
+    ) {
+      lostReason = 'host_lost';
+    }
+    let retryTurn: LostTurn | null = null;
+    if (lostReason && row.dispatchMessageId && durableInteractive && row.requestedByUserId) {
+      const candidate: LostTurn = {
+        runId: row.id,
+        threadId: row.threadId,
+        userId: row.requestedByUserId,
+        reason: lostReason,
+      };
+      const eligibility = await lostTurnRetry.isEligible(candidate).catch(
+        (): LostTurnEligibility => ({ eligible: false, skippedReason: 'no_specification' }),
+      );
+      if (eligibility.eligible) retryTurn = candidate;
+      emitWorkerTelemetry(() => {
+        trackEvent('interactive.turn.auto_retry', {
+          runId: row.id,
+          reason: lostReason!,
+          eligible: String(eligibility.eligible),
+          ...(eligibility.eligible ? {} : { skippedReason: eligibility.skippedReason }),
+        });
+      });
+    }
+    const lostMessage = lostReason === 'never_started'
+      ? 'Interactive agent did not start.'
+      : 'Interactive agent stopped responding.';
+    const detail = lostReason
+      ? `${lostMessage} ${retryTurn ? 'Restarting automatically.' : 'Please retry.'}`
+      : null;
+    if (row.dispatchMessageId && detail) {
+      throwIfAborted(signal);
+      const healthEvent = workerHealthEvent({
+        runId: row.id,
+        threadId: row.threadId,
+        health: 'worker_lost',
+        detail,
+        timestamp: updatedAt,
+        phase: row.progressPhase,
+      });
+      const terminal = await markTerminal(row.id, {
+        status: 'failed',
+        terminalReason: 'worker_lost',
+        dispatchMessageId: row.dispatchMessageId,
+        detail,
+        events: retryTurn
+          ? [
+              healthEvent,
+              buildRunDoneEnvelope({
+                runId: row.id,
+                threadId: row.threadId,
+                status: 'failed',
+                detail,
+                autoRetry: true,
+              }),
+            ]
+          : [healthEvent],
+      });
+      throwIfAborted(signal);
+      console.log(
+        `[reaper] Reaped interactive run (id=${row.id}, threadId=${row.threadId}, status=${row.status}) — ${detail}`,
+      );
+      if (terminal.ok) {
+        emitWorkerTelemetry(() => {
+          workerTierTelemetry.reaperAction(
+            workerTelemetryContext(row),
+          );
+        });
+      }
+      if (terminal.ok && retryTurn) {
+        try {
+          await lostTurnRetry.retry(retryTurn);
+          console.log(
+            `[reaper] Re-ran lost interactive turn (id=${row.id}, threadId=${row.threadId}, reason=${retryTurn.reason})`,
+          );
+        } catch (error) {
+          console.warn(
+            `[reaper] Automatic retry failed (id=${row.id}, threadId=${row.threadId}):`,
+            error instanceof Error ? error.message : error,
+          );
+          // The page is waiting on the re-run; end the turn so it can retry by hand.
+          await notifyRunEvent(
+            buildRunDoneEnvelope({
+              runId: row.id,
+              threadId: row.threadId,
+              status: 'failed',
+              detail: `${lostMessage} Please retry.`,
+            }),
+            { persist: true },
+          ).catch(() => undefined);
+        }
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Durable interactive turns only. Runs more often than the full sweep so a
+ * lost turn restarts within about one heartbeat timeout.
+ */
+export async function reapLostInteractiveTurns(options: ReaperOptions = {}): Promise<void> {
+  const { signal } = options;
+  throwIfAborted(signal);
+  const config = options.config ?? resolveAgentRunHealthConfig();
+  const nowMs = options.now?.() ?? Date.now();
+  const rows = await db.query.agentRuns.findMany({
+    where: and(
+      eq(agentRuns.lane, INTERACTIVE_LANE),
+      eq(agentRuns.transportVersion, 'dapr-actor-v2'),
+      inArray(agentRuns.status, ['running', 'dispatched']),
+    ),
+  });
+  for (const row of rows) {
+    throwIfAborted(signal);
+    await reapLostInteractiveRow(row, {
+      config,
+      dispatchColdStartMs: config.dispatchColdStartMs ?? DEFAULT_DISPATCH_COLD_START_MS,
+      lostTurnRetry: options.lostTurnRetry ?? defaultLostTurnRetry,
+      nowMs,
+      updatedAt: new Date(nowMs).toISOString(),
+      signal,
+    });
+  }
+}
+
 export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<void> {
   const { signal } = options;
   try {
@@ -874,8 +1135,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
     const workerProgressTimeoutMs =
       config.workerProgressTimeoutMs ?? DEFAULT_WORKER_PROGRESS_TIMEOUT_MS;
     const cancelGraceMs = config.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
-    const neverStartedTurnRetry =
-      options.neverStartedTurnRetry ?? defaultNeverStartedTurnRetry;
+    const lostTurnRetry = options.lostTurnRetry ?? defaultLostTurnRetry;
     const nowMs = options.now?.() ?? Date.now();
     const updatedAt = new Date(nowMs).toISOString();
     throwIfAborted(signal);
@@ -938,83 +1198,7 @@ export async function reapOrphanedRuns(options: ReaperOptions = {}): Promise<voi
         continue;
       }
 
-      // Interactive dispatch is acknowledged before the Dapr actor invocation
-      // finishes. A process crash can therefore bypass the host's rejection
-      // handler and leave the fenced row dispatched forever. Unlike background
-      // work, this lane has nothing to republish, so terminate it after the
-      // cold-start budget and let the user retry. Durable turns heartbeat on a
-      // timer, so a replica that dies mid-turn is detected within a minute.
-      const durableInteractive =
-        row.lane === INTERACTIVE_LANE && row.transportVersion === 'dapr-actor-v2';
-      if (
-        row.lane === INTERACTIVE_LANE
-        && (row.status === 'dispatched' || (durableInteractive && row.status === 'running'))
-      ) {
-        let detail: string | null = null;
-        let retryTurn: NeverStartedTurn | null = null;
-        if (row.status === 'dispatched') {
-          const startBudgetMs = durableInteractive
-            ? config.durableInteractiveStartTimeoutMs ?? DEFAULT_DURABLE_INTERACTIVE_START_TIMEOUT_MS
-            : dispatchColdStartMs;
-          if (ageMs(row.dispatchedAt, nowMs) >= startBudgetMs) {
-            const candidate = durableInteractive && row.requestedByUserId
-              ? { runId: row.id, threadId: row.threadId, userId: row.requestedByUserId }
-              : null;
-            if (candidate && await neverStartedTurnRetry.isEligible(candidate).catch(() => false)) {
-              retryTurn = candidate;
-            }
-            detail = retryTurn
-              ? 'Interactive agent did not start. Retrying automatically.'
-              : 'Interactive agent did not start. Please retry.';
-          }
-        } else if (
-          ageMs(row.heartbeatAt ?? row.startedAt ?? row.dispatchedAt, nowMs)
-            >= (config.durableInteractiveHeartbeatTimeoutMs
-              ?? DEFAULT_DURABLE_INTERACTIVE_HEARTBEAT_TIMEOUT_MS)
-        ) {
-          detail = 'Interactive agent stopped responding. Please retry.';
-        }
-        if (row.dispatchMessageId && detail) {
-          throwIfAborted(signal);
-          const terminal = await markTerminal(row.id, {
-            status: 'failed',
-            terminalReason: 'worker_lost',
-            dispatchMessageId: row.dispatchMessageId,
-            detail,
-            events: [workerHealthEvent({
-              runId: row.id,
-              threadId: row.threadId,
-              health: 'worker_lost',
-              detail,
-              timestamp: updatedAt,
-              phase: row.progressPhase,
-            })],
-          });
-          throwIfAborted(signal);
-          console.log(
-            `[reaper] Reaped interactive run (id=${row.id}, threadId=${row.threadId}, status=${row.status}) — ${detail}`,
-          );
-          if (terminal.ok) {
-            emitWorkerTelemetry(() => {
-              workerTierTelemetry.reaperAction(
-                workerTelemetryContext(row),
-              );
-            });
-          }
-          if (terminal.ok && retryTurn) {
-            try {
-              await neverStartedTurnRetry.retry(retryTurn);
-              console.log(
-                `[reaper] Retried interactive run that never started (id=${row.id}, threadId=${row.threadId})`,
-              );
-            } catch (error) {
-              console.warn(
-                `[reaper] Automatic retry failed (id=${row.id}, threadId=${row.threadId}):`,
-                error instanceof Error ? error.message : error,
-              );
-            }
-          }
-        }
+      if (await reapLostInteractiveRow(row, { config, dispatchColdStartMs, lostTurnRetry, nowMs, updatedAt, signal })) {
         continue;
       }
 
@@ -1499,6 +1683,10 @@ export function startReaper(): void {
     void runReaperCycle('[reaper] Periodic reap failed:');
   }, REAP_INTERVAL_MS);
   reaperTimer.unref?.();
+  interactiveReaperTimer = setInterval(() => {
+    void runInteractiveReaperCycle();
+  }, INTERACTIVE_REAP_INTERVAL_MS);
+  interactiveReaperTimer.unref?.();
 }
 
 /**
@@ -1508,6 +1696,10 @@ export function stopReaper(): void {
   if (reaperTimer) {
     clearInterval(reaperTimer);
     reaperTimer = null;
+  }
+  if (interactiveReaperTimer) {
+    clearInterval(interactiveReaperTimer);
+    interactiveReaperTimer = null;
   }
   void import('./cloudAgentQueueScheduler')
     .then((scheduler) => scheduler.stopCloudAgentQueueScheduler())

@@ -42,6 +42,13 @@ Tonight (safe to test today):
 8. Phase 5a: loop_error metric carries reason/status.
 Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" below.
 
+## Status 2026-11-03
+- Prod Terraform reconciled (two forked local states merged into `Apex/infra`; tbi copy retired). Plan from main 61c7678b = no changes. Prod plan/apply needs the secret inputs from the agent-store helper `tf-merge/prd-secrets-env.sh` (Oct 9 apply passed them on the command line). #268 pins `ALLOW_TEST_ACCOUNT_SIGN_IN`/`UV_THREADPOOL_SIZE`.
+- Repo vars set: `GROUNDING_MAINTENANCE_MODE_PRODUCTION=legacy-projects`, `_STAGING=disk-only`. Live slots still `full`/`cleanup-only` until the next prod deploy (user chose no restart).
+- Decisions: F re-runs only PRD/design-doc assistants, Home chat, Ask Apex; B and C gate on `ai-runs-v2-transport`; A step 2 uses Postgres LISTEN/NOTIFY; C walkthrough drafts wait in place with live progress.
+- In progress: all of workstream F on one branch/PR, `feat/chat-run-ended-signal` (#269, draft until F is done). Code complete, committed locally, NOT pushed (dev busy with other testing): F.0 a/b/d (server `done` on every terminal, client `endRun`, test matrix); F steps 1–3, 5–7 (reaper `lostTurnRetry` for never-started and host-lost turns — first attempt, no ADO grant, `assistant`/`home-chat`/`ask-apex`, no MCP tool call; `autoRetry` on the failed `done`; failed `done` if the re-run cannot start; `interactive.turn.auto_retry` telemetry; client "Restarting the agent…" with a 3-minute give-up). Step 5 needs no code: a drained turn stops heartbeating and takes the same path. Left: push when dev is free, dev restart test (`az containerapp revision restart` on `ca-apex-ai-agentic-dev` mid-turn), then step 4 data. A–E each get their own PR.
+- Step 4 (faster lost-turn detection): prod has no heartbeat-gap history (DB keeps only the latest `heartbeat_at`; App Insights has no ingest requests or host dependencies). Done locally: `reapLostInteractiveTurns` runs every 15 s on lease `agent-run-reaper:interactive` (detection ~60–75 s, was up to ~2 min); timeout stays 60 s because heartbeats go through App Service and a restart/swap pauses them. Host sends `interactive.heartbeats` (maxGapMs, sent, failed) per durable turn. After 1–2 weeks of prod data, decide whether `AI_RUNS_INTERACTIVE_HEARTBEAT_TIMEOUT_MS` can drop to 30–45 s (look at p99 maxGapMs, especially across App Service deploys).
+
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.
 

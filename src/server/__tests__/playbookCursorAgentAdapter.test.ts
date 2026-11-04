@@ -51,11 +51,10 @@ jest.mock('../services/playbookSteps/stepRuns', () => ({
 import fs from 'fs';
 import path from 'path';
 import { executeCursorAgentStep } from '../services/playbookSteps/cursorAgentAdapter';
-import { PHASE_0_ALLOWED_AGENT_SKILLS } from '../services/playbookSteps/registry';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
 
 const INITIATOR = 'initiator-oid';
-const ALLOWED_SKILL = PHASE_0_ALLOWED_AGENT_SKILLS[0];
+const ALLOWED_SKILL = '.cursor/skills/app-knowledge/SKILL.md';
 
 function context(
   overrides: Partial<Record<string, unknown>> = {}
@@ -137,14 +136,13 @@ describe('VT-09 — enqueue, correlate, suspend', () => {
     expect(stepDeadline).toBeGreaterThan(agentTimeout);
   });
 
-  it('refuses a Skill outside the allow-list before creating anything', async () => {
-    await expect(
-      executeCursorAgentStep(context({ skillPath: '.cursor/skills/build-test-push/SKILL.md' }))
-    ).rejects.toThrow(/may not run Skill/);
-
-    // The refusal has to cost nothing. Validating after the thread exists would mean cleaning up.
-    expect(createThread).not.toHaveBeenCalled();
-    expect(enqueue).not.toHaveBeenCalled();
+  it('does not refuse the investigation Skill for being unnamed by a list', async () => {
+    await executeCursorAgentStep(
+      context({ skillPath: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md' })
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toMatch(/may not run Skill/);
+    });
   });
 });
 describe('VT-10 — a rejected enqueue leaves nothing dangling', () => {

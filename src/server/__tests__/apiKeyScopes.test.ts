@@ -38,6 +38,7 @@ describe('normalizeApiKeyScopes', () => {
       'feature-requests:submit',
       'standup:summary:read',
       'backlog:export',
+      'playbooks:trigger',
     ]);
   });
 });

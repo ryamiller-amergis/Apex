@@ -20,13 +20,14 @@ import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSet
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentComposer, AgentPanelShell, AgentRetryBanner } from './agentChat';
 import { BrandLogo } from './BrandLogo';
 import { BuildAgentHomePill } from './BuildAgentHomePill';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
+import { RUN_STALLED_NOTICE, useRunStalled } from '../hooks/useRunStalled';
 import styles from './ChatAgentPanel.module.css';
 
 function isStatusOnlyStream(text: string): boolean {
@@ -408,7 +409,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     toolProgress,
     showTypingIndicator,
     sendError,
+    isRetrying,
+    retryReason,
+    lastProgressAt,
   } = session;
+  const isStalled = useRunStalled(isRunning && !isRetrying, lastProgressAt);
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   useAvailableModelSelection(selectedModel, setSelectedModel, availableModels);
@@ -1318,6 +1323,22 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   )}
                 </div>
               </div>
+            )}
+
+            <AgentRetryBanner
+              isRetrying={isRetrying}
+              retryReason={retryReason}
+              data-testid="chat-run-restarting"
+            />
+            {isStalled && (
+              <p
+                className={styles.stallNotice}
+                role="status"
+                aria-live="polite"
+                {...{ 'data-testid': 'chat-run-stalled' }}
+              >
+                {RUN_STALLED_NOTICE}
+              </p>
             )}
 
             <div ref={messagesEndRef} />

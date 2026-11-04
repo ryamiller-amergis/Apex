@@ -1,15 +1,33 @@
-/**
+﻿/**
  * Settings for the selected canvas step.
  *
- * Fields come from the step type's input JSON schema, so a new server step type gets a form without
- * a client change. Anything the form cannot express (nested objects, unions) is edited as JSON for
- * that field, and the whole config is always available as raw JSON.
+ * The common step types have hand-built fields (`PlaybookStepFields`). Every other field comes from
+ * the step type's input JSON schema, so a new server step type gets a form without a client change.
+ * Anything the form cannot express (nested objects, unions) is edited as JSON for that field, and
+ * the whole config is always available as raw JSON.
  */
-import React, { useState } from 'react';
-import { Trash2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Link2, Maximize2, Minimize2, Trash2, X } from 'lucide-react';
 import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
+import { availableBindings, tokenReferences } from '../utils/playbookBindings';
+import { PlaybookBindingText } from './PlaybookBindingText';
+import { DeadlineField, STEP_FIELD_RENDERERS } from './PlaybookStepFields';
 import { stepMeta } from './playbookStepCatalog';
 import styles from './PlaybookBuilder.module.css';
+
+const WIDTH_STORAGE_KEY = 'apex.playbooks.inspectorWidth';
+const DEFAULT_WIDTH = 380;
+const EXPANDED_WIDTH = 680;
+const MIN_WIDTH = 300;
+
+function maxWidth(): number {
+  return Math.max(MIN_WIDTH, Math.min(960, window.innerWidth - 160));
+}
+
+function readWidth(): number {
+  const stored = Number(window.localStorage.getItem(WIDTH_STORAGE_KEY));
+  return Number.isFinite(stored) && stored >= MIN_WIDTH ? Math.min(stored, maxWidth()) : DEFAULT_WIDTH;
+}
 
 interface JsonSchema {
   type?: string | string[];
@@ -23,10 +41,14 @@ type Config = Record<string, unknown>;
 
 /** Render with `key={node.id}` so per-field drafts reset when the selection changes. */
 interface PlaybookStepInspectorProps {
+  project: string;
   node: PlaybookGraphNode;
   paletteItem: PlaybookStepTypePaletteItem | undefined;
   otherNodeIds: readonly string[];
+  /** Earlier steps, nearest first. */
   priorNodeIds: readonly string[];
+  /** Steps this one connects straight to. */
+  nextNodeIds?: readonly string[];
   allNodes: readonly PlaybookGraphNode[];
   paletteItems: readonly PlaybookStepTypePaletteItem[];
   canAuthor: boolean;
@@ -38,7 +60,7 @@ interface PlaybookStepInspectorProps {
 
 /** Keys whose value names another node in the graph. */
 const NODE_REFERENCE_KEYS = new Set(['whenTrue', 'whenFalse', 'gatedStepId']);
-const MULTILINE_KEYS = new Set(['prompt', 'body', 'reportMd']);
+const MULTILINE_KEYS = new Set(['prompt', 'body', 'reportMd', 'description', 'text']);
 
 const FIELD_LABELS: Record<string, string> = {
   deadlineMs: 'Deadline (ms)',
@@ -51,7 +73,7 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const FIELD_HINTS: Record<string, string> = {
-  deadlineMs: 'Leave blank to use the step’s default.',
+  deadlineMs: 'Leave blank to use the stepâ€™s default.',
   recipientUserId: 'Leave blank to notify whoever started the run.',
   gatedStepId: 'The step this approval protects.',
 };
@@ -74,6 +96,7 @@ interface FieldProps {
   disabled: boolean;
   otherNodeIds: readonly string[];
   onChange: (value: unknown) => void;
+  binding?: Pick<React.ComponentProps<typeof PlaybookBindingText>, 'bindings' | 'references'>;
   'data-testid'?: string;
 }
 
@@ -101,7 +124,7 @@ const NumberField: React.FC<FieldProps> = ({ id, value, disabled, onChange, 'dat
           setInvalid(!Number.isFinite(parsed));
           if (Number.isFinite(parsed)) onChange(parsed);
         }}
-        data-testid={testId}
+        {...{ 'data-testid': testId }}
       />
       {invalid ? <span className={styles.fieldError}>Enter a number.</span> : null}
     </>
@@ -136,7 +159,7 @@ const JsonValueField: React.FC<FieldProps> = ({ id, value, disabled, onChange, '
             setInvalid(true);
           }
         }}
-        data-testid={testId}
+        {...{ 'data-testid': testId }}
       />
       {invalid ? <span className={styles.fieldError}>Not valid JSON yet.</span> : null}
     </>
@@ -155,9 +178,9 @@ const SchemaField: React.FC<FieldProps> = (props) => {
         value={typeof value === 'string' ? value : ''}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value || undefined)}
-        data-testid={testId}
+        {...{ 'data-testid': testId }}
       >
-        <option value="">Choose a step…</option>
+        <option value="">Choose a stepâ€¦</option>
         {otherNodeIds.map((nodeId) => (
           <option key={nodeId} value={nodeId}>{nodeId}</option>
         ))}
@@ -173,7 +196,7 @@ const SchemaField: React.FC<FieldProps> = (props) => {
         value={value === undefined ? '' : String(value)}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value || undefined)}
-        data-testid={testId}
+        {...{ 'data-testid': testId }}
       >
         <option value="">Not set</option>
         {schema.enum.map((option) => (
@@ -183,7 +206,25 @@ const SchemaField: React.FC<FieldProps> = (props) => {
     );
   }
 
+  if (name === 'deadlineMs') {
+    return <DeadlineField id={id} value={value} disabled={disabled} onChange={onChange} {...{ 'data-testid': testId }} />;
+  }
+
   const type = schemaType(schema);
+  if (type === 'string' && props.binding) {
+    return (
+      <PlaybookBindingText
+        id={id}
+        value={typeof value === 'string' ? value : ''}
+        multiline={MULTILINE_KEYS.has(name)}
+        disabled={disabled}
+        bindings={props.binding.bindings}
+        references={props.binding.references}
+        onChange={onChange}
+        {...{ 'data-testid': testId }}
+      />
+    );
+  }
   if (type === 'string') {
     const common = {
       id,
@@ -194,10 +235,10 @@ const SchemaField: React.FC<FieldProps> = (props) => {
         onChange(event.target.value === '' ? undefined : event.target.value),
     };
     return MULTILINE_KEYS.has(name)
-      ? <textarea rows={4} {...common} data-testid={testId} />
-      : <input {...common} data-testid={testId} />;
+      ? <textarea rows={4} {...common} {...{ 'data-testid': testId }} />
+      : <input {...common} {...{ 'data-testid': testId }} />;
   }
-  if (type === 'number' || type === 'integer') return <NumberField {...props} data-testid={testId} />;
+  if (type === 'number' || type === 'integer') return <NumberField {...props} {...{ 'data-testid': testId }} />;
   if (type === 'boolean') {
     return (
       <input
@@ -207,11 +248,11 @@ const SchemaField: React.FC<FieldProps> = (props) => {
         checked={value === true}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
-        data-testid={testId}
+        {...{ 'data-testid': testId }}
       />
     );
   }
-  return <JsonValueField {...props} data-testid={testId} />;
+  return <JsonValueField {...props} {...{ 'data-testid': testId }} />;
 };
 
 const ConfigJsonEditor: React.FC<{
@@ -246,18 +287,76 @@ const ConfigJsonEditor: React.FC<{
             setError('Not valid JSON yet.');
           }
         }}
-        data-testid={testId}
+        {...{ 'data-testid': testId }}
       />
       {error ? <span className={styles.fieldError}>{error}</span> : null}
     </>
   );
 };
 
+/** Drag the left edge to resize; the expand button toggles a wide layout; collapse keeps the header. */
+function useInspectorWidth() {
+  const [width, setWidth] = useState(readWidth);
+  const [collapsed, setCollapsed] = useState(false);
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const persist = useCallback((next: number) => {
+    try {
+      window.localStorage.setItem(WIDTH_STORAGE_KEY, String(next));
+    } catch {
+      // Storage can be blocked; the width then lasts for this page only.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      if (!drag.current) return;
+      const next = drag.current.startWidth + (drag.current.startX - event.clientX);
+      setWidth(Math.max(MIN_WIDTH, Math.min(maxWidth(), next)));
+    };
+    const onUp = () => {
+      if (!drag.current) return;
+      drag.current = null;
+      document.body.style.removeProperty('user-select');
+      setWidth((current) => {
+        persist(current);
+        return current;
+      });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [persist]);
+
+  const startDrag = (event: React.PointerEvent) => {
+    drag.current = { startX: event.clientX, startWidth: width };
+    document.body.style.userSelect = 'none';
+  };
+  const expanded = width >= EXPANDED_WIDTH - 1;
+  const toggleExpanded = () => {
+    const next = expanded ? DEFAULT_WIDTH : Math.min(EXPANDED_WIDTH, maxWidth());
+    setWidth(next);
+    persist(next);
+    setCollapsed(false);
+  };
+  const nudge = (delta: number) => {
+    const next = Math.max(MIN_WIDTH, Math.min(maxWidth(), width + delta));
+    setWidth(next);
+    persist(next);
+  };
+  return { width, collapsed, setCollapsed, expanded, toggleExpanded, startDrag, nudge };
+}
+
 export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
+  project,
   node,
   paletteItem,
   otherNodeIds,
   priorNodeIds,
+  nextNodeIds = [],
   allNodes,
   paletteItems,
   canAuthor,
@@ -272,33 +371,19 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   const schema = (paletteItem?.inputJsonSchema ?? {}) as JsonSchema;
   const properties = Object.entries(schema.properties ?? {});
   const required = new Set(schema.required ?? []);
-  const [mode, setMode] = useState<'form' | 'json'>(properties.length ? 'form' : 'json');
-  const configJson = JSON.stringify(config);
-  const stepBindings = [...configJson.matchAll(
-    /\$\{steps\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)\}/g
-  )].map((match) => {
-    const source = allNodes.find((candidate) => candidate.id === match[1]);
-    const sourcePalette = paletteItems.find((item) => item.stepType === source?.stepType);
-    const output = sourcePalette?.outputJsonSchema as JsonSchema | undefined;
-    return {
-      placeholder: match[0],
-      valid: Boolean(
-        source
-        && priorNodeIds.includes(source.id)
-        && output?.properties
-        && match[2] in output.properties
-      ),
-    };
-  });
-  const inputBindings = [...configJson.matchAll(
-    /\$\{input\.([A-Za-z][A-Za-z0-9_-]*)\}/g
-  )].map((match) => ({
-    placeholder: match[0],
-    valid: true,
-  }));
-  const bindings = [...new Map(
-    [...inputBindings, ...stepBindings].map((binding) => [binding.placeholder, binding])
-  ).values()];
+  const custom = STEP_FIELD_RENDERERS[node.stepType];
+  const [mode, setMode] = useState<'form' | 'json'>(properties.length || custom ? 'form' : 'json');
+  const layout = useInspectorWidth();
+
+  const bindings = useMemo(
+    () => availableBindings(priorNodeIds, allNodes, paletteItems),
+    [priorNodeIds, allNodes, paletteItems],
+  );
+  const referencesFor = useCallback(
+    (text: string) => tokenReferences(text, priorNodeIds, allNodes, paletteItems),
+    [priorNodeIds, allNodes, paletteItems],
+  );
+  const reads = referencesFor(JSON.stringify(config));
 
   const setField = (key: string, value: unknown) => {
     const next: Config = { ...config };
@@ -307,12 +392,52 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
     onChange(next);
   };
 
+  const genericProperties = custom
+    ? properties.filter(([key]) => !custom.handledKeys.includes(key))
+    : properties;
+  const genericFields = genericProperties.map(([key, fieldSchema]) => {
+    const fieldId = `playbook-field-${node.id}-${key}`;
+    const text = typeof config[key] === 'string' ? (config[key] as string) : '';
+    return (
+      <div key={`${node.id}-${key}`} className={styles.field}>
+        <label htmlFor={fieldId} className={styles.fieldLabel}>
+          {humanize(key)}
+          {required.has(key) ? <span className={styles.fieldRequired} aria-label="required">*</span> : null}
+        </label>
+        <SchemaField
+          id={fieldId}
+          name={key}
+          schema={fieldSchema}
+          value={config[key]}
+          disabled={!canAuthor}
+          otherNodeIds={otherNodeIds}
+          onChange={(value) => setField(key, value)}
+          binding={{ bindings, references: referencesFor(text) }}
+          {...{ 'data-testid': `playbook-inspector-field-${key}` }}
+        />
+        {FIELD_HINTS[key] ? <span className={styles.fieldHint}>{FIELD_HINTS[key]}</span> : null}
+      </div>
+    );
+  });
+
   return (
     <aside
-      className={styles.inspector}
+      className={`${styles.inspector} ${layout.collapsed ? styles.inspectorCollapsed : ''}`}
+      style={{ width: layout.width }}
       aria-label={`${meta.title} settings`}
       {...{ 'data-testid': testId, 'data-group': meta.group }}
     >
+      <button
+        type="button"
+        className={styles.resizeHandle}
+        aria-label="Resize settings panel. Use the left and right arrow keys."
+        onPointerDown={layout.startDrag}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') layout.nudge(24);
+          if (event.key === 'ArrowRight') layout.nudge(-24);
+        }}
+        {...{ 'data-testid': "playbook-inspector-resize" }}
+      />
       <header className={styles.inspectorHeader}>
         <span className={styles.stepGlyph} aria-hidden>
           <Icon size={16} />
@@ -324,6 +449,27 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
         <button
           type="button"
           className={styles.iconButton}
+          onClick={layout.toggleExpanded}
+          aria-label={layout.expanded ? 'Make settings narrower' : 'Make settings wider'}
+          title={layout.expanded ? 'Narrower' : 'Wider'}
+          {...{ 'data-testid': 'playbook-inspector-expand' }}
+        >
+          {layout.expanded ? <Minimize2 size={15} aria-hidden /> : <Maximize2 size={15} aria-hidden />}
+        </button>
+        <button
+          type="button"
+          className={styles.iconButton}
+          onClick={() => layout.setCollapsed((current) => !current)}
+          aria-label={layout.collapsed ? 'Show settings' : 'Hide settings'}
+          aria-expanded={!layout.collapsed}
+          title={layout.collapsed ? 'Show' : 'Minimize'}
+          {...{ 'data-testid': 'playbook-inspector-collapse' }}
+        >
+          {layout.collapsed ? <ChevronDown size={16} aria-hidden /> : <ChevronUp size={16} aria-hidden />}
+        </button>
+        <button
+          type="button"
+          className={styles.iconButton}
           onClick={onClose}
           aria-label="Close settings"
           {...{ 'data-testid': 'playbook-inspector-close' }}
@@ -332,85 +478,104 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
         </button>
       </header>
 
-      <div className={styles.segmented} role="tablist" aria-label="Edit mode">
-        {(['form', 'json'] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="tab"
-            aria-selected={mode === value}
-            className={`${styles.segment} ${mode === value ? styles.segmentActive : ''}`}
-            disabled={value === 'form' && properties.length === 0}
-            onClick={() => setMode(value)}
-            {...{ 'data-testid': `playbook-inspector-mode-${value}` }}
-          >
-            {value === 'form' ? 'Fields' : 'JSON'}
-          </button>
-        ))}
-      </div>
-
-      <div className={styles.inspectorBody}>
-        {bindings.length > 0 ? (
-          <div className={styles.field} data-testid="playbook-inspector-reads">
-            <span className={styles.fieldLabel}>Reads</span>
-            {bindings.map((binding, index) => (
-              <span
-                key={`${binding.placeholder}-${index}`}
-                className={binding.valid ? styles.fieldHint : styles.fieldError}
+      {layout.collapsed ? null : (
+        <>
+          <div className={styles.segmented} role="tablist" aria-label="Edit mode">
+            {(['form', 'json'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={mode === value}
+                className={`${styles.segment} ${mode === value ? styles.segmentActive : ''}`}
+                disabled={value === 'form' && properties.length === 0 && !custom}
+                onClick={() => setMode(value)}
+                {...{ 'data-testid': `playbook-inspector-mode-${value}` }}
               >
-                {binding.placeholder} — {binding.valid ? 'available' : 'not available before this step'}
-              </span>
+                {value === 'form' ? 'Fields' : 'JSON'}
+              </button>
             ))}
           </div>
-        ) : null}
-        {mode === 'json' ? (
-          <ConfigJsonEditor
-            key={`${node.id}-json`}
-            config={config}
-            disabled={!canAuthor}
-            onChange={onChange}
-            data-testid="playbook-canvas-config"
-          />
-        ) : (
-          properties.map(([key, fieldSchema]) => {
-            const fieldId = `playbook-field-${node.id}-${key}`;
-            return (
-              <div key={`${node.id}-${key}`} className={styles.field}>
-                <label htmlFor={fieldId} className={styles.fieldLabel}>
-                  {humanize(key)}
-                  {required.has(key) ? <span className={styles.fieldRequired} aria-label="required">*</span> : null}
-                </label>
-                <SchemaField
-                  id={fieldId}
-                  name={key}
-                  schema={fieldSchema}
-                  value={config[key]}
-                  disabled={!canAuthor}
-                  otherNodeIds={otherNodeIds}
-                  onChange={(value) => setField(key, value)}
-                  data-testid={`playbook-inspector-field-${key}`}
-                />
-                {FIELD_HINTS[key] ? <span className={styles.fieldHint}>{FIELD_HINTS[key]}</span> : null}
-              </div>
-            );
-          })
-        )}
-      </div>
 
-      {canAuthor ? (
-        <footer className={styles.inspectorFooter}>
-          <button
-            type="button"
-            className={styles.dangerGhost}
-            onClick={onDelete}
-            {...{ 'data-testid': 'playbook-inspector-delete' }}
-          >
-            <Trash2 size={14} aria-hidden /> Delete step
-          </button>
-        </footer>
-      ) : null}
+          <div className={styles.inspectorBody}>
+            {reads.length > 0 ? (
+              <section className={styles.readsCard} {...{ 'data-testid': "playbook-inspector-reads" }}>
+                <span className={styles.readsTitle}>
+                  <Link2 size={13} aria-hidden /> Uses data from
+                </span>
+                <ul className={styles.readsList}>
+                  {reads.map((reference) => (
+                    <li
+                      key={reference.token}
+                      className={reference.valid ? styles.readsItem : `${styles.readsItem} ${styles.readsItemInvalid}`}
+                      title={reference.token}
+                    >
+                      <span>{reference.label}</span>
+                      <span className={styles.readsState}>
+                        {reference.valid ? 'ready' : 'not available before this step'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className={styles.fieldHint}>
+                  A step can use the output of any step that finishes before it. An approval in
+                  between only pauses the run; the data is still there afterwards.
+                </p>
+              </section>
+            ) : null}
+            {mode === 'json' ? (
+              <ConfigJsonEditor
+                key={`${node.id}-json`}
+                config={config}
+                disabled={!canAuthor}
+                onChange={onChange}
+                {...{ 'data-testid': "playbook-canvas-config" }}
+              />
+            ) : (
+              <>
+                {custom ? (
+                  <custom.Component
+                    project={project}
+                    node={node}
+                    config={config}
+                    disabled={!canAuthor}
+                    priorNodeIds={priorNodeIds}
+                    nextNodeIds={nextNodeIds}
+                    allNodes={allNodes}
+                    paletteItems={paletteItems}
+                    bindings={bindings}
+                    referencesFor={referencesFor}
+                    setField={setField}
+                    setConfig={onChange}
+                  />
+                ) : null}
+                {custom && genericFields.length ? (
+                  <details className={styles.moreSettings}>
+                    <summary {...{ 'data-testid': "playbook-inspector-more" }}>More settings</summary>
+                    {genericFields}
+                  </details>
+                ) : genericFields}
+              </>
+            )}
+          </div>
+
+          {canAuthor ? (
+            <footer className={styles.inspectorFooter}>
+              <button
+                type="button"
+                className={styles.dangerGhost}
+                onClick={onDelete}
+                {...{ 'data-testid': 'playbook-inspector-delete' }}
+              >
+                <Trash2 size={14} aria-hidden /> Delete step
+              </button>
+            </footer>
+          ) : null}
+        </>
+      )}
     </aside>
   );
 };
 
 export default PlaybookStepInspector;
+

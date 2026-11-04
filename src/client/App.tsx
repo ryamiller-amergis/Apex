@@ -437,7 +437,8 @@ function App() {
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
     menuConfigReady &&
-    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+    effectiveEnabledViews.includes('playbooks') &&
+    can('playbooks:view');
   const canAccessMcpServers =
     mcpServersEnabled &&
     menuConfigReady &&
@@ -1048,7 +1049,6 @@ function App() {
             onNavigateMyWork={() => navigateAwayFromHome('/my-work')}
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
-
             onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
@@ -1111,7 +1111,6 @@ function App() {
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
-
             onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
@@ -1521,7 +1520,8 @@ function App() {
               <Suspense fallback={<ViewSkeleton />}>
                 <QaLabView project={selectedProject} />
               </Suspense>
-            </ErrorBoundary>          ) : currentView === 'design-module' ? (
+            </ErrorBoundary>
+          ) : currentView === 'design-module' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <DesignModuleView selectedProject={selectedProject} />
