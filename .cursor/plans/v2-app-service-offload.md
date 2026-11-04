@@ -63,6 +63,12 @@ Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" 
   - A step 5: same event trigger for `designPrototypeV2Harvest` and `uiLabV2Harvest`.
   - B: reuse `ai-runs-v2-transport`. Ask Apex turns lost to a host restart re-run once, same rules as Home chat.
   - C: grounding impact only; walkthrough drafts stay on App Service for now.
+- Built 2026-11-04 on #271:
+  - A (37db7ffc): `v2HarvestTrigger.ts` subscribes to terminal `done` events and harvests documents + prototypes under lease `ai-run-v2-harvest`; the recovery sweep takes the same lease (waits up to 30 s). Started/stopped with `startRecoveryLoop`/`stopRecoveryLoop`. UI Lab was already event-driven.
+  - B (e3296470): `askApexService.openAskApexThread` creates a hidden chat thread (kickoff `askApex: true`, app-knowledge skill, project Apex) when the flag is on; `resolveInteractiveWorkflowClass` returns `ask-apex` (already eligible for one automatic re-run). History and search hide `askApex` threads. `useAskApex` switches to `useAgentChatSession` when the session has a `threadId`; the panel shows the restart / slow notice and Try again.
+  - C: no code. Impact checks are started by grounding upkeep, which for V2 projects runs on repo-read (`GROUNDING_MAINTENANCE_MODE=v2-projects`). Prod and dev App Insights have zero `grounding.notification` events in 30 days.
+  - Full jest: only known git/load-timeout suites fail; they pass alone. `featureRequestAnalysisService` › startWatcher › persists analysis result times out on origin/main too (pre-existing).
+- Next: deploy #271 to dev; user tests a PRD or design-doc validation (scorecard lands within seconds, no `[documentValidationWatcher] Started`) and Ask Apex (answer arrives; `interactive.route.decision` workflowClass `ask-apex` route durable; thread not in Home history).
 
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.

@@ -32,7 +32,7 @@ describe('v2HarvestTrigger', () => {
     let listener: ((event: AgentRunEventEnvelope) => void) | null = null;
     const harvestDocuments = jest.fn().mockResolvedValue(1);
     const harvestPrototypes = jest.fn().mockResolvedValue(0);
-    const withLease = jest.fn(<T,>(operation: () => Promise<T>) => operation());
+    const withLease = jest.fn().mockImplementation((operation: () => Promise<unknown>) => operation());
     const trigger = createV2HarvestTrigger({
       harvestDocuments,
       harvestPrototypes,
