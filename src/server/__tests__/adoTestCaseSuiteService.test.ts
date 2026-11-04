@@ -15,7 +15,8 @@ import {
   sendMessage,
 } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
-import { propagatePipelineGrounding } from '../services/runGroundingService';
+import { readRemoteBranchTip } from '../services/repoCacheService';
+import { propagatePipelineGrounding, runGroundingService } from '../services/runGroundingService';
 import {
   ADO_TEST_SUITE_WATCHER_INTERVAL_MS,
   AdoTestSuiteConflictError,
@@ -114,10 +115,15 @@ jest.mock('../services/agentRunReaperService', () => ({
   canThisInstanceFailGeneration: jest.fn(),
 }));
 
+jest.mock('../services/repoCacheService', () => ({
+  readRemoteBranchTip: jest.fn().mockResolvedValue(null),
+}));
+
 jest.mock('../services/runGroundingService', () => ({
   propagatePipelineGrounding: jest.fn(),
   runGroundingService: {
     getGroundings: jest.fn().mockResolvedValue([]),
+    activateGroundings: jest.fn().mockResolvedValue(undefined),
     persistThenMarkTerminalInactive: jest.fn(
       async (_ref: unknown, persist: () => Promise<unknown>) => {
         const persisted = await persist();
@@ -496,6 +502,70 @@ describe('ADO test suite generation and publish', () => {
     expect(isAdoTestSuiteWatcherActive('suite-new')).toBe(true);
   });
 
+  describe('commit pin before routing', () => {
+    const SHA = 'a'.repeat(40);
+    const pinned = {
+      repoRole: 'target',
+      isActive: true,
+      project: 'Apex',
+      groundedSha: SHA,
+    };
+    let preparedGrounding: unknown;
+
+    beforeEach(() => {
+      preparedGrounding = 'unset';
+      jest.mocked(readRemoteBranchTip).mockReset();
+      jest.mocked(runGroundingService.getGroundings).mockReset();
+      jest.mocked(runGroundingService.activateGroundings).mockReset();
+      jest.mocked(routeBackgroundWorkflow).mockImplementation(async (input) => {
+        preparedGrounding = (await input.prepareWorker()).targetGrounding;
+        return { route: 'v2', reason: 'flag-enabled' } as never;
+      });
+    });
+
+    async function generate(): Promise<void> {
+      const ado = { getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()) };
+      await triggerAdoTestCaseGeneration({ project: 'Apex', rootWorkItemId: 100, userId: 'user-1', ado });
+      await settleBackgroundDispatch();
+    }
+
+    it('keeps a commit pin the run already has', async () => {
+      jest.mocked(runGroundingService.getGroundings).mockResolvedValue([pinned] as never);
+
+      await generate();
+
+      expect(preparedGrounding).toBe(pinned);
+      expect(readRemoteBranchTip).not.toHaveBeenCalled();
+      expect(runGroundingService.activateGroundings).not.toHaveBeenCalled();
+    });
+
+    it('pins the skill branch tip when the run has no commit pin', async () => {
+      jest.mocked(runGroundingService.getGroundings)
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([pinned] as never);
+      jest.mocked(readRemoteBranchTip).mockResolvedValue(SHA);
+
+      await generate();
+
+      expect(readRemoteBranchTip).toHaveBeenCalledWith({
+        provider: 'ado',
+        project: 'Apex',
+        repo: 'org/skills',
+        branch: 'main',
+      });
+      expect(runGroundingService.activateGroundings).toHaveBeenCalledWith({
+        run: { runType: 'chat', runId: 'thread-ado', project: 'Apex' },
+        target: {
+          provider: 'azure_devops',
+          repository: 'org/skills',
+          branch: 'main',
+          groundedSha: SHA,
+        },
+      });
+      expect(preparedGrounding).toBe(pinned);
+    });
+  });
+
   it('generates only the chosen targets and keeps TBIs as context', async () => {
     const ado = { getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()) };
 
@@ -668,6 +738,21 @@ describe('ADO test suite generation and publish', () => {
     await expect(syncAdoTestSuiteRunOutput('thread-ado', workspaceDir)).resolves.toBe(true);
 
     expect(dbMock.state.updates).toContainEqual(expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('logs the harvest failure reason when a run left no output', async () => {
+    dbMock.state.threadRow = { workspaceDir };
+    dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating' };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await syncAdoTestSuiteRunOutput('thread-ado', workspaceDir, 'Artifact manifest contains unexpected document output');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Artifact manifest contains unexpected document output'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('ignores threads that do not belong to an ADO suite', async () => {

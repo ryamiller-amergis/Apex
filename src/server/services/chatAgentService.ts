@@ -3425,7 +3425,7 @@ async function syncOutputToDbFromWorkspace(
   }
 
   if (await syncCaseRegenerationRunOutput(threadId, workspaceDir)) return;
-  if (await syncAdoTestSuiteRunOutput(threadId, workspaceDir)) return;
+  if (await syncAdoTestSuiteRunOutput(threadId, workspaceDir, agentText)) return;
 
   // Check if this thread belongs to a PRD
   const prdRow = await db.query.prds.findFirst({

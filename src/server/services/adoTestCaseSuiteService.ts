@@ -18,7 +18,8 @@ import type {
   QaLabPublishedCase,
 } from '../../shared/types/qaLab';
 import { DEVELOPER_ONLY_AUTOMATION_TIERS } from '../../shared/types/qaLab';
-import type { RunRef } from '../../shared/types/runGrounding';
+import type { SkillProvider } from '../../shared/types/projectSettings';
+import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { getDefaultModel } from './appSettingsService';
 import {
   canThisInstanceFailGeneration,
@@ -35,6 +36,7 @@ import {
   updateThreadKickoffContext,
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
+import { readRemoteBranchTip } from './repoCacheService';
 import {
   propagatePipelineGrounding,
   runGroundingService,
@@ -448,6 +450,7 @@ export async function triggerAdoTestCaseGeneration(
     workspaceDir: thread.workspaceDir,
     userId,
     project,
+    repository: qaLabRepository(skillConfig),
     sourceThreadId: input.sourceThreadId,
     kickoffMessage,
   });
@@ -463,6 +466,7 @@ async function dispatchAdoTestSuite(input: {
   workspaceDir: string;
   userId: string;
   project: string;
+  repository: QaLabRepository;
   sourceThreadId?: string;
   kickoffMessage: string;
 }): Promise<void> {
@@ -478,10 +482,79 @@ async function dispatchAdoTestSuite(input: {
  * Starts the hidden agent turn for a QA Lab thread. Returns false when routing
  * failed; `onPreparationFailure` has already run by then.
  */
+export type QaLabRepository = Readonly<{
+  provider: SkillProvider;
+  repo: string;
+  branch: string;
+}>;
+
+export function qaLabRepository(skillConfig: {
+  skillRepo: string;
+  skillBranch?: string | null;
+  skillProvider?: SkillProvider | null;
+}): QaLabRepository {
+  return {
+    provider: skillConfig.skillProvider ?? 'ado',
+    repo: skillConfig.skillRepo,
+    branch: skillConfig.skillBranch ?? 'main',
+  };
+}
+
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$/i;
+
+function findTargetGrounding(groundings: RunGrounding[]): RunGrounding | undefined {
+  return groundings.find((grounding) =>
+    grounding.repoRole === 'target'
+    && grounding.isActive
+    && COMMIT_SHA_RE.test(grounding.groundedSha.trim()));
+}
+
+/**
+ * Work-item runs have no source thread to copy a commit from, and the App
+ * Service clone may still be preparing. The V2 worker reads through repo-read
+ * at a pinned commit, so pin the branch tip when nothing else did.
+ */
+async function pinBranchTipWhenUngrounded(
+  run: RunRef,
+  repository: QaLabRepository,
+  logLabel: string,
+): Promise<RunGrounding | undefined> {
+  const existing = findTargetGrounding(await runGroundingService.getGroundings(run));
+  if (existing) return existing;
+
+  const sha = await readRemoteBranchTip({
+    provider: repository.provider,
+    project: run.project,
+    repo: repository.repo,
+    branch: repository.branch,
+  }).catch((error: unknown) => {
+    console.warn(
+      `[adoTestSuite] Branch tip lookup failed (${logLabel}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  });
+  if (!sha) return undefined;
+
+  await runGroundingService.activateGroundings({
+    run,
+    target: {
+      provider: repository.provider === 'ado' ? 'azure_devops' : 'github',
+      repository: repository.provider === 'github'
+        ? repository.repo.split('/').pop() || repository.repo
+        : repository.repo,
+      branch: repository.branch,
+      groundedSha: sha,
+    },
+  });
+  console.log(`[adoTestSuite] Pinned ${repository.repo}@${repository.branch} to ${sha.slice(0, 12)} (${logLabel})`);
+  return findTargetGrounding(await runGroundingService.getGroundings(run));
+}
+
 export async function dispatchQaLabRun(input: {
   threadId: string;
   userId: string;
   project: string;
+  repository: QaLabRepository;
   sourceThreadId?: string;
   kickoffMessage: string;
   logLabel: string;
@@ -521,9 +594,11 @@ export async function dispatchQaLabRun(input: {
           }
         }
         const prepared = await prepareBackgroundWorkflowTurn(input.threadId, input.kickoffMessage);
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+        const targetGrounding = await pinBranchTipWhenUngrounded(
+          destinationRun,
+          input.repository,
+          input.logLabel,
+        );
         return { ...prepared, targetGrounding };
       },
       runInProcess: () => sendMessage(
@@ -947,6 +1022,7 @@ function mapSuiteCases(
 export async function syncAdoTestSuiteRunOutput(
   chatThreadId: string,
   workspaceDir?: string,
+  detail?: string,
 ): Promise<boolean> {
   const row = await db.query.qaAdoTestSuites.findFirst({
     where: eq(qaAdoTestSuites.chatThreadId, chatThreadId),
@@ -959,7 +1035,11 @@ export async function syncAdoTestSuiteRunOutput(
     stopAdoTestSuiteWatcher(row.id);
     return true;
   }
-  console.warn(`[adoTestSuite] Agent run produced no test-case output (suiteId=${row.id})`);
+  const reason = detail?.trim().slice(0, 500);
+  console.warn(
+    `[adoTestSuite] Agent run produced no test-case output (suiteId=${row.id})`
+      + (reason ? `: ${reason}` : ''),
+  );
   stopAdoTestSuiteWatcher(row.id);
   await markAdoTestSuiteFailed(row.id, chatThreadId);
   return true;
@@ -1769,7 +1849,10 @@ async function readOutputTestCases(
   if (!file) return null;
   try {
     return JSON.parse(fs.readFileSync(file, 'utf-8')) as unknown;
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[adoTestSuite] Could not parse ${path.basename(file)}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   }
 }
