@@ -39,6 +39,7 @@ export function getTypeIcon(type: NotificationType): React.ReactNode {
         </svg>
       );
     case 'background':
+    case 'build':
       return (
         <svg viewBox="0 0 16 16" fill="none">
           <path d="M3 8.5L6 11.5 13 4.5" />

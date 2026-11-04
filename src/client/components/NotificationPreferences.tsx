@@ -24,6 +24,7 @@ const NOTIFICATION_TYPES: { type: NotificationType; label: string; description: 
     description: 'Walkthrough publications, deployments, builds, releases',
   },
   { type: 'ai', label: 'AI Completions', description: 'PRD generation, test cases, validation, design docs, prototypes' },
+  { type: 'build', label: 'Builds', description: 'Build started, preview ready, paused, deployment failures, and pull requests' },
   { type: 'background', label: 'Background Jobs', description: 'Job status updates', comingSoon: true },
 ];
 

@@ -3,7 +3,7 @@
  * Teams delivery stays one client, shared with ordinary notifications.
  */
 import type { AppNotification } from '../../shared/types/notification';
-import { sendTeamsNotification } from './teamsBotService';
+import { sendTeamsNotification, type TeamsDeliveryStatus } from './teamsBotService';
 
 export interface PlaybookConnector {
   id: string;
@@ -30,10 +30,12 @@ export const playbookConnectors: readonly PlaybookConnector[] = [teamsConnector]
 export async function deliverPlaybookTeamsMessage(
   userId: string,
   notification: AppNotification,
-): Promise<void> {
+): Promise<TeamsDeliveryStatus> {
   try {
-    await sendTeamsNotification(userId, notification);
+    const result = await sendTeamsNotification(userId, notification);
+    return result ?? 'skipped';
   } catch {
     // The connector is best-effort. Callers already wrote the durable row.
+    return 'failed';
   }
 }

@@ -5,6 +5,9 @@
 import type {
   BuildClassification,
   BuildDeploymentStatus,
+  BuildDeploymentView,
+  BuildPreviewEntry,
+  BuildPullRequestSummary,
   BuildRequirement,
   BuildReuseEntry,
   BuildRiskDecision,
@@ -13,7 +16,15 @@ import type {
   BuildTaskRole,
   BuildTaskRunMode,
   BuildTaskStatus,
+  BuildTestTier,
+  BuildVerificationKind,
+  BuildVerificationStatus,
 } from './build';
+import type { BuildRevisionProgressView } from './buildRevision';
+
+export type VerificationKind = BuildVerificationKind;
+export type VerificationTier = BuildTestTier;
+export type VerificationStatus = BuildVerificationStatus;
 
 export const BUILD_DELIVERY_TARGET_SECONDS: Record<BuildClassification, number> = { small: 300, full: 3600 };
 
@@ -134,6 +145,13 @@ export interface BuildDetailResponse {
   verificationSummary: BuildVerificationSummary;
   /** Null until the preview lease manager fills it. */
   lease: { state: 'waiting' | 'held' | 'none'; queuePosition: number | null } | null;
+  deployment?: BuildDeploymentView;
+  previews?: BuildPreviewEntry[];
+  revision?: BuildRevisionProgressView;
+  pullRequest?: BuildPullRequestSummary | null;
+  viewer?: {
+    canRetryDeployment: boolean;
+  };
 }
 
 export interface BuildEventView {
@@ -148,3 +166,34 @@ export interface BuildEventsResponse {
   events: BuildEventView[];
   total: number;
 }
+
+export type BuildEvidenceSlot = 'red' | 'green';
+
+export interface BuildEvidenceSummary {
+  commit: string;
+  command: string;
+  exitCode: number;
+  recordedAt: string;
+}
+
+export interface BuildVerificationRowView {
+  id: string;
+  requirementId: string;
+  kind: BuildVerificationKind;
+  requirementText: string;
+  tier: BuildTestTier | null;
+  status: BuildVerificationStatus;
+  testReferences: { file: string; name: string }[];
+  red: BuildEvidenceSummary | null;
+  green: BuildEvidenceSummary | null;
+  deferralReason: string | null;
+}
+
+export interface BuildVerificationMatrixResponse {
+  buildId: string;
+  revisionNumber: number;
+  revisionNumbers: number[];
+  summary: BuildVerificationSummary;
+  rows: BuildVerificationRowView[];
+}
+

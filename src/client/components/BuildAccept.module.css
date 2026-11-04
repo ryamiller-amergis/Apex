@@ -1,0 +1,148 @@
+.actionWrapper {
+  display: inline-flex;
+  align-items: center;
+}
+
+.acceptButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.acceptButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 24px;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.125rem;
+  color: var(--text-primary);
+}
+
+.description {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.errorBox {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--error-color);
+  background: var(--bg-secondary);
+  color: var(--error-color);
+  font-size: 0.875rem;
+}
+
+.reloadButton {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cancelButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.confirmButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.confirmButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.prPanel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.openDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stateText {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.prLink {
+  color: var(--accent-color);
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.metaText {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.needsDevText {
+  margin: 0;
+  color: var(--error-color);
+  font-weight: 600;
+}

@@ -640,4 +640,98 @@ export interface BuildRepositoryOption {
   label: string;
 }
 
+export type DeploymentStatus = BuildDeploymentStatus;
+
+export interface BuildDeploymentCallbackRequest {
+  pipelineRunId: string;
+  commit: string;
+  status: 'succeeded' | 'failed';
+  failedStage?: string;
+  errorText?: string;
+  previewUrl?: string;
+  pipelineUrl?: string;
+}
+
+export interface BuildDeploymentCallbackResponse {
+  applied: boolean;
+  reason?: 'duplicate' | 'stale' | 'run_not_deploying';
+}
+
+export interface BuildDeploymentView {
+  status: DeploymentStatus;
+  queuePosition: number | null;
+  previewUrl: string | null;
+  leaseExpiresAt: string | null;
+  failedStage: string | null;
+  errorExcerpt: string | null;
+  pipelineUrl: string | null;
+  supportContactNames: string[];
+}
+
+export interface BuildPreviewEntry {
+  revisionNumber: number;
+  commit: string;
+  deploymentStatus: DeploymentStatus;
+  finishedAt: string | null;
+  previewUrl: string | null;
+  isLive: boolean;
+}
+
+export interface RetryDeploymentResponse {
+  deploymentStatus: 'queued';
+  queuePosition: number | null;
+  changed: boolean;
+}
+
+export type BuildAcceptState =
+  | 'opening_pull_request'
+  | 'syncing'
+  | 'pull_request_open'
+  | 'needs_developer';
+
+export interface BuildAcceptRequest {
+  revisionNumber: number;
+  project: string;
+}
+
+export interface BuildAcceptResponse {
+  buildId: string;
+  revisionNumber: number;
+  status: 'accepted' | 'needs_developer';
+  acceptState: BuildAcceptState;
+  pullRequestUrl: string | null;
+}
+
+export interface BuildPullRequestSummary {
+  state: BuildAcceptState;
+  url: string | null;
+  syncCommitSha: string | null;
+  reviewersAdded: boolean | null;
+  reviewerNames: string[];
+}
+
+export type BuildAcceptEventKind =
+  | 'accept_requested'
+  | 'pull_request_draft_created'
+  | 'sync_started'
+  | 'sync_commit_added'
+  | 'sync_failed'
+  | 'reviewers_added'
+  | 'reviewers_failed'
+  | 'overflow_comment_failed'
+  | 'pull_request_opened'
+  | 'needs_developer'
+  | 'integration_branch_deleted';
+
 export type { BuildPlan } from '../buildPlanSchema';
+export type VerificationKind = BuildVerificationKind;
+export type VerificationTier = BuildTestTier;
+export type VerificationStatus = BuildVerificationStatus;
+export type {
+  BuildEvidenceSlot,
+  BuildEvidenceSummary,
+  BuildVerificationMatrixResponse,
+  BuildVerificationRowView,
+  BuildVerificationSummary,
+} from './buildView';
+

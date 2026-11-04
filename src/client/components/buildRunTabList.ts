@@ -2,6 +2,8 @@
 export const BUILD_RUN_TABS = [
   { key: 'overview', label: 'Overview' },
   { key: 'plan', label: 'Plan' },
+  { key: 'verification', label: 'Verification' },
+  { key: 'preview', label: 'Preview' },
   { key: 'timeline', label: 'Timeline' },
 ] as const;
 

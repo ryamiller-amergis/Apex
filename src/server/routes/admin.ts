@@ -32,7 +32,7 @@ import type { ApprovalMode, ModuleApprovalModes } from '../../shared/types/appro
 import type { CreateGroupRequest, UpdateGroupRequest, SetGroupMembersRequest } from '../../shared/types/groups';
 import type { NotificationType } from '../../shared/types/notification';
 
-const ALL_NOTIFICATION_TYPES: NotificationType[] = ['system', 'ai', 'user-action', 'background'];
+const ALL_NOTIFICATION_TYPES: NotificationType[] = ['system', 'ai', 'user-action', 'background', 'build'];
 
 function validateApprovalModeRequest(body: UpsertProjectSkillConfigRequest): {
   error?: string;
@@ -115,7 +115,7 @@ router.post('/roles', async (req: Request, res: Response): Promise<void> => {
     }
     const role = await rbacService.createRole(name, description, permissionIds);
     res.status(201).json(role);
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
 });

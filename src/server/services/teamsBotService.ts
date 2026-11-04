@@ -83,16 +83,18 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
   }
 }
 
+export type TeamsDeliveryStatus = 'sent' | 'skipped' | 'failed';
+
 export async function sendTeamsNotification(
   userOid: string,
   notification: AppNotification,
-): Promise<void> {
+): Promise<TeamsDeliveryStatus> {
   try {
     const row = await db.query.teamsConversationReferences.findFirst({
       where: eq(teamsConversationReferences.userOid, userOid),
     });
 
-    if (!row) return;
+    if (!row) return 'skipped';
 
     const enabledTypesSetting = await getAppSetting('teams_notification_enabled_types');
     if (enabledTypesSetting !== null) {
@@ -100,9 +102,9 @@ export async function sendTeamsNotification(
       try {
         enabledTypes = JSON.parse(enabledTypesSetting) as NotificationType[];
       } catch {
-        enabledTypes = ['system', 'ai', 'user-action', 'background'];
+        enabledTypes = ['system', 'ai', 'user-action', 'background', 'build'];
       }
-      if (!enabledTypes.includes(notification.type)) return;
+      if (!enabledTypes.includes(notification.type)) return 'skipped';
     }
 
     const ref = row.conversationReference as ConversationReference;
@@ -123,8 +125,10 @@ export async function sendTeamsNotification(
         });
       },
     );
+    return 'sent';
   } catch (err) {
     console.error('[teamsBotService] Failed to send Teams notification:', err);
+    return 'failed';
   }
 }
 

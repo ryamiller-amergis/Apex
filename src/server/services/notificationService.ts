@@ -9,6 +9,7 @@ import type {
   NotificationSseEvent,
 } from '../../shared/types/notification';
 import { deliverPlaybookTeamsMessage } from './playbookConnectorRegistry';
+import type { TeamsDeliveryStatus } from './teamsBotService';
 import { writeSseEvent } from '../utils/sseResponse';
 
 // ── SSE Connection Manager ────────────────────────────────────────────────────
@@ -77,7 +78,10 @@ function toNotificationPreference(row: typeof notificationPreferences.$inferSele
 export async function createNotification(
   userId: string,
   payload: { type: NotificationType; title: string; body?: string; link?: string },
-  options?: { dedupeKey?: string },
+  options?: {
+    dedupeKey?: string;
+    onTeamsResult?: (result: TeamsDeliveryStatus) => void | Promise<void>;
+  },
 ): Promise<AppNotification> {
   const dedupeKey = options?.dedupeKey ?? null;
 
@@ -137,7 +141,11 @@ export async function createNotification(
     });
   }
 
-  void deliverPlaybookTeamsMessage(userId, notification);
+  void deliverPlaybookTeamsMessage(userId, notification).then((result) => {
+    if (options?.onTeamsResult) {
+      return Promise.resolve(options.onTeamsResult(result)).catch(() => {});
+    }
+  });
 
   return notification;
 }
@@ -189,6 +197,19 @@ export async function getPreferences(userId: string): Promise<NotificationPrefer
     .where(eq(notificationPreferences.userId, userId));
 
   return rows.map(toNotificationPreference);
+}
+
+export async function isNotificationEnabled(
+  userId: string,
+  notificationType: NotificationType,
+): Promise<boolean> {
+  const pref = await db.query.notificationPreferences.findFirst({
+    where: and(
+      eq(notificationPreferences.userId, userId),
+      eq(notificationPreferences.notificationType, notificationType),
+    ),
+  });
+  return pref?.enabled ?? true;
 }
 
 export async function upsertPreference(

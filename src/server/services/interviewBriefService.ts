@@ -468,3 +468,90 @@ export async function approveInterviewBrief(input: {
 
   return resumeApprovedBrief(interview, approved, false);
 }
+
+export async function reopenInterviewBriefForRevision(
+  input: {
+    interviewId: string;
+    reopenedBy: string;
+  },
+  executor?: BriefTransaction,
+): Promise<InterviewBriefRecord> {
+  const runInTx = async (tx: BriefTransaction): Promise<InterviewBriefRecord> => {
+    const [existing] = await tx
+      .select({
+        id: interviewBriefs.id,
+        interviewId: interviewBriefs.interviewId,
+        status: interviewBriefs.status,
+        version: interviewBriefs.version,
+        sections: interviewBriefs.sections,
+        approvedBy: interviewBriefs.approvedBy,
+        approvedAt: interviewBriefs.approvedAt,
+      })
+      .from(interviewBriefs)
+      .where(eq(interviewBriefs.interviewId, input.interviewId))
+      .limit(1);
+
+    if (!existing) {
+      throw new InterviewBriefError(`Interview ${input.interviewId} has no brief to reopen.`, 404);
+    }
+    if (existing.status !== 'approved') {
+      throw new InterviewBriefError('Only an approved brief can be reopened for a revision.', 409);
+    }
+
+    const now = new Date().toISOString();
+    const nextVersion = existing.version + 1;
+    const sections = parseInterviewBriefSections(existing.sections);
+
+    const [reopened] = await tx
+      .update(interviewBriefs)
+      .set({
+        status: 'draft',
+        version: nextVersion,
+        approvedBy: null,
+        approvedAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(interviewBriefs.id, existing.id),
+          eq(interviewBriefs.status, 'approved'),
+          eq(interviewBriefs.version, existing.version),
+        ),
+      )
+      .returning({
+        id: interviewBriefs.id,
+        interviewId: interviewBriefs.interviewId,
+        status: interviewBriefs.status,
+        version: interviewBriefs.version,
+        sections: interviewBriefs.sections,
+        approvedBy: interviewBriefs.approvedBy,
+        approvedAt: interviewBriefs.approvedAt,
+      });
+
+    if (!reopened) {
+      throw new InterviewBriefError(BRIEF_CHANGED_MESSAGE, 409);
+    }
+
+    await tx.insert(interviewBriefRevisions).values({
+      briefId: reopened.id,
+      interviewId: input.interviewId,
+      version: nextVersion,
+      status: 'draft',
+      sections,
+      createdBy: input.reopenedBy,
+      createdAt: now,
+    });
+
+    await tx
+      .update(interviews)
+      .set({ status: 'in_progress', updatedAt: now })
+      .where(eq(interviews.id, input.interviewId));
+
+    return toRecord(reopened);
+  };
+
+  if (executor) {
+    return runInTx(executor);
+  }
+  return db.transaction(runInTx);
+}

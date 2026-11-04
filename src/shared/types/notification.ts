@@ -1,4 +1,4 @@
-export type NotificationType = 'system' | 'ai' | 'user-action' | 'background';
+export type NotificationType = 'system' | 'ai' | 'user-action' | 'background' | 'build';
 
 /** Events that trigger AI completion notifications to section owners and reviewers. */
 export type AiCompletionEvent =

@@ -1,0 +1,135 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suspensionBlock {
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.suspensionReason {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.suspensionMeta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.buttonRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resumeButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.resumeButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--error-color);
+  background: var(--bg-primary);
+  color: var(--error-color);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cancelButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.errorText {
+  margin: 0;
+  color: var(--error-color);
+  font-size: 0.875rem;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 24px;
+  width: 100%;
+  max-width: 440px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  color: var(--text-primary);
+}
+
+.dialogDesc {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dismissButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.confirmCancelButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--error-color);
+  background: var(--error-color);
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirmCancelButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

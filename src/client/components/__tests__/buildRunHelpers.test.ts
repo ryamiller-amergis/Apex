@@ -154,13 +154,15 @@ describe('groupTasksByBlockers', () => {
 });
 
 describe('resolveBuildRunTab', () => {
-  it('VT-28 PBI-017 AC-0 lists Overview, Plan and Timeline in order', () => {
-    expect(BUILD_RUN_TABS.map((tab) => tab.key)).toEqual(['overview', 'plan', 'timeline']);
+  it('VT-28 PBI-017 AC-0 lists Overview, Plan, Verification, Preview and Timeline in order', () => {
+    expect(BUILD_RUN_TABS.map((tab) => tab.key)).toEqual(['overview', 'plan', 'verification', 'preview', 'timeline']);
   });
 
   it('VT-28 defaults a bare address to Overview and redirects an unknown segment', () => {
     expect(resolveBuildRunTab(undefined)).toEqual({ tab: 'overview', redirect: false });
     expect(resolveBuildRunTab('plan')).toEqual({ tab: 'plan', redirect: false });
+    expect(resolveBuildRunTab('verification')).toEqual({ tab: 'verification', redirect: false });
+    expect(resolveBuildRunTab('preview')).toEqual({ tab: 'preview', redirect: false });
     expect(resolveBuildRunTab('unknown')).toEqual({ tab: 'overview', redirect: true });
   });
 });

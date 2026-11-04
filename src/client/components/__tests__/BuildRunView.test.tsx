@@ -95,13 +95,28 @@ function json(status: number, body: unknown) {
 type Handler = (url: string) => Promise<unknown>;
 let fetchMock: jest.Mock;
 
-function stubFetch(detailHandler: Handler, eventsHandler: Handler = () => json(200, { events: [], total: 0 })) {
-  fetchMock = jest.fn((url: string) => (url.includes('/events') ? eventsHandler(url) : detailHandler(url)));
+function stubFetch(
+  detailHandler: Handler,
+  eventsHandler: Handler = () => json(200, { events: [], total: 0 }),
+  verificationHandler: Handler = () => json(200, {
+    revisionNumber: 1,
+    revisionNumbers: [1],
+    summary: { total: 0, pass: 0, fail: 0, deferred: 0, retired: 0 },
+    rows: [],
+  }),
+) {
+  fetchMock = jest.fn((url: string) => {
+    if (url.includes('/events')) return eventsHandler(url);
+    if (url.includes('/verification')) return verificationHandler(url);
+    return detailHandler(url);
+  });
   global.fetch = fetchMock as unknown as typeof fetch;
 }
 
 function detailCalls() {
-  return fetchMock.mock.calls.filter(([url]) => !String(url).includes('/events')).length;
+  return fetchMock.mock.calls.filter(
+    ([url]) => !String(url).includes('/events') && !String(url).includes('/verification'),
+  ).length;
 }
 
 const LocationProbe: React.FC = () => {
@@ -214,6 +229,25 @@ describe('header (PBI-016)', () => {
     renderAt(`/builds/${BUILD_ID}`);
     expect(await screen.findByTestId('build-run-exception-cause')).toHaveTextContent(/reason is missing\. This is a data error/);
   });
+
+  it('VT-29 PBI-024 NFR-a11y / AC-3 renders Checking stage text and repair_cap suspension notice', async () => {
+    stubFetch(() => json(200, detail({
+      build: { ...detail().build, status: 'checking' },
+      stage: { kind: 'stage', key: 'checking', tasks: null, queuePosition: null, suspendReason: null },
+    })));
+    const checkingRender = renderAt(`/builds/${BUILD_ID}`);
+    expect(await screen.findByTestId('build-run-stage-text')).toHaveTextContent(/^Checking$/);
+    checkingRender.unmount();
+
+    stubFetch(() => json(200, detail({
+      build: { ...detail().build, status: 'suspended' },
+      stage: { kind: 'exception', key: 'suspended', tasks: null, queuePosition: null, suspendReason: 'repair_cap' },
+    })));
+    renderAt(`/builds/${BUILD_ID}`);
+    expect(await screen.findByTestId('build-run-stage-text')).toHaveTextContent(/^Suspended$/);
+    expect(screen.getByTestId('build-run-exception-cause')).toHaveTextContent(/reached a limit/);
+    expect(screen.getByTestId('build-run-exception-contacts')).toHaveTextContent('Contact a Project Admin.');
+  });
 });
 
 describe('access and loading (PBI-017 AC-3)', () => {
@@ -240,6 +274,8 @@ describe('tabs (PBI-017 AC-0)', () => {
     renderAt(`/builds/${BUILD_ID}`);
     const overview = await screen.findByTestId('build-run-tab-overview');
     const plan = screen.getByTestId('build-run-tab-plan');
+    const verification = screen.getByTestId('build-run-tab-verification');
+    const preview = screen.getByTestId('build-run-tab-preview');
     const timeline = screen.getByTestId('build-run-tab-timeline');
     expect(screen.getByTestId('build-run-tabs')).toHaveAttribute('role', 'tablist');
     expect(overview).toHaveAttribute('aria-selected', 'true');
@@ -262,10 +298,21 @@ describe('tabs (PBI-017 AC-0)', () => {
     await user.keyboard('{End}');
     expect(timeline).toHaveFocus();
     await user.keyboard('{ArrowLeft}');
+    expect(preview).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
+    expect(verification).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
     expect(plan).toHaveFocus();
     await user.keyboard('{Enter}');
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(`/builds/${BUILD_ID}/plan`));
     expect(await screen.findByTestId('build-run-panel-plan')).toBeInTheDocument();
+  });
+
+  it('VT-28 renders the Verification tab when navigating to /verification', async () => {
+    renderAt(`/builds/${BUILD_ID}/verification`);
+    expect(await screen.findByTestId('build-run-panel-verification')).toBeInTheDocument();
+    expect(await screen.findByTestId('build-verification-tab')).toBeInTheDocument();
+    expect(await screen.findByTestId('build-verification-empty')).toBeInTheDocument();
   });
 
   it('VT-28 redirects an unknown tab segment to Overview', async () => {

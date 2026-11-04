@@ -1,6 +1,5 @@
 import { AzureDevOpsService } from '../services/azureDevOps';
 import * as azdev from 'azure-devops-node-api';
-import { retryWithBackoff } from '../utils/retry';
 
 // Mock the retry utility
 jest.mock('../utils/retry', () => ({
@@ -47,6 +46,9 @@ describe('AzureDevOpsService', () => {
 
     mockGitApi = {
       getPullRequest: jest.fn(),
+      getPullRequests: jest.fn(),
+      updatePullRequest: jest.fn(),
+      getRefs: jest.fn(),
     };
 
     // Mock Connection
@@ -67,7 +69,7 @@ describe('AzureDevOpsService', () => {
 
   describe('constructor', () => {
     it('should create service with environment variables', () => {
-      const service = new AzureDevOpsService();
+      const _service = new AzureDevOpsService();
       expect(azdev.WebApi).toHaveBeenCalledWith(
         'https://dev.azure.com/test-org',
         undefined,
@@ -1223,6 +1225,104 @@ describe('AzureDevOpsService', () => {
       expect(wiql).toContain("[System.WorkItemType] = 'Dev''s Type'");
       expect(wiql).toContain("[System.Title] CONTAINS 'can''t link'");
       expect(result).toHaveLength(1);
+    });
+  });
+
+  describe('build merge PR methods (TBI-022 DoD-0 / VT-01, VT-02)', () => {
+    it('VT-01 TBI-022 DoD-0 completePullRequest sends completed status, lastMergeSourceCommit, deleteSourceBranch, and noFastForward', async () => {
+      const service = new AzureDevOpsService('Apex');
+      mockGitApi.updatePullRequest.mockResolvedValue({ pullRequestId: 42 });
+
+      await service.completePullRequest({
+        repo: 'apex-repo',
+        project: 'Apex',
+        pullRequestId: 42,
+        sourceCommit: 'abc123',
+        deleteSourceBranch: true,
+        mergeStrategy: 'noFastForward',
+      });
+
+      expect(mockGitApi.updatePullRequest).toHaveBeenCalledTimes(1);
+      const [payload, repo, prId, project] = mockGitApi.updatePullRequest.mock.calls[0];
+      expect(repo).toBe('apex-repo');
+      expect(prId).toBe(42);
+      expect(project).toBe('Apex');
+      expect(payload).toEqual(expect.objectContaining({
+        lastMergeSourceCommit: { commitId: 'abc123' },
+        completionOptions: expect.objectContaining({
+          deleteSourceBranch: true,
+        }),
+      }));
+    });
+
+    it('VT-02 TBI-022 DoD-0 maps getPullRequest status and mergeStatus, finds completed PRs by source branch, abandons PRs, and reads branch head commits', async () => {
+      const service = new AzureDevOpsService('Apex');
+
+      mockGitApi.getPullRequest.mockResolvedValueOnce({
+        status: 1,
+        mergeStatus: 3,
+        lastMergeSourceCommit: { commitId: 'src-111' },
+        lastMergeCommit: { commitId: 'mrg-222' },
+      });
+      await expect(
+        service.getPullRequest({ repo: 'apex-repo', project: 'Apex', pullRequestId: 42 }),
+      ).resolves.toEqual({
+        status: 'active',
+        mergeStatus: 'succeeded',
+        sourceCommit: 'src-111',
+        mergeCommit: 'mrg-222',
+      });
+
+      mockGitApi.getPullRequest.mockResolvedValueOnce({
+        status: 'completed',
+        mergeStatus: 'conflicts',
+      });
+      await expect(
+        service.getPullRequest({ repo: 'apex-repo', project: 'Apex', pullRequestId: 43 }),
+      ).resolves.toEqual({
+        status: 'completed',
+        mergeStatus: 'conflicts',
+        sourceCommit: null,
+        mergeCommit: null,
+      });
+
+      mockGitApi.getPullRequest.mockResolvedValueOnce({
+        status: 2,
+        mergeStatus: 4,
+      });
+      await expect(
+        service.getPullRequest({ repo: 'apex-repo', project: 'Apex', pullRequestId: 44 }),
+      ).resolves.toEqual({
+        status: 'abandoned',
+        mergeStatus: 'rejectedByPolicy',
+        sourceCommit: null,
+        mergeCommit: null,
+      });
+
+      mockGitApi.getPullRequests.mockResolvedValueOnce([
+        { pullRequestId: 77, status: 3 },
+      ]);
+      await expect(
+        service.findPullRequestBySourceBranch('apex-repo', 'Apex', 'apex/build-task/r1/t1-1', 'apex/build/r1'),
+      ).resolves.toEqual({
+        pullRequestId: 77,
+        status: 'completed',
+      });
+
+      mockGitApi.updatePullRequest.mockResolvedValueOnce({ pullRequestId: 77 });
+      await service.abandonPullRequest({ repo: 'apex-repo', project: 'Apex', pullRequestId: 77 });
+      expect(mockGitApi.updatePullRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: expect.anything() }),
+        'apex-repo',
+        77,
+        'Apex',
+      );
+
+      mockGitApi.getRefs.mockResolvedValueOnce([{ name: 'refs/heads/main', objectId: 'deadbeef'.repeat(5) }]);
+      await expect(service.getBranchHeadCommit('apex-repo', 'Apex', 'main')).resolves.toBe('deadbeef'.repeat(5));
+
+      mockGitApi.getRefs.mockResolvedValueOnce([]);
+      await expect(service.getBranchHeadCommit('apex-repo', 'Apex', 'missing')).resolves.toBeNull();
     });
   });
 });

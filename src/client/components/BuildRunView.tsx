@@ -2,14 +2,16 @@ import React, { useCallback, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
-import { BuildApiError, useBuild } from '../hooks/useBuilds';
+import { BuildApiError, useBuild, useRetryBuildDeployment } from '../hooks/useBuilds';
 import { useFeatureFlags } from '../hooks/useFeatureFlags';
 import { resolveBuildRunTab, type BuildRunTabKey } from './buildRunTabList';
 import { BuildRunHeader } from './BuildRunHeader';
 import { BuildRunTabs, buildRunPanelId, buildRunTabId } from './BuildRunTabs';
 import { BuildOverviewTab } from './BuildOverviewTab';
 import { BuildPlanTab } from './BuildPlanTab';
+import { BuildPreviewTab } from './BuildPreviewTab';
 import { BuildTimelineTab } from './BuildTimelineTab';
+import { BuildVerificationTab } from './BuildVerificationTab';
 import styles from './BuildRunView.module.css';
 
 interface BuildRunViewProps {
@@ -21,6 +23,7 @@ interface BuildRunViewProps {
 
 export const BuildRunView: React.FC<BuildRunViewProps> = ({ project, buildId, tab }) => {
   const { data, error, isLoading, isRefetchError, dataUpdatedAt, refetch } = useBuild(project, buildId);
+  const retryDeploymentMutation = useRetryBuildDeployment(project, buildId);
   const navigate = useNavigate();
   const { tab: activeTab, redirect } = resolveBuildRunTab(tab);
   const basePath = `/builds/${encodeURIComponent(buildId)}`;
@@ -106,6 +109,25 @@ export const BuildRunView: React.FC<BuildRunViewProps> = ({ project, buildId, ta
               tasks={revision?.tasks ?? []}
               status={data.build.status}
               suspendReason={data.stage.suspendReason}
+            />
+          )}
+          {activeTab === 'verification' && (
+            // data-testid-exempt
+            <BuildVerificationTab
+              project={project}
+              buildId={buildId}
+              buildStatus={data.build.status}
+            />
+          )}
+          {activeTab === 'preview' && (
+            // data-testid-exempt
+            <BuildPreviewTab
+              buildStatus={data.build.status}
+              currentRevisionNumber={data.build.currentRevisionNumber}
+              deployment={data.deployment ?? null}
+              previews={data.previews ?? []}
+              canRetryDeployment={Boolean(data.viewer?.canRetryDeployment)}
+              onRetryDeployment={() => retryDeploymentMutation.mutateAsync({})}
             />
           )}
           {/* data-testid-exempt */}

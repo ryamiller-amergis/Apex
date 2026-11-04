@@ -8,6 +8,7 @@ const NOTIFICATION_TYPES: { type: NotificationType; label: string }[] = [
   { type: 'ai', label: 'AI Completions' },
   { type: 'user-action', label: 'User Actions' },
   { type: 'system', label: 'System Events' },
+  { type: 'build', label: 'Builds' },
   { type: 'background', label: 'Background Jobs' },
 ];
 
@@ -61,6 +62,7 @@ export const TeamsNotificationSettings: React.FC = () => {
               className={styles['tns-checkbox']}
               checked={selected.includes(type)}
               onChange={() => toggle(type)}
+              {...{ 'data-testid': `teams-notification-type-${type}` }}
             />
             <span className={styles['tns-label']}>{label}</span>
           </label>
@@ -72,6 +74,7 @@ export const TeamsNotificationSettings: React.FC = () => {
           className={styles['tns-save-btn']}
           onClick={handleSave}
           disabled={update.isPending}
+          {...{ 'data-testid': 'teams-notification-save-btn' }}
         >
           {update.isPending ? 'Saving…' : 'Save'}
         </button>

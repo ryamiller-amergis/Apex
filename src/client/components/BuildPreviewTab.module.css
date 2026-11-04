@@ -1,0 +1,167 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusBadge {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.copy {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.queuePosition {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.readyBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.link {
+  color: var(--accent-color);
+  text-decoration: underline;
+  transition: all 0.2s ease;
+}
+
+.link:hover {
+  color: var(--accent-hover);
+}
+
+.endedNotice {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.failedPanel {
+  border: 1px solid var(--error-color);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.failedTitle {
+  margin: 0;
+  font-weight: 600;
+  color: var(--error-color);
+}
+
+.failedContacts {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.failedDiagnostic {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.errorExcerpt {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  font-size: 0.8125rem;
+}
+
+.retryAction {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.retryButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.retryButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.errorText {
+  margin: 0;
+  color: var(--error-color);
+  font-size: 0.875rem;
+}
+
+.historySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.historyHeading {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.historyList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.historyRow {
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.historyMeta {
+  color: var(--text-primary);
+}
+
+.replacedNote {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}

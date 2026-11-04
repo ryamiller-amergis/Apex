@@ -1,9 +1,24 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { BUILD_REVISION_FEEDBACK_MAX_LENGTH } from '../../shared/types/buildRevision';
+import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
 import { requirePermission, requireProjectAccess, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { defaultBuildDeploymentService } from '../services/buildDeploymentService';
+import {
+  BuildAcceptError,
+  defaultBuildAcceptService,
+} from '../services/build/buildAcceptService';
+import {
+  BuildRevisionError,
+  defaultBuildRevisionService,
+} from '../services/buildRevisionService';
+import { isFeatureEnabled } from '../services/featureFlagService';
 import { listBuildRepositories, listBuilds, normalizeListQuery } from '../services/buildQueryService';
 import { refusalOf, startBuild } from '../services/buildOrchestrator/startBuild';
 import { getBuildDetail, listBuildRunEvents, normalizeEventsLimit } from '../services/buildRunProjectionService';
+import buildRunControlsRouter from './buildRunControls';
+import buildVerificationRouter from './buildVerification';
 
 const router = express.Router();
 
@@ -191,5 +206,204 @@ router.get(
     }
   },
 );
+
+router.post(
+  '/:id/retry-deployment',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:view'),
+  async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const userPerms = (req as Request & { userPermissions?: Set<string> }).userPermissions;
+      const isProjectAdmin = Boolean(userPerms?.has('admin:roles'));
+      const isSuperAdmin = isSuperAdminRequest(req);
+
+      const result = await defaultBuildDeploymentService.retryDeployment({
+        buildRunId: req.params.id,
+        actor: {
+          userId,
+          isProjectAdmin,
+          isSuperAdmin,
+        },
+      });
+
+      switch (result.kind) {
+        case 'ok':
+          res.status(202).json(result.response);
+          return;
+        case 'forbidden':
+          res.status(403).json({ error: 'Forbidden' });
+          return;
+        case 'not_found':
+          res.status(404).json({ error: 'Not found' });
+          return;
+        case 'not_retryable':
+          res.status(409).json({
+            error: result.message,
+            code: 'BUILD_NOT_RETRYABLE',
+          });
+          return;
+        default: {
+          const exhaustive: never = result;
+          throw new Error(`Unhandled retry result: ${JSON.stringify(exhaustive)}`);
+        }
+      }
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.post(
+  '/:id/revisions',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:run'),
+  async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const project = resolveRequestProject(req) as string;
+
+      // @feature-flag:build-from-prompt start winner=enabled
+      const flagOn = await isFeatureEnabled(BUILD_FROM_PROMPT_FLAG, {
+        userId,
+        project,
+      });
+      if (!flagOn) {
+        // @feature-flag:build-from-prompt disabled-start
+        res.status(403).json({
+          error: 'Builds are switched off for this project right now. Your past builds stay readable.',
+          code: 'BUILDS_DISABLED',
+        });
+        return;
+        // @feature-flag:build-from-prompt disabled-end
+      }
+      // @feature-flag:build-from-prompt enabled-start
+      const userPerms = (req as Request & { userPermissions?: Set<string> }).userPermissions;
+      const isProjectAdmin = Boolean(userPerms?.has('admin:roles'));
+      const isSuperAdmin = isSuperAdminRequest(req);
+      const body = req.body as { feedback?: unknown } | undefined;
+      const feedback = typeof body?.feedback === 'string' ? body.feedback : '';
+      const trimmedFeedback = feedback.trim();
+      if (!trimmedFeedback) {
+        res.status(400).json({
+          error: 'Describe what you want changed.',
+          code: 'FEEDBACK_REQUIRED',
+        });
+        return;
+      }
+      if (trimmedFeedback.length > BUILD_REVISION_FEEDBACK_MAX_LENGTH) {
+        res.status(400).json({
+          error: 'Use 4,000 characters or fewer.',
+          code: 'FEEDBACK_TOO_LONG',
+        });
+        return;
+      }
+
+      const accepted = await defaultBuildRevisionService.requestRevision({
+        buildId: req.params.id,
+        project,
+        feedback,
+        actor: {
+          userId,
+          isProjectAdmin,
+          isSuperAdmin,
+        },
+      });
+      res.status(202).json(accepted);
+      // @feature-flag:build-from-prompt enabled-end
+      // @feature-flag:build-from-prompt end
+    } catch (error) {
+      if (error instanceof BuildRevisionError) {
+        res.status(error.statusCode).json({
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+router.post(
+  '/:id/accept',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:run'),
+  async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const project = resolveRequestProject(req) as string;
+
+      // @feature-flag:build-from-prompt start winner=enabled
+      const flagOn = await isFeatureEnabled(BUILD_FROM_PROMPT_FLAG, {
+        userId,
+        project,
+      });
+      if (!flagOn) {
+        // @feature-flag:build-from-prompt disabled-start
+        res.status(403).json({
+          error: 'Build from prompt is turned off for this project.',
+          code: 'BUILD_FLAG_DISABLED',
+        });
+        return;
+        // @feature-flag:build-from-prompt disabled-end
+      }
+      // @feature-flag:build-from-prompt enabled-start
+      const userPerms = (req as Request & { userPermissions?: Set<string> }).userPermissions;
+      const isProjectAdmin = Boolean(userPerms?.has('admin:roles'));
+      const isSuperAdmin = isSuperAdminRequest(req);
+      const body = req.body as { revisionNumber?: unknown } | undefined;
+      const revisionNumber =
+        typeof body?.revisionNumber === 'number' ? body.revisionNumber : NaN;
+
+      const result = await defaultBuildAcceptService.acceptBuild({
+        buildId: req.params.id,
+        project,
+        revisionNumber,
+        actor: {
+          userId,
+          isProjectAdmin,
+          isSuperAdmin,
+        },
+      });
+
+      if (result.firstClaim) {
+        void defaultBuildAcceptService.continueAccept(req.params.id);
+        res.status(202).json(result.response);
+        return;
+      }
+      res.status(200).json(result.response);
+      // @feature-flag:build-from-prompt enabled-end
+      // @feature-flag:build-from-prompt end
+    } catch (error) {
+      if (error instanceof BuildAcceptError) {
+        res.status(error.statusCode).json({
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+router.use(buildRunControlsRouter);
+router.use(buildVerificationRouter);
 
 export default router;

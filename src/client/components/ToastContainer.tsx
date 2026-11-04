@@ -15,6 +15,7 @@ function getTypeLabel(type: NotificationType): string {
     case 'ai': return 'AI';
     case 'user-action': return 'Activity';
     case 'background': return 'Background';
+    case 'build': return 'Builds';
   }
 }
 

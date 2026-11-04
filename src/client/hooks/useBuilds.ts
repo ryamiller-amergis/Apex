@@ -7,7 +7,12 @@ import type {
   StartBuildRequest,
   StartBuildResponse,
 } from '../../shared/types/build';
-import type { BuildDetailResponse, BuildEventsResponse } from '../../shared/types/buildView';
+import type {
+  BuildDetailResponse,
+  BuildEventsResponse,
+  BuildEvidenceSlot,
+  BuildVerificationMatrixResponse,
+} from '../../shared/types/buildView';
 
 const BUILD_POLL_MS = 5_000;
 
@@ -139,7 +144,12 @@ export function useBuild(project: string, buildId: string) {
     queryKey: buildDetailKey(project, buildId),
     enabled: Boolean(project) && Boolean(buildId),
     queryFn: () => fetchBuildDetail(project, buildId),
-    refetchInterval: (query) => (isBuildLive(query.state.data?.build.status) ? BUILD_POLL_MS : false),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const depStatus = data?.deployment?.status;
+      if (depStatus === 'queued' || depStatus === 'deploying') return BUILD_POLL_MS;
+      return isBuildLive(data?.build.status) ? BUILD_POLL_MS : false;
+    },
     refetchIntervalInBackground: false,
     staleTime: 0,
     retry: retryUnlessDenied,
@@ -241,5 +251,99 @@ export function useStartBuild(project: string) {
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['builds', project] });
     },
+  });
+}
+
+function buildVerificationKey(project: string, buildId: string, revision: number | undefined) {
+  return ['build-verification', project, buildId, revision ?? null] as const;
+}
+
+function buildEvidenceKey(
+  project: string,
+  buildId: string,
+  rowId: string | null,
+  slot: BuildEvidenceSlot | null,
+  recordedAt: string | null,
+) {
+  return ['build-evidence', project, buildId, rowId, slot, recordedAt] as const;
+}
+
+export function useBuildVerification(
+  project: string,
+  buildId: string,
+  options?: { revision?: number; enabled?: boolean; buildStatus?: BuildRunStatus },
+) {
+  const client = useQueryClient();
+  const revision = options?.revision;
+  const enabled = options?.enabled ?? true;
+  return useQuery({
+    queryKey: buildVerificationKey(project, buildId, revision),
+    enabled: enabled && Boolean(project) && Boolean(buildId),
+    queryFn: () => {
+      const revisionQuery =
+        revision !== undefined ? `&revision=${encodeURIComponent(String(revision))}` : '';
+      return apiFetch<BuildVerificationMatrixResponse>(
+        `/api/builds/${encodeURIComponent(buildId)}/verification?project=${encodeURIComponent(project)}${revisionQuery}`,
+      );
+    },
+    refetchInterval: () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
+      const status =
+        options?.buildStatus ??
+        client.getQueryData<BuildDetailResponse>(buildDetailKey(project, buildId))?.build.status;
+      if (status !== undefined) {
+        return isBuildLive(status) ? BUILD_POLL_MS : false;
+      }
+      return BUILD_POLL_MS;
+    },
+    refetchIntervalInBackground: false,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+async function fetchBuildEvidence(
+  project: string,
+  buildId: string,
+  rowId: string,
+  slot: BuildEvidenceSlot,
+): Promise<string> {
+  const response = await fetch(
+    `/api/builds/${encodeURIComponent(buildId)}/evidence/${encodeURIComponent(rowId)}/${encodeURIComponent(slot)}?project=${encodeURIComponent(project)}`,
+    { credentials: 'include' },
+  );
+  if (!response.ok) {
+    let body: Record<string, unknown> = {};
+    try {
+      body = await readJson(response);
+    } catch {
+      body = {};
+    }
+    const refusals = Array.isArray(body.refusals) ? body.refusals.map((item) => String(item)) : [];
+    throw new BuildApiError(
+      response.status,
+      typeof body.error === 'string' ? body.error : 'The request failed.',
+      typeof body.code === 'string' ? body.code : undefined,
+      refusals,
+    );
+  }
+  return response.text();
+}
+
+export function useBuildEvidence(
+  project: string,
+  buildId: string,
+  target: { rowId: string; slot: BuildEvidenceSlot; recordedAt?: string | null } | null,
+) {
+  const rowId = target?.rowId ?? null;
+  const slot = target?.slot ?? null;
+  const recordedAt = target?.recordedAt ?? null;
+  return useQuery({
+    queryKey: buildEvidenceKey(project, buildId, rowId, slot, recordedAt),
+    enabled: Boolean(project) && Boolean(buildId) && Boolean(rowId) && Boolean(slot),
+    queryFn: () => fetchBuildEvidence(project, buildId, rowId!, slot!),
+    staleTime: Infinity,
+    refetchInterval: false,
+    retry: false,
   });
 }

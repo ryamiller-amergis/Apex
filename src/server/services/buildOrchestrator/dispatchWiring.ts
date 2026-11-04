@@ -5,6 +5,9 @@
  */
 import type { BuildSuspendReason } from '../../../shared/types/build';
 import { markTerminal, requestCancel } from '../agentRunLifecycleService';
+import { mergeTaskBranch } from '../build/buildMergeService';
+import { applyMergeOutcome } from '../build/mergeOutcome';
+import { createMayReportDone } from '../builds/buildVerificationApply';
 import { cancelCursorCloudAgentRun, getCloudAgentRun, streamCloudAgentRun } from '../cursorCloudAgentClient';
 import { trackEvent } from '../telemetry';
 import {
@@ -28,9 +31,10 @@ export interface BuildDispatchPorts {
 
 const unavailablePorts: BuildDispatchPorts = {
   buildCandidate: candidateBuilderUnavailable,
-  mayReportDone: async () => false,
-  requestMerge: async () => {
-    throw new Error('The build merge step is not available.');
+  mayReportDone: createMayReportDone(),
+  requestMerge: async ({ headTaskId }) => {
+    const outcome = await mergeTaskBranch(headTaskId);
+    await applyMergeOutcome(headTaskId, outcome);
   },
 };
 

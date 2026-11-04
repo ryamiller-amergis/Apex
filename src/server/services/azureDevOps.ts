@@ -1,8 +1,8 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
-import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
-import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
+import { GitPullRequestMergeStrategy, PullRequestAsyncStatus, PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
@@ -6503,5 +6503,291 @@ export class AzureDevOpsService {
       }),
     );
     return deleted;
+  }
+
+  /**
+   * Reads a pull request's status, merge status, source commit, and merge commit (TBI-022).
+   */
+  async getPullRequest(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+  }): Promise<{
+    status: 'active' | 'completed' | 'abandoned';
+    mergeStatus: 'notSet' | 'queued' | 'conflicts' | 'succeeded' | 'rejectedByPolicy' | 'failure';
+    sourceCommit: string | null;
+    mergeCommit: string | null;
+  }> {
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      const pr = await gitApi.getPullRequest(opts.repo, opts.pullRequestId, opts.project);
+      const rawStatus: unknown = pr?.status;
+      let status: 'active' | 'completed' | 'abandoned' = 'active';
+      if (
+        rawStatus === PullRequestStatus.Completed
+        || rawStatus === 3
+        || (typeof rawStatus === 'string' && rawStatus.toLowerCase() === 'completed')
+      ) {
+        status = 'completed';
+      } else if (
+        rawStatus === PullRequestStatus.Abandoned
+        || rawStatus === 2
+        || (typeof rawStatus === 'string' && rawStatus.toLowerCase() === 'abandoned')
+      ) {
+        status = 'abandoned';
+      }
+
+      const rawMerge: unknown = pr?.mergeStatus;
+      let mergeStatus: 'notSet' | 'queued' | 'conflicts' | 'succeeded' | 'rejectedByPolicy' | 'failure' = 'notSet';
+      if (
+        rawMerge === PullRequestAsyncStatus.Queued
+        || rawMerge === 1
+        || (typeof rawMerge === 'string' && rawMerge.toLowerCase() === 'queued')
+      ) {
+        mergeStatus = 'queued';
+      } else if (
+        rawMerge === PullRequestAsyncStatus.Conflicts
+        || rawMerge === 2
+        || (typeof rawMerge === 'string' && rawMerge.toLowerCase() === 'conflicts')
+      ) {
+        mergeStatus = 'conflicts';
+      } else if (
+        rawMerge === PullRequestAsyncStatus.Succeeded
+        || rawMerge === 3
+        || (typeof rawMerge === 'string' && rawMerge.toLowerCase() === 'succeeded')
+      ) {
+        mergeStatus = 'succeeded';
+      } else if (
+        rawMerge === PullRequestAsyncStatus.RejectedByPolicy
+        || rawMerge === 4
+        || (typeof rawMerge === 'string' && rawMerge.toLowerCase() === 'rejectedbypolicy')
+      ) {
+        mergeStatus = 'rejectedByPolicy';
+      } else if (
+        rawMerge === PullRequestAsyncStatus.Failure
+        || rawMerge === 5
+        || (typeof rawMerge === 'string' && rawMerge.toLowerCase() === 'failure')
+      ) {
+        mergeStatus = 'failure';
+      }
+
+      return {
+        status,
+        mergeStatus,
+        sourceCommit: pr?.lastMergeSourceCommit?.commitId ?? null,
+        mergeCommit: pr?.lastMergeCommit?.commitId ?? null,
+      };
+    });
+  }
+
+  /**
+   * Finds a pull request from `sourceBranch` into `targetBranch` regardless of status (active, completed, abandoned).
+   */
+  async findPullRequestBySourceBranch(
+    repo: string,
+    project: string,
+    sourceBranch: string,
+    targetBranch: string,
+  ): Promise<{ pullRequestId: number; status: 'active' | 'completed' | 'abandoned' } | null> {
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      const matches = await gitApi.getPullRequests(
+        repo,
+        {
+          sourceRefName: `refs/heads/${sourceBranch}`,
+          targetRefName: `refs/heads/${targetBranch}`,
+          status: PullRequestStatus.All ?? (4 as any),
+        },
+        project,
+        undefined,
+        undefined,
+        10,
+      );
+      const pr = matches?.[0];
+      if (!pr?.pullRequestId) return null;
+      const rawStatus: unknown = pr.status;
+      let status: 'active' | 'completed' | 'abandoned' = 'active';
+      if (
+        rawStatus === PullRequestStatus.Completed
+        || rawStatus === 3
+        || (typeof rawStatus === 'string' && rawStatus.toLowerCase() === 'completed')
+      ) {
+        status = 'completed';
+      } else if (
+        rawStatus === PullRequestStatus.Abandoned
+        || rawStatus === 2
+        || (typeof rawStatus === 'string' && rawStatus.toLowerCase() === 'abandoned')
+      ) {
+        status = 'abandoned';
+      }
+      return { pullRequestId: pr.pullRequestId, status };
+    });
+  }
+
+  /**
+   * Completes a pull request with `noFastForward` strategy and optional source-branch deletion.
+   */
+  async completePullRequest(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    sourceCommit: string;
+    deleteSourceBranch: boolean;
+    mergeStrategy: 'noFastForward';
+  }): Promise<void> {
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      await gitApi.updatePullRequest(
+        {
+          status: PullRequestStatus.Completed ?? (3 as any),
+          lastMergeSourceCommit: { commitId: opts.sourceCommit },
+          completionOptions: {
+            deleteSourceBranch: opts.deleteSourceBranch,
+            mergeStrategy: GitPullRequestMergeStrategy?.NoFastForward ?? (1 as any),
+          },
+        } as any,
+        opts.repo,
+        opts.pullRequestId,
+        opts.project,
+      );
+    });
+  }
+
+  /**
+   * Abandons a pull request.
+   */
+  async abandonPullRequest(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+  }): Promise<void> {
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      await gitApi.updatePullRequest(
+        { status: PullRequestStatus.Abandoned ?? (2 as any) } as any,
+        opts.repo,
+        opts.pullRequestId,
+        opts.project,
+      );
+    });
+  }
+
+  /**
+   * Returns the head commit SHA of a branch, or null when the branch does not exist.
+   */
+  async getBranchHeadCommit(repo: string, project: string, branch: string): Promise<string | null> {
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      const clean = branch.replace(/^refs\/heads\//, '');
+      const refs = await gitApi.getRefs(repo, project, `heads/${clean}`);
+      const match = (refs ?? []).find(
+        (ref) => ref?.name === `refs/heads/${clean}` || ref?.name === clean,
+      ) ?? refs?.[0];
+      return match?.objectId ?? null;
+    });
+  }
+
+  /**
+   * Returns only the mergeStatus of a pull request (TBI-027 / FEAT-015).
+   */
+  async getPullRequestMergeStatus(
+    repo: string,
+    project: string,
+    pullRequestId: number,
+  ): Promise<'notSet' | 'queued' | 'conflicts' | 'succeeded' | 'rejectedByPolicy' | 'failure'> {
+    const pr = await this.getPullRequest({ repo, project, pullRequestId });
+    return pr.mergeStatus;
+  }
+
+  /**
+   * Resolves an email or display name to an Azure DevOps identity ID.
+   */
+  async resolveIdentityIdByEmail(project: string, emailOrName: string): Promise<string | null> {
+    return this.findReviewerId(project, emailOrName);
+  }
+
+  /**
+   * Adds optional reviewers to a pull request and returns added and failed lists.
+   */
+  async addPullRequestReviewers(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    reviewers: Array<{ id: string; displayName?: string }>;
+  }): Promise<{ added: string[]; failed: Array<{ id: string; message: string }> }> {
+    const gitApi = await this.connection.getGitApi();
+    const added: string[] = [];
+    const failed: Array<{ id: string; message: string }> = [];
+
+    for (const reviewer of opts.reviewers) {
+      try {
+        await gitApi.createPullRequestReviewer(
+          {
+            id: reviewer.id,
+            isRequired: false,
+            ...(reviewer.displayName ? { displayName: reviewer.displayName } : {}),
+          },
+          opts.repo,
+          opts.pullRequestId,
+          reviewer.id,
+          opts.project,
+        );
+        added.push(reviewer.id);
+      } catch (err) {
+        failed.push({
+          id: reviewer.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return { added, failed };
+  }
+
+  /**
+   * Posts a comment thread on a pull request (used for overflow body text).
+   */
+  async addPullRequestComment(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    content: string;
+  }): Promise<void> {
+    return retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      await gitApi.createThread(
+        {
+          comments: [{ content: opts.content, commentType: 1 }],
+          status: 1,
+        } as any,
+        opts.repo,
+        opts.pullRequestId,
+        opts.project,
+      );
+    });
+  }
+
+  /**
+   * Deletes a branch ref in Azure DevOps. Treats a missing branch as already deleted.
+   */
+  async deleteBranch(repo: string, project: string, branch: string): Promise<void> {
+    const currentSha = await this.getBranchHeadCommit(repo, project, branch);
+    if (!currentSha) return;
+
+    await retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      const clean = branch.replace(/^refs\/heads\//, '');
+      await gitApi.updateRefs(
+        [
+          {
+            name: `refs/heads/${clean}`,
+            oldObjectId: currentSha,
+            newObjectId: '0'.repeat(40),
+          },
+        ] as any,
+        repo,
+        project,
+      );
+    });
   }
 }
