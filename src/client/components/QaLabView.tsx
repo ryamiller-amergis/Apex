@@ -634,6 +634,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         title: entry.title,
         proposedTestPlan: entry.proposedTestPlan,
         proposedTestSuite: entry.proposedTestSuite,
+        placementReason: entry.placementReason,
         suiteError: suiteErrors.get(entry.id),
       }));
   }, [allCases, publishedCaseIds, externalSuite?.publishedCases]);
@@ -1122,7 +1123,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               // data-testid-exempt — QaLabPublishReview owns its panel testids
               <QaLabPublishReview
                 suiteId={externalSuite.id}
-                cases={reviewCases}
+                cases={publishTargets}
                 requireSuite={externalSuite.requireSuite}
                 isPublishing={publishAdoSuite.isPending}
                 onCancel={() => setPublishReviewOpen(false)}

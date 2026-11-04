@@ -38,6 +38,7 @@ describe('QaLabPublishReview', () => {
           title: 'Clock in inside the geofence',
           proposedTestPlan: '15 create, save, submit timesheet',
           proposedTestSuite: 'Geofence Clock In and Out>Inside Geofence Distance',
+          placementReason: 'Clock in inside the geofence radius',
         }]}
         requireSuite
         isPublishing={false}
@@ -46,6 +47,7 @@ describe('QaLabPublishReview', () => {
       />,
     );
 
+    expect(screen.getByText('Clock in inside the geofence radius')).toBeTruthy();
     fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
 
     expect(onPublish).toHaveBeenCalledWith({ 'TC-1': { planId: 15, suiteId: 152 } });
@@ -71,6 +73,40 @@ describe('QaLabPublishReview', () => {
     fireEvent.change(screen.getByTestId('qa-lab-publish-review-TC-2-suite'), { target: { value: '151' } });
 
     expect(confirm).not.toBeDisabled();
+  });
+
+  it('keeps the Set all choice and leaves matched proposals in place when only a plan is set', () => {
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[
+          { id: 'TC-4', title: 'Matched', proposedTestPlan: '15 Create, Save, Submit Timesheet', proposedTestSuite: 'Geofence Clock In and Out' },
+          { id: 'TC-5', title: 'No proposal' },
+        ]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    const bulkPlan = screen.getByTestId('qa-lab-publish-review-all-plan') as HTMLSelectElement;
+    fireEvent.change(bulkPlan, { target: { value: '15' } });
+    expect(bulkPlan.value).toBe('15');
+    expect((screen.getByTestId('qa-lab-publish-review-TC-4-suite') as HTMLSelectElement).value).toBe('151');
+    expect(screen.queryByText(/not found/)).toBeNull();
+
+    const bulkSuite = screen.getByTestId('qa-lab-publish-review-all-suite') as HTMLSelectElement;
+    expect(bulkSuite).not.toBeDisabled();
+    fireEvent.change(bulkSuite, { target: { value: '152' } });
+    expect(bulkSuite.value).toBe('152');
+
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
+    expect(onPublish).toHaveBeenCalledWith({
+      'TC-4': { planId: 15, suiteId: 152 },
+      'TC-5': { planId: 15, suiteId: 152 },
+    });
   });
 
   it('lets cases publish without a suite when the skill does not require one', () => {

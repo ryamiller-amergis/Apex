@@ -8,6 +8,7 @@ export interface QaLabPublishReviewCase {
   title: string;
   proposedTestPlan?: string;
   proposedTestSuite?: string;
+  placementReason?: string;
   /** Set when the case was created earlier but never reached its suite. */
   suiteError?: string;
 }
@@ -56,6 +57,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
   const plansQuery = useAdoTestPlanOptions(suiteId, true);
   const plans = useMemo(() => plansQuery.data?.plans ?? [], [plansQuery.data?.plans]);
   const [rows, setRows] = useState<Record<string, RowSelection>>({});
+  const [bulk, setBulk] = useState<RowSelection>(EMPTY_ROW);
   const proposed = useMemo(
     () => Object.fromEntries(cases.map((entry) => [entry.id, matchProposal(plans, entry)])),
     [plans, cases],
@@ -65,8 +67,15 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
   const rowFor = (caseId: string): RowSelection => rows[caseId] ?? proposed[caseId] ?? EMPTY_ROW;
   const setRow = (caseId: string, next: RowSelection) =>
     setRows((previous) => ({ ...previous, [caseId]: next }));
-  const setAll = (next: RowSelection) =>
-    setRows(Object.fromEntries(cases.map((entry) => [entry.id, next])));
+  /** A plan alone keeps each row's suite when it is in that plan; a suite applies to every row. */
+  const setAll = (next: RowSelection) => {
+    setBulk(next);
+    setRows(Object.fromEntries(cases.map((entry) => {
+      if (next.suiteId !== null || next.planId === null) return [entry.id, next];
+      const current = rowFor(entry.id);
+      return [entry.id, current.planId === next.planId ? current : { planId: next.planId, suiteId: null }];
+    })));
+  };
 
   const missingCount = cases.filter((entry) => rowFor(entry.id).suiteId === null).length;
   const canPublish = !isPublishing && !plansQuery.isLoading && (!requireSuite || missingCount === 0);
@@ -148,7 +157,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
         <>
           <div className={styles.bulkRow}>
             <span className={styles.bulkLabel}>Set all</span>
-            {renderSelects(EMPTY_ROW, setAll, 'qa-lab-publish-review-all')}
+            {renderSelects(bulk, setAll, 'qa-lab-publish-review-all')}
           </div>
           <ul className={styles.list}>
             {cases.map((entry) => {
@@ -156,7 +165,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
               const proposal = entry.proposedTestPlan
                 ? `${entry.proposedTestPlan}${entry.proposedTestSuite ? ` / ${entry.proposedTestSuite}` : ''}`
                 : null;
-              const proposalMissed = proposal !== null && row.suiteId === null;
+              const proposalMissed = proposal !== null && proposed[entry.id]?.suiteId === null;
               return (
                 <li key={entry.id} className={styles.row}>
                   <div className={styles.caseText}>
@@ -166,6 +175,9 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
                       {proposal && ` · Proposed: ${proposal}`}
                       {proposalMissed && ' (not found)'}
                     </span>
+                    {proposal && entry.placementReason && (
+                      <span className={styles.caseReason}>{entry.placementReason}</span>
+                    )}
                     {entry.suiteError && (
                       <span className={styles.caseError}>Created earlier but not in a suite: {entry.suiteError}</span>
                     )}

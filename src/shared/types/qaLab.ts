@@ -40,6 +40,8 @@ export interface QaLabTestCase {
   proposedTestPlan?: string;
   /** Static suite path the skill proposed, `Suite > Child`. */
   proposedTestSuite?: string;
+  /** One line from the skill on why it chose that plan and suite. */
+  placementReason?: string;
 }
 
 export interface QaLabSuite {

@@ -202,6 +202,7 @@ export function normalizeTestCase(
   const placement = asRecord(record.placement);
   const proposedTestPlan = asString(placement?.testPlan) ?? asString(defaultPlacement?.testPlan);
   const proposedTestSuite = asString(placement?.testSuite) ?? asString(defaultPlacement?.testSuite);
+  const placementReason = asString(placement?.reason);
 
   return {
     id: asString(record.id) ?? `${fallbackPbiId}-TC-${index + 1}`,
@@ -226,6 +227,7 @@ export function normalizeTestCase(
     pbiId: asString(traceability?.pbiId) ?? fallbackPbiId,
     ...(proposedTestPlan ? { proposedTestPlan } : {}),
     ...(proposedTestSuite ? { proposedTestSuite } : {}),
+    ...(placementReason ? { placementReason } : {}),
   };
 }
 
