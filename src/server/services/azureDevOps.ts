@@ -6768,6 +6768,31 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Ensures a branch ref exists in Azure DevOps pointing at `commitSha` if not already created.
+   */
+  async ensureBranch(repo: string, project: string, branch: string, commitSha: string): Promise<string> {
+    const existingSha = await this.getBranchHeadCommit(repo, project, branch);
+    if (existingSha) return existingSha;
+
+    await retryWithBackoff(async () => {
+      const gitApi = await this.connection.getGitApi();
+      const clean = branch.replace(/^refs\/heads\//, '');
+      await gitApi.updateRefs(
+        [
+          {
+            name: `refs/heads/${clean}`,
+            oldObjectId: '0'.repeat(40),
+            newObjectId: commitSha,
+          },
+        ] as any,
+        repo,
+        project,
+      );
+    });
+    return commitSha;
+  }
+
+  /**
    * Deletes a branch ref in Azure DevOps. Treats a missing branch as already deleted.
    */
   async deleteBranch(repo: string, project: string, branch: string): Promise<void> {

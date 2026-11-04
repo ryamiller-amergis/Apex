@@ -16,6 +16,9 @@ import {
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { listBuildRepositories, listBuilds, normalizeListQuery } from '../services/buildQueryService';
 import { refusalOf, startBuild } from '../services/buildOrchestrator/startBuild';
+import { driveBuildOrchestration, getActiveBuildAgentSummary } from '../services/buildOrchestrator/planning';
+import { loadBuild } from '../services/buildOrchestrator/store';
+import { approveBuildBrief, draftBuildBrief, getRedactedBuildBrief } from '../services/buildBriefService';
 import { getBuildDetail, listBuildRunEvents, normalizeEventsLimit } from '../services/buildRunProjectionService';
 import buildRunControlsRouter from './buildRunControls';
 import buildVerificationRouter from './buildVerification';
@@ -398,6 +401,76 @@ router.post(
         });
         return;
       }
+      next(error);
+    }
+  },
+);
+
+router.post(
+  '/:id/confirm-intake',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:run'),
+  async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const row = await loadBuild(req.params.id);
+      if (!row || row.project !== resolveRequestProject(req)) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      if (!row.interviewId) {
+        res.status(409).json({ error: 'The intake conversation has not started yet.', code: 'INTAKE_NOT_READY' });
+        return;
+      }
+      const existingBrief = await getRedactedBuildBrief(row.interviewId);
+      if (!existingBrief) {
+        await draftBuildBrief({ interviewId: row.interviewId, actorId: userId, mode: 'manual' });
+      }
+      const approved = await approveBuildBrief({ interviewId: row.interviewId, actorId: userId });
+      void driveBuildOrchestration(row.id);
+      res.status(200).json({
+        buildRunId: row.id,
+        status: 'planning',
+        classification: approved.classification.value,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.post(
+  '/:id/start-planning',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:run'),
+  async (req, res, next) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const row = await loadBuild(req.params.id);
+      if (!row || row.project !== resolveRequestProject(req)) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      const activeAgent = await getActiveBuildAgentSummary(row.id);
+      if (!activeAgent && (row.status === 'planning' || row.status === 'building')) {
+        void driveBuildOrchestration(row.id);
+      }
+      res.status(202).json({
+        buildRunId: row.id,
+        status: row.status,
+        activeAgent,
+      });
+    } catch (error) {
       next(error);
     }
   },

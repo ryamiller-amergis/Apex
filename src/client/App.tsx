@@ -128,12 +128,8 @@ const BuildsRouteGuard = lazy(() =>
   import('./components/BuildsRouteGuard').then((m) => ({ default: m.BuildsRouteGuard })),
 );
 const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
-const NewBuildForm = lazy(() => import('./components/NewBuildForm').then((m) => ({ default: m.NewBuildForm })));
-const BuildRunView = lazy(() =>
-  import('./components/BuildRunView').then((m) => ({ default: m.BuildRunView })),
-);
-const BuildIntakeChatRoute = lazy(() =>
-  import('./components/BuildIntakeChatRoute').then((m) => ({ default: m.BuildIntakeChatRoute })),
+const BuildWorkspace = lazy(() =>
+  import('./components/BuildWorkspace').then((m) => ({ default: m.BuildWorkspace })),
 );
 const BrainstormSessionsPage = lazy(() =>
   import('./components/BrainstormSessionsPage').then((m) => ({ default: m.BrainstormSessionsPage })),
@@ -1582,13 +1578,14 @@ function App() {
                   })}
                 >
                   {isBuildIntakePath ? (
-                    <BuildIntakeChatRoute project={selectedProject} buildId={buildIntakeBuildId} />
+                    // data-testid-exempt — BuildWorkspace owns its build-workspace root id
+                    <BuildWorkspace project={selectedProject} buildId={buildIntakeBuildId} />
                   ) : buildRunId !== undefined ? (
-                    // data-testid-exempt — BuildRunView owns its build-run-view root id; no data-testid prop
-                    <BuildRunView project={selectedProject} buildId={buildRunId} tab={buildRunTab} />
+                    // data-testid-exempt — BuildWorkspace owns its build-workspace root id
+                    <BuildWorkspace project={selectedProject} buildId={buildRunId} initialTab={buildRunTab} />
                   ) : location.pathname === '/builds/new' ? (
-                    // data-testid-exempt — NewBuildForm owns its new-build-form root id; no data-testid prop
-                    <NewBuildForm project={selectedProject} />
+                    // data-testid-exempt — BuildWorkspace owns its build-workspace root id
+                    <BuildWorkspace project={selectedProject} />
                   ) : (
                     <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
                   )}

@@ -1,0 +1,42 @@
+---
+description: Coding rules for the React + MUI client, Zod contracts package, and Express server
+alwaysApply: true
+---
+
+# Coding rules — Full-Stack Express + React + MUI Monorepo
+
+## TypeScript & Workspace Conventions
+
+- `strict` mode is enabled across all packages. Do not use `any`; use `unknown` and narrow it, or infer types from `@project-scope/contracts`.
+- Run all commands from the repository root via `corepack pnpm`.
+- Use synthetic values in tests, fixtures, and examples (`example.test` emails and invented display names). Never hard-code secrets, tokens, connection strings, or real personal data.
+- A product feature is a feature slice inside `packages/contracts`, `apps/api`, and `apps/web` (modeled on the `profile` slice in `docs/feature-slices.md`), never a new workspace package.
+
+## API Contracts (`packages/contracts` & `.cursor/skills/api-contract/SKILL.md`)
+
+- Read and follow `.cursor/skills/api-contract/SKILL.md` before adding or changing any HTTP endpoint.
+- Declare every route once with `defineRoute` in `packages/contracts/src/routes/` and register it in `packages/contracts/src/registry.ts`.
+- Version every non-probe path as `/api/v1/...`. Declare request, response, and RFC 9457 Problem Details error schemas (`problemDetailsSchema`) and `X-Request-Id`.
+- List endpoints must use `paginationQuerySchema` (default 20, max 100) and `paginated(item)`.
+- After any contract change, run `corepack pnpm openapi:generate` and commit `packages/contracts/openapi/openapi.json` — never edit `openapi.json` by hand.
+- `packages/contracts` may import `zod` only (no Express, React, database, or `node:` imports).
+
+## Server (`apps/api`)
+
+- Register route handlers from their contract definitions in `apps/api/src/app.ts`. Every registered route must have a contract (`corepack pnpm routes:check`).
+- Non-health routes run behind `createAuthMiddleware`. Read the authenticated caller from `getPrincipal(req)` — never accept `userId`, `subject`, `sub`, `externalSubject`, or `externalId` in `params`, `query`, or `body`.
+- Keep route handlers thin: parse with the contract schema, call the feature service and store, and return Problem Details on error without stack traces or echoed PII.
+- Schema changes in `apps/api/src/persistence/schema.ts` must ship with a committed SQL migration (`docs/runbooks/migrations.md`).
+- Do not invent roles, permissions, or a user-list/lookup endpoint (`docs/adr/0002-no-roles-or-permissions-in-the-template.md`).
+
+## Client (`apps/web` & `packages/ui` & `.cursor/skills/ui-standards/SKILL.md`)
+
+- Read and follow `.cursor/skills/ui-standards/SKILL.md` and `.cursor/skills/design-system/SKILL.md` before adding or changing any screen.
+- Copy the reference feature slice structure under `apps/web/src/features/profile/` (`ProfileForm.tsx`, `useProfileQuery.ts`, `useUpdateProfileMutation.ts`, `profileKeys.ts`, `profileTestIds.ts`).
+- Use `@project-scope/ui` components (`AppShell`, `LoadingState`, `EmptyState`, `ErrorState`, `AppErrorBoundary`) and theme-styled `@mui/material` primitives (`Button`, `TextField`, `Alert`, `Box`, `Stack`, `Typography`).
+- Never hard-code hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`, or named colours in `apps/web/src/` or `packages/ui/src/` (`design-tokens/no-hardcoded-color` lint rule). Read colours from `theme.vars.palette.*` and spacing from `theme.spacing(n)`.
+- Every data-loading screen must render `LoadingState`, `EmptyState`, `ErrorState` (with retry and a fixed safe message), and the loaded state.
+- Build forms with `react-hook-form` (`shouldFocusError: true`) and `zodResolver` bound to the shared Zod schema from `@project-scope/contracts`. Preserve user input when a mutation fails.
+- Read server state via `createAppQueryClient` and the typed `apiClient` — never call `fetch` inside `useEffect`. Invalidate affected query keys after every mutation.
+- Build every `data-testid` with `testId(scope, ...parts)` from `@project-scope/ui` matching lower-case kebab-case `{scope}-{element}[-{qualifier}]`.
+- Register every new top-level screen as a lazy route in `apps/web/src/app/routes.tsx` and as a `NavItem` in `navItems` in `apps/web/src/app/App.tsx`.

@@ -1,0 +1,3 @@
+{
+  "install": "corepack enable && corepack pnpm install --frozen-lockfile"
+}

@@ -1,0 +1,6 @@
+{
+  "typeCheck": "corepack pnpm typecheck",
+  "lint": "corepack pnpm lint",
+  "relatedTests": "corepack pnpm vitest related --run {files}",
+  "unitSuite": "corepack pnpm test:unit"
+}

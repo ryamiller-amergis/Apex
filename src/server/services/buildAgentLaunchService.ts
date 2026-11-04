@@ -62,11 +62,22 @@ export function defaultBuildAgentLaunchDeps(): BuildAgentLaunchDeps {
   };
 }
 
+const localBuildPromptCache = new Map<string, string>();
+
+/** Caches a build prompt in process memory for local dev and single-instance runs. */
+export function storeLocalBuildPromptBlob(pointer: BlobLocation, text: string): void {
+  localBuildPromptCache.set(`${pointer.container}/${pointer.key}`, text);
+}
+
 /** Reads build prompt text from the shared cursor-prompts container. */
 export async function readBuildPromptBlob(pointer: BlobLocation): Promise<string> {
   const container = process.env.CURSOR_PROMPT_BLOB_CONTAINER_NAME?.trim() || CURSOR_PROMPT_CONTAINER;
   if (pointer.container !== container || !pointer.key.startsWith(BUILD_PROMPT_KEY_PREFIX)) {
     throw new Error('Build prompt pointer is outside the build prompt area.');
+  }
+  const cached = localBuildPromptCache.get(`${pointer.container}/${pointer.key}`);
+  if (cached !== undefined) {
+    return cached;
   }
   const accountName = resolveCursorPromptBlobAccount();
   const credential = process.env.NODE_ENV === 'production'

@@ -113,6 +113,7 @@ export function createBuildEvidenceStore(deps?: {
 }
 
 const defaultStore = createBuildEvidenceStore();
+const localFallbackStore = createInMemoryEvidenceStore();
 
 export async function putEvidence(
   prefix: string,
@@ -120,13 +121,22 @@ export async function putEvidence(
   text: string,
   container?: string,
 ): Promise<ArtifactRef> {
-  return defaultStore.putEvidence(prefix, slot, text, container);
+  try {
+    return await defaultStore.putEvidence(prefix, slot, text, container);
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      return localFallbackStore.putEvidence(prefix, slot, text, container);
+    }
+    throw error;
+  }
 }
 
 export async function streamEvidence(
   ref: ArtifactRef,
   slot: EvidenceSlot,
 ): Promise<NodeJS.ReadableStream | null> {
+  const localStream = await localFallbackStore.streamEvidence(ref, slot);
+  if (localStream) return localStream;
   return defaultStore.streamEvidence(ref, slot);
 }
 

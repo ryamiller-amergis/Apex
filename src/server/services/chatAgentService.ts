@@ -2858,7 +2858,7 @@ async function ensureThreadState(
     subscribers: new Set(),
     agent: null,
     idleTimer: null,
-    isInterviewThread: isInterview,
+    isInterviewThread: isInterview && thread.kickoff?.mode !== 'development',
     isDevSession: thread.kickoff?.mode === 'development',
     grounding: null,
     groundingInFlight: null,
@@ -3094,6 +3094,38 @@ export function markAsInterviewThread(threadId: string): void {
   if (!state || state.isInterviewThread) return;
   state.isInterviewThread = true;
   resetIdleTimer(state);
+}
+
+/**
+ * Transitions a build's chat thread from read-only intake mode to a writable
+ * local git workspace so the Planner, Implementer, QA, and Check turns stream
+ * live in the same conversation thread while editing the checked-out repository.
+ */
+export async function configureBuildWorkspaceThread(
+  threadId: string,
+  options: { workspaceDir: string; skillPath?: string; branch?: string },
+): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  if (!state) return false;
+  if (state.agent) {
+    await state.agent[Symbol.asyncDispose]().catch(() => {});
+    state.agent = null;
+  }
+  state.isInterviewThread = false;
+  state.isDevSession = true;
+  state.grounding = null;
+  state.groundingInFlight = null;
+  state.thread.workspaceDir = options.workspaceDir;
+  state.thread.cursorAgentId = undefined;
+  state.thread.kickoff = {
+    ...state.thread.kickoff,
+    mode: 'development',
+    ...(options.skillPath ? { skillPath: options.skillPath } : {}),
+    ...(options.branch ? { branch: options.branch } : {}),
+  };
+  await pgUpsertThread(state.thread);
+  resetIdleTimer(state);
+  return true;
 }
 
 export async function getThread(threadId: string): Promise<ChatThread | null> {
@@ -6627,6 +6659,18 @@ export async function sendMessage(
   const workflowClass = resolveInteractiveWorkflowClass(state);
   const legacyCompletion = options?.legacyCompletion ?? 'await';
   const requesterUserId = options?.requesterUserId ?? state.thread.userId;
+
+  // Writable build-workspace turns (build-planner / build-implementer / build-qa / build-check)
+  // edit files in the checked-out repository and await completion, while streaming to interactiveLiveBus.
+  if (state.isDevSession && options?.turnSkill?.name?.startsWith('build-')) {
+    await sendMessageLegacy(threadId, text, modelOverride, attachments, {
+      hidden: options?.hidden,
+      turnSkill: options?.turnSkill,
+      internalContext: options?.internalContext,
+    });
+    options?.onLegacySettled?.();
+    return { route: 'legacy' };
+  }
 
   const decision = await interactiveWorkflowRouter.route({
     userId: requesterUserId,

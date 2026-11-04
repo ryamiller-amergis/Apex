@@ -70,13 +70,16 @@ async function launchPlanner(request: PlannerLaunchRequest): Promise<PlannerLaun
 
   let launched: Awaited<ReturnType<typeof launchCloudAgent>>;
   try {
+    const startingBranch = /^[0-9a-f]{40}$/i.test(request.startingRef)
+      ? request.integrationBranch
+      : request.startingRef;
     launched = await launchCloudAgent({
       project: request.project,
       prompt: request.prompt,
       model: request.model,
       skillProvider: 'ado',
       skillRepo: request.repository,
-      skillBranch: request.startingRef,
+      skillBranch: startingBranch,
       workItemTitle: `Build plan ${request.buildRunId}`,
       skillName: 'build-planner',
       openPullRequest: false,
@@ -150,11 +153,17 @@ async function cancelQuietly(
 }
 
 async function readCommittedPlan(view: PlanningView, reportedBranch: string | null): Promise<string | null> {
-  const branch = reportedBranch?.trim()
-    || view.integrationBranch
-    || integrationBranchName(view.buildRunId);
-  return readRepoFile(
-    { adoProject: view.project, repo: view.repository, branch },
-    buildPlanFilePath(view.buildRunId),
+  const integration = view.integrationBranch || integrationBranchName(view.buildRunId);
+  const candidates = Array.from(
+    new Set([reportedBranch?.trim(), integration].filter((b): b is string => Boolean(b))),
   );
+  const planPath = buildPlanFilePath(view.buildRunId);
+  for (const branch of candidates) {
+    const content = await readRepoFile(
+      { adoProject: view.project, repo: view.repository, branch },
+      planPath,
+    );
+    if (content !== null) return content;
+  }
+  return null;
 }

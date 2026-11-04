@@ -5,7 +5,14 @@
     "AGENTS.md",
     "README.md",
     "docs/**/*.md",
-    ".cursor/skills/**/SKILL.md"
+    ".cursor/skills/api-contract/SKILL.md",
+    ".cursor/skills/developer/SKILL.md",
+    ".cursor/skills/integration/SKILL.md",
+    ".cursor/skills/orchestrator/SKILL.md",
+    ".cursor/skills/planner/SKILL.md",
+    ".cursor/skills/qa/SKILL.md",
+    ".cursor/skills/ui/SKILL.md",
+    ".cursor/skills/ui-standards/SKILL.md"
   ],
   "requiredDocuments": [
     "docs/architecture.md",

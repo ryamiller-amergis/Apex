@@ -1,0 +1,18 @@
+trigger: none
+
+parameters:
+  - name: commitSha
+    type: string
+    default: 'HEAD'
+  - name: branch
+    type: string
+    default: 'main'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - checkout: self
+  - script: |
+      echo "Preview deployment for branch ${{ parameters.branch }} at commit ${{ parameters.commitSha }}"
+    displayName: 'Preview deploy'

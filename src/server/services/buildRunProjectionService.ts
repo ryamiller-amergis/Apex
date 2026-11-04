@@ -68,6 +68,9 @@ export interface ProjectionRunRow {
   elapsedCapSeconds: number;
   parallelismCap: number;
   parallelismUsed: number;
+  pullRequestUrl?: string | null;
+  pullRequestId?: number | null;
+  acceptedRevisionNumber?: number | null;
   endedAt: string | null;
   createdAt: string;
   revisions: ProjectionRevisionRow[];
@@ -127,6 +130,9 @@ const defaultDeps: BuildRunProjectionDeps = {
         elapsedCapSeconds: true,
         parallelismCap: true,
         parallelismUsed: true,
+        pullRequestUrl: true,
+        pullRequestId: true,
+        acceptedRevisionNumber: true,
         endedAt: true,
         createdAt: true,
       },
@@ -394,6 +400,17 @@ export async function getBuildDetail(
       : null,
     verificationSummary: summarizeVerification(verificationCounts),
     lease: null,
+    ...(run.status === 'accepted' && run.pullRequestUrl
+      ? {
+          pullRequest: {
+            state: 'pull_request_open' as const,
+            url: run.pullRequestUrl,
+            syncCommitSha: null,
+            reviewersAdded: true,
+            reviewerNames: run.supportContacts.map((c) => c.displayName),
+          },
+        }
+      : {}),
   };
   return { kind: 'ok', detail };
 }

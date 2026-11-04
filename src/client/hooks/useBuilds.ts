@@ -232,6 +232,14 @@ export function useRetryBuildDeployment(project: string, buildId: string) {
   return useBuildAction<Record<string, never>>(project, buildId, 'retry-deployment');
 }
 
+export function useConfirmBuildIntake(project: string, buildId: string) {
+  return useBuildAction<Record<string, never>>(project, buildId, 'confirm-intake');
+}
+
+export function useEnsureBuildPlanning(project: string, buildId: string) {
+  return useBuildAction<Record<string, never>>(project, buildId, 'start-planning');
+}
+
 export function useBuildRepositories(project: string) {
   return useQuery({
     queryKey: ['builds', 'repositories', project],

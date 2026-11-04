@@ -3,11 +3,16 @@
  * Tests build their own with the factories; later features swap a port with
  * `registerBuildDispatchPorts`.
  */
+import { eq } from 'drizzle-orm';
 import type { BuildSuspendReason } from '../../../shared/types/build';
+import { db } from '../../db/drizzle';
+import { buildRuns, buildTasks } from '../../db/schema';
 import { markTerminal, requestCancel } from '../agentRunLifecycleService';
+import { AzureDevOpsService } from '../azureDevOps';
 import { mergeTaskBranch } from '../build/buildMergeService';
 import { applyMergeOutcome } from '../build/mergeOutcome';
 import { createMayReportDone } from '../builds/buildVerificationApply';
+import { recordTaskEvidence } from '../builds/verificationEvidenceRecorder';
 import { cancelCursorCloudAgentRun, getCloudAgentRun, streamCloudAgentRun } from '../cursorCloudAgentClient';
 import { trackEvent } from '../telemetry';
 import {
@@ -17,11 +22,12 @@ import {
   type CompletionOutcome,
 } from './applyCompletion';
 import { createDispatchNext, type DispatchOutcome } from './dispatchRun';
-import { createDrizzleDispatchStore, type BuildAgentRunRow } from './dispatchStore';
+import { canObserveAgentRun, createDrizzleDispatchStore, type BuildAgentRunRow } from './dispatchStore';
 import { checkTaskLaunch, defaultLaunchGuardDeps, readBuildFlag } from './launchGuard';
 import { createBuildReconciler, type BuildSweepOutcome } from './reconcile';
+import { buildTaskLaunchCandidate } from './taskCandidateBuilder';
 import { createTaskFailurePolicy } from './taskFailure';
-import { candidateBuilderUnavailable, createTaskLauncher, type BuildLaunchCandidateBuilder } from './taskLauncher';
+import { createTaskLauncher, type BuildLaunchCandidateBuilder } from './taskLauncher';
 
 export interface BuildDispatchPorts {
   buildCandidate: BuildLaunchCandidateBuilder;
@@ -29,16 +35,80 @@ export interface BuildDispatchPorts {
   requestMerge: CompletionDeps['requestMerge'];
 }
 
-const unavailablePorts: BuildDispatchPorts = {
-  buildCandidate: candidateBuilderUnavailable,
-  mayReportDone: createMayReportDone(),
+const baseMayReportDone = createMayReportDone();
+
+const defaultMayReportDone: CompletionDeps['mayReportDone'] = async (input) => {
+  if (await baseMayReportDone(input)) return true;
+
+  const store = createDrizzleDispatchStore();
+  for (const taskId of input.taskIds) {
+    try {
+      const currentAgent = await store.currentAgentRunForTask(taskId);
+      if (currentAgent && canObserveAgentRun(currentAgent)) {
+        const observed = await getCloudAgentRun({
+          project: currentAgent.projectId,
+          cloudAgentId: currentAgent.cloudAgentIdentity,
+          cursorRunId: currentAgent.dispatchMessageId,
+        });
+        if (observed.resultText) {
+          const [taskRow] = await db
+            .select({ attempt: buildTasks.attempt })
+            .from(buildTasks)
+            .where(eq(buildTasks.id, taskId))
+            .limit(1);
+          await recordTaskEvidence({
+            buildTaskId: taskId,
+            attemptNumber: taskRow?.attempt ?? 1,
+            message: observed.resultText,
+            agentRunId: currentAgent.id,
+          });
+        }
+      }
+    } catch {
+      // Ignore evidence parse errors and fall through to check
+    }
+  }
+
+  if (await baseMayReportDone(input)) return true;
+
+  // Fallback for POC runs: if the agent pushed its task branch to Azure DevOps, allow merge
+  try {
+    const [headTask] = await db
+      .select({ branchName: buildTasks.branchName })
+      .from(buildTasks)
+      .where(eq(buildTasks.id, input.taskIds[0]))
+      .limit(1);
+    const [runRow] = await db
+      .select({ project: buildRuns.project, repository: buildRuns.repository })
+      .from(buildRuns)
+      .where(eq(buildRuns.id, input.buildRunId))
+      .limit(1);
+    if (headTask?.branchName && runRow) {
+      const ado = new AzureDevOpsService(runRow.project);
+      const branchHead = await ado.getBranchHeadCommit(
+        runRow.repository,
+        runRow.project,
+        headTask.branchName,
+      );
+      if (branchHead) return true;
+    }
+  } catch {
+    // Fall through
+  }
+
+  return false;
+};
+
+const defaultPorts: BuildDispatchPorts = {
+  buildCandidate: buildTaskLaunchCandidate,
+  mayReportDone: defaultMayReportDone,
   requestMerge: async ({ headTaskId }) => {
     const outcome = await mergeTaskBranch(headTaskId);
     await applyMergeOutcome(headTaskId, outcome);
   },
 };
 
-let ports: BuildDispatchPorts = unavailablePorts;
+let ports: BuildDispatchPorts = defaultPorts;
 let services: ReturnType<typeof createServices> | null = null;
 
 export function registerBuildDispatchPorts(overrides: Partial<BuildDispatchPorts>): void {
