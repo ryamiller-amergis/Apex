@@ -24,6 +24,7 @@ async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
       response.status,
     );
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -127,6 +128,27 @@ export function usePublishPlaybookDraft(project: string, definitionId: string) {
         jsonRequest('POST', { project, expectedDraftUpdatedAt }),
       ),
     onSuccess: invalidate,
+  });
+}
+
+export function useDeletePlaybookDefinition(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, PlaybookApiError, string>({
+    mutationFn: (definitionId) =>
+      apiRequest(
+        `/api/playbooks/definitions/${encodeURIComponent(definitionId)}?project=${encodeURIComponent(project)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: async (_data, definitionId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: playbookDefinitionKeys.list(project) }),
+        queryClient.invalidateQueries({
+          queryKey: playbookDefinitionKeys.detail(project, definitionId),
+        }),
+        queryClient.invalidateQueries({ queryKey: ['playbook-runs', project] }),
+        queryClient.invalidateQueries({ queryKey: ['playbook-runnable-versions', project] }),
+      ]);
+    },
   });
 }
 

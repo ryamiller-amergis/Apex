@@ -8,6 +8,28 @@
   border-top: 1px solid var(--border-color-light);
 }
 
+.toolbar {
+  flex-wrap: nowrap;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.toolbar .button {
+  height: 2rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.toolbar .message {
+  flex-basis: auto;
+  margin: 0;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .button {
   padding: 6px 12px;
   border: 1px solid var(--border-color);

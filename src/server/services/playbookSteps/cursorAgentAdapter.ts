@@ -28,6 +28,7 @@ import {
   resolvePlaybookMcpCapability,
 } from '../playbookMcpCapabilityService';
 import {
+  loadPlaybookSkillCompanions,
   loadPlaybookSkillContent,
   PlaybookExecutionCapabilityError,
   resolvePlaybookAgentRunPolicy,
@@ -82,7 +83,13 @@ function bindPolicySkill<T extends { prompt: string; skillContent?: string }>(
   prepared: T,
   skillContent: string,
   policy: PlaybookAgentRunPolicy,
-): T & { skillPath: string; skillContent: string; skillSha256: string } {
+  skillCompanions: Array<{ path: string; content: string }>,
+): T & {
+  skillPath: string;
+  skillContent: string;
+  skillSha256: string;
+  skillCompanions?: Array<{ path: string; content: string }>;
+} {
   const catalogSkill = prepared.skillContent;
   const prompt = catalogSkill
     && catalogSkill !== skillContent
@@ -95,6 +102,7 @@ function bindPolicySkill<T extends { prompt: string; skillContent?: string }>(
     skillPath: policy.skill.path,
     skillContent,
     skillSha256: policy.skill.sha256,
+    ...(skillCompanions.length ? { skillCompanions } : {}),
   };
 }
 
@@ -105,6 +113,7 @@ async function routeStepThroughV2(input: {
   prompt: string;
   model: string;
   skillContent: string;
+  skillCompanions: Array<{ path: string; content: string }>;
   policy: PlaybookAgentRunPolicy;
 }): Promise<string | null> {
   const decision = await routeBackgroundWorkflow({
@@ -123,6 +132,7 @@ async function routeStepThroughV2(input: {
       },
       input.skillContent,
       input.policy,
+      input.skillCompanions,
     ),
     runInProcess: () => undefined,
     reportRecoverablePreparationFailure: () => undefined,
@@ -156,6 +166,7 @@ export async function executeCursorAgentStep(
 
   const skillConfig = await getSkillConfig(context.project);
   const skillContent = await loadPlaybookSkillContent(config.skillPath);
+  const skillCompanions = await loadPlaybookSkillCompanions(config.skillPath);
   const resolvedPolicy = resolvePlaybookAgentRunPolicy({
     nodeId: context.stepId,
     skillPath: config.skillPath,
@@ -235,6 +246,7 @@ export async function executeCursorAgentStep(
         prompt: config.prompt,
         model,
         skillContent,
+        skillCompanions,
         policy,
       });
     } catch (error) {

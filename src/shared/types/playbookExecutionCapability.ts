@@ -4,6 +4,7 @@ export const PLAYBOOK_CAPABILITIES = [
   'repository-read',
   'repository-write',
   'network-read',
+  'azure-cli',
   'external-write',
   'secret-use',
   'browser-use',

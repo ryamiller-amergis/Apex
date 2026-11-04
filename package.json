@@ -13,7 +13,7 @@
     "dev:interactive": "node scripts/dev/run-interactive-host.mjs",
     "dev:orchestrator": "node scripts/dev/run-ai-orchestrator.mjs",
     "build": "npm run build:server && npm run build:client",
-    "build:server": "tsc -p tsconfig.server.json",
+    "build:server": "tsc -p tsconfig.server.json && node scripts/copy-playbook-skills.mjs",
     "build:client": "tsc -p tsconfig.client.json && vite build",
     "start": "node dist/server/index.js",
     "test": "jest",

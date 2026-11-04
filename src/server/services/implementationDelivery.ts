@@ -77,17 +77,66 @@ export function extractAgentPullRequestDescription(text: string | null | undefin
   return body || null;
 }
 
-/**
- * My Work branch name: feature/apex-<workItemId>-<title-slug>.
- * Cloud Agent and local Start Development both use this.
- */
-export function implementationBranchName(workItemId: number, workItemTitle: string): string {
-  const slug = workItemTitle
+function titleSlug(workItemTitle: string): string {
+  return workItemTitle
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/, '');
+}
+
+/**
+ * Prefix for a Cloud Agent branch. A bug, including a production issue, is
+ * `bug/<id>-<name>`. Other types use a short prefix from the type name.
+ */
+export function cloudAgentBranchPrefix(workItemType: string): string {
+  const type = workItemType.trim().toLowerCase();
+  if (type === 'bug' || type === 'production bug' || type === 'production issue') return 'bug';
+  if (type === 'feature') return 'feat';
+  if (type === 'product backlog item') return 'pbi';
+  if (type === 'technical backlog item') return 'tbi';
+  const slug = type.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'change';
+}
+
+/** Cloud Agent branch: `<prefix>/<workItemId>-<title-slug>`. */
+export function cloudAgentBranchName(
+  workItemId: number,
+  workItemTitle: string,
+  workItemType: string,
+): string {
+  const prefix = cloudAgentBranchPrefix(workItemType);
+  const slug = titleSlug(workItemTitle);
+  return slug ? `${prefix}/${workItemId}-${slug}` : `${prefix}/${workItemId}`;
+}
+
+/** Names of Azure DevOps teams or groups, one per line or comma. */
+export function parseReviewerList(value: unknown): string[] {
+  const parts = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[\n,]/)
+      : [];
+  const seen = new Set<string>();
+  const reviewers: string[] = [];
+  for (const part of parts) {
+    if (typeof part !== 'string') continue;
+    const trimmed = part.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    reviewers.push(trimmed);
+  }
+  return reviewers;
+}
+
+/**
+ * Local Start Development branch name: feature/apex-<workItemId>-<title-slug>.
+ * Cloud Agent uses cloudAgentBranchName so a bug is not named feat/.
+ */
+export function implementationBranchName(workItemId: number, workItemTitle: string): string {
+  const slug = titleSlug(workItemTitle);
   return slug
     ? `feature/apex-${workItemId}-${slug}`
     : `feature/apex-${workItemId}`;
@@ -110,8 +159,26 @@ function descriptionFromTemplate(workItemId: number | null, workItemTitle?: stri
 }
 
 /**
+ * Pull-request title: `<work item type> <id>: <title>` when both the id and a real
+ * title are known, so it reads like a sentence instead of a branch slug. Falls back to
+ * `[APEX] <branch without the feature/ prefix>` when there is no title to build from.
+ */
+export function buildPullRequestTitle(input: {
+  branchName: string;
+  workItemId: number | null;
+  workItemTitle?: string | null;
+  workItemType?: string | null;
+}): string {
+  const workItemTitle = input.workItemTitle?.trim();
+  if (input.workItemId && workItemTitle) {
+    const typeLabel = input.workItemType?.trim() || 'Work item';
+    return `${typeLabel} ${input.workItemId}: ${workItemTitle}`;
+  }
+  return `[APEX] ${input.branchName.replace(/^[^/]+\//, '')}`;
+}
+
+/**
  * Pull-request title and description used by My Work.
- * Title: [APEX] <branch without the feature/ prefix>
  * Description: pr-description.md, with the Work items line filled.
  * A Cloud Agent final message wrapped in pr-description tags replaces that skeleton.
  */
@@ -119,9 +186,10 @@ export function buildImplementationPullRequestText(input: {
   branchName: string;
   workItemId: number | null;
   workItemTitle?: string | null;
+  workItemType?: string | null;
   agentDescription?: string | null;
 }): { title: string; description: string } {
-  const title = `[APEX] ${input.branchName.replace('feature/', '')}`.slice(0, TITLE_LIMIT);
+  const title = buildPullRequestTitle(input).slice(0, TITLE_LIMIT);
   const reference = input.workItemId ? buildWorkItemReferenceText(input.workItemId) : null;
   const filled = input.agentDescription?.trim();
   const description = filled

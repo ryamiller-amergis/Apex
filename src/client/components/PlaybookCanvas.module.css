@@ -132,6 +132,8 @@
 .flowNode[data-group='Logic'] { --node-tint: var(--status-review); }
 .flowNode[data-group='Messaging'] { --node-tint: var(--success-color); }
 .flowNode[data-group='Data'] { --node-tint: var(--accent-teal); }
+.flowNode[data-group='Connectors'],
+.connectorNode { --node-tint: var(--accent-color); }
 
 .flowNode:hover {
   border-color: var(--border-color-light);
@@ -183,6 +185,43 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.connectorNode {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  width: 128px;
+  min-height: 92px;
+  padding: 0.75rem 0.7rem;
+  border-radius: 999px;
+  border: 1.5px dashed color-mix(in srgb, var(--node-tint) 65%, var(--border-color));
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--node-tint) 16%, transparent), transparent 70%),
+    var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px var(--shadow-sm);
+  text-align: center;
+}
+
+.connectorIcon {
+  display: grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  color: var(--node-tint);
+  background: color-mix(in srgb, var(--node-tint) 14%, transparent);
+}
+
+.connectorLabel {
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-primary);
+}
+
 .handle {
   width: 10px;
   height: 10px;
@@ -214,7 +253,52 @@
 .nodeStatus[data-status='failed_retryable'],
 .nodeStatus[data-status='expired'] { color: var(--error-color); border-color: var(--error-color); }
 
-.status_running { border-color: var(--accent-color); }
+.nodeRunning {
+  position: absolute;
+  top: -0.55rem;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent-color);
+  background: var(--bg-secondary);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color) 25%, transparent);
+  transform: translateX(-50%);
+}
+
+.nodeRunning i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  animation: nodeRunningDot 1.2s ease-in-out infinite;
+}
+
+.nodeRunning i:nth-child(2) { animation-delay: 0.15s; }
+.nodeRunning i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes nodeRunningDot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+.status_running {
+  border-color: var(--accent-color);
+  animation: nodeRunningGlow 1.8s ease-in-out infinite;
+}
+
+@keyframes nodeRunningGlow {
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-color) 18%, transparent), 0 4px 14px var(--shadow-md); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nodeRunning i,
+  .status_running {
+    animation: none;
+  }
+}
 .status_completed { border-color: var(--success-color); }
 .status_failed,
 .status_failed_retryable,
@@ -266,17 +350,49 @@
   color: var(--text-muted);
 }
 
+.liveToolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.liveWatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 2rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  color: var(--accent-color);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.liveWatch:hover {
+  box-shadow: var(--glow-accent);
+}
+
+.liveDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent-color);
+  animation: liveDot 1.2s ease-in-out infinite;
+}
+
+@keyframes liveDot {
+  50% { opacity: 0.3; }
+}
+
 .liveFrame {
-  height: 52vh;
-  min-height: 360px;
+  position: relative;
+  height: calc(100vh - 11rem);
+  min-height: 480px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   overflow: hidden;
-}
-
-.liveSection {
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 1rem 1.1rem;
-  background: var(--bg-secondary);
 }
