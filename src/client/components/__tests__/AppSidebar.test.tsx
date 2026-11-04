@@ -317,16 +317,17 @@ describe('AppSidebar — Work Board flag', () => {
 });
 
 describe('AppSidebar — Playbooks visibility', () => {
-  it('renders Playbooks for a super admin', () => {
+  it('hides Playbooks from a platform admin when the project menu omits the module', () => {
     render(
       <AppSidebar
         {...baseProps}
         isSuperAdmin
+        can={(key: string) => key === 'playbooks:view'}
         selectedProject="Apex"
         onNavigatePlaybooks={jest.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Playbooks' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
   });
 
   it('hides Playbooks when Platform Admin has not enabled it for the project', () => {

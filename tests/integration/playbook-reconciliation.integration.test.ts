@@ -11,6 +11,7 @@
  * that can be wrong.
  */
 import pg from 'pg';
+import { getSuperAdminEmails } from '../../src/server/utils/superAdmin';
 import { PLAYBOOK_GUARD_LIMITS } from '../../src/shared/types/playbook';
 import { createScratchDatabase, ScratchDatabase } from './support/scratch-db';
 
@@ -181,6 +182,8 @@ async function grantStepPermissions(userOid: string, stepTypes: string[]): Promi
      ON CONFLICT DO NOTHING`,
     [userOid, PROJECT, role.id]
   );
+  // Role grants no longer admit a Playbook step. A platform admin does, when the menu includes Playbooks.
+  await query('UPDATE app_users SET email = $2 WHERE oid = $1', [userOid, getSuperAdminEmails()[0]]);
 }
 
 /**
@@ -219,7 +222,7 @@ async function startRunMissingItsTerminalEvent(): Promise<{
             id: 'work',
             stepType: 'cursor-agent',
             config: {
-              skillPath: registry.PHASE_0_ALLOWED_AGENT_SKILLS[0],
+              skillPath: '.cursor/skills/app-knowledge/SKILL.md',
               prompt: 'Do the thing',
             },
           },

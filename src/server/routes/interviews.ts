@@ -2549,7 +2549,7 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
 
     const doc = await db.query.designDocs.findFirst({
       where: eq(designDocsTable.id, docId),
-      columns: { id: true, status: true },
+      columns: { id: true, status: true, project: true },
     });
     if (!doc) {
       res.status(404).json({ error: 'Design doc not found' });
@@ -2580,6 +2580,18 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
         await recordArtifactDoneEvent('design_doc', docId, approvedAt);
       } catch (err) {
         console.error(`[owner-approve] Failed to record design doc done event (docId=${docId})`, err);
+      }
+      try {
+        const { publishPlaybookApexEvent } = await import('../services/playbookApexEventService');
+        await publishPlaybookApexEvent({
+          project: doc.project,
+          type: 'document.approved',
+          entityId: docId,
+          actorUserId: userId,
+          data: { documentType: 'design_doc', documentId: docId },
+        });
+      } catch (err) {
+        console.error(`[owner-approve] Failed to publish document.approved (docId=${docId})`, err);
       }
     } else {
       await db.update(designDocsTable).set({

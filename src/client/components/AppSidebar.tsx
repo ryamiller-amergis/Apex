@@ -339,8 +339,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       return isSuperAdmin || can('brainstorm:view');
     }
     if (item.view === 'playbooks') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
-      return isSuperAdmin || can('playbooks:view');
+      return menuEnabledViews.includes('playbooks') && can('playbooks:view');
     }
     if (item.view === 'mcp-servers') {
       if (!mcpServersEnabled) return false;

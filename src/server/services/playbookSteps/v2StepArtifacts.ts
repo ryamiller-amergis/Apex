@@ -11,6 +11,7 @@ import { createArtifactReader } from '../aiRunV2/artifactReader';
 
 const V2_SCORECARD_JSON_PATH = 'output/review-scorecard.json';
 const V2_SCORECARD_MD_PATH = 'output/review-scorecard.md';
+const V2_AGENT_REPLY_PATH = 'output/agent-reply.md';
 
 export type StepScorecardFiles = { scorecard: string | null; reportMd: string | null };
 
@@ -35,6 +36,6 @@ export async function readV2ScorecardFiles(
       : null;
   return {
     scorecard: await read(V2_SCORECARD_JSON_PATH),
-    reportMd: await read(V2_SCORECARD_MD_PATH),
+    reportMd: (await read(V2_SCORECARD_MD_PATH)) ?? (await read(V2_AGENT_REPLY_PATH)),
   };
 }
