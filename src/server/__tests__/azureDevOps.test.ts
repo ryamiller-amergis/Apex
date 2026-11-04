@@ -1,4 +1,5 @@
-import { AzureDevOpsService } from '../services/azureDevOps';
+import { AzureDevOpsService, staticSuitePaths } from '../services/azureDevOps';
+import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import * as azdev from 'azure-devops-node-api';
 import { retryWithBackoff } from '../utils/retry';
 
@@ -107,6 +108,59 @@ describe('AzureDevOpsService', () => {
         { query: 'SELECT links' },
         { project: 'TestProject' },
       );
+    });
+  });
+
+  describe('listProjectBacklogWorkItems', () => {
+    it('loads every epic, feature, PBI, TBI, and bug in the project without the calendar filters', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItems: [{ id: 90441 }, { id: 12 }],
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 90441,
+          fields: {
+            'System.Title': 'A backlog item',
+            'System.State': 'New',
+            'System.WorkItemType': 'Product Backlog Item',
+          },
+        },
+        {
+          id: 12,
+          fields: {
+            'System.Title': 'A bug',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Bug',
+          },
+        },
+      ]);
+
+      const service = new AzureDevOpsService('MaxView', 'MaxView\\MaxView Infra Team');
+      const result = await service.listProjectBacklogWorkItems();
+
+      const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
+      expect(wiql).toContain("[System.TeamProject] = 'MaxView'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Epic'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Feature'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Product Backlog Item'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Technical Backlog Item'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Bug'");
+      expect(wiql).not.toContain('AreaPath');
+      expect(wiql).not.toContain('DueDate');
+      expect(wiql).not.toContain('TargetDate');
+      expect(mockWitApi.queryByWiql).toHaveBeenCalledWith(
+        expect.objectContaining({ query: wiql }),
+        { project: 'MaxView' },
+        undefined,
+        20000,
+      );
+      expect(result).toEqual({
+        truncated: false,
+        items: [
+          { id: 90441, title: 'A backlog item', state: 'New', workItemType: 'Product Backlog Item' },
+          { id: 12, title: 'A bug', state: 'Active', workItemType: 'Bug' },
+        ],
+      });
     });
   });
 
@@ -224,6 +278,65 @@ describe('AzureDevOpsService', () => {
 
       // Should be called 4 times (2 for fields: 200 + 50, and 2 for relations: 200 + 50)
       expect(mockWitApi.getWorkItems).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('getQaTestGenerationContext', () => {
+    it('returns PBIs and Bugs as targets and TBIs as context', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItemRelations: [
+          { source: { id: 10 }, target: { id: 20 } },
+          { source: { id: 20 }, target: { id: 30 } },
+          { source: { id: 20 }, target: { id: 31 } },
+        ],
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 10,
+          fields: {
+            'System.Title': 'Release',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Epic',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+        {
+          id: 20,
+          fields: {
+            'System.Title': 'Checkout',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Feature',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+        {
+          id: 30,
+          fields: {
+            'System.Title': 'Pay by card',
+            'System.State': 'New',
+            'System.WorkItemType': 'Product Backlog Item',
+            'System.AreaPath': 'MaxView',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '<p>Payment succeeds</p>',
+          },
+        },
+        {
+          id: 31,
+          fields: {
+            'System.Title': 'Gateway client',
+            'System.State': 'New',
+            'System.WorkItemType': 'Technical Backlog Item',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+      ]);
+
+      const service = new AzureDevOpsService('MaxView');
+      const context = await service.getQaTestGenerationContext(10);
+
+      expect(context?.root.id).toBe(10);
+      expect(context?.targets.map((item) => item.id)).toEqual([30]);
+      expect(context?.technicalContext.map((item) => item.id)).toEqual([31]);
+      expect(context?.targets[0].parentId).toBe(20);
     });
   });
 
@@ -1224,5 +1337,23 @@ describe('AzureDevOpsService', () => {
       expect(wiql).toContain("[System.Title] CONTAINS 'can''t link'");
       expect(result).toHaveLength(1);
     });
+  });
+});
+
+describe('staticSuitePaths', () => {
+  it('builds paths below the plan root and keeps only static suites', () => {
+    const suites = [
+      { id: 1, name: '15 Timesheets', suiteType: TestSuiteType.StaticTestSuite },
+      { id: 2, name: 'Geofence', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 3, name: 'Inside Distance', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 2, name: 'Geofence' } },
+      { id: 4, name: 'By requirement', suiteType: TestSuiteType.RequirementTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 5, name: 'Orphan', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 99, name: 'Missing' } },
+    ] as TestSuite[];
+
+    expect(staticSuitePaths(suites)).toEqual([
+      { id: 1, path: '' },
+      { id: 2, path: 'Geofence' },
+      { id: 3, path: 'Geofence > Inside Distance' },
+    ]);
   });
 });

@@ -96,6 +96,7 @@ function isExpectedOutputPath(
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
+        || /\.case\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
@@ -179,8 +180,11 @@ function assertExpectedOutputSet(
       }
       return;
     case 'test-cases':
+      if (names.length === 1 && /\.case\.json$/i.test(names[0])) return;
       assertSingleMatch(names, /\.test-cases\.json$/i, 'test-case JSON');
-      assertSingleMatch(names, /\.test-cases\.md$/i, 'test-case markdown');
+      if (names.filter((name) => /\.test-cases\.md$/i.test(name)).length > 1) {
+        throw new Error('Document workflow produced more than one test-case markdown');
+      }
       assertSingleMatch(names, /\.backlog\.json$/i, 'patched backlog JSON');
       return;
     case 'walkthrough-smart-tagging':

@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 18 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(18);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 19 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(19);
   });
 
   it('contains the expected keys in order', () => {
@@ -24,6 +24,7 @@ describe('menuSettings shared types', () => {
       'my-work',
       'standup',
       'ui-lab',
+      'qa-lab',
       'feature-requests',
       'ai-cost',
       'design-module',
@@ -48,6 +49,7 @@ describe('menuSettings shared types', () => {
       'My Work',
       'Standup',
       'UI Lab',
+      'QA Lab',
       'Apex Backlog',
       'AI Cost Analytics',
       'Design Module',

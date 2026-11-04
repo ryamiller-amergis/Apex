@@ -193,6 +193,11 @@ function mergeThinkingText(previous: string, incoming: string): string {
   return `${previous} ${trimmed}`;
 }
 
+/** Joins raw streamed pieces exactly; they carry their own spacing. */
+function appendThinkingPiece(previous: string, piece: string): string {
+  if (!previous || previous === 'Analyzing') return piece.trimStart();
+  return `${previous}${piece}`;
+}
 const RESTARTING_LABEL = 'Restarting your answer…';
 const RESTART_GIVE_UP_MS = 3 * 60_000;
 const RESTART_GAVE_UP_DETAIL = "This answer didn't finish. Please try again.";
@@ -294,6 +299,7 @@ export function useChatStream(
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
   const streamTrimOffsetRef = useRef(0);
+  const lastThinkingSeqRef = useRef(0);
   const pendingOffsetTokensRef = useRef<
     Map<number, { text: string; key: string }>
   >(new Map());
@@ -386,6 +392,7 @@ export function useChatStream(
     setStreamingText('');
     setThinkingText('');
     setToolProgress([]);
+    lastThinkingSeqRef.current = 0;
     setIsRetrying(false);
     setRetryReason(null);
     setGroundingPreparation(null);
@@ -437,6 +444,7 @@ export function useChatStream(
     setStreamingText('');
     setThinkingText('');
     setToolProgress([]);
+    lastThinkingSeqRef.current = 0;
     setStatus(initialStatusRef.current ?? 'idle');
     setIsConnected(false);
     setHasConnectionError(false);
@@ -674,6 +682,7 @@ export function useChatStream(
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);
+          lastThinkingSeqRef.current = 0;
           setIsRetrying(false);
           setRetryReason(null);
           setRetryableRunId(null);
@@ -697,7 +706,13 @@ export function useChatStream(
         }
         case 'thinking': {
           const thinkingEvent = event as SseThinkingEvent;
-          setThinkingText((prev) => mergeThinkingText(prev, thinkingEvent.text));
+          if (typeof thinkingEvent.seq === 'number') {
+            if (thinkingEvent.seq <= lastThinkingSeqRef.current) break;
+            lastThinkingSeqRef.current = thinkingEvent.seq;
+            setThinkingText((prev) => appendThinkingPiece(prev, thinkingEvent.text));
+          } else {
+            setThinkingText((prev) => mergeThinkingText(prev, thinkingEvent.text));
+          }
           setProgressPhase((prev) =>
             prev === null || prev === 'queued' || prev === 'dispatched'
               ? 'analysis'

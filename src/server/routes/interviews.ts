@@ -4,7 +4,7 @@ import path from 'path';
 import { requireAnyPermission, requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
-import { isAdoUserAuthError } from '../services/adoFactory';
+import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
@@ -130,6 +130,7 @@ import { buildIntakeInterviewOf, requireBriefEditor, requireBriefReader } from '
 
 const BUILD_REQUEST_NO_PRD_MESSAGE = 'Build requests do not create a PRD.';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
+import { AzureDevOpsService } from '../services/azureDevOps';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
@@ -140,6 +141,37 @@ import {
   recalculateTestCaseCoverage,
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
+import {
+  extractAdoNativeSuites,
+  getTestCasesForWorkItem,
+} from '../services/testCaseLookupService';
+import {
+  AdoTestSuiteConflictError,
+  deleteAdoTestCases,
+  getLatestAdoTestSuite,
+  listAdoGenerationCandidates,
+  publishAdoTestCases,
+  suiteRequiredByOutput,
+  triggerAdoTestCaseGeneration,
+} from '../services/adoTestCaseSuiteService';
+import {
+  QaCaseNotFoundError,
+  addCaseComment,
+  getCaseReview,
+  regenerateAdoTestCase,
+  restoreCaseRegeneration,
+} from '../services/qaCaseRegenerationService';
+import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
+import type {
+  QaAdoSuiteSelection,
+  QaLabAddCaseCommentRequest,
+  QaLabDeleteCasesRequest,
+  QaLabGenerateRequest,
+  QaLabPublishRequest,
+  QaLabAssistantThreadRequest,
+  QaLabRegenerateCaseRequest,
+} from '../../shared/types/qaLab';
+import type { EffortLevel } from '../../shared/types/effort';
 import {
   generateFallbackReport as generateFallbackValidationReport,
   ingestValidationScorecard,
@@ -382,6 +414,351 @@ router.get('/prds/:prdId/test-cases', requirePermission('interviews:view'), asyn
   }
 });
 
+/**
+ * QA Lab picker: every Epic, Feature, PBI, TBI, and Bug in the selected
+ * Azure DevOps project. Not the calendar list, which is limited to this
+ * month and one exact area path.
+ */
+router.get('/work-items', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+    if (project.toLowerCase() === 'apex') {
+      res.json({ items: [], truncated: false });
+      return;
+    }
+
+    const adoService = new AzureDevOpsService(project);
+    res.json(await adoService.listProjectBacklogWorkItems());
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * QA Lab: generated test cases for an ADO work item, resolved through the
+ * `adoWorkItemId` stamped on the backlog. Selecting a Feature or Epic returns
+ * the suites of every PBI beneath it.
+ */
+router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+
+    const result = await getTestCasesForWorkItem(project, workItemId);
+    if (result.generation || result.totalCases > 0) {
+      res.json(result);
+      return;
+    }
+
+    const external = await getLatestAdoTestSuite(project, workItemId);
+    if (!external) {
+      res.json(result);
+      return;
+    }
+
+    const suites = external.testCasesJson
+      ? extractAdoNativeSuites(external.testCasesJson, external.sourceSnapshot)
+      : [];
+    res.json({
+      ...result,
+      suites,
+      totalCases: suites.reduce((sum, suite) => sum + suite.testCases.length, 0),
+      externalSuite: {
+        id: external.id,
+        status: external.status,
+        publishedCases: external.publishedCases ?? [],
+        requireSuite: suiteRequiredByOutput(external.testCasesJson),
+        threadId: external.chatThreadId,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** PBIs and Bugs beneath an ADO work item that can receive generated cases. */
+router.get('/work-items/:workItemId/test-cases/candidates', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+    if (project.toLowerCase() === 'apex') {
+      res.json({ rootWorkItemId: workItemId, items: [] });
+      return;
+    }
+
+    const candidates = await listAdoGenerationCandidates(project, workItemId);
+    if (!candidates) {
+      res.status(404).json({ error: 'The Azure DevOps work item was not found' });
+      return;
+    }
+    res.json(candidates);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/work-items/:workItemId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+    const { project, model, effort, targetIds } = (req.body ?? {}) as QaLabGenerateRequest & {
+      project?: string;
+    };
+    if (typeof project !== 'string' || !project.trim()) {
+      res.status(400).json({ error: 'A project is required' });
+      return;
+    }
+    if (
+      targetIds !== undefined
+      && (!Array.isArray(targetIds)
+        || targetIds.length === 0
+        || !targetIds.every((id) => Number.isInteger(id) && id > 0))
+    ) {
+      res.status(400).json({ error: 'targetIds must be a non-empty list of work item IDs' });
+      return;
+    }
+
+    const started = await triggerAdoTestCaseGeneration({
+      project: project.trim(),
+      rootWorkItemId: workItemId,
+      userId: getUserId(req),
+      model,
+      effort: effort as EffortLevel | undefined,
+      ...(targetIds ? { targetIds } : {}),
+    });
+    if (started.started) {
+      res.json(started);
+      return;
+    }
+    if (started.reason === 'already-generating' && started.suiteId) {
+      res.json({ started: true, suiteId: started.suiteId });
+      return;
+    }
+    const status = started.reason === 'root-not-found'
+      ? 404
+      : started.reason === 'routing-failed'
+        ? 503
+        : 422;
+    const messages: Record<typeof started.reason, string> = {
+      'root-not-found': 'The Azure DevOps work item was not found',
+      'no-targets': 'This work item has no PBI or Bug requirements to test',
+      'skill-not-configured': 'The project has no test-case skill configured',
+      'routing-failed': 'Test-case generation could not be started',
+      'already-generating': 'Test-case generation is already running',
+    };
+    res.status(status).json({ error: messages[started.reason], reason: started.reason });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    const { selections, localCaseIds } = (req.body ?? {}) as QaLabPublishRequest;
+    if (selections !== undefined && !isSuiteSelectionMap(selections)) {
+      res.status(400).json({ error: 'selections must map case ids to { planId, suiteId }' });
+      return;
+    }
+    if (localCaseIds !== undefined && !isCaseIdList(localCaseIds)) {
+      res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const adoService = await adoWriteForRequest(req, suite.project);
+    res.json(await publishAdoTestCases(suite.id, {
+      ado: adoService,
+      ...(selections ? { selections } : {}),
+      ...(localCaseIds ? { localCaseIds } : {}),
+    }));
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+/** Test Plans and static suites the signed-in user can publish this suite into. */
+router.get('/ado-test-suites/:suiteId/test-plans', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    const adoService = await adoWriteForRequest(req, suite.project);
+    res.json({ plans: await adoService.listStaticTestPlanSuites() });
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    const status = (err as { statusCode?: number; status?: number })?.statusCode
+      ?? (err as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      res.status(403).json({
+        error: 'Azure DevOps denied access to Test Plans. Publishing into suites needs Test Plans access (Basic + Test Plans or Visual Studio Enterprise).',
+      });
+      return;
+    }
+    next(err);
+  }
+});
+
+/** Removes generated cases that QA does not want published. */
+router.post('/ado-test-suites/:suiteId/delete-cases', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { localCaseIds } = (req.body ?? {}) as Partial<QaLabDeleteCasesRequest>;
+    if (!isCaseIdList(localCaseIds)) {
+      res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    res.json(await deleteAdoTestCases(suite.id, localCaseIds));
+  } catch (err) {
+    if (err instanceof AdoTestSuiteConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+router.get('/ado-test-suites/:suiteId/case-review', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await getCaseReview(req.params.suiteId));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/cases/:localCaseId/comments', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { body } = (req.body ?? {}) as Partial<QaLabAddCaseCommentRequest>;
+    if (typeof body !== 'string' || body.trim().length === 0 || body.length > MAX_COMMENT_LENGTH) {
+      res.status(400).json({ error: `body must be 1–${MAX_COMMENT_LENGTH} characters` });
+      return;
+    }
+    res.status(201).json(await addCaseComment({
+      suiteId: req.params.suiteId,
+      localCaseId: req.params.localCaseId,
+      body,
+      authorId: getUserId(req),
+      authorName: getDisplayName(req),
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/cases/:localCaseId/regenerate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { model } = (req.body ?? {}) as QaLabRegenerateCaseRequest;
+    if (model !== undefined && (typeof model !== 'string' || model.trim().length === 0)) {
+      res.status(400).json({ error: 'model must be a non-empty string' });
+      return;
+    }
+    res.status(202).json(await regenerateAdoTestCase({
+      suiteId: req.params.suiteId,
+      localCaseId: req.params.localCaseId,
+      userId: getUserId(req),
+      ...(model ? { model: model.trim() } : {}),
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/regenerations/:regenerationId/restore', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await restoreCaseRegeneration(req.params.suiteId, req.params.regenerationId));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/assistant-thread', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { threadId } = (req.body ?? {}) as QaLabAssistantThreadRequest;
+    if (threadId !== undefined && threadId !== null && typeof threadId !== 'string') {
+      res.status(400).json({ error: 'threadId must be a string' });
+      return;
+    }
+    res.json(await openQaLabAssistantThread({
+      suiteId: req.params.suiteId,
+      userId: getUserId(req),
+      threadId,
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+const MAX_COMMENT_LENGTH = 4000;
+
+function sendCaseReviewError(err: unknown, res: Response, next: NextFunction): void {
+  if (err instanceof QaCaseNotFoundError) {
+    res.status(404).json({ error: err.message });
+    return;
+  }
+  if (err instanceof AdoTestSuiteConflictError) {
+    res.status(409).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
+
+const MAX_CASE_IDS = 500;
+
+function isCaseIdList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.length <= MAX_CASE_IDS
+    && value.every((id) => typeof id === 'string' && id.trim().length > 0 && id.length <= 200);
+}
+
+function isSuiteSelectionMap(value: unknown): value is Record<string, QaAdoSuiteSelection> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => {
+    const selection = entry as Partial<QaAdoSuiteSelection> | null;
+    return Number.isSafeInteger(selection?.planId) && (selection?.planId ?? 0) > 0
+      && Number.isSafeInteger(selection?.suiteId) && (selection?.suiteId ?? 0) > 0;
+  });
+}
+
 router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const { prdId } = req.params;
@@ -424,12 +801,30 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     }
     // @feature-flag:project-repository-checkout-readiness end
 
+    const { model, effort, pbiIds, matchLevel, matchedTitle } = (req.body ?? {}) as QaLabGenerateRequest;
     const sourceThreadId = prdRow.chatThreadId ?? '';
-    const started = await triggerTestCaseGeneration(
-      prdId,
-      sourceThreadId,
-      userId,
-    );
+    // Only forward overrides when the caller actually picked one, so the
+    // project skill config stays the single source of truth otherwise.
+    const overrides = model || effort
+      ? { model, effort: effort as EffortLevel | undefined }
+      : undefined;
+    const scope = Array.isArray(pbiIds) && pbiIds.length > 0
+      ? { pbiIds, matchLevel, matchedTitle }
+      : undefined;
+    const started = scope
+      ? await triggerTestCaseGeneration(
+          prdId,
+          sourceThreadId,
+          userId,
+          overrides,
+          scope,
+        )
+      : await triggerTestCaseGeneration(
+          prdId,
+          sourceThreadId,
+          userId,
+          overrides,
+        );
     res.json({ started });
   } catch (err) {
     next(err);

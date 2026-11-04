@@ -24,6 +24,14 @@ import {
 } from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
+import {
+  assistantAddCase,
+  assistantCommentCase,
+  assistantDeleteCase,
+  assistantEditCase,
+  assistantRegenerateCase,
+  listAssistantCases,
+} from '../../services/qaLabAssistantService';
 import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
@@ -350,6 +358,20 @@ export async function handleAddTestCase(params: {
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
     };
+  }
+}
+
+async function runQaLabTool(
+  name: string,
+  run: () => Promise<unknown>,
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  try {
+    const result = await run();
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, result }) }] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] ${name}: FAILED — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
   }
 }
 
@@ -713,6 +735,72 @@ export function createAdoMcpServer(options?: {
         .describe('Business-rule IDs this case covers, e.g. ["BR-001"]'),
     },
     async (params) => handleAddTestCase(params)
+  );
+
+  // ── QA Lab Ask Apex ─────────────────────────────────────────────────────────
+  // Each tool changes only the suite bound to the calling thread.
+
+  const qaThreadId = z
+    .string()
+    .describe('The QA Lab Ask Apex thread ID (thread_id in .ai-pilot/kickoff-context.md)');
+  const qaCaseId = z.string().describe('The case id, e.g. "PBI-58989-3"');
+  const qaCaseFields = z
+    .record(z.string(), z.unknown())
+    .describe('Case fields in the suite JSON format: title, persona, preconditions, steps [{order, action, expected}], placement, traceability, …');
+
+  server.tool(
+    'qa_lab_get_cases',
+    'List the current test cases in this QA Lab suite, whether each is published, and the open review comments.',
+    { threadId: qaThreadId },
+    async ({ threadId }) => runQaLabTool('qa_lab_get_cases', () => listAssistantCases(threadId))
+  );
+
+  server.tool(
+    'qa_lab_update_case',
+    'Change one unpublished test case. Pass only the fields that change; steps replaces every step. QA can review the change and restore the old version.',
+    { threadId: qaThreadId, localCaseId: qaCaseId, patch: qaCaseFields },
+    async ({ threadId, localCaseId, patch }) =>
+      runQaLabTool('qa_lab_update_case', () => assistantEditCase({ threadId, localCaseId, patch }))
+  );
+
+  server.tool(
+    'qa_lab_add_case',
+    'Add one test case to the cases of a work item in this QA Lab suite. Apex assigns the case id.',
+    {
+      threadId: qaThreadId,
+      pbiId: z.string().describe('The work item the case tests, as "PBI-58989" or "58989"'),
+      testCase: qaCaseFields,
+    },
+    async ({ threadId, pbiId, testCase }) =>
+      runQaLabTool('qa_lab_add_case', () => assistantAddCase({ threadId, pbiId, testCase }))
+  );
+
+  server.tool(
+    'qa_lab_delete_case',
+    'Remove one unpublished test case from this QA Lab suite. Use only when QA asks to delete that case.',
+    { threadId: qaThreadId, localCaseId: qaCaseId },
+    async ({ threadId, localCaseId }) =>
+      runQaLabTool('qa_lab_delete_case', () => assistantDeleteCase({ threadId, localCaseId }))
+  );
+
+  server.tool(
+    'qa_lab_comment_case',
+    'Leave a review comment on one test case, for example before regenerating it.',
+    {
+      threadId: qaThreadId,
+      localCaseId: qaCaseId,
+      body: z.string().min(1).max(4000).describe('What should change in the case'),
+    },
+    async ({ threadId, localCaseId, body }) =>
+      runQaLabTool('qa_lab_comment_case', () => assistantCommentCase({ threadId, localCaseId, body }))
+  );
+
+  server.tool(
+    'qa_lab_regenerate_case',
+    'Rewrite one unpublished test case from its open review comments using the project test-case skill. Runs in the background; the case updates when it finishes.',
+    { threadId: qaThreadId, localCaseId: qaCaseId },
+    async ({ threadId, localCaseId }) =>
+      runQaLabTool('qa_lab_regenerate_case', () => assistantRegenerateCase({ threadId, localCaseId }))
   );
 
   // ── Wiki namespace ──────────────────────────────────────────────────────────

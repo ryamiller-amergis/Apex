@@ -113,6 +113,8 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from './testCaseService';
+import { syncAdoTestSuiteRunOutput } from './adoTestCaseSuiteService';
+import { syncCaseRegenerationRunOutput } from './qaCaseRegenerationService';
 import type { Prd } from '../../shared/types/interview';
 import { NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
 import { ingestValidationScorecard } from './documentValidationService';
@@ -3422,6 +3424,9 @@ async function syncOutputToDbFromWorkspace(
     return;
   }
 
+  if (await syncCaseRegenerationRunOutput(threadId, workspaceDir)) return;
+  if (await syncAdoTestSuiteRunOutput(threadId, workspaceDir, agentText)) return;
+
   // Check if this thread belongs to a PRD
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.chatThreadId, threadId),
@@ -4297,6 +4302,10 @@ async function tryDispatchInteractiveTurn(
       // actor while its MCP map is intentionally empty.
       if (state.thread.kickoff.mcpPill) {
         return bypass('custom-mcp-pill');
+      }
+      // QA Lab Ask Apex changes cases through ado-skills tools the actor lacks.
+      if (state.thread.kickoff.qaLabSuiteId) {
+        return bypass('qa-lab-assistant');
       }
       const userId = state.thread.userId;
       const project = state.thread.kickoff.project;

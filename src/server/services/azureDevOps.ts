@@ -2,11 +2,13 @@ import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
 import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
+import type { QaAdoTestPlanOption, QaAdoTestSuiteOption } from '../../shared/types/qaLab';
 import {
   computeLastEnterInProgressToDone,
   summarizeRelatedItemCycleTimes,
@@ -42,6 +44,33 @@ function computeDepth(id: number, parentMap: Map<number, number | null>): number
     if (depth > 20) break; // guard against cycles
   }
   return depth;
+}
+
+const MAX_TEST_PLANS = 200;
+
+/**
+ * Static suites of one plan with paths below the plan's root suite. A suite
+ * whose parent chain breaks (a parent outside the page) is left out.
+ */
+export function staticSuitePaths(suites: TestSuite[]): QaAdoTestSuiteOption[] {
+  const byId = new Map(suites.map((suite) => [suite.id, suite]));
+  const pathOf = (suite: TestSuite): string[] | null => {
+    const names: string[] = [];
+    let current: TestSuite | undefined = suite;
+    for (let depth = 0; current?.parentSuite; depth++) {
+      if (depth > 20) return null;
+      names.unshift(current.name);
+      current = byId.get(current.parentSuite.id);
+    }
+    return current ? names : null;
+  };
+  const options: QaAdoTestSuiteOption[] = [];
+  for (const suite of suites) {
+    if (suite.suiteType !== TestSuiteType.StaticTestSuite) continue;
+    const names = pathOf(suite);
+    if (names) options.push({ id: suite.id, path: names.join(' > ') });
+  }
+  return options.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 export class AzureDevOpsService {
@@ -303,6 +332,54 @@ export class AzureDevOpsService {
     });
   }
 
+  /**
+   * Every Epic, Feature, PBI, TBI, and Bug in the project.
+   * No area-path and no due-date filter — those belong to the calendar query.
+   */
+  async listProjectBacklogWorkItems(): Promise<{
+    items: Array<{ id: number; title: string; state: string; workItemType: string }>;
+    truncated: boolean;
+  }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const project = this.project.replace(/'/g, "''");
+      const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug') ORDER BY [System.ChangedDate] DESC`;
+      const top = 20_000;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+        undefined,
+        top,
+      );
+
+      const ids = (queryResult.workItems ?? [])
+        .map((wi: { id?: number }) => wi.id)
+        .filter((id: number | undefined): id is number => typeof id === 'number');
+      if (ids.length === 0) {
+        return { items: [], truncated: false };
+      }
+
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+      ]);
+
+      return {
+        truncated: ids.length >= top,
+        items: workItems
+          .filter((wi) => typeof wi.id === 'number')
+          .map((wi) => ({
+            id: wi.id as number,
+            title: String(wi.fields?.['System.Title'] ?? ''),
+            state: String(wi.fields?.['System.State'] ?? ''),
+            workItemType: String(wi.fields?.['System.WorkItemType'] ?? ''),
+          })),
+      };
+    });
+  }
+
   async getWorkItems(from?: string, to?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
@@ -520,6 +597,73 @@ export class AzureDevOpsService {
           design: wi.fields['Custom.Design'] || '',
           discussions: wi.fields['System.History'] || '',
         }));
+    });
+  }
+
+  /**
+   * Capture the requirement context used to generate QA cases from an
+   * ADO-native work item. PBIs and Bugs own cases; TBIs are context only.
+   */
+  async getQaTestGenerationContext(
+    rootId: number,
+  ): Promise<import('../../shared/types/qaLab').QaAdoGenerationContext | null> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wiql = `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.Id] = ${rootId}) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+      );
+
+      const parentMap = new Map<number, number | null>([[rootId, null]]);
+      for (const relation of queryResult?.workItemRelations ?? []) {
+        if (typeof relation.source?.id === 'number' && typeof relation.target?.id === 'number') {
+          parentMap.set(relation.target.id, relation.source.id);
+        }
+      }
+
+      const fields = [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+        'System.AreaPath',
+        'System.Description',
+        'Microsoft.VSTS.Common.AcceptanceCriteria',
+        'Microsoft.VSTS.TCM.ReproSteps',
+      ];
+      const rawItems = await this.getWorkItemsInBatches(
+        witApi,
+        Array.from(parentMap.keys()),
+        fields,
+      );
+
+      const items: import('../../shared/types/qaLab').QaAdoGenerationItem[] = rawItems
+        .filter((item) => typeof item?.id === 'number' && !!item.fields)
+        .map((item) => ({
+          id: item.id as number,
+          parentId: parentMap.get(item.id as number) ?? null,
+          workItemType: String(item.fields?.['System.WorkItemType'] ?? ''),
+          title: String(item.fields?.['System.Title'] ?? ''),
+          state: String(item.fields?.['System.State'] ?? ''),
+          areaPath: String(item.fields?.['System.AreaPath'] ?? ''),
+          description: String(item.fields?.['System.Description'] ?? ''),
+          acceptanceCriteria: String(
+            item.fields?.['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? '',
+          ),
+          reproSteps: String(item.fields?.['Microsoft.VSTS.TCM.ReproSteps'] ?? ''),
+        }));
+
+      const root = items.find((item) => item.id === rootId);
+      if (!root) return null;
+
+      const targets = items.filter((item) =>
+        item.workItemType === 'Product Backlog Item' || item.workItemType === 'Bug',
+      );
+      const technicalContext = items.filter(
+        (item) => item.workItemType === 'Technical Backlog Item',
+      );
+      return { root, targets, technicalContext };
     });
   }
 
@@ -5944,24 +6088,37 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Create a Test Case work item linked as a child under `parentId`.
-   * Falls back to TestedBy-Reverse if hierarchy link is rejected.
+   * Create a Test Case linked to `parentId`. PRD export keeps its historical
+   * hierarchy preference; QA Lab publishing requests ADO's Tested By relation.
    */
   async createTestCaseWorkItem(spec: {
     title: string;
     stepsHtml: string;
     parentId: number;
     assignedTo?: string;
+    /** ADO-native QA publishing uses the Tested By relationship. */
+    linkType?: 'hierarchy' | 'tested-by' | 'related';
+    /** Overrides the area path this service was created with. */
+    areaPath?: string;
+    iterationPath?: string;
+    tags?: string[];
   }): Promise<{ id: number; url: string }> {
     const witApi = await this.connection.getWorkItemTrackingApi();
     const orgUrl = this.organization.replace(/\/$/, '');
+    const areaPath = spec.areaPath ?? this.areaPath;
 
     const buildPatch = (linkRel: string, includeAssignedTo: boolean): any[] => {
       const patch: any[] = [
         { op: 'add', path: '/fields/System.Title', value: spec.title },
       ];
-      if (this.areaPath) {
-        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+      if (areaPath) {
+        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: areaPath });
+      }
+      if (spec.iterationPath) {
+        patch.push({ op: 'add', path: '/fields/System.IterationPath', value: spec.iterationPath });
+      }
+      if (spec.tags?.length) {
+        patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
       }
       if (spec.stepsHtml) {
         patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: spec.stepsHtml });
@@ -5981,25 +6138,35 @@ export class AzureDevOpsService {
       return patch;
     };
 
+    const preferredLink = spec.linkType === 'tested-by'
+      ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
+      : spec.linkType === 'related'
+        ? 'System.LinkTypes.Related'
+        : 'System.LinkTypes.Hierarchy-Reverse';
+    const fallbackLink = preferredLink === 'System.LinkTypes.Hierarchy-Reverse'
+      ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
+      : 'System.LinkTypes.Hierarchy-Reverse';
+
     let wi: any;
     try {
-      wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', true), this.project, 'Test Case');
+      wi = await witApi.createWorkItem({}, buildPatch(preferredLink, true), this.project, 'Test Case');
     } catch (firstErr: any) {
-      // Identity errors: retry without assignee. Other 400s: hierarchy likely rejected → TestedBy.
+      // Identity errors retry without assignee. Other 400s retry the alternate
+      // relation because ADO process templates differ in their allowed links.
       if (/identity/i.test(String(firstErr?.message))) {
         try {
-          wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', false), this.project, 'Test Case');
+          wi = await witApi.createWorkItem({}, buildPatch(preferredLink, false), this.project, 'Test Case');
         } catch (noAssigneeErr: any) {
           if (noAssigneeErr?.status === 400) {
-            console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
-            wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', false), this.project, 'Test Case');
+            console.warn(`[ADO] createTestCaseWorkItem: preferred link rejected for work item ${spec.parentId}, trying alternate relation`);
+            wi = await witApi.createWorkItem({}, buildPatch(fallbackLink, false), this.project, 'Test Case');
           } else {
             throw noAssigneeErr;
           }
         }
       } else if (firstErr?.status === 400) {
-        console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
-        wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', true), this.project, 'Test Case');
+        console.warn(`[ADO] createTestCaseWorkItem: preferred link rejected for work item ${spec.parentId}, trying alternate relation`);
+        wi = await witApi.createWorkItem({}, buildPatch(fallbackLink, true), this.project, 'Test Case');
       } else {
         throw firstErr;
       }
@@ -6010,6 +6177,46 @@ export class AzureDevOpsService {
       id: wi.id,
       url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
     };
+  }
+
+  /**
+   * Active Test Plans with their static suites. Requirement and query-based
+   * suites are left out because Test Cases cannot be added to them directly.
+   */
+  async listStaticTestPlanSuites(): Promise<QaAdoTestPlanOption[]> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const plans: Array<{ id: number; name: string }> = [];
+    let planToken: string | undefined;
+    do {
+      const page = await testPlanApi.getTestPlans(this.project, undefined, planToken, false, true);
+      for (const plan of page ?? []) {
+        if (typeof plan.id === 'number' && plan.name) plans.push({ id: plan.id, name: plan.name });
+      }
+      planToken = page?.continuationToken || undefined;
+    } while (planToken && plans.length < MAX_TEST_PLANS);
+
+    const options: QaAdoTestPlanOption[] = [];
+    for (const plan of plans.slice(0, MAX_TEST_PLANS)) {
+      const suites: TestSuite[] = [];
+      let suiteToken: string | undefined;
+      do {
+        const page = await testPlanApi.getTestSuitesForPlan(this.project, plan.id, undefined, suiteToken, false);
+        suites.push(...(page ?? []));
+        suiteToken = page?.continuationToken || undefined;
+      } while (suiteToken);
+      options.push({ id: plan.id, name: plan.name, suites: staticSuitePaths(suites) });
+    }
+    return options;
+  }
+
+  async addTestCasesToSuite(planId: number, suiteId: number, testCaseIds: number[]): Promise<void> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    await testPlanApi.addTestCasesToSuite(
+      testCaseIds.map((id) => ({ workItem: { id } })),
+      this.project,
+      planId,
+      suiteId,
+    );
   }
 
   /**

@@ -4,6 +4,7 @@ import { EpicProgress } from './EpicProgress';
 import { RichTextField } from './RichTextField';
 import { useAppShell } from '../hooks/useAppShell';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { useWorkItemTestCases } from '../hooks/useQaLab';
 import { TERMINAL_WORK_ITEM_STATES } from '../../shared/types/calendarWorkItemAssistant';
 import { env } from '../config/env';
 import './DetailsPanel.css';
@@ -78,6 +79,27 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [isUnlinking, setIsUnlinking] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [teamAssignees, setTeamAssignees] = useState<string[]>([]);
+  const [showTestCases, setShowTestCases] = useState(false);
+  const [expandedTestCaseIds, setExpandedTestCaseIds] = useState<Set<string>>(new Set());
+
+  // Generated test cases for this work item. Fetched only once the section is
+  // expanded — the server-side lookup scans every PRD backlog in the project.
+  const canViewTestCases = can('planning:qa');
+  const {
+    data: testCaseData,
+    isLoading: isLoadingTestCases,
+    isError: isTestCaseError,
+  } = useWorkItemTestCases(
+    project,
+    workItem?.id ?? null,
+    showTestCases && canViewTestCases,
+  );
+
+  // Collapse the section when the selection changes so counts never look stale.
+  useEffect(() => {
+    setShowTestCases(false);
+    setExpandedTestCaseIds(new Set());
+  }, [workItem?.id]);
 
   // Fetch related items when workItem changes and is PBI, TBI, or Feature
   useEffect(() => {
@@ -866,6 +888,126 @@ export const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       </li>
                     ))}
                   </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Generated Test Cases Section */}
+        {canViewTestCases && (
+          <div className="related-items-section">
+            <div
+              className="related-items-header"
+              onClick={() => setShowTestCases(!showTestCases)}
+             {...{ 'data-testid': 'details-panel-test-cases-header' }}>
+              <span className="related-items-title">
+                {showTestCases ? '▼' : '▶'} Test Cases
+                {showTestCases && testCaseData ? ` (${testCaseData.totalCases})` : ''}
+              </span>
+            </div>
+            {showTestCases && (
+              <div className="related-items-content">
+                {isLoadingTestCases ? (
+                  <div className="related-items-loading">Loading...</div>
+                ) : isTestCaseError ? (
+                  <div className="related-items-empty">Could not load test cases</div>
+                ) : !testCaseData || testCaseData.totalCases === 0 ? (
+                  <div className="related-items-empty">
+                    No generated test cases linked to this work item
+                  </div>
+                ) : (
+                  <>
+                    {testCaseData.sources.map((source) => (
+                      <div key={source.prdId} className="test-case-source">
+                        From PRD <strong>{source.prdTitle}</strong> · matched at{' '}
+                        {source.matchLevel} level
+                      </div>
+                    ))}
+                    {testCaseData.suites.map((suite) => (
+                      <div key={suite.pbiId} className="test-case-suite">
+                        <div className="test-case-suite-header">
+                          <span className="related-item-id">{suite.pbiId}</span>
+                          <span className="test-case-suite-title">{suite.pbiTitle}</span>
+                          <span className="related-item-type">
+                            {suite.testCases.length}{' '}
+                            {suite.testCases.length === 1 ? 'case' : 'cases'}
+                          </span>
+                        </div>
+                        <ul className="related-items-list">
+                          {suite.testCases.map((testCase) => {
+                            const isExpanded = expandedTestCaseIds.has(testCase.id);
+                            return (
+                              <li
+                                key={testCase.id}
+                                className="related-item"
+                                onClick={() =>
+                                  setExpandedTestCaseIds((previous) => {
+                                    const next = new Set(previous);
+                                    if (next.has(testCase.id)) next.delete(testCase.id);
+                                    else next.add(testCase.id);
+                                    return next;
+                                  })
+                                }
+                               {...{ 'data-testid': `details-panel-test-case-${testCase.id}` }}>
+                                <div className="related-item-header">
+                                  <span className="related-item-id">{testCase.id}</span>
+                                  {testCase.tier && (
+                                    <span className="related-item-type">{testCase.tier}</span>
+                                  )}
+                                  {testCase.persona && (
+                                    <span className="related-item-type">{testCase.persona}</span>
+                                  )}
+                                </div>
+                                <div className="related-item-title">{testCase.title}</div>
+                                {isExpanded && (
+                                  <div className="test-case-detail">
+                                    {testCase.preconditions.length > 0 && (
+                                      <>
+                                        <div className="test-case-detail-label">Preconditions</div>
+                                        <ul className="test-case-detail-list">
+                                          {testCase.preconditions.map((precondition, index) => (
+                                            <li key={`${testCase.id}-pre-${index}`}>{precondition}</li>
+                                          ))}
+                                        </ul>
+                                      </>
+                                    )}
+                                    {testCase.steps.length > 0 && (
+                                      <>
+                                        <div className="test-case-detail-label">Steps</div>
+                                        <ol className="test-case-detail-list">
+                                          {testCase.steps.map((step) => (
+                                            <li key={`${testCase.id}-step-${step.order}`}>
+                                              {step.action}
+                                              {step.expected && (
+                                                <em className="test-case-expected">
+                                                  {step.expected}
+                                                </em>
+                                              )}
+                                            </li>
+                                          ))}
+                                        </ol>
+                                      </>
+                                    )}
+                                    {testCase.expectedResult && (
+                                      <>
+                                        <div className="test-case-detail-label">
+                                          Expected result
+                                        </div>
+                                        <div className="test-case-detail-text">
+                                          {testCase.expectedResult}
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    ))}
+                  </>
                 )}
               </div>
             )}
