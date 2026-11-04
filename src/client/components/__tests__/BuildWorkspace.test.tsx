@@ -104,7 +104,9 @@ function baseDetail(overrides: Record<string, unknown> = {}) {
       elapsedSeconds: { used: 45, limit: 14400 },
       parallelism: { used: 0, limit: 4 },
     },
-    supportContacts: [{ displayName: 'Ryan Miller', email: 'ryan@example.test' }],
+    supportContacts: [
+      { displayName: 'Ryan Miller', email: 'ryan@example.test' },
+    ],
     revisions: [
       {
         number: 1,
@@ -122,7 +124,12 @@ function baseDetail(overrides: Record<string, unknown> = {}) {
         status: 'ok',
         overview: null,
         requirements: [
-          { id: 'AC-1', kind: 'ac', text: 'Renders calendar on the home page', retired: false },
+          {
+            id: 'AC-1',
+            kind: 'ac',
+            text: 'Renders calendar on the home page',
+            retired: false,
+          },
         ],
         assumptions: ['Signed-in users can view the calendar'],
         exclusions: [],
@@ -130,7 +137,13 @@ function baseDetail(overrides: Record<string, unknown> = {}) {
       },
       tasks: [],
     },
-    verificationSummary: { total: 1, pass: 0, fail: 0, deferred: 0, retired: 0 },
+    verificationSummary: {
+      total: 1,
+      pass: 0,
+      fail: 0,
+      deferred: 0,
+      retired: 0,
+    },
     lease: null,
     ...overrides,
   };
@@ -159,7 +172,10 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
       isSuccess: true,
       data: {
         repositories: [
-          { repository: 'Amergis Connect - ATS', label: 'Amergis Connect - ATS' },
+          {
+            repository: 'Amergis Connect - ATS',
+            label: 'Amergis Connect - ATS',
+          },
         ],
       },
     });
@@ -185,8 +201,14 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
       mutateAsync: revisionMutateAsync,
       isPending: false,
     });
-    mockCancelBuild.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
-    mockResumeBuild.mockReturnValue({ mutateAsync: jest.fn(), isPending: false });
+    mockCancelBuild.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
+    mockResumeBuild.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
     mockUseBuild.mockReturnValue({
       data: null,
       isLoading: false,
@@ -234,6 +256,13 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
       'pending',
       'pending',
     ]);
+    expect(derivePipelineSteps('accepted', false).map((s) => s.state)).toEqual([
+      'done',
+      'done',
+      'done',
+      'active',
+      'pending',
+    ]);
     expect(derivePipelineSteps('accepted', true).map((s) => s.state)).toEqual([
       'done',
       'done',
@@ -266,12 +295,14 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
             }
           />
         </Routes>
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
     expect(screen.getByTestId('build-workspace')).toBeInTheDocument();
     expect(screen.getByTestId('build-workspace-empty')).toBeInTheDocument();
-    expect(screen.getByTestId('build-workspace-sandbox-frame')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('build-workspace-sandbox-frame')
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('build-workspace-composer-input'), {
       target: { value: 'Add a calendar component to the home page' },
@@ -280,14 +311,14 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent(
-        '/builds/16dd6dcc-595d-48b8-8da8-1110751a2320',
-      ),
+        '/builds/16dd6dcc-595d-48b8-8da8-1110751a2320'
+      )
     );
     expect(startMutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         repository: 'Amergis Connect - ATS',
         prompt: 'Add a calendar component to the home page',
-      }),
+      })
     );
   });
 
@@ -300,27 +331,32 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
         409,
         '2 things need fixing before this build can start.',
         'BUILD_PREFLIGHT_REFUSED',
-        ['No deploy pipeline is set.', 'No quality manifest path is set.'],
+        ['No deploy pipeline is set.', 'No quality manifest path is set.']
       ),
     });
 
     render(
       <MemoryRouter initialEntries={['/builds/new']}>
         <BuildWorkspace project="Amergis Connect - ATS" />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
-    expect(screen.getByTestId('build-workspace-error-banner')).toHaveTextContent(
-      '2 things need fixing before this build can start.',
-    );
-    expect(screen.getByTestId('build-workspace-refusal-list').querySelectorAll('li')).toHaveLength(
-      2,
-    );
+    expect(
+      screen.getByTestId('build-workspace-error-banner')
+    ).toHaveTextContent('2 things need fixing before this build can start.');
+    expect(
+      screen.getByTestId('build-workspace-refusal-list').querySelectorAll('li')
+    ).toHaveLength(2);
   });
 
   it('groups _reasoning, _thinking, and tool rows into Brainstorm-style collapsible activity traces', () => {
     const grouped = groupChatMessagesIntoTurns([
-      { id: 'u1', role: 'user', text: 'Build a calendar', ts: '2026-11-04T05:00:00Z' },
+      {
+        id: 'u1',
+        role: 'user',
+        text: 'Build a calendar',
+        ts: '2026-11-04T05:00:00Z',
+      },
       {
         id: 'r1',
         role: 'agent',
@@ -345,7 +381,9 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
 
     expect(grouped.turns).toHaveLength(2);
     expect(grouped.turns[1].activity).toHaveLength(2);
-    expect(activitySummaryLabel(grouped.turns[1].activity)).toBe('Thought process · 1 step');
+    expect(activitySummaryLabel(grouped.turns[1].activity)).toBe(
+      'Thought process · 1 step'
+    );
     expect(grouped.pendingActivity).toEqual([]);
   });
 
@@ -357,7 +395,12 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
     mockUseAgentChat.mockReturnValue({
       messages: [
-        { id: 'm1', role: 'user', text: 'Add a calendar component to the home page', ts: '1' },
+        {
+          id: 'm1',
+          role: 'user',
+          text: 'Add a calendar component to the home page',
+          ts: '1',
+        },
         {
           id: 'm1-think',
           role: 'agent',
@@ -388,24 +431,28 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
 
     render(
-      <MemoryRouter initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}>
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
         <BuildWorkspace
           project="Amergis Connect - ATS"
           buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
         />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
     expect(screen.getByTestId('build-workspace-user-msg')).toHaveTextContent(
-      'Add a calendar component to the home page',
+      'Add a calendar component to the home page'
     );
-    expect(screen.getByTestId('build-workspace-thought-process')).toHaveTextContent(
-      'Thought process',
-    );
-    expect(screen.getByTestId('build-workspace-confirm-bar')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('build-workspace-thought-process')
+    ).toHaveTextContent('Thought process');
+    expect(
+      screen.getByTestId('build-workspace-confirm-bar')
+    ).toBeInTheDocument();
   });
 
-  it('triggers ensurePlanning on planning status and renders live autonomous activity and task pills', () => {
+  it('triggers the build on planning status and keeps internal task names out of the primary experience', () => {
     mockUseBuild.mockReturnValue({
       data: baseDetail({
         build: { ...baseDetail().build, status: 'planning' },
@@ -438,7 +485,7 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
             occurredAt: '2026-11-04T04:11:53.210Z',
             kind: 'build.planning_started',
             message: 'Planning started',
-            taskKey: null,
+            taskKey: 't-impl-1',
           },
         ],
         total: 1,
@@ -447,32 +494,46 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
 
     render(
-      <MemoryRouter initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}>
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
         <BuildWorkspace
           project="Amergis Connect - ATS"
           buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
         />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
     expect(ensurePlanningMutate).toHaveBeenCalledWith({});
-    expect(screen.getByTestId('build-workspace-autonomous-card')).toBeInTheDocument();
-    expect(screen.getByTestId('build-workspace-event-row')).toHaveTextContent('Planning started');
-    expect(screen.getByTestId('build-workspace-task-pill-t-impl-1')).toHaveTextContent(
-      't-impl-1· running',
+    expect(
+      screen.getByTestId('build-workspace-autonomous-card')
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('build-workspace-event-row')).toHaveTextContent(
+      'Planning started'
     );
+    expect(
+      screen.getByTestId('build-workspace-stage-headline')
+    ).toHaveTextContent('Preparing your repository and build instructions');
+    expect(
+      screen.queryByTestId('build-workspace-task-pill-t-impl-1')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('build-workspace-event-row')
+    ).not.toHaveTextContent('t-impl-1');
   });
 
   it('renders Create Pull Request when preview_ready and View Pull Request link once accepted', async () => {
     acceptMutateAsync.mockResolvedValue({ status: 'accepted' });
 
     const { rerender } = render(
-      <MemoryRouter initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}>
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
         <BuildWorkspace
           project="Amergis Connect - ATS"
           buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
         />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
     mockUseBuild.mockReturnValue({
@@ -484,17 +545,21 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
 
     rerender(
-      <MemoryRouter initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}>
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
         <BuildWorkspace
           project="Amergis Connect - ATS"
           buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
         />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
     const createPrBtn = screen.getByTestId('build-workspace-create-pr-button');
     fireEvent.click(createPrBtn);
-    await waitFor(() => expect(acceptMutateAsync).toHaveBeenCalledWith({ revisionNumber: 1 }));
+    await waitFor(() =>
+      expect(acceptMutateAsync).toHaveBeenCalledWith({ revisionNumber: 1 })
+    );
 
     mockUseBuild.mockReturnValue({
       data: baseDetail({
@@ -512,18 +577,20 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
 
     rerender(
-      <MemoryRouter initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}>
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
         <BuildWorkspace
           project="Amergis Connect - ATS"
           buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
         />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
     const prLink = screen.getByTestId('build-workspace-pr-link');
     expect(prLink).toHaveAttribute(
       'href',
-      'https://dev.azure.com/amergis/Amergis%20Connect%20-%20ATS/_git/Amergis%20Connect%20-%20ATS/pullrequest/42',
+      'https://dev.azure.com/amergis/Amergis%20Connect%20-%20ATS/_git/Amergis%20Connect%20-%20ATS/pullrequest/42'
     );
   });
 
@@ -537,23 +604,31 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
 
     render(
-      <MemoryRouter initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}>
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
         <BuildWorkspace
           project="Amergis Connect - ATS"
           buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
         />
-      </MemoryRouter>,
+      </MemoryRouter>
     );
 
-    expect(screen.getByTestId('build-workspace-preview-panel')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('build-workspace-preview-panel')
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('build-workspace-plan-tab'));
-    expect(screen.getByTestId('build-workspace-plan-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('build-workspace-requirements-list')).toHaveTextContent(
-      'AC-1: Renders calendar on the home page',
-    );
+    expect(
+      screen.getByTestId('build-workspace-plan-panel')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('build-workspace-requirements-list')
+    ).toHaveTextContent('AC-1: Renders calendar on the home page');
 
     fireEvent.click(screen.getByTestId('build-workspace-side-minimize'));
-    expect(screen.queryByTestId('build-workspace-plan-panel')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('build-workspace-plan-panel')
+    ).not.toBeInTheDocument();
   });
 });

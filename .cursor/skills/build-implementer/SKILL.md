@@ -1,6 +1,6 @@
 ---
 name: build-implementer
-description: Implements one build task test-first from a validated plan or small-path brief. Searches the repository before creating anything new, commits a failing test (red) then minimal passing code (green) for every owned requirement and risk decision, runs the quality manifest checks, reviews against the standards contract, and emits a versioned apex-evidence block.
+description: Implements one complete prompted feature in a repository-agent run. Searches before creating code, plans internally without pausing, uses a focused red commit followed by a green implementation commit, runs and repairs the quality checks, and emits structured evidence for every requirement.
 disable-model-invocation: true
 ---
 
@@ -8,11 +8,11 @@ disable-model-invocation: true
 
 ## Purpose
 
-The `build-implementer` skill serves the Implementer role in a Build from prompt run. It classifies the task, reads the standards contract and reuse list before writing code, implements every owned requirement (`AC-*`, `DOD-*`, `BR-*`, `NFR-*`) and risk decision (`RD-*`) test-first with separate red and green commits, runs the quality manifest checks (`typeCheck`, `lint`, `relatedTests`), reviews against the standards contract, and emits a versioned `apex-evidence` block.
+The `build-implementer` skill performs the complete repository change for a Build from prompt run. It plans internally, reads the standards contract before writing code, implements every owned requirement (`AC-*`, `DOD-*`, `BR-*`, `NFR-*`) and risk decision (`RD-*`), runs and repairs the quality checks, reviews the resulting diff, and emits a versioned `apex-evidence` block for evaluation and future training.
 
 ## When to use
 
-Use this skill for every `implementer`-role build task on the `small` or `full` path. Do not use it to author a full multi-task plan (`build-planner` owns that) or to decide final integration readiness (`build-check` / `build-final-check` owns that).
+Use this skill for the single repository-agent step after the requester confirms the scope. Do not stop to show or request approval for an internal technical plan. Stop only when a listed stop condition prevents a safe implementation.
 
 ## Inputs
 
@@ -39,8 +39,8 @@ The per-task envelope supplies these inputs. Read the repository files before th
 | ID      | Rule                                                                                                                                                                                                 | Enforced by                  |
 | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
 | IMP-R01 | Search the code map, the reuse list, and the repository before creating any new component, hook, service, or helper. Reuse existing modules whenever they fit.                                       | Standards review             |
-| IMP-R02 | Commit a failing test (`test(<ID>): <summary>`) before writing implementation code, then commit minimal passing code (`feat(<ID>): <summary>`) on a distinct commit for every owned requirement.     | Verification evidence check  |
-| IMP-R03 | Follow the exact same red-then-green commit sequence (`test(<ID>): <summary>` then `feat(<ID>): <summary>`) for every owned risk decision (`RD-*`).                                                  | Verification evidence check  |
+| IMP-R02 | Add focused failing tests for the owned requirements, commit them together as `test(build): <summary>`, then commit the passing implementation separately as `feat(build): <summary>`.               | Verification evidence check  |
+| IMP-R03 | Every owned requirement and risk decision must map to a named test and to the red and green commits; related requirements may share the same commit pair.                                               | Verification evidence check  |
 | IMP-R04 | Run the quality manifest commands (`typeCheck`, `lint`, `relatedTests`), fix breaks in-session, and report only the final passing run (`exitCode: 0`) so in-session fixes use zero repair attempts. | Verification evidence check  |
 | IMP-R05 | Review the diff against the frozen standards contract (`design-system`, `coding rules`, `code map`) for duplicated helpers, hard-coded colours, off-library components, and missing accessibility.   | Standards review             |
 | IMP-R06 | Never put a hard-coded secret, bearer token, connection string, or personal identity value in code, tests, commit messages, or evidence output.                                                      | Redaction & evidence check   |
@@ -49,16 +49,16 @@ The per-task envelope supplies these inputs. Read the repository files before th
 ## Procedure
 
 1. **Search before creating**: Read the code map, coding rules, design-system file, and reuse list, and search the repository before creating any new component, hook, service, or helper.
-2. **Commit a failing test (red) for each owned requirement**:
-   - Write a focused test in an owned test file whose test name begins with the requirement ID (for example `AC-1: rejects an empty title`).
-   - Run only that test command and confirm the run fails (non-zero exit code) with the test name listed in `failedTests`. A red run that does not execute the named test does not count.
-   - Commit the failing test with the commit subject format `test(<ID>): <summary>` (for example `test(AC-1): add failing test for empty title validation`) and record the red commit SHA, command, exit code, failed test names, and output.
-3. **Commit the minimal passing code (green) for each owned requirement**:
-   - Write the smallest implementation change that makes the failing test pass without weakening the test assertion.
-   - Run the test command and confirm it exits with code `0` and lists the test name in `passedTests`.
-   - Commit the implementation on a new commit distinct from the red commit with the commit subject format `feat(<ID>): <summary>` (for example `feat(AC-1): reject empty title in validation`) and record the green commit SHA, command, exit code, passed test names, and output.
-4. **Commit red then green for each owned risk decision**:
-   - For every owned risk decision (`RD-*`), follow the same red-then-green sequence: write a test named `RD-<N>: <constraint assertion>` that fails when the risk constraint is violated, commit as `test(<ID>): <summary>`, implement the safeguard so the test passes, and commit as `feat(<ID>): <summary>` on a separate commit.
+2. **Create one focused red test set**:
+   - Write named tests for every owned requirement and risk decision. Test names begin with their IDs.
+   - Run the focused tests and confirm the relevant assertions fail for the missing behavior.
+   - Commit the test set once as `test(build): <summary>` and record that commit and final red output for each covered ID.
+3. **Implement the complete feature**:
+   - Reuse repository patterns and shared components wherever they fit.
+   - Implement the smallest coherent change that makes the focused test set pass.
+   - Commit the implementation separately as `feat(build): <summary>`. The red and green commit SHAs must differ.
+4. **Verify every requirement**:
+   - Run the focused tests again and map each owned requirement and risk decision to its named passing test and the shared red/green commit pair.
 5. **Run quality manifest checks (`typeCheck`, `lint`, `relatedTests`)**:
    - Run the manifest's `typeCheck` command, `lint` command, and `relatedTests` command (replacing `{files}` with the changed files).
    - If any check or related test fails because of your change, fix the break inside the current session and re-run until `typeCheck`, `lint`, and `relatedTests` all exit with `0`.
@@ -88,8 +88,8 @@ When running on the `small` path, if you find that the feature requires more tha
 | Item                                                                                     | Evidence source                       | Met? (yes, no, not applicable) |
 | ---------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------ |
 | Searched code map and reuse list before creating new modules (IMP-R01)                   | Commit diff and reuse list            |                                |
-| Every owned requirement has distinct red (`test(<ID>):`) and green (`feat(<ID>):`) commits (IMP-R02) | `entries[].red` and `entries[].green` |                                |
-| Every owned risk decision (`RD-*`) has distinct red and green commits (IMP-R03)          | `entries[]` for `RD-*`                |                                |
+| Every owned requirement maps to a named red/green test and a distinct red/green commit pair (IMP-R02) | `entries[].red` and `entries[].green` |                                |
+| Every owned risk decision (`RD-*`) maps to evidence; related IDs may share a commit pair (IMP-R03) | `entries[]` for `RD-*`                |                                |
 | `typeCheck`, `lint`, and `relatedTests` exited with `0` (IMP-R04)                        | `checks` object                       |                                |
 | Standards contract reviewed with zero open findings (IMP-R05)                            | `standardsReview`                     |                                |
 | No secrets, tokens, or personal identity values appear in code or output (IMP-R06)       | Diff and `apex-evidence`              |                                |

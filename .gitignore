@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 build/
+# `build/` above is generated output; this is Build from prompt source code.
+!src/server/services/build/
+!src/server/services/build/**
 # Generated from @pdftron/webviewer during dev/build.
 public/apryse-webviewer/
 

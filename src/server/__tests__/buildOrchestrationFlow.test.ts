@@ -22,7 +22,8 @@ describe('buildOrchestrationFlow & taskCandidateBuilder', () => {
       revisionNumber: 1,
       classification: 'full',
       integrationBranch: 'apex/build/16dd6dcc-595d-48b8-8da8-1110751a2320',
-      targetBranch: 'apex/build/16dd6dcc-595d-48b8-8da8-1110751a2320/t-impl-1-1',
+      targetBranch:
+        'apex/build/16dd6dcc-595d-48b8-8da8-1110751a2320/t-impl-1-1',
       taskKey: 't-impl-1',
       role: 'implementer',
       attempt: 1,
@@ -82,11 +83,19 @@ describe('buildOrchestrationFlow & taskCandidateBuilder', () => {
       skillPath: '.cursor/skills/build-implementer/SKILL.md',
     });
 
-    expect(prompt).toContain('Read and follow the skill at `.cursor/skills/build-implementer/SKILL.md`.');
-    expect(prompt).toContain('AC-1 (AC): Renders the monthly calendar view on the home page');
+    expect(prompt).toContain(
+      'Read and follow the skill at `.cursor/skills/build-implementer/SKILL.md`.'
+    );
+    expect(prompt).toContain(
+      'AC-1 (AC): Renders the monthly calendar view on the home page'
+    );
     expect(prompt).not.toContain('AC-2');
-    expect(prompt).toContain('RD-1 (access, low): Keep calendar scoped to authenticated principal');
-    expect(prompt).toContain('apps/web/src/features/calendar/CalendarWidget.tsx');
+    expect(prompt).toContain(
+      'RD-1 (access, low): Keep calendar scoped to authenticated principal'
+    );
+    expect(prompt).toContain(
+      'apps/web/src/features/calendar/CalendarWidget.tsx'
+    );
     expect(prompt).toContain('packages/ui/src/index.ts (LoadingState)');
     expect(prompt).toContain('corepack pnpm typecheck');
     expect(prompt).toContain('apex-evidence');
@@ -171,20 +180,36 @@ describe('buildOrchestrationFlow & taskCandidateBuilder', () => {
 
   it('synthesizes a schema-valid fallback BuildPlan covering all active requirements', () => {
     const requirements = [
-      { id: 'AC-1', kind: 'ac' as const, text: 'Renders calendar grid', retired: false },
-      { id: 'AC-2', kind: 'ac' as const, text: 'Supports month navigation', retired: false },
+      {
+        id: 'AC-1',
+        kind: 'ac' as const,
+        text: 'Renders calendar grid',
+        retired: false,
+      },
+      {
+        id: 'AC-2',
+        kind: 'ac' as const,
+        text: 'Supports month navigation',
+        retired: false,
+      },
     ];
     const plan = synthesizeFallbackBuildPlan(
       '70a4c165-7293-4ec6-b81e-cbea2764c4ca',
       requirements,
-      [],
+      []
     );
     const result = validateBuildPlan({
       plan,
       requirements,
       riskDecisions: [],
-      classification: 'full',
+      classification: 'small',
     });
     expect(result.ok).toBe(true);
+    expect(plan.tasks).toHaveLength(1);
+    expect(plan.tasks[0]).toMatchObject({
+      key: 'build-feature',
+      role: 'implementer',
+      covers: ['AC-1', 'AC-2'],
+    });
   });
 });

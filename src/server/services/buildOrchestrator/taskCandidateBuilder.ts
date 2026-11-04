@@ -20,7 +20,10 @@ import {
   storeLocalBuildPromptBlob,
 } from '../buildAgentLaunchService';
 import { CURSOR_PROMPT_CONTAINER } from '../cursorPromptStore';
-import type { BuildLaunchCandidateBuilder, BuildTaskLaunchRequest } from './taskLauncher';
+import type {
+  BuildLaunchCandidateBuilder,
+  BuildTaskLaunchRequest,
+} from './taskLauncher';
 
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -50,22 +53,32 @@ export interface TaskPromptEnvelopeInput {
   skillPath: string;
 }
 
-export function buildTaskExecutionPrompt(input: TaskPromptEnvelopeInput): string {
+export function buildTaskExecutionPrompt(
+  input: TaskPromptEnvelopeInput
+): string {
   const ownedReqs = input.requirements.filter(
-    (r) => !r.retired && (input.covers.length === 0 || input.covers.includes(r.id)),
+    (r) =>
+      !r.retired && (input.covers.length === 0 || input.covers.includes(r.id))
   );
   const ownedRisks = input.riskDecisions.filter(
-    (r) => input.covers.length === 0 || input.covers.includes(r.id),
+    (r) => input.covers.length === 0 || input.covers.includes(r.id)
   );
 
   const reqLines =
     ownedReqs.length > 0
-      ? ownedReqs.map((r) => `- ${r.id} (${r.kind.toUpperCase()}): ${r.text}`).join('\n')
+      ? ownedReqs
+          .map((r) => `- ${r.id} (${r.kind.toUpperCase()}): ${r.text}`)
+          .join('\n')
       : '- (Follow task scope from the plan)';
 
   const riskLines =
     ownedRisks.length > 0
-      ? ownedRisks.map((r) => `- ${r.id} (${r.category}, ${r.rating}): ${r.decision} — ${r.rationale}`).join('\n')
+      ? ownedRisks
+          .map(
+            (r) =>
+              `- ${r.id} (${r.category}, ${r.rating}): ${r.decision} — ${r.rationale}`
+          )
+          .join('\n')
       : '- None';
 
   const ownedFilesLines =
@@ -76,14 +89,23 @@ export function buildTaskExecutionPrompt(input: TaskPromptEnvelopeInput): string
   const reuseLines =
     input.reuse.length > 0
       ? input.reuse
-          .map((r) => `- ${r.path}${r.symbol ? ` (${r.symbol})` : ''}${r.reason ? ` — ${r.reason}` : ''}`)
+          .map(
+            (r) =>
+              `- ${r.path}${r.symbol ? ` (${r.symbol})` : ''}${r.reason ? ` — ${r.reason}` : ''}`
+          )
           .join('\n')
       : '- Search `.cursor/CODEMAP.md` before creating new modules';
 
   return [
     `Read and follow the skill at \`${input.skillPath}\`.`,
     '',
-    '## Task Envelope',
+    '## Repository Build',
+    'Plan the change internally, then implement it completely in this run. Do not pause for plan approval.',
+    'Inspect existing repository patterns and shared components before creating new code.',
+    'Add or update automated tests, run the quality commands below, and repair failures before finishing.',
+    'Apex will open the pull request after verification; do not open or complete one yourself.',
+    '',
+    '## Execution Envelope',
     `- Build Run ID: \`${input.buildRunId}\``,
     `- Revision: \`${input.revisionNumber}\``,
     `- Classification: \`${input.classification}\``,
@@ -92,7 +114,6 @@ export function buildTaskExecutionPrompt(input: TaskPromptEnvelopeInput): string
     `- Attempt Number: \`${input.attempt}\``,
     `- Integration Branch: \`${input.integrationBranch}\``,
     `- Target Task Branch: \`${input.targetBranch}\``,
-    `- Plan Path: \`.apex/build/${input.buildRunId}/plan.json\``,
     '',
     '## Feature Request Summary',
     input.briefPrompt,
@@ -126,7 +147,7 @@ export function buildTaskExecutionPrompt(input: TaskPromptEnvelopeInput): string
 
 function resolveRoleSkill(
   snapshot: BuildSkillSnapshot,
-  role: BuildTaskRole,
+  role: BuildTaskRole
 ): { model: string; path: string; contentHash: string } {
   switch (role) {
     case 'qa':
@@ -159,7 +180,7 @@ function resolveRoleSkill(
 }
 
 export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
-  request: BuildTaskLaunchRequest,
+  request: BuildTaskLaunchRequest
 ) => {
   const headTask = request.tasks[0];
   if (!headTask) {
@@ -181,8 +202,8 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
     .where(
       and(
         eq(buildRevisions.id, request.run.revisionId),
-        eq(buildRevisions.buildRunId, request.run.id),
-      ),
+        eq(buildRevisions.buildRunId, request.run.id)
+      )
     )
     .limit(1);
   if (!revRow) {
@@ -196,16 +217,17 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
   const taskMap = new Map(fullTasks.map((t) => [t.id, t]));
 
   const ownedFiles = Array.from(
-    new Set(request.tasks.flatMap((t) => taskMap.get(t.id)?.ownedFiles ?? [])),
+    new Set(request.tasks.flatMap((t) => taskMap.get(t.id)?.ownedFiles ?? []))
   );
   const covers = Array.from(
-    new Set(request.tasks.flatMap((t) => taskMap.get(t.id)?.covers ?? [])),
+    new Set(request.tasks.flatMap((t) => taskMap.get(t.id)?.covers ?? []))
   );
   const reuse = request.tasks.flatMap((t) => taskMap.get(t.id)?.reuse ?? []);
 
   const skillSnapshot = runRow.skillSnapshot;
   const roleSkill = resolveRoleSkill(skillSnapshot, headTask.role);
-  const integrationBranch = runRow.integrationBranch ?? integrationBranchName(runRow.id);
+  const integrationBranch =
+    runRow.integrationBranch ?? integrationBranchName(runRow.id);
 
   const standards = {
     designSystem: {
@@ -243,12 +265,14 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
   });
 
   const container =
-    process.env.CURSOR_PROMPT_BLOB_CONTAINER_NAME?.trim() || CURSOR_PROMPT_CONTAINER;
+    process.env.CURSOR_PROMPT_BLOB_CONTAINER_NAME?.trim() ||
+    CURSOR_PROMPT_CONTAINER;
   const promptKey = `${BUILD_PROMPT_KEY_PREFIX}${runRow.id}/r${revRow.revisionNumber}/${headTask.key}/attempt-${request.attempt}/prompt.txt`;
   const contextKey = `${BUILD_PROMPT_KEY_PREFIX}${runRow.id}/r${revRow.revisionNumber}/context.txt`;
 
   const promptHash = sha256Hex(promptText);
-  const contextText = revRow.contextNotesPath ?? `.apex/build/${runRow.id}/context-notes.md`;
+  const contextText =
+    revRow.contextNotesPath ?? `.apex/build/${runRow.id}/context-notes.md`;
   const contextHash = sha256Hex(contextText);
 
   storeLocalBuildPromptBlob({ container, key: promptKey }, promptText);

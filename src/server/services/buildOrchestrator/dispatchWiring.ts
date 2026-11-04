@@ -3,17 +3,21 @@
  * Tests build their own with the factories; later features swap a port with
  * `registerBuildDispatchPorts`.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import type { BuildSuspendReason } from '../../../shared/types/build';
 import { db } from '../../db/drizzle';
-import { buildRuns, buildTasks } from '../../db/schema';
+import { buildRuns, buildTasks, playbookStepRuns } from '../../db/schema';
 import { markTerminal, requestCancel } from '../agentRunLifecycleService';
 import { AzureDevOpsService } from '../azureDevOps';
 import { mergeTaskBranch } from '../build/buildMergeService';
 import { applyMergeOutcome } from '../build/mergeOutcome';
 import { createMayReportDone } from '../builds/buildVerificationApply';
 import { recordTaskEvidence } from '../builds/verificationEvidenceRecorder';
-import { cancelCursorCloudAgentRun, getCloudAgentRun, streamCloudAgentRun } from '../cursorCloudAgentClient';
+import {
+  cancelCursorCloudAgentRun,
+  getCloudAgentRun,
+  streamCloudAgentRun,
+} from '../cursorCloudAgentClient';
 import { trackEvent } from '../telemetry';
 import {
   createCompletionHandler,
@@ -22,12 +26,23 @@ import {
   type CompletionOutcome,
 } from './applyCompletion';
 import { createDispatchNext, type DispatchOutcome } from './dispatchRun';
-import { canObserveAgentRun, createDrizzleDispatchStore, type BuildAgentRunRow } from './dispatchStore';
-import { checkTaskLaunch, defaultLaunchGuardDeps, readBuildFlag } from './launchGuard';
+import {
+  canObserveAgentRun,
+  createDrizzleDispatchStore,
+  type BuildAgentRunRow,
+} from './dispatchStore';
+import {
+  checkTaskLaunch,
+  defaultLaunchGuardDeps,
+  readBuildFlag,
+} from './launchGuard';
 import { createBuildReconciler, type BuildSweepOutcome } from './reconcile';
 import { buildTaskLaunchCandidate } from './taskCandidateBuilder';
 import { createTaskFailurePolicy } from './taskFailure';
-import { createTaskLauncher, type BuildLaunchCandidateBuilder } from './taskLauncher';
+import {
+  createTaskLauncher,
+  type BuildLaunchCandidateBuilder,
+} from './taskLauncher';
 
 export interface BuildDispatchPorts {
   buildCandidate: BuildLaunchCandidateBuilder;
@@ -88,7 +103,7 @@ const defaultMayReportDone: CompletionDeps['mayReportDone'] = async (input) => {
       const branchHead = await ado.getBranchHeadCommit(
         runRow.repository,
         runRow.project,
-        headTask.branchName,
+        headTask.branchName
       );
       if (branchHead) return true;
     }
@@ -111,14 +126,20 @@ const defaultPorts: BuildDispatchPorts = {
 let ports: BuildDispatchPorts = defaultPorts;
 let services: ReturnType<typeof createServices> | null = null;
 
-export function registerBuildDispatchPorts(overrides: Partial<BuildDispatchPorts>): void {
+export function registerBuildDispatchPorts(
+  overrides: Partial<BuildDispatchPorts>
+): void {
   ports = { ...ports, ...overrides };
   services = null;
 }
 
 async function cancelAgent(agentRun: BuildAgentRunRow): Promise<void> {
   await requestCancel(agentRun.id);
-  if (agentRun.projectId && agentRun.cloudAgentIdentity && agentRun.dispatchMessageId) {
+  if (
+    agentRun.projectId &&
+    agentRun.cloudAgentIdentity &&
+    agentRun.dispatchMessageId
+  ) {
     await cancelCursorCloudAgentRun({
       project: agentRun.projectId,
       cloudAgentId: agentRun.cloudAgentIdentity,
@@ -128,16 +149,22 @@ async function cancelAgent(agentRun: BuildAgentRunRow): Promise<void> {
   await markTerminal(agentRun.id, {
     status: 'cancelled',
     terminalReason: 'forced_cancel',
-    ...(agentRun.dispatchMessageId ? { dispatchMessageId: agentRun.dispatchMessageId } : {}),
+    ...(agentRun.dispatchMessageId
+      ? { dispatchMessageId: agentRun.dispatchMessageId }
+      : {}),
   });
 }
 
 function createServices() {
   const store = createDrizzleDispatchStore();
-  const guardDeps = defaultLaunchGuardDeps((userId) => store.loadUserEmail(userId));
+  const guardDeps = defaultLaunchGuardDeps((userId) =>
+    store.loadUserEmail(userId)
+  );
   const failTask = createTaskFailurePolicy({ store, track: trackEvent });
 
-  let dispatchNext: (buildRunId: string) => Promise<DispatchOutcome> = async () => {
+  let dispatchNext: (
+    buildRunId: string
+  ) => Promise<DispatchOutcome> = async () => {
     throw new Error('Build dispatch is not ready.');
   };
 
@@ -145,7 +172,10 @@ function createServices() {
     store,
     observe: getCloudAgentRun,
     markTerminal: async (agentRunId, status, dispatchMessageId) => {
-      await markTerminal(agentRunId, { status, ...(dispatchMessageId ? { dispatchMessageId } : {}) });
+      await markTerminal(agentRunId, {
+        status,
+        ...(dispatchMessageId ? { dispatchMessageId } : {}),
+      });
     },
     mayReportDone: (input) => ports.mayReportDone(input),
     requestMerge: (input) => ports.requestMerge(input),
@@ -154,12 +184,17 @@ function createServices() {
     track: trackEvent,
   });
 
-  const watcher = createCompletionWatcher({ stream: streamCloudAgentRun, apply: applyCompletion });
+  const watcher = createCompletionWatcher({
+    stream: streamCloudAgentRun,
+    apply: applyCompletion,
+  });
 
   dispatchNext = createDispatchNext({
     store,
     guard: (run) => checkTaskLaunch(run, guardDeps),
-    launch: createTaskLauncher({ buildCandidate: (request) => ports.buildCandidate(request) }),
+    launch: createTaskLauncher({
+      buildCandidate: (request) => ports.buildCandidate(request),
+    }),
     failTask,
     onLaunched: (agent) => watcher.watch(agent),
     track: trackEvent,
@@ -187,16 +222,60 @@ export function dispatchNext(buildRunId: string): Promise<DispatchOutcome> {
   return current().dispatchNext(buildRunId);
 }
 
-export function applyAgentCompletion(input: { agentRunId: string }): Promise<CompletionOutcome> {
+export function applyAgentCompletion(input: {
+  agentRunId: string;
+}): Promise<CompletionOutcome> {
   return current().applyCompletion(input);
 }
 
-export function reconcileBuildRuns(): Promise<BuildSweepOutcome> {
-  return current().reconcile();
+async function reconcileAcceptedBuilds(): Promise<void> {
+  const rows = await db
+    .select({ id: buildRuns.id })
+    .from(buildRuns)
+    .leftJoin(
+      playbookStepRuns,
+      eq(playbookStepRuns.id, buildRuns.playbookStepRunId)
+    )
+    .where(
+      and(
+        eq(buildRuns.status, 'accepted'),
+        or(
+          isNull(buildRuns.pullRequestUrl),
+          and(
+            isNotNull(buildRuns.playbookStepRunId),
+            eq(playbookStepRuns.status, 'suspended')
+          )
+        )
+      )
+    )
+    .limit(25);
+
+  if (rows.length === 0) return;
+  const { defaultBuildAcceptService } =
+    await import('../build/buildAcceptService');
+  for (const row of rows) {
+    try {
+      await defaultBuildAcceptService.continueAccept(row.id);
+    } catch (error) {
+      console.warn(
+        '[build-reconciliation] accepted build retry failed:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+}
+
+export async function reconcileBuildRuns(): Promise<BuildSweepOutcome> {
+  const outcome = await current().reconcile();
+  await reconcileAcceptedBuilds();
+  return outcome;
 }
 
 /** The one place that suspends an active run and writes its timeline event. */
-export async function suspendRun(buildRunId: string, reason: BuildSuspendReason): Promise<boolean> {
+export async function suspendRun(
+  buildRunId: string,
+  reason: BuildSuspendReason
+): Promise<boolean> {
   const suspended = await current().store.suspend(buildRunId, reason);
   if (suspended) trackEvent('build_run.suspended', { buildRunId, reason });
   return suspended;

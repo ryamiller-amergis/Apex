@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   BUILD_PROMPT_MAX_LENGTH,
@@ -9,7 +15,10 @@ import type { ChatMessage } from '../../shared/types/chat';
 import { stripBuildIntakeMarkers } from '../../shared/utils/buildIntakeMarkers';
 import { friendlyToolActivityLabel } from '../../shared/utils/chatProgressCopy';
 import { DEFAULT_MODEL_ID } from '../config/models';
-import { useAgentChatSession, type AgentChatSession } from '../hooks/useAgentChatSession';
+import {
+  useAgentChatSession,
+  type AgentChatSession,
+} from '../hooks/useAgentChatSession';
 import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import {
   BuildApiError,
@@ -29,7 +38,10 @@ import { useChatThread } from '../hooks/useChatThreads';
 import { useInterview } from '../hooks/useInterviews';
 import { useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useSpeechInput } from '../hooks/useSpeechInput';
-import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
+import {
+  parseAgentMessage,
+  type ChoiceBlock,
+} from '../utils/parseAgentMessage';
 import { stripInterviewPhaseMarkers } from '../utils/interviewPhaseProgress';
 import { AgentComposer } from './agentChat';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
@@ -59,7 +71,10 @@ export interface GroupedChatTurn {
 }
 
 function newClientRequestId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return crypto.randomUUID();
   }
   return `build-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -67,7 +82,12 @@ function newClientRequestId(): string {
 
 function toolTarget(args: unknown): string | null {
   if (!args || typeof args !== 'object') return null;
-  const record = args as { target?: unknown; path?: unknown; command?: unknown; args?: unknown };
+  const record = args as {
+    target?: unknown;
+    path?: unknown;
+    command?: unknown;
+    args?: unknown;
+  };
   for (const candidate of [record.target, record.path, record.command]) {
     if (typeof candidate === 'string' && candidate.trim()) {
       return candidate.trim().slice(0, 140);
@@ -130,7 +150,10 @@ export function groupChatMessagesIntoTurns(messages: readonly ChatMessage[]): {
       continue;
     }
 
-    if (msg.role === 'agent' && (msg.toolName === '_reasoning' || msg.toolName === '_thinking')) {
+    if (
+      msg.role === 'agent' &&
+      (msg.toolName === '_reasoning' || msg.toolName === '_thinking')
+    ) {
       const text = msg.text?.trim();
       if (text) {
         stagedActivity.push({
@@ -214,7 +237,9 @@ function BuildActivityLog({ items }: { items: BuildActivityItem[] }) {
             <span>
               <span className={styles.stepStatus}>{status}</span>
               <span className={styles.stepLabel}>{label}</span>
-              {target ? <code className={styles.stepTarget}>{` — ${target}`}</code> : null}
+              {target ? (
+                <code className={styles.stepTarget}>{` — ${target}`}</code>
+              ) : null}
             </span>
           </div>
         );
@@ -236,7 +261,9 @@ function BuildCollapsibleTrace({
     <details
       className={styles.traceDrawer}
       open={open}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+      onToggle={(event) =>
+        setOpen((event.currentTarget as HTMLDetailsElement).open)
+      }
       {...{ 'data-testid': 'build-workspace-thought-process' }}
     >
       <summary
@@ -264,13 +291,18 @@ function BuildAgentWork({
   persistedActivity?: BuildActivityItem[];
   fallbackStageLabel?: string;
 }) {
-  const toolProgress = useMemo(() => chat.toolProgress ?? [], [chat.toolProgress]);
+  const toolProgress = useMemo(
+    () => chat.toolProgress ?? [],
+    [chat.toolProgress]
+  );
   const toolRunning = toolProgress.some((tool) => tool.status === 'running');
   const writing = Boolean(text && text.trim()) && !toolRunning;
   const activityLabel =
     chat.progressLabel ||
     fallbackStageLabel ||
-    (chat.isSending ? 'Preparing repository context…' : 'Working through your request…');
+    (chat.isSending
+      ? 'Preparing repository context…'
+      : 'Working through your request…');
   const [liveItems, setLiveItems] = useState<BuildActivityItem[]>([]);
 
   useEffect(() => {
@@ -316,7 +348,7 @@ function BuildAgentWork({
           target: toolTarget(tool.args),
         };
         const existingIdx = next.findIndex(
-          (item) => item.kind === 'tool' && item.id === tool.callId,
+          (item) => item.kind === 'tool' && item.id === tool.callId
         );
         if (existingIdx >= 0) {
           next[existingIdx] = {
@@ -340,7 +372,11 @@ function BuildAgentWork({
   }, [liveItems, persistedActivity]);
 
   return (
-    <div aria-live="polite" aria-busy="true" {...{ 'data-testid': 'build-workspace-agent-progress' }}>
+    <div
+      aria-live="polite"
+      aria-busy="true"
+      {...{ 'data-testid': 'build-workspace-agent-progress' }}
+    >
       {!writing ? (
         <div className={styles.liveWorkBox}>
           <p className={styles.activity}>
@@ -376,14 +412,14 @@ interface PipelineStepItem {
 
 export function derivePipelineSteps(
   status: BuildRunStatus | undefined,
-  hasPullRequest: boolean,
+  hasPullRequest: boolean
 ): PipelineStepItem[] {
   const order: Array<{ key: string; label: string }> = [
-    { key: 'intake', label: '1. Intake & Requirements' },
-    { key: 'planning', label: '2. Technical Plan & Scaffold' },
-    { key: 'building', label: '3. TDD Implementation & QA' },
-    { key: 'checking', label: '4. Final Check & Standards' },
-    { key: 'pr', label: '5. Pull Request Ready' },
+    { key: 'intake', label: '1. Request understood' },
+    { key: 'planning', label: '2. Preparing your build' },
+    { key: 'building', label: '3. Building and testing' },
+    { key: 'checking', label: '4. Opening pull request' },
+    { key: 'pr', label: '5. Ready to review' },
   ];
 
   let activeIndex = -1;
@@ -393,20 +429,30 @@ export function derivePipelineSteps(
     activeIndex = 1;
   } else if (status === 'building') {
     activeIndex = 2;
-  } else if (status === 'checking' || status === 'deploying') {
+  } else if (
+    status === 'checking' ||
+    status === 'deploying' ||
+    status === 'preview_ready' ||
+    status === 'accepted'
+  ) {
     activeIndex = 3;
-  } else if (status === 'preview_ready' || status === 'accepted' || hasPullRequest) {
+  } else if (hasPullRequest) {
     activeIndex = 4;
   } else {
     activeIndex = 2;
   }
 
-  const allComplete = status === 'accepted' || hasPullRequest;
+  const allComplete = hasPullRequest;
 
   return order.map((item, idx) => ({
     key: item.key,
     label: item.label,
-    state: allComplete || idx < activeIndex ? 'done' : idx === activeIndex ? 'active' : 'pending',
+    state:
+      allComplete || idx < activeIndex
+        ? 'done'
+        : idx === activeIndex
+          ? 'active'
+          : 'pending',
   }));
 }
 
@@ -424,11 +470,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const planningTriggeredRef = useRef<string | null>(null);
 
   const [sideTab, setSideTab] = useState<'preview' | 'plan'>(() =>
-    initialTab === 'plan' || initialTab === 'overview' || initialTab === 'verification' || initialTab === 'timeline'
+    initialTab === 'plan' ||
+    initialTab === 'overview' ||
+    initialTab === 'verification' ||
+    initialTab === 'timeline'
       ? 'plan'
-      : 'preview',
+      : 'preview'
   );
-  const [sidePanelState, setSidePanelState] = useState<'normal' | 'minimized' | 'expanded'>('normal');
+  const [sidePanelState, setSidePanelState] = useState<
+    'normal' | 'minimized' | 'expanded'
+  >('normal');
   const [selectedRepo, setSelectedRepo] = useState('');
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
   const [draft, setDraft] = useState('');
@@ -441,11 +492,12 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const repositoriesQuery = useBuildRepositories(project);
   const repoOptions = useMemo(
     () => repositoriesQuery.data?.repositories ?? [],
-    [repositoriesQuery.data?.repositories],
+    [repositoriesQuery.data?.repositories]
   );
   const effectiveRepo = selectedRepo || repoOptions[0]?.repository || '';
 
-  const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
+  const { data: availableModels, isLoading: modelsLoading } =
+    useAvailableModels();
   useAvailableModelSelection(selectedModel, setSelectedModel, availableModels);
 
   const startBuildMutation = useStartBuild(project);
@@ -476,7 +528,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     streamTransport: 'ws',
   });
 
-  const speech = useSpeechInput(useCallback((text: string) => setDraft(text), []));
+  const speech = useSpeechInput(
+    useCallback((text: string) => setDraft(text), [])
+  );
 
   // Auto-kickoff planning if a build enters or is opened in `planning` state
   useEffect(() => {
@@ -498,13 +552,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
 
   const { turns, pendingActivity } = useMemo(
     () => groupChatMessagesIntoTurns(chatSession.messages ?? []),
-    [chatSession.messages],
+    [chatSession.messages]
   );
 
   const streamingText = chatSession.streamingText
     ? cleanDisplayText(chatSession.streamingText)
     : '';
-  const toolProgress = useMemo(() => chatSession.toolProgress ?? [], [chatSession.toolProgress]);
+  const toolProgress = useMemo(
+    () => chatSession.toolProgress ?? [],
+    [chatSession.toolProgress]
+  );
   const isTurnStreaming =
     chatSession.isRunning ||
     chatSession.isSending ||
@@ -529,7 +586,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     turns.length,
     pendingActivity.length,
     streamingText,
-     chatSession.thinkingText,
+    chatSession.thinkingText,
     toolProgress.length,
     eventsQuery.data?.events.length,
     buildStatus,
@@ -544,9 +601,17 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       await eventsQuery.refetch();
       void refetchChatThread();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Could not start planning.');
+      setActionError(
+        err instanceof Error ? err.message : 'Could not start planning.'
+      );
     }
-  }, [buildId, buildQuery, confirmIntakeMutation, eventsQuery, refetchChatThread]);
+  }, [
+    buildId,
+    buildQuery,
+    confirmIntakeMutation,
+    eventsQuery,
+    refetchChatThread,
+  ]);
 
   const handleChoiceClick = useCallback(
     async (optionLetter: string, optionText: string) => {
@@ -559,10 +624,19 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
         return;
       }
       if (chatThreadId) {
-        await chatSession.send(`${optionLetter}. ${optionText}`, { model: selectedModel });
+        await chatSession.send(`${optionLetter}. ${optionText}`, {
+          model: selectedModel,
+        });
       }
     },
-    [buildId, chatSession, chatThreadId, handleConfirmAndBuild, intakeBusy, selectedModel],
+    [
+      buildId,
+      chatSession,
+      chatThreadId,
+      handleConfirmAndBuild,
+      intakeBusy,
+      selectedModel,
+    ]
   );
 
   const handleSend = useCallback(async () => {
@@ -588,14 +662,20 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       } catch (err) {
         requestIdRef.current = newClientRequestId();
         if (!(err instanceof BuildApiError)) {
-          setActionError(err instanceof Error ? err.message : 'The build was not started.');
+          setActionError(
+            err instanceof Error ? err.message : 'The build was not started.'
+          );
         }
       }
       return;
     }
 
     if (buildStatus === 'intake') {
-      if (/^(confirm|a\.?\s*confirm|yes|ship it|looks good|start build)$/i.test(text)) {
+      if (
+        /^(confirm|a\.?\s*confirm|yes|ship it|looks good|start build)$/i.test(
+          text
+        )
+      ) {
         setDraft('');
         await handleConfirmAndBuild();
         return;
@@ -613,7 +693,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
         await buildQuery.refetch();
       } catch (err) {
         setDraft(text);
-        setActionError(err instanceof Error ? err.message : 'Could not start revision.');
+        setActionError(
+          err instanceof Error ? err.message : 'Could not start revision.'
+        );
       }
     }
   }, [
@@ -642,18 +724,27 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       await buildQuery.refetch();
       await eventsQuery.refetch();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Could not create pull request.');
+      setActionError(
+        err instanceof Error ? err.message : 'Could not create pull request.'
+      );
     }
   }, [acceptBuildMutation, buildQuery, detail, eventsQuery]);
 
   const startError =
-    startBuildMutation.error instanceof BuildApiError ? startBuildMutation.error : null;
+    startBuildMutation.error instanceof BuildApiError
+      ? startBuildMutation.error
+      : null;
   const prUrl = detail?.pullRequest?.url ?? null;
   const hasPr = Boolean(prUrl);
   const live = isBuildLive(buildStatus);
   const tasks = detail?.currentRevision?.tasks ?? [];
   const events = eventsQuery.data?.events ?? [];
   const pipelineSteps = derivePipelineSteps(buildStatus, hasPr);
+  const previewUrl = detail?.currentRevision
+    ? (detail.revisions.find(
+        (revision) => revision.number === detail.currentRevision?.number
+      )?.previewUrl ?? null)
+    : null;
 
   const composerBusy =
     startBuildMutation.isPending ||
@@ -676,7 +767,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       ? 'Reply to the collaborator, or click Confirm & Start Build…'
       : buildStatus === 'preview_ready' || buildStatus === 'accepted'
         ? 'Ask for a change or revision to this build…'
-        : 'Collaborator is planning and building your feature…';
+        : 'Apex is building and checking your feature…';
 
   const statusText = isNewMode
     ? 'New Build'
@@ -688,21 +779,31 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
 
   const fallbackStageLabel =
     buildStatus === 'planning'
-      ? 'Planning — writing technical plan & scaffold in repository…'
+      ? 'Understanding the request and preparing the repository…'
       : buildStatus === 'building'
-        ? 'Building — implementing code & running verification tests…'
+        ? 'Building the feature and running its checks…'
         : buildStatus === 'checking'
-          ? 'Final Check — running unit suite, type-check & standards…'
+          ? 'Checking the finished feature and preparing the pull request…'
           : undefined;
 
   return (
     <main className={styles.root} {...{ 'data-testid': 'build-workspace' }}>
-      <header className={styles.header} {...{ 'data-testid': 'build-workspace-header' }}>
+      <header
+        className={styles.header}
+        {...{ 'data-testid': 'build-workspace-header' }}
+      >
         <div className={styles.identity}>
-          <Link to="/builds" className={styles.back} {...{ 'data-testid': 'build-workspace-back' }}>
+          <Link
+            to="/builds"
+            className={styles.back}
+            {...{ 'data-testid': 'build-workspace-back' }}
+          >
             ← Builds
           </Link>
-          <h1 className={styles.title} {...{ 'data-testid': 'build-workspace-title' }}>
+          <h1
+            className={styles.title}
+            {...{ 'data-testid': 'build-workspace-title' }}
+          >
             {isNewMode
               ? 'New build'
               : detail?.build.repository
@@ -720,7 +821,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
             >
               {repoOptions.length === 0 ? (
                 <option value="">
-                  {repositoriesQuery.isLoading ? 'Loading repositories…' : 'No repositories available'}
+                  {repositoriesQuery.isLoading
+                    ? 'Loading repositories…'
+                    : 'No repositories available'}
                 </option>
               ) : (
                 repoOptions.map((opt) => (
@@ -732,14 +835,20 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
             </select>
           ) : (
             detail && (
-              <span className={styles.repoBadge} {...{ 'data-testid': 'build-workspace-repo-badge' }}>
+              <span
+                className={styles.repoBadge}
+                {...{ 'data-testid': 'build-workspace-repo-badge' }}
+              >
                 {detail.build.repository}
               </span>
             )
           )}
         </div>
 
-        <div className={styles.meta} {...{ 'data-testid': 'build-workspace-meta' }}>
+        <div
+          className={styles.meta}
+          {...{ 'data-testid': 'build-workspace-meta' }}
+        >
           <span
             role="status"
             aria-live="polite"
@@ -801,16 +910,23 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               {...{ 'data-testid': 'build-workspace-thread' }}
             >
               {isNewMode && (
-                <div className={styles.emptyHero} {...{ 'data-testid': 'build-workspace-empty' }}>
+                <div
+                  className={styles.emptyHero}
+                  {...{ 'data-testid': 'build-workspace-empty' }}
+                >
                   <h2 className={styles.emptyTitle}>What should we build?</h2>
                   <p className={styles.emptySub}>
-                    Describe your feature in plain language. Your AI collaborator will clarify any
-                    gaps, write the technical plan, implement the code with tests, and open a Pull
-                    Request automatically.
+                    Describe your feature in plain language. Your AI
+                    collaborator will clarify any gaps, write the technical
+                    plan, implement the code with tests, and open a Pull Request
+                    automatically.
                   </p>
-                  <p className={styles.secretsNote} {...{ 'data-testid': 'build-workspace-secrets-note' }}>
-                    Do not paste passwords, keys or customer data. The build agent can read this
-                    request.
+                  <p
+                    className={styles.secretsNote}
+                    {...{ 'data-testid': 'build-workspace-secrets-note' }}
+                  >
+                    Do not paste passwords, keys or customer data. The build
+                    agent can read this request.
                   </p>
                 </div>
               )}
@@ -818,19 +934,23 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               {/* Grouped Conversation Turns (with collapsible Thought process traces on every assistant message) */}
               {turns.map((turn, idx) => {
                 const isUser = turn.role === 'user';
-                const parsedParts = !isUser && turn.text ? parseAgentMessage(turn.text) : [];
+                const parsedParts =
+                  !isUser && turn.text ? parseAgentMessage(turn.text) : [];
                 const choiceBlocks = parsedParts.filter(
-                  (part): part is ChoiceBlock => part.type === 'choices',
+                  (part): part is ChoiceBlock => part.type === 'choices'
                 );
-                const isLatestAgentTurn =
-                  !isUser && idx === turns.length - 1;
+                const isLatestAgentTurn = !isUser && idx === turns.length - 1;
 
                 return (
                   <article
                     key={turn.id}
                     className={`${styles.message} ${isUser ? styles.user : styles.collaborator}`}
                     aria-label={isUser ? 'Your message' : 'Collaborator'}
-                    {...{ 'data-testid': isUser ? 'build-workspace-user-msg' : 'build-workspace-agent-msg' }}
+                    {...{
+                      'data-testid': isUser
+                        ? 'build-workspace-user-msg'
+                        : 'build-workspace-agent-msg',
+                    }}
                   >
                     {!isUser && turn.activity.length > 0 && (
                       <BuildCollapsibleTrace items={turn.activity} />
@@ -839,26 +959,30 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       // data-testid-exempt — MarkdownWithMermaid renders turn body
                       <MarkdownWithMermaid content={turn.text} skipHtml />
                     ) : null}
-                    {isLatestAgentTurn && choiceBlocks.length > 0 && buildStatus === 'intake' && (
-                      <div className={styles.choiceRow}>
-                        {choiceBlocks.flatMap((block) =>
-                          block.options.map((opt) => (
-                            <button
-                              key={`${block.id}-${opt.letter}`}
-                              type="button"
-                              className={styles.choiceButton}
-                              disabled={intakeBusy}
-                              onClick={() => {
-                                void handleChoiceClick(opt.letter, opt.text);
-                              }}
-                              {...{ 'data-testid': `build-workspace-choice-${opt.letter}` }}
-                            >
-                              {`${opt.letter.toUpperCase()}. ${opt.text}`}
-                            </button>
-                          )),
-                        )}
-                      </div>
-                    )}
+                    {isLatestAgentTurn &&
+                      choiceBlocks.length > 0 &&
+                      buildStatus === 'intake' && (
+                        <div className={styles.choiceRow}>
+                          {choiceBlocks.flatMap((block) =>
+                            block.options.map((opt) => (
+                              <button
+                                key={`${block.id}-${opt.letter}`}
+                                type="button"
+                                className={styles.choiceButton}
+                                disabled={intakeBusy}
+                                onClick={() => {
+                                  void handleChoiceClick(opt.letter, opt.text);
+                                }}
+                                {...{
+                                  'data-testid': `build-workspace-choice-${opt.letter}`,
+                                }}
+                              >
+                                {`${opt.letter.toUpperCase()}. ${opt.text}`}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
                   </article>
                 );
               })}
@@ -879,25 +1003,33 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               )}
 
               {/* One-click Confirm & Start Build bar during Intake */}
-              {buildStatus === 'intake' && turns.some((t) => t.role === 'agent') && !isTurnStreaming && (
-                <div className={styles.confirmBar} {...{ 'data-testid': 'build-workspace-confirm-bar' }}>
-                  <p className={styles.confirmText}>
-                    Ready to build? Confirm the scope to automatically generate the plan and start
-                    the coding agents in this conversation.
-                  </p>
-                  <button
-                    type="button"
-                    className={styles.primaryButton}
-                    disabled={intakeBusy}
-                    onClick={() => {
-                      void handleConfirmAndBuild();
-                    }}
-                    {...{ 'data-testid': 'build-workspace-confirm-button' }}
+              {buildStatus === 'intake' &&
+                turns.some((t) => t.role === 'agent') &&
+                !isTurnStreaming && (
+                  <div
+                    className={styles.confirmBar}
+                    {...{ 'data-testid': 'build-workspace-confirm-bar' }}
                   >
-                    {confirmIntakeMutation.isPending ? 'Starting build…' : 'Confirm & Start Build'}
-                  </button>
-                </div>
-              )}
+                    <p className={styles.confirmText}>
+                      Confirm that this captures what you want. Apex will build
+                      it, run the checks, fix what it can, and open a pull
+                      request.
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={intakeBusy}
+                      onClick={() => {
+                        void handleConfirmAndBuild();
+                      }}
+                      {...{ 'data-testid': 'build-workspace-confirm-button' }}
+                    >
+                      {confirmIntakeMutation.isPending
+                        ? 'Starting build…'
+                        : 'Confirm & Start Build'}
+                    </button>
+                  </div>
+                )}
 
               {/* Build Pipeline Stage Progress Card (Planning / Building / Checking) */}
               {buildId && buildStatus && buildStatus !== 'intake' && (
@@ -911,17 +1043,20 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       {live && !isTurnStreaming && (
                         <span className={styles.spinner} aria-hidden="true" />
                       )}
-                      <span {...{ 'data-testid': 'build-workspace-stage-headline' }}>
+                      <span
+                        {...{ 'data-testid': 'build-workspace-stage-headline' }}
+                      >
                         {buildStatus === 'planning'
-                          ? 'Stage 2 · Technical Planning — writing plan.json & context notes in your repository…'
+                          ? 'Preparing your repository and build instructions…'
                           : buildStatus === 'building'
-                            ? `Stage 3 · TDD Implementation & Verification (${detail?.stage.tasks?.merged ?? 0} of ${detail?.stage.tasks?.total ?? tasks.length} tasks merged)…`
-                            : buildStatus === 'checking' || buildStatus === 'deploying'
-                              ? 'Stage 4 · Final Check — verifying unit suite, type-check, lint & standards…'
+                            ? 'Building your feature, running checks, and fixing errors…'
+                            : buildStatus === 'checking' ||
+                                buildStatus === 'deploying'
+                              ? 'Checking the finished feature and preparing the pull request…'
                               : hasPr
-                                ? 'Stage 5 · Build complete — Pull Request created in Azure DevOps.'
+                                ? 'Your feature is ready to review in Azure DevOps.'
                                 : buildStatus === 'preview_ready'
-                                  ? 'Stage 5 · Build validated — ready to create your Pull Request.'
+                                  ? 'Your feature passed its checks. Opening the pull request…'
                                   : `Build status: ${buildStatusLabel(buildStatus)}`}
                       </span>
                     </p>
@@ -929,17 +1064,26 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     <details
                       className={styles.traceDrawer}
                       open={eventsOpen}
-                      onToggle={(e) => setEventsOpen((e.currentTarget as HTMLDetailsElement).open)}
+                      onToggle={(e) =>
+                        setEventsOpen(
+                          (e.currentTarget as HTMLDetailsElement).open
+                        )
+                      }
                       {...{ 'data-testid': 'build-workspace-events-trace' }}
                     >
                       <summary
                         className={styles.traceSummary}
-                        {...{ 'data-testid': 'build-workspace-events-trace-toggle' }}
+                        {...{
+                          'data-testid': 'build-workspace-events-trace-toggle',
+                        }}
                       >
-                        <span className={styles.traceChevron} aria-hidden="true">
+                        <span
+                          className={styles.traceChevron}
+                          aria-hidden="true"
+                        >
                           {eventsOpen ? '▼' : '▶'}
                         </span>
-                        <span>{`Pipeline milestones · ${events.length} ${events.length === 1 ? 'event' : 'events'}`}</span>
+                        <span>{`Build details · ${events.length} ${events.length === 1 ? 'update' : 'updates'}`}</span>
                       </summary>
                       <div className={styles.activityScroller}>
                         {events.length === 0 ? (
@@ -951,15 +1095,17 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                             <div
                               key={ev.id}
                               className={styles.stepRow}
-                              {...{ 'data-testid': 'build-workspace-event-row' }}
+                              {...{
+                                'data-testid': 'build-workspace-event-row',
+                              }}
                             >
-                              <span className={styles.stepBullet} aria-hidden="true">
+                              <span
+                                className={styles.stepBullet}
+                                aria-hidden="true"
+                              >
                                 •
                               </span>
                               <span>
-                                <span className={styles.stepStatus}>
-                                  {ev.taskKey ? `[${ev.taskKey}] ` : ''}
-                                </span>
                                 <span>{ev.message}</span>
                               </span>
                             </div>
@@ -968,25 +1114,8 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       </div>
                     </details>
 
-                    {tasks.length > 0 && (
-                      <div className={styles.taskPills} {...{ 'data-testid': 'build-workspace-task-pills' }}>
-                        {tasks.map((task) => (
-                          <span
-                            key={task.key}
-                            className={styles.taskPill}
-                            {...{ 'data-testid': `build-workspace-task-pill-${task.key}` }}
-                          >
-                            {task.status === 'running' && (
-                              <span className={styles.spinner} aria-hidden="true" />
-                            )}
-                            <strong>{task.key}</strong>
-                            <span>{`· ${task.status}`}</span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {(buildStatus === 'planning' || buildStatus === 'building') &&
+                    {(buildStatus === 'planning' ||
+                      buildStatus === 'building') &&
                       !isTurnStreaming &&
                       tasks.some((t) => t.status === 'failed') && (
                         <div className={styles.choiceRow}>
@@ -997,9 +1126,13 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                             onClick={() => {
                               ensurePlanningMutation.mutate({});
                             }}
-                            {...{ 'data-testid': 'build-workspace-retry-planning' }}
+                            {...{
+                              'data-testid': 'build-workspace-retry-planning',
+                            }}
                           >
-                            {ensurePlanningMutation.isPending ? 'Retrying…' : 'Retry stage in chat'}
+                            {ensurePlanningMutation.isPending
+                              ? 'Retrying…'
+                              : 'Retry build'}
                           </button>
                         </div>
                       )}
@@ -1008,16 +1141,27 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               )}
 
               {/* Pull Request Finish Card (POC Target) */}
-              {(hasPr || buildStatus === 'preview_ready' || buildStatus === 'accepted') && (
-                <div className={styles.confirmBar} {...{ 'data-testid': 'build-workspace-pr-card' }}>
+              {(hasPr ||
+                buildStatus === 'preview_ready' ||
+                buildStatus === 'accepted') && (
+                <div
+                  className={styles.confirmBar}
+                  {...{ 'data-testid': 'build-workspace-pr-card' }}
+                >
                   <div>
                     <strong>
-                      {hasPr ? 'Pull Request Created' : 'Build Validated & Ready for Pull Request'}
+                      {hasPr
+                        ? 'Pull Request Created'
+                        : buildStatus === 'accepted'
+                          ? 'Opening Pull Request'
+                          : 'Build Validated & Ready for Pull Request'}
                     </strong>
                     <p className={styles.confirmText}>
                       {hasPr
                         ? 'Your feature branch has been verified and a Pull Request is open in Azure DevOps.'
-                        : 'All tasks and checks have completed. Create the Pull Request in Azure DevOps to finish.'}
+                        : buildStatus === 'accepted'
+                          ? 'Apex is opening the Pull Request in Azure DevOps now.'
+                          : 'All tasks and checks have completed. Create the Pull Request in Azure DevOps to finish.'}
                     </p>
                   </div>
                   {prUrl ? (
@@ -1040,7 +1184,11 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       }}
                       {...{ 'data-testid': 'build-workspace-create-pr-button' }}
                     >
-                      {acceptBuildMutation.isPending ? 'Creating PR…' : 'Create Pull Request'}
+                      {acceptBuildMutation.isPending
+                        ? 'Creating PR…'
+                        : buildStatus === 'accepted'
+                          ? 'Retry now'
+                          : 'Create Pull Request'}
                     </button>
                   )}
                 </div>
@@ -1054,9 +1202,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   className={styles.errorBanner}
                   {...{ 'data-testid': 'build-workspace-error-banner' }}
                 >
-                  <strong>{startError?.message ?? actionError ?? chatSession.sendError}</strong>
+                  <strong>
+                    {startError?.message ??
+                      actionError ??
+                      chatSession.sendError}
+                  </strong>
                   {startError && startError.refusals.length > 0 && (
-                    <ul className={styles.errorList} {...{ 'data-testid': 'build-workspace-refusal-list' }}>
+                    <ul
+                      className={styles.errorList}
+                      {...{ 'data-testid': 'build-workspace-refusal-list' }}
+                    >
                       {startError.refusals.map((item) => (
                         <li key={item}>{item}</li>
                       ))}
@@ -1071,7 +1226,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 shellClassName={styles.composerShell}
                 textareaRef={inputRef}
                 value={draft}
-                onChange={(value) => setDraft(value.slice(0, BUILD_PROMPT_MAX_LENGTH))}
+                onChange={(value) =>
+                  setDraft(value.slice(0, BUILD_PROMPT_MAX_LENGTH))
+                }
                 onSend={() => {
                   void handleSend();
                 }}
@@ -1080,7 +1237,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 }}
                 disabled={composerBusy}
                 isRunning={chatSession.isRunning}
-                isSending={startBuildMutation.isPending || chatSession.isSending}
+                isSending={
+                  startBuildMutation.isPending || chatSession.isSending
+                }
                 isBusy={composerBusy}
                 isCancelling={chatSession.isCancelling}
                 canSend={canSend}
@@ -1111,7 +1270,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
           </section>
         </div>
 
-        {/* Right Pane: Sandbox Preview Placeholder & Plan/Checks (BrainstormArtifactPanel split UX) */}
+        {/* Right Pane: live branch preview and optional build details */}
         <div
           className={`${styles.artifact}${isMinimized ? ` ${styles.artifactMinimized}` : ''}`}
           {...{ 'data-testid': 'build-workspace-side-panel' }}
@@ -1129,7 +1288,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 }}
                 {...{ 'data-testid': 'build-workspace-preview-tab' }}
               >
-                Sandbox Preview
+                Preview
               </button>
               <button
                 type="button"
@@ -1142,7 +1301,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 }}
                 {...{ 'data-testid': 'build-workspace-plan-tab' }}
               >
-                Plan &amp; Checks
+                Details
               </button>
             </div>
             <div className={styles.sideControls}>
@@ -1152,7 +1311,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   className={styles.sideControlButton}
                   aria-pressed={isExpanded}
                   onClick={() =>
-                    setSidePanelState((prev) => (prev === 'expanded' ? 'normal' : 'expanded'))
+                    setSidePanelState((prev) =>
+                      prev === 'expanded' ? 'normal' : 'expanded'
+                    )
                   }
                   {...{ 'data-testid': 'build-workspace-side-expand' }}
                 >
@@ -1164,7 +1325,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 className={styles.sideControlButton}
                 aria-expanded={!isMinimized}
                 onClick={() =>
-                  setSidePanelState((prev) => (prev === 'minimized' ? 'normal' : 'minimized'))
+                  setSidePanelState((prev) =>
+                    prev === 'minimized' ? 'normal' : 'minimized'
+                  )
                 }
                 {...{
                   'data-testid': isMinimized
@@ -1181,10 +1344,13 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
             (sideTab === 'preview' ? (
               <section
                 className={styles.sidePanelBody}
-                aria-label="Sandbox Preview"
+                aria-label="Preview"
                 {...{ 'data-testid': 'build-workspace-preview-panel' }}
               >
-                <div className={styles.sandboxWindow} {...{ 'data-testid': 'build-workspace-sandbox-frame' }}>
+                <div
+                  className={styles.sandboxWindow}
+                  {...{ 'data-testid': 'build-workspace-sandbox-frame' }}
+                >
                   <div className={styles.sandboxChrome}>
                     <span className={styles.sandboxDots} aria-hidden="true">
                       <span className={styles.sandboxDot} />
@@ -1192,50 +1358,79 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       <span className={styles.sandboxDot} />
                     </span>
                     <span className={styles.sandboxUrl}>
-                      {detail?.currentRevision && detail.revisions.find((r) => r.number === detail.currentRevision?.number)?.previewUrl
-                        ? detail.revisions.find((r) => r.number === detail.currentRevision?.number)?.previewUrl
-                        : `sandbox://preview/${detail?.build.repository ?? (effectiveRepo || 'app')}`}
+                      {previewUrl ??
+                        `preview://building/${detail?.build.repository ?? (effectiveRepo || 'app')}`}
                     </span>
                   </div>
                   <div className={styles.sandboxViewport}>
-                    <h3 className={styles.sectionHeading}>Live Sandbox Preview (Placeholder)</h3>
-                    <p className={styles.emptySub}>
-                      The interactive application sandbox preview mounts here in a later stage. For
-                      this POC, the autonomous pipeline runs from Intake through Pull Request
-                      creation.
-                    </p>
-                    <ol className={styles.stepperList} {...{ 'data-testid': 'build-workspace-pipeline-steps' }}>
-                      {pipelineSteps.map((step) => (
-                        <li
-                          key={step.key}
-                          className={`${styles.stepperItem}${step.state === 'active' ? ` ${styles.stepperItemActive}` : ''}${step.state === 'done' ? ` ${styles.stepperItemDone}` : ''}`}
-                          {...{ 'data-testid': `build-workspace-step-${step.key}` }}
+                    {previewUrl ? (
+                      <iframe
+                        className={styles.previewFrame}
+                        src={previewUrl}
+                        title="Build preview"
+                        sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+                        {...{ 'data-testid': 'build-workspace-preview-iframe' }}
+                      />
+                    ) : (
+                      <>
+                        <h3 className={styles.sectionHeading}>
+                          Your preview will appear here
+                        </h3>
+                        <p className={styles.emptySub}>
+                          Apex is building and testing your feature. A live
+                          preview will appear if this project provides one.
+                        </p>
+                        <ol
+                          className={styles.stepperList}
+                          {...{
+                            'data-testid': 'build-workspace-pipeline-steps',
+                          }}
                         >
-                          <span aria-hidden="true">
-                            {step.state === 'done' ? '✓' : step.state === 'active' ? '●' : '○'}
-                          </span>
-                          <span>{step.label}</span>
-                        </li>
-                      ))}
-                    </ol>
+                          {pipelineSteps.map((step) => (
+                            <li
+                              key={step.key}
+                              className={`${styles.stepperItem}${step.state === 'active' ? ` ${styles.stepperItemActive}` : ''}${step.state === 'done' ? ` ${styles.stepperItemDone}` : ''}`}
+                              {...{
+                                'data-testid': `build-workspace-step-${step.key}`,
+                              }}
+                            >
+                              <span aria-hidden="true">
+                                {step.state === 'done'
+                                  ? '✓'
+                                  : step.state === 'active'
+                                    ? '●'
+                                    : '○'}
+                              </span>
+                              <span>{step.label}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 {detail && (
-                  <div className={styles.metricsRow} {...{ 'data-testid': 'build-workspace-metrics' }}>
+                  <div
+                    className={styles.metricsRow}
+                    {...{ 'data-testid': 'build-workspace-metrics' }}
+                  >
                     <div className={styles.metricCard}>
                       <span className={styles.metricValue}>{tasks.length}</span>
-                      <span>Plan Tasks</span>
+                      <span>Build Steps</span>
                     </div>
                     <div className={styles.metricCard}>
-                      <span className={styles.metricValue}>{detail.verificationSummary.pass}</span>
+                      <span className={styles.metricValue}>
+                        {detail.verificationSummary.pass}
+                      </span>
                       <span>Checks Passed</span>
                     </div>
                     <div className={styles.metricCard}>
                       <span className={styles.metricValue}>
                         {detail.currentRevision?.brief.status === 'ok'
-                          ? detail.currentRevision.brief.requirements.filter((r) => !r.retired)
-                              .length
+                          ? detail.currentRevision.brief.requirements.filter(
+                              (r) => !r.retired
+                            ).length
                           : 0}
                       </span>
                       <span>Requirements</span>
@@ -1246,14 +1441,19 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
             ) : (
               <section
                 className={styles.sidePanelBody}
-                aria-label="Plan and Checks"
+                aria-label="Build details"
                 {...{ 'data-testid': 'build-workspace-plan-panel' }}
               >
                 <div>
                   <h3 className={styles.sectionHeading}>Requirements</h3>
                   {detail?.currentRevision?.brief.status === 'ok' &&
                   detail.currentRevision.brief.requirements.length > 0 ? (
-                    <ul className={styles.reqList} {...{ 'data-testid': 'build-workspace-requirements-list' }}>
+                    <ul
+                      className={styles.reqList}
+                      {...{
+                        'data-testid': 'build-workspace-requirements-list',
+                      }}
+                    >
                       {detail.currentRevision.brief.requirements
                         .filter((r) => !r.retired)
                         .map((req) => (
@@ -1263,30 +1463,39 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                         ))}
                     </ul>
                   ) : (
-                    <p className={styles.emptySub} {...{ 'data-testid': 'build-workspace-requirements-empty' }}>
-                      Requirements will appear here once intake confirms the brief.
+                    <p
+                      className={styles.emptySub}
+                      {...{
+                        'data-testid': 'build-workspace-requirements-empty',
+                      }}
+                    >
+                      Requirements will appear here once intake confirms the
+                      brief.
                     </p>
                   )}
                 </div>
 
                 <div>
-                  <h3 className={styles.sectionHeading}>Technical Plan Tasks</h3>
+                  <h3 className={styles.sectionHeading}>Build Activity</h3>
                   {tasks.length > 0 ? (
-                    <ul className={styles.reqList} {...{ 'data-testid': 'build-workspace-tasks-list' }}>
+                    <ul
+                      className={styles.reqList}
+                      {...{ 'data-testid': 'build-workspace-tasks-list' }}
+                    >
                       {tasks.map((t) => (
                         <li key={t.key}>
-                          <strong>{t.key}</strong> ({t.role}) — <span>{t.status}</span>
-                          {t.ownedFiles.length > 0 && (
-                            <div>
-                              <small>{`Files: ${t.ownedFiles.join(', ')}`}</small>
-                            </div>
-                          )}
+                          <strong>Feature build:</strong>{' '}
+                          <span>{t.status}</span>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className={styles.emptySub} {...{ 'data-testid': 'build-workspace-tasks-empty' }}>
-                      Tasks will appear here as soon as the Planner agent commits plan.json.
+                    <p
+                      className={styles.emptySub}
+                      {...{ 'data-testid': 'build-workspace-tasks-empty' }}
+                    >
+                      Build activity will appear here after the request is
+                      confirmed.
                     </p>
                   )}
                 </div>

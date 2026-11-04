@@ -13,19 +13,52 @@ import {
 function createAcceptHarness() {
   const runs = new Map<string, AcceptRunRecord>();
   const revisions = new Map<string, AcceptRevisionRecord>();
-  const syncTasks = new Map<string, { id: string; revisionId: string; status: 'pending' | 'ready' | 'running' | 'merged' | 'failed'; syncCommitSha: string | null }>();
-  const events: Array<{ buildRunId: string; eventType: string; detail?: Record<string, unknown> }> = [];
-  const requesterNotifications: Array<{ userId: string; title: string; body: string; dedupeKey: string }> = [];
-  const contactNotifications: Array<{ userId: string; title: string; body: string; dedupeKey: string }> = [];
+  const syncTasks = new Map<
+    string,
+    {
+      id: string;
+      revisionId: string;
+      status: 'pending' | 'ready' | 'running' | 'merged' | 'failed';
+      syncCommitSha: string | null;
+    }
+  >();
+  const events: Array<{
+    buildRunId: string;
+    eventType: string;
+    detail?: Record<string, unknown>;
+  }> = [];
+  const requesterNotifications: Array<{
+    userId: string;
+    title: string;
+    body: string;
+    dedupeKey: string;
+  }> = [];
+  const contactNotifications: Array<{
+    userId: string;
+    title: string;
+    body: string;
+    dedupeKey: string;
+  }> = [];
   const releasedLeases: string[] = [];
   const launchedSyncTasks: string[] = [];
+  const reportedTerminals: Array<{
+    buildRunId: string;
+    pullRequestUrl: string;
+  }> = [];
 
   let draftPrUrl: string | null = null;
   let draftPrId: number | null = null;
   let publishedTitle: string | null = null;
   let publishedDescription: string | null = null;
   let publishedIsDraft: boolean | null = null;
-  let mergeStatusSequence: Array<'notSet' | 'queued' | 'conflicts' | 'succeeded' | 'rejectedByPolicy' | 'failure'> = ['succeeded'];
+  let mergeStatusSequence: Array<
+    | 'notSet'
+    | 'queued'
+    | 'conflicts'
+    | 'succeeded'
+    | 'rejectedByPolicy'
+    | 'failure'
+  > = ['succeeded'];
   let branchHead = 'a'.repeat(40);
   let reviewerThrow = false;
   let unresolvedReviewerEmail: string | null = null;
@@ -33,7 +66,7 @@ function createAcceptHarness() {
 
   const seed = (
     runOverrides?: Partial<AcceptRunRecord>,
-    revOverrides?: Partial<AcceptRevisionRecord>,
+    revOverrides?: Partial<AcceptRevisionRecord>
   ) => {
     const run: AcceptRunRecord = {
       id: 'run-1',
@@ -92,24 +125,28 @@ function createAcceptHarness() {
     findPullRequestUrlBySourceBranch: async () => draftPrUrl,
     createPullRequest: async () => {
       draftPrId = 901;
-      draftPrUrl = 'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901';
+      draftPrUrl =
+        'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901';
       publishedIsDraft = true;
       return draftPrUrl;
     },
     getPullRequestMergeStatus: async () => {
-      const next = mergeStatusSequence.length > 1
-        ? mergeStatusSequence.shift()!
-        : mergeStatusSequence[0];
+      const next =
+        mergeStatusSequence.length > 1
+          ? mergeStatusSequence.shift()!
+          : mergeStatusSequence[0];
       return next;
     },
     updatePullRequest: async (opts) => {
       publishedTitle = opts.title;
-      if (opts.description !== undefined) publishedDescription = opts.description;
+      if (opts.description !== undefined)
+        publishedDescription = opts.description;
       if (opts.isDraft !== undefined) publishedIsDraft = opts.isDraft;
     },
     addPullRequestLabel: async () => undefined,
     resolveIdentityIdByEmail: async (_project, email) => {
-      if (unresolvedReviewerEmail && email === unresolvedReviewerEmail) return null;
+      if (unresolvedReviewerEmail && email === unresolvedReviewerEmail)
+        return null;
       return `ado-id-${email}`;
     },
     addPullRequestReviewers: async (opts) => {
@@ -126,7 +163,8 @@ function createAcceptHarness() {
     },
     withAcceptLock: async (_runId, fn) => fn(),
     loadRun: async (buildId) => runs.get(buildId) ?? null,
-    loadRevision: async (buildId, revNum) => revisions.get(`${buildId}:${revNum}`) ?? null,
+    loadRevision: async (buildId, revNum) =>
+      revisions.get(`${buildId}:${revNum}`) ?? null,
     casClaimAccept: async (buildId, revisionNumber) => {
       const run = runs.get(buildId);
       if (!run) return { kind: 'not_found' };
@@ -139,7 +177,11 @@ function createAcceptHarness() {
         return { kind: 'stale_revision' };
       }
       const rev = revisions.get(`${buildId}:${revisionNumber}`);
-      if (run.status !== 'preview_ready' || !rev || rev.deploymentStatus !== 'succeeded') {
+      if (
+        run.status !== 'preview_ready' ||
+        !rev ||
+        rev.deploymentStatus !== 'succeeded'
+      ) {
         return { kind: 'not_acceptable' };
       }
       run.status = 'accepted';
@@ -189,7 +231,9 @@ function createAcceptHarness() {
       }
     },
     notifyRequesterPrOpened: async (input) => {
-      if (!requesterNotifications.some((n) => n.dedupeKey === input.dedupeKey)) {
+      if (
+        !requesterNotifications.some((n) => n.dedupeKey === input.dedupeKey)
+      ) {
         requesterNotifications.push(input);
       }
     },
@@ -197,6 +241,9 @@ function createAcceptHarness() {
       if (!contactNotifications.some((n) => n.dedupeKey === input.dedupeKey)) {
         contactNotifications.push(input);
       }
+    },
+    reportBuildTerminal: async (input) => {
+      reportedTerminals.push(input);
     },
     appendEvent: async (ev) => {
       events.push(ev);
@@ -213,6 +260,7 @@ function createAcceptHarness() {
     contactNotifications,
     releasedLeases,
     launchedSyncTasks,
+    reportedTerminals,
     getPrState: () => ({
       draftPrUrl,
       draftPrId,
@@ -268,13 +316,24 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
     await h.service.continueAccept('run-1');
 
     const run = h.runs.get('run-1')!;
-    expect(run.pullRequestUrl).toBe('https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901');
+    expect(run.pullRequestUrl).toBe(
+      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901'
+    );
+    expect(h.reportedTerminals).toEqual([
+      {
+        buildRunId: 'run-1',
+        pullRequestUrl:
+          'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901',
+      },
+    ]);
     expect(h.getPrState().publishedIsDraft).toBe(false);
     expect(h.getPrState().publishedDescription).toContain('RD-1 [low]');
     expect(h.events.map((e) => e.eventType)).toEqual(
-      expect.arrayContaining(['reviewers_added', 'pull_request_opened']),
+      expect.arrayContaining(['reviewers_added', 'pull_request_opened'])
     );
-    const prOpenedEvent = h.events.find((e) => e.eventType === 'pull_request_opened')!;
+    const prOpenedEvent = h.events.find(
+      (e) => e.eventType === 'pull_request_opened'
+    )!;
     expect(Number(prOpenedEvent.detail?.durationMs)).toBeLessThan(30_000);
     expect(h.requesterNotifications).toHaveLength(1);
     expect(h.requesterNotifications[0].body).toContain(run.pullRequestUrl!);
@@ -309,11 +368,13 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
     });
 
     expect(h.runs.get('run-1')?.pullRequestUrl).toBe(
-      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901',
+      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901'
     );
     expect(h.getPrState().publishedIsDraft).toBe(false);
     expect(h.getPrState().publishedDescription).toContain(newHead.slice(0, 7));
-    expect(h.getPrState().publishedDescription).toMatch(/sync commit was added/i);
+    expect(h.getPrState().publishedDescription).toMatch(
+      /sync commit was added/i
+    );
     expect(h.events.map((e) => e.eventType)).toContain('sync_commit_added');
   });
 
@@ -346,7 +407,9 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
     expect(h.runs.get('run-1')?.status).toBe('needs_developer');
     expect(h.getPrState().publishedTitle).toMatch(/^\[Needs developer\]/);
     expect(h.contactNotifications).toHaveLength(2);
-    expect(h.events.filter((e) => e.eventType === 'needs_developer')).toHaveLength(1);
+    expect(
+      h.events.filter((e) => e.eventType === 'needs_developer')
+    ).toHaveLength(1);
   });
 
   it('VT-07 PBI-033 AC-3 / TBI-027 NFR is idempotent on sequential and concurrent accept calls, opening only one pull request', async () => {
@@ -358,13 +421,21 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
         buildId: 'run-1',
         project: 'Apex',
         revisionNumber: 2,
-        actor: { userId: 'user-req', isProjectAdmin: false, isSuperAdmin: false },
+        actor: {
+          userId: 'user-req',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
       }),
       h.service.acceptBuild({
         buildId: 'run-1',
         project: 'Apex',
         revisionNumber: 2,
-        actor: { userId: 'user-req', isProjectAdmin: false, isSuperAdmin: false },
+        actor: {
+          userId: 'user-req',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
       }),
     ]);
 
@@ -372,6 +443,30 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
     await h.service.continueAccept('run-1');
     await h.service.continueAccept('run-1');
     expect(h.requesterNotifications).toHaveLength(1);
+  });
+
+  it('retries the Playbook terminal report when the pull request was already stored', async () => {
+    const h = createAcceptHarness();
+    const pullRequestUrl =
+      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901';
+    h.seed({
+      status: 'accepted',
+      acceptedRevisionNumber: 2,
+      pullRequestUrl,
+      pullRequestId: 901,
+    });
+    let attempts = 0;
+    h.deps.reportBuildTerminal = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('temporary Playbook error');
+    };
+
+    await expect(h.service.continueAccept('run-1')).rejects.toThrow(
+      'temporary Playbook error'
+    );
+    await h.service.continueAccept('run-1');
+
+    expect(attempts).toBe(2);
   });
 
   it('VT-08, VT-09, VT-11 PBI-033 AC-4..5 enforces actor authorization, revision freshness, run status, and branch head match', async () => {
@@ -384,8 +479,12 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
         buildId: 'run-1',
         project: 'Apex',
         revisionNumber: 2,
-        actor: { userId: 'user-other', isProjectAdmin: false, isSuperAdmin: false },
-      }),
+        actor: {
+          userId: 'user-other',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
     ).rejects.toMatchObject({
       code: 'BUILD_NOT_ALLOWED',
       statusCode: 403,
@@ -397,8 +496,12 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
         buildId: 'run-1',
         project: 'Apex',
         revisionNumber: 1,
-        actor: { userId: 'user-req', isProjectAdmin: false, isSuperAdmin: false },
-      }),
+        actor: {
+          userId: 'user-req',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
     ).rejects.toMatchObject({
       code: 'BUILD_STALE_REVISION',
       statusCode: 409,
@@ -411,8 +514,12 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
         buildId: 'run-1',
         project: 'Apex',
         revisionNumber: 2,
-        actor: { userId: 'user-req', isProjectAdmin: false, isSuperAdmin: false },
-      }),
+        actor: {
+          userId: 'user-req',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
     ).rejects.toMatchObject({
       code: 'BUILD_BRANCH_DIVERGED',
       statusCode: 409,
@@ -433,7 +540,7 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
     await h.service.continueAccept('run-1');
 
     expect(h.runs.get('run-1')?.pullRequestUrl).toBe(
-      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901',
+      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901'
     );
     expect(h.events.map((e) => e.eventType)).toContain('reviewers_failed');
     expect(h.requesterNotifications).toHaveLength(1);
