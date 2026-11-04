@@ -429,7 +429,7 @@ async function finalizeAgentRun(
               active_run_id = NULL,
               last_error = $1,
               last_activity_at = CURRENT_TIMESTAMP
-        WHERE id = $2
+        WHERE id::text = $2
           AND (active_run_id = $3 OR active_run_id IS NULL)`,
       [input.status === 'failed' ? terminalDetail : null, input.threadId, input.runId],
     );

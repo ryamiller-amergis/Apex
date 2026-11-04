@@ -340,6 +340,9 @@ describe('pgNotifyService durable run events', () => {
     expect(String(threadReset[0])).toContain('UPDATE chat_threads');
     expect(String(threadReset[0])).toContain("status = 'idle'");
     expect(String(threadReset[0])).toContain('active_run_id = NULL');
+    // agent_runs.thread_id also carries synthetic values such as `build:<id>`.
+    // Comparing as text lets those non-chat runs skip this update without a UUID cast error.
+    expect(String(threadReset[0])).toContain('WHERE id::text = $2');
     // CAS guard: only clear this run's own claim (or an already-cleared claim).
     expect(String(threadReset[0])).toContain('active_run_id = $3 OR active_run_id IS NULL');
     // A successful terminal clears last_error and targets the owning thread + run.

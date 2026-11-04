@@ -6,15 +6,18 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
 
-const dispatchUrl = (process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL || '').trim();
+const LOCAL_INTERACTIVE_HOST = 'http://127.0.0.1:8080';
+const configuredDispatchUrl = (
+  process.env.AI_RUNS_INTERACTIVE_DISPATCH_URL || ''
+).trim();
+const dispatchUrl = configuredDispatchUrl || LOCAL_INTERACTIVE_HOST;
 const fastUrl = (process.env.AI_RUNS_INTERACTIVE_FAST_DISPATCH_URL || '').trim();
 const agenticUrl = (process.env.AI_RUNS_INTERACTIVE_AGENTIC_DISPATCH_URL || '').trim();
 
-if (!dispatchUrl && !fastUrl && !agenticUrl) {
-  console.error(
-    'Set AI_RUNS_INTERACTIVE_DISPATCH_URL so local interactive turns have a host to call.',
+if (!configuredDispatchUrl && !fastUrl && !agenticUrl) {
+  console.log(
+    `AI_RUNS_INTERACTIVE_DISPATCH_URL is unset; using local host ${LOCAL_INTERACTIVE_HOST}.`,
   );
-  process.exit(1);
 }
 
 const child = spawn(
