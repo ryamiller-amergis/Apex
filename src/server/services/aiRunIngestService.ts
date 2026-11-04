@@ -37,7 +37,6 @@ import {
   isAiRunIngestKind,
   isAiRunTerminalIngestStatus,
   type AiRunIngestBody,
-  type AiRunBootstrapResponse,
   type AiRunBootstrapResult,
   type AiRunIngestErrorCode,
   type AiRunProgressIngest,
@@ -61,6 +60,7 @@ import { workerTierTelemetry } from './workerTierTelemetry';
 import { trackEvent } from './telemetry';
 import { recordCursorChatUsage } from './aiUsageService';
 import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
+import type { InteractiveTerminalInput } from './brainstormTurnLedger';
 import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
 import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
 import {
@@ -214,6 +214,13 @@ export interface AiRunIngestDependencies {
   }) => Promise<void>;
   /** Called when a failed run reports that the Cursor team admin blocked its model. */
   onModelBlocked?: () => void;
+  /** Called after an interactive V2 terminal commits. Errors are logged, never thrown. */
+  onInteractiveTerminal?: (input: InteractiveTerminalInput) => Promise<void>;
+}
+
+async function defaultOnInteractiveTerminal(input: InteractiveTerminalInput): Promise<void> {
+  const { finalizeBrainstormTerminal } = await import('./brainstormTurnLedger');
+  await finalizeBrainstormTerminal(input);
 }
 
 function requestModelAvailabilityProbe(): void {
@@ -1170,6 +1177,29 @@ async function terminalizeDaprActorV2(input: {
 
   if (status === 'failed' || status === 'cancelled') {
     await reflectFailedGeneration(existing.threadId, dependencies);
+  }
+
+  const snapshot = existing.executionSnapshot;
+  const frozenWorkflowClass =
+    snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot.workflowClass : null;
+  if (existing.lane === INTERACTIVE_LANE && frozenWorkflowClass === 'brainstorm') {
+    await (dependencies.onInteractiveTerminal ?? defaultOnInteractiveTerminal)({
+      threadId: existing.threadId,
+      runId,
+      status,
+      failureCategory,
+      message: assistantMessage ? { id: assistantMessage.id, text: assistantMessage.text } : null,
+      inputTokens: body.inputTokens,
+      outputTokens: body.outputTokens,
+      cacheReadTokens: body.cacheReadTokens,
+      cacheWriteTokens: body.cacheWriteTokens,
+      durationMs: body.durationMs,
+    }).catch((err: unknown) => {
+      console.error(
+        '[aiRunIngest] interactive terminal effect failed:',
+        err instanceof Error ? err.message : 'Unexpected error',
+      );
+    });
   }
 
   return { run: mapRow(run), cancelRequested: run.cancelRequested };

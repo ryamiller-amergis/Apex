@@ -33,9 +33,14 @@ const PRE_WARM_CONCURRENCY = 2;
 /** Idle configured repos are probed at most this often. Active pins probe every sweep. */
 export const IDLE_REMOTE_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 
+export interface GroundingPreWarmSweepOptions {
+  /** Skips targets whose project this host does not ground. */
+  includeProject?: (project: string) => Promise<boolean>;
+}
+
 export interface GroundingPreWarmService {
   preWarm(target: PreWarmTarget): Promise<void>;
-  sweep(): Promise<void>;
+  sweep(options?: GroundingPreWarmSweepOptions): Promise<void>;
 }
 
 export interface GroundingPreWarmDependencies {
@@ -444,8 +449,17 @@ export function createGroundingPreWarmService(
 
   return {
     preWarm,
-    async sweep() {
-      const targets = await listActiveTargets();
+    async sweep(options = {}) {
+      const { includeProject } = options;
+      const listed = await listActiveTargets();
+      const targets = includeProject
+        ? (
+            await Promise.all(
+              listed.map(async (target) =>
+                (await includeProject(target.project)) ? target : null),
+            )
+          ).filter((target): target is PreWarmTarget => target !== null)
+        : listed;
       let firstError: unknown;
       for (
         let index = 0;

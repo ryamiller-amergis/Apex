@@ -126,7 +126,8 @@ export interface RunGroundingService {
   ): Promise<RunGroundingStatus | null>;
   reGroundFromCache(
     ref: RunRef,
-    role: RepoRole
+    role: RepoRole,
+    options?: { materialize?: boolean }
   ): Promise<ReGroundResponse | null>;
 }
 
@@ -784,7 +785,7 @@ export function createRunGroundingService(
       };
     },
 
-    async reGroundFromCache(ref, role) {
+    async reGroundFromCache(ref, role, options = {}) {
       const rows = await repository.findByRun(ref);
       const current =
         rows.find((row) => row.repoRole === role && row.isActive) ??
@@ -795,6 +796,13 @@ export function createRunGroundingService(
       if (!cachedOriginSha) return null;
       const replacement = await repository.reground(ref, role, cachedOriginSha);
       if (!replacement) return null;
+      if (options.materialize === false) {
+        return {
+          previousSha: current.groundedSha,
+          newSha: replacement.groundedSha,
+          groundedAt: replacement.groundedAt,
+        };
+      }
       try {
         materializationStates.set(
           materializationKey(ref, role),

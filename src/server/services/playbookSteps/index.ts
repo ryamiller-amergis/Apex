@@ -17,7 +17,14 @@ import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
 import { executeInterviewStep } from './interviewAdapter';
+import { executeApexActionStep } from './apexActionAdapter';
+import { executeCloudAgentStep } from './cloudAgentAdapter';
+import { executeJoinStep } from './joinAdapter';
+import { executeForeachStep, executeUntilStep } from './loopAdapters';
+import { executeBuildStep } from './buildAdapter';
+import { executeConnectorStep } from './connectorAdapter';
 import { getUserPermissions } from '../rbacService';
+import { isSuperAdminUserId } from '../../utils/superAdminUser';
 import { parseStepInput } from './descriptorValidation';
 import { getStepTypeDescriptor, requiredPermissionsForStep } from './registry';
 import { configHasBindings } from '../playbookBindingResolver';
@@ -33,9 +40,16 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   'cursor-agent': executeCursorAgentStep,
   'approval-gate': executeApprovalGateStep,
   notify: executeNotifyStep,
+  connector: executeConnectorStep,
   'ingest-artifact': executeIngestArtifactStep,
   branch: executeBranchStep,
   interview: executeInterviewStep,
+  'apex-action': executeApexActionStep,
+  'cloud-agent': executeCloudAgentStep,
+  join: executeJoinStep,
+  foreach: executeForeachStep,
+  until: executeUntilStep,
+  build: executeBuildStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */
@@ -80,6 +94,7 @@ async function assertInitiatorStillPermitted(
   context: PlaybookStepExecutionContext,
   requiredPermissions: readonly string[]
 ): Promise<void> {
+  if (await isSuperAdminUserId(context.initiatorUserId)) return;
   const permissions = await getUserPermissions(context.initiatorUserId, context.project);
   const missingPermissions = requiredPermissions.filter(
     (permission) => !permissions.has(permission)

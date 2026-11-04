@@ -1,5 +1,6 @@
 import type {
   InteractiveActorHealthMeasurements,
+  InteractiveHeartbeatMeasurements,
   InteractiveInflightMeasurements,
   InteractiveReplayMeasurements,
   InteractiveShedMeasurements,
@@ -151,6 +152,10 @@ export interface WorkerTierTelemetry {
     stage: InteractiveStageName,
     durationMs: number,
   ): void;
+  interactiveHeartbeats(
+    context: WorkerTierTelemetryContext,
+    measurements: InteractiveHeartbeatMeasurements,
+  ): void;
 }
 
 export function createWorkerTierTelemetry(
@@ -289,6 +294,13 @@ export function createWorkerTierTelemetry(
       const measurements: InteractiveReplayMeasurements = { replayedEvents };
       emit(
         WORKER_TIER_TELEMETRY_EVENT_NAMES.interactiveReplay,
+        properties(context),
+        measurements,
+      );
+    },
+    interactiveHeartbeats(context, measurements) {
+      emit(
+        WORKER_TIER_TELEMETRY_EVENT_NAMES.interactiveHeartbeats,
         properties(context),
         measurements,
       );

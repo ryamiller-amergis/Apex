@@ -21,7 +21,8 @@ export type AgentModuleId =
   | 'calendarAssistant'
   | 'loadTestGeneration'
   | 'designModule'
-  | 'designModuleScoping';
+  | 'designModuleScoping'
+  | 'brainstorm';
 
 export interface ChatMessage {
   id: string;
@@ -59,6 +60,8 @@ export interface ChatAttachmentMeta {
 export interface ChatThreadKickoff {
   project: string;
   repo: string;
+  /** Repository the skill is read from when it is not `repo` (the grounding repository). */
+  skillRepo?: string;
   branch?: string;
   /** Branch to fetch skills from (defaults to `branch` if not set) */
   skillBranch?: string;
@@ -95,6 +98,8 @@ export interface ChatThreadKickoff {
   calendarSelectedWorkItemIds?: number[];
   /** Calendar assistant: session ID in work_item_assistant_sessions */
   calendarAssistantSessionId?: string;
+  /** QA Lab Ask Apex: the one ADO test suite this thread may change */
+  qaLabSuiteId?: string;
   /** Human-readable label from the QuickSkillPill or QuickMcpPill selected on the home page */
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */
@@ -262,12 +267,19 @@ export interface SseDoneEvent {
   runId?: string;
   prdReady?: boolean;
   backlogReady?: boolean;
+  /** The failed attempt is being re-run under the same run id; the turn has not ended. */
+  autoRetry?: boolean;
 }
 
 export interface SseThinkingEvent {
   type: 'thinking';
   text: string;
   durationMs?: number;
+  /**
+   * Set when `text` is a raw streamed piece with its spacing intact. Pieces are
+   * joined as-is in `seq` order; a piece whose `seq` was already seen is a repeat.
+   */
+  seq?: number;
 }
 
 export type AgentRunPhase =

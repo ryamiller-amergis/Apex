@@ -297,6 +297,37 @@ describe('AdminProjectSettings — effort overrides', () => {
       body: expect.objectContaining({ interviewEffort: null }),
     })));
   });
+
+  it('saves one workflow edit as a flat body that carries the other workflows unchanged', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(projectConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+    (useAllProjectSkillConfigs as jest.Mock).mockReturnValue({
+      data: [{ ...projectConfig, prdEffort: 'high', adrEffort: 'low', designDocEffort: null }],
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.change(screen.getByTestId('ps-stage-effort-designDocEffort'), {
+      target: { value: 'medium' },
+    });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    const { body } = mutateAsync.mock.calls[0][0] as { body: Record<string, unknown> };
+    expect(body).toEqual(expect.objectContaining({
+      designDocEffort: 'medium',
+      prdEffort: 'high',
+      adrEffort: 'low',
+    }));
+    expect(body).not.toHaveProperty('workflowSettings');
+  });
 });
 
 describe('AdminProjectSettings — quick pill effort overrides', () => {

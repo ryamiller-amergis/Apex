@@ -7,6 +7,7 @@
  *
  * The run initiator is the interview author. Facilitator reassignment is not part of this step.
  */
+import { BUILD_INTAKE_OPTION_KEY } from '../../../shared/types/buildPreflight';
 import type { ChatThreadKickoff } from '../../../shared/types/chat';
 import type {
   InterviewProfileSnapshot,
@@ -14,10 +15,13 @@ import type {
   InterviewStepMode,
 } from '../../../shared/types/playbook';
 import type { InterviewSkillOption, ProjectSkillConfig } from '../../../shared/types/projectSettings';
+import { BUILD_INTAKE_SEED_TURN_ID, prepareBuildIntakeTurn } from '../buildIntakeService';
+import { findBuildByPlaybookRun, linkBuildInterview, type BuildForPlaybookRun } from '../buildOrchestrator/store';
 import { createThread, sendMessage } from '../chatAgentService';
 import { isFeatureEnabled } from '../featureFlagService';
 import { createInterview } from '../interviewService';
 import { resolveSkillConfig } from '../projectSettingsService';
+import { trackEvent } from '../telemetry';
 import { parseStepInput } from './descriptorValidation';
 import { resolveDeadlineMs } from './registry';
 import {
@@ -84,6 +88,20 @@ function snapshotProfile(
   };
 }
 
+/** The opening message is the requester's prompt on a build intake, so it goes through the same turn hook. */
+async function startInterview(threadId: string, opening: string, isBuildIntake: boolean): Promise<void> {
+  if (!isBuildIntake) {
+    await sendMessage(threadId, opening);
+    return;
+  }
+  const prepared = await prepareBuildIntakeTurn({
+    threadId,
+    messageText: opening,
+    turnId: BUILD_INTAKE_SEED_TURN_ID,
+  });
+  await sendMessage(threadId, opening, undefined, [], { internalContext: prepared.internalContext });
+}
+
 export async function executeInterviewStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
@@ -107,16 +125,36 @@ export async function executeInterviewStep(
   // @feature-flag:playbook-interview-step end
 
   // Read the project's skill settings before inserting anything. A bad key must leave no thread.
-  const skillConfig = await resolveSkillConfig({ project: context.project });
+  const skillConfig = await resolveSkillConfig({
+    project: context.project,
+    ...(config.skillSettingsId ? { settingsId: config.skillSettingsId } : {}),
+  });
+  const isBuildIntake = config.profileKey.trim() === BUILD_INTAKE_OPTION_KEY;
   const option = enabledProfile(skillConfig?.interviewSkillOptions, config.profileKey);
   if (!skillConfig || !option?.key?.trim()) {
+    if (isBuildIntake) trackEvent('build.intake.profile_refused', { reason: 'missing_intake_role' });
     throw new PlaybookInterviewProfileError(context.project, config.profileKey.trim());
   }
 
-  const snapshot = snapshotProfile(config.mode, option, skillConfig);
+  // A build intake is grounded on the build's target repository; the skill still loads from skillRepo.
+  let build: BuildForPlaybookRun | null = null;
+  if (isBuildIntake) {
+    build = await findBuildByPlaybookRun(context.runId);
+    if (!build) {
+      trackEvent('build.intake.profile_refused', { reason: 'missing_build_run' });
+      throw new PlaybookInterviewProfileError(context.project, config.profileKey.trim());
+    }
+  }
+
+  const profile = snapshotProfile(config.mode, option, skillConfig);
+  const snapshot: InterviewProfileSnapshot = isBuildIntake
+    ? { ...profile, wantsDesignPrototype: false, wantsTestCases: false }
+    : profile;
+  const groundingRepo = build?.repository ?? skillConfig.skillRepo;
   const kickoff: InterviewThreadKickoff = {
     project: context.project,
-    repo: skillConfig.skillRepo,
+    repo: groundingRepo,
+    ...(build ? { skillRepo: skillConfig.skillRepo } : {}),
     branch: skillConfig.skillBranch,
     skillProvider: skillConfig.skillProvider,
     skillPath:
@@ -137,7 +175,7 @@ export async function executeInterviewStep(
   const interview = await createInterview({
     userId: context.initiatorUserId,
     project: context.project,
-    repo: skillConfig.skillRepo,
+    repo: groundingRepo,
     title: option.friendlyName,
     chatThreadId: thread.id,
     model: snapshot.model ?? undefined,
@@ -158,7 +196,9 @@ export async function executeInterviewStep(
     expiresAt,
     resumeToken: interview.interviewId,
   });
-  void sendMessage(thread.id, 'Begin.').catch((error: unknown) => {
+  if (build) await linkBuildInterview(build.id, interview.interviewId);
+  const opening = config.openingMessage?.trim() || 'Begin.';
+  void startInterview(thread.id, opening, isBuildIntake).catch((error: unknown) => {
     console.error(
       `[playbook-interview] Failed to start interview ${interview.interviewId}:`,
       error,

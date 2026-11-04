@@ -294,7 +294,7 @@ describe('POST /api/interviews/design-docs/:id/assistant-thread — new thread c
     const res = await request(buildApp()).post('/api/interviews/design-docs/doc-1/assistant-thread');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ threadId: 'thread-new' });
+    expect(res.body).toEqual({ threadId: 'thread-new', created: true });
     expect(mockCreateThread).toHaveBeenCalledTimes(1);
   });
 

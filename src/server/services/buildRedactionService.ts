@@ -98,6 +98,26 @@ export function redactText(input: string, options?: RedactOptions): string {
   return patterned.split(KNOWN_SENTINEL).join('[REDACTED:known-secret]');
 }
 
+export type SecretClass = 'access_token' | 'connection_string' | 'secret_key_value';
+
+const SECRET_CLASS_ORDER: readonly SecretClass[] = ['access_token', 'connection_string', 'secret_key_value'];
+
+function secretClassFor(groups: Record<string, string | undefined> | undefined): SecretClass {
+  if (groups?.bearer || groups?.jwt) return 'access_token';
+  if (groups?.connUrl || groups?.ado || groups?.account) return 'connection_string';
+  return 'secret_key_value';
+}
+
+/** Which secret shapes the text holds, using the same patterns as `redactText`. Never returns matched text. */
+export function findSecretClasses(input: string): SecretClass[] {
+  assertString(input);
+  const found = new Set<SecretClass>();
+  for (const match of input.matchAll(SECRET_PATTERN)) {
+    found.add(secretClassFor(match.groups));
+  }
+  return SECRET_CLASS_ORDER.filter((value) => found.has(value));
+}
+
 function isSecretKey(key: string): boolean {
   return SECRET_KEY_NAME.test(key);
 }

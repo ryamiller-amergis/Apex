@@ -89,6 +89,8 @@ Read and evaluate these project assets before writing any code or design doc:
 - `feature-flags` — **always read** when the user chose feature-flag gating in Phase 1; also load when the feature introduces or retires a flag. Follow the top-level split pattern from that skill in the design doc and every subagent prompt.
 
 > **Skill resolution note:** If the feature involves resolving which skill repo/branch to use for an AI agent session, use `useProjectSkillConfig` (from `src/client/hooks/useProjectSkillConfig.ts`) as the canonical source for repo + branch. Do not hardcode branch names or let users pick repos manually. The admin-managed `project_skill_settings` table (managed via `/admin/project-settings`) is the source of truth.
+>
+> **New per-project AI settings:** If the feature adds a workflow that needs its own skill path, model, effort, or Bedrock setting, design it as an entry in `PROJECT_SKILL_WORKFLOWS` (`src/shared/constants/projectSkillWorkflows.ts`), stored in `project_skill_workflow_settings`. Never plan new columns on `project_skill_settings`. See `.cursor/rules/project-skill-settings.mdc`.
 
 Output a **Context Block** in this format — paste it into every subagent prompt generated in Phase 4:
 

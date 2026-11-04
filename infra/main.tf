@@ -71,6 +71,10 @@ resource "azurerm_linux_web_app" "main" {
     # dependency endpoints are observed separately so a shared database outage
     # does not remove every application instance from rotation.
     health_check_path = "/api/health"
+    # Azure pings about once a minute. azurerm 3.63+ rejects
+    # WEBSITE_HEALTHCHECK_MAXPINGFAILURES in app_settings and writes this
+    # value into that setting. 2 replaces the platform default of 10.
+    health_check_eviction_time_in_min = 2
 
     # Required for the FEAT-007 interactive WebSocket gateway (client ↔ gateway
     # upgrade). Declared explicitly so a full apply never reverts the runtime
@@ -92,10 +96,6 @@ resource "azurerm_linux_web_app" "main" {
     "ENABLE_ORYX_BUILD"                   = "false"
     "WEBSITE_RUN_FROM_PACKAGE"            = "1"
     "WEBSITES_ENABLE_APP_SERVICE_STORAGE" = "true"
-
-    # Evict an unresponsive instance after 2 failed health pings instead of the
-    # default 10.
-    "WEBSITE_HEALTHCHECK_MAXPINGFAILURES" = "2"
 
     # Observability
     "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.main.connection_string
@@ -179,6 +179,10 @@ resource "azurerm_linux_web_app" "main" {
       "DATABASE_URL",
       var.enable_staging_slot ? "LT_APEX_CALLBACK_BASE_URL" : null,
       "DB_POOL_MAX",
+      # Staging opts in to test-account sign-in; a swap must not carry that into production.
+      "ALLOW_TEST_ACCOUNT_SIGN_IN",
+      # Production runs a larger libuv pool than staging.
+      "UV_THREADPOOL_SIZE",
       # How long a background run may wait for a worker before it is failed as
       # queue_ttl. Approving a PRD submits one run per feature against a lane
       # that runs ten at a time, so the legitimate wait scales with the feature
@@ -192,6 +196,10 @@ resource "azurerm_linux_web_app" "main" {
       # clones production's repositories onto staging's disk. Staging holds
       # "cleanup-only" and production "full"; a swap must not trade them.
       "GROUNDING_MAINTENANCE_MODE",
+      # Staging shares production's database, so its background sweeps would
+      # claim production's work. Staging holds "off" and production "full"; a
+      # swap must not trade them.
+      "BACKGROUND_JOBS_MODE",
     ])
   }
 

@@ -39,6 +39,29 @@ jest.mock('../services/rbacService', () => ({
   getUserPermissions: (...args: unknown[]) => getUserPermissions(...args),
 }));
 
+const isSuperAdminUserId = jest.fn();
+jest.mock('../utils/superAdminUser', () => ({
+  isSuperAdminUserId: (...args: unknown[]) => isSuperAdminUserId(...args),
+}));
+
+const findBuildByPlaybookRun = jest.fn();
+const linkBuildInterview = jest.fn();
+jest.mock('../services/buildOrchestrator/store', () => ({
+  findBuildByPlaybookRun: (...args: unknown[]) => findBuildByPlaybookRun(...args),
+  linkBuildInterview: (...args: unknown[]) => linkBuildInterview(...args),
+}));
+
+const prepareBuildIntakeTurn = jest.fn();
+jest.mock('../services/buildIntakeService', () => ({
+  BUILD_INTAKE_SEED_TURN_ID: 'seed',
+  prepareBuildIntakeTurn: (...args: unknown[]) => prepareBuildIntakeTurn(...args),
+}));
+
+const trackEvent = jest.fn();
+jest.mock('../services/telemetry', () => ({
+  trackEvent: (...args: unknown[]) => trackEvent(...args),
+}));
+
 import { executeStep, adapterStepTypes, listStepTypeDescriptors } from '../services/playbookSteps';
 import { executeInterviewStep } from '../services/playbookSteps/interviewAdapter';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
@@ -99,6 +122,7 @@ beforeEach(() => {
   createInterview.mockResolvedValue({ interviewId: 'interview-1', threadId: 'thread-1' });
   suspendStepRun.mockResolvedValue(undefined);
   getUserPermissions.mockResolvedValue(new Set(['playbooks:run']));
+  isSuperAdminUserId.mockResolvedValue(false);
 });
 
 it('refuses execution before profile resolution when the project flag is disabled', async () => {
@@ -342,5 +366,130 @@ describe('VT-STEP-6 — dispatch includes the interview adapter', () => {
     expect(suspendStepRun).toHaveBeenCalledWith(
       expect.objectContaining({ resumeToken: 'interview-1' })
     );
+  });
+});
+
+describe('VT-37 — a super admin initiator runs without holding the step permission', () => {
+  it('runs the step for a super admin with no permissions', async () => {
+    isSuperAdminUserId.mockResolvedValue(true);
+    getUserPermissions.mockResolvedValue(new Set());
+
+    await executeStep(context(validConfig));
+
+    expect(getUserPermissions).not.toHaveBeenCalled();
+    expect(createInterview).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses an ordinary initiator with no permissions', async () => {
+    getUserPermissions.mockResolvedValue(new Set());
+
+    await expect(executeStep(context(validConfig))).rejects.toThrow();
+    expect(createInterview).not.toHaveBeenCalled();
+  });
+});
+
+describe('VT-39 — optional intake message and repository', () => {
+  it('sends the opening message and resolves the chosen skill settings', async () => {
+    await executeInterviewStep(context({
+      ...validConfig,
+      openingMessage: 'Build a reports page',
+      skillSettingsId: 'settings-9',
+    }));
+
+    expect(resolveSkillConfig).toHaveBeenCalledWith({ project: 'Apex', settingsId: 'settings-9' });
+    expect(sendMessage).toHaveBeenCalledWith('thread-1', 'Build a reports page');
+  });
+
+  it('keeps Begin. and the project default when both inputs are absent', async () => {
+    await executeInterviewStep(context(validConfig));
+
+    expect(resolveSkillConfig).toHaveBeenCalledWith({ project: 'Apex' });
+    expect(sendMessage).toHaveBeenCalledWith('thread-1', 'Begin.');
+  });
+});
+
+describe('FEAT-005 — build-intake profile (TBI-009)', () => {
+  const INTAKE: InterviewSkillOption = {
+    key: 'build-intake',
+    path: '.cursor/skills/build-intake/SKILL.md',
+    friendlyName: 'Build intake',
+    model: 'intake-model',
+    wantsDesignPrototype: true,
+    wantsTestCases: true,
+  };
+  const intakeConfig = { mode: 'human_led', profileKey: 'build-intake', openingMessage: 'Add a dark mode toggle' };
+
+  beforeEach(() => {
+    resolveSkillConfig.mockResolvedValue(skillConfig([PROFILE, INTAKE]));
+    findBuildByPlaybookRun.mockResolvedValue({ id: 'build-1', repository: 'org/target', requestedByUserId: 'initiator-1' });
+    linkBuildInterview.mockResolvedValue(undefined);
+    prepareBuildIntakeTurn.mockResolvedValue({ internalContext: '<<<INTERNAL_INTAKE_CONTEXT>>>\nx\n<<<END_INTERNAL_INTAKE_CONTEXT>>>' });
+  });
+
+  async function flushStart(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await Promise.resolve();
+  }
+
+  it('VT-16: resolves the profile with prototypes and test cases off, grounded on the target repo (DoD-0)', async () => {
+    await executeInterviewStep(context(intakeConfig));
+
+    expect(findBuildByPlaybookRun).toHaveBeenCalledWith('run-1');
+    const kickoff = createThread.mock.calls[0][1];
+    expect(kickoff).toMatchObject({
+      repo: 'org/target',
+      skillRepo: 'org/apex',
+      skillPath: INTAKE.path,
+      model: 'intake-model',
+      playbookInterview: { snapshot: { key: 'build-intake', wantsDesignPrototype: false, wantsTestCases: false } },
+    });
+    expect(createInterview).toHaveBeenCalledWith(expect.objectContaining({
+      repo: 'org/target',
+      playbookProfileKey: 'build-intake',
+      prototypeStageEnabled: false,
+      testCasesEnabled: false,
+    }));
+    expect(linkBuildInterview).toHaveBeenCalledWith('build-1', 'interview-1');
+  });
+
+  it('VT-17: a missing intake profile leaves no thread or interview', async () => {
+    resolveSkillConfig.mockResolvedValue(skillConfig([PROFILE]));
+
+    await expect(executeInterviewStep(context(intakeConfig))).rejects.toThrow('build-intake');
+    expect(createThread).not.toHaveBeenCalled();
+    expect(createInterview).not.toHaveBeenCalled();
+    expect(trackEvent).toHaveBeenCalledWith('build.intake.profile_refused', { reason: 'missing_intake_role' });
+  });
+
+  it('VT-17: a missing build run leaves no thread or interview', async () => {
+    findBuildByPlaybookRun.mockResolvedValue(null);
+
+    await expect(executeInterviewStep(context(intakeConfig))).rejects.toThrow('build-intake');
+    expect(createThread).not.toHaveBeenCalled();
+    expect(createInterview).not.toHaveBeenCalled();
+    expect(trackEvent).toHaveBeenCalledWith('build.intake.profile_refused', { reason: 'missing_build_run' });
+  });
+
+  it('VT-18: the opening message is the prompt and carries the hook context (PBI-009 AC-0)', async () => {
+    await executeInterviewStep(context(intakeConfig));
+    await flushStart();
+
+    expect(prepareBuildIntakeTurn).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      messageText: 'Add a dark mode toggle',
+      turnId: 'seed',
+    });
+    expect(sendMessage).toHaveBeenCalledWith('thread-1', 'Add a dark mode toggle', undefined, [], {
+      internalContext: expect.stringContaining('<<<INTERNAL_INTAKE_CONTEXT>>>'),
+    });
+  });
+
+  it('leaves other profiles on the skill repository with no hook', async () => {
+    await executeInterviewStep(context(validConfig));
+    await flushStart();
+
+    expect(findBuildByPlaybookRun).not.toHaveBeenCalled();
+    expect(createThread.mock.calls[0][1].repo).toBe('org/apex');
+    expect(createThread.mock.calls[0][1]).not.toHaveProperty('skillRepo');
+    expect(prepareBuildIntakeTurn).not.toHaveBeenCalled();
   });
 });

@@ -39,6 +39,8 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
+| `brainstorm:view` | brainstorm | admin, member, viewer |
+| `brainstorm:create` | brainstorm | admin, member, viewer |
 | `builds:view` | builds | admin, member, viewer |
 | `builds:run` | builds | admin, member |
 | `calendar:view` | calendar | admin, member |
@@ -69,10 +71,11 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
-| `playbooks:view` | playbooks | admin, member, viewer |
-| `playbooks:run` | playbooks | admin, member |
-| `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |
-| `playbooks:admin` | playbooks | admin |
+| `playbooks:view` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:run` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:author` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:admin` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:triggers:manage` | playbooks | platform admin, and Playbooks is enabled for the project |
 | `prds:review` | prds | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |

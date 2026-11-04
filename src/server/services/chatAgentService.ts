@@ -71,7 +71,10 @@ import {
   mcpServerTurnRequiresToolUse,
 } from '../../shared/types/mcpServers';
 import { resetMcpTurnCallBudget } from '../mcp/mcpServers/server';
-import type { InteractiveTurnAcceptedResponse } from '../../shared/types/durableInteractiveTurn';
+import type {
+  FrozenBrainstormTurn,
+  InteractiveTurnAcceptedResponse,
+} from '../../shared/types/durableInteractiveTurn';
 import {
   interactiveWorkflowRouter,
   legacyInteractiveWorkflowRouter,
@@ -111,6 +114,8 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from './testCaseService';
+import { syncAdoTestSuiteRunOutput } from './adoTestCaseSuiteService';
+import { syncCaseRegenerationRunOutput } from './qaCaseRegenerationService';
 import type { Prd } from '../../shared/types/interview';
 import { NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
 import { ingestValidationScorecard } from './documentValidationService';
@@ -820,6 +825,14 @@ export interface RepositoryReadRuntime {
   local: LocalAgentOptions;
   mcpServers: Record<string, McpServerConfig>;
   repoReader?: RepoReader;
+}
+
+function skillRepoOf(kickoff: ChatThreadKickoff): string {
+  return kickoff.skillRepo?.trim() || kickoff.repo;
+}
+
+function hasSeparateSkillRepo(kickoff: ChatThreadKickoff): boolean {
+  return skillRepoOf(kickoff) !== kickoff.repo;
 }
 
 function targetedRepositoryName(kickoff: ChatThreadKickoff): string {
@@ -1953,13 +1966,14 @@ async function buildNewAgentTurnPrompt(
 
       const results = await Promise.allSettled(
         requests.map(async (request) => {
-          if (options?.repoReader) {
+          const fromSkillRepo = request.key === 'skill' && hasSeparateSkillRepo(kickoff);
+          if (options?.repoReader && !fromSkillRepo) {
             return options.repoReader.readFile(request.path);
           }
           const { getSkillFile } = await import('./skillCatalogFacade');
           return getSkillFile(
             kickoff.project,
-            kickoff.repo,
+            fromSkillRepo ? skillRepoOf(kickoff) : kickoff.repo,
             request.path,
             resolvedBranch,
             provider
@@ -1981,7 +1995,7 @@ async function buildNewAgentTurnPrompt(
         if (request.key === 'skill') {
           skillContent = result.value;
           resolvedSkillPath = request.path.replace(/^\//, '');
-          skillSource = options?.repoReader ? 'local' : provider;
+          skillSource = options?.repoReader && !hasSeparateSkillRepo(kickoff) ? 'local' : provider;
         } else if (request.key === 'context') {
           contextContent = result.value;
         } else {
@@ -2006,13 +2020,13 @@ async function buildNewAgentTurnPrompt(
     if (!skillContent && !skipProviderCatalog) {
       for (const candidate of candidates.slice(1)) {
         try {
-          const content = options?.repoReader
+          const content = options?.repoReader && !hasSeparateSkillRepo(kickoff)
             ? await options.repoReader.readFile(candidate)
             : await (
                 await import('./skillCatalogFacade')
               ).getSkillFile(
                 kickoff.project,
-                kickoff.repo,
+                skillRepoOf(kickoff),
                 candidate,
                 resolvedBranch,
                 provider
@@ -2020,7 +2034,7 @@ async function buildNewAgentTurnPrompt(
           if (content) {
             skillContent = content;
             resolvedSkillPath = candidate;
-            skillSource = options?.repoReader ? 'local' : provider;
+            skillSource = options?.repoReader && !hasSeparateSkillRepo(kickoff) ? 'local' : provider;
             break;
           }
         } catch (err) {
@@ -3061,6 +3075,18 @@ export async function updateThreadKickoffTranscript(
   return true;
 }
 
+/** Merges kickoff fields and persists them before the next turn reads the thread. */
+export async function updateThreadKickoff(
+  threadId: string,
+  patch: Partial<ChatThreadKickoff>,
+): Promise<boolean> {
+  const state = await ensureThreadState(threadId);
+  if (!state) return false;
+  state.thread.kickoff = { ...state.thread.kickoff, ...patch };
+  await pgUpsertThread(state.thread);
+  return true;
+}
+
 /**
  * Mark an in-memory thread as interview-backed, extending its idle timeout.
  * Call this after linking a thread to an interviews row so the longer timeout
@@ -3398,6 +3424,9 @@ async function syncOutputToDbFromWorkspace(
     }
     return;
   }
+
+  if (await syncCaseRegenerationRunOutput(threadId, workspaceDir)) return;
+  if (await syncAdoTestSuiteRunOutput(threadId, workspaceDir, agentText)) return;
 
   // Check if this thread belongs to a PRD
   const prdRow = await db.query.prds.findFirst({
@@ -4013,6 +4042,7 @@ export function resolveInteractiveWorkflowClass(
   state: ThreadState
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
+  if (state.thread.kickoff.agentModule === 'brainstorm') return 'brainstorm';
   const assistantType = state.thread.kickoff.assistantType;
   if (assistantType === 'prd' || assistantType === 'design-doc') {
     return 'assistant';
@@ -4082,6 +4112,8 @@ export type InteractiveSendOptions = Readonly<{
   requesterUserId?: string;
   toolGrant?: DurableInteractiveToolGrantInput;
   onLegacySettled?: () => void;
+  /** Brainstorm turn context. A Brainstorm turn runs on V2 only and never in-process. */
+  brainstorm?: FrozenBrainstormTurn;
 }>;
 
 type LegacyChatSendOptions = Pick<
@@ -4271,6 +4303,10 @@ async function tryDispatchInteractiveTurn(
       // actor while its MCP map is intentionally empty.
       if (state.thread.kickoff.mcpPill) {
         return bypass('custom-mcp-pill');
+      }
+      // QA Lab Ask Apex changes cases through ado-skills tools the actor lacks.
+      if (state.thread.kickoff.qaLabSuiteId) {
+        return bypass('qa-lab-assistant');
       }
       const userId = state.thread.userId;
       const project = state.thread.kickoff.project;
@@ -6483,6 +6519,12 @@ function forgetThread(threadId: string): void {
   durableTerminalWatches.get(threadId)?.();
 }
 
+/** Hides a message in the in-memory thread copy. The caller updates Postgres. */
+export function hideLiveThreadMessage(threadId: string, messageId: string): void {
+  const message = threads.get(threadId)?.thread.messages.find((entry) => entry.id === messageId);
+  if (message) message.hidden = true;
+}
+
 function reflectDurableAdmission(
   state: ThreadState,
   text: string,
@@ -6612,6 +6654,9 @@ export async function sendMessage(
           status: 422,
         });
       }
+      if (options?.brainstorm || workflowClass === 'brainstorm') {
+        throw Object.assign(new Error('transport_unavailable'), { status: 409 });
+      }
       if (
         legacyCompletion === 'detach' &&
         state.thread.status === 'running'
@@ -6672,6 +6717,7 @@ export async function sendMessage(
         turnSkill: options?.turnSkill,
         toolGrant: options?.toolGrant,
         internalContext: options?.internalContext,
+        ...(options?.brainstorm ? { brainstorm: options.brainstorm } : {}),
       });
     },
   });

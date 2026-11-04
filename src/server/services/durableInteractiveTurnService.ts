@@ -8,10 +8,12 @@ import type {
 } from '../../shared/types/chat';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
+import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
 import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import type {
   DurableInteractiveTurnSpecification,
+  FrozenBrainstormTurn,
   FrozenGuidedInterview,
   FrozenInteractiveMcpDescriptor,
   FrozenInteractiveToolGrant,
@@ -47,7 +49,7 @@ import {
   buildDocumentAssistantEditGuidance,
   resolveDocumentAssistantType,
 } from './documentAssistantGuidance';
-import { isFeatureEnabled } from './featureFlagService';
+import { isFeatureEnabled, isFlagEnabledForWholeProject } from './featureFlagService';
 import { trackEvent } from './telemetry';
 import { isMaxviewConfigured } from './maxviewAuthService';
 import {
@@ -177,6 +179,8 @@ export type AdmitDurableInteractiveTurnInput = Readonly<{
   toolGrant?: DurableInteractiveToolGrantInput;
   /** Specialist findings for the model prompt. The visible user message stays `text`. */
   internalContext?: string;
+  /** Required for, and only for, workflow class `brainstorm`. */
+  brainstorm?: FrozenBrainstormTurn;
 }>;
 
 export type RetryDurableInteractiveTurnInput = Readonly<{
@@ -184,6 +188,8 @@ export type RetryDurableInteractiveTurnInput = Readonly<{
   runId: string;
   userId: string;
   toolGrant?: DurableInteractiveToolGrantInput;
+  /** Brainstorm retries re-freeze the artifact so the retried change builds on the current version. */
+  refreshedBrainstormArtifact?: FrozenBrainstormArtifact;
 }>;
 
 export type DurableInteractiveRetrySource = Readonly<{
@@ -711,6 +717,7 @@ function capabilityMetadata(
     thread.kickoff.webResearchEnabled ||
     thread.kickoff.assistantType === 'calendar-work-item' ||
     thread.kickoff.assistantType === 'mcp-server' ||
+    thread.kickoff.qaLabSuiteId ||
     resolveDocumentAssistantType(thread.kickoff)
   ) {
     capabilities.push('mcp');
@@ -789,6 +796,14 @@ function lastQuestion(agentText: string): string {
  * the only record of earlier answers. Question-driven sessions resend the
  * saved question/answer pairs every turn so an answered question is not
  * asked again.
+ *
+ * The UI can show a second agent question before the user answers the first
+ * (a race it guards against separately), so the transcript may hold more
+ * than one outstanding agent question at once. Pair each user reply with the
+ * specific question it quotes — the UI's `Q<n> · <question>` answer format
+ * echoes the question text verbatim — rather than always the most recently
+ * asked one. An outstanding question with no quoted reply stays out of the
+ * recap entirely, so the model is never told it was answered.
  */
 function answersSoFar(
   transcript: DurableInteractiveTurnSpecification['transcript'],
@@ -796,19 +811,27 @@ function answersSoFar(
 ): string[] {
   if (workflowClass !== 'interview' && workflowClass !== 'adr') return [];
   const entries: string[] = [];
-  let pendingQuestion: string | null = null;
+  const pendingQuestions: string[] = [];
   for (const entry of transcript) {
     if (entry.role === 'agent') {
-      pendingQuestion = lastQuestion(entry.text);
+      pendingQuestions.push(lastQuestion(entry.text));
       continue;
     }
     const answer = clipped(entry.text, MAX_RECAP_ANSWER_CHARS);
-    entries.push(
-      pendingQuestion === null
-        ? `${entries.length + 1}. Original request: ${answer}`
-        : `${entries.length + 1}. You asked: ${pendingQuestion}\n   User answered: ${answer}`,
+    if (pendingQuestions.length === 0) {
+      entries.push(`${entries.length + 1}. Original request: ${answer}`);
+      continue;
+    }
+    const quotedIndex = pendingQuestions.findIndex(
+      (question) => question.length > 0 && entry.text.includes(question),
     );
-    pendingQuestion = null;
+    // No explicit quote (plain free-text reply): assume it answers the
+    // earliest still-open question, matching the normal one-question flow.
+    const matchedIndex = quotedIndex >= 0 ? quotedIndex : 0;
+    const [question] = pendingQuestions.splice(matchedIndex, 1);
+    entries.push(
+      `${entries.length + 1}. You asked: ${question}\n   User answered: ${answer}`,
+    );
   }
   if (entries.length === 0) return [];
   return [
@@ -949,6 +972,7 @@ export function workflowUsesMaxview(
 ): boolean {
   switch (workflowClass) {
     case 'adr':
+    case 'brainstorm':
       return false;
     case 'interview':
     case 'home-chat':
@@ -971,6 +995,7 @@ export function workflowAllowsRepositorySearch(
 ): boolean {
   switch (workflowClass) {
     case 'interview':
+    case 'brainstorm':
       return false;
     case 'adr':
     case 'home-chat':
@@ -1025,8 +1050,9 @@ function frozenMcpDescriptors(
       enableRepoBrowse: false,
     });
   }
-  // Document assistants stage edits through ado-skills `update_*` tools.
-  if (hasAdoCapability || resolveDocumentAssistantType(thread.kickoff)) {
+  // Document assistants stage edits through ado-skills `update_*` tools, and
+  // QA Lab Ask Apex edits cases through its `qa_lab_*` tools.
+  if (hasAdoCapability || thread.kickoff.qaLabSuiteId || resolveDocumentAssistantType(thread.kickoff)) {
     descriptors.push({
       kind: 'internal-proxy',
       serverName: 'ado-skills',
@@ -1085,8 +1111,12 @@ async function defaultLoadSkill(
     );
   }
   let pinnedReader: Pick<RepoReader, 'readFile'>;
-  if (!input.grounding) {
-    if (!input.readBranchTip) {
+  if (hasSeparateSkillRepo(input.thread)) {
+    pinnedReader = branchTipReader(input.thread);
+  } else if (!input.grounding) {
+    // Brainstorm keeps its source checkouts separate from this turn, and still
+    // reads its skill from the Project Settings repository and branch.
+    if (!input.readBranchTip && input.thread.kickoff.agentModule !== 'brainstorm') {
       warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
       throw unavailableSkill();
     }
@@ -1119,6 +1149,146 @@ async function defaultLoadSkill(
   );
 }
 
+const SHA_40_RE = /^[0-9a-f]{40}$/i;
+
+async function resolveLightweightGroundingFallback(
+  input: ResolveGroundingInput,
+  repository: {
+    readonly provider: 'ado' | 'github';
+    readonly repo: string;
+    readonly branch: string;
+  },
+): Promise<FrozenGrounding> {
+  const project = input.thread.kickoff.project;
+  const bareRepo =
+    repository.provider === 'github'
+      ? repository.repo.split('/').pop() || repository.repo
+      : repository.repo;
+  const groundingProvider =
+    repository.provider === 'ado' ? ('azure_devops' as const) : ('github' as const);
+
+  const { readCachedOriginSha, readRemoteBranchTip } = await import(
+    './repoCacheService'
+  );
+
+  let sha: string | null = null;
+  const existingRows = await runGroundingService
+    .getGroundings({
+      runType: 'chat',
+      runId: input.thread.id,
+      project,
+    })
+    .catch(() => []);
+  const activeExisting = existingRows.find(
+    (row) =>
+      row.repoRole === 'target' &&
+      row.isActive &&
+      SHA_40_RE.test(row.groundedSha.trim()),
+  );
+  if (activeExisting) {
+    sha = activeExisting.groundedSha.trim().toLowerCase();
+  }
+
+  if (!sha) {
+    for (const candidateRepo of new Set([bareRepo, repository.repo])) {
+      const activeBranchRows = await runGroundingService
+        .findActiveByRepoBranch({
+          provider: groundingProvider,
+          project,
+          repository: candidateRepo,
+          branch: repository.branch,
+        })
+        .catch(() => []);
+      const latestActive = activeBranchRows
+        .filter(
+          (row) =>
+            row.repoRole === 'target' && SHA_40_RE.test(row.groundedSha.trim()),
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.groundedAt) - Date.parse(left.groundedAt),
+        )[0];
+      if (latestActive) {
+        sha = latestActive.groundedSha.trim().toLowerCase();
+        break;
+      }
+    }
+  }
+
+  // App Service stops refreshing its own mirrors for whole-V2 projects, so its
+  // cached SHA would pin an old commit; ask the remote instead.
+  const wholeV2 = await isFlagEnabledForWholeProject('ai-runs-v2-transport', project)
+    .catch(() => false);
+  if (!sha && !wholeV2) {
+    for (const candidateRepo of new Set([bareRepo, repository.repo])) {
+      const cached = await readCachedOriginSha({
+        provider: groundingProvider,
+        project,
+        repository: candidateRepo,
+        branch: repository.branch,
+      }).catch(() => null);
+      if (cached && SHA_40_RE.test(cached.trim())) {
+        sha = cached.trim().toLowerCase();
+        break;
+      }
+    }
+  }
+
+  if (!sha) {
+    const remoteTip = await readRemoteBranchTip({
+      provider: repository.provider,
+      project,
+      repo: repository.repo,
+      branch: repository.branch,
+    }).catch(() => null);
+    if (remoteTip && SHA_40_RE.test(remoteTip.trim())) {
+      sha = remoteTip.trim().toLowerCase();
+    }
+  }
+
+  if (!sha) return null;
+
+  await runGroundingService
+    .activateGroundings({
+      run: { runType: 'chat', runId: input.thread.id, project },
+      target: {
+        provider: groundingProvider,
+        repository: bareRepo,
+        branch: repository.branch,
+        groundedSha: sha,
+      },
+    })
+    .catch(() => undefined);
+
+  const runRef = `chat:${input.thread.id}`;
+  const profile = groundingProfileResolver.registerConnectionProfile(
+    {
+      runRef,
+      provider: repository.provider,
+      project,
+      repo: bareRepo,
+      sha,
+      checkoutPath: input.thread.workspaceDir,
+      caller: 'durable-interactive',
+      shareAcrossInstances: true,
+    },
+    {
+      userId: input.userId,
+      runRef,
+      project,
+    },
+    async () => true,
+  );
+  await groundingProfileResolver.whenShared(profile.id);
+  return {
+    provider: repository.provider,
+    project,
+    repository: repository.repo,
+    sha,
+    profileId: profile.id,
+  };
+}
+
 async function defaultResolveGrounding(
   input: ResolveGroundingInput,
 ): Promise<FrozenGrounding> {
@@ -1145,24 +1315,40 @@ async function defaultResolveGrounding(
       sandboxCwd: input.thread.workspaceDir,
       shareAcrossInstances: true,
     });
-  let selection = await start();
-  if (selection.mode === 'preparing') {
-    if (!selection.waitUntilReady) return null;
-    await waitForPreparation(
-      selection.waitUntilReady(),
-      resolveGroundingPreparationTimeoutMs(),
+  try {
+    let selection = await start();
+    if (selection.mode === 'preparing') {
+      if (!selection.waitUntilReady) {
+        return resolveLightweightGroundingFallback(input, repository);
+      }
+      await waitForPreparation(
+        selection.waitUntilReady(),
+        resolveGroundingPreparationTimeoutMs(),
+      );
+      selection = await start();
+    }
+    if (selection.mode !== 'local') {
+      return resolveLightweightGroundingFallback(input, repository);
+    }
+    await groundingProfileResolver.whenShared(selection.profileId);
+    return {
+      provider: repository.provider,
+      project: input.thread.kickoff.project,
+      repository: repository.repo,
+      sha: selection.resolvedSha,
+      profileId: selection.profileId,
+    };
+  } catch (error) {
+    if (error instanceof GroundingStillPreparingError) {
+      throw error;
+    }
+    const fallback = await resolveLightweightGroundingFallback(
+      input,
+      repository,
     );
-    selection = await start();
+    if (fallback) return fallback;
+    throw error;
   }
-  if (selection.mode !== 'local') return null;
-  await groundingProfileResolver.whenShared(selection.profileId);
-  return {
-    provider: repository.provider,
-    project: input.thread.kickoff.project,
-    repository: repository.repo,
-    sha: selection.resolvedSha,
-    profileId: selection.profileId,
-  };
 }
 
 export async function resolveDurableMaxviewCapability(
@@ -1221,13 +1407,22 @@ async function defaultIsBackgroundGroundingEnabled(
   }
 }
 
+function skillRepoOf(thread: ChatThread): string {
+  return thread.kickoff.skillRepo?.trim() || thread.kickoff.repo;
+}
+
+/** The skill lives outside the grounding repository, so the grounded reader cannot load it. */
+function hasSeparateSkillRepo(thread: ChatThread): boolean {
+  return skillRepoOf(thread) !== thread.kickoff.repo;
+}
+
 function branchTipReader(thread: ChatThread): Pick<RepoReader, 'readFile'> {
   const { kickoff } = thread;
   return {
     readFile: (filePath) =>
       getSkillFile(
         kickoff.project,
-        kickoff.repo,
+        skillRepoOf(thread),
         filePath,
         kickoff.skillBranch ?? kickoff.branch ?? 'main',
         kickoff.skillProvider ?? 'ado',
@@ -1436,9 +1631,12 @@ export function createDurableInteractiveTurnService(
       // for Technical. Keeping these turns ungrounded also keeps the worker's
       // workspace, and so its warm agent, the same across the product phase.
       const requiresRepositoryPreparation =
-        skillNeedsRepository && !groundInBackground;
+        skillNeedsRepository &&
+        !groundInBackground &&
+        input.workflowClass !== 'brainstorm';
       // An MCP connection chat answers from that server alone.
-      const skipRepositoryGrounding = thread.kickoff.assistantType === 'mcp-server';
+      const skipRepositoryGrounding =
+        thread.kickoff.assistantType === 'mcp-server';
 
       const immutableAttachments = [];
       for (
@@ -1516,9 +1714,13 @@ export function createDurableInteractiveTurnService(
         // Once a thread is pinned, an expired short wait would send an
         // ungrounded turn and move the worker to another workspace.
         const pinned = await deps.hasPinnedGrounding(thread).catch(() => false);
+        const waitMs =
+          input.workflowClass === 'brainstorm'
+            ? resolveGroundingPreparationTimeoutMs()
+            : deps.optionalGroundingWaitMs;
         grounding = pinned
           ? await resolution.catch(() => null)
-          : await resolveWithin(resolution, deps.optionalGroundingWaitMs);
+          : await resolveWithin(resolution, waitMs);
       }
       const groundingDoneAt = deps.now().getTime();
       const repositoryContext =
@@ -1670,15 +1872,20 @@ export function createDurableInteractiveTurnService(
         },
         transcript,
         grounding,
-        mcpServers: frozenMcpDescriptors(
-          thread,
-          hasAdoCapability,
-          maxviewEnabled,
-          grounding,
-        ).filter(
-          (descriptor) =>
-            !productPhaseInterview || descriptor.serverName !== 'ado-skills',
-        ),
+        mcpServers: [
+          ...frozenMcpDescriptors(
+            thread,
+            hasAdoCapability,
+            maxviewEnabled,
+            grounding,
+          ).filter(
+            (descriptor) =>
+              !productPhaseInterview || descriptor.serverName !== 'ado-skills',
+          ),
+          ...(input.brainstorm
+            ? [{ kind: 'internal-proxy', serverName: 'brainstorm-artifact', enableRepoBrowse: false } as const]
+            : []),
+        ],
         toolGrant,
         currentPrompt: preparedCurrentPrompt,
         recreationPrompt: recreationPrompt({
@@ -1689,6 +1896,7 @@ export function createDurableInteractiveTurnService(
         }),
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
+        ...(input.brainstorm ? { brainstorm: input.brainstorm } : {}),
       };
       const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({
@@ -1827,6 +2035,9 @@ export function createDurableInteractiveTurnService(
         userId: input.userId,
         refreshedToolGrant,
         refreshedDeadlines,
+        ...(input.refreshedBrainstormArtifact
+          ? { refreshedBrainstormArtifact: input.refreshedBrainstormArtifact }
+          : {}),
       });
 
       switch (retried.status) {

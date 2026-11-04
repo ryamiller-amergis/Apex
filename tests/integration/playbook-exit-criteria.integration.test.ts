@@ -34,6 +34,7 @@ jest.mock('../../src/server/services/chatAgentService', () => ({
 }));
 
 import pg from 'pg';
+import { getSuperAdminEmails } from '../../src/server/utils/superAdmin';
 import {
   createScratchDatabase,
   listTables,
@@ -143,12 +144,10 @@ async function provisionRun(
 }
 
 /**
- * Gives a user the project role carrying every permission Demo B's descriptors require.
+ * Marks the initiator as a platform admin so the step re-check admits them.
  *
- * E3 calls `startRun` directly rather than through the route, so `requirePermission` never runs —
- * but TBI-024 re-checks the initiator's access again before each side-effecting step, and an
- * initiator with no role at all is refused there. Seeding a real role rather than stubbing keeps
- * that re-check honest.
+ * E3 calls `startRun` directly rather than through the route, so `requirePermission` never runs.
+ * The step re-check still runs, and a role grant of a Playbook key no longer satisfies it.
  */
 async function grantPlaybookExecutionPermissions(userOid: string): Promise<void> {
   const [role] = await query<{ id: string }>(
@@ -175,6 +174,7 @@ async function grantPlaybookExecutionPermissions(userOid: string): Promise<void>
      ON CONFLICT DO NOTHING`,
     [userOid, PROJECT, role.id]
   );
+  await query('UPDATE app_users SET email = $2 WHERE oid = $1', [userOid, getSuperAdminEmails()[0]]);
 }
 
 beforeAll(async () => {

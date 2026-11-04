@@ -8,7 +8,7 @@ import {
   appGroups,
   appUsers,
 } from '../db/schema';
-import { eq, and, asc, desc } from 'drizzle-orm';
+import { eq, and, asc, desc, getTableColumns } from 'drizzle-orm';
 import * as groupService from './groupService';
 import type {
   ProjectSkillConfig,
@@ -30,8 +30,28 @@ import type {
 } from '../../shared/types/approvals';
 import { emitGroundingActiveSetChanged } from './groundingMaintenanceEvents';
 import { isProjectRepositoryCheckoutReadinessEnabled } from './featureFlagService';
+import {
+  omitWorkflowColumns,
+  saveWorkflowSettings,
+  workflowSettingsSubquery,
+  withWorkflowSettings,
+  type StoredWorkflowSettings,
+} from './projectSkillWorkflowSettings';
 
-function toSkillConfig(row: Record<string, unknown>): ProjectSkillConfig {
+/** Parent columns plus the workflow rows, mapped back to the flat shape by toSkillConfig. */
+function skillConfigSelection() {
+  return {
+    ...getTableColumns(projectSkillSettings),
+    workflowSettings: workflowSettingsSubquery(),
+  };
+}
+
+function toSkillConfig(stored: Record<string, unknown>): ProjectSkillConfig {
+  const { workflowSettings, ...settings } = stored;
+  const row = withWorkflowSettings(
+    settings,
+    workflowSettings as StoredWorkflowSettings[] | null | undefined,
+  );
   return {
     ...row,
     approvalMode: row.approvalMode as ApprovalMode | undefined,
@@ -73,7 +93,7 @@ export async function getSkillConfig(
   project: string
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .where(
       and(
@@ -89,7 +109,7 @@ export async function getSkillConfigById(
   id: string
 ): Promise<ProjectSkillConfig | null> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.id, id))
     .limit(1);
@@ -100,7 +120,7 @@ export async function listSkillConfigsForProject(
   project: string
 ): Promise<ProjectSkillConfig[]> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .where(eq(projectSkillSettings.project, project))
     .orderBy(
@@ -120,7 +140,7 @@ export async function resolveSkillConfig(opts: {
 
 export async function listSkillConfigs(): Promise<ProjectSkillConfig[]> {
   const rows = await db
-    .select()
+    .select(skillConfigSelection())
     .from(projectSkillSettings)
     .orderBy(projectSkillSettings.project);
   return rows.map(toSkillConfig);
@@ -182,6 +202,8 @@ export interface UpsertSkillConfigOptions extends ProjectEffortSettings {
   designPlanBedrockMaxTokens?: number | null;
   developmentSkillPath?: string | null;
   developmentModel?: string | null;
+  standupSkillPath?: string | null;
+  standupModel?: string | null;
   featureRequestSkillPath?: string | null;
   featureRequestModel?: string | null;
   technicalSkillPath?: string | null;
@@ -274,6 +296,8 @@ export async function upsertSkillConfig(
     designPlanBedrockMaxTokens: opts.designPlanBedrockMaxTokens ?? null,
     developmentSkillPath: opts.developmentSkillPath ?? null,
     developmentModel: opts.developmentModel ?? null,
+    standupSkillPath: opts.standupSkillPath ?? null,
+    standupModel: opts.standupModel ?? null,
     featureRequestSkillPath: opts.featureRequestSkillPath ?? null,
     featureRequestModel: opts.featureRequestModel ?? null,
     technicalSkillPath: opts.technicalSkillPath ?? null,
@@ -368,12 +392,16 @@ export async function upsertSkillConfig(
           },
         );
 
+      const parentValues = omitWorkflowColumns(values);
       const rows = await tx
         .update(projectSkillSettings)
-        .set(resetCheckout ? { ...values, ...CHECKOUT_RESET } : values)
+        .set(
+          (resetCheckout ? { ...parentValues, ...CHECKOUT_RESET } : parentValues) as typeof projectSkillSettings.$inferInsert,
+        )
         .where(eq(projectSkillSettings.id, opts.id))
         .returning();
       const row = rows[0];
+      await saveWorkflowSettings(tx, row.id, values, now);
       await writeApprovalModeRows(
         tx,
         row.id,
@@ -397,9 +425,10 @@ export async function upsertSkillConfig(
 
     const rows = await tx
       .insert(projectSkillSettings)
-      .values({ ...values, ...CHECKOUT_RESET })
+      .values({ ...omitWorkflowColumns(values), ...CHECKOUT_RESET } as typeof projectSkillSettings.$inferInsert)
       .returning();
     const row = rows[0];
+    await saveWorkflowSettings(tx, row.id, values, now);
     const initialModes: ModuleApprovalModes = {
       prd: approvalModeValue,
       design_doc: approvalModeValue,
@@ -450,7 +479,9 @@ export async function upsertSkillConfig(
     // @feature-flag:project-repository-checkout-readiness disabled-end
   }
   // @feature-flag:project-repository-checkout-readiness end
-  return toSkillConfig(result);
+  // Parent `.returning()` no longer carries workflow fields; reload so the
+  // save response matches GET instead of null-filling from the parent row.
+  return (await getSkillConfigById(result.id)) ?? toSkillConfig(result);
 }
 
 /**
@@ -487,7 +518,8 @@ export async function updateRepositoryCheckoutState(
     })
     .where(eq(projectSkillSettings.id, skillSettingsId))
     .returning();
-  return rows[0] ? toSkillConfig(rows[0]) : null;
+  if (!rows[0]) return null;
+  return (await getSkillConfigById(skillSettingsId)) ?? toSkillConfig(rows[0]);
 }
 
 export async function deleteSkillConfig(id: string): Promise<void> {

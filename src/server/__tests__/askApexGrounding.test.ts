@@ -115,6 +115,7 @@ describe('PBI-005 Ask Apex shared grounding lifecycle', () => {
       expect.objectContaining({
         caller: 'ask-apex',
         userId: 'developer-1',
+        sandboxCwd: expect.stringContaining(sessionId),
         run: {
           runType: 'service',
           runId: sessionId,

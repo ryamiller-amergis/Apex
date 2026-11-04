@@ -15,6 +15,10 @@ jest.mock('../services/playbookTerminalEventService', () => ({
   startPlaybookTerminalEventListener: jest.fn(),
   stopPlaybookTerminalEventListener: jest.fn(),
 }));
+jest.mock('../services/playbookTriggerScheduler', () => ({
+  startPlaybookTriggerScheduler: jest.fn(),
+  stopPlaybookTriggerScheduler: jest.fn(),
+}));
 
 import {
   computeReconciliationDelayMs,

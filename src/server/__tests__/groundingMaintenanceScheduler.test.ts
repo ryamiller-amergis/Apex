@@ -88,7 +88,7 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
     expect(evictOverBudget).toHaveBeenCalledTimes(2);
     expect(preWarm).toHaveBeenCalledWith(target);
     expect(evaluateActive).toHaveBeenCalledWith(target);
-    expect(evaluateActive).toHaveBeenCalledWith();
+    expect(evaluateActive).toHaveBeenCalledWith(undefined, { includeProject: undefined });
     expect(runLeaderSweep).toHaveBeenCalledTimes(2);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
@@ -254,8 +254,13 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
       };
     }
 
-    function build(s: ReturnType<typeof stubs>, mode?: string) {
+    function build(
+      s: ReturnType<typeof stubs>,
+      mode?: string,
+      isV2Project?: (project: string) => Promise<boolean>,
+    ) {
       return createGroundingMaintenanceScheduler({
+        ...(isV2Project ? { isV2Project } : {}),
         preWarmService: { sweep: s.sweep, preWarm: s.preWarm },
         evictionService: { evictIdle: s.evictIdle },
         sharedReadCheckoutService: { evictIdle: s.sharedEvictIdle },
@@ -309,6 +314,107 @@ describe('TBI-007 groundingMaintenanceScheduler', () => {
         expect.any(Number),
         'grounding-maintenance:sweep',
       );
+    });
+
+    it('disk-only only compacts this host repo cache', async () => {
+      const s = stubs();
+      const scheduler = build(s, 'disk-only');
+
+      await scheduler.runNow();
+
+      expect(scheduler.mode).toBe('disk-only');
+      expect(s.sweep).not.toHaveBeenCalled();
+      expect(s.evaluateActive).not.toHaveBeenCalled();
+      expect(s.runIfDue).not.toHaveBeenCalled();
+      expect(s.evictIdle).not.toHaveBeenCalled();
+      expect(s.sharedEvictIdle).not.toHaveBeenCalled();
+      expect(s.evictOverBudget).toHaveBeenCalledTimes(1);
+      expect(s.runLeaderSweep).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.any(Number),
+        'grounding-maintenance:sweep:disk-only',
+      );
+    });
+
+    const isV2Project = async (project: string) => project === 'Apex';
+
+    async function includedProjects(
+      filter: ((project: string) => Promise<boolean>) | undefined,
+    ): Promise<string[]> {
+      expect(filter).toBeDefined();
+      const projects = ['Apex', 'MatterWorx'];
+      const decisions = await Promise.all(projects.map((project) => filter!(project)));
+      return projects.filter((_, index) => decisions[index]);
+    }
+
+    it('legacy-projects grounds only non-V2 projects and leaves the workspace share alone', async () => {
+      const s = stubs();
+      const scheduler = build(s, 'legacy-projects', isV2Project);
+
+      await scheduler.runNow();
+
+      expect(scheduler.mode).toBe('legacy-projects');
+      expect(await includedProjects(s.sweep.mock.calls[0][0].includeProject)).toEqual(['MatterWorx']);
+      expect(await includedProjects(s.evaluateActive.mock.calls[0][1].includeProject)).toEqual(['MatterWorx']);
+      expect(s.runIfDue).toHaveBeenCalledWith(expect.objectContaining({ materialize: true }));
+      expect(s.evictIdle).not.toHaveBeenCalled();
+      expect(s.sharedEvictIdle).not.toHaveBeenCalled();
+      expect(s.evictOverBudget).toHaveBeenCalledTimes(1);
+      expect(s.runLeaderSweep).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.any(Number),
+        'grounding-maintenance:sweep:legacy-projects',
+      );
+    });
+
+    it('v2-projects grounds only V2 projects, cleans the share, re-pins without checkout, and keeps its mirrors', async () => {
+      const s = stubs();
+      const scheduler = build(s, 'v2-projects', isV2Project);
+
+      await scheduler.runNow();
+
+      expect(await includedProjects(s.sweep.mock.calls[0][0].includeProject)).toEqual(['Apex']);
+      expect(await includedProjects(s.runIfDue.mock.calls[0][0].includeProject)).toEqual(['Apex']);
+      expect(s.runIfDue).toHaveBeenCalledWith(expect.objectContaining({ materialize: false }));
+      expect(s.evictIdle).toHaveBeenCalledTimes(1);
+      expect(s.sharedEvictIdle).toHaveBeenCalledTimes(1);
+      expect(s.evictOverBudget).not.toHaveBeenCalled();
+      expect(s.runLeaderSweep).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.any(Number),
+        'grounding-maintenance:sweep:v2-projects',
+      );
+    });
+
+    it('keeps a project on App Service when the V2 flag cannot be read', async () => {
+      const unreadable = jest.fn().mockRejectedValue(new Error('db down'));
+      const legacy = stubs();
+      const v2 = stubs();
+
+      await build(legacy, 'legacy-projects', unreadable).runNow();
+      await build(v2, 'v2-projects', unreadable).runNow();
+
+      expect(await includedProjects(legacy.sweep.mock.calls[0][0].includeProject)).toEqual(['Apex', 'MatterWorx']);
+      expect(await includedProjects(v2.sweep.mock.calls[0][0].includeProject)).toEqual([]);
+    });
+
+    it('skips event pre-warm for a project this host does not ground', async () => {
+      const s = stubs();
+      let handler: ((changed: PreWarmTarget) => void) | undefined;
+      s.subscribe.mockImplementation(((next: (changed: PreWarmTarget) => void) => {
+        handler = next;
+        return jest.fn();
+      }) as () => jest.Mock);
+      const scheduler = build(s, 'legacy-projects', isV2Project);
+
+      scheduler.start();
+      handler?.(target);
+      handler?.({ ...target, project: 'MatterWorx' });
+      await jest.advanceTimersByTimeAsync(0);
+      scheduler.stop();
+
+      expect(s.preWarm).toHaveBeenCalledTimes(1);
+      expect(s.preWarm).toHaveBeenCalledWith({ ...target, project: 'MatterWorx' });
     });
 
     it('reads the mode from the environment by default', () => {

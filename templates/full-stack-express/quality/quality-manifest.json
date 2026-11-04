@@ -1,0 +1,76 @@
+{
+  "$schema": "./quality-manifest.schema.json",
+  "schemaVersion": 1,
+  "coverage": {
+    "lines": 80,
+    "functions": 80,
+    "statements": 80,
+    "branches": 75
+  },
+  "gates": [
+    {
+      "id": "build",
+      "title": "Build all workspace members",
+      "script": "build"
+    },
+    {
+      "id": "type-check",
+      "title": "TypeScript type check",
+      "script": "typecheck"
+    },
+    { "id": "lint", "title": "ESLint", "script": "lint" },
+    {
+      "id": "formatting",
+      "title": "Prettier check",
+      "script": "format:check"
+    },
+    {
+      "id": "openapi-drift",
+      "title": "Committed OpenAPI document matches the route definitions",
+      "script": "openapi:check"
+    },
+    {
+      "id": "routes-check",
+      "title": "Registered routes match the contract routes",
+      "script": "routes:check"
+    },
+    {
+      "id": "contract",
+      "title": "Committed operations match the OpenAPI document",
+      "script": "test:contract"
+    },
+    {
+      "id": "migration-validation",
+      "title": "Drizzle schema matches the committed migrations",
+      "script": "migrate:validate"
+    },
+    { "id": "unit", "title": "Unit tests", "script": "test:unit" },
+    {
+      "id": "component",
+      "title": "Component tests",
+      "script": "test:component"
+    },
+    { "id": "api", "title": "API tests", "script": "test:api" },
+    {
+      "id": "integration",
+      "title": "PostgreSQL integration tests",
+      "script": "test:integration"
+    },
+    {
+      "id": "accessibility",
+      "title": "Browser accessibility checks",
+      "script": "test:a11y"
+    },
+    {
+      "id": "container-build",
+      "title": "Build the production image",
+      "script": "container:build"
+    },
+    {
+      "id": "docs-validation",
+      "title": "Documentation links, sections, paths, and index coverage",
+      "script": "docs:check"
+    }
+  ],
+  "deferrals": []
+}

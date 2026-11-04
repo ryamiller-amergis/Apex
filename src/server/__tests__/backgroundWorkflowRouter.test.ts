@@ -603,7 +603,7 @@ describe('background workflow routing', () => {
 
     expect(decision).toEqual<WorkflowRouteDecision>({
       route: 'worker',
-      workspacePath: 'C:\\grounding-workspaces\\opaque',
+      workspacePath: 'C:\\threads\\thread-1',
       runId: 'run-1',
     });
     expect(dependencies.enqueue).not.toHaveBeenCalled();
@@ -615,6 +615,43 @@ describe('background workflow routing', () => {
         workloadLane: 'document',
         capacityClass: 'batch',
         specification: expect.objectContaining({ workflowClass: 'prd' }),
+      }),
+    );
+  });
+
+  it('with V2 on, sends only the grounded commit and prepares nothing on App Service', async () => {
+    const admitV2Run = jest.fn().mockResolvedValue({
+      status: 'dispatched',
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      attemptNumber: 1,
+      dispatchMessageId: 'dispatch-1',
+      outboxId: 'outbox-1',
+    });
+    const isUsableBareMirror = jest.fn().mockReturnValue(true);
+    const getRepoCacheDir = jest.fn().mockReturnValue('C:\\repo-cache\\mirror');
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run,
+      isUsableBareMirror,
+      getRepoCacheDir,
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(
+      makeInput(),
+    );
+
+    expect(decision.route).toBe('worker');
+    expect(dependencies.materializeRunGroundingWithPath).not.toHaveBeenCalled();
+    expect(dependencies.prepareWorkspace).not.toHaveBeenCalled();
+    expect(isUsableBareMirror).not.toHaveBeenCalled();
+    expect(getRepoCacheDir).not.toHaveBeenCalled();
+    expect(admitV2Run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        specification: expect.objectContaining({
+          groundedSha: expect.any(String),
+          repository: expect.any(String),
+        }),
       }),
     );
   });

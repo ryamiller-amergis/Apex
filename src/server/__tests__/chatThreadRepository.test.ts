@@ -1,8 +1,11 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   upsertThread,
   insertMessage,
+  isBackgroundWorkflowThread,
   listThreadsByUser,
   loadFullThread,
   deleteThread,
@@ -18,6 +21,7 @@ jest.mock('../db/drizzle', () => ({
     insert: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
+    execute: jest.fn(),
     transaction: jest.fn(),
     query: {
       chatThreads: {
@@ -452,6 +456,57 @@ describe('listThreadsByUser', () => {
 
     const result = await listThreadsByUser('user-1');
     expect(result).toEqual([]);
+  });
+
+  it('hides threads owned by validation, design-doc and test-case jobs', async () => {
+    const chain = buildSelectChain([]);
+    (db.select as jest.Mock).mockReturnValue(chain);
+
+    await listThreadsByUser('user-1');
+
+    const query = new PgDialect().sqlToQuery(chain.where.mock.calls[0][0] as SQL);
+    const where = query.sql;
+    expect(where).toContain('not (');
+    expect(where).toContain("bt.kickoff->>'freeformContext'");
+    expect(query.params).toEqual(expect.arrayContaining([
+      'document_operation: validation',
+      '# Design Doc Validation Context',
+      '# Test Case Generation Context',
+      '# Design Doc Generation — Single Feature',
+    ]));
+    expect(where).toContain('prds.validation_thread_id');
+    expect(where).toContain('design_docs.chat_thread_id');
+    expect(where).toContain('design_docs.validation_thread_id');
+    expect(where).toContain('test_cases.chat_thread_id');
+    expect(where).toContain('adrs.generation_thread_id');
+    expect(where).toContain("bt.kickoff->>'transcript'");
+    expect(query.params).toContain('# ADR Interview Transcript');
+  });
+});
+
+describe('isBackgroundWorkflowThread', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it.each([
+    [true, true],
+    [false, false],
+  ])('returns %s when the lookup reports %s', async (background, expected) => {
+    (db.execute as jest.Mock).mockResolvedValue({ rows: [{ background }] });
+
+    await expect(isBackgroundWorkflowThread('thread-1')).resolves.toBe(expected);
+
+    const query = new PgDialect().sqlToQuery((db.execute as jest.Mock).mock.calls[0][0] as SQL);
+    expect(query.sql).toContain('prds.validation_thread_id');
+    expect(query.sql).toContain('test_cases.chat_thread_id');
+    expect(query.params).toContain('thread-1');
+  });
+
+  it('returns false when the lookup returns no row', async () => {
+    (db.execute as jest.Mock).mockResolvedValue({ rows: [] });
+
+    await expect(isBackgroundWorkflowThread('thread-1')).resolves.toBe(false);
   });
 });
 

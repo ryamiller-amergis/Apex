@@ -36,6 +36,7 @@ import {
   REPO_CACHE_MIN_FREE_BYTES,
   RepoCacheDiskFullError,
   getRepoCacheDir,
+  isRepoCacheDir,
   readRemoteBranchTip,
   repairRepoCache,
   resolveGitRemote,
@@ -84,6 +85,19 @@ describe('repoCacheService', () => {
     expect(development).toContain(path.join('repo-cache', 'ado-maxview-maxview-'));
     expect(development).not.toContain('development');
     expect(development).toBe(release);
+  });
+
+  it('recognizes only this host project mirrors as repo-cache dirs', () => {
+    const mirror = getRepoCacheDir({
+      provider: 'ado',
+      project: 'MaxView',
+      repo: 'MaxView',
+      branch: 'development',
+    });
+
+    expect(isRepoCacheDir(mirror)).toBe(true);
+    expect(isRepoCacheDir(path.join(path.dirname(mirror), '..', 'brainstorm-repos', 'catalog-1'))).toBe(false);
+    expect(isRepoCacheDir(path.dirname(mirror))).toBe(false);
   });
 
   it('reuses a legacy per-branch mirror when the per-repo mirror is absent', () => {

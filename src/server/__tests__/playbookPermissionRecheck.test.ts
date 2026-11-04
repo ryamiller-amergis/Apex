@@ -16,6 +16,13 @@ const executeCursorAgent = jest.fn();
 const executeIngestArtifact = jest.fn();
 const executeBranch = jest.fn();
 const executeInterview = jest.fn();
+const executeBuild = jest.fn();
+const executeApexAction = jest.fn();
+const executeCloudAgent = jest.fn();
+const executeJoin = jest.fn();
+const executeForeach = jest.fn();
+const executeUntil = jest.fn();
+const executeConnector = jest.fn();
 const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
@@ -44,6 +51,31 @@ jest.mock('../services/playbookSteps/branchAdapter', () => ({
 
 jest.mock('../services/playbookSteps/interviewAdapter', () => ({
   executeInterviewStep: (...args: unknown[]) => executeInterview(...args),
+}));
+
+jest.mock('../services/playbookSteps/buildAdapter', () => ({
+  executeBuildStep: (...args: unknown[]) => executeBuild(...args),
+}));
+
+jest.mock('../services/playbookSteps/apexActionAdapter', () => ({
+  executeApexActionStep: (...args: unknown[]) => executeApexAction(...args),
+}));
+
+jest.mock('../services/playbookSteps/cloudAgentAdapter', () => ({
+  executeCloudAgentStep: (...args: unknown[]) => executeCloudAgent(...args),
+}));
+
+jest.mock('../services/playbookSteps/joinAdapter', () => ({
+  executeJoinStep: (...args: unknown[]) => executeJoin(...args),
+}));
+
+jest.mock('../services/playbookSteps/loopAdapters', () => ({
+  executeForeachStep: (...args: unknown[]) => executeForeach(...args),
+  executeUntilStep: (...args: unknown[]) => executeUntil(...args),
+}));
+
+jest.mock('../services/playbookSteps/connectorAdapter', () => ({
+  executeConnectorStep: (...args: unknown[]) => executeConnector(...args),
 }));
 
 jest.mock('../services/featureFlagService', () => ({
@@ -82,6 +114,37 @@ function context(stepType: string): PlaybookStepExecutionContext {
       mode: 'human_led',
       profileKey: 'ba-discovery',
     },
+    build: {
+      buildRunId: 'build-1',
+      briefId: 'brief-1',
+      interviewId: 'interview-1',
+    },
+    'apex-action': {
+      operation: 'create-work-item',
+      parameters: { workItemType: 'Bug', title: 'Fix the report', description: 'The total is wrong.' },
+    },
+    'cloud-agent': {
+      workItemId: 1,
+      workItemType: 'Bug',
+      state: 'New',
+    },
+    join: {
+      predecessors: ['left', 'right'],
+      policy: 'all',
+    },
+    foreach: {
+      maxIterations: 1,
+      items: [],
+    },
+    until: {
+      maxIterations: 1,
+      done: true,
+      iteration: 0,
+    },
+    connector: {
+      integration: 'teams',
+      operation: 'send-message',
+    },
   };
   return {
     runId: 'run-1',
@@ -108,6 +171,12 @@ beforeEach(() => {
   executeIngestArtifact.mockResolvedValue({ kind: 'completed', output: {} });
   executeBranch.mockResolvedValue({ kind: 'completed', output: {} });
   executeInterview.mockResolvedValue({ kind: 'suspended' });
+  executeBuild.mockResolvedValue({ kind: 'suspended' });
+  executeApexAction.mockResolvedValue({ kind: 'completed', output: {} });
+  executeCloudAgent.mockResolvedValue({ kind: 'suspended' });
+  executeJoin.mockResolvedValue({ kind: 'completed', output: {} });
+  executeForeach.mockResolvedValue({ kind: 'completed', output: {} });
+  executeUntil.mockResolvedValue({ kind: 'completed', output: {} });
   isFeatureEnabled.mockResolvedValue(true);
 });
 

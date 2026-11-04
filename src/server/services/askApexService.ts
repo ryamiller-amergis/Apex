@@ -4,6 +4,8 @@ import type {
   LocalAgentOptions,
   McpServerConfig,
 } from '@cursor/sdk/dist/cjs/options.js';
+import os from 'os';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { retryWithBackoff } from '../utils/retry';
 import { listSkillConfigs } from './projectSettingsService';
@@ -388,6 +390,12 @@ interface SessionState {
 
 const sessions = new Map<string, SessionState>();
 
+// Never created: the agent runs in process.cwd() and reads through the
+// grounding profile. It only keeps the session's profile off the host mirror.
+function sessionScratchDir(sessionId: string): string {
+  return path.join(os.tmpdir(), 'ask-apex-sessions', sessionId);
+}
+
 function broadcast(session: SessionState, event: AskApexSseEvent): void {
   for (const cb of session.subscribers) {
     try {
@@ -493,6 +501,7 @@ async function ensureSessionGrounding(
 
   const grounding = await callerGroundingService.start({
     caller: 'ask-apex',
+    sandboxCwd: sessionScratchDir(session.id),
     userId: session.userId,
     run: {
       runType: 'service',

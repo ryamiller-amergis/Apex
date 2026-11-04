@@ -99,7 +99,9 @@ export function createCheckpointConsumer(
             await clock.sleep(250);
           }
         } catch (err) {
-          metrics.increment('orchestrator.checkpoint.loop_error');
+          metrics.increment('orchestrator.checkpoint.loop_error', {
+            error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+          });
           console.error(
             '[aiOrchestrator/checkpointConsumer]',
             err instanceof Error ? err.message : String(err),

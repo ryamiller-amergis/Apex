@@ -107,6 +107,21 @@ resource "azurerm_role_assignment" "ai_platform_v2_api_blob_contributor" {
   principal_id         = data.azurerm_linux_web_app.ai_platform_v2_api[0].identity[0].principal_id
 }
 
+# Staging shares production's database, so its recovery sweep can claim a
+# finished V2 attempt and must be able to read that attempt's artifacts.
+resource "azurerm_role_assignment" "ai_platform_v2_api_staging_blob_contributor" {
+  count = (
+    local.ai_platform_v2_runtime_enabled
+    && var.ai_platform_v2_grant_app_service_blob
+    && var.enable_staging_slot
+    && !var.staging_slot_shares_app_identity
+  ) ? 1 : 0
+
+  scope                = azurerm_storage_container.ai_platform_v2_artifacts[0].resource_manager_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app_slot.staging[0].identity[0].principal_id
+}
+
 resource "azurerm_container_app" "ai_platform_v2_orchestrator" {
   count = local.ai_platform_v2_runtime_enabled ? 1 : 0
 
@@ -254,8 +269,11 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
   revision_mode                = "Single"
 
   identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.ai_platform_v2["document"].id]
+    type = "UserAssigned"
+    identity_ids = [
+      azurerm_user_assigned_identity.ai_platform_v2["document"].id,
+      local.ai_runs_insights_reader_id,
+    ]
   }
 
   registry {
@@ -319,6 +337,10 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.ai_platform_v2["document"].client_id
+      }
+      env {
+        name  = "AZURE_INSIGHTS_CLIENT_ID"
+        value = local.ai_runs_insights_reader_client_id
       }
       env {
         name  = "AZURE_TENANT_ID"

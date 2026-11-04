@@ -19,6 +19,7 @@ import type {
 import type { AgentRunStatus } from '../../shared/types/agentRunLifecycle';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import type { FeatureRequest } from '../../shared/types/featureRequest';
+import { appendCloudActivityEvent } from '../utils/cloudAgentActivityLog';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -127,7 +128,7 @@ export function useCloudAgentActivityStream(
         if (payload.type === 'activity') {
           if (seen.has(payload.event.id)) return;
           seen.add(payload.event.id);
-          setEvents((current) => [...current, payload.event].slice(-500));
+          setEvents((current) => appendCloudActivityEvent(current, payload.event));
         } else if (payload.type === 'stream_end') {
           setIsConnected(false);
           source.close();

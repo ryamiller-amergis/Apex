@@ -18,10 +18,16 @@ export const SOFT_STALE_AGE_MS = 7 * DAY_MS;
 export const SOFT_STALE_COMMIT_COUNT = 50;
 export const HARD_CHECKPOINT_AGE_MS = 14 * DAY_MS;
 
+export interface GroundingStalenessEvaluateOptions {
+  /** Skips groundings whose project this host does not ground. */
+  includeProject?: (project: string) => Promise<boolean>;
+}
+
 export interface GroundingStalenessService {
   evaluate(grounding: RunGrounding): Promise<GroundingStalenessState>;
   evaluateActive(
     target?: PreWarmTarget,
+    options?: GroundingStalenessEvaluateOptions,
   ): Promise<GroundingStalenessState[]>;
 }
 
@@ -105,7 +111,8 @@ export function createGroundingStalenessService(
 
   return {
     evaluate,
-    async evaluateActive(target) {
+    async evaluateActive(target, options = {}) {
+      const { includeProject } = options;
       const groundings = await listActiveGroundings();
       const matching = target
         ? groundings.filter(
@@ -116,7 +123,15 @@ export function createGroundingStalenessService(
               grounding.branch === target.branch,
           )
         : groundings;
-      return Promise.all(matching.map(evaluate));
+      const included = includeProject
+        ? (
+            await Promise.all(
+              matching.map(async (grounding) =>
+                (await includeProject(grounding.project)) ? grounding : null),
+            )
+          ).filter((grounding): grounding is RunGrounding => grounding !== null)
+        : matching;
+      return Promise.all(included.map(evaluate));
     },
   };
 }

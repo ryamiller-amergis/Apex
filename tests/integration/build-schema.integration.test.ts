@@ -180,8 +180,11 @@ describe('VT-01 build tables exist with the contracted shape', () => {
     const byName = Object.fromEntries(rules.map((row) => [row.constraint_name, row.delete_rule]));
     expect(byName.fk_build_preview_leases_run).toBe('CASCADE');
     expect(byName.fk_agent_runs_build_task).toBe('SET NULL');
+    // FEAT-004: deleting a project skill settings row clears the link instead of blocking the delete.
+    expect(byName.fk_build_runs_skill_settings).toBe('SET NULL');
+    const notRestrict = new Set(['fk_build_preview_leases_run', 'fk_agent_runs_build_task', 'fk_build_runs_skill_settings']);
     for (const [name, rule] of Object.entries(byName)) {
-      if (name === 'fk_build_preview_leases_run' || name === 'fk_agent_runs_build_task') continue;
+      if (notRestrict.has(name)) continue;
       if (!name.startsWith('fk_build_')) continue;
       expect(rule).toBe('RESTRICT');
     }

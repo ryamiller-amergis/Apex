@@ -3,6 +3,7 @@ import { PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import type { PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
 import {
   DEFAULT_POPULAR_STEP_TYPES,
+  PLAYBOOK_STEP_GROUP_LABELS,
   PLAYBOOK_STEP_GROUP_ORDER,
   stepMeta,
   type PlaybookStepMeta,
@@ -35,7 +36,7 @@ function rankPopular(items: readonly PlaybookStepMeta[], usage: Record<string, n
 }
 
 function matches(meta: PlaybookStepMeta, query: string): boolean {
-  const haystack = `${meta.title} ${meta.stepType} ${meta.description} ${meta.group}`.toLowerCase();
+  const haystack = `${meta.title} ${meta.stepType} ${meta.description} ${PLAYBOOK_STEP_GROUP_LABELS[meta.group]}`.toLowerCase();
   return query
     .toLowerCase()
     .split(/\s+/)
@@ -52,7 +53,10 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
   onAdd,
 }) => {
   const [query, setQuery] = useState('');
-  const steps = useMemo(() => items.map((item) => stepMeta(item.stepType)), [items]);
+  const steps = useMemo(
+    () => items.filter((item) => item.addable !== false).map((item) => stepMeta(item.stepType)),
+    [items],
+  );
   const popular = useMemo(() => rankPopular(steps, usage), [steps, usage]);
   const trimmed = query.trim();
   const results = useMemo(
@@ -174,8 +178,8 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
           </p>
         ) : (
           grouped.map(({ group, steps: groupSteps }) => (
-            <section key={group} aria-label={group}>
-              <h3 className={styles.libraryGroup}>{group}</h3>
+            <section key={group} aria-label={PLAYBOOK_STEP_GROUP_LABELS[group]}>
+              <h3 className={styles.libraryGroup}>{PLAYBOOK_STEP_GROUP_LABELS[group]}</h3>
               <ul className={styles.stepList}>
                 {groupSteps.map((meta) => {
                   const Icon = meta.icon;

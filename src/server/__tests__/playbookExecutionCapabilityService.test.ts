@@ -1,5 +1,6 @@
 import {
   PlaybookExecutionCapabilityError,
+  loadPlaybookSkillCompanions,
   parsePlaybookSkillCapabilities,
   resolvePlaybookAgentRunPolicy,
 } from '../services/playbookExecutionCapabilityService';
@@ -13,14 +14,37 @@ playbook-capabilities: [repository-read, network-read]
 `;
 
 describe('Playbook execution capability policy', () => {
+  it('loads the markdown files that sit beside a Skill', async () => {
+    const companions = await loadPlaybookSkillCompanions(
+      'playbook-skills/maxview-incident-investigation/SKILL.md',
+    );
+    expect(companions.map((file) => file.path).sort()).toEqual([
+      'INVESTIGATION_GUIDE.md',
+      'RESOURCE_CATALOG.md',
+    ]);
+  });
+
   it('parses the closed capability declaration', () => {
     expect(parsePlaybookSkillCapabilities(skill)).toEqual([
       'repository-read',
       'network-read',
     ]);
+    expect(parsePlaybookSkillCapabilities('---\nname: x\n---\n')).toBeNull();
     expect(() =>
       parsePlaybookSkillCapabilities(skill.replace('network-read', 'teleport'))
     ).toThrow(PlaybookExecutionCapabilityError);
+  });
+
+  it('runs a Skill that does not declare playbook-capabilities', () => {
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'draft',
+      skillPath: 'skill.md',
+      skillContent: '---\nname: x\ndescription: Y\n---\n',
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+    });
+
+    expect(policy.capabilities).toEqual(['repository-read', 'network-read']);
   });
 
   it('freezes a read-only policy without credentials', () => {
@@ -50,7 +74,22 @@ describe('Playbook execution capability policy', () => {
     expect(JSON.stringify(policy)).not.toMatch(/token|secret|credential/i);
   });
 
-  it('refuses a profile or Skill that is broader or narrower than required', () => {
+  it('includes azure-cli when the Skill declares it', () => {
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'investigate',
+      skillPath: 'skill.md',
+      skillContent: skill.replace(
+        'playbook-capabilities: [repository-read, network-read]',
+        'playbook-capabilities: [repository-read, network-read, azure-cli]',
+      ),
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+    });
+
+    expect(policy.capabilities).toEqual(['repository-read', 'network-read', 'azure-cli']);
+  });
+
+  it('refuses a profile that is not read-only', () => {
     expect(() =>
       resolvePlaybookAgentRunPolicy({
         nodeId: 'draft',
@@ -60,15 +99,17 @@ describe('Playbook execution capability policy', () => {
         enforce: true,
       })
     ).toThrow(/read-only/i);
+  });
 
-    expect(() =>
-      resolvePlaybookAgentRunPolicy({
-        nodeId: 'draft',
-        skillPath: 'skill.md',
-        skillContent: skill.replace(', network-read', ''),
-        mcpProfile: 'repository-read-only',
-        enforce: true,
-      })
-    ).toThrow(/network-read/);
+  it('still runs a Skill that declares only some capabilities', () => {
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'draft',
+      skillPath: 'skill.md',
+      skillContent: skill.replace(', network-read', ''),
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+    });
+
+    expect(policy.capabilities).toEqual(['repository-read', 'network-read']);
   });
 });
