@@ -45,7 +45,7 @@ import {
   RepoCacheLeaseLostError,
   withRepoCacheLease,
 } from './repoCacheLeaseService';
-import { isDocumentHarvestPendingForRun } from './aiRunV2/finishedAttemptReader';
+import { isDocumentHarvestPendingForThread } from './aiRunV2/finishedAttemptReader';
 import {
   durableInteractiveTurnService,
   loadDurableInteractiveRetrySource,
@@ -661,20 +661,12 @@ function canThisInstanceFailLatestRun(
   return Number.isFinite(updatedMs) && nowMs - updatedMs >= orphanGraceMs;
 }
 
-async function hasPendingDocumentHarvest(
-  latest: Pick<
-    ThreadRunSnapshotRow,
-    'id' | 'status' | 'transportVersion'
-  > | null,
-): Promise<boolean> {
-  if (
-    !latest?.id
-    || latest.transportVersion !== 'servicebus-blob-v2'
-    || !isTerminalAgentRunStatus(latest.status)
-  ) {
-    return false;
-  }
-  return isDocumentHarvestPendingForRun(latest.id).catch(() => true);
+/**
+ * Checks the whole thread, not just its latest run: a chat turn posted after a
+ * document run finishes must not let a watcher fail the document before harvest.
+ */
+async function hasPendingDocumentHarvest(threadId: string): Promise<boolean> {
+  return isDocumentHarvestPendingForThread(threadId).catch(() => true);
 }
 
 /**
@@ -731,7 +723,7 @@ export async function getThreadRunStateSnapshot(
     orphanGraceMs,
   );
   const pendingDocumentHarvest =
-    mayFailGeneration && await hasPendingDocumentHarvest(latest);
+    mayFailGeneration && await hasPendingDocumentHarvest(threadId);
 
   return {
     latestRun: latest
@@ -814,7 +806,7 @@ export async function canThisInstanceFailGeneration(
   const latest = await getLatestThreadRun(threadId);
   const mayFail = canThisInstanceFailLatestRun(latest, nowMs, orphanGraceMs);
   if (!mayFail) return false;
-  return !(await hasPendingDocumentHarvest(latest));
+  return !(await hasPendingDocumentHarvest(threadId));
 }
 
 function warningFor(health: AgentRunHealth, config: AgentRunHealthConfig): string | null {

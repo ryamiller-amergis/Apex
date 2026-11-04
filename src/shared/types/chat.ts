@@ -100,6 +100,8 @@ export interface ChatThreadKickoff {
   calendarAssistantSessionId?: string;
   /** QA Lab Ask Apex: the one ADO test suite this thread may change */
   qaLabSuiteId?: string;
+  /** Server-set: the thread backs an Ask Apex panel session and stays out of Home history. */
+  askApex?: boolean;
   /** Human-readable label from the QuickSkillPill or QuickMcpPill selected on the home page */
   pillLabel?: string;
   /** Short description from the pill, used as a subtitle in the thread title */

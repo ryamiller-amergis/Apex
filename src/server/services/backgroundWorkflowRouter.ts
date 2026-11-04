@@ -1044,6 +1044,26 @@ export function createBackgroundWorkflowRouter(
 
 export const backgroundWorkflowRouter = createBackgroundWorkflowRouter();
 
+/**
+ * Whether the router sends this workflow to the V2 document worker, which then
+ * owns the run's ending through harvest.
+ */
+export async function usesV2DocumentTransport(input: {
+  userId: string;
+  project: string;
+  workflowClass: BackgroundWorkflowClass;
+}): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(V2_TRANSPORT_FLAG, {
+      userId: input.userId,
+      project: input.project,
+      caller: input.workflowClass,
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function routeBackgroundWorkflow(
   input: BackgroundWorkflowRouteInput,
 ): Promise<WorkflowRouteDecision> {

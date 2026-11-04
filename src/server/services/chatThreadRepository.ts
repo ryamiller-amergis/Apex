@@ -225,6 +225,7 @@ export async function listThreadsByUser(
     sql`NOT EXISTS (SELECT 1 FROM prds WHERE prds.chat_thread_id = ${chatThreads.id})`,
     sql`NOT EXISTS (SELECT 1 FROM brainstorm_sessions WHERE brainstorm_sessions.chat_thread_id = ${chatThreads.id})`,
     not(backgroundWorkflowThreadCondition(sql`${chatThreads.id}`)),
+    sql`(${chatThreads.kickoff}->>'askApex') IS DISTINCT FROM 'true'`,
   ];
 
   if (opts?.project) {
@@ -314,6 +315,7 @@ export async function searchThreads(
           SELECT 1 FROM brainstorm_sessions WHERE brainstorm_sessions.chat_thread_id = t.id
         )
         AND NOT ${backgroundWorkflowThreadCondition(sql`t.id`)}
+        AND (t.kickoff->>'askApex') IS DISTINCT FROM 'true'
         ${projectFilter}
         ${flaggedFilter}
     ),

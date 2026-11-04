@@ -4042,6 +4042,7 @@ export function resolveInteractiveWorkflowClass(
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
   if (state.thread.kickoff.agentModule === 'brainstorm') return 'brainstorm';
+  if (state.thread.kickoff.askApex) return 'ask-apex';
   const assistantType = state.thread.kickoff.assistantType;
   if (assistantType === 'prd' || assistantType === 'design-doc') {
     return 'assistant';

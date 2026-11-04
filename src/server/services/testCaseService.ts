@@ -18,7 +18,7 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   canThisInstanceFailGeneration,
   isThreadRunAlive,
@@ -1001,16 +1001,33 @@ export async function triggerTestCaseGeneration(
   // The HTTP caller returns now; preparation continues after the response.
   const testCaseId = testCaseRow.id;
   const threadId = thread.id;
+  const routeUserId = actorUserId ?? prdRow.authorId;
   void routeTestCaseGenerationKickoff({
     testCaseId,
     prdId,
-    userId: actorUserId ?? prdRow.authorId,
+    userId: routeUserId,
     project: prdRow.project,
     threadId,
     sourceThreadId,
     kickoffMessage: buildTestCaseKickoff(scope),
-  }).then((routedSuccessfully) => {
-    if (routedSuccessfully) startTestCaseWatcher(testCaseId, threadId);
+  }).then(async (routedSuccessfully) => {
+    if (!routedSuccessfully) return;
+    const v2Transport = await usesV2DocumentTransport({
+      userId: routeUserId,
+      project: prdRow.project,
+      workflowClass: 'test-cases',
+    });
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (v2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      // Harvest applies the V2 result, including failures and missing output.
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    } else {
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      startTestCaseWatcher(testCaseId, threadId);
+      // @feature-flag:ai-runs-v2-transport disabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
   }).catch((error: unknown) => {
     console.error(
       `[testCase] Routing failed — testCaseId=${testCaseId} prdId=${prdId}`,

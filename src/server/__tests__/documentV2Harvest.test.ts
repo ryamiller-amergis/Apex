@@ -63,6 +63,8 @@ function arrange(
     listFinishedByThread: jest.fn(),
     listFinishedDocuments: jest.fn().mockResolvedValue([currentAttempt]),
     isDocumentHarvestPending: jest.fn().mockResolvedValue(false),
+
+    isThreadDocumentHarvestPending: jest.fn().mockResolvedValue(false),
     recordHarvestFailure: jest.fn().mockResolvedValue(1),
     claimHarvest: jest.fn().mockResolvedValue('claimed'),
     completeHarvest: jest.fn().mockResolvedValue(undefined),
