@@ -31,6 +31,11 @@ import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
 import { harvestFinishedV2UiLabDesigns } from './uiLabV2Harvest';
 import { harvestFinishedV2Documents } from './documentV2Harvest';
 import {
+  startV2HarvestTrigger,
+  stopV2HarvestTrigger,
+  withV2HarvestLease,
+} from './v2HarvestTrigger';
+import {
   findRunningInterviewThreads,
   clearStaleRun,
 } from './chatThreadRepository';
@@ -48,6 +53,8 @@ import {
 } from './repoCacheLeaseService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
+/** The event trigger may be mid-harvest; wait for it rather than skip, so stale-row resets see its result. */
+const RECOVERY_HARVEST_LEASE_WAIT_MS = 30_000;
 const SHUTDOWN_GRACE_MS = 10_000;
 const DEFAULT_SETUP_TIMEOUT_MS = 15 * 60_000;
 const GENERATION_RECOVERY_GRACE_MS = DEFAULT_SETUP_TIMEOUT_MS;
@@ -340,7 +347,10 @@ export async function recoverInFlightWork(
   }
 
   await runRecoveryCategory('finished document runs', signal, async () => {
-    const harvestedDocuments = await harvestFinishedV2Documents();
+    const harvestedDocuments = await withV2HarvestLease(
+      () => harvestFinishedV2Documents(),
+      RECOVERY_HARVEST_LEASE_WAIT_MS,
+    );
     if (harvestedDocuments > 0) {
       recovered += harvestedDocuments;
       console.log(
@@ -765,7 +775,10 @@ export async function recoverInFlightWork(
   // a run that finished just past the threshold is failed before it is read.
   try {
     throwIfAborted(signal);
-    const harvested = await harvestFinishedV2Prototypes();
+    const harvested = await withV2HarvestLease(
+      () => harvestFinishedV2Prototypes(),
+      RECOVERY_HARVEST_LEASE_WAIT_MS,
+    );
     if (harvested > 0) {
       recovered += harvested;
       console.log(
@@ -825,6 +838,7 @@ export function startRecoveryLoop(): void {
     return;
   }
 
+  startV2HarvestTrigger();
   void runRecoveryCycle('[recovery] Initial recovery failed:');
   recoveryTimer = setInterval(() => {
     void runRecoveryCycle('[recovery] Periodic recovery failed:');
@@ -833,6 +847,7 @@ export function startRecoveryLoop(): void {
 }
 
 export function stopRecoveryLoop(): void {
+  stopV2HarvestTrigger();
   if (recoveryTimer) {
     clearInterval(recoveryTimer);
     recoveryTimer = null;

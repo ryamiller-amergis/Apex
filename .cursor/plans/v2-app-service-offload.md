@@ -57,7 +57,12 @@ Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" 
   - No share watcher for V2 validation: `usesV2DocumentTransport` in `backgroundWorkflowRouter.ts` gates the watcher in `documentValidationService.autoStartDocumentValidation` and `designDocService.autoStartValidation`; `startupRecovery.ts` skips threads where `isV2ValidationThread` is true.
   - Own run: `listFinishedDocuments` counts only newer runs of the same `workflowClass`; new `isThreadDocumentHarvestPending` backs `canThisInstanceFailGeneration` and `getThreadRunStateSnapshot`, so a later chat turn can't hide a pending harvest.
   - Targeted tests, server typecheck and `npm run lint:check` pass.
-- Next: commit, push, open the PR, deploy to dev, then check that a V2 validation finishes with a scorecard and no `[documentValidationWatcher]` logs.
+- A step 1 pushed as PR #271 (6e3a102a).
+- Decisions 2026-11-04 (user): finish A, B, C in one go, all folded into #271, then the user tests.
+  - A: App Service harvests as soon as the orchestrator's terminal `done` NOTIFY arrives (`subscribeAllRunEvents`, like `playbookTerminalEventService`); the ~60 s sweep stays as a backup. Harvest stays on App Service and the orchestrator stays domain-neutral. A steps 2 and 3 dropped.
+  - A step 5: same event trigger for `designPrototypeV2Harvest` and `uiLabV2Harvest`.
+  - B: reuse `ai-runs-v2-transport`. Ask Apex turns lost to a host restart re-run once, same rules as Home chat.
+  - C: grounding impact only; walkthrough drafts stay on App Service for now.
 
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.

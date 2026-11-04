@@ -77,6 +77,11 @@ jest.mock('../services/testCaseService', () => ({
   isTestCaseWatcherActive: jest.fn(),
   routeTestCaseGenerationKickoff: jest.fn(),
 }));
+jest.mock('../services/v2HarvestTrigger', () => ({
+  startV2HarvestTrigger: jest.fn(),
+  stopV2HarvestTrigger: jest.fn(),
+  withV2HarvestLease: (operation: () => Promise<unknown>) => operation(),
+}));
 jest.mock('../services/documentValidationService', () => ({
   routeDocumentValidationKickoff: jest.fn(),
   isV2ValidationThread: (...args: unknown[]) => mockIsV2ValidationThread(...args),
