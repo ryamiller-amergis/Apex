@@ -23,6 +23,7 @@ import { env } from '../config/env';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { QaLabAssistantPanel, type QaLabAssistantTarget } from './QaLabAssistantPanel';
 import { QaLabCaseComments } from './QaLabCaseComments';
+import { QaLabCaseRun } from './QaLabCaseRun';
 import { QaLabCaseDiff } from './QaLabCaseDiff';
 import { QaLabGenerationStatus } from './QaLabGenerationStatus';
 import {
@@ -427,6 +428,10 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
               isPublished={isPublished}
             />
           )}
+
+          {review && (isPublished || testCase.existing) && (
+            <QaLabCaseRun suiteId={review.suiteId} localCaseId={testCase.id} />
+          )}
         </div>
       )}
     </div>
@@ -435,8 +440,15 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
 
 /* ── Suite group ─────────────────────────────────────────────────────────── */
 
+function suiteWorkItemUrl(suite: QaLabSuite, urlFor: (id: number) => string): string | null {
+  if (suite.adoWorkItemUrl) return suite.adoWorkItemUrl;
+  const id = suite.adoWorkItemId ?? Number(/^PBI-(\d+)$/i.exec(suite.pbiId)?.[1]);
+  return Number.isInteger(id) && id > 0 ? urlFor(id) : null;
+}
+
 interface SuiteGroupProps {
   suite: QaLabSuite;
+  pbiUrl: string | null;
   cases: QaLabTestCase[];
   /** All- or Manual-tab cases for this suite, used for the coverage strip. */
   manualCases: QaLabTestCase[] | null;
@@ -479,6 +491,7 @@ const ManualCoverage: React.FC<{ suiteId: string; cases: QaLabTestCase[] }> = ({
 
 const SuiteGroup: React.FC<SuiteGroupProps> = ({
   suite,
+  pbiUrl,
   cases,
   manualCases,
   expandedIds,
@@ -493,7 +506,19 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({
       <header className={styles.suiteHeader}>
         <div className={styles.suiteTitleRow}>
           <span className={styles.suitePbiId}>{suite.pbiId}</span>
-          <h3 className={styles.suiteTitle}>{suite.pbiTitle}</h3>
+          <h3 className={styles.suiteTitle}>
+            {pbiUrl ? (
+              <a
+                href={pbiUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.suiteTitleLink}
+                {...{ 'data-testid': `qa-lab-suite-title-link-${suite.pbiId}` }}
+              >
+                {suite.pbiTitle}
+              </a>
+            ) : suite.pbiTitle}
+          </h3>
           <span className={styles.suiteCount}>
             {cases.length} {cases.length === 1 ? 'case' : 'cases'}
           </span>
@@ -588,9 +613,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   }, [saveSidebarWidth, sidebarWidth]);
 
   const workItemDetail = useQaLabWorkItemDetail(project, selectedWorkItemId, detailsOpen);
-  const adoWorkItemUrl = selectedWorkItemId
-    ? `https://dev.azure.com/${encodeURIComponent(env.VITE_ADO_ORG)}/${encodeURIComponent(project)}/_workitems/edit/${selectedWorkItemId}`
-    : null;
+  const workItemUrlFor = useCallback(
+    (id: number) => `https://dev.azure.com/${encodeURIComponent(env.VITE_ADO_ORG)}/${encodeURIComponent(project)}/_workitems/edit/${id}`,
+    [project],
+  );
+  const adoWorkItemUrl = selectedWorkItemId ? workItemUrlFor(selectedWorkItemId) : null;
 
   const {
     data: workItemList,
@@ -1597,6 +1624,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               <SuiteGroup
                 key={`${suite.pbiId}-${suite.adoWorkItemId ?? 'unlinked'}`}
                 suite={suite}
+                pbiUrl={suiteWorkItemUrl(suite, workItemUrlFor)}
                 cases={suite.testCases.filter(
                   (entry) => isOnTab(entry, activeTab) && matchesUserType(entry) && matchesFilters(entry),
                 )}

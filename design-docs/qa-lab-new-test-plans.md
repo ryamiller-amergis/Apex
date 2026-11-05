@@ -67,7 +67,7 @@ QA can create a plan or suite the skill did not propose.
 For each ticked proposal, in order:
 
 1. Look the plan up by name again (case-insensitive) and reuse it if it now exists. Do the same for each suite segment. A retry never creates a duplicate, and no database change is needed.
-2. Create the plan. It copies the area path and iteration that most active plans in the project use (`MatterWorx` / `MatterWorx` for MatterWorx). Azure DevOps creates its root suite.
+2. Create the plan at the project's top-level area path (`MatterWorx`), with the iteration most active plans in the project use. Azure DevOps creates its root suite.
 3. Static: create each missing suite along the path under the plan's root suite. Requirement: create a requirement suite for the PBI under the root suite.
 4. Publish the cases. A case going to a static suite is added to it. A case going to a requirement suite needs only its Tested By link; Apex does not call add-to-suite for it.
 

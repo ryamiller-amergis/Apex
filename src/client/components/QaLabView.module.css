@@ -603,6 +603,16 @@
   margin: 0;
 }
 
+.suiteTitleLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.suiteTitleLink:hover {
+  color: var(--accent-color);
+  text-decoration: underline;
+}
+
 .suiteCount {
   font-size: 0.75rem;
   color: var(--text-muted);

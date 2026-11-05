@@ -2,7 +2,13 @@ import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
-import type { QaAdoGenerationContext } from '../../shared/types/qaLab';
+import type {
+  QaAdoGenerationContext,
+  QaLabRunAttachment,
+  QaLabRunBug,
+  QaLabRunOutcome,
+  QaLabRunStepResult,
+} from '../../shared/types/qaLab';
 import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
 import type {
   BrainstormFailureCode,
@@ -932,6 +938,34 @@ export const qaCaseComments = pgTable('qa_case_comments', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   suiteCaseIdx: index('qa_case_comments_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
+export const qaCaseRuns = pgTable('qa_case_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  adoTestCaseId: integer('ado_test_case_id').notNull(),
+  adoPlanId: integer('ado_plan_id').notNull(),
+  adoSuiteId: integer('ado_suite_id').notNull(),
+  parentWorkItemId: integer('parent_work_item_id'),
+  status: text('status').$type<'draft' | 'published'>().notNull().default('draft'),
+  outcome: text('outcome').$type<QaLabRunOutcome>(),
+  comment: text('comment').notNull().default(''),
+  stepResults: jsonb('step_results').$type<QaLabRunStepResult[]>().notNull().default(sql`'[]'::jsonb`),
+  attachments: jsonb('attachments').$type<QaLabRunAttachment[]>().notNull().default(sql`'[]'::jsonb`),
+  bugs: jsonb('bugs').$type<QaLabRunBug[]>().notNull().default(sql`'[]'::jsonb`),
+  adoRunId: integer('ado_run_id'),
+  adoResultId: integer('ado_result_id'),
+  adoRunUrl: text('ado_run_url'),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by'),
+  createdByName: text('created_by_name'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  oneDraft: uniqueIndex('qa_case_runs_one_draft_idx')
+    .on(t.project, t.adoTestCaseId)
+    .where(sql`${t.status} = 'draft'`),
+  caseIdx: index('qa_case_runs_case_idx').on(t.project, t.adoTestCaseId, t.createdAt),
 }));
 
 export const designDocs = pgTable('design_docs', {

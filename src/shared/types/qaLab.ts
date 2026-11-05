@@ -373,3 +373,74 @@ export interface QaLabGenerateRequest {
   matchLevel?: QaLabMatchLevel;
   matchedTitle?: string;
 }
+
+export type QaLabRunOutcome = 'passed' | 'failed';
+
+/** A Test Case step as Azure DevOps stores it; `stepId` is the id in the steps XML. */
+export interface QaLabRunStep extends QaLabTestCaseStep {
+  stepId: number;
+}
+
+export interface QaLabRunStepResult {
+  stepId: number;
+  outcome: QaLabRunOutcome | null;
+  comment: string;
+}
+
+export interface QaLabRunAttachment {
+  id: string;
+  fileName: string;
+  size: number;
+  /** Azure DevOps work item attachment URL. */
+  url: string;
+  /** Set when the file belongs to one step rather than the whole case. */
+  stepId?: number;
+}
+
+export interface QaLabRunBug {
+  id: number;
+  url: string;
+  title: string;
+}
+
+/** Where a case runs in Azure DevOps. */
+export interface QaLabRunTarget {
+  adoTestCaseId: number;
+  adoTestCaseUrl: string;
+  title: string;
+  planId: number;
+  planName: string;
+  suiteId: number;
+  suiteName: string;
+  steps: QaLabRunStep[];
+}
+
+export interface QaLabCaseRun {
+  id: string;
+  status: 'draft' | 'published';
+  outcome: QaLabRunOutcome | null;
+  comment: string;
+  stepResults: QaLabRunStepResult[];
+  attachments: QaLabRunAttachment[];
+  bugs: QaLabRunBug[];
+  adoRunUrl: string | null;
+  publishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface QaLabCaseRunState {
+  /** Null when the case has no Test Case in a Test Plan suite yet. */
+  target: QaLabRunTarget | null;
+  /** Why the case cannot be run, when `target` is null. */
+  unavailableReason?: string;
+  /** The open draft, or null before QA records anything. */
+  draft: QaLabCaseRun | null;
+  /** The most recent published run of this Test Case. */
+  lastPublished: QaLabCaseRun | null;
+}
+
+export interface QaLabSaveCaseRunRequest {
+  outcome: QaLabRunOutcome | null;
+  comment: string;
+  stepResults: QaLabRunStepResult[];
+}

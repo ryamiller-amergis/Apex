@@ -164,6 +164,7 @@ import {
   restoreCaseRegeneration,
 } from '../services/qaCaseRegenerationService';
 import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
+import qaCaseRunRouter from './qaCaseRuns';
 import type {
   QaAdoSuiteSelection,
   QaLabAddCaseCommentRequest,
@@ -195,6 +196,8 @@ import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
 const router = Router();
+
+router.use(qaCaseRunRouter);
 
 router.get('/reviewer-availability', requirePermission('interviews:manage'), async (req, res, next) => {
   try {

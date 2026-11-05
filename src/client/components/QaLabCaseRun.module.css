@@ -1,0 +1,258 @@
+.runClosed {
+  margin-top: 12px;
+}
+
+.run {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.runHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.runTitle {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.runWhere {
+  flex: 1;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.runWhere a,
+.note a,
+.bugs a,
+.attachment a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.runWhere a:hover,
+.note a:hover,
+.bugs a:hover,
+.attachment a:hover {
+  text-decoration: underline;
+}
+
+.note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--error-color);
+}
+
+.runTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.runTable th,
+.runTable td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.runTable th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.numberCol {
+  width: 44px;
+}
+
+.resultCol {
+  width: 36%;
+}
+
+.multiline {
+  white-space: pre-line;
+}
+
+.rowFailed td:first-child {
+  box-shadow: inset 3px 0 0 var(--error-color);
+}
+
+.outcomeButtons {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.outcomeBtn {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.outcomeBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.outcomePassed {
+  border-color: var(--success-color);
+  background: var(--success-color);
+  color: var(--on-accent);
+}
+
+.outcomeFailed {
+  border-color: var(--error-color);
+  background: var(--error-color);
+  color: var(--on-accent);
+}
+
+.comment {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+  resize: vertical;
+}
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-size: 0.75rem;
+}
+
+.attachmentRemove {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.fileInput {
+  display: none;
+}
+
+.linkBtn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--accent-color);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.linkBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.caseResult {
+  display: flex;
+  flex-direction: column;
+}
+
+.caseResultRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.bugs {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primaryBtn,
+.secondaryBtn,
+.bugBtn {
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primaryBtn {
+  border: none;
+  background: var(--accent-color);
+  color: var(--on-accent);
+}
+
+.secondaryBtn {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.bugBtn {
+  border: 1px solid var(--error-color);
+  background: transparent;
+  color: var(--error-color);
+}
+
+.primaryBtn:disabled,
+.secondaryBtn:disabled,
+.bugBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

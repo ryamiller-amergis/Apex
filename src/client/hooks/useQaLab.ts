@@ -8,7 +8,10 @@ import type {
   QaLabCaseComment,
   QaLabCaseRegeneration,
   QaLabCaseReview,
+  QaLabCaseRun,
+  QaLabCaseRunState,
   QaLabGenerateRequest,
+  QaLabSaveCaseRunRequest,
   QaLabGenerationCandidates,
   QaLabNewPlacementApproval,
   QaLabPublishedCase,
@@ -296,6 +299,60 @@ export function useRegenerateCase() {
       void queryClient.invalidateQueries({ queryKey: caseReviewKey(suiteId) });
     },
   });
+}
+
+const caseRunKey = (suiteId: string, localCaseId: string) =>
+  ['qa-lab', 'case-run', suiteId, localCaseId] as const;
+
+const caseRunUrl = (suiteId: string, localCaseId: string) =>
+  `/api/interviews/ado-test-suites/${suiteId}/cases/${encodeURIComponent(localCaseId)}/run`;
+
+/** The Azure DevOps Test Case to run, the draft in progress, and the last published run. */
+export function useCaseRun(suiteId: string, localCaseId: string, enabled: boolean) {
+  return useQuery<QaLabCaseRunState>({
+    queryKey: caseRunKey(suiteId, localCaseId),
+    queryFn: () => apiFetch(caseRunUrl(suiteId, localCaseId)),
+    enabled,
+  });
+}
+
+/** Run mutations for one case; each refreshes the run state when it settles. */
+export function useCaseRunActions(suiteId: string, localCaseId: string) {
+  const queryClient = useQueryClient();
+  const url = caseRunUrl(suiteId, localCaseId);
+  const onSettled = () => {
+    void queryClient.invalidateQueries({ queryKey: caseRunKey(suiteId, localCaseId) });
+  };
+  const save = useMutation<QaLabCaseRun, Error, QaLabSaveCaseRunRequest>({
+    mutationFn: (body) => apiFetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    onSettled,
+  });
+  const attach = useMutation<QaLabCaseRun, Error, { file: File; stepId?: number }>({
+    mutationFn: ({ file, stepId }) => {
+      const form = new FormData();
+      form.append('file', file);
+      if (stepId !== undefined) form.append('stepId', String(stepId));
+      return apiFetch(`${url}/attachments`, { method: 'POST', body: form });
+    },
+    onSettled,
+  });
+  const removeAttachment = useMutation<QaLabCaseRun, Error, string>({
+    mutationFn: (attachmentId) => apiFetch(`${url}/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE' }),
+    onSettled,
+  });
+  const createBug = useMutation<QaLabCaseRun, Error, void>({
+    mutationFn: () => apiFetch(`${url}/bug`, { method: 'POST' }),
+    onSettled,
+  });
+  const publish = useMutation<QaLabCaseRun, Error, void>({
+    mutationFn: () => apiFetch(`${url}/publish`, { method: 'POST' }),
+    onSettled,
+  });
+  return { save, attach, removeAttachment, createBug, publish };
 }
 
 export function useRestoreCase() {
