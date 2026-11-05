@@ -150,6 +150,8 @@ import {
   deleteAdoTestCases,
   getLatestAdoTestSuite,
   listAdoGenerationCandidates,
+  newPlacementApprovalFrom,
+  newPlacementsFrom,
   publishAdoTestCases,
   suiteRequiredByOutput,
   triggerAdoTestCaseGeneration,
@@ -167,6 +169,7 @@ import type {
   QaLabAddCaseCommentRequest,
   QaLabDeleteCasesRequest,
   QaLabGenerateRequest,
+  QaLabNewPlacementApproval,
   QaLabPublishRequest,
   QaLabAssistantThreadRequest,
   QaLabRegenerateCaseRequest,
@@ -481,6 +484,7 @@ router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'
         status: external.status,
         publishedCases: external.publishedCases ?? [],
         requireSuite: suiteRequiredByOutput(external.testCasesJson),
+        newPlacements: newPlacementsFrom(external.testCasesJson),
         threadId: external.chatThreadId,
       },
     });
@@ -583,12 +587,36 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       res.status(404).json({ error: 'QA suite not found' });
       return;
     }
-    const { selections, localCaseIds } = (req.body ?? {}) as QaLabPublishRequest;
+    const {
+      selections,
+      localCaseIds,
+      updateLocalCaseIds,
+      newPlacements: rawNewPlacements,
+      newPlacementSelections,
+    } = (req.body ?? {}) as QaLabPublishRequest;
+    const newPlacements = rawNewPlacements?.map(newPlacementApprovalFrom);
+    if (
+      rawNewPlacements !== undefined
+      && (!Array.isArray(rawNewPlacements) || !newPlacements?.every((entry) => entry !== null))
+    ) {
+      res.status(400).json({ error: 'newPlacements must list { testPlan, createPlan, suiteType } proposals' });
+      return;
+    }
+    if (newPlacementSelections !== undefined && !isStringMap(newPlacementSelections)) {
+      res.status(400).json({ error: 'newPlacementSelections must map case ids to proposal keys' });
+      return;
+    }
     if (selections !== undefined && !isSuiteSelectionMap(selections)) {
       res.status(400).json({ error: 'selections must map case ids to { planId, suiteId }' });
       return;
     }
-    if (localCaseIds !== undefined && !isCaseIdList(localCaseIds)) {
+    if (updateLocalCaseIds !== undefined && !isCaseIdList(updateLocalCaseIds)) {
+      res.status(400).json({ error: 'updateLocalCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const onlyUpdates = updateLocalCaseIds !== undefined
+      && Array.isArray(localCaseIds) && localCaseIds.length === 0;
+    if (localCaseIds !== undefined && !onlyUpdates && !isCaseIdList(localCaseIds)) {
       res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
       return;
     }
@@ -597,6 +625,11 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       ado: adoService,
       ...(selections ? { selections } : {}),
       ...(localCaseIds ? { localCaseIds } : {}),
+      ...(updateLocalCaseIds ? { updateLocalCaseIds } : {}),
+      ...(newPlacements
+        ? { newPlacements: newPlacements.filter((entry): entry is QaLabNewPlacementApproval => entry !== null) }
+        : {}),
+      ...(newPlacementSelections ? { newPlacementSelections } : {}),
     }));
   } catch (err) {
     if (isAdoUserAuthError(err)) {
@@ -755,8 +788,14 @@ function isSuiteSelectionMap(value: unknown): value is Record<string, QaAdoSuite
   return Object.values(value).every((entry) => {
     const selection = entry as Partial<QaAdoSuiteSelection> | null;
     return Number.isSafeInteger(selection?.planId) && (selection?.planId ?? 0) > 0
-      && Number.isSafeInteger(selection?.suiteId) && (selection?.suiteId ?? 0) > 0;
+      && Number.isSafeInteger(selection?.suiteId) && (selection?.suiteId ?? 0) > 0
+      && (selection?.requirement === undefined || typeof selection.requirement === 'boolean');
   });
+}
+
+function isStringMap(value: unknown): value is Record<string, string> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.values(value).every((entry) => typeof entry === 'string');
 }
 
 router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {

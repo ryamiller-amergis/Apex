@@ -4,6 +4,7 @@ import {
   type QaAdoSuiteSelection,
   type QaLabCaseComment,
   type QaLabCaseRegeneration,
+  type QaLabExistingCase,
   type QaLabSuite,
   type QaLabTestCase,
 } from '../../shared/types/qaLab';
@@ -22,8 +23,14 @@ import { env } from '../config/env';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { QaLabAssistantPanel, type QaLabAssistantTarget } from './QaLabAssistantPanel';
 import { QaLabCaseComments } from './QaLabCaseComments';
+import { QaLabCaseDiff } from './QaLabCaseDiff';
 import { QaLabGenerationStatus } from './QaLabGenerationStatus';
-import { QaLabPublishReview, type QaLabPublishReviewCase } from './QaLabPublishReview';
+import {
+  QaLabPublishReview,
+  type QaLabPublishNewPlacements,
+  type QaLabPublishReviewCase,
+  type QaLabPublishUpdateCase,
+} from './QaLabPublishReview';
 import { RichTextField } from './RichTextField';
 import styles from './QaLabView.module.css';
 
@@ -126,6 +133,29 @@ function uniqueValues(cases: QaLabTestCase[], key: FilterKey): string[] {
   return Array.from(values).sort();
 }
 
+type ExistingFilter = 'all' | 'new' | 'existing';
+
+const EXISTING_FILTERS: Array<{ key: ExistingFilter; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'new', label: 'New' },
+  { key: 'existing', label: 'Existing' },
+];
+
+function matchesExistingFilter(testCase: QaLabTestCase, filter: ExistingFilter): boolean {
+  switch (filter) {
+    case 'all':
+      return true;
+    case 'new':
+      return !testCase.existing;
+    case 'existing':
+      return Boolean(testCase.existing);
+    default: {
+      const unhandled: never = filter;
+      return unhandled;
+    }
+  }
+}
+
 /* ── Test case card ──────────────────────────────────────────────────────── */
 
 /** Checkbox and delete controls for cases in an ADO-native suite. */
@@ -142,6 +172,41 @@ interface CaseReviewInfo {
   commentsByCase: Map<string, QaLabCaseComment[]>;
   regenerationByCase: Map<string, QaLabCaseRegeneration>;
 }
+
+/** Why the case matches one already in Azure DevOps, and what a needs-update suggestion changes. */
+const ExistingCaseNote: React.FC<{ testCase: QaLabTestCase; existing: QaLabExistingCase }> = ({
+  testCase,
+  existing,
+}) => {
+  const { current } = existing;
+  return (
+    <section className={styles.existingNote} {...{ 'data-testid': `qa-lab-case-existing-${testCase.id}` }}>
+      <p className={styles.existingReason}>
+        {current?.url ? (
+          <a
+            href={current.url}
+            target="_blank"
+            rel="noreferrer"
+            {...{ 'data-testid': `qa-lab-case-existing-link-${testCase.id}` }}
+          >
+            Test Case #{existing.adoTestCaseId}
+          </a>
+        ) : (
+          `Test Case #${existing.adoTestCaseId}`
+        )}
+        {existing.source === 'linked' ? ' (linked to this work item)' : ' (in a Test Plan suite)'}
+        {existing.reason ? `: ${existing.reason}` : ''}
+      </p>
+      {existing.status === 'needs-update' && current && (
+        <QaLabCaseDiff
+          localCaseId={testCase.id}
+          before={{ ...testCase, title: current.title, steps: current.steps }}
+          after={testCase}
+        />
+      )}
+    </section>
+  );
+};
 
 interface TestCaseCardProps {
   testCase: QaLabTestCase;
@@ -189,6 +254,14 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
           <span className={styles.caseTitle}>{testCase.title}</span>
           <span className={styles.caseBadges}>
             {isPublished && <span className={`${styles.badge} ${styles.badgePublished}`}>Published</span>}
+            {testCase.existing && (
+              <span
+                className={`${styles.badge} ${testCase.existing.status === 'needs-update' ? styles.badgeNeedsUpdate : styles.badgeExisting}`}
+                title={testCase.existing.reason}
+              >
+                {testCase.existing.status === 'needs-update' ? 'Existing · Needs update' : 'Existing'}
+              </span>
+            )}
             {isRegenerating && <span className={`${styles.badge} ${styles.badgeAutomation}`}>Regenerating…</span>}
             {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
             {testCase.type && <span className={styles.badge}>{testCase.type}</span>}
@@ -237,6 +310,7 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
 
       {expanded && (
         <div className={styles.cardBody}>
+          {testCase.existing && <ExistingCaseNote testCase={testCase} existing={testCase.existing} />}
           <dl className={styles.metaGrid}>
             {testCase.persona && (
               <>
@@ -458,6 +532,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<CaseKind>('all');
   const [activeUserType, setActiveUserType] = useState(ALL_USER_TYPES);
+  const [existingFilter, setExistingFilter] = useState<ExistingFilter>('all');
   const [scopeOpen, setScopeOpen] = useState(false);
   const [scopeSelection, setScopeSelection] = useState<Set<string> | null>(null);
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
@@ -596,12 +671,16 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     [tabCases],
   );
 
+  const hasExistingCases = useMemo(() => allCases.some((entry) => entry.existing), [allCases]);
+  const effectiveExistingFilter = hasExistingCases ? existingFilter : 'all';
+
   const matchesFilters = useCallback(
     (testCase: QaLabTestCase) =>
-      (Object.entries(filters) as [FilterKey, string | undefined][]).every(
+      matchesExistingFilter(testCase, effectiveExistingFilter)
+      && (Object.entries(filters) as [FilterKey, string | undefined][]).every(
         ([key, value]) => !value || testCase[key] === value,
       ),
-    [filters],
+    [filters, effectiveExistingFilter],
   );
 
   const filteredCount = useMemo(
@@ -623,7 +702,8 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     () => new Set((externalSuite?.publishedCases ?? []).map((entry) => entry.localCaseId)),
     [externalSuite?.publishedCases],
   );
-  const unpublishedCount = allCases.filter((entry) => !publishedCaseIds.has(entry.id)).length;
+  const unpublishedCount = allCases
+    .filter((entry) => !entry.existing && !publishedCaseIds.has(entry.id)).length;
   const reviewCases = useMemo<QaLabPublishReviewCase[]>(() => {
     const suiteErrors = new Map(
       (externalSuite?.publishedCases ?? [])
@@ -631,6 +711,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         .map((entry) => [entry.localCaseId, entry.suiteError]),
     );
     return allCases
+      .filter((entry) => !entry.existing)
       .filter((entry) => !publishedCaseIds.has(entry.id) || suiteErrors.has(entry.id))
       .map((entry) => ({
         id: entry.id,
@@ -646,10 +727,26 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     () => reviewCases.filter((entry) => selectedCaseIds.has(entry.id)),
     [reviewCases, selectedCaseIds],
   );
-  const hasSelection = selectedForPublish.length > 0;
+  const updateCandidates = useMemo<QaLabPublishUpdateCase[]>(
+    () => allCases
+      .filter((entry) => entry.existing?.status === 'needs-update' && !publishedCaseIds.has(entry.id))
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        adoTestCaseId: entry.existing?.adoTestCaseId ?? 0,
+        reason: entry.existing?.reason ?? '',
+      })),
+    [allCases, publishedCaseIds],
+  );
+  const hasSelection = selectedForPublish.length > 0
+    || updateCandidates.some((entry) => selectedCaseIds.has(entry.id));
   const publishTargets = hasSelection ? selectedForPublish : reviewCases;
-  const pendingPublishCount = publishTargets.length;
+  const updateTargets = hasSelection
+    ? updateCandidates.filter((entry) => selectedCaseIds.has(entry.id))
+    : updateCandidates;
+  const pendingPublishCount = publishTargets.length + updateTargets.length;
   const needsPublishReview = externalSuite?.requireSuite === true
+    || updateTargets.length > 0
     || publishTargets.some((entry) => entry.proposedTestPlan || entry.suiteError);
   const deletableIds = useMemo(
     () => new Set(allCases.filter((entry) => !publishedCaseIds.has(entry.id)).map((entry) => entry.id)),
@@ -750,6 +847,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     setPublishReviewOpen(false);
     setDetailsOpen(false);
     setActiveUserType(ALL_USER_TYPES);
+    setExistingFilter('all');
     setSelectedCaseIds(new Set());
     setPendingDeleteIds(null);
   }, []);
@@ -805,13 +903,26 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     refetch,
   ]);
 
-  const publishSuite = useCallback(async (selections?: Record<string, QaAdoSuiteSelection>) => {
+  const publishSuite = useCallback(async (
+    selections?: Record<string, QaAdoSuiteSelection>,
+    updateLocalCaseIds: string[] = [],
+    created?: QaLabPublishNewPlacements,
+  ) => {
     if (!externalSuite) return;
+    const newCaseIds = hasSelection
+      ? selectedForPublish.map((entry) => entry.id)
+      : publishTargets.length > 0 ? undefined : [];
+    if (newCaseIds?.length === 0 && updateLocalCaseIds.length === 0) {
+      setPublishReviewOpen(false);
+      return;
+    }
     try {
       await publishAdoSuite.mutateAsync({
         suiteId: externalSuite.id,
         selections,
-        ...(hasSelection ? { localCaseIds: selectedForPublish.map((entry) => entry.id) } : {}),
+        ...(newCaseIds ? { localCaseIds: newCaseIds } : {}),
+        ...(updateLocalCaseIds.length > 0 ? { updateLocalCaseIds } : {}),
+        ...(created?.newPlacements.length ? created : {}),
       });
       setPublishReviewOpen(false);
       setSelectedCaseIds(new Set());
@@ -820,7 +931,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
       // Mutation state renders the server error below the work-item header.
       await refetch();
     }
-  }, [externalSuite, publishAdoSuite, hasSelection, selectedForPublish, refetch]);
+  }, [externalSuite, publishAdoSuite, hasSelection, selectedForPublish, publishTargets.length, refetch]);
 
   const confirmDelete = useCallback(async () => {
     if (!externalSuite || !pendingDeleteIds) return;
@@ -1037,7 +1148,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                         {publishAdoSuite.isPending
                           ? 'Publishing…'
                           : pendingPublishCount === 0
-                            ? 'Published to ADO'
+                            ? publishedCaseIds.size === 0 ? 'Nothing new to publish' : 'Published to ADO'
                             : hasSelection
                               ? `Publish ${pendingPublishCount} selected`
                               : unpublishedCount === 0
@@ -1127,10 +1238,12 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               <QaLabPublishReview
                 suiteId={externalSuite.id}
                 cases={publishTargets}
+                updates={updateTargets}
+                newPlacements={externalSuite.newPlacements ?? []}
                 requireSuite={externalSuite.requireSuite}
                 isPublishing={publishAdoSuite.isPending}
                 onCancel={() => setPublishReviewOpen(false)}
-                onPublish={(selections) => void publishSuite(selections)}
+                onPublish={(selections, updateIds, created) => void publishSuite(selections, updateIds, created)}
               />
             )}
 
@@ -1322,6 +1435,27 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
                   >
                     {userType || 'All users'}
                     <span className={styles.tabCount}>{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {hasExistingCases && (
+              <div className={styles.userTypeTabs} role="tablist" aria-label="New or existing">
+                {EXISTING_FILTERS.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={effectiveExistingFilter === key}
+                    className={`${styles.userTypeTab} ${effectiveExistingFilter === key ? styles.userTypeTabActive : ''}`}
+                    onClick={() => setExistingFilter(key)}
+                    {...{ 'data-testid': `qa-lab-existing-filter-${key}` }}
+                  >
+                    {label}
+                    <span className={styles.tabCount}>
+                      {tabCases.filter((entry) => matchesExistingFilter(entry, key)).length}
+                    </span>
                   </button>
                 ))}
               </div>

@@ -42,6 +42,8 @@ export interface QaLabTestCase {
   proposedTestSuite?: string;
   /** One line from the skill on why it chose that plan and suite. */
   placementReason?: string;
+  /** Set when an Azure DevOps case already covers this scenario. */
+  existing?: QaLabExistingCase;
 }
 
 export interface QaLabSuite {
@@ -121,6 +123,8 @@ export interface QaLabPublishedCase {
   testSuiteId?: number;
   /** Set when the Test Case was created but adding it to the suite failed. */
   suiteError?: string;
+  /** `updated` when publish applied the suggestion to an existing Test Case. Absent means created. */
+  action?: 'updated';
 }
 
 /** State for a suite generated directly from an ADO work item. */
@@ -130,6 +134,8 @@ export interface QaLabExternalSuite {
   publishedCases: QaLabPublishedCase[];
   /** The project's skill requires a confirmed Test Plan suite for every case. */
   requireSuite: boolean;
+  /** Plans or suites the skill proposed creating. */
+  newPlacements: QaLabNewPlacement[];
   /** Agent thread that generates the suite, for live progress. */
   threadId: string | null;
 }
@@ -198,11 +204,48 @@ export interface QaAdoPlacement {
   requireSuite?: boolean;
 }
 
+/** A Test Case that already exists in Azure DevOps, with its current steps. */
+export interface QaAdoExistingTestCase {
+  id: number;
+  title: string;
+  state: string;
+  steps: QaLabTestCaseStep[];
+  url: string;
+}
+
+/** One line of the static-suite case index the agent compares against. */
+export interface QaAdoSuiteCaseIndexEntry {
+  id: number;
+  title: string;
+  planName: string;
+  suitePath: string;
+}
+
+export interface QaAdoSuiteCaseIndex {
+  entries: QaAdoSuiteCaseIndexEntry[];
+  /** True when the index stopped at its size cap. */
+  truncated: boolean;
+}
+
+export type QaLabExistingStatus = 'up-to-date' | 'needs-update';
+
+/** The agent's verdict that a case already exists in Azure DevOps. */
+export interface QaLabExistingCase {
+  adoTestCaseId: number;
+  status: QaLabExistingStatus;
+  reason: string;
+  source: 'linked' | 'suite';
+  /** The case as it is in Azure DevOps now; absent when it could not be read. */
+  current?: QaAdoExistingTestCase;
+}
+
 /** A static Test Suite a published case can be added to. */
 export interface QaAdoTestSuiteOption {
   id: number;
   /** Path below the plan's root suite, `Suite > Child`. Empty for the root suite. */
   path: string;
+  /** Set for a requirement suite, which shows every case linked to its PBI by Tested By. */
+  requirementId?: number;
 }
 
 export interface QaAdoTestPlanOption {
@@ -215,13 +258,38 @@ export interface QaAdoTestPlanOption {
 export interface QaAdoSuiteSelection {
   planId: number;
   suiteId: number;
+  /** A requirement suite: the Tested By link places the case, so publish does not add it. */
+  requirement?: boolean;
 }
+
+export type QaLabNewPlacementSuiteType = 'static' | 'requirement';
+
+/** A Test Plan or suite the skill proposed because none in Azure DevOps fits. */
+export interface QaLabNewPlacement {
+  /** Stable id for the proposal within its generated suite. */
+  key: string;
+  testPlan: string;
+  /** Static suite path, `Suite > Child`. Absent for requirement suites, which are named after the PBI. */
+  testSuite?: string;
+  createPlan: boolean;
+  suiteType: QaLabNewPlacementSuiteType;
+  reason: string;
+}
+
+/** A proposal QA approved, with the names QA may have edited. */
+export type QaLabNewPlacementApproval = Omit<QaLabNewPlacement, 'reason'>;
 
 export interface QaLabPublishRequest {
   /** Confirmed suites keyed by local case id. */
   selections?: Record<string, QaAdoSuiteSelection>;
   /** Publish only these cases. Omit to publish every unpublished case. */
   localCaseIds?: string[];
+  /** Needs-update cases whose suggestion QA chose to apply to the existing Test Case. */
+  updateLocalCaseIds?: string[];
+  /** Proposals QA approved; Apex creates them before publishing. */
+  newPlacements?: QaLabNewPlacementApproval[];
+  /** Local case id to the key of the approved proposal it goes to. */
+  newPlacementSelections?: Record<string, string>;
 }
 
 export interface QaLabDeleteCasesRequest {

@@ -84,6 +84,19 @@
   color: var(--text-secondary);
 }
 
+.updates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.updateLabel {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
 .caseError {
   font-size: 0.72rem;
   color: var(--error-color);

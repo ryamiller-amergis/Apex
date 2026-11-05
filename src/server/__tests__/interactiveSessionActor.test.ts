@@ -1603,8 +1603,10 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       }
     }
     expect(longTimers.length).toBeGreaterThanOrEqual(2);
+    // Both timers count down to the same deadline and tie when armed in the same
+    // millisecond; the shell timer is armed later, so ties go to the later one.
     const shellTimer = longTimers.reduce((shorter, timer) =>
-      timer.delay < shorter.delay ? timer : shorter,
+      timer.delay <= shorter.delay ? timer : shorter,
     );
     shellTimer.cb();
     await expect(turnPromise).resolves.toEqual({

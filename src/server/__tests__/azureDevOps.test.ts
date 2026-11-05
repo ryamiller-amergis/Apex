@@ -1,4 +1,4 @@
-import { AzureDevOpsService, staticSuitePaths } from '../services/azureDevOps';
+import { AzureDevOpsService, parseTestCaseStepsXml, placeableSuitePaths } from '../services/azureDevOps';
 import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import * as azdev from 'azure-devops-node-api';
 import { retryWithBackoff } from '../utils/retry';
@@ -1338,20 +1338,151 @@ describe('AzureDevOpsService', () => {
       expect(result).toHaveLength(1);
     });
   });
+
+  describe('existing Test Cases', () => {
+    it('updates title and steps and adds Tested By only when the link is missing', async () => {
+      mockWitApi.getWorkItem
+        .mockResolvedValueOnce({ id: 700, relations: [] })
+        .mockResolvedValueOnce({
+          id: 700,
+          relations: [{ rel: 'Microsoft.VSTS.Common.TestedBy-Reverse', url: 'https://ado/_apis/wit/workItems/100' }],
+        });
+      mockWitApi.updateWorkItem.mockResolvedValue({ id: 700 });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await service.updateTestCaseWorkItem({ id: 700, title: 'New', stepsHtml: '<steps/>', testedById: 100 });
+      await service.updateTestCaseWorkItem({ id: 700, title: 'New', stepsHtml: '<steps/>', testedById: 100 });
+
+      const [, firstPatch] = mockWitApi.updateWorkItem.mock.calls[0];
+      const [, secondPatch] = mockWitApi.updateWorkItem.mock.calls[1];
+      expect(firstPatch).toEqual(expect.arrayContaining([
+        { op: 'add', path: '/fields/System.Title', value: 'New' },
+        expect.objectContaining({ path: '/relations/-' }),
+      ]));
+      expect(secondPatch).toHaveLength(2);
+    });
+
+    it('returns Tested By cases per work item with parsed steps', async () => {
+      mockWitApi.getWorkItems
+        .mockResolvedValueOnce([
+          {
+            id: 100,
+            relations: [
+              { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: 'https://ado/_apis/wit/workItems/501' },
+              { rel: 'System.LinkTypes.Hierarchy-Forward', url: 'https://ado/_apis/wit/workItems/600' },
+            ],
+          },
+          { id: 101, relations: [] },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 501,
+            fields: {
+              'System.Title': 'Validate Approve Timesheet',
+              'System.State': 'Ready',
+              'System.WorkItemType': 'Test Case',
+              'Microsoft.VSTS.TCM.Steps': '<steps id="0" last="1"><step id="2" type="ActionStep"><parameterizedString isformatted="true">&lt;DIV&gt;&lt;P&gt;Click Approve&amp;amp;Save&lt;/P&gt;&lt;/DIV&gt;</parameterizedString><parameterizedString isformatted="true">&lt;P&gt;Timesheet status displays Approved.&lt;/P&gt;</parameterizedString></step></steps>',
+            },
+          },
+        ]);
+      const service = new AzureDevOpsService('MatterWorx');
+
+      const linked = await service.listLinkedTestCases([100, 101]);
+
+      expect(linked.get(101)).toEqual([]);
+      expect(linked.get(100)).toEqual([{
+        id: 501,
+        title: 'Validate Approve Timesheet',
+        state: 'Ready',
+        steps: [{ order: 1, action: 'Click Approve&Save', expected: 'Timesheet status displays Approved.' }],
+        url: 'https://dev.azure.com/test-org/MatterWorx/_workitems/edit/501',
+      }]);
+    });
+
+    it('indexes suite cases and stops at the cap', async () => {
+      const getTestCaseList = jest.fn()
+        .mockResolvedValueOnce(Object.assign(
+          [{ workItem: { id: 1, name: 'First' } }],
+          { continuationToken: 'next' },
+        ))
+        .mockResolvedValueOnce([{ workItem: { id: 2, name: 'Second' } }]);
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getTestCaseList });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      const index = await service.listSuiteCaseIndex([
+        { id: 7, name: '15 Timesheets', suites: [{ id: 70, path: 'Approve' }] },
+      ]);
+
+      expect(index).toEqual({
+        truncated: false,
+        entries: [
+          { id: 1, title: 'First', planName: '15 Timesheets', suitePath: 'Approve' },
+          { id: 2, title: 'Second', planName: '15 Timesheets', suitePath: 'Approve' },
+        ],
+      });
+      expect(getTestCaseList.mock.calls[1][6]).toBe('next');
+    });
+  });
+
+  describe('creating Test Plans and suites', () => {
+    it('creates a plan with the area and iteration most plans use', async () => {
+      const getTestPlans = jest.fn().mockResolvedValue([
+        { id: 1, name: 'A', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        { id: 2, name: 'B', areaPath: 'MatterWorx\\QA Automation', iteration: 'MatterWorx' },
+        { id: 3, name: 'C', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+      ]);
+      const createTestPlan = jest.fn().mockResolvedValue({ id: 50, rootSuite: { id: 500 } });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getTestPlans, createTestPlan });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.createTestPlan('Delete User - Functional Testing'))
+        .resolves.toEqual({ id: 50, rootSuiteId: 500 });
+      expect(createTestPlan).toHaveBeenCalledWith(
+        { name: 'Delete User - Functional Testing', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        'MatterWorx',
+      );
+    });
+
+    it('creates a requirement suite for a PBI', async () => {
+      const createTestSuite = jest.fn().mockResolvedValue({ id: 501 });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ createTestSuite });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.createTestSuite(50, 500, { name: '18452 : Delete user', requirementId: 18452 }))
+        .resolves.toBe(501);
+      expect(createTestSuite).toHaveBeenCalledWith({
+        name: '18452 : Delete user',
+        parentSuite: { id: 500, name: '' },
+        suiteType: TestSuiteType.RequirementTestSuite,
+        requirementId: 18452,
+      }, 'MatterWorx', 50);
+    });
+  });
 });
 
-describe('staticSuitePaths', () => {
-  it('builds paths below the plan root and keeps only static suites', () => {
+describe('parseTestCaseStepsXml', () => {
+  it('skips shared-step references and empty actions', () => {
+    expect(parseTestCaseStepsXml(
+      '<steps><compref id="3" ref="900" /><step id="4"><parameterizedString>Open app</parameterizedString><parameterizedString></parameterizedString></step><step id="5"><parameterizedString></parameterizedString></step></steps>',
+    )).toEqual([{ order: 1, action: 'Open app', expected: '' }]);
+    expect(parseTestCaseStepsXml(undefined)).toEqual([]);
+  });
+});
+
+describe('placeableSuitePaths', () => {
+  it('builds paths below the plan root for static and requirement suites', () => {
     const suites = [
       { id: 1, name: '15 Timesheets', suiteType: TestSuiteType.StaticTestSuite },
       { id: 2, name: 'Geofence', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
       { id: 3, name: 'Inside Distance', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 2, name: 'Geofence' } },
-      { id: 4, name: 'By requirement', suiteType: TestSuiteType.RequirementTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 4, name: '40249 : Delete User', suiteType: TestSuiteType.RequirementTestSuite, requirementId: 40249, parentSuite: { id: 1, name: '15 Timesheets' } },
       { id: 5, name: 'Orphan', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 99, name: 'Missing' } },
+      { id: 6, name: 'By query', suiteType: TestSuiteType.DynamicTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
     ] as TestSuite[];
 
-    expect(staticSuitePaths(suites)).toEqual([
+    expect(placeableSuitePaths(suites)).toEqual([
       { id: 1, path: '' },
+      { id: 4, path: '40249 : Delete User', requirementId: 40249 },
       { id: 2, path: 'Geofence' },
       { id: 3, path: 'Geofence > Inside Distance' },
     ]);

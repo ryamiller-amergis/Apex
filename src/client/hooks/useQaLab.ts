@@ -10,6 +10,7 @@ import type {
   QaLabCaseReview,
   QaLabGenerateRequest,
   QaLabGenerationCandidates,
+  QaLabNewPlacementApproval,
   QaLabPublishedCase,
   QaLabWorkItemList,
   QaLabWorkItemTestCases,
@@ -158,9 +159,23 @@ export function usePublishAdoTestSuite() {
       failures: Array<{ localCaseId: string; message: string }>;
     },
     Error,
-    { suiteId: string; selections?: Record<string, QaAdoSuiteSelection>; localCaseIds?: string[] }
+    {
+      suiteId: string;
+      selections?: Record<string, QaAdoSuiteSelection>;
+      localCaseIds?: string[];
+      updateLocalCaseIds?: string[];
+      newPlacements?: QaLabNewPlacementApproval[];
+      newPlacementSelections?: Record<string, string>;
+    }
   >({
-    mutationFn: async ({ suiteId, selections, localCaseIds }) => {
+    mutationFn: async ({
+      suiteId,
+      selections,
+      localCaseIds,
+      updateLocalCaseIds,
+      newPlacements,
+      newPlacementSelections,
+    }) => {
       const result = await apiFetch<{
         published: QaLabPublishedCase[];
         skippedLocalCaseIds: string[];
@@ -171,6 +186,9 @@ export function usePublishAdoTestSuite() {
         body: JSON.stringify({
           ...(selections ? { selections } : {}),
           ...(localCaseIds ? { localCaseIds } : {}),
+          ...(updateLocalCaseIds ? { updateLocalCaseIds } : {}),
+          ...(newPlacements ? { newPlacements } : {}),
+          ...(newPlacementSelections ? { newPlacementSelections } : {}),
         }),
       });
       if (result.failures.length > 0) {
