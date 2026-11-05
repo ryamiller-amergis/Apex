@@ -20,7 +20,8 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `templates/full-stack-express/apps/api/src/persistence/`: the starter's own `app_users` table (UUID key) and store; unrelated to Apex's `app_users` in `src/server/db/schema.ts`.
 - `runners/`: container workers, one Dockerfile each: `runners/ai-runs/`, `runners/ai-runs-interactive/`, `runners/load-test-k6/`, `runners/repo-read-service/`. Local Dapr components: `runners/ai-runs-interactive/dapr/`.
 - `infra/`: Terraform, one `.tf` per capability (`infra/main.tf`, `infra/shared-async.tf`, `infra/ai-runs-worker.tf`, `infra/load-test.tf`, `infra/repo-read-service.tf`). Standards: `.cursor/skills/terraform-infra/SKILL.md`.
-- `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), local Redis, interactive host, and orchestrator (`scripts/dev/ensure-local-redis.mjs`, `scripts/dev/ensure-local-dapr.mjs`, `scripts/dev/run-interactive-host.mjs`, `scripts/dev/run-ai-orchestrator.mjs`), changelog, dev→prod migration.
+- `scripts/`: CI checks (`scripts/ci/`), E2E helpers (`scripts/e2e/`), local Redis, interactive host, and orchestrator (`scripts/dev/ensure-local-redis.mjs`, `scripts/dev/ensure-local-dapr.mjs`, `scripts/dev/run-interactive-host.mjs`, `scripts/dev/run-ai-orchestrator.mjs`), changelog, dev→prod migration. Cloud-agent scorecard: `scripts/export-cloud-agent-eval-cases.ts`, `scripts/cloud-agent-report.mjs` (`npm run cloud-agent:report`).
+- `evals/`: local promptfoo scorecards. Cloud-agent outcomes: `evals/cloud-agent/promptfooconfig.yaml`.
 - `design-docs/`: feature design docs. `docs/`: setup and ops (auth, Azure cost, release, security).
 - `public/`: static assets; `public/CHANGELOG.json` is the release record.
 - `pr-description.md`: pull request description skeleton. My Work fills the Work items line; the cursor pool worker copies it for the agent.

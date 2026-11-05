@@ -7,7 +7,6 @@ import type {
   PlaybookGraph,
   PlaybookPublishResponse,
 } from '../../shared/types/playbook';
-
 export class PlaybookApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);

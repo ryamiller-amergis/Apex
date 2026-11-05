@@ -3,7 +3,9 @@ import { db } from '../db/drizzle';
 import { prds } from '../db/schema';
 import type {
   QaAdoGenerationContext,
+  QaAdoExistingTestCase,
   QaLabBacklogPbiTarget,
+  QaLabExistingCase,
   QaLabGenerationTarget,
   QaLabMatchLevel,
   QaLabSource,
@@ -174,6 +176,54 @@ function normalizeSteps(value: unknown): QaLabTestCaseStep[] {
   });
 }
 
+/** The raw case objects of every suite in a test-cases JSON document, for in-place edits. */
+export function rawTestCaseRecords(testCasesJson: unknown): Record<string, unknown>[] {
+  return asArray(asRecord(testCasesJson)?.suites).flatMap((rawSuite) => {
+    const suite = asRecord(rawSuite);
+    if (!suite) return [];
+    return suiteCases(suite).flatMap((entry) => {
+      const record = asRecord(entry);
+      return record ? [record] : [];
+    });
+  });
+}
+
+/** The Azure DevOps Test Case id a raw case says it duplicates, or null. */
+export function existingAdoTestCaseId(record: Record<string, unknown>): number | null {
+  const rawId = asRecord(record.existing)?.adoTestCaseId;
+  const id = typeof rawId === 'number' ? rawId : Number(asString(rawId));
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function normalizeCurrentCase(value: unknown): QaAdoExistingTestCase | undefined {
+  const record = asRecord(value);
+  if (!record || typeof record.id !== 'number') return undefined;
+  return {
+    id: record.id,
+    title: asString(record.title) ?? '',
+    state: asString(record.state) ?? '',
+    steps: normalizeSteps(record.steps),
+    url: asString(record.url) ?? '',
+  };
+}
+
+function normalizeExisting(value: unknown): QaLabExistingCase | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const adoTestCaseId = existingAdoTestCaseId({ existing: record });
+  if (adoTestCaseId === null) return null;
+  const status = record.status;
+  if (status !== 'up-to-date' && status !== 'needs-update') return null;
+  const current = normalizeCurrentCase(record.current);
+  return {
+    adoTestCaseId,
+    status,
+    reason: asString(record.reason) ?? '',
+    source: record.source === 'linked' ? 'linked' : 'suite',
+    ...(current ? { current } : {}),
+  };
+}
+
 function normalizeTestData(value: unknown): Record<string, string> {
   const record = asRecord(value);
   if (!record) return {};
@@ -203,6 +253,7 @@ export function normalizeTestCase(
   const proposedTestPlan = asString(placement?.testPlan) ?? asString(defaultPlacement?.testPlan);
   const proposedTestSuite = asString(placement?.testSuite) ?? asString(defaultPlacement?.testSuite);
   const placementReason = asString(placement?.reason);
+  const existing = normalizeExisting(record.existing);
 
   return {
     id: asString(record.id) ?? `${fallbackPbiId}-TC-${index + 1}`,
@@ -228,6 +279,7 @@ export function normalizeTestCase(
     ...(proposedTestPlan ? { proposedTestPlan } : {}),
     ...(proposedTestSuite ? { proposedTestSuite } : {}),
     ...(placementReason ? { placementReason } : {}),
+    ...(existing ? { existing } : {}),
   };
 }
 
