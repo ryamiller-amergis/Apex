@@ -24,6 +24,7 @@ import {
   adoBacklogPbiId,
   adoBacklogTbiId,
   buildSyntheticAdoBacklog,
+  buildTestCaseStepsXml,
   deleteAdoTestCases,
   getLatestAdoTestSuite,
   inferUserTypes,
@@ -269,6 +270,25 @@ describe('buildSyntheticAdoBacklog', () => {
     expect(backlog.epics[0].features[0].affectedPersonas).toEqual(['External User', 'Internal User']);
     expect(pbiItem(backlog, 'PBI-18452').userStory.persona).toBe('External User');
     expect(pbiItem(backlog, 'PBI-18499').userStory.persona).toBe('Internal User');
+  });
+});
+
+describe('buildTestCaseStepsXml', () => {
+  it('keeps line breaks and escapes step text as HTML inside XML', () => {
+    expect(buildTestCaseStepsXml([
+      { action: 'Go to Test Environment:\n- For QA, use https://qa.example.com', expected: 'Login & <Home> display.' },
+      { action: 'Precondition: Status = Submitted.', expected: '' },
+    ])).toBe(
+      '<steps id="0" last="2">'
+      + '<step id="1" type="ActionStep">'
+      + '<parameterizedString isformatted="true">Go to Test Environment:&lt;br/&gt;- For QA, use https://qa.example.com</parameterizedString>'
+      + '<parameterizedString isformatted="true">Login &amp;amp; &amp;lt;Home&amp;gt; display.</parameterizedString>'
+      + '</step>'
+      + '<step id="2" type="ActionStep">'
+      + '<parameterizedString isformatted="true">Precondition: Status = Submitted.</parameterizedString>'
+      + '<parameterizedString isformatted="true"></parameterizedString>'
+      + '</step></steps>',
+    );
   });
 });
 

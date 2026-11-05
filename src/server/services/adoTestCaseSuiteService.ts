@@ -2283,14 +2283,19 @@ export function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
   return cases;
 }
 
-function buildTestCaseStepsXml(
+/** A formatted step string is HTML inside XML, so the text is escaped twice and line breaks become `<br/>`. */
+function stepHtml(text: string): string {
+  return escapeXml(escapeXml(text).replace(/\r?\n/g, '<br/>'));
+}
+
+export function buildTestCaseStepsXml(
   steps: Array<string | { action: string; expected?: string }>,
 ): string {
   if (steps.length === 0) return '';
   const stepElements = steps.map((step, index) => {
     const action = typeof step === 'string' ? step : step.action;
     const expected = typeof step === 'string' ? '' : (step.expected ?? '');
-    return `<step id="${index + 1}" type="ActionStep"><parameterizedString isformatted="true">${escapeXml(action)}</parameterizedString><parameterizedString isformatted="true">${escapeXml(expected)}</parameterizedString></step>`;
+    return `<step id="${index + 1}" type="ActionStep"><parameterizedString isformatted="true">${stepHtml(action)}</parameterizedString><parameterizedString isformatted="true">${stepHtml(expected)}</parameterizedString></step>`;
   });
   return `<steps id="0" last="${steps.length}">${stepElements.join('')}</steps>`;
 }

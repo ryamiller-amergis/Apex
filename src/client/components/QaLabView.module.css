@@ -905,6 +905,7 @@
 
 .stepTable td {
   vertical-align: top;
+  white-space: pre-line;
   padding: 7px 8px;
   border-bottom: 1px solid var(--border-color);
 }
