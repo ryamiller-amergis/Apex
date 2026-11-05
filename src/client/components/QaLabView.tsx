@@ -135,6 +135,11 @@ function uniqueValues(cases: QaLabTestCase[], key: FilterKey): string[] {
 
 type ExistingFilter = 'all' | 'new' | 'existing';
 
+/** New cases, and existing ones Azure DevOps has in no Test Plan, still need publishing. */
+function needsPublish(testCase: QaLabTestCase): boolean {
+  return !testCase.existing || testCase.existing.inTestPlan === false;
+}
+
 const EXISTING_FILTERS: Array<{ key: ExistingFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'new', label: 'New' },
@@ -197,6 +202,11 @@ const ExistingCaseNote: React.FC<{ testCase: QaLabTestCase; existing: QaLabExist
         {existing.source === 'linked' ? ' (linked to this work item)' : ' (in a Test Plan suite)'}
         {existing.reason ? `: ${existing.reason}` : ''}
       </p>
+      {existing.inTestPlan === false && (
+        <p className={styles.existingReason}>
+          It is not in any Test Plan suite. Publishing adds this existing case to the suite you choose; nothing new is created.
+        </p>
+      )}
       {existing.status === 'needs-update' && current && (
         <QaLabCaseDiff
           localCaseId={testCase.id}
@@ -261,6 +271,9 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
               >
                 {testCase.existing.status === 'needs-update' ? 'Existing · Needs update' : 'Existing'}
               </span>
+            )}
+            {testCase.existing?.inTestPlan === false && (
+              <span className={`${styles.badge} ${styles.badgeNeedsUpdate}`}>Not in a Test Plan</span>
             )}
             {isRegenerating && <span className={`${styles.badge} ${styles.badgeAutomation}`}>Regenerating…</span>}
             {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
@@ -703,7 +716,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     [externalSuite?.publishedCases],
   );
   const unpublishedCount = allCases
-    .filter((entry) => !entry.existing && !publishedCaseIds.has(entry.id)).length;
+    .filter((entry) => needsPublish(entry) && !publishedCaseIds.has(entry.id)).length;
   const reviewCases = useMemo<QaLabPublishReviewCase[]>(() => {
     const suiteErrors = new Map(
       (externalSuite?.publishedCases ?? [])
@@ -711,7 +724,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         .map((entry) => [entry.localCaseId, entry.suiteError]),
     );
     return allCases
-      .filter((entry) => !entry.existing)
+      .filter(needsPublish)
       .filter((entry) => !publishedCaseIds.has(entry.id) || suiteErrors.has(entry.id))
       .map((entry) => ({
         id: entry.id,
@@ -720,6 +733,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         proposedTestSuite: entry.proposedTestSuite,
         placementReason: entry.placementReason,
         suiteError: suiteErrors.get(entry.id),
+        ...(entry.existing ? { existingAdoTestCaseId: entry.existing.adoTestCaseId } : {}),
       }));
   }, [allCases, publishedCaseIds, externalSuite?.publishedCases]);
   const canSelectCases = externalSuite?.status === 'ready' && !isGenerating;

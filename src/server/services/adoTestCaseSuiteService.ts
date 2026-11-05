@@ -246,7 +246,13 @@ interface PublishableCase {
   parentWorkItemId: number;
   placement: QaAdoPlacement;
   placementError: string | null;
-  existing: { adoTestCaseId: number; status: QaLabExistingStatus } | null;
+  existing: {
+    adoTestCaseId: number;
+    status: QaLabExistingStatus;
+    /** Set when sync found the case in no Test Plan suite. */
+    notInTestPlan: boolean;
+    url: string | null;
+  } | null;
 }
 
 const PLACEMENT_LINK_TO: readonly QaAdoPlacementLinkTo[] = ['requirement', 'parent', 'root'];
@@ -718,7 +724,7 @@ export async function publishAdoTestCases(
   const byId = new Map(cases.map((testCase) => [testCase.localCaseId, testCase]));
   const requested = [
     ...(options.localCaseIds ?? cases
-      .filter((testCase) => !testCase.developerOnly && !testCase.existing)
+      .filter((testCase) => !testCase.developerOnly && (!testCase.existing || testCase.existing.notInTestPlan))
       .map((testCase) => testCase.localCaseId)),
     ...updateIds,
   ];
@@ -797,17 +803,44 @@ export async function publishAdoTestCases(
       failures.push({ localCaseId, message: 'Only cases that need an update can update an existing Test Case' });
       continue;
     }
-    if (testCase.existing && !updateIds.has(localCaseId)) {
-      skippedLocalCaseIds.push(localCaseId);
-      continue;
-    }
     if (testCase.existing) {
-      const result = await applyExistingCaseUpdate(writer, testCase, testCase.existing.adoTestCaseId, context);
-      if ('error' in result) {
-        failures.push({ localCaseId, message: result.error });
+      const { existing: found } = testCase;
+      const placement = found.notInTestPlan
+        ? await selectionFor(localCaseId, testCase.parentWorkItemId)
+        : undefined;
+      if (placement !== undefined && 'error' in placement) {
+        failures.push({ localCaseId, message: placement.error });
+        continue;
+      }
+      const update = updateIds.has(localCaseId);
+      if (!update && !placement) {
+        skippedLocalCaseIds.push(localCaseId);
+        continue;
+      }
+      let entry: QaAdoPublishedCase;
+      if (update) {
+        const result = await applyExistingCaseUpdate(writer, testCase, found.adoTestCaseId, context);
+        if ('error' in result) {
+          failures.push({ localCaseId, message: result.error });
+          continue;
+        }
+        entry = result.entry;
       } else {
-        await savePublishedCase(suiteId, result.entry);
-        published.push(result.entry);
+        entry = {
+          localCaseId,
+          adoTestCaseId: found.adoTestCaseId,
+          adoTestCaseUrl: found.url ?? '',
+          parentWorkItemId: testCase.parentWorkItemId,
+          publishedAt: new Date().toISOString(),
+          action: 'placed',
+        };
+      }
+      if (placement) entry = await addToSuite(writer, entry, placement);
+      await savePublishedCase(suiteId, entry);
+      if (entry.suiteError) {
+        failures.push({ localCaseId, message: suiteFailureMessage(entry) });
+      } else {
+        published.push(entry);
       }
       continue;
     }
@@ -1091,7 +1124,8 @@ async function addToSuite(
 }
 
 function suiteFailureMessage(entry: QaAdoPublishedCase): string {
-  return `Created Test Case ${entry.adoTestCaseId} but could not add it to the suite: ${entry.suiteError}`;
+  const done = entry.action === 'placed' ? 'Found' : entry.action === 'updated' ? 'Updated' : 'Created';
+  return `${done} Test Case ${entry.adoTestCaseId} but could not add it to the suite: ${entry.suiteError}`;
 }
 
 /** Upserts one published case. A different Test Case already saved for the id wins. */
@@ -1361,11 +1395,13 @@ export async function syncAdoTestSuiteRunOutput(
 
 export interface ExistingCaseDetailsReader {
   getTestCasesById(ids: number[]): Promise<QaAdoExistingTestCase[]>;
+  listTestCasesInSuites?(ids: number[]): Promise<Set<number>>;
 }
 
 /**
- * Stores each flagged case's current Azure DevOps version on `existing.current`, and drops
- * the flag when the id is not a Test Case, so the case is treated as new.
+ * Stores each flagged case's current Azure DevOps version on `existing.current` and whether
+ * it is in any Test Plan suite on `existing.inTestPlan`. Drops the flag when the id is not a
+ * Test Case (for example, it was deleted), so the case is treated as new.
  */
 export async function attachExistingCaseDetails(
   testCasesJson: unknown,
@@ -1379,9 +1415,10 @@ export async function attachExistingCaseDetails(
   });
   if (flagged.length === 0) return;
 
+  const reader = createReader();
   let found: QaAdoExistingTestCase[];
   try {
-    found = await createReader().getTestCasesById([...new Set(flagged.map((entry) => entry.id))]);
+    found = await reader.getTestCasesById([...new Set(flagged.map((entry) => entry.id))]);
   } catch (error) {
     console.warn(
       `[adoTestSuite] Could not read existing Test Cases: ${error instanceof Error ? error.message : String(error)}`,
@@ -1389,13 +1426,32 @@ export async function attachExistingCaseDetails(
     return;
   }
   const byId = new Map(found.map((testCase) => [testCase.id, testCase]));
+  const inSuites = await readSuiteMembership(reader, [...byId.keys()]);
   for (const { record, id } of flagged) {
     const current = byId.get(id);
     if (current) {
-      (record.existing as Record<string, unknown>).current = current;
+      const existing = record.existing as Record<string, unknown>;
+      existing.current = current;
+      if (inSuites) existing.inTestPlan = inSuites.has(id);
     } else {
       delete record.existing;
     }
+  }
+}
+
+/** Null when membership cannot be read; callers then leave `inTestPlan` unset. */
+async function readSuiteMembership(
+  reader: ExistingCaseDetailsReader,
+  ids: number[],
+): Promise<Set<number> | null> {
+  if (!reader.listTestCasesInSuites || ids.length === 0) return null;
+  try {
+    return await reader.listTestCasesInSuites(ids);
+  } catch (error) {
+    console.warn(
+      `[adoTestSuite] Could not read Test Plan membership: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
   }
 }
 
@@ -2097,7 +2153,8 @@ function toPublishableCase(
   const automationTier = stringFrom(asRecord(record.automation)?.recommendedTier)
     ?? stringFrom(record.automationTier);
   const existingId = existingAdoTestCaseId(record);
-  const existingStatus = asRecord(record.existing)?.status;
+  const existingRecord = asRecord(record.existing);
+  const existingStatus = existingRecord?.status;
   return {
     localCaseId,
     title,
@@ -2107,7 +2164,12 @@ function toPublishableCase(
     placement: mergePlacements(defaultPlacement.placement, casePlacement.placement),
     placementError: defaultPlacement.error ?? casePlacement.error,
     existing: existingId !== null && (existingStatus === 'up-to-date' || existingStatus === 'needs-update')
-      ? { adoTestCaseId: existingId, status: existingStatus }
+      ? {
+        adoTestCaseId: existingId,
+        status: existingStatus,
+        notInTestPlan: existingRecord?.inTestPlan === false,
+        url: stringFrom(asRecord(existingRecord?.current)?.url),
+      }
       : null,
   };
 }
@@ -2277,7 +2339,7 @@ export function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
       ...(testPlanId !== null ? { testPlanId } : {}),
       ...(testSuiteId !== null ? { testSuiteId } : {}),
       ...(suiteError ? { suiteError } : {}),
-      ...(record?.action === 'updated' ? { action: 'updated' as const } : {}),
+      ...(record?.action === 'updated' || record?.action === 'placed' ? { action: record.action } : {}),
     });
   }
   return cases;

@@ -17,6 +17,8 @@ export interface QaLabPublishReviewCase {
   placementReason?: string;
   /** Set when the case was created earlier but never reached its suite. */
   suiteError?: string;
+  /** An existing Test Case in no Test Plan; publish only adds it to the suite. */
+  existingAdoTestCaseId?: number;
 }
 
 /** A needs-update case whose suggestion can be applied to its existing Test Case. */
@@ -555,6 +557,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
                     <span className={styles.caseTitle}>{entry.title}</span>
                     <span className={styles.caseMeta}>
                       {entry.id}
+                      {entry.existingAdoTestCaseId !== undefined && ` · Existing #${entry.existingAdoTestCaseId}, added to the suite only`}
                       {proposal && ` · Proposed: ${proposal}`}
                       {proposalMissed && ' (not found)'}
                       {awaitingCreate && (isApproved(row.newKey) ? ' (will be created)' : ' (new; approve it above)')}

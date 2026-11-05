@@ -69,6 +69,15 @@ The sync step reads `existing` into `QaLabTestCase.existing`. For flagged suite 
 - Needs-update cases are listed separately as "Update existing #61234", unchecked by default.
 - Applying an update patches `System.Title` and `Microsoft.VSTS.TCM.Steps` on that ADO case, and adds the Tested By link to the PBI if it is missing. It does not move the case to another suite. The result is saved in `publishedCases` with `action: "updated"`, so a retry does not apply it twice.
 
+### Existing cases in no Test Plan
+
+Removing a case from a static suite in Azure DevOps leaves the Test Case and its Tested By link, so the agent still finds it and marks it existing. Without this step it would never return to a suite.
+
+- At sync, Apex asks Azure DevOps which suites each flagged case is in (`getSuitesByTestCaseId`) and stores `existing.inTestPlan`. If that read fails, the field stays unset and the case is treated as placed.
+- A case with `inTestPlan: false` shows *Existing · Not in a Test Plan*, and appears in the publish window like a new case, with the skill's proposed plan and suite.
+- Publishing it adds the existing Test Case to the chosen suite and creates nothing. It is saved with `action: "placed"`. A needs-update case with the update ticked is updated, then placed.
+- A deleted Test Case is not returned by Azure DevOps, so its flag is dropped at sync and the case is new, as before.
+
 ## Errors
 
 - ADO reads fail: generate without existing-case context, with the gap above.
@@ -82,9 +91,10 @@ The sync step reads `existing` into `QaLabTestCase.existing`. For flagged suite 
 - Sync: `existing` parsed; flagged suite case fetched and stored; missing ADO id falls back to new.
 - Publish: up-to-date skipped; needs-update patches title and steps once, adds a missing Tested By link, records `action: "updated"`.
 - UI: tag, status, reason, diff, filter chips, unchecked update rows.
+- In no Test Plan: sync stores `inTestPlan`; publish adds the existing case to the chosen suite without creating one and records `action: "placed"`; the publish window lists it.
 
 ## Out of scope
 
 - Fuzzy matching in Apex itself; the agent decides what counts as the same scenario.
-- Moving existing cases between suites.
+- Moving existing cases between suites. A case in no suite can be placed; one already in a suite is not moved.
 - Creating Test Plans or suites (separate design).
