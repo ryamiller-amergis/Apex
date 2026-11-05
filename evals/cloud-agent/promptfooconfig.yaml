@@ -1,0 +1,35 @@
+description: >
+  Score finished Apex cloud-agent runs. Export cases first with
+  scripts/export-cloud-agent-eval-cases.ts. A fail means the outcome missed
+  the rubric. A gap means a signal Apex wanted was not stored. Prompt-rule
+  misses are listed on the row and in evals/cloud-agent/summary.json.
+prompts:
+  - label: Outcome
+    raw: "{{report}}"
+providers:
+  - echo
+tests: file://cases.json
+outputPath: evals/cloud-agent/results.json
+defaultTest:
+  assert:
+    - type: javascript
+      value: |
+        const score = JSON.parse(context.test.metadata.scoreJson);
+        const outcome = score.findings
+          .filter(function (finding) { return finding.grade !== 'pass'; })
+          .map(function (finding) {
+            return finding.grade + ': ' + finding.label + (finding.detail ? ' — ' + finding.detail : '');
+          });
+        const promptGaps = score.promptRules
+          .filter(function (rule) { return rule.grade !== 'pass'; })
+          .map(function (rule) { return 'prompt: ' + rule.label; });
+        if (score.grade === 'fail') {
+          return { pass: false, score: 0, reason: outcome.concat(promptGaps).join('; ') };
+        }
+        if (score.grade === 'gap') {
+          return { pass: false, score: 0.5, reason: outcome.concat(promptGaps).join('; ') };
+        }
+        if (promptGaps.length > 0) {
+          return { pass: true, score: 0.5, reason: promptGaps.join('; ') };
+        }
+        return { pass: true, score: 1, reason: 'Outcome matched the rubric.' };

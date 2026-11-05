@@ -10,11 +10,15 @@ import type {
   PushSessionResponse,
   CreatePrResponse,
   StartDevSessionRequest,
+  CloudAgentLaunchOptions,
+  GuidedCloudJobsResponse,
   StartCloudAgentRunRequest,
   StartCloudAgentRunResponse,
+  StartGuidedCloudAgentRequest,
   CloudAgentActivityEvent,
   CloudAgentActivityStreamEvent,
   CloudAgentRunSummary,
+  MyWorkItemContext,
 } from '../../shared/types/devWorkbench';
 import type { AgentRunStatus } from '../../shared/types/agentRunLifecycle';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
@@ -28,6 +32,16 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+export function useMyWorkItemContext(project: string | null, workItemId: number | null) {
+  return useQuery<MyWorkItemContext>({
+    queryKey: ['dev-workbench', 'work-item-context', project, workItemId],
+    queryFn: () => apiFetch(
+      `/api/dev-workbench/workitems/${workItemId}/context?project=${encodeURIComponent(project!)}`,
+    ),
+    enabled: !!project && workItemId != null,
+  });
 }
 
 export function useAssignedWorkItems(project: string | null) {
@@ -101,6 +115,7 @@ export function useCloudAgentActivityStream(
   sessionId: string | null,
   runId: string | null,
   enabled: boolean,
+  streamUrl?: string | null,
 ) {
   const [events, setEvents] = useState<CloudAgentActivityEvent[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -113,7 +128,8 @@ export function useCloudAgentActivityStream(
     if (!sessionId || !runId || !enabled) return;
 
     const source = new EventSource(
-      `/api/dev-workbench/sessions/${encodeURIComponent(sessionId)}/cloud-agent/stream?runId=${encodeURIComponent(runId)}`,
+      streamUrl
+        ?? `/api/dev-workbench/sessions/${encodeURIComponent(sessionId)}/cloud-agent/stream?runId=${encodeURIComponent(runId)}`,
       { withCredentials: true },
     );
     const seen = new Set<string>();
@@ -147,7 +163,7 @@ export function useCloudAgentActivityStream(
     };
 
     return () => source.close();
-  }, [enabled, runId, sessionId]);
+  }, [enabled, runId, sessionId, streamUrl]);
 
   return { events, isConnected, error };
 }
@@ -163,6 +179,65 @@ export function useStartCloudAgentRun() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dev-workbench'] });
+    },
+  });
+}
+
+export function useCloudAgentLaunchOptions(
+  project: string | null,
+  workItemId: number | null,
+  enabled: boolean,
+) {
+  return useQuery<CloudAgentLaunchOptions>({
+    queryKey: ['dev-workbench', 'cloud-agent-launch-options', project, workItemId],
+    queryFn: () => apiFetch(
+      `/api/dev-workbench/cloud-agent/launch-options?project=${encodeURIComponent(project!)}&workItemId=${workItemId}`,
+    ),
+    enabled: Boolean(enabled && project && workItemId),
+  });
+}
+
+export function useGuidedCloudJobs(project: string | null, enabled: boolean) {
+  return useQuery<GuidedCloudJobsResponse>({
+    queryKey: ['home-dashboard', 'guided-cloud-jobs', project],
+    queryFn: () => apiFetch(
+      `/api/home-dashboard/cloud-agent/guided?project=${encodeURIComponent(project!)}`,
+    ),
+    enabled: Boolean(enabled && project),
+    refetchInterval: (query) => {
+      const runs = query.state.data?.runs ?? [];
+      return runs.some((run) => run.run && !isAgentRunTerminalStatus(run.run.status))
+        ? CLOUD_AGENT_POLL_INTERVAL_MS
+        : false;
+    },
+  });
+}
+
+export function useStartGuidedCloudAgentRun() {
+  const queryClient = useQueryClient();
+  return useMutation<StartCloudAgentRunResponse, Error, StartGuidedCloudAgentRequest>({
+    mutationFn: (body) =>
+      apiFetch('/api/home-dashboard/cloud-agent/guided', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['home-dashboard', 'guided-cloud-jobs'] });
+    },
+  });
+}
+
+export function useCancelGuidedCloudAgentRun() {
+  const queryClient = useQueryClient();
+  return useMutation<{ ok: true; status: AgentRunStatus }, Error, { project: string; sessionId: string }>({
+    mutationFn: ({ project, sessionId }) =>
+      apiFetch(
+        `/api/home-dashboard/cloud-agent/guided/${encodeURIComponent(sessionId)}/cancel?project=${encodeURIComponent(project)}`,
+        { method: 'POST' },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['home-dashboard', 'guided-cloud-jobs'] });
     },
   });
 }

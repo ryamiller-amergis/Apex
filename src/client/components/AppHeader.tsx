@@ -24,7 +24,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -69,6 +69,9 @@ interface AppHeaderProps {
   buildsEnabled?: boolean;
   onNavigateBrainstorm?: () => void;
   brainstormEnabled?: boolean;
+  onNavigateReportIssue?: () => void;
+  /** Prod Support stays hidden until the guided cloud-agent flags and the project menu are on. */
+  reportIssueEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   mcpServersEnabled?: boolean;
   onNavigateAdmin: () => void;
@@ -117,6 +120,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   buildsEnabled = false,
   onNavigateBrainstorm,
   brainstormEnabled = false,
+  onNavigateReportIssue,
+  reportIssueEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -154,6 +159,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'AI Cost Analytics', view: 'ai-cost', permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
     { label: 'Brainstorm', view: 'brainstorm', permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
+    { label: 'Prod Support', view: 'prod-support', permission: 'chat:create', onNavigate: onNavigateReportIssue ?? (() => {}) },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
@@ -198,6 +204,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'brainstorm') {
       if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
       return isSuperAdmin || can('brainstorm:view');
+    }
+    if (item.view === 'prod-support') {
+      if (!reportIssueEnabled || !menuEnabledViews.includes('prod-support')) return false;
+      return isSuperAdmin || can('chat:create');
     }
     if (item.view === 'playbooks') {
       return menuEnabledViews.includes('playbooks') && can('playbooks:view');

@@ -922,6 +922,60 @@ describe('AzureDevOpsService', () => {
       const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
       expect(wiql).not.toContain("[System.State] NOT IN");
     });
+
+    it('pulls in the parent feature so children can stack under it', async () => {
+      const service = new AzureDevOpsService('MaxView');
+
+      mockWitApi.queryByWiql
+        .mockResolvedValueOnce({ workItems: [{ id: 32 }, { id: 31 }] })
+        .mockResolvedValueOnce({ workItems: [{ id: 30 }] });
+      mockWitApi.getWorkItems
+        .mockResolvedValueOnce([
+          {
+            id: 32,
+            fields: {
+              'System.Title': 'Crash on save',
+              'System.WorkItemType': 'Bug',
+              'System.State': 'New',
+              'System.AssignedTo': { uniqueName: 'jane@example.com' },
+              'System.Parent': 31,
+            },
+          },
+          {
+            id: 31,
+            fields: {
+              'System.Title': 'Save the form',
+              'System.WorkItemType': 'Product Backlog Item',
+              'System.State': 'New',
+              'System.AssignedTo': { uniqueName: 'jane@example.com' },
+              'System.Parent': '30',
+            },
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 30,
+            fields: {
+              'System.Title': 'Onboarding',
+              'System.WorkItemType': 'Feature',
+              'System.State': 'In Progress',
+              'System.AssignedTo': { uniqueName: 'someone-else@example.com' },
+            },
+          },
+        ]);
+
+      const result = await service.getWorkItemsAssignedToUser('Jane Developer', 'MaxView');
+
+      expect(result.map((item) => item.id)).toEqual([32, 31, 30]);
+      expect(result[0]).toMatchObject({ id: 32, parentId: 30, workItemType: 'Bug' });
+      expect(result[1]).toMatchObject({ id: 31, parentId: 30, workItemType: 'Product Backlog Item' });
+      expect(result[2]).toMatchObject({
+        id: 30,
+        title: 'Onboarding',
+        workItemType: 'Feature',
+        groupingOnly: true,
+      });
+    });
   });
 
   describe('createWorkItemForPrd — APEX origin tagging', () => {

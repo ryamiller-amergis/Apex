@@ -10,8 +10,39 @@ export interface AssignedWorkItem {
   url?: string;
   /** Raw ADO System.Tags value (semicolon-separated). */
   tags?: string;
+  /** Azure DevOps parent. Child PBIs, TBIs, and Bugs point at their Feature. */
+  parentId?: number | null;
+  /**
+   * Parent Feature included so assigned children can stack under it.
+   * The signed-in user is not assigned to this row.
+   */
+  groupingOnly?: boolean;
   /** Server-derived Cloud Agent start eligibility. Absent when the flag is off. */
   cloudAgentEligibility?: CloudAgentEligibility;
+}
+
+/** One child of a Feature shown in the My Work View Context section. */
+export interface MyWorkItemContextChild {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+}
+
+/**
+ * Read-only Azure DevOps context for a My Work row.
+ * Text fields are plain text. `children` is empty unless the item is a Feature.
+ */
+export interface MyWorkItemContext {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+  description: string;
+  acceptanceCriteria: string;
+  reproSteps: string;
+  design: string;
+  children: MyWorkItemContextChild[];
 }
 
 /**
@@ -179,14 +210,82 @@ export function isLeftoverWorkClean(
   );
 }
 
+export type CloudAgentLaunchIntent = 'start' | 'resume' | 'retry';
+
+export interface CloudAgentSkillChoice {
+  name: string;
+  path: string;
+  description: string;
+}
+
+export interface CloudAgentLaunchOptions {
+  recommendedSkillPath: string;
+  recommendedModel: string;
+  reason: string;
+  skills: CloudAgentSkillChoice[];
+  models: { id: string; displayName: string }[];
+  priorSkillPath: string | null;
+  priorModel: string | null;
+  priorCustomPrompt: string | null;
+}
+
 export interface StartCloudAgentRunRequest {
   workItemId: number;
   project: string;
+  intent?: CloudAgentLaunchIntent;
+  skillPath?: string;
+  model?: string;
+  /** Optional instructions added to the cloud agent prompt for this start or retry. */
+  customPrompt?: string;
+}
+
+export interface GuidedCloudJobOption {
+  id: string;
+  title: string;
+  description: string;
+  skillName: string;
+  skillPath: string | null;
+  /** Site reports open a Bug. Investigations only gather context. */
+  opensBug: boolean;
+}
+
+export interface GuidedCloudAgentSession {
+  sessionId: string;
+  jobId: string;
+  title: string;
+  task: string;
+  skillPath: string;
+  model: string;
+  updatedAt: string;
+  bugWorkItemId: number | null;
+  bugUrl: string | null;
+  run: CloudAgentRunSummary | null;
+}
+
+export interface GuidedCloudJobsResponse {
+  jobs: GuidedCloudJobOption[];
+  skills: CloudAgentSkillChoice[];
+  models: { id: string; displayName: string }[];
+  recommendedModel: string;
+  runs: GuidedCloudAgentSession[];
+}
+
+export interface StartGuidedCloudAgentRequest {
+  project: string;
+  jobId: string;
+  task: string;
+  intent?: CloudAgentLaunchIntent;
+  sessionId?: string;
+  skillPath?: string;
+  model?: string;
+  images?: Array<{ name: string; mimeType: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }>;
 }
 
 export interface StartCloudAgentRunResponse {
   sessionId: string;
   runId: string;
+  bugWorkItemId?: number | null;
+  bugUrl?: string | null;
 }
 
 export interface BacklogFeatureItem {
