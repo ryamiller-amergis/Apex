@@ -733,7 +733,12 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         proposedTestSuite: entry.proposedTestSuite,
         placementReason: entry.placementReason,
         suiteError: suiteErrors.get(entry.id),
-        ...(entry.existing ? { existingAdoTestCaseId: entry.existing.adoTestCaseId } : {}),
+        ...(entry.existing
+          ? {
+            existingAdoTestCaseId: entry.existing.adoTestCaseId,
+            ...(entry.existing.current?.url ? { existingAdoTestCaseUrl: entry.existing.current.url } : {}),
+          }
+          : {}),
       }));
   }, [allCases, publishedCaseIds, externalSuite?.publishedCases]);
   const canSelectCases = externalSuite?.status === 'ready' && !isGenerating;
