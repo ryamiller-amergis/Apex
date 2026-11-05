@@ -610,6 +610,8 @@ export interface StartCloudAgentRunInput {
   initiatorName?: string;
   initiatorEmail?: string;
   adoUserToken?: string | null;
+  /** Passed by the Playbook step. Cloud Agent start does not use the Start Development type gate. */
+  isSuperAdmin?: boolean;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
   /** Set by the route when cloud-agent-guided-launch is on. */
   launchChooser?: boolean;

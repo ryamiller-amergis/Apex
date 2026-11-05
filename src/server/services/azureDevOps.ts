@@ -5902,7 +5902,6 @@ export class AzureDevOpsService {
     /** HTML for the Bug form's Repro Steps field. Description is not on that form. */
     reproStepsHtml?: string;
     acceptanceCriteriaHtml?: string;
-    reproStepsHtml?: string;
     systemInfoHtml?: string;
     priority?: string;
     parentId?: number;
@@ -5934,10 +5933,6 @@ export class AzureDevOpsService {
 
         if (spec.acceptanceCriteriaHtml) {
           patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
-        }
-
-        if (spec.reproStepsHtml) {
-          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: spec.reproStepsHtml });
         }
 
         if (spec.systemInfoHtml) {
