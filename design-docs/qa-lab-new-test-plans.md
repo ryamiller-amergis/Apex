@@ -52,6 +52,16 @@ Top-level `newPlacements` in `{slug}.test-cases.json`:
 - Cases that point at a proposal show "New: {plan} / {suite}" as their placement. While the proposal is unticked, they have no suite; when the project requires a suite, they cannot publish.
 - Requirement suites in existing plans become selectable placements, so QA can choose one without a proposal.
 
+### Adding one by hand
+
+QA can create a plan or suite the skill did not propose.
+
+- "Add a Test Plan or suite" in the "Create in Azure DevOps" section adds a row with two choices. **Plan**: a new plan (name box) or an existing plan (dropdown). **Suites**: a requirement suite per PBI, or a static suite path (`A > B`). A static suite in an existing plan needs a path.
+- A row QA adds is ticked by default and has a remove button. It sends the same `{ testPlan, testSuite?, createPlan, suiteType }` approval as a skill proposal, so the server does not change.
+- Every row in this section, from the skill or added by QA, appears in each case's plan dropdown and in "Set all" under "New in Azure DevOps". Choosing it sets the case's suite box to the new suite ("Requirement suite per PBI" or the path) and disables it.
+- A skill proposal stays listed if a case pointed at it when the window opened or points at it now, so QA can move cases off it and back.
+- A new plan name that matches an existing plan shows "Already exists; Apex will use it". Publish still reuses that plan by name.
+
 ## Creating on publish
 
 For each ticked proposal, in order:
@@ -81,3 +91,4 @@ Editing or deleting plans, query-based suites, and choosing plan area or iterati
 - A requirement-suite case is linked and not added to the suite.
 - A failed create fails only its cases.
 - Publish window: proposals unchecked by default; ticking one lets its cases publish and sends it in the request.
+- Publish window: a plan QA adds by hand can be chosen for a case and is sent as a ticked approval; removing it clears the cases that used it.

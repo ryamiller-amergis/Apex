@@ -4,6 +4,7 @@ import type {
   QaAdoTestPlanOption,
   QaLabNewPlacement,
   QaLabNewPlacementApproval,
+  QaLabNewPlacementSuiteType,
 } from '../../shared/types/qaLab';
 import { useAdoTestPlanOptions } from '../hooks/useQaLab';
 import styles from './QaLabPublishReview.module.css';
@@ -61,7 +62,42 @@ interface ProposalEdit {
   testSuite: string;
 }
 
+/** A plan or suite QA added by hand; `existingPlanId` null means a new plan named `testPlan`. */
+interface ManualPlacement {
+  key: string;
+  approved: boolean;
+  existingPlanId: number | null;
+  testPlan: string;
+  suiteType: QaLabNewPlacementSuiteType;
+  testSuite: string;
+}
+
+/** A skill proposal or a hand-added row, with QA's current edits applied. */
+interface PlacementDraft {
+  key: string;
+  approved: boolean;
+  testPlan: string;
+  testSuite: string;
+  createPlan: boolean;
+  suiteType: QaLabNewPlacementSuiteType;
+}
+
 const EMPTY_ROW: RowSelection = { planId: null, suiteId: null };
+const NEW_OPTION_PREFIX = 'new:';
+
+function draftReady(draft: PlacementDraft): boolean {
+  if (!draft.testPlan.trim()) return false;
+  return draft.suiteType === 'requirement' || draft.createPlan || draft.testSuite.trim() !== '';
+}
+
+function draftSuiteLabel(draft: PlacementDraft): string {
+  if (draft.suiteType === 'requirement') return 'Requirement suite per PBI';
+  return draft.testSuite.trim() || 'Plan root';
+}
+
+function draftLabel(draft: PlacementDraft): string {
+  return `${draft.testPlan.trim() || 'Unnamed plan'} / ${draftSuiteLabel(draft)} (new)`;
+}
 
 function normalizeName(value: string): string {
   return value.split('>').map((part) => part.trim().toLowerCase()).filter(Boolean).join(' > ');
@@ -123,11 +159,6 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
     })),
     [plans, cases, newPlacements],
   );
-  const usedProposals = useMemo(
-    () => newPlacements.filter((proposal) =>
-      Object.values(proposed).some((row) => row.newKey === proposal.key)),
-    [newPlacements, proposed],
-  );
   const [edits, setEdits] = useState<Record<string, ProposalEdit>>({});
   const editFor = (proposal: QaLabNewPlacement): ProposalEdit => edits[proposal.key] ?? {
     approved: false,
@@ -136,15 +167,70 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
   };
   const setEdit = (proposal: QaLabNewPlacement, next: Partial<ProposalEdit>) =>
     setEdits((previous) => ({ ...previous, [proposal.key]: { ...editFor(proposal), ...next } }));
-  const isApproved = (key: string | undefined): boolean => {
-    const proposal = key === undefined ? undefined : newPlacements.find((entry) => entry.key === key);
-    return proposal !== undefined && editFor(proposal).approved && editFor(proposal).testPlan.trim() !== '';
-  };
+  const [manual, setManual] = useState<ManualPlacement[]>([]);
+  const [manualCount, setManualCount] = useState(0);
 
   const planById = useMemo(() => new Map(plans.map((plan) => [plan.id, plan])), [plans]);
+  const planNames = useMemo(() => new Set(plans.map((plan) => normalizeName(plan.name))), [plans]);
   const rowFor = (caseId: string): RowSelection => rows[caseId] ?? proposed[caseId] ?? EMPTY_ROW;
   const setRow = (caseId: string, next: RowSelection) =>
     setRows((previous) => ({ ...previous, [caseId]: next }));
+  const pointsAt = (key: string) => (caseId: string): boolean => {
+    const row = rowFor(caseId);
+    return row.suiteId === null && row.newKey === key;
+  };
+
+  /** Listed while a case points at it now or did when the window opened. */
+  const usedProposals = newPlacements.filter((proposal) =>
+    cases.some((entry) => proposed[entry.id]?.newKey === proposal.key || pointsAt(proposal.key)(entry.id)));
+  const skillDraft = (proposal: QaLabNewPlacement): PlacementDraft => ({
+    ...editFor(proposal),
+    key: proposal.key,
+    createPlan: proposal.createPlan,
+    suiteType: proposal.suiteType,
+  });
+  const manualDraft = (entry: ManualPlacement): PlacementDraft => ({
+    key: entry.key,
+    approved: entry.approved,
+    testPlan: entry.existingPlanId === null ? entry.testPlan : planById.get(entry.existingPlanId)?.name ?? '',
+    testSuite: entry.testSuite,
+    createPlan: entry.existingPlanId === null,
+    suiteType: entry.suiteType,
+  });
+  const listedDrafts = [...usedProposals.map(skillDraft), ...manual.map(manualDraft)];
+  const draftFor = (key: string | undefined): PlacementDraft | undefined => {
+    if (key === undefined) return undefined;
+    const proposal = newPlacements.find((entry) => entry.key === key);
+    if (proposal) return skillDraft(proposal);
+    const added = manual.find((entry) => entry.key === key);
+    return added ? manualDraft(added) : undefined;
+  };
+  const isApproved = (key: string | undefined): boolean => {
+    const draft = draftFor(key);
+    return draft !== undefined && draft.approved && draftReady(draft);
+  };
+
+  const addManual = () => {
+    setManual((previous) => [...previous, {
+      key: `manual-${manualCount + 1}`,
+      approved: true,
+      existingPlanId: null,
+      testPlan: '',
+      suiteType: 'requirement',
+      testSuite: '',
+    }]);
+    setManualCount((count) => count + 1);
+  };
+  const updateManual = (key: string, next: Partial<ManualPlacement>) =>
+    setManual((previous) => previous.map((entry) => (entry.key === key ? { ...entry, ...next } : entry)));
+  const removeManual = (key: string) => {
+    setManual((previous) => previous.filter((entry) => entry.key !== key));
+    setRows((previous) => Object.fromEntries(cases.map((entry) => {
+      const row = previous[entry.id] ?? proposed[entry.id] ?? EMPTY_ROW;
+      return [entry.id, row.newKey === key ? EMPTY_ROW : row];
+    })));
+    if (bulk.newKey === key) setBulk(EMPTY_ROW);
+  };
   /** A plan alone keeps each row's suite when it is in that plan; a suite applies to every row. */
   const setAll = (next: RowSelection) => {
     setBulk(next);
@@ -159,6 +245,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
     const row = rowFor(entry.id);
     return row.suiteId === null && !isApproved(row.newKey);
   }).length;
+  const canChoose = !plansQuery.isLoading && !plansQuery.isError && cases.length > 0;
   const actionCount = cases.length + updateIds.length;
   const canPublish = !isPublishing && !plansQuery.isLoading && actionCount > 0
     && (!requireSuite || missingCount === 0);
@@ -179,18 +266,15 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
         newPlacementSelections[entry.id] = row.newKey;
       }
     }
-    const approved = usedProposals
-      .filter((proposal) => isApproved(proposal.key))
-      .map((proposal): QaLabNewPlacementApproval => {
-        const edit = editFor(proposal);
-        return {
-          key: proposal.key,
-          testPlan: edit.testPlan.trim(),
-          ...(proposal.suiteType === 'static' && edit.testSuite.trim() ? { testSuite: edit.testSuite.trim() } : {}),
-          createPlan: proposal.createPlan,
-          suiteType: proposal.suiteType,
-        };
-      });
+    const approved = listedDrafts
+      .filter((draft) => isApproved(draft.key))
+      .map((draft): QaLabNewPlacementApproval => ({
+        key: draft.key,
+        testPlan: draft.testPlan.trim(),
+        ...(draft.suiteType === 'static' && draft.testSuite.trim() ? { testSuite: draft.testSuite.trim() } : {}),
+        createPlan: draft.createPlan,
+        suiteType: draft.suiteType,
+      }));
     onPublish(selections, updateIds, { newPlacements: approved, newPlacementSelections });
   };
 
@@ -200,15 +284,20 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
     testIdPrefix: string,
   ) => {
     const plan = row.planId !== null ? planById.get(row.planId) : undefined;
+    const draft = row.suiteId === null ? draftFor(row.newKey) : undefined;
     return (
       <div className={styles.selects}>
         <select
           className={styles.select}
-          value={row.planId ?? ''}
+          value={draft ? `${NEW_OPTION_PREFIX}${draft.key}` : row.planId ?? ''}
           aria-label="Test Plan"
           onChange={(event) => {
-            const planId = event.target.value ? Number(event.target.value) : null;
-            onChange({ planId, suiteId: null });
+            const { value } = event.target;
+            if (value.startsWith(NEW_OPTION_PREFIX)) {
+              onChange({ planId: null, suiteId: null, newKey: value.slice(NEW_OPTION_PREFIX.length) });
+              return;
+            }
+            onChange({ planId: value ? Number(value) : null, suiteId: null });
           }}
           {...{ 'data-testid': `${testIdPrefix}-plan` }}
         >
@@ -216,6 +305,13 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
           {plans.map((option) => (
             <option key={option.id} value={option.id}>{option.name}</option>
           ))}
+          {listedDrafts.length > 0 && (
+            <optgroup label="New in Azure DevOps">
+              {listedDrafts.map((entry) => (
+                <option key={entry.key} value={`${NEW_OPTION_PREFIX}${entry.key}`}>{draftLabel(entry)}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <select
           className={styles.select}
@@ -227,7 +323,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
           }
           {...{ 'data-testid': `${testIdPrefix}-suite` }}
         >
-          <option value="">Choose a suite</option>
+          <option value="">{draft ? draftSuiteLabel(draft) : 'Choose a suite'}</option>
           {(plan?.suites ?? []).map((option) => (
             <option key={option.id} value={option.id}>
               {suiteLabel(option.path)}{option.requirementId !== undefined ? ' (requirement)' : ''}
@@ -283,13 +379,13 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
         </div>
       )}
 
-      {usedProposals.length > 0 && (
+      {canChoose && (
         <div className={styles.updates} {...{ 'data-testid': 'qa-lab-publish-review-new-placements' }}>
           <span className={styles.bulkLabel}>Create in Azure DevOps</span>
-          <ul className={styles.list}>
+          {listedDrafts.length > 0 && <ul className={styles.list}>
             {usedProposals.map((proposal, index) => {
               const edit = editFor(proposal);
-              const caseCount = Object.values(proposed).filter((row) => row.newKey === proposal.key).length;
+              const caseCount = cases.filter((entry) => pointsAt(proposal.key)(entry.id)).length;
               return (
                 <li key={proposal.key} className={styles.row}>
                   <label className={styles.updateLabel}>
@@ -331,14 +427,114 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
                       />
                     )}
                   </div>
+                  {proposal.createPlan && planNames.has(normalizeName(edit.testPlan)) && (
+                    <span className={styles.caseMeta}>Already exists; Apex will use it</span>
+                  )}
                 </li>
               );
             })}
-          </ul>
+            {manual.map((entry, index) => {
+              const draft = manualDraft(entry);
+              const caseCount = cases.filter((item) => pointsAt(entry.key)(item.id)).length;
+              const prefix = `qa-lab-publish-review-manual-${index}`;
+              return (
+                <li key={entry.key} className={styles.row}>
+                  <label className={styles.updateLabel}>
+                    <input
+                      type="checkbox"
+                      checked={entry.approved}
+                      onChange={() => updateManual(entry.key, { approved: !entry.approved })}
+                      aria-label={`Create ${draftLabel(draft)}`}
+                      {...{ 'data-testid': prefix }}
+                    />
+                    <span className={styles.caseText}>
+                      <span className={styles.caseTitle}>
+                        {draft.createPlan ? 'New Test Plan' : 'New suite in an existing plan'} (added by QA)
+                      </span>
+                      <span className={styles.caseMeta}>
+                        {caseCount} {caseCount === 1 ? 'case goes' : 'cases go'} here
+                        {!draftReady(draft) && ' · needs a plan name and suite'}
+                      </span>
+                    </span>
+                  </label>
+                  <div className={styles.selects}>
+                    <select
+                      className={styles.select}
+                      value={entry.existingPlanId ?? ''}
+                      aria-label="Plan to create in"
+                      onChange={(event) => updateManual(entry.key, {
+                        existingPlanId: event.target.value ? Number(event.target.value) : null,
+                      })}
+                      {...{ 'data-testid': `${prefix}-plan-source` }}
+                    >
+                      <option value="">New Test Plan</option>
+                      {plans.map((option) => (
+                        <option key={option.id} value={option.id}>{option.name}</option>
+                      ))}
+                    </select>
+                    {entry.existingPlanId === null && (
+                      <input
+                        className={styles.select}
+                        value={entry.testPlan}
+                        aria-label="New Test Plan name"
+                        placeholder="Test Plan name"
+                        onChange={(event) => updateManual(entry.key, { testPlan: event.target.value })}
+                        {...{ 'data-testid': `${prefix}-plan` }}
+                      />
+                    )}
+                    <select
+                      className={styles.select}
+                      value={entry.suiteType}
+                      aria-label="Suite type"
+                      onChange={(event) => updateManual(entry.key, {
+                        suiteType: event.target.value === 'static' ? 'static' : 'requirement',
+                      })}
+                      {...{ 'data-testid': `${prefix}-type` }}
+                    >
+                      <option value="requirement">Requirement suite per PBI</option>
+                      <option value="static">Static suite</option>
+                    </select>
+                    {entry.suiteType === 'static' && (
+                      <input
+                        className={styles.select}
+                        value={entry.testSuite}
+                        aria-label="New suite path"
+                        placeholder={draft.createPlan ? 'Plan root' : 'Suite > Sub-suite'}
+                        onChange={(event) => updateManual(entry.key, { testSuite: event.target.value })}
+                        {...{ 'data-testid': `${prefix}-suite` }}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      className={styles.secondaryBtn}
+                      onClick={() => removeManual(entry.key)}
+                      aria-label={`Remove ${draftLabel(draft)}`}
+                      {...{ 'data-testid': `${prefix}-remove` }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {draft.createPlan && planNames.has(normalizeName(entry.testPlan)) && (
+                    <span className={styles.caseMeta}>Already exists; Apex will use it</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>}
+          <div>
+            <button
+              type="button"
+              className={styles.secondaryBtn}
+              onClick={addManual}
+              {...{ 'data-testid': 'qa-lab-publish-review-add-placement' }}
+            >
+              Add a Test Plan or suite
+            </button>
+          </div>
         </div>
       )}
 
-      {plans.length > 0 && cases.length > 0 && (
+      {canChoose && (
         <>
           <div className={styles.bulkRow}>
             <span className={styles.bulkLabel}>Set all</span>
@@ -379,7 +575,7 @@ export const QaLabPublishReview: React.FC<QaLabPublishReviewProps> = ({
       )}
 
       <div className={styles.actions}>
-        {requireSuite && missingCount > 0 && plans.length > 0 && (
+        {requireSuite && missingCount > 0 && canChoose && (
           <span className={styles.missing}>{missingCount} {missingCount === 1 ? 'case needs' : 'cases need'} a suite</span>
         )}
         <button

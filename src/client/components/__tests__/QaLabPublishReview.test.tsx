@@ -204,6 +204,81 @@ describe('QaLabPublishReview', () => {
     );
   });
 
+  it('creates a Test Plan QA adds by hand and sends it as an approval', () => {
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[{ id: 'TC-9', title: 'Delete a user' }]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    const confirm = screen.getByTestId('qa-lab-publish-review-confirm');
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-add-placement'));
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-manual-0-plan'), {
+      target: { value: 'Delete User - Functional Testing' },
+    });
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-TC-9-plan'), { target: { value: 'new:manual-1' } });
+    expect(screen.getByText(/will be created/)).toBeTruthy();
+    expect(confirm).not.toBeDisabled();
+    fireEvent.click(confirm);
+
+    expect(onPublish).toHaveBeenCalledWith({}, [], {
+      newPlacements: [{
+        key: 'manual-1',
+        testPlan: 'Delete User - Functional Testing',
+        createPlan: true,
+        suiteType: 'requirement',
+      }],
+      newPlacementSelections: { 'TC-9': 'manual-1' },
+    });
+  });
+
+  it('adds a static suite to an existing plan by hand and clears its cases when removed', () => {
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[{ id: 'TC-10', title: 'Clock out outside the geofence' }]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    const confirm = screen.getByTestId('qa-lab-publish-review-confirm');
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-add-placement'));
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-manual-0-plan-source'), { target: { value: '15' } });
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-manual-0-type'), { target: { value: 'static' } });
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-TC-10-plan'), { target: { value: 'new:manual-1' } });
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('qa-lab-publish-review-manual-0-suite'), {
+      target: { value: 'Geofence Clock In and Out > Outside Geofence' },
+    });
+    expect(confirm).not.toBeDisabled();
+    fireEvent.click(confirm);
+    expect(onPublish).toHaveBeenCalledWith({}, [], {
+      newPlacements: [{
+        key: 'manual-1',
+        testPlan: '15 Create, Save, Submit Timesheet',
+        testSuite: 'Geofence Clock In and Out > Outside Geofence',
+        createPlan: false,
+        suiteType: 'static',
+      }],
+      newPlacementSelections: { 'TC-10': 'manual-1' },
+    });
+
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-manual-0-remove'));
+    expect((screen.getByTestId('qa-lab-publish-review-TC-10-plan') as HTMLSelectElement).value).toBe('');
+    expect(confirm).toBeDisabled();
+  });
+
   it('leaves existing-case updates unchecked until QA chooses them', () => {
     const onPublish = jest.fn();
     render(
