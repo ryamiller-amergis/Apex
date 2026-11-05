@@ -79,15 +79,15 @@
   box-shadow: var(--shadow-sm);
 }
 
-/* The feature header sits on a raised band with an accent rail, clearly
-   outranking the children band beneath it. */
-.stack-header {
+/* The feature header sits on the raised band with an accent rail. The
+   selector has to beat `.item`, which is declared later and would otherwise
+   paint the header with the children's background. */
+.stack .stack-header {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   padding: 14px 20px 14px 16px;
   background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-color);
   box-shadow: inset 4px 0 0 var(--accent-color);
 }
 
@@ -138,7 +138,7 @@
   font-style: italic;
 }
 
-/* Children render on a slightly dimmer band, tied to the feature header by
+/* Children render on the secondary band, tied to the feature header by
    a tree guide line so the group reads as one hierarchy at a glance. */
 .stack-children {
   position: relative;
@@ -156,7 +156,7 @@
   background: var(--border-color);
 }
 
-.tree-item {
+.stack .tree-item {
   position: relative;
   border-radius: 0;
   border: none;
@@ -164,12 +164,12 @@
   background: transparent;
 }
 
-.tree-item:first-child {
+.stack .tree-item:first-child {
   border-top: none;
 }
 
-.tree-item:hover {
-  background: var(--bg-tertiary);
+.stack .tree-item:hover {
+  background: var(--bg-primary);
 }
 
 /* Horizontal tick connecting the vertical guide line to each child row. */
