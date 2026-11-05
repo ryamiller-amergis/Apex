@@ -1521,6 +1521,19 @@ describe('parseTestCaseStepsXml', () => {
     )).toEqual([{ order: 1, action: 'Open app', expected: '' }]);
     expect(parseTestCaseStepsXml(undefined)).toEqual([]);
   });
+
+  it('reads back multi-line steps the way Apex writes them', () => {
+    expect(parseTestCaseStepsXml(
+      '<steps id="0" last="1"><step id="1" type="ActionStep">'
+      + '<parameterizedString isformatted="true">Go to Test Environment:&lt;br/&gt;- For QA, use https://qa.example.com</parameterizedString>'
+      + '<parameterizedString isformatted="true">Login &amp;amp; &amp;lt;Home&amp;gt; display.</parameterizedString>'
+      + '</step></steps>',
+    )).toEqual([{
+      order: 1,
+      action: 'Go to Test Environment:\n- For QA, use https://qa.example.com',
+      expected: 'Login & <Home> display.',
+    }]);
+  });
 });
 
 describe('placeableSuitePaths', () => {

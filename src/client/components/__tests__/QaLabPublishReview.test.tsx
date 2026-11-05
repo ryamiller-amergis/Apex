@@ -279,6 +279,32 @@ describe('QaLabPublishReview', () => {
     expect(confirm).toBeDisabled();
   });
 
+  it('links an existing case that is in no Test Plan and places it like a new case', () => {
+    const onPublish = jest.fn();
+    render(
+      <QaLabPublishReview
+        suiteId="suite-1"
+        cases={[{
+          id: 'TC-11',
+          title: 'Clock in inside the geofence',
+          proposedTestPlan: '15 Create, Save, Submit Timesheet',
+          proposedTestSuite: 'Geofence Clock In and Out',
+          existingAdoTestCaseId: 600,
+          existingAdoTestCaseUrl: 'https://ado.example/600',
+        }]}
+        requireSuite
+        isPublishing={false}
+        onCancel={jest.fn()}
+        onPublish={onPublish}
+      />,
+    );
+
+    expect(screen.getByTestId('qa-lab-publish-review-existing-link-TC-11')).toHaveAttribute('href', 'https://ado.example/600');
+    expect(screen.getByText(/is in no Test Plan; publishing adds it to the suite only/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('qa-lab-publish-review-confirm'));
+    expect(onPublish).toHaveBeenCalledWith({ 'TC-11': { planId: 15, suiteId: 151 } }, [], NO_NEW_PLACEMENTS);
+  });
+
   it('leaves existing-case updates unchecked until QA chooses them', () => {
     const onPublish = jest.fn();
     render(

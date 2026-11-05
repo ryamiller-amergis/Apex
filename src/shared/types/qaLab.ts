@@ -123,8 +123,11 @@ export interface QaLabPublishedCase {
   testSuiteId?: number;
   /** Set when the Test Case was created but adding it to the suite failed. */
   suiteError?: string;
-  /** `updated` when publish applied the suggestion to an existing Test Case. Absent means created. */
-  action?: 'updated';
+  /**
+   * `updated` when publish applied the suggestion to an existing Test Case; `placed` when it
+   * only added an existing case to a suite. Absent means created.
+   */
+  action?: 'updated' | 'placed';
 }
 
 /** State for a suite generated directly from an ADO work item. */
@@ -237,6 +240,8 @@ export interface QaLabExistingCase {
   source: 'linked' | 'suite';
   /** The case as it is in Azure DevOps now; absent when it could not be read. */
   current?: QaAdoExistingTestCase;
+  /** False when the case is in no Test Plan suite, so publish can place it. Absent when unknown. */
+  inTestPlan?: boolean;
 }
 
 /** A static Test Suite a published case can be added to. */

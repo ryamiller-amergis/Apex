@@ -24,6 +24,7 @@ import {
   adoBacklogPbiId,
   adoBacklogTbiId,
   buildSyntheticAdoBacklog,
+  buildTestCaseStepsXml,
   deleteAdoTestCases,
   getLatestAdoTestSuite,
   inferUserTypes,
@@ -269,6 +270,25 @@ describe('buildSyntheticAdoBacklog', () => {
     expect(backlog.epics[0].features[0].affectedPersonas).toEqual(['External User', 'Internal User']);
     expect(pbiItem(backlog, 'PBI-18452').userStory.persona).toBe('External User');
     expect(pbiItem(backlog, 'PBI-18499').userStory.persona).toBe('Internal User');
+  });
+});
+
+describe('buildTestCaseStepsXml', () => {
+  it('keeps line breaks and escapes step text as HTML inside XML', () => {
+    expect(buildTestCaseStepsXml([
+      { action: 'Go to Test Environment:\n- For QA, use https://qa.example.com', expected: 'Login & <Home> display.' },
+      { action: 'Precondition: Status = Submitted.', expected: '' },
+    ])).toBe(
+      '<steps id="0" last="2">'
+      + '<step id="1" type="ActionStep">'
+      + '<parameterizedString isformatted="true">Go to Test Environment:&lt;br/&gt;- For QA, use https://qa.example.com</parameterizedString>'
+      + '<parameterizedString isformatted="true">Login &amp;amp; &amp;lt;Home&amp;gt; display.</parameterizedString>'
+      + '</step>'
+      + '<step id="2" type="ActionStep">'
+      + '<parameterizedString isformatted="true">Precondition: Status = Submitted.</parameterizedString>'
+      + '<parameterizedString isformatted="true"></parameterizedString>'
+      + '</step></steps>',
+    );
   });
 });
 
@@ -812,6 +832,43 @@ describe('ADO test suite generation and publish', () => {
     expect(opens).not.toHaveProperty('existing');
   });
 
+  it('records whether each existing case is in a Test Plan, and leaves it unknown when the read fails', async () => {
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+    const flag = (adoTestCaseId: number) => ({ adoTestCaseId, status: 'up-to-date', reason: 'Same', source: 'linked' });
+    const output = JSON.stringify({
+      suites: [{
+        pbiId: 'PBI-18452',
+        testCases: [
+          { id: 'TC-1', title: 'Saves', steps: [], existing: flag(900) },
+          { id: 'TC-2', title: 'Mutes', steps: [], existing: flag(901) },
+        ],
+      }],
+    });
+    const caseFor = (id: number) => ({ id, title: `Case ${id}`, state: 'Ready', steps: [], url: `https://ado.example/${id}` });
+    const getTestCasesById = jest.fn().mockResolvedValue([caseFor(900), caseFor(901)]);
+    const storedExisting = () => (dbMock.state.updates[dbMock.state.updates.length - 1].testCasesJson as {
+      suites: Array<{ testCases: Array<{ existing: Record<string, unknown> }> }>;
+    }).suites[0].testCases.map((testCase) => testCase.existing);
+    dbMock.state.threadRow = { workspaceDir };
+
+    fs.writeFileSync(path.join(outputDir, 'notifications.test-cases.json'), output);
+    dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating', project: 'Apex' };
+    const listTestCasesInSuites = jest.fn().mockResolvedValue(new Set([900]));
+    await syncAdoTestSuiteOutput('suite-1', 'thread-ado', undefined, { getTestCasesById, listTestCasesInSuites });
+    expect(listTestCasesInSuites).toHaveBeenCalledWith([900, 901]);
+    expect(storedExisting().map((existing) => existing.inTestPlan)).toEqual([true, false]);
+
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(path.join(outputDir, 'notifications.test-cases.json'), output);
+    dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating', project: 'Apex' };
+    await syncAdoTestSuiteOutput('suite-1', 'thread-ado', undefined, {
+      getTestCasesById,
+      listTestCasesInSuites: jest.fn().mockRejectedValue(new Error('403')),
+    });
+    expect(storedExisting().every((existing) => !('inTestPlan' in existing))).toBe(true);
+  });
+
   it('syncs worker-harvested output from a workspace other than the thread workspace', async () => {
     const harvestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ado-suite-harvest-'));
     try {
@@ -1015,6 +1072,43 @@ describe('ADO test suite generation and publish', () => {
         action: 'updated',
       })]);
       expect(retried.skippedLocalCaseIds).toEqual(['TC-2']);
+    });
+
+    it('adds an existing case that is in no Test Plan to the chosen suite without creating one', async () => {
+      const createTestCaseWorkItem = jest.fn();
+      const addTestCasesToSuite = jest.fn().mockResolvedValue(undefined);
+      const ado = { createTestCaseWorkItem, addTestCasesToSuite };
+      const row = twoCaseSuite();
+      const testCases = (row.testCasesJson.suites[0].testCases as Array<Record<string, unknown>>);
+      testCases[0].existing = {
+        adoTestCaseId: 600,
+        status: 'up-to-date',
+        reason: 'Same',
+        source: 'linked',
+        inTestPlan: false,
+        current: { id: 600, title: 'Keep me', state: 'Ready', steps: [], url: 'https://ado.example/600' },
+      };
+      testCases[1].existing = { adoTestCaseId: 700, status: 'up-to-date', reason: 'Same', source: 'linked', inTestPlan: true };
+      dbMock.state.suiteRow = row;
+      const selections = { 'TC-1': { planId: 15, suiteId: 151 }, 'TC-2': { planId: 15, suiteId: 151 } };
+
+      const unplaced = await publishAdoTestCases('suite-1', { ado, localCaseIds: ['TC-1'] });
+      const placed = await publishAdoTestCases('suite-1', { ado, selections });
+
+      expect(unplaced.skippedLocalCaseIds).toEqual(['TC-1']);
+      expect(createTestCaseWorkItem).not.toHaveBeenCalled();
+      expect(addTestCasesToSuite).toHaveBeenCalledTimes(1);
+      expect(addTestCasesToSuite).toHaveBeenCalledWith(15, 151, [600]);
+      expect(placed.published).toEqual([expect.objectContaining({
+        localCaseId: 'TC-1',
+        adoTestCaseId: 600,
+        adoTestCaseUrl: 'https://ado.example/600',
+        parentWorkItemId: 18452,
+        testPlanId: 15,
+        testSuiteId: 151,
+        action: 'placed',
+      })]);
+      expect(placed.skippedLocalCaseIds).toEqual([]);
     });
 
     describe('approved new Test Plans and suites', () => {

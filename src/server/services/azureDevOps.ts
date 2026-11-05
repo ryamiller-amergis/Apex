@@ -6459,6 +6459,17 @@ export class AzureDevOpsService {
     return cases;
   }
 
+  /** The ids, among `ids`, of Test Cases that are in at least one Test Plan suite. */
+  async listTestCasesInSuites(ids: number[]): Promise<Set<number>> {
+    if (ids.length === 0) return new Set();
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const placed = await mapWithConcurrency(ids, SUITE_CASE_INDEX_CONCURRENCY, async (id) => {
+      const suites = await retryWithBackoff(() => testPlanApi.getSuitesByTestCaseId(id));
+      return (suites ?? []).length > 0 ? id : null;
+    });
+    return new Set(placed.filter((id): id is number => id !== null));
+  }
+
   /**
    * Case ids and titles in every static suite, for the agent to compare new
    * cases against. Stops at MAX_SUITE_CASE_INDEX_ENTRIES.
