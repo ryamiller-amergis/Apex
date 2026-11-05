@@ -1,4 +1,4 @@
--- Up
+-- Up Migration
 
 CREATE TABLE IF NOT EXISTS qa_case_regenerations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -54,6 +54,7 @@ CREATE INDEX IF NOT EXISTS qa_case_comments_suite_case_idx
 COMMENT ON TABLE qa_case_comments IS
   'Reviewer comments on one generated QA case. A regeneration marks the comments it used as addressed.';
 
--- Down
--- DROP TABLE IF EXISTS qa_case_comments;
--- DROP TABLE IF EXISTS qa_case_regenerations;
+-- Down Migration
+
+DROP TABLE IF EXISTS qa_case_comments;
+DROP TABLE IF EXISTS qa_case_regenerations;
