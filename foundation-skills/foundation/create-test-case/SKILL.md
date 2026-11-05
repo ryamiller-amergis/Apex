@@ -54,13 +54,13 @@ Apex files published cases in Azure DevOps by the `placement` block in the JSON 
 2. Use only area paths, iteration paths, and tags the adapter lists. Never invent a path.
 3. If the project files cases in Azure Test Plans, set `testPlan` and `testSuite` on each case, copied exactly from the "Azure Test Plans" list in the kickoff context. Set top-level `requireSuite: true` when every case must be in a suite. QA confirms the plan and suite in Apex before publishing.
 4. If the adapter states no rule, omit `placement`. Apex then links each case to its requirement with Tested By.
-5. If no plan or suite in the "Azure Test Plans" list fits, propose one in top-level `newPlacements`: plan name, `createPlan`, `suiteType` (`static` with a `testSuite` path, or `requirement`, which Apex names after each PBI), and a one-line `reason`. Follow the adapter's naming rule and never propose a name already in the list. Point each case's `testPlan`/`testSuite` at it. Apex creates it only after QA approves it.
+5. If no plan or suite in the "Azure Test Plans" list fits, propose one in top-level `newPlacements`: plan name, `createPlan`, `suiteType` (`static` with a `testSuite` path, or `requirement`, which Apex names after each PBI), and a one-line `reason`. Follow the adapter's naming rule and never propose a name already in the list. Point each case's `testPlan`/`testSuite` at a `static` proposal; for a `requirement` proposal set only `testPlan` and leave `testSuite` out. Apex creates it only after QA approves it.
 
 ## Existing test cases
 
 When the kickoff context has an `## Existing test cases` section, read `.ai-pilot/existing-test-cases.json` (cases already linked to each PBI) and `.ai-pilot/test-case-index.md` (cases in the static suites) before writing a case.
 
-1. If an existing case covers the scenario, set `existing` on the case: `up-to-date` when it still matches (copy its title and steps; it does not count toward the case limit), or `needs-update` when it no longer matches (write the suggested title and steps and say in `reason` what changed).
+1. If an existing case covers the scenario, set `existing` on the case: `up-to-date` when it still matches (copy its title and steps exactly, even when they do not follow the adapter's case format), or `needs-update` when it no longer matches what the work item requires (write the suggested title and steps and say in `reason` what changed). A format difference alone is not a reason for `needs-update`. Cases with `existing` do not count toward any case limit; never drop one to stay under it.
 2. Write a new case only when nothing covers the scenario. Use only ids from those two files.
 3. If the kickoff says existing cases were not checked, write every case as new and add the `coverageMatrix` gap it names.
 

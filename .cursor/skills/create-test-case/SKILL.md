@@ -188,7 +188,7 @@ QA engineers run these cases by hand. QA Lab shows them on the **Manual** tab, w
 
 ### Case volume
 
-Per PBI, at most **8** manual-runnable cases (`manual` plus `e2e-playwright`), and at most **2** of those tagged `e2e-playwright`. When the work item needs more, keep the highest-risk cases and add a gap for each one left out: "Not written: case limit reached — {scenario}". A project changes these numbers in its own skill.
+Per PBI, at most **8** new manual-runnable cases (`manual` plus `e2e-playwright`), and at most **2** of those tagged `e2e-playwright`. Cases with `existing` do not count. When the work item needs more, keep the highest-risk cases and add a gap for each one left out: "Not written: case limit reached — {scenario}". A project changes these numbers in its own skill.
 
 ### Count test cases per PBI
 
@@ -236,13 +236,13 @@ Apex files published cases in Azure DevOps by the `placement` block in the JSON 
 | `testPlan`, `testSuite` | Proposed Azure Test Plan and static suite (`Feature > Sub-feature`). Copy names exactly from the "Azure Test Plans" list in the kickoff context. QA confirms them in Apex, then Apex adds the case to the suite |
 | `requireSuite` | Top level only. `true` when the project files every case in a suite; Apex then refuses to publish a case without a confirmed suite |
 
-When no plan or suite in `.ai-pilot/test-plans.md` fits, propose one in top-level `newPlacements` (see `definitions.newPlacement`): the plan name, `createPlan`, `suiteType` (`static` with a `testSuite` path, or `requirement`, which Apex names after each PBI), and a one-line `reason`. Follow the project's naming rule and never propose a name already in the file. Point each case's `testPlan`/`testSuite` at the proposal. Apex creates it only after QA approves it in the publish window.
+When no plan or suite in `.ai-pilot/test-plans.md` fits, propose one in top-level `newPlacements` (see `definitions.newPlacement`): the plan name, `createPlan`, `suiteType` (`static` with a `testSuite` path, or `requirement`, which Apex names after each PBI), and a one-line `reason`. Follow the project's naming rule and never propose a name already in the file. Point each case's `testPlan`/`testSuite` at a `static` proposal; for a `requirement` proposal set only `testPlan` and leave `testSuite` out. Apex creates it only after QA approves it in the publish window.
 
 ### Existing test cases
 
 When Apex generates from Azure DevOps, the kickoff context has an `## Existing test cases` section and two files: `.ai-pilot/existing-test-cases.json` (Test Cases already linked to each PBI, with steps) and `.ai-pilot/test-case-index.md` (every case in the static suites). Check both before writing a case.
 
-1. If an existing case covers the scenario, set `existing` on the case (see `definitions.existingCase`): `up-to-date` when it still matches the work item (copy its title and steps; it does not count toward the case limit), or `needs-update` when it no longer matches (write the suggested title and steps and say in `reason` what changed).
+1. If an existing case covers the scenario, set `existing` on the case (see `definitions.existingCase`): `up-to-date` when it still matches the work item (copy its title and steps exactly, even when they do not follow the project's case format), or `needs-update` when it no longer matches what the work item requires (write the suggested title and steps in the case format and say in `reason` what changed). A format difference alone is not a reason for `needs-update`. Cases with `existing` do not count toward the case limit; never drop one to stay under it.
 2. Write a new case only when nothing covers the scenario. Use only ids from those two files.
 3. If the kickoff says existing cases were not checked, write every case as new and add the `coverageMatrix` gap it names.
 
@@ -299,7 +299,8 @@ When Apex generates from Azure DevOps, the kickoff context has an `## Existing t
 - [ ] Every in-scope PBI acceptance criterion has ≥1 mapped test case
 - [ ] Every in-scope PBI business rule (`BR-NNN`) appears in at least one case
 - [ ] Every case covers a scenario the work item supports; none invented to fill the four types
-- [ ] Each PBI has at most 8 manual-runnable and 2 `e2e-playwright` cases; cases left out are listed as gaps
+- [ ] Each PBI has at most 8 new manual-runnable and 2 new `e2e-playwright` cases (cases with `existing` do not count); cases left out are listed as gaps
+- [ ] No existing case was dropped or marked `needs-update` for format alone
 - [ ] No case is a copy of another for a different persona
 - [ ] Every manual-runnable case has concrete `testData`, exact UI labels, and a cleanup step when it changes data
 - [ ] Manual-runnable steps start with Sign in / Navigate to / Click / Enter / Select / Upload / Verify, one control each, each with its own `expected`

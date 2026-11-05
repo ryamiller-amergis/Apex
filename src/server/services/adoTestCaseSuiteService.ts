@@ -1760,8 +1760,9 @@ export function renderExistingCasesSection(existing: ExistingCaseContext): strin
     '',
     'When an existing case covers the scenario, set the case\'s `existing` to',
     '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`:',
-    '- `up-to-date`: it still matches the work item. Copy its title and steps. It does not count toward the case limit.',
-    '- `needs-update`: it covers the scenario but no longer matches. Write the suggested title and steps, and say in `reason` what changed.',
+    '- `up-to-date`: it still matches the work item. Copy its title and steps exactly, even when they do not follow the case format.',
+    '- `needs-update`: it covers the scenario but no longer matches what the work item requires. Write the suggested title and steps, and say in `reason` what changed. A format difference alone is not a reason to update.',
+    'Cases with `existing` do not count toward the per-PBI case limit; never drop one to stay under it.',
     'Write a new case only when no existing case covers the scenario. Only use ids from these two files.',
     '',
   ];
