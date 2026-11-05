@@ -2,6 +2,7 @@ import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
+import type { QaAdoGenerationContext } from '../../shared/types/qaLab';
 import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
 import type {
   BrainstormFailureCode,
@@ -862,6 +863,77 @@ export const testCases = pgTable('test_cases', {
   prdIdx: index('test_cases_prd_id_idx').on(t.prdId),
 }));
 
+/**
+ * QA suites generated from Azure DevOps work items that do not belong to an
+ * Apex PRD. Each generation is retained so QA can review history and publish
+ * selected cases back to ADO without creating duplicate Test Case work items.
+ */
+export const qaAdoTestSuites = pgTable('qa_ado_test_suites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  rootWorkItemId: integer('root_work_item_id').notNull(),
+  rootWorkItemType: text('root_work_item_type').notNull(),
+  rootTitle: text('root_title').notNull(),
+  status: text('status').notNull().default('generating'),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  sourceSnapshot: jsonb('source_snapshot').$type<QaAdoGenerationContext>().notNull(),
+  testCasesJson: jsonb('test_cases_json'),
+  testCasesMd: text('test_cases_md'),
+  coverageSummary: jsonb('coverage_summary').$type<TestCaseCoverageSummary>(),
+  publishedCases: jsonb('published_cases').$type<Array<{
+    localCaseId: string;
+    adoTestCaseId: number;
+    adoTestCaseUrl: string;
+    parentWorkItemId: number;
+    publishedAt: string;
+  }>>().notNull().default(sql`'[]'::jsonb`),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectRootIdx: index('qa_ado_test_suites_project_root_idx').on(
+    t.project,
+    t.rootWorkItemId,
+    t.createdAt,
+  ),
+  statusIdx: index('qa_ado_test_suites_status_idx').on(t.status),
+}));
+
+export const qaCaseRegenerations = pgTable('qa_case_regenerations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  status: text('status').$type<'generating' | 'ready' | 'failed' | 'restored'>().notNull().default('generating'),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  previousCase: jsonb('previous_case').notNull(),
+  source: text('source').$type<'comments' | 'assistant'>().notNull().default('comments'),
+  error: text('error'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  suiteCaseIdx: index('qa_case_regenerations_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+  oneGenerating: uniqueIndex('qa_case_regenerations_one_generating_idx')
+    .on(t.suiteId, t.localCaseId)
+    .where(sql`${t.status} = 'generating'`),
+  threadIdx: index('qa_case_regenerations_thread_idx').on(t.chatThreadId),
+}));
+
+export const qaCaseComments = pgTable('qa_case_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  body: text('body').notNull(),
+  status: text('status').$type<'open' | 'addressed'>().notNull().default('open'),
+  regenerationId: uuid('regeneration_id').references(() => qaCaseRegenerations.id, { onDelete: 'set null' }),
+  authorId: text('author_id').notNull(),
+  authorName: text('author_name'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  suiteCaseIdx: index('qa_case_comments_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
 export const designDocs = pgTable('design_docs', {
   id: uuid('id').primaryKey().defaultRandom(),
   prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
@@ -1165,6 +1237,14 @@ export const projectSkillWorkflowSettings = pgTable('project_skill_workflow_sett
 export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ many }) => ({
   workflowSettings: many(projectSkillWorkflowSettings),
 }));
+
+/** Cloud Agent branch target and required reviewers for one repository config. */
+export const projectCloudAgentDelivery = pgTable('project_cloud_agent_delivery', {
+  settingsId: uuid('settings_id').primaryKey().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  targetBranch: text('target_branch'),
+  requiredReviewers: jsonb('required_reviewers').$type<string[]>().notNull().default([]),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
 
 export const projectSkillWorkflowSettingsRelations = relations(projectSkillWorkflowSettings, ({ one }) => ({
   settings: one(projectSkillSettings, {
@@ -3410,6 +3490,8 @@ export const playbookRuns = pgTable('playbook_runs', {
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  triggerSubscriptionId: uuid('trigger_subscription_id'),
+  triggerReceiptId: uuid('trigger_receipt_id'),
 }, (t) => ({
   projectStartedIdx: index('idx_playbook_runs_project_started').on(t.project, t.startedAt),
   projectStatusIdx: index('idx_playbook_runs_project_status').on(t.project, t.status),
@@ -3420,6 +3502,56 @@ export const playbookRuns = pgTable('playbook_runs', {
   ),
   stepCountCheck: check('playbook_runs_step_count_check', sql`${t.stepCount} >= 0`),
   agentStepCountCheck: check('playbook_runs_agent_step_count_check', sql`${t.agentStepCount} >= 0`),
+}));
+
+export const playbookTriggerSubscriptions = pgTable('playbook_trigger_subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => playbookDefinitions.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  kind: text('kind').notNull(),
+  scheduleHour: integer('schedule_hour'),
+  scheduleMinute: integer('schedule_minute'),
+  eventType: text('event_type'),
+  eventFilter: jsonb('event_filter').$type<Record<string, unknown> | null>(),
+  versionPolicy: text('version_policy').notNull().default('current_published'),
+  pinnedVersionId: uuid('pinned_version_id')
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'restrict' }),
+  initiatorUserId: text('initiator_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  runInputTemplate: jsonb('run_input_template').$type<Record<string, unknown>>().notNull().default({}),
+  inputMapping: jsonb('input_mapping').$type<unknown[]>().notNull().default([]),
+  concurrencyPolicy: text('concurrency_policy').notNull().default('skip_if_active'),
+  dedupeKeyTemplate: text('dedupe_key_template').notNull(),
+  publicId: text('public_id'),
+  webhookSecret: text('webhook_secret'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  definitionIdx: index('idx_playbook_trigger_subscriptions_definition').on(t.definitionId, t.enabled),
+}));
+
+export const playbookTriggerReceipts = pgTable('playbook_trigger_receipts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  subscriptionId: uuid('subscription_id').notNull()
+    .references(() => playbookTriggerSubscriptions.id, { onDelete: 'cascade' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  source: text('source').notNull(),
+  payloadHash: text('payload_hash').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  status: text('status').notNull(),
+  runId: uuid('run_id').references(() => playbookRuns.id, { onDelete: 'set null' }),
+  attempts: integer('attempts').notNull().default(0),
+  nextRetryAt: timestamp('next_retry_at', { withTimezone: true, mode: 'string' }),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUq: unique('uq_playbook_trigger_receipts_idempotency').on(t.subscriptionId, t.idempotencyKey),
+  retryIdx: index('idx_playbook_trigger_receipts_retry').on(t.nextRetryAt),
 }));
 
 export const playbookStepRuns = pgTable('playbook_step_runs', {

@@ -225,6 +225,7 @@ describe('pgNotifyService durable run events', () => {
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] }) // CAS
       .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // event insert
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // done insert
       .mockResolvedValueOnce({ rowCount: 1, rows: [] }) // chat_threads reset
       .mockResolvedValueOnce({ rows: [] }); // COMMIT
     const release = jest.fn();
@@ -243,6 +244,7 @@ describe('pgNotifyService durable run events', () => {
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0])).toEqual([
       'BEGIN',
       'WITH',
+      'INSERT',
       'INSERT',
       'UPDATE',
       'COMMIT',
@@ -307,7 +309,7 @@ describe('pgNotifyService durable run events', () => {
     );
     expect(clientQuery.mock.calls[1][0]).not.toContain('owner_instance');
     expect(clientQuery.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0]))
-      .toEqual(['BEGIN', 'WITH', 'INSERT', 'UPDATE', 'COMMIT']);
+      .toEqual(['BEGIN', 'WITH', 'INSERT', 'INSERT', 'UPDATE', 'COMMIT']);
     // A durable interactive attempt left active would hold orchestrator capacity forever.
     expect(clientQuery.mock.calls[1][0]).toContain('UPDATE ai_run_attempts');
     expect(clientQuery.mock.calls[1][0]).toContain("transport_version = 'dapr-actor-v2'");
@@ -334,7 +336,7 @@ describe('pgNotifyService durable run events', () => {
     })).resolves.toBe(true);
 
     // The chat_threads reset runs inside the transaction, immediately before COMMIT.
-    const threadReset = clientQuery.mock.calls[3];
+    const threadReset = clientQuery.mock.calls[4];
     expect(String(threadReset[0])).toContain('UPDATE chat_threads');
     expect(String(threadReset[0])).toContain("status = 'idle'");
     expect(String(threadReset[0])).toContain('active_run_id = NULL');
@@ -343,7 +345,78 @@ describe('pgNotifyService durable run events', () => {
     // A successful terminal clears last_error and targets the owning thread + run.
     expect(threadReset[1]).toEqual([null, envelope.threadId, envelope.runId]);
     // COMMIT follows the thread reset — the reset is durable, not a post-commit patch.
-    expect(String(clientQuery.mock.calls[4][0]).trim()).toBe('COMMIT');
+    expect(String(clientQuery.mock.calls[5][0]).trim()).toBe('COMMIT');
+  });
+
+  it('appends a terminal done with status and detail when the caller passed none', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] })
+      .mockResolvedValue({ rowCount: 1, rows: [] });
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release: jest.fn() });
+    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+    const health: AgentRunEventEnvelope = {
+      ...envelope,
+      eventId: '0b0f6c3e-1c55-4a59-9a3e-4f1f0d3a2b10',
+      type: 'health',
+      phase: 'completion',
+      status: 'failed',
+      detail: 'Interactive agent stopped responding. Please retry.',
+      event: {
+        type: 'health',
+        health: 'worker_lost',
+        eventTimestamp: envelope.timestamp,
+        detail: 'Interactive agent stopped responding. Please retry.',
+      },
+    };
+
+    await expect(finalizeReconciledAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      status: 'failed',
+      detail: 'Interactive agent stopped responding. Please retry.',
+      events: [health],
+    })).resolves.toBe(true);
+
+    const inserts = clientQuery.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO agent_run_events'));
+    expect(inserts.map(([, params]) => (params as unknown[])[6])).toEqual(['health', 'done']);
+    const doneParams = inserts[1][1] as unknown[];
+    expect(doneParams[2]).toBe(envelope.runId);
+    expect(doneParams[8]).toBe('failed');
+    expect(doneParams[9]).toBe('Interactive agent stopped responding. Please retry.');
+    const notified = mockPoolQuery.mock.calls
+      .filter(([sql]) => String(sql).includes('pg_notify'))
+      .map(([, params]) => JSON.stringify(params));
+    expect(notified.some((payload) => payload.includes(doneParams[0] as string))).toBe(true);
+  });
+
+  it('does not add a second done when the caller already passed one', async () => {
+    const clientQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'run-1' }] })
+      .mockResolvedValue({ rowCount: 1, rows: [] });
+    mockPoolConnect.mockResolvedValue({ query: clientQuery, release: jest.fn() });
+    mockPoolQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+    const done: AgentRunEventEnvelope = {
+      ...envelope,
+      eventId: '7d1c2b8a-5e3f-4c6d-9a0b-1e2f3a4b5c6d',
+      type: 'done',
+      phase: 'completion',
+      status: 'completed',
+      detail: 'completed',
+      event: { type: 'done', runId: envelope.runId },
+    };
+
+    await finalizeReconciledAgentRun({
+      runId: envelope.runId,
+      threadId: envelope.threadId,
+      status: 'completed',
+      detail: 'completed',
+      events: [done],
+    });
+
+    const inserts = clientQuery.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO agent_run_events'));
+    expect(inserts).toHaveLength(1);
   });
 
   it('FEAT-001 VT-05 atomically fences terminal completion and stores its reason', async () => {

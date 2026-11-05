@@ -59,6 +59,8 @@ export type FinishedAttemptReader = {
     limit: number,
   ): Promise<FinishedV2DocumentAttempt[]>;
   isDocumentHarvestPending(runId: string): Promise<boolean>;
+  /** Any document run on the thread still waiting for harvest, newer chat runs aside. */
+  isThreadDocumentHarvestPending(threadId: string): Promise<boolean>;
   recordHarvestFailure(
     attemptId: string,
     detail: string,
@@ -212,6 +214,8 @@ export function createFinishedAttemptReader(deps?: {
               SELECT 1
               FROM agent_runs newer
               WHERE newer.thread_id = r.thread_id
+                AND newer.execution_snapshot->>'workflowClass' =
+                  r.execution_snapshot->>'workflowClass'
                 AND (
                   newer.created_at > r.created_at
                   OR (
@@ -292,6 +296,56 @@ export function createFinishedAttemptReader(deps?: {
       return resultRows(result).length > 0;
     },
 
+    async isThreadDocumentHarvestPending(threadId) {
+      const result = await executor.execute(sql`
+        SELECT TRUE AS pending
+        FROM agent_runs r
+        JOIN LATERAL (
+          SELECT attempt.id, attempt.status
+          FROM ai_run_attempts attempt
+          WHERE attempt.run_id = r.id
+          ORDER BY attempt.attempt_number DESC
+          LIMIT 1
+        ) latest_attempt ON TRUE
+        WHERE r.thread_id = ${threadId}
+          AND r.transport_version = 'servicebus-blob-v2'
+          AND r.status IN ('completed', 'failed', 'cancelled')
+          AND latest_attempt.status IN ('completed', 'failed', 'cancelled')
+          AND r.execution_snapshot->>'workflowClass' IN (
+            'prd',
+            'adr',
+            'design-doc',
+            'validation',
+            'test-cases',
+            'walkthrough-smart-tagging',
+            'playbook-step'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM agent_runs newer
+            WHERE newer.thread_id = r.thread_id
+              AND newer.execution_snapshot->>'workflowClass' =
+                r.execution_snapshot->>'workflowClass'
+              AND (
+                newer.created_at > r.created_at
+                OR (
+                  newer.created_at = r.created_at
+                  AND newer.id > r.id
+                )
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ai_run_inbox harvested
+            WHERE harvested.event_id =
+              'artifact-harvest:' || latest_attempt.id
+              AND harvested.processed_at IS NOT NULL
+          )
+        LIMIT 1
+      `);
+      return resultRows(result).length > 0;
+    },
+
     async recordHarvestFailure(attemptId, detail) {
       const result = await executor.execute(sql`
         UPDATE ai_run_inbox
@@ -348,4 +402,10 @@ export function isDocumentHarvestPendingForRun(
   runId: string,
 ): Promise<boolean> {
   return createFinishedAttemptReader().isDocumentHarvestPending(runId);
+}
+
+export function isDocumentHarvestPendingForThread(
+  threadId: string,
+): Promise<boolean> {
+  return createFinishedAttemptReader().isThreadDocumentHarvestPending(threadId);
 }

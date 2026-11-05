@@ -76,9 +76,10 @@ it('keeps the previous worker path while enforcement is observe', async () => {
     playbookAgentPolicy: { ...policy, enforcement: 'observe' },
   });
 
-  const local = jest.mocked(Agent.create).mock.calls[0][0].local;
-  expect(local?.settingSources).toEqual(['project']);
-  expect(local?.sandboxOptions).toBeUndefined();
+  const options = jest.mocked(Agent.create).mock.calls[0][0];
+  expect(options.local?.settingSources).toEqual(['project']);
+  expect(options.local?.sandboxOptions).toEqual({ enabled: false });
+  expect(options.disallowedTools).toBeUndefined();
   expect(send).toHaveBeenCalledWith('Run the check');
 });
 
@@ -90,10 +91,49 @@ it('restricts the worker and supplies the Skill only when enforcement is on', as
     skillSha256,
   });
 
-  const local = jest.mocked(Agent.create).mock.calls[0][0].local;
-  expect(local?.settingSources).toEqual([]);
-  expect(local?.sandboxOptions).toEqual({ enabled: true });
+  const options = jest.mocked(Agent.create).mock.calls[0][0];
+  expect(options.local?.settingSources).toEqual([]);
+  expect(options.local?.sandboxOptions).toEqual({ enabled: false });
+  expect(options.disallowedTools).toEqual(['shell']);
   expect(send).toHaveBeenCalledWith(`${skillContent}\n\n---\n\nRun the check`);
+});
+
+it('leaves the shell available when the Skill declared azure-cli', async () => {
+  mockAgent();
+
+  await createLocalCursorExecution({
+    ...snapshot,
+    skillSha256,
+    playbookAgentPolicy: {
+      ...policy,
+      capabilities: ['repository-read', 'network-read', 'azure-cli'],
+    },
+  });
+
+  const options = jest.mocked(Agent.create).mock.calls[0][0];
+  expect(options.local?.sandboxOptions).toEqual({ enabled: false });
+  expect(options.disallowedTools).toBeUndefined();
+});
+
+it('leaves the shell available for the MaxView investigation skill', async () => {
+  mockAgent();
+
+  await createLocalCursorExecution({
+    ...snapshot,
+    skillSha256,
+    skillPath: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+    playbookAgentPolicy: {
+      ...policy,
+      skill: {
+        path: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+        sha256: skillSha256,
+      },
+    },
+  });
+
+  const options = jest.mocked(Agent.create).mock.calls[0][0];
+  expect(options.local?.sandboxOptions).toEqual({ enabled: false });
+  expect(options.disallowedTools).toBeUndefined();
 });
 
 it('does not prepend Skill content the V2 prompt already carries', async () => {

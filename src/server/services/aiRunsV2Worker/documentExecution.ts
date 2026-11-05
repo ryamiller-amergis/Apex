@@ -96,6 +96,7 @@ function isExpectedOutputPath(
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
+        || /\.case\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
@@ -179,8 +180,11 @@ function assertExpectedOutputSet(
       }
       return;
     case 'test-cases':
+      if (names.length === 1 && /\.case\.json$/i.test(names[0])) return;
       assertSingleMatch(names, /\.test-cases\.json$/i, 'test-case JSON');
-      assertSingleMatch(names, /\.test-cases\.md$/i, 'test-case markdown');
+      if (names.filter((name) => /\.test-cases\.md$/i.test(name)).length > 1) {
+        throw new Error('Document workflow produced more than one test-case markdown');
+      }
       assertSingleMatch(names, /\.backlog\.json$/i, 'patched backlog JSON');
       return;
     case 'walkthrough-smart-tagging':
@@ -312,6 +316,13 @@ async function prepareDocumentWorkspace(
       flag: 'wx',
       mode: 0o600,
     });
+    for (const companion of specification.skillCompanions ?? []) {
+      await fs.writeFile(
+        path.join(path.dirname(frozenSkillPath), companion.path),
+        companion.content,
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+      );
+    }
     if (signal.aborted) throw abortError();
     await writeScratchInputs(specification, workspacePath, signal);
     if (signal.aborted) throw abortError();
@@ -411,6 +422,12 @@ function executionSnapshot(
     specification.skillContent,
     '',
     'The skill above is the immutable version selected for this run. Follow it exactly and do not load another version.',
+    ...(specification.skillCompanions ?? []).flatMap((companion) => [
+      '',
+      `# Companion file: ${companion.path}`,
+      'This file is also written next to the frozen SKILL.md.',
+      companion.content,
+    ]),
   ].join('\n');
   return {
     prompt,
@@ -585,21 +602,12 @@ export function createDocumentExecute(
                 sourceInstance: 'ai-runs-v2-document-worker',
               },
               sink: {
-                publish: (event, envelope) => {
-                  if (
-                    event.type !== 'phase'
-                    && event.type !== 'tool_call'
-                    && event.type !== 'tool_status'
-                    && event.type !== 'error'
-                  ) {
-                    return;
-                  }
-                  return checkpoints.publishProgress(
+                publish: (_event, envelope) => checkpoints.publishActivity?.(envelope)
+                  ?? checkpoints.publishProgress(
                     envelope.phase,
                     envelope.status,
                     envelope.detail,
-                  );
-                },
+                  ),
               },
               hooks: {
                 beforeStreamEvent: () => {
@@ -665,6 +673,14 @@ export function createDocumentExecute(
         ),
         signal,
       );
+      const reply = result.text.trim();
+      if (reply) {
+        files.push({
+          path: `${ARTIFACT_OUTPUT_PREFIX}agent-reply.md`,
+          content: Buffer.from(reply, 'utf8'),
+          contentType: 'text/markdown; charset=utf-8',
+        });
+      }
       return {
         files,
         durationMs: Math.max(0, now() - startedAt),

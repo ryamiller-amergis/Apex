@@ -7,6 +7,7 @@ export type MenuItemKey =
   | 'my-work'
   | 'standup'
   | 'ui-lab'
+  | 'qa-lab'
   | 'feature-requests'
   | 'ai-cost'
   | 'design-module'
@@ -28,6 +29,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'my-work', label: 'My Work' },
   { key: 'standup', label: 'Standup' },
   { key: 'ui-lab', label: 'UI Lab' },
+  { key: 'qa-lab', label: 'QA Lab' },
   { key: 'feature-requests', label: 'Apex Backlog' },
   { key: 'ai-cost', label: 'AI Cost Analytics' },
   { key: 'design-module', label: 'Design Module' },

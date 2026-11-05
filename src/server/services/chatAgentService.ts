@@ -83,6 +83,7 @@ import {
   durableInteractiveTurnService,
   type DurableInteractiveToolGrantInput,
 } from './durableInteractiveTurnService';
+import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import {
   fetchAvailableModels,
   fetchModelParameters,
@@ -113,6 +114,8 @@ import {
   syncTestCaseOutput,
   triggerTestCaseGeneration,
 } from './testCaseService';
+import { syncAdoTestSuiteRunOutput } from './adoTestCaseSuiteService';
+import { syncCaseRegenerationRunOutput } from './qaCaseRegenerationService';
 import type { Prd } from '../../shared/types/interview';
 import { NO_SCORECARD_REASON } from '../../shared/utils/validationReport';
 import { ingestValidationScorecard } from './documentValidationService';
@@ -3422,6 +3425,9 @@ async function syncOutputToDbFromWorkspace(
     return;
   }
 
+  if (await syncCaseRegenerationRunOutput(threadId, workspaceDir)) return;
+  if (await syncAdoTestSuiteRunOutput(threadId, workspaceDir, agentText)) return;
+
   // Check if this thread belongs to a PRD
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.chatThreadId, threadId),
@@ -4037,6 +4043,7 @@ export function resolveInteractiveWorkflowClass(
 ): InteractiveWorkflowClass {
   if (state.isInterviewThread) return 'interview';
   if (state.thread.kickoff.agentModule === 'brainstorm') return 'brainstorm';
+  if (state.thread.kickoff.askApex) return 'ask-apex';
   const assistantType = state.thread.kickoff.assistantType;
   if (assistantType === 'prd' || assistantType === 'design-doc') {
     return 'assistant';
@@ -4297,6 +4304,10 @@ async function tryDispatchInteractiveTurn(
       // actor while its MCP map is intentionally empty.
       if (state.thread.kickoff.mcpPill) {
         return bypass('custom-mcp-pill');
+      }
+      // QA Lab Ask Apex changes cases through ado-skills tools the actor lacks.
+      if (state.thread.kickoff.qaLabSuiteId) {
+        return bypass('qa-lab-assistant');
       }
       const userId = state.thread.userId;
       const project = state.thread.kickoff.project;
@@ -6634,6 +6645,16 @@ export async function sendMessage(
     workflowClass,
     threadId,
     runLegacy: async () => {
+      // The legacy path can run the agent inside the web app. CAB release
+      // turns run only on the interactive container.
+      if (
+        isCabReleaseSkillPath(state.thread.kickoff.skillPath) ||
+        isCabReleaseSkillPath(options?.turnSkill?.path)
+      ) {
+        throw Object.assign(new Error('INTERACTIVE_V2_REQUIRED'), {
+          status: 422,
+        });
+      }
       if (options?.brainstorm || workflowClass === 'brainstorm') {
         throw Object.assign(new Error('transport_unavailable'), { status: 409 });
       }

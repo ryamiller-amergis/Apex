@@ -1053,12 +1053,14 @@ export function createInteractiveSessionActor(
       }
     };
 
-    const armToolTimer = (): void => {
+    const armToolTimer = (toolName?: string): void => {
       clearToolTimer();
-      const toolMs = Math.min(
-        effectiveDeadlines.toolCallMs,
-        absoluteMs - now(),
-      );
+      const remainingMs = absoluteMs - now();
+      // toolCallMs bounds a stalled MCP call. A shell is the step itself, so
+      // it keeps the rest of the turn instead of the MCP stall limit.
+      const configuredMs =
+        toolName?.toLowerCase() === 'shell' ? remainingMs : effectiveDeadlines.toolCallMs;
+      const toolMs = Math.min(configuredMs, remainingMs);
       if (!(toolMs > 0)) {
         failureCategory = 'tool_timeout';
         throw Object.assign(new Error('tool_timeout'), { code: 'tool_timeout' });
@@ -1094,8 +1096,22 @@ export function createInteractiveSessionActor(
       }
     };
 
+    const heartbeatStats = { lastAcceptedAt: now(), maxGapMs: 0, sent: 0, failed: 0 };
+    const recordHeartbeatGap = (at: number): void => {
+      heartbeatStats.maxGapMs = Math.max(heartbeatStats.maxGapMs, at - heartbeatStats.lastAcceptedAt);
+    };
     const heartbeat = (): void => {
-      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).catch(() => {});
+      heartbeatStats.sent += 1;
+      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).then(
+        () => {
+          const at = now();
+          recordHeartbeatGap(at);
+          heartbeatStats.lastAcceptedAt = at;
+        },
+        () => {
+          heartbeatStats.failed += 1;
+        },
+      );
     };
     heartbeat();
     const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
@@ -1502,11 +1518,11 @@ export function createInteractiveSessionActor(
               observeEvent();
               if (event.type === 'tool_call') {
                 if (mcpServerChat) mcpToolUsedThisAttempt = true;
-                armToolTimer();
+                armToolTimer(event.toolName);
               } else if (event.type === 'tool_status') {
                 if (mcpServerChat) mcpToolUsedThisAttempt = true;
                 if (event.status === 'running') {
-                  armToolTimer();
+                  armToolTimer(event.toolName);
                 } else {
                   clearToolTimer();
                 }
@@ -1777,6 +1793,19 @@ export function createInteractiveSessionActor(
     } finally {
       activeDurableThreads.delete(threadId);
       clearInterval(heartbeatTimer);
+      recordHeartbeatGap(now());
+      try {
+        telemetry.interactiveHeartbeats(
+          { runId, dispatchMessageId, project: projectId, lane: INTERACTIVE_LANE },
+          {
+            maxGapMs: heartbeatStats.maxGapMs,
+            sent: heartbeatStats.sent,
+            failed: heartbeatStats.failed,
+          },
+        );
+      } catch {
+        // Telemetry must not change the turn outcome.
+      }
       clearTimeout(absoluteTimer);
       clearToolTimer();
       clearEventTimers();

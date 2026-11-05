@@ -124,6 +124,9 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
           cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
+          # Agent task Skills. The picker reads foundation-skills/foundation from the server.
+          cp -r foundation-skills/foundation deploy/foundation-skills/foundation
+          cp -r foundation-skills/foundation deploy/dist/foundation-skills/foundation
           # Brainstorm falls back to this bundled skill when the Project Settings
           # repository has no copy of it.
           mkdir -p deploy/.cursor/skills

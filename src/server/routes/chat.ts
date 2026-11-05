@@ -419,6 +419,7 @@ router.post('/threads', async (req: Request, res: Response) => {
       effort: _clientEffort,
       agentModule: _clientAgentModule,
       skillPathIsAppDefault: _clientSkillPathIsAppDefault,
+      askApex: _clientAskApex,
       ...clientKickoff
     } = body.kickoff;
     const skillConfig = await resolveSkillConfig({

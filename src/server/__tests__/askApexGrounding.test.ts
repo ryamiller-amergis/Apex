@@ -5,6 +5,14 @@ jest.mock('fs', () => ({
   rmSync: jest.fn(),
 }));
 
+const mockCreateThread = jest.fn();
+jest.mock('../services/chatAgentService', () => ({
+  createThread: (...args: unknown[]) => mockCreateThread(...args),
+}));
+const mockIsFeatureEnabled = jest.fn().mockResolvedValue(false);
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+}));
 jest.mock('../services/projectSettingsService', () => ({
   listSkillConfigs: jest.fn().mockResolvedValue([
     {

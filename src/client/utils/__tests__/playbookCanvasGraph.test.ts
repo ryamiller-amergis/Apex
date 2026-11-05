@@ -32,6 +32,29 @@ describe('positions after a drag', () => {
   });
 });
 
+describe('parallel split flag', () => {
+  it('keeps parallel through a canvas round trip and leaves other nodes unmarked', () => {
+    const split: PlaybookGraph = {
+      nodes: [
+        { id: 'split', stepType: 'notify', parallel: true },
+        { id: 'left', stepType: 'notify' },
+        { id: 'join-1', stepType: 'join' },
+      ],
+      edges: [
+        { from: 'split', to: 'left' },
+        { from: 'left', to: 'join-1' },
+      ],
+    };
+
+    const flow = graphToFlow(split, {}, {});
+    expect(flow.nodes.find((node) => node.id === 'split')?.data.parallel).toBe(true);
+
+    const saved = flowToGraph(flow.nodes, flow.edges);
+    expect(saved.nodes.find((node) => node.id === 'split')?.parallel).toBe(true);
+    expect(saved.nodes.find((node) => node.id === 'left')?.parallel).toBeUndefined();
+  });
+});
+
 describe('playbook canvas branch edges', () => {
   it('stamps continuation names onto edges when the branch picker targets them', () => {
     const flow = graphToFlow(graph, {}, {});

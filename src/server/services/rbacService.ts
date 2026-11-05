@@ -12,6 +12,35 @@ import {
 import type { AppPermission, AppRole, RoleWithPermissions, UserWithRoles } from '../../shared/types/rbac';
 import type { ActiveUser } from '../../shared/types/interview';
 import { resolveCurrentChangelogVersion } from './changelogService';
+import { isPlatformAdmin } from '../utils/rbacHelpers';
+import { getMenuConfig } from './menuSettingsService';
+import { DEFAULT_ENABLED_MENU_VIEWS } from '../../shared/types/menuSettings';
+
+const PLAYBOOK_MODULE_PERMISSIONS = [
+  'playbooks:view',
+  'playbooks:run',
+  'playbooks:author',
+  'playbooks:admin',
+  'playbooks:triggers:manage',
+] as const;
+
+/**
+ * Playbook role grants are ignored. A platform admin on a project whose menu
+ * includes Playbooks receives every Playbook key. Everyone else receives none.
+ */
+async function withPlaybookModuleAccess(
+  userId: string,
+  project: string | undefined,
+  keys: Set<string>,
+): Promise<Set<string>> {
+  for (const key of PLAYBOOK_MODULE_PERMISSIONS) keys.delete(key);
+  if (!project || !(await isPlatformAdmin(userId))) return keys;
+  const menu = await getMenuConfig(project);
+  const views = menu?.enabledViews ?? DEFAULT_ENABLED_MENU_VIEWS;
+  if (!views.includes('playbooks')) return keys;
+  for (const key of PLAYBOOK_MODULE_PERMISSIONS) keys.add(key);
+  return keys;
+}
 
 // ── getUserPermissions ─────────────────────────────────────────────────────────
 
@@ -38,7 +67,7 @@ export async function getUserPermissions(userId: string, project?: string): Prom
           keys.add(rp.permission.key);
         }
       }
-      return keys;
+      return withPlaybookModuleAccess(userId, project, keys);
     }
   }
 
@@ -63,7 +92,7 @@ export async function getUserPermissions(userId: string, project?: string): Prom
         keys.add(rp.permission.key);
       }
     }
-    return keys;
+    return withPlaybookModuleAccess(userId, project, keys);
   }
 
   // Fall back to the default role when the user has no explicit assignments
@@ -82,7 +111,7 @@ export async function getUserPermissions(userId: string, project?: string): Prom
       keys.add(rp.permission.key);
     }
   }
-  return keys;
+  return withPlaybookModuleAccess(userId, project, keys);
 }
 
 // ── listRoles ─────────────────────────────────────────────────────────────────

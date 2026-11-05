@@ -1,16 +1,16 @@
 ---
 name: Playbook Product Expansion — Part 2
-overview: Second of two plans. After the runtime foundation, adds template reuse, unattended triggers, deterministic action nodes and connectors, parallel joins and bounded loops, and author assistance. Each chunk uses the previous ones.
+overview: After the runtime foundation, adds template reuse, unattended triggers, deterministic action nodes and connectors, parallel joins and bounded loops, and an authoring recommender. SkillOpt is Part 3.
 status: proposed
 part: 2
 requires: design-docs/playbook-product-expansion.plan.md
+continues_in: design-docs/playbook-product-expansion-part-3.plan.md
 scope:
   - Source-controlled Playbook template catalog
   - Schedules, Apex events, signed webhooks, and Azure DevOps triggers
   - Apex action nodes, a connector model, and a cloud-agent step wrapped over the existing service
   - Parallel splits, joins, and bounded loops
   - An authoring recommender for existing step types
-  - A human-gated SkillOpt pilot for skill documents
 out_of_scope:
   - Additional interview specialists
   - Ordered-list authoring fallback
@@ -18,7 +18,7 @@ out_of_scope:
   - User-forked step types
   - Free-drawn graph cycles
   - A public connector marketplace
-  - Auto-publishing SkillOpt output
+  - SkillOpt (Part 3)
 ---
 
 # Playbook Product Expansion — Part 2: Composition and automation
@@ -39,10 +39,10 @@ ordered so each one has somewhere to stand.
 | 2 | Triggers | Part 1 run path and edit page. Chunk 1 is not required. | Start that same run from a schedule or an Apex event, then from outside Apex. |
 | 3 | Actions and connectors | Part 1 bindings, side-effect rules, and drawer. Chunk 2's inbound events. | Deterministic Apex operations, outbound connectors, and a cloud-agent step. |
 | 4 | Parallel, join, and bounded loop | Part 1 bindings, output loader, and agent caps. Chunk 3 so a loop can call an action. | More than one arm, a join, and a loop with a maximum. |
-| 5 | Author assistance | Chunks 1 and 3 for the recommender. Part 1 scorecards for SkillOpt. | Recommend an existing type. Later, train a skill document offline. |
+| 5 | Author assistance | Chunks 1 and 3 for the recommender. | Recommend an existing step type. |
 
 Chunks 1 and 2 may proceed in parallel once Part 1 is done. Chunk 3 should finish before chunk 4.
-Chunk 5 starts after chunk 3, and the SkillOpt pilot stays last.
+Chunk 5 starts after chunk 3. SkillOpt is not in this plan.
 
 ## Product outcome
 
@@ -84,9 +84,6 @@ This plan does not add a second run-start path. Triggers call `startRun`.
 
 This plan does not use Service Bus. Trigger dispatch stays in PostgreSQL until a measured scale
 problem says otherwise.
-
-SkillOpt may propose a new `SKILL.md`. A person reviews and publishes it. The pilot does not write
-the skill into the repository by itself.
 
 ## Decisions
 
@@ -211,18 +208,6 @@ An edge that points backward still fails publish.
 The authoring assistant reads a draft and a goal and returns an existing `stepType` plus a config
 that passes that type's input schema. When no type fits, it says so and describes the gap. It does
 not write a descriptor, an adapter, or a graph full of private node types.
-
-### D13 — SkillOpt trains a skill document offline
-
-SkillOpt (Microsoft Research, 2026) treats a skill markdown file as trainable state for a frozen
-model. Edits are small, and an edit is kept only when a held-out score improves. The deployed
-artifact is still a `SKILL.md`, with no extra model call at runtime.
-
-The pilot uses completed Playbook runs that already have scorecards. It proposes a skill revision
-for a person to review. It does not change graphs, register nodes, or publish a skill unattended.
-
-The pilot waits until Part 1 is storing scorecards and until legal and security agree that the
-chosen run transcripts may be sent to the optimizer model.
 
 ## Chunk 1 — Template catalog
 
@@ -503,22 +488,10 @@ The skill cannot call the registry's registration path, because there is not one
 Ship this after chunk 3 so the suggestion list includes actions. Shipping it against only the
 original six types would teach authors to use `cursor-agent` for deterministic work.
 
-### SkillOpt pilot
-
-Offline only. Inputs are a chosen Skill path, a set of completed runs of Playbooks that use that
-Skill, and the scorecards Part 1 already stored. The optimizer proposes a revised skill document.
-A reviewer diffs it and decides whether to commit it.
-
-The pilot covers one Skill, preferably `design-doc-validation`, because it already produces a
-scorecard. It does not run inside a Playbook step. It does not start until the transcript-sharing
-decision is recorded.
-
 ### Tests
 
 - The recommender's fixture output fails closed when it names an unknown step type.
 - A suggested config that fails the input schema is not applied.
-- SkillOpt artifacts, when the pilot runs, are files a person reviews. No test should expect the
-  repository skill to change automatically.
 
 ## Delivery order
 
@@ -572,11 +545,6 @@ Canvas entry point, registry-constrained suggestions, accept into draft.
 
 Exit: an unknown type cannot be applied.
 
-### Wave 8 — SkillOpt pilot
-
-Only after the transcript decision. One Skill, human review, no product flag required until a UI
-exists. The first pilot can be a documented offline run rather than a page.
-
 ## Testing strategy
 
 Unit tests cover catalog version comparison, mapping, receipt idempotency, operation schemas,
@@ -599,7 +567,6 @@ the canvas, and accepting a recommender suggestion. They run in CI.
 - Receipts store only the payload needed for audit.
 - Cloud-agent prompts stay in the existing private blob.
 - `leaves-apex` steps, including `cloud-agent` and any external action, still require a gate.
-- SkillOpt input is limited to the approved transcript set.
 
 ## Reliability
 
@@ -625,7 +592,6 @@ accept and reject. Do not log output bodies, webhook secrets, or full external p
 5. Run the external-trigger security review, then one non-production webhook.
 6. Enable parallel for one Playbook whose worst-case agent count is inside the cap.
 7. Turn on the recommender for authors in the Apex project.
-8. Run the SkillOpt pilot only after the transcript decision.
 
 Each flag rolls back on its own. Installed templates remain if the catalog flag goes off.
 Paused subscriptions remain if the trigger flag goes off, and they stop dispatching. Action and
@@ -740,8 +706,6 @@ the trigger scheduler and needs explicit approval when that wave is implemented.
 
 - AST-001: recommender contract limited to the registry
 - AST-002: canvas suggestion and accept path
-- AST-003: SkillOpt pilot plan, blocked on the transcript decision
-- AST-004: one reviewed skill revision, not an automatic commit
 
 ## Acceptance criteria
 
@@ -756,7 +720,6 @@ the trigger scheduler and needs explicit approval when that wave is implemented.
 7. Parallel arms join into an addressable output map, loops stop at their maximum, and a back-edge
    still cannot publish.
 8. The recommender can only apply a registered step type.
-9. SkillOpt, if the pilot is approved, produces a skill file a person reviews.
 
 ## Open decisions
 
@@ -767,9 +730,7 @@ the trigger scheduler and needs explicit approval when that wave is implemented.
 5. Which Azure DevOps events are in the first adapter?
 6. Do external callers use HMAC, API keys, or both?
 7. What is the default `maxIterations` for `foreach` and `until`?
-8. Is `design-doc-validation` the SkillOpt pilot skill, and are its transcripts approved for the
-   optimizer?
 
 Do not infer these during the wave that depends on them. Waves 1 through 4 can start without
-decisions 5 through 8. Decision 1 is the only one that blocks a template choice, and the interview
-template can ship either way.
+decisions 5 through 7. Decision 1 is the only one that blocks a template choice, and the interview
+template can ship either way. The SkillOpt skill and transcript decision moved to Part 3.

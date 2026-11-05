@@ -94,9 +94,13 @@ export interface ExecutionSnapshot {
     /** Absent on guided jobs, which do not have an Azure DevOps work item. */
     workItemId?: number;
     workItemTitle?: string;
-    /** My Work branch: feature/apex-<workItemId>-<title-slug>. */
+    /** Used to give the pull request title a professional, non-slug form. */
+    workItemType?: string;
+    /** Cloud Agent branch: bug/<id>-<name> for a bug, otherwise a type prefix. */
     branchName?: string;
+    /** Branch the work is cut from and the pull request merges into. */
     baseBranch: string;
+    requiredReviewers?: string[];
     initiatorName?: string;
     initiatorEmail?: string;
     /** Configured development skill, invoked as `/name` by the container CLI. */

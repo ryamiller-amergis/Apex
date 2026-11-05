@@ -93,6 +93,16 @@ describe('cursorCloudAgentClient', () => {
     ]);
   });
 
+  it('keeps a leading space on a streamed reply chunk', () => {
+    const event = sdkMessageToActivity({
+      type: 'assistant',
+      agent_id: 'bc-1',
+      run_id: 'run-1',
+      message: { role: 'assistant', content: [{ type: 'text', text: ' needed' }] },
+    }, 1);
+    expect(event?.detail).toBe(' needed');
+  });
+
   it('strips a trailing .git from clone URLs', () => {
     expect(toCloudRepoUrl('https://github.com/amergis/Apex.git')).toBe(
       'https://github.com/amergis/Apex',
@@ -204,6 +214,7 @@ describe('cursorCloudAgentClient', () => {
         modelId: null,
         durationMs: null,
         usage: null,
+        agentFinished: true,
       });
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
@@ -299,6 +310,7 @@ describe('cursorCloudAgentClient', () => {
     } as unknown as Parameters<typeof observeCloudRun>[0]);
 
     expect(observed.status).toBe('running');
+    expect(observed.agentFinished).toBe(true);
     expect(observed.noChanges).toBe(false);
     expect(observed.settled).toBe(false);
   });

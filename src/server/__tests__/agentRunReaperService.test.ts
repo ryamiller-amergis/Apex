@@ -28,6 +28,29 @@ jest.mock('../services/pgNotifyService', () => ({
   nextRunEventSequence: jest.fn().mockReturnValue(1),
   notifyRunEvent: jest.fn().mockResolvedValue(undefined),
   finalizeReconciledAgentRun: jest.fn().mockResolvedValue(true),
+  buildRunDoneEnvelope: (input: {
+    runId: string;
+    threadId: string;
+    status: string;
+    detail?: string;
+    autoRetry?: boolean;
+  }) => ({
+    eventId: `done-${input.runId}`,
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: 'worker-a',
+    sequence: 2,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    type: 'done',
+    phase: 'completion',
+    status: input.status,
+    detail: input.detail,
+    event: {
+      type: 'done',
+      runId: input.runId,
+      ...(input.autoRetry ? { autoRetry: true } : {}),
+    },
+  }),
 }));
 jest.mock('../services/agentRunLifecycleService', () => {
   const actual = jest.requireActual('../services/agentRunLifecycleService');
@@ -76,7 +99,7 @@ jest.mock('../services/workerTierTelemetry', () => ({
   },
 }));
 jest.mock('../services/aiRunV2/finishedAttemptReader', () => ({
-  isDocumentHarvestPendingForRun: (...args: unknown[]) =>
+  isDocumentHarvestPendingForThread: (...args: unknown[]) =>
     mockIsDocumentHarvestPending(...args),
 }));
 jest.mock('../services/cloudAgentQueueScheduler', () => ({
@@ -101,6 +124,7 @@ import {
   getLatestThreadRun,
   getThreadRunStateSnapshot,
   canThisInstanceFailGeneration,
+  reapLostInteractiveTurns,
   reapOrphanedRuns,
   startReaper,
   stopReaper,
@@ -175,6 +199,10 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 describe('startReaper leader election', () => {
+  const sweepLeaseCalls = () => mockWithRepoCacheLease.mock.calls.filter(
+    ([key]) => key !== 'agent-run-reaper:interactive',
+  );
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
@@ -192,9 +220,8 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
-    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
-      1,
+    expect(sweepLeaseCalls()).toHaveLength(1);
+    expect(sweepLeaseCalls()[0]).toEqual([
       'agent-run-reaper:sweep',
       expect.any(Function),
       {
@@ -203,14 +230,13 @@ describe('startReaper leader election', () => {
         waitMs: 0,
         releaseOnComplete: false,
       },
-    );
+    ]);
 
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
-    expect(mockWithRepoCacheLease).toHaveBeenNthCalledWith(
-      2,
+    expect(sweepLeaseCalls()).toHaveLength(2);
+    expect(sweepLeaseCalls()[1]).toEqual([
       'agent-run-reaper:sweep',
       expect.any(Function),
       {
@@ -219,7 +245,25 @@ describe('startReaper leader election', () => {
         waitMs: 0,
         releaseOnComplete: false,
       },
+    ]);
+  });
+
+  it('checks durable interactive turns every 15 seconds on their own lease', async () => {
+    startReaper();
+    await flushAsyncWork();
+    await jest.advanceTimersByTimeAsync(30_000);
+    await flushAsyncWork();
+
+    const interactiveCalls = mockWithRepoCacheLease.mock.calls.filter(
+      ([key]) => key === 'agent-run-reaper:interactive',
     );
+    expect(interactiveCalls).toHaveLength(2);
+    expect(interactiveCalls[0]?.[2]).toEqual({
+      leaseMs: 14_000,
+      heartbeatMs: 5_000,
+      waitMs: 0,
+      releaseOnComplete: false,
+    });
   });
 
   it('skips quietly when another instance holds the reaper lease', async () => {
@@ -231,7 +275,7 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(sweepLeaseCalls()).toHaveLength(1);
     expect(consoleSpy).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
@@ -249,14 +293,14 @@ describe('startReaper leader election', () => {
     await jest.advanceTimersByTimeAsync(120_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(sweepLeaseCalls()).toHaveLength(1);
 
     leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(sweepLeaseCalls()).toHaveLength(2);
   });
 
   it('logs unexpected failures and still allows the next cycle to run', async () => {
@@ -276,7 +320,7 @@ describe('startReaper leader election', () => {
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(sweepLeaseCalls()).toHaveLength(2);
     consoleSpy.mockRestore();
   });
 
@@ -296,21 +340,21 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(1);
+    expect(sweepLeaseCalls()).toHaveLength(1);
 
     leaseGate.call();
     await flushAsyncWork();
     await jest.advanceTimersByTimeAsync(60_000);
     await flushAsyncWork();
 
-    expect(mockWithRepoCacheLease).toHaveBeenCalledTimes(2);
+    expect(sweepLeaseCalls()).toHaveLength(2);
   });
 
   it('runs reaper work exactly once when the lease holder callback executes', async () => {
     startReaper();
     await flushAsyncWork();
 
-    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+    const mainOperation = sweepLeaseCalls()[0]?.[1] as ((lease: {
       signal: AbortSignal;
       assertOwned(): Promise<void>;
     }) => Promise<void>) | undefined;
@@ -341,7 +385,7 @@ describe('startReaper leader election', () => {
     startReaper();
     await flushAsyncWork();
 
-    const mainOperation = mockWithRepoCacheLease.mock.calls[0]?.[1] as ((lease: {
+    const mainOperation = sweepLeaseCalls()[0]?.[1] as ((lease: {
       signal: AbortSignal;
       assertOwned(): Promise<void>;
     }) => Promise<void>) | undefined;
@@ -1109,52 +1153,67 @@ describe('reapOrphanedRuns', () => {
       );
     });
 
-    it('retries a never-started turn once when it is eligible', async () => {
+    const autoRetryDone = expect.objectContaining({
+      type: 'done',
+      status: 'failed',
+      event: expect.objectContaining({ type: 'done', autoRetry: true }),
+    });
+
+    it('re-runs a never-started turn once when it is eligible', async () => {
       mockFindMany.mockResolvedValue([durableRow({
         status: 'dispatched',
         dispatchedAt: timestamp(60_001),
         requestedByUserId: 'user-1',
       })]);
-      const neverStartedTurnRetry = {
-        isEligible: jest.fn().mockResolvedValue(true),
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
         retry: jest.fn().mockResolvedValue(undefined),
       };
 
-      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
 
-      const turn = { runId: 'run-durable', threadId: 'thread-durable', userId: 'user-1' };
-      expect(neverStartedTurnRetry.isEligible).toHaveBeenCalledWith(turn);
+      const turn = {
+        runId: 'run-durable',
+        threadId: 'thread-durable',
+        userId: 'user-1',
+        reason: 'never_started',
+      };
+      expect(lostTurnRetry.isEligible).toHaveBeenCalledWith(turn);
       expect(mockMarkTerminal).toHaveBeenCalledWith(
         'run-durable',
         expect.objectContaining({
           terminalReason: 'worker_lost',
-          detail: 'Interactive agent did not start. Retrying automatically.',
+          detail: 'Interactive agent did not start. Restarting automatically.',
+          events: [expect.objectContaining({ type: 'health' }), autoRetryDone],
         }),
       );
-      expect(neverStartedTurnRetry.retry).toHaveBeenCalledWith(turn);
+      expect(lostTurnRetry.retry).toHaveBeenCalledWith(turn);
     });
 
-    it('asks the user to retry when the turn is not eligible for an automatic retry', async () => {
+    it('asks the user to retry when the turn is not eligible for an automatic re-run', async () => {
       mockFindMany.mockResolvedValue([durableRow({
         status: 'dispatched',
         dispatchedAt: timestamp(60_001),
         requestedByUserId: 'user-1',
       })]);
-      const neverStartedTurnRetry = {
-        isEligible: jest.fn().mockResolvedValue(false),
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: false, skippedReason: 'tool_grant' }),
         retry: jest.fn(),
       };
 
-      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
 
       expect(mockMarkTerminal).toHaveBeenCalledWith(
         'run-durable',
-        expect.objectContaining({ detail: 'Interactive agent did not start. Please retry.' }),
+        expect.objectContaining({
+          detail: 'Interactive agent did not start. Please retry.',
+          events: [expect.objectContaining({ type: 'health' })],
+        }),
       );
-      expect(neverStartedTurnRetry.retry).not.toHaveBeenCalled();
+      expect(lostTurnRetry.retry).not.toHaveBeenCalled();
     });
 
-    it('does not retry a running turn whose heartbeat went silent', async () => {
+    it('re-runs an eligible running turn whose host stopped heartbeating', async () => {
       mockFindMany.mockResolvedValue([durableRow({
         status: 'running',
         dispatchedAt: timestamp(5 * 60_000),
@@ -1162,12 +1221,96 @@ describe('reapOrphanedRuns', () => {
         heartbeatAt: timestamp(60_001),
         requestedByUserId: 'user-1',
       })]);
-      const neverStartedTurnRetry = { isEligible: jest.fn(), retry: jest.fn() };
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
+        retry: jest.fn().mockResolvedValue(undefined),
+      };
 
-      await reapOrphanedRuns({ now: () => now, config, neverStartedTurnRetry });
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
 
-      expect(neverStartedTurnRetry.isEligible).not.toHaveBeenCalled();
-      expect(neverStartedTurnRetry.retry).not.toHaveBeenCalled();
+      expect(lostTurnRetry.isEligible).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
+      );
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          detail: 'Interactive agent stopped responding. Restarting automatically.',
+          events: [expect.objectContaining({ type: 'health' }), autoRetryDone],
+        }),
+      );
+      expect(lostTurnRetry.retry).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
+      );
+    });
+
+    it('the 15-second check re-runs a lost turn the same way as the full sweep', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
+        retry: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await reapLostInteractiveTurns({ now: () => now, config, lostTurnRetry });
+
+      expect(mockMarkTerminal).toHaveBeenCalledWith(
+        'run-durable',
+        expect.objectContaining({
+          detail: 'Interactive agent stopped responding. Restarting automatically.',
+          events: [expect.objectContaining({ type: 'health' }), autoRetryDone],
+        }),
+      );
+      expect(lostTurnRetry.retry).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-durable', reason: 'host_lost' }),
+      );
+    });
+
+    it('the 15-second check leaves a turn alone while its heartbeat is fresh', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(15_000),
+        requestedByUserId: 'user-1',
+      })]);
+
+      await reapLostInteractiveTurns({ now: () => now, config });
+
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+    });
+
+    it('ends the turn with a failed done when the re-run cannot start', async () => {
+      mockFindMany.mockResolvedValue([durableRow({
+        status: 'running',
+        dispatchedAt: timestamp(5 * 60_000),
+        startedAt: timestamp(5 * 60_000),
+        heartbeatAt: timestamp(60_001),
+        requestedByUserId: 'user-1',
+      })]);
+      const lostTurnRetry = {
+        isEligible: jest.fn().mockResolvedValue({ eligible: true }),
+        retry: jest.fn().mockRejectedValue(new Error('RUN_NOT_RETRYABLE')),
+      };
+
+      await reapOrphanedRuns({ now: () => now, config, lostTurnRetry });
+
+      const { notifyRunEvent } = jest.requireMock('../services/pgNotifyService') as {
+        notifyRunEvent: jest.Mock;
+      };
+      expect(notifyRunEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'done',
+          status: 'failed',
+          detail: 'Interactive agent stopped responding. Please retry.',
+          event: { type: 'done', runId: 'run-durable' },
+        }),
+        { persist: true },
+      );
     });
 
     it('fails a running turn whose heartbeat went silent', async () => {
@@ -2193,7 +2336,7 @@ describe('getThreadRunStateSnapshot', () => {
       canFailGeneration: false,
     });
     expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
-      'run-v2-document',
+      'thread-1',
     );
   });
 
@@ -2359,8 +2502,25 @@ describe('canThisInstanceFailGeneration', () => {
       canThisInstanceFailGeneration('thread-1'),
     ).resolves.toBe(false);
     expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith(
-      'run-v2-document',
+      'thread-1',
     );
+  });
+
+  it('keeps waiting for harvest when a chat run follows the V2 document run', async () => {
+    mockIsDocumentHarvestPending.mockResolvedValueOnce(true);
+    mockFindFirst.mockResolvedValue({
+      id: 'run-chat',
+      status: 'completed',
+      ownerInstance: null,
+      updatedAt: timestamp(0),
+      timeoutAt: null,
+      transportVersion: 'dapr-actor-v2',
+    });
+
+    await expect(
+      canThisInstanceFailGeneration('thread-1'),
+    ).resolves.toBe(false);
+    expect(mockIsDocumentHarvestPending).toHaveBeenCalledWith('thread-1');
   });
 
   it('returns true when ownerInstance is null (legacy/reaped)', async () => {

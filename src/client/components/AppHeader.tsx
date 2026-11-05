@@ -24,7 +24,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -54,6 +54,7 @@ interface AppHeaderProps {
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
+  onNavigateQaLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
@@ -106,6 +107,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
+  onNavigateQaLab,
   onNavigateFeatureRequests,
   onNavigateAiCost,
   onNavigateDesignModule,
@@ -164,6 +166,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Builds', view: 'builds', permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
+    { label: 'QA Lab', view: 'qa-lab', permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
@@ -207,8 +210,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       return isSuperAdmin || can('chat:create');
     }
     if (item.view === 'playbooks') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
-      return isSuperAdmin || can('playbooks:view');
+      return menuEnabledViews.includes('playbooks') && can('playbooks:view');
     }
     if (item.view === 'mcp-servers') {
       if (!mcpServersEnabled) return false;
