@@ -199,7 +199,6 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
   const hasReports = (data?.runs ?? []).length > 0;
   const copy = job ? launchCopy(job, intent) : null;
   const prodJob = jobById('prod-investigation');
-  const siteJob = jobById('site-issue');
 
   return (
     <main className={styles.page} {...{ 'data-testid': 'prod-support-page' }}>
@@ -219,15 +218,6 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
             {...{ 'data-testid': 'prod-support-prod' }}
           >
             Investigate production
-          </button>
-          <button
-            type="button"
-            className={gridStyles.button}
-            onClick={() => openStart('site-issue')}
-            disabled={!siteJob}
-            {...{ 'data-testid': 'home-guided-job-site-issue' }}
-          >
-            New report
           </button>
         </div>
       </header>
@@ -250,7 +240,7 @@ export const GuidedCloudJobs: React.FC<GuidedCloudJobsProps> = ({ project }) => 
         ) : null}
         {!jobsQuery.isLoading && !jobsQuery.error && reports.length === 0 ? (
           <p className={gridStyles.empty}>
-            {hasReports ? 'No reports match this search.' : 'No reports yet. Start an investigation or a new report.'}
+            {hasReports ? 'No reports match this search.' : 'No investigations yet. Start one with Investigate production.'}
           </p>
         ) : null}
         {reports.length > 0 ? (

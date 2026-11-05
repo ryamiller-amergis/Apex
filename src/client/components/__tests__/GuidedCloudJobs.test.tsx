@@ -74,6 +74,7 @@ describe('GuidedCloudJobs', () => {
     expect(screen.getByText('What happened in production?')).toBeInTheDocument();
     expect(screen.getByText(/Who is affected:/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Investigate a timecard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New report' })).not.toBeInTheDocument();
   });
 
   it('says the page is off when the flags are off', () => {
