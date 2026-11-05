@@ -1603,12 +1603,11 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       }
     }
     expect(longTimers.length).toBeGreaterThanOrEqual(2);
-    // The absolute deadline is the longest timer. The shell step keeps the
-    // rest of that turn, so its timer is the next longest, not a shorter stall.
-    const absoluteDelay = longTimers.reduce((max, timer) => Math.max(max, timer.delay), 0);
-    const shellTimer = longTimers
-      .filter((timer) => timer.delay < absoluteDelay)
-      .reduce((longer, timer) => (timer.delay > longer.delay ? timer : longer));
+    // Both timers count down to the same deadline and tie when armed in the same
+    // millisecond; the shell timer is armed later, so ties go to the later one.
+    const shellTimer = longTimers.reduce((shorter, timer) =>
+      timer.delay <= shorter.delay ? timer : shorter,
+    );
     shellTimer.cb();
     await expect(turnPromise).resolves.toEqual({
       status: 'failed',

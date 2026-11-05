@@ -1290,6 +1290,8 @@ describe('background workspace preparation', () => {
       '{"epics":[]}',
       'utf8',
     );
+    await fs.writeFile(path.join(aiPilot, 'existing-test-cases.json'), '{}', 'utf8');
+    await fs.writeFile(path.join(aiPilot, 'test-case-index.md'), '# Index', 'utf8');
     await fs.writeFile(
       path.join(output, 'stale.test-cases.json'),
       '{"suites":[]}',
@@ -1299,6 +1301,10 @@ describe('background workspace preparation', () => {
     await expect(
       readDocumentScratchInputs(tempRoot, 'test-cases'),
     ).resolves.toEqual([
+      {
+        path: '.ai-pilot/existing-test-cases.json',
+        content: '{}',
+      },
       {
         path: '.ai-pilot/kickoff-context.md',
         content: '# Test context',
@@ -1310,6 +1316,10 @@ describe('background workspace preparation', () => {
       {
         path: '.ai-pilot/output/feature.prd.md',
         content: '# PRD',
+      },
+      {
+        path: '.ai-pilot/test-case-index.md',
+        content: '# Index',
       },
     ]);
   });

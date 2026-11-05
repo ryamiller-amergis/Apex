@@ -13,6 +13,7 @@ import {
   isThreadIdle,
   prepareBackgroundWorkflowTurn,
   sendMessage,
+  updateThreadKickoffContext,
 } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { readRemoteBranchTip } from '../services/repoCacheService';
@@ -28,6 +29,7 @@ import {
   inferUserTypes,
   isAdoTestSuiteWatcherActive,
   listAdoGenerationCandidates,
+  newPlacementsFrom,
   publishAdoTestCases,
   resetAdoTestSuiteWatchersForTests,
   syncAdoTestSuiteOutput,
@@ -502,6 +504,64 @@ describe('ADO test suite generation and publish', () => {
     expect(isAdoTestSuiteWatcherActive('suite-new')).toBe(true);
   });
 
+  it('writes the existing Test Cases and suite index the skill checks before writing new cases', async () => {
+    const plans = [{ planId: 7, planName: 'Release 1', suites: [] }];
+    const linkedCase = {
+      id: 900,
+      title: 'Sends a notification',
+      state: 'Design',
+      steps: [{ action: 'Open', expected: 'Opens' }],
+      url: 'https://dev.azure.com/org/Apex/_workitems/edit/900',
+    };
+    const ado = {
+      getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()),
+      listStaticTestPlanSuites: jest.fn().mockResolvedValue(plans),
+      listLinkedTestCases: jest.fn().mockResolvedValue(new Map([[18452, [linkedCase]], [18499, []]])),
+      listSuiteCaseIndex: jest.fn().mockResolvedValue({
+        entries: [
+          { id: 901, title: 'Mutes a channel', planName: 'Release 1', suitePath: 'Settings' },
+          { id: 902, title: 'Opens the bell', planName: 'Release 1', suitePath: '' },
+        ],
+        truncated: true,
+      }),
+    };
+
+    await triggerAdoTestCaseGeneration({ project: 'Apex', rootWorkItemId: 100, userId: 'user-1', ado });
+    await settleBackgroundDispatch();
+
+    expect(ado.listLinkedTestCases).toHaveBeenCalledWith([18452, 18499]);
+    expect(ado.listSuiteCaseIndex).toHaveBeenCalledWith(plans);
+    expect(JSON.parse(fs.readFileSync(
+      path.join(workspaceDir, '.ai-pilot', 'existing-test-cases.json'),
+      'utf-8',
+    ))).toEqual({ 'PBI-18452': [linkedCase] });
+    const index = fs.readFileSync(path.join(workspaceDir, '.ai-pilot', 'test-case-index.md'), 'utf-8');
+    expect(index).toContain('## Release 1');
+    expect(index).toContain('- 901 | Settings | Mutes a channel');
+    expect(index).toContain('- 902 | (plan root) | Opens the bell');
+    const kickoff = jest.mocked(updateThreadKickoffContext).mock.lastCall?.[1] as string;
+    expect(kickoff).toContain('## Existing test cases');
+    expect(kickoff).toContain('.ai-pilot/existing-test-cases.json');
+    expect(kickoff).toContain('Suite case index incomplete');
+  });
+
+  it('tells the skill existing cases were not checked when Azure DevOps cannot list them', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ado = {
+      getQaTestGenerationContext: jest.fn().mockResolvedValue(generationContext()),
+      listLinkedTestCases: jest.fn().mockRejectedValue(new Error('403')),
+      listSuiteCaseIndex: jest.fn().mockResolvedValue({ entries: [], truncated: false }),
+    };
+
+    const result = await triggerAdoTestCaseGeneration({ project: 'Apex', rootWorkItemId: 100, userId: 'user-1', ado });
+    await settleBackgroundDispatch();
+
+    expect(result).toEqual(expect.objectContaining({ started: true }));
+    expect(fs.existsSync(path.join(workspaceDir, '.ai-pilot', 'existing-test-cases.json'))).toBe(false);
+    const kickoff = jest.mocked(updateThreadKickoffContext).mock.lastCall?.[1] as string;
+    expect(kickoff).toContain('Existing cases not checked');
+  });
+
   describe('commit pin before routing', () => {
     const SHA = 'a'.repeat(40);
     const pinned = {
@@ -707,6 +767,51 @@ describe('ADO test suite generation and publish', () => {
     expect(adoWriteForRequest).not.toHaveBeenCalled();
   });
 
+  it('stores the current version of flagged existing cases and treats unknown ids as new', async () => {
+    const outputDir = path.join(workspaceDir, '.ai-pilot', 'output');
+    fs.mkdirSync(outputDir, { recursive: true });
+    const flag = (adoTestCaseId: number) => ({
+      adoTestCaseId,
+      status: 'needs-update',
+      reason: 'Steps changed',
+      source: 'suite',
+    });
+    fs.writeFileSync(
+      path.join(outputDir, 'notifications.test-cases.json'),
+      JSON.stringify({
+        suites: [{
+          pbiId: 'PBI-18452',
+          testCases: [
+            { id: 'TC-1', title: 'Saves', steps: [], existing: flag(900) },
+            { id: 'TC-2', title: 'Mutes', steps: [], existing: flag(404) },
+            { id: 'TC-3', title: 'Opens', steps: [], existing: { adoTestCaseId: 'abc' } },
+          ],
+        }],
+      }),
+    );
+    dbMock.state.threadRow = { workspaceDir };
+    dbMock.state.suiteRow = { id: 'suite-1', chatThreadId: 'thread-ado', status: 'generating', project: 'Apex' };
+    const current = {
+      id: 900,
+      title: 'Saves the form',
+      state: 'Ready',
+      steps: [{ order: 1, action: 'Click save', expected: 'Saved' }],
+      url: 'https://dev.azure.com/org/Apex/_workitems/edit/900',
+    };
+    const ado = { getTestCasesById: jest.fn().mockResolvedValue([current]) };
+
+    await expect(syncAdoTestSuiteOutput('suite-1', 'thread-ado', undefined, ado)).resolves.toBe(true);
+
+    expect(ado.getTestCasesById).toHaveBeenCalledWith([900, 404]);
+    const stored = dbMock.state.updates[0].testCasesJson as {
+      suites: Array<{ testCases: Array<Record<string, unknown>> }>;
+    };
+    const [saves, mutes, opens] = stored.suites[0].testCases;
+    expect(saves.existing).toEqual({ ...flag(900), current });
+    expect(mutes).not.toHaveProperty('existing');
+    expect(opens).not.toHaveProperty('existing');
+  });
+
   it('syncs worker-harvested output from a workspace other than the thread workspace', async () => {
     const harvestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ado-suite-harvest-'));
     try {
@@ -875,6 +980,170 @@ describe('ADO test suite generation and publish', () => {
       expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
     });
 
+    it('skips existing cases and updates a needs-update case only when QA chooses it', async () => {
+      const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9001, url: 'https://ado.example/9001' });
+      const updateTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 700, url: 'https://ado.example/700' });
+      const ado = { createTestCaseWorkItem, updateTestCaseWorkItem };
+      const row = twoCaseSuite();
+      const testCases = (row.testCasesJson.suites[0].testCases as Array<Record<string, unknown>>);
+      testCases[0].existing = { adoTestCaseId: 600, status: 'up-to-date', reason: 'Same', source: 'linked' };
+      testCases[1].existing = { adoTestCaseId: 700, status: 'needs-update', reason: 'New step', source: 'suite' };
+      dbMock.state.suiteRow = row;
+
+      const all = await publishAdoTestCases('suite-1', { ado });
+      const forced = await publishAdoTestCases('suite-1', { ado, localCaseIds: ['TC-1', 'TC-2'] });
+      const wrongUpdate = await publishAdoTestCases('suite-1', { ado, localCaseIds: [], updateLocalCaseIds: ['TC-1'] });
+      const updated = await publishAdoTestCases('suite-1', { ado, localCaseIds: [], updateLocalCaseIds: ['TC-2'] });
+      const retried = await publishAdoTestCases('suite-1', { ado, localCaseIds: [], updateLocalCaseIds: ['TC-2'] });
+
+      expect(all.published).toEqual([]);
+      expect(forced.skippedLocalCaseIds).toEqual(['TC-1', 'TC-2']);
+      expect(wrongUpdate.failures).toEqual([{
+        localCaseId: 'TC-1',
+        message: 'Only cases that need an update can update an existing Test Case',
+      }]);
+      expect(createTestCaseWorkItem).not.toHaveBeenCalled();
+      expect(updateTestCaseWorkItem).toHaveBeenCalledTimes(1);
+      expect(updateTestCaseWorkItem).toHaveBeenCalledWith(expect.objectContaining({
+        id: 700,
+        title: 'Drop me',
+        testedById: 18452,
+      }));
+      expect(updated.published).toEqual([expect.objectContaining({
+        localCaseId: 'TC-2',
+        adoTestCaseId: 700,
+        action: 'updated',
+      })]);
+      expect(retried.skippedLocalCaseIds).toEqual(['TC-2']);
+    });
+
+    describe('approved new Test Plans and suites', () => {
+      const existingPlans = [{
+        id: 15,
+        name: '15 Timesheets',
+        suites: [{ id: 150, path: '' }, { id: 151, path: 'Geofence' }],
+      }];
+      const planWriter = () => ({
+        createTestCaseWorkItem: jest.fn()
+          .mockResolvedValueOnce({ id: 9001, url: 'https://ado.example/9001' })
+          .mockResolvedValueOnce({ id: 9002, url: 'https://ado.example/9002' }),
+        addTestCasesToSuite: jest.fn().mockResolvedValue(undefined),
+        listStaticTestPlanSuites: jest.fn().mockResolvedValue(existingPlans),
+        createTestPlan: jest.fn().mockResolvedValue({ id: 50, rootSuiteId: 500 }),
+        createTestSuite: jest.fn()
+          .mockResolvedValueOnce(501)
+          .mockResolvedValueOnce(502),
+      });
+
+      it('creates a plan with a requirement suite once and links the cases without adding them', async () => {
+        const ado = planWriter();
+        dbMock.state.suiteRow = {
+          ...twoCaseSuite(),
+          sourceSnapshot: {
+            root: { id: 18452, areaPath: 'Apex\\QA', title: 'Delete user', workItemType: 'Product Backlog Item' },
+            targets: [{ id: 18452, title: 'Delete user', workItemType: 'Product Backlog Item' }],
+          },
+        };
+        const approval = {
+          key: 'delete user - functional testing|',
+          testPlan: 'Delete User - Functional Testing',
+          createPlan: true,
+          suiteType: 'requirement' as const,
+        };
+
+        const result = await publishAdoTestCases('suite-1', {
+          ado,
+          newPlacements: [approval],
+          newPlacementSelections: { 'TC-1': approval.key, 'TC-2': approval.key },
+        });
+
+        expect(result.failures).toEqual([]);
+        expect(ado.createTestPlan).toHaveBeenCalledTimes(1);
+        expect(ado.createTestPlan).toHaveBeenCalledWith('Delete User - Functional Testing');
+        expect(ado.createTestSuite).toHaveBeenCalledTimes(1);
+        expect(ado.createTestSuite).toHaveBeenCalledWith(50, 500, { name: '18452 : Delete user', requirementId: 18452 });
+        expect(ado.addTestCasesToSuite).not.toHaveBeenCalled();
+        expect(ado.createTestCaseWorkItem).toHaveBeenCalledWith(expect.objectContaining({ linkType: 'tested-by' }));
+        expect(result.published).toEqual([
+          expect.objectContaining({ localCaseId: 'TC-1', testPlanId: 50, testSuiteId: 501 }),
+          expect.objectContaining({ localCaseId: 'TC-2', testPlanId: 50, testSuiteId: 501 }),
+        ]);
+      });
+
+      it('reuses an existing plan and creates only the missing static suite segments', async () => {
+        const ado = planWriter();
+        dbMock.state.suiteRow = twoCaseSuite();
+        const approval = {
+          key: 'k',
+          testPlan: '15 timesheets',
+          testSuite: 'Geofence > Outside Radius',
+          createPlan: true,
+          suiteType: 'static' as const,
+        };
+
+        const result = await publishAdoTestCases('suite-1', {
+          ado,
+          localCaseIds: ['TC-1'],
+          newPlacements: [approval],
+          newPlacementSelections: { 'TC-1': 'k' },
+        });
+
+        expect(result.failures).toEqual([]);
+        expect(ado.createTestPlan).not.toHaveBeenCalled();
+        expect(ado.createTestSuite).toHaveBeenCalledTimes(1);
+        expect(ado.createTestSuite).toHaveBeenCalledWith(15, 151, { name: 'Outside Radius' });
+        expect(ado.addTestCasesToSuite).toHaveBeenCalledWith(15, 501, [9001]);
+      });
+
+      it('fails only the cases whose plan could not be created, and refuses unapproved keys', async () => {
+        const ado = { ...planWriter(), createTestPlan: jest.fn().mockRejectedValue(new Error('Access denied')) };
+        dbMock.state.suiteRow = twoCaseSuite();
+        const approval = { key: 'k', testPlan: 'New Plan', createPlan: true, suiteType: 'requirement' as const };
+
+        const result = await publishAdoTestCases('suite-1', {
+          ado,
+          newPlacements: [approval],
+          newPlacementSelections: { 'TC-1': 'k', 'TC-2': 'not-approved' },
+        });
+
+        expect(ado.createTestPlan).toHaveBeenCalledTimes(1);
+        expect(ado.createTestCaseWorkItem).not.toHaveBeenCalled();
+        expect(result.failures).toEqual([
+          { localCaseId: 'TC-1', message: 'Could not create the Test Plan or suite "New Plan": Access denied' },
+          { localCaseId: 'TC-2', message: 'Approve the new Test Plan or suite for this case before publishing' },
+        ]);
+      });
+    });
+
+    it('keeps valid skill proposals and drops malformed ones', () => {
+      expect(newPlacementsFrom({
+        newPlacements: [
+          { testPlan: 'Delete User - Functional Testing', createPlan: true, suiteType: 'requirement', reason: 'New feature' },
+          { testPlan: '15 Timesheets', testSuite: 'Geofence > Radius', createPlan: false, suiteType: 'static', reason: 'r' },
+          { testPlan: '15 Timesheets', createPlan: false, suiteType: 'static' },
+          { testPlan: 'X', createPlan: 'yes', suiteType: 'static', testSuite: 'A' },
+          { testPlan: 'X', createPlan: true, suiteType: 'query' },
+          { testPlan: 'delete user - functional testing', createPlan: true, suiteType: 'requirement' },
+        ],
+      })).toEqual([
+        {
+          key: 'delete user - functional testing|',
+          testPlan: 'Delete User - Functional Testing',
+          createPlan: true,
+          suiteType: 'requirement',
+          reason: 'New feature',
+        },
+        {
+          key: '15 timesheets|geofence > radius',
+          testPlan: '15 Timesheets',
+          testSuite: 'Geofence > Radius',
+          createPlan: false,
+          suiteType: 'static',
+          reason: 'r',
+        },
+      ]);
+    });
+
     it('removes unpublished cases and updates the suite count', async () => {
       dbMock.state.suiteRow = twoCaseSuite();
 
@@ -959,7 +1228,7 @@ describe('ADO test suite generation and publish', () => {
     expect(result.published.map((item) => item.parentWorkItemId)).toEqual([18000, 18000]);
   });
 
-  it('defaults to a Tested By link on the requirement when the skill sets no placement', async () => {
+  it('defaults to a Tested By link and the root area when the skill sets no placement', async () => {
     const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9201, url: 'https://ado.example/9201' });
     dbMock.state.suiteRow = {
       id: 'suite-1',
@@ -975,8 +1244,11 @@ describe('ADO test suite generation and publish', () => {
     await publishAdoTestCases('suite-1', { ado: { createTestCaseWorkItem } });
 
     const spec = createTestCaseWorkItem.mock.calls[0][0];
-    expect(spec).toEqual(expect.objectContaining({ parentId: 18452, linkType: 'tested-by' }));
-    expect(spec).not.toHaveProperty('areaPath');
+    expect(spec).toEqual(expect.objectContaining({
+      parentId: 18452,
+      linkType: 'tested-by',
+      areaPath: 'Apex\\QA',
+    }));
     expect(spec).not.toHaveProperty('tags');
   });
 

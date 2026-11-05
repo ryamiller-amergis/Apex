@@ -797,6 +797,29 @@
   background: color-mix(in srgb, var(--accent-color) 10%, transparent);
 }
 
+.badgeExisting {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+}
+
+.badgeNeedsUpdate {
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+}
+
+.existingNote {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.existingReason {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 .chevron {
   color: var(--text-muted);
   font-size: 0.7rem;

@@ -1,4 +1,4 @@
--- Up
+-- Up Migration
 
 CREATE TABLE IF NOT EXISTS qa_ado_test_suites (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -32,5 +32,6 @@ COMMENT ON TABLE qa_ado_test_suites IS
 COMMENT ON COLUMN qa_ado_test_suites.published_cases IS
   'Idempotency ledger mapping local generated case ids to linked ADO Test Case work items.';
 
--- Down
--- DROP TABLE IF EXISTS qa_ado_test_suites;
+-- Down Migration
+
+DROP TABLE IF EXISTS qa_ado_test_suites;

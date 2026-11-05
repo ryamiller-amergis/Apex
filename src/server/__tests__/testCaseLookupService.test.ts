@@ -14,6 +14,7 @@ import {
   extractAdoNativeSuites,
   findBacklogMatch,
   getTestCasesForWorkItem,
+  normalizeTestCase,
 } from '../services/testCaseLookupService';
 
 const mockSelect = db.select as unknown as jest.Mock;
@@ -248,6 +249,31 @@ describe('extractAdoNativeSuites', () => {
       adoWorkItemId: 90441,
       pbiTitle: 'Existing ADO requirement',
     });
+  });
+});
+
+describe('normalizeTestCase existing', () => {
+  it('keeps a valid existing flag with the current Azure DevOps version', () => {
+    const current = { id: 900, title: 'Saves', state: 'Ready', steps: [{ order: 1, action: 'Save', expected: 'Saved' }], url: 'u' };
+    const testCase = normalizeTestCase({
+      title: 'Saves',
+      existing: { adoTestCaseId: '900', status: 'up-to-date', reason: 'Same steps', source: 'linked', current },
+    }, 'PBI-1', 0);
+
+    expect(testCase?.existing).toEqual({
+      adoTestCaseId: 900,
+      status: 'up-to-date',
+      reason: 'Same steps',
+      source: 'linked',
+      current,
+    });
+  });
+
+  it('drops an existing flag with an unknown status or a bad id', () => {
+    expect(normalizeTestCase({ title: 'A', existing: { adoTestCaseId: 9, status: 'maybe' } }, 'PBI-1', 0))
+      .not.toHaveProperty('existing');
+    expect(normalizeTestCase({ title: 'A', existing: { adoTestCaseId: -1, status: 'up-to-date' } }, 'PBI-1', 0))
+      .not.toHaveProperty('existing');
   });
 });
 
