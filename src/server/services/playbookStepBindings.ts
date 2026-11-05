@@ -11,6 +11,7 @@ import {
   configHasBindings,
   resolvePlaybookBindings,
 } from './playbookBindingResolver';
+import { preferredStepOutputs } from './playbookLoopCursor';
 import { createPlaybookStepOutputStore } from './playbookStepOutputStore';
 
 export async function resolveRunStepConfig(
@@ -37,7 +38,7 @@ export async function resolveRunStepConfig(
       eq(playbookStepRuns.status, 'completed'),
     ));
 
-  const steps: Record<string, Record<string, unknown>> = {};
+  const loaded: Array<{ stepId: string; output: Record<string, unknown> }> = [];
   for (const row of prior) {
     if (row.outputBlobRef) {
       const envelope = await createPlaybookStepOutputStore().load(row.outputBlobRef);
@@ -48,11 +49,12 @@ export async function resolveRunStepConfig(
       ) {
         throw new Error(`Playbook output reference for step "${row.stepId}" has wrong ownership.`);
       }
-      steps[row.stepId] = envelope.output;
+      loaded.push({ stepId: row.stepId, output: envelope.output });
     } else {
-      steps[row.stepId] = (row.output ?? {}) as Record<string, unknown>;
+      loaded.push({ stepId: row.stepId, output: (row.output ?? {}) as Record<string, unknown> });
     }
   }
+  const steps = preferredStepOutputs(loaded);
 
   return resolvePlaybookBindings(config, {
     input: (run?.runInput ?? {}) as Record<string, unknown>,

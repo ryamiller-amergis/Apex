@@ -1,6 +1,7 @@
 import {
   CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS,
   GUIDED_CLOUD_JOBS,
+  recommendGuidedJobSkill,
   buildGuidedCloudAgentPrompt,
   customPromptForCloudAgentLaunch,
   guidedSiteIssueBranchName,
@@ -180,9 +181,59 @@ describe('guided cloud jobs', () => {
     });
   });
 
-  it('lists the site-issue report', () => {
-    expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual(['site-issue']);
-    expect(guidedCloudJobById('site-issue')?.skillName).toBe('bug-fix');
+  it('lists the site report and the production investigation', () => {
+    expect(GUIDED_CLOUD_JOBS.map((job) => job.id)).toEqual([
+      'site-issue',
+      'prod-investigation',
+    ]);
+    expect(guidedCloudJobById('site-issue')?.opensBug).toBe(true);
+    expect(guidedCloudJobById('prod-investigation')).toMatchObject({
+      skillName: 'prod-investigation',
+      opensBug: false,
+    });
+  });
+
+  it('uses an installed investigation skill when the project has it', () => {
+    expect(recommendGuidedJobSkill({
+      skillName: 'prod-investigation',
+      skills: [
+        { name: 'bug-fix', path: '.cursor/skills/bug-fix/SKILL.md' },
+        { name: 'prod-investigation', path: '.cursor/skills/prod-investigation/SKILL.md' },
+      ],
+      configuredSkillPath: '.cursor/skills/bug-fix/SKILL.md',
+    })).toEqual({
+      skillPath: '.cursor/skills/prod-investigation/SKILL.md',
+      skillName: 'prod-investigation',
+    });
+  });
+
+  it('falls back to the site skill when the investigation skill is not installed', () => {
+    expect(recommendGuidedJobSkill({
+      skillName: 'prod-investigation',
+      skills: [{ name: 'bug-fix', path: '.cursor/skills/bug-fix/SKILL.md' }],
+      configuredSkillPath: null,
+    })).toEqual({
+      skillPath: '.cursor/skills/bug-fix/SKILL.md',
+      skillName: 'bug-fix',
+    });
+  });
+
+  it('tells an investigation to gather context and leave work items alone', () => {
+    const prompt = buildGuidedCloudAgentPrompt({
+      title: 'Investigate production',
+      skillPath: '.cursor/skills/bug-fix/SKILL.md',
+      skillName: 'bug-fix',
+      requestedSkillName: 'prod-investigation',
+      task: 'Checkout failed for every user after 2pm.',
+      branchName: 'feature/apex-site-abc123-checkout-failed',
+      mode: 'investigate',
+    });
+    expect(prompt.startsWith('/prod-investigation')).toBe(true);
+    expect(prompt).toContain('If `prod-investigation` is in the repository');
+    expect(prompt).toContain('Do not open a pull request.');
+    expect(prompt).toContain('Do not create or edit an Azure DevOps work item.');
+    expect(prompt).toContain('Checkout failed for every user after 2pm.');
+    expect(prompt).not.toContain('Add a regression test');
   });
 
   it('names a branch from the report without a work item id', () => {

@@ -12,7 +12,6 @@ import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
 } from './playbookMcpCapabilityService';
-import { isAgentStepType } from './playbookSteps/registry';
 
 const RESOLVER_VERSION = 1;
 const CAPABILITY_LINE = /^playbook-capabilities:\s*\[([^\]]*)\]\s*$/m;
@@ -24,14 +23,11 @@ export class PlaybookExecutionCapabilityError extends Error {
   }
 }
 
-export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCapability[] {
+/** Declared capabilities, or null when the Skill does not list any. A missing list does not block a run. */
+export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCapability[] | null {
   const frontmatter = skillContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   const line = frontmatter?.[1].match(CAPABILITY_LINE);
-  if (!line) {
-    throw new PlaybookExecutionCapabilityError(
-      'The Skill frontmatter must declare playbook-capabilities.'
-    );
-  }
+  if (!line) return null;
   const capabilities = line[1]
     .split(',')
     .map((value) => value.trim())
@@ -47,20 +43,76 @@ export function parsePlaybookSkillCapabilities(skillContent: string): PlaybookCa
   return [...new Set(capabilities)] as PlaybookCapability[];
 }
 
+/** Graphs saved before the skill moved still name the old path. */
+const MOVED_SKILL_PATHS: Record<string, string> = {
+  '.cursor/skills/maxview-incident-investigation/SKILL.md':
+    'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+  'playbook-skills/maxview-incident-investigation/SKILL.md':
+    'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+};
+
+function playbookContentRoots(): string[] {
+  return [
+    path.resolve(process.cwd()),
+    path.resolve(__dirname, '..', '..', '..'),
+    path.resolve(__dirname, '..', '..'),
+  ];
+}
+
 export async function loadPlaybookSkillContent(skillPath: string): Promise<string> {
-  const repoRoot = path.resolve(process.cwd());
-  const relativePath = skillPath.replace(/^[/\\]+/, '');
-  const absolutePath = path.resolve(repoRoot, relativePath);
-  if (absolutePath !== repoRoot && !absolutePath.startsWith(`${repoRoot}${path.sep}`)) {
-    throw new PlaybookExecutionCapabilityError('The Skill path leaves the Apex repository.');
+  const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
+  const tried = new Set<string>();
+  for (const root of playbookContentRoots()) {
+    const absolutePath = path.resolve(root, relativePath);
+    if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
+      throw new PlaybookExecutionCapabilityError('The Skill path leaves the Apex repository.');
+    }
+    if (tried.has(absolutePath)) continue;
+    tried.add(absolutePath);
+    try {
+      return await fs.readFile(absolutePath, 'utf8');
+    } catch {
+      // This layout does not have the file. Try the next root.
+    }
   }
-  try {
-    return await fs.readFile(absolutePath, 'utf8');
-  } catch {
-    throw new PlaybookExecutionCapabilityError(
-      `The Playbook Skill "${relativePath}" could not be read to resolve its capability policy.`
-    );
+  throw new PlaybookExecutionCapabilityError(
+    `The Playbook Skill "${relativePath}" could not be read to resolve its capability policy.`
+  );
+}
+
+const SKILL_COMPANION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/;
+const SKILL_COMPANION_MAX_BYTES = 200_000;
+
+/** Markdown files that sit beside SKILL.md, such as a resource catalog. */
+export async function loadPlaybookSkillCompanions(
+  skillPath: string,
+): Promise<Array<{ path: string; content: string }>> {
+  const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
+  const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
+  const directory = path.posix.dirname(relativePath);
+  if (!directory || directory === '.' || directory.split('/').includes('..')) return [];
+
+  for (const root of playbookContentRoots()) {
+    const absoluteDir = path.resolve(root, directory);
+    if (absoluteDir !== root && !absoluteDir.startsWith(`${root}${path.sep}`)) continue;
+    let names: string[];
+    try {
+      names = await fs.readdir(absoluteDir);
+    } catch {
+      continue;
+    }
+    const companions: Array<{ path: string; content: string }> = [];
+    for (const name of names.sort()) {
+      if (name === 'SKILL.md' || !SKILL_COMPANION_NAME.test(name)) continue;
+      const filePath = path.join(absoluteDir, name);
+      const metadata = await fs.stat(filePath);
+      if (!metadata.isFile() || metadata.size > SKILL_COMPANION_MAX_BYTES) continue;
+      companions.push({ path: name, content: await fs.readFile(filePath, 'utf8') });
+    }
+    return companions;
   }
+  return [];
 }
 
 export interface ResolvePlaybookAgentRunPolicyInput {
@@ -85,14 +137,11 @@ export function resolvePlaybookAgentRunPolicy(
   if (profile.mode !== 'read') {
     throw new PlaybookMcpCapabilityError(input.nodeId, executionProfile, profile.mode);
   }
-  const maximum = parsePlaybookSkillCapabilities(input.skillContent);
+  const declared = parsePlaybookSkillCapabilities(input.skillContent);
   const requested: PlaybookCapability[] = ['repository-read', 'network-read'];
-  const excessive = requested.find((capability) => !maximum.includes(capability));
-  if (excessive) {
-    throw new PlaybookExecutionCapabilityError(
-      `Skill "${input.skillPath}" does not permit required capability "${excessive}".`
-    );
-  }
+  // A Skill that names azure-cli is allowed to run Azure CLI in the worker shell.
+  // The shell stays closed for every other Skill, including one with no capability list.
+  if (declared?.includes('azure-cli')) requested.push('azure-cli');
 
   const provider =
     input.provider === 'ado'
@@ -140,7 +189,8 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
 }): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
   const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = [];
   for (const node of input.graph.nodes) {
-    if (!isAgentStepType(node.stepType)) continue;
+    // Cloud-agent steps count toward the agent cap, but they do not load a repository Skill.
+    if (node.stepType !== 'cursor-agent') continue;
     const skillPath = typeof node.config?.skillPath === 'string' ? node.config.skillPath : '';
     const skillContent = await loadPlaybookSkillContent(skillPath);
     policies.push({

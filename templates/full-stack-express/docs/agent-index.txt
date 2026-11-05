@@ -1,0 +1,34 @@
+# Agent index. One document per line: <path>  <summary>.
+# Paths are relative to the repository root. Lines starting with # are comments.
+# pnpm docs:check fails when a document is missing here or a path no longer exists.
+
+AGENTS.md  Entry point. Links every document, the skills, and the main scripts.
+README.md  Command reference, environment variables, identity, feature flags, placeholders.
+docs/architecture.md  Layers, request flow, data, identity, observability, and the template origin note.
+docs/module-map.md  One entry per workspace member: responsibility, public interface, dependencies.
+docs/feature-slices.md  Profile slice to copy when adding a product area inside the workspace members.
+docs/plans/README.md  Brief, plan, evidence paths, and the authorization, identity, and performance questions.
+docs/api.md  The committed OpenAPI document, the reference endpoints, and their auth rules.
+docs/testing.md  Test suites, quality gates, coverage floors, selectors, and when Docker is needed.
+docs/design-system.md  Tokens, themes, colour mode, branding overrides, and the contrast check.
+docs/component-catalog.md  Every public export of the UI package with its props and test ids.
+docs/compatibility.md  Pinned toolchain and dependency versions and why each was chosen.
+docs/adr/README.md  Decision record index and how to add a record.
+docs/adr/0000-template.md  Template for a new decision record.
+docs/adr/0001-zod-contracts-are-the-api-authority.md  Decision: Zod route definitions are the API contract.
+docs/adr/0002-no-roles-or-permissions-in-the-template.md  Decision: the template ships authentication but no authorization model.
+docs/adr/0003-forward-only-production-migrations.md  Decision: production schema rollback is a new corrective migration.
+docs/adr/0004-docs-as-code-knowledge-base.md  Decision: documents live in the repository and a script checks them.
+docs/runbooks/local-setup.md  Clean checkout to a running local stack.
+docs/runbooks/migrations.md  Generate, validate, and apply schema migrations; ownership and rollback.
+docs/runbooks/common-failures.md  Install and startup errors with their fixes.
+docs/runbooks/supply-chain.md  Secret, vulnerability, and license scans, the SBOM, and the production image.
+docs/handoff.md  Platform Engineering adoption: ownership, pipeline contracts, placeholders, open decisions.
+.cursor/skills/orchestrator/SKILL.md  Prompted build: brief, recorded questions, plan approval, then the other role skills.
+.cursor/skills/api-contract/SKILL.md  Rules and steps for adding an endpoint so it matches the API contract.
+.cursor/skills/ui-standards/SKILL.md  Rules, screen steps, and the review checklist for the design system.
+.cursor/skills/planner/SKILL.md  Plan a prompt from the module map, the manifests, and recorded decisions.
+.cursor/skills/ui/SKILL.md  UI role skill. Loads UI standards, then records catalog, token, and state evidence.
+.cursor/skills/developer/SKILL.md  Implement a change with the required skills, a reviewed migration, and the gates.
+.cursor/skills/qa/SKILL.md  Run or review each quality gate and write an evidence report.
+.cursor/skills/integration/SKILL.md  Read the QA evidence and report whether the build is ready for a pipeline.

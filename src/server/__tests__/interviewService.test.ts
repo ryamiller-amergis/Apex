@@ -56,6 +56,7 @@ jest.mock('../db/drizzle', () => {
       query: {
         interviews: { findFirst: jest.fn() },
         prds: { findFirst: jest.fn() },
+        buildRuns: { findFirst: jest.fn().mockResolvedValue(undefined) },
       },
       insert: jest.fn().mockImplementation(makeInsertChain),
       update: jest.fn().mockImplementation(makeUpdateChain),
@@ -1106,6 +1107,19 @@ describe('deleteInterview', () => {
     await expect(deleteInterview('interview-1', 'user-other')).rejects.toMatchObject({
       message: 'Only the author can delete the interview',
     });
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('throws 409 and keeps the interview when a build uses it', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(interviewRow);
+    mockDb.query.buildRuns.findFirst.mockResolvedValueOnce({ id: 'build-1' });
+
+    await expect(deleteInterview('interview-1', 'user-1')).rejects.toMatchObject({
+      status: 409,
+      message: 'This interview belongs to a build. Cancel the build instead.',
+    });
+    const { cancelRun } = jest.requireMock('../services/chatAgentService') as { cancelRun: jest.Mock };
+    expect(cancelRun).not.toHaveBeenCalled();
     expect(mockDb.delete).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
-import { AzureDevOpsService } from '../services/azureDevOps';
+import { AzureDevOpsService, parseTestCaseStepsXml, placeableSuitePaths } from '../services/azureDevOps';
+import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import * as azdev from 'azure-devops-node-api';
 import { retryWithBackoff } from '../utils/retry';
 
@@ -107,6 +108,59 @@ describe('AzureDevOpsService', () => {
         { query: 'SELECT links' },
         { project: 'TestProject' },
       );
+    });
+  });
+
+  describe('listProjectBacklogWorkItems', () => {
+    it('loads every epic, feature, PBI, TBI, and bug in the project without the calendar filters', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItems: [{ id: 90441 }, { id: 12 }],
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 90441,
+          fields: {
+            'System.Title': 'A backlog item',
+            'System.State': 'New',
+            'System.WorkItemType': 'Product Backlog Item',
+          },
+        },
+        {
+          id: 12,
+          fields: {
+            'System.Title': 'A bug',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Bug',
+          },
+        },
+      ]);
+
+      const service = new AzureDevOpsService('MaxView', 'MaxView\\MaxView Infra Team');
+      const result = await service.listProjectBacklogWorkItems();
+
+      const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
+      expect(wiql).toContain("[System.TeamProject] = 'MaxView'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Epic'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Feature'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Product Backlog Item'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Technical Backlog Item'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Bug'");
+      expect(wiql).not.toContain('AreaPath');
+      expect(wiql).not.toContain('DueDate');
+      expect(wiql).not.toContain('TargetDate');
+      expect(mockWitApi.queryByWiql).toHaveBeenCalledWith(
+        expect.objectContaining({ query: wiql }),
+        { project: 'MaxView' },
+        undefined,
+        20000,
+      );
+      expect(result).toEqual({
+        truncated: false,
+        items: [
+          { id: 90441, title: 'A backlog item', state: 'New', workItemType: 'Product Backlog Item' },
+          { id: 12, title: 'A bug', state: 'Active', workItemType: 'Bug' },
+        ],
+      });
     });
   });
 
@@ -224,6 +278,65 @@ describe('AzureDevOpsService', () => {
 
       // Should be called 4 times (2 for fields: 200 + 50, and 2 for relations: 200 + 50)
       expect(mockWitApi.getWorkItems).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('getQaTestGenerationContext', () => {
+    it('returns PBIs and Bugs as targets and TBIs as context', async () => {
+      mockWitApi.queryByWiql.mockResolvedValue({
+        workItemRelations: [
+          { source: { id: 10 }, target: { id: 20 } },
+          { source: { id: 20 }, target: { id: 30 } },
+          { source: { id: 20 }, target: { id: 31 } },
+        ],
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([
+        {
+          id: 10,
+          fields: {
+            'System.Title': 'Release',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Epic',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+        {
+          id: 20,
+          fields: {
+            'System.Title': 'Checkout',
+            'System.State': 'Active',
+            'System.WorkItemType': 'Feature',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+        {
+          id: 30,
+          fields: {
+            'System.Title': 'Pay by card',
+            'System.State': 'New',
+            'System.WorkItemType': 'Product Backlog Item',
+            'System.AreaPath': 'MaxView',
+            'Microsoft.VSTS.Common.AcceptanceCriteria': '<p>Payment succeeds</p>',
+          },
+        },
+        {
+          id: 31,
+          fields: {
+            'System.Title': 'Gateway client',
+            'System.State': 'New',
+            'System.WorkItemType': 'Technical Backlog Item',
+            'System.AreaPath': 'MaxView',
+          },
+        },
+      ]);
+
+      const service = new AzureDevOpsService('MaxView');
+      const context = await service.getQaTestGenerationContext(10);
+
+      expect(context?.root.id).toBe(10);
+      expect(context?.targets.map((item) => item.id)).toEqual([30]);
+      expect(context?.technicalContext.map((item) => item.id)).toEqual([31]);
+      expect(context?.targets[0].parentId).toBe(20);
     });
   });
 
@@ -809,6 +922,60 @@ describe('AzureDevOpsService', () => {
       const wiql = mockWitApi.queryByWiql.mock.calls[0][0].query as string;
       expect(wiql).not.toContain("[System.State] NOT IN");
     });
+
+    it('pulls in the parent feature so children can stack under it', async () => {
+      const service = new AzureDevOpsService('MaxView');
+
+      mockWitApi.queryByWiql
+        .mockResolvedValueOnce({ workItems: [{ id: 32 }, { id: 31 }] })
+        .mockResolvedValueOnce({ workItems: [{ id: 30 }] });
+      mockWitApi.getWorkItems
+        .mockResolvedValueOnce([
+          {
+            id: 32,
+            fields: {
+              'System.Title': 'Crash on save',
+              'System.WorkItemType': 'Bug',
+              'System.State': 'New',
+              'System.AssignedTo': { uniqueName: 'jane@example.com' },
+              'System.Parent': 31,
+            },
+          },
+          {
+            id: 31,
+            fields: {
+              'System.Title': 'Save the form',
+              'System.WorkItemType': 'Product Backlog Item',
+              'System.State': 'New',
+              'System.AssignedTo': { uniqueName: 'jane@example.com' },
+              'System.Parent': '30',
+            },
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 30,
+            fields: {
+              'System.Title': 'Onboarding',
+              'System.WorkItemType': 'Feature',
+              'System.State': 'In Progress',
+              'System.AssignedTo': { uniqueName: 'someone-else@example.com' },
+            },
+          },
+        ]);
+
+      const result = await service.getWorkItemsAssignedToUser('Jane Developer', 'MaxView');
+
+      expect(result.map((item) => item.id)).toEqual([32, 31, 30]);
+      expect(result[0]).toMatchObject({ id: 32, parentId: 30, workItemType: 'Bug' });
+      expect(result[1]).toMatchObject({ id: 31, parentId: 30, workItemType: 'Product Backlog Item' });
+      expect(result[2]).toMatchObject({
+        id: 30,
+        title: 'Onboarding',
+        workItemType: 'Feature',
+        groupingOnly: true,
+      });
+    });
   });
 
   describe('createWorkItemForPrd — APEX origin tagging', () => {
@@ -839,6 +1006,23 @@ describe('AzureDevOpsService', () => {
       expect(tags).toContain('apex');
       expect(tags).toContain('wave-1');
       expect(tags.filter((t) => t === 'apex')).toHaveLength(1);
+    });
+
+    it('writes Bug repro steps when the caller supplies them', async () => {
+      const service = new AzureDevOpsService('MaxView');
+      mockWitApi.createWorkItem.mockResolvedValue({ id: 504 });
+
+      await service.createWorkItemForPrd({
+        type: 'Bug',
+        title: 'Playbook finding',
+        description: '<p>Hidden description</p>',
+        reproStepsHtml: '<p>Visible on the Bug form</p>',
+      });
+
+      const patch = mockWitApi.createWorkItem.mock.calls[0][1] as Array<{ path: string; value: unknown }>;
+      expect(patch).toEqual(expect.arrayContaining([
+        { op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: '<p>Visible on the Bug form</p>' },
+      ]));
     });
 
     it('does not add the apex tag to non-Feature types', async () => {
@@ -1124,5 +1308,237 @@ describe('AzureDevOpsService', () => {
 
       expect(mockGitApi.createPullRequestLabel).not.toHaveBeenCalled();
     });
+  });
+
+  describe('searchWorkItems', () => {
+    const pbi = {
+      id: 59642,
+      fields: {
+        'System.Title': 'Release item',
+        'System.State': 'Active',
+        'System.AssignedTo': { displayName: 'Dev One' },
+        'System.WorkItemType': 'Product Backlog Item',
+        'System.TeamProject': 'Apex',
+        'System.AreaPath': 'Apex\\Team\\Child',
+      },
+    };
+
+    it('looks up a numeric query directly by ID without a WIQL query', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      const result = await service.searchWorkItems(' 59642 ', 'All');
+
+      expect(mockWitApi.queryByWiql).not.toHaveBeenCalled();
+      expect(mockWitApi.getWorkItems).toHaveBeenCalledWith(
+        [59642],
+        expect.arrayContaining(['System.Title', 'System.WorkItemType']),
+        undefined,
+        undefined,
+        2,
+      );
+      expect(result).toEqual([
+        expect.objectContaining({
+          id: 59642,
+          title: 'Release item',
+          state: 'Active',
+          assignedTo: 'Dev One',
+          workItemType: 'Product Backlog Item',
+        }),
+      ]);
+    });
+
+    it('returns no results when the ID does not exist or does not match the chosen type', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+
+      mockWitApi.getWorkItems.mockResolvedValueOnce([null]);
+      expect(await service.searchWorkItems('99999999', 'All')).toEqual([]);
+
+      mockWitApi.getWorkItems.mockResolvedValueOnce([pbi]);
+      expect(await service.searchWorkItems('59642', 'Bug')).toEqual([]);
+    });
+
+    it('finds an ID in any area of the project but not in another project', async () => {
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      expect(await new AzureDevOpsService('Other', 'Other\\Team').searchWorkItems('59642', 'All')).toEqual([]);
+      expect(await new AzureDevOpsService('Apex', 'Apex\\Teammates').searchWorkItems('59642', 'All')).toHaveLength(1);
+    });
+
+    it('checks release assignments across the whole project, not just the area', async () => {
+      const service = new AzureDevOpsService('Apex', 'Apex\\Team');
+      const linksSpy = jest
+        .spyOn(service, 'queryWorkItemLinksByWiql')
+        .mockResolvedValue([{ sourceId: 58140, targetId: 59642 }] as any);
+
+      expect(await service.findReleaseAssignments([59642])).toEqual({ 59642: [58140] });
+      const wiql = linksSpy.mock.calls[0][0];
+      expect(wiql).toContain("[Source].[System.TeamProject] = 'Apex'");
+      expect(wiql).not.toContain('AreaPath');
+    });
+
+    it('searches text under the area path and escapes single quotes', async () => {
+      const service = new AzureDevOpsService("Team's Project", "Team's Project\\Area");
+      mockWitApi.queryByWiql.mockResolvedValue({ workItems: [{ id: 59642 }] });
+      mockWitApi.getWorkItems.mockResolvedValue([pbi]);
+
+      const result = await service.searchWorkItems("can't link", "Dev's Type");
+
+      const wiql: string = mockWitApi.queryByWiql.mock.calls[0][0].query;
+      expect(wiql).toContain("[System.TeamProject] = 'Team''s Project'");
+      expect(wiql).toContain("[System.AreaPath] UNDER 'Team''s Project\\Area'");
+      expect(wiql).toContain("[System.WorkItemType] = 'Dev''s Type'");
+      expect(wiql).toContain("[System.Title] CONTAINS 'can''t link'");
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe('existing Test Cases', () => {
+    it('updates title and steps and adds Tested By only when the link is missing', async () => {
+      mockWitApi.getWorkItem
+        .mockResolvedValueOnce({ id: 700, relations: [] })
+        .mockResolvedValueOnce({
+          id: 700,
+          relations: [{ rel: 'Microsoft.VSTS.Common.TestedBy-Reverse', url: 'https://ado/_apis/wit/workItems/100' }],
+        });
+      mockWitApi.updateWorkItem.mockResolvedValue({ id: 700 });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await service.updateTestCaseWorkItem({ id: 700, title: 'New', stepsHtml: '<steps/>', testedById: 100 });
+      await service.updateTestCaseWorkItem({ id: 700, title: 'New', stepsHtml: '<steps/>', testedById: 100 });
+
+      const [, firstPatch] = mockWitApi.updateWorkItem.mock.calls[0];
+      const [, secondPatch] = mockWitApi.updateWorkItem.mock.calls[1];
+      expect(firstPatch).toEqual(expect.arrayContaining([
+        { op: 'add', path: '/fields/System.Title', value: 'New' },
+        expect.objectContaining({ path: '/relations/-' }),
+      ]));
+      expect(secondPatch).toHaveLength(2);
+    });
+
+    it('returns Tested By cases per work item with parsed steps', async () => {
+      mockWitApi.getWorkItems
+        .mockResolvedValueOnce([
+          {
+            id: 100,
+            relations: [
+              { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: 'https://ado/_apis/wit/workItems/501' },
+              { rel: 'System.LinkTypes.Hierarchy-Forward', url: 'https://ado/_apis/wit/workItems/600' },
+            ],
+          },
+          { id: 101, relations: [] },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 501,
+            fields: {
+              'System.Title': 'Validate Approve Timesheet',
+              'System.State': 'Ready',
+              'System.WorkItemType': 'Test Case',
+              'Microsoft.VSTS.TCM.Steps': '<steps id="0" last="1"><step id="2" type="ActionStep"><parameterizedString isformatted="true">&lt;DIV&gt;&lt;P&gt;Click Approve&amp;amp;Save&lt;/P&gt;&lt;/DIV&gt;</parameterizedString><parameterizedString isformatted="true">&lt;P&gt;Timesheet status displays Approved.&lt;/P&gt;</parameterizedString></step></steps>',
+            },
+          },
+        ]);
+      const service = new AzureDevOpsService('MatterWorx');
+
+      const linked = await service.listLinkedTestCases([100, 101]);
+
+      expect(linked.get(101)).toEqual([]);
+      expect(linked.get(100)).toEqual([{
+        id: 501,
+        title: 'Validate Approve Timesheet',
+        state: 'Ready',
+        steps: [{ order: 1, action: 'Click Approve&Save', expected: 'Timesheet status displays Approved.' }],
+        url: 'https://dev.azure.com/test-org/MatterWorx/_workitems/edit/501',
+      }]);
+    });
+
+    it('indexes suite cases and stops at the cap', async () => {
+      const getTestCaseList = jest.fn()
+        .mockResolvedValueOnce(Object.assign(
+          [{ workItem: { id: 1, name: 'First' } }],
+          { continuationToken: 'next' },
+        ))
+        .mockResolvedValueOnce([{ workItem: { id: 2, name: 'Second' } }]);
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getTestCaseList });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      const index = await service.listSuiteCaseIndex([
+        { id: 7, name: '15 Timesheets', suites: [{ id: 70, path: 'Approve' }] },
+      ]);
+
+      expect(index).toEqual({
+        truncated: false,
+        entries: [
+          { id: 1, title: 'First', planName: '15 Timesheets', suitePath: 'Approve' },
+          { id: 2, title: 'Second', planName: '15 Timesheets', suitePath: 'Approve' },
+        ],
+      });
+      expect(getTestCaseList.mock.calls[1][6]).toBe('next');
+    });
+  });
+
+  describe('creating Test Plans and suites', () => {
+    it('creates a plan with the area and iteration most plans use', async () => {
+      const getTestPlans = jest.fn().mockResolvedValue([
+        { id: 1, name: 'A', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        { id: 2, name: 'B', areaPath: 'MatterWorx\\QA Automation', iteration: 'MatterWorx' },
+        { id: 3, name: 'C', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+      ]);
+      const createTestPlan = jest.fn().mockResolvedValue({ id: 50, rootSuite: { id: 500 } });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getTestPlans, createTestPlan });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.createTestPlan('Delete User - Functional Testing'))
+        .resolves.toEqual({ id: 50, rootSuiteId: 500 });
+      expect(createTestPlan).toHaveBeenCalledWith(
+        { name: 'Delete User - Functional Testing', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        'MatterWorx',
+      );
+    });
+
+    it('creates a requirement suite for a PBI', async () => {
+      const createTestSuite = jest.fn().mockResolvedValue({ id: 501 });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ createTestSuite });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.createTestSuite(50, 500, { name: '18452 : Delete user', requirementId: 18452 }))
+        .resolves.toBe(501);
+      expect(createTestSuite).toHaveBeenCalledWith({
+        name: '18452 : Delete user',
+        parentSuite: { id: 500, name: '' },
+        suiteType: TestSuiteType.RequirementTestSuite,
+        requirementId: 18452,
+      }, 'MatterWorx', 50);
+    });
+  });
+});
+
+describe('parseTestCaseStepsXml', () => {
+  it('skips shared-step references and empty actions', () => {
+    expect(parseTestCaseStepsXml(
+      '<steps><compref id="3" ref="900" /><step id="4"><parameterizedString>Open app</parameterizedString><parameterizedString></parameterizedString></step><step id="5"><parameterizedString></parameterizedString></step></steps>',
+    )).toEqual([{ order: 1, action: 'Open app', expected: '' }]);
+    expect(parseTestCaseStepsXml(undefined)).toEqual([]);
+  });
+});
+
+describe('placeableSuitePaths', () => {
+  it('builds paths below the plan root for static and requirement suites', () => {
+    const suites = [
+      { id: 1, name: '15 Timesheets', suiteType: TestSuiteType.StaticTestSuite },
+      { id: 2, name: 'Geofence', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 3, name: 'Inside Distance', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 2, name: 'Geofence' } },
+      { id: 4, name: '40249 : Delete User', suiteType: TestSuiteType.RequirementTestSuite, requirementId: 40249, parentSuite: { id: 1, name: '15 Timesheets' } },
+      { id: 5, name: 'Orphan', suiteType: TestSuiteType.StaticTestSuite, parentSuite: { id: 99, name: 'Missing' } },
+      { id: 6, name: 'By query', suiteType: TestSuiteType.DynamicTestSuite, parentSuite: { id: 1, name: '15 Timesheets' } },
+    ] as TestSuite[];
+
+    expect(placeableSuitePaths(suites)).toEqual([
+      { id: 1, path: '' },
+      { id: 4, path: '40249 : Delete User', requirementId: 40249 },
+      { id: 2, path: 'Geofence' },
+      { id: 3, path: 'Geofence > Inside Distance' },
+    ]);
   });
 });

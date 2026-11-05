@@ -253,5 +253,61 @@ describe('database pool telemetry', () => {
       expect(clearIntervalFn).toHaveBeenCalledWith(timer);
       expect(mockTrackEvent).toHaveBeenCalledTimes(2);
     });
+
+    const idlePoolStats = () => ({
+      max: 5,
+      total: 1,
+      idle: 1,
+      active: 0,
+      waiting: 0,
+      saturation: 0,
+    });
+
+    it('reports thread pool wait once the probe completes', async () => {
+      const times = [1_000, 1_007];
+      const scheduler = createDbPoolTelemetryScheduler({
+        getDbPoolStats: idlePoolStats,
+        setIntervalFn: createSetIntervalFn(() => createTimerHandle()),
+        probeThreadpool: () => Promise.resolve(),
+        now: () => times.shift() ?? 0,
+      });
+
+      scheduler.start();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'runtime.threadpool.probe',
+        undefined,
+        { waitMs: 7, pending: 0 },
+      );
+      scheduler.stop();
+    });
+
+    it('reports a still-pending probe on later ticks instead of starting another', () => {
+      const probeThreadpool = jest.fn(() => new Promise<void>(() => {}));
+      const times = [1_000, 31_000];
+      let intervalCallback: (() => void) | undefined;
+      const scheduler = createDbPoolTelemetryScheduler({
+        getDbPoolStats: idlePoolStats,
+        setIntervalFn: createSetIntervalFn((callback) => {
+          intervalCallback = callback;
+          return createTimerHandle();
+        }),
+        probeThreadpool,
+        now: () => times.shift() ?? 0,
+      });
+
+      scheduler.start();
+      intervalCallback?.();
+
+      expect(probeThreadpool).toHaveBeenCalledTimes(1);
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        'runtime.threadpool.probe',
+        undefined,
+        { waitMs: 30_000, pending: 1 },
+      );
+      scheduler.stop();
+    });
   });
 });

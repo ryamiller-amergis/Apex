@@ -74,6 +74,7 @@ async function admittedSpecification(
     interviewContext?: string | null;
     resolveGrounding?: jest.Mock;
     loadSkill?: jest.Mock;
+    skillConfig?: Record<string, unknown> | null;
     resolveDeadlines?: jest.Mock;
     hasPinnedGrounding?: boolean;
     optionalGroundingWaitMs?: number;
@@ -102,9 +103,11 @@ async function admittedSpecification(
         access: 'owner',
         thread: thread(messages, options.kickoff),
       }),
-    resolveSkillConfig: jest.fn().mockResolvedValue({
-      interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }],
-    }),
+    resolveSkillConfig: jest.fn().mockResolvedValue(
+      'skillConfig' in options
+        ? options.skillConfig
+        : { interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }] },
+    ),
     loadSkill:
       options.loadSkill ??
       jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT }),
@@ -183,6 +186,65 @@ describe('durable interactive turn prompt', () => {
     expect(specification.recreationPrompt).toContain('governs this whole session, not only this turn');
   });
 
+  it('loads the thread skill from the project repo when the turn names that same path', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const loadSkill = jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' });
+
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+      turnSkill: { name: 'cab-release', path: cabPath },
+      skillConfig: null,
+      loadSkill,
+    });
+
+    expect(loadSkill).toHaveBeenCalledWith(expect.objectContaining({
+      registration: 'project',
+      skill: expect.objectContaining({ path: cabPath }),
+    }));
+    expect(specification.skill?.content).toContain('# cab-release');
+  });
+
+  it('grants only CAB wiki, snow, and conditional release-branch writes to the CAB skill', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+      turnSkill: { name: 'cab-release', path: cabPath },
+      skillConfig: null,
+      loadSkill: jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' }),
+    });
+
+    expect(specification.currentPrompt).toContain('explicitly requested CAB release workflow');
+    expect(specification.currentPrompt).toContain('update only `/Manual Release/{version}`');
+    expect(specification.currentPrompt).toContain('pipeline 670 for Dry-run or 595 for Run');
+    expect(specification.currentPrompt).toContain('only after the snow run succeeds');
+    expect(specification.currentPrompt).toContain('through the CAB broker');
+    expect(specification.currentPrompt).toContain('Do not git push.');
+    expect(specification.currentPrompt).not.toContain(
+      'Treat the repository checkout as read-only',
+    );
+  });
+
+  it('keeps the narrow CAB write grant on follow-up turns without reloading the skill', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Run the CAB dry-run', 1),
+        message('agent', 'The ADO request failed.', 2),
+      ],
+      {
+        workflowClass: 'home-chat',
+        kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+        skillConfig: null,
+        loadSkill: jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' }),
+      },
+    );
+
+    expect(specification.currentPrompt).toContain('explicitly requested CAB release workflow');
+    expect(specification.currentPrompt).not.toContain('# cab-release');
+  });
+
   it('scopes a skill picked mid-thread to that turn only', async () => {
     const specification = await admittedSpecification(
       [
@@ -228,6 +290,28 @@ describe('durable interactive turn prompt', () => {
     );
     expect(specification.currentPrompt).not.toContain('Does this surface any PHI?');
     expect(specification.currentPrompt).not.toContain(SKILL_CONTENT);
+  });
+
+  it('pairs a reply with the question it quotes, not a later unanswered question', async () => {
+    // Reproduces the race from interview d05034ee-4d85-423b-9677-e034547efde5:
+    // the UI showed a second question (Q4) before the user answered the
+    // first (Q3). The reply only quotes Q3, so Q4 must stay unanswered.
+    const specification = await admittedSpecification([
+      message('user', 'We need a Brainstorm session feature', 1),
+      message('agent', 'Who may create a Brainstorm session?\na. Any project member\nb. Admins only', 2),
+      message('agent', 'Who may delete a Brainstorm session?\na. The creator\nb. Any admin', 3),
+      message(
+        'user',
+        'Q3 · Who may create a Brainstorm session? Answer: A — Any member of the current project.',
+        4,
+      ),
+    ]);
+
+    expect(specification.currentPrompt).toContain(
+      '2. You asked: Who may create a Brainstorm session?\n'
+      + '   User answered: Q3 · Who may create a Brainstorm session? Answer: A — Any member of the current project.',
+    );
+    expect(specification.currentPrompt).not.toContain('Who may delete a Brainstorm session?');
   });
 
   it('does not add an answer recap to Home chat turns', async () => {

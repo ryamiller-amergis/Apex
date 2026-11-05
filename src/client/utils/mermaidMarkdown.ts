@@ -21,6 +21,55 @@ function shouldRewriteFenceAsMermaid(
   return MERMAID_GENERIC_FENCE_LANGS.has(lang);
 }
 
+function findFirstFenceContentLine(
+  lines: string[],
+  startIndex: number,
+  fenceMarker: string
+): string {
+  for (let j = startIndex; j < lines.length; j += 1) {
+    const candidate = lines[j].trim();
+    if (candidate.startsWith(fenceMarker)) {
+      return '';
+    }
+    if (candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
+export function extractMermaidChartFromCode(
+  language: string | undefined,
+  code: string
+): string | null {
+  const normalizedLang = language?.trim() ?? '';
+  const lowerLang = normalizedLang.toLowerCase();
+  if (lowerLang === 'mermaid' || lowerLang === 'mmd') {
+    return code;
+  }
+  const firstNonEmpty =
+    code
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean) ?? '';
+  if (normalizedLang && MERMAID_KEYWORD_RE.test(normalizedLang)) {
+    if (MERMAID_KEYWORD_RE.test(firstNonEmpty)) {
+      return code;
+    }
+    const header = /^(flowchart|graph)$/i.test(normalizedLang)
+      ? `${normalizedLang} TD`
+      : normalizedLang;
+    return `${header}\n${code}`;
+  }
+  if (
+    MERMAID_GENERIC_FENCE_LANGS.has(lowerLang) &&
+    MERMAID_KEYWORD_RE.test(firstNonEmpty)
+  ) {
+    return code;
+  }
+  return null;
+}
+
 export function normalizeMermaidBlocks(markdown: string): string {
   const lines = markdown.split('\n');
   const normalized: string[] = [];
@@ -34,12 +83,31 @@ export function normalizeMermaidBlocks(markdown: string): string {
       const fenceMarker = trimmed.startsWith('```') ? '```' : '~~~';
 
       if (!inFence) {
-        // Opening fence — rewrite generic/bare fences whose first content line
-        // is a Mermaid keyword (AI often emits ```text instead of ```mermaid).
+        // Opening fence — rewrite generic/bare/keyword fences whose content
+        // is a Mermaid diagram (AI often emits ```text, ```flowchart, or bare ```).
         const lang = trimmed.slice(fenceMarker.length).trim();
-        const firstContentLine =
-          i + 1 < lines.length ? lines[i + 1].trim() : '';
-        if (shouldRewriteFenceAsMermaid(lang, firstContentLine)) {
+        const lowerLang = lang.toLowerCase();
+        const firstContentLine = findFirstFenceContentLine(
+          lines,
+          i + 1,
+          fenceMarker
+        );
+        if (lowerLang === 'mermaid' || lowerLang === 'mmd') {
+          normalized.push(`${fenceMarker}mermaid`);
+          inFence = true;
+          continue;
+        }
+        if (MERMAID_KEYWORD_RE.test(lang)) {
+          normalized.push(`${fenceMarker}mermaid`);
+          if (!MERMAID_KEYWORD_RE.test(firstContentLine)) {
+            normalized.push(
+              /^(flowchart|graph)$/i.test(lang) ? `${lang} TD` : lang
+            );
+          }
+          inFence = true;
+          continue;
+        }
+        if (shouldRewriteFenceAsMermaid(lowerLang, firstContentLine)) {
           normalized.push(`${fenceMarker}mermaid`);
           inFence = true;
           continue;
@@ -58,7 +126,16 @@ export function normalizeMermaidBlocks(markdown: string): string {
         const currentLine = lines[i];
         const currentTrimmed = currentLine.trim();
 
-        if (i !== 0 && (/^#{1,6}\s+/.test(currentLine) || currentTrimmed === '---')) {
+        if (
+          i !== 0 &&
+          (/^#{1,6}\s+/.test(currentLine) ||
+            currentTrimmed === '---' ||
+            currentTrimmed.startsWith('```') ||
+            currentTrimmed.startsWith('~~~') ||
+            /^(\*\*|__)[A-Za-z0-9]/.test(currentTrimmed) ||
+            /^\|.+\|$/.test(currentTrimmed) ||
+            /^>\s+/.test(currentTrimmed))
+        ) {
           break;
         }
 

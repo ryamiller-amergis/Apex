@@ -114,6 +114,11 @@ jest.mock('../services/devWorkbenchFeatureContextService', () => ({
   getApexFeatureContext: (...args: unknown[]) => mockGetApexFeatureContext(...args),
 }));
 
+const mockGetMyWorkItemContext = jest.fn();
+jest.mock('../services/myWorkItemContextService', () => ({
+  getMyWorkItemContext: (...args: unknown[]) => mockGetMyWorkItemContext(...args),
+}));
+
 const mockAttachCloudAgentEligibility = jest.fn(async (items: unknown[]) => items);
 const mockGetCloudAgentRunStatus = jest.fn().mockResolvedValue(null);
 const mockGetCloudAgentRunHistory = jest.fn().mockResolvedValue([]);
@@ -332,7 +337,10 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
   };
   const callerAssignedTo = { displayName: 'Jane Developer', uniqueName: 'jane@example.com' };
 
-  function mockWorkItemLookup(fields: Record<string, unknown>) {
+  function mockWorkItemLookup(
+    fields: Record<string, unknown>,
+    children: Array<{ assignedTo?: string }> = [],
+  ) {
     MockAzureDevOpsService.mockImplementation(() => ({
       queryWorkItemsByWiql: jest.fn().mockResolvedValue({
         items: [{
@@ -347,6 +355,7 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
           },
         }],
       }),
+      getFeatureChildren: jest.fn().mockResolvedValue(children),
     }) as unknown as AzureDevOpsService);
   }
 
@@ -407,6 +416,25 @@ describe('POST /api/dev-workbench/cloud-agent/start', () => {
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/assigned to you/i);
     expect(mockStartCloudAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('starts a feature that is not assigned to you when one of your items sits under it', async () => {
+    mockWorkItemLookup({
+      'System.AssignedTo': { displayName: 'Other Developer', uniqueName: 'other@example.com' },
+      'System.WorkItemType': 'Feature',
+    }, [
+      { assignedTo: 'Jane Developer' },
+    ]);
+
+    const res = await request(buildApp(callerProfile))
+      .post('/api/dev-workbench/cloud-agent/start')
+      .send({ workItemId: 42, project: 'MaxView' });
+
+    expect(res.status).toBe(200);
+    expect(mockStartCloudAgentRun).toHaveBeenCalledWith(expect.objectContaining({
+      workItemId: 42,
+      project: 'MaxView',
+    }));
   });
 
   it('returns 200 with sessionId and runId', async () => {
@@ -1622,6 +1650,60 @@ describe('GET /api/dev-workbench/features/:prdId/:featureId/context', () => {
 
     expect(res.status).toBe(403);
     expect(mockGetApexFeatureContext).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/dev-workbench/workitems/:id/context', () => {
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    mockGroupMembershipGranted = true;
+    jest.clearAllMocks();
+  });
+
+  it('returns 400 when project is missing', async () => {
+    const res = await request(buildApp()).get('/api/dev-workbench/workitems/42/context');
+    expect(res.status).toBe(400);
+    expect(mockGetMyWorkItemContext).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for an app-native requirements project', async () => {
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/workitems/42/context?project=Apex',
+    );
+    expect(res.status).toBe(400);
+    expect(mockGetMyWorkItemContext).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the work item is missing', async () => {
+    mockGetMyWorkItemContext.mockResolvedValue(null);
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/workitems/42/context?project=MaxView',
+    );
+    expect(res.status).toBe(404);
+    expect(mockGetMyWorkItemContext).toHaveBeenCalledWith('MaxView', 42);
+  });
+
+  it('returns the work item context, including child states', async () => {
+    mockGetMyWorkItemContext.mockResolvedValue({
+      id: 42,
+      title: 'Shift scheduler',
+      workItemType: 'Feature',
+      state: 'In Progress',
+      description: 'Build the scheduler',
+      acceptanceCriteria: '',
+      reproSteps: '',
+      design: '',
+      children: [
+        { id: 201, title: 'Pick a shift', workItemType: 'Product Backlog Item', state: 'New' },
+      ],
+    });
+
+    const res = await request(buildApp()).get(
+      '/api/dev-workbench/workitems/42/context?project=MaxView',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.children[0].state).toBe('New');
   });
 });
 

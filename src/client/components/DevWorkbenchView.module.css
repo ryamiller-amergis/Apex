@@ -57,71 +57,174 @@
 .list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
+/* ---- Feature + linked-items hierarchy -------------------------------- */
+
+/* One card per Feature group. Elevates slightly on hover so the whole
+   group reads as a single unit, distinct from the standalone-item cards. */
 .stack {
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.stack .item {
-  border: none;
-  border-radius: 0;
-  background: var(--bg-secondary);
-  box-shadow: none;
+.stack:hover {
+  border-color: var(--accent-color);
+  box-shadow: var(--shadow-sm);
 }
 
-.stack .item + .item {
-  border-top: 1px solid var(--border-color);
-}
-
-/* The feature is the header: accent rail plus a stronger title. Children sit
-   on their own band so the two read apart at a glance. Child text uses the
-   primary color, which stays at or above 4.5:1 on this band in every theme. */
-.stack .item[data-role="feature"] {
+/* The feature header sits on the raised band with an accent rail. The
+   selector has to beat `.item`, which is declared later and would otherwise
+   paint the header with the children's background. */
+.stack .stack-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 20px 14px 16px;
+  background: var(--bg-tertiary);
   box-shadow: inset 4px 0 0 var(--accent-color);
 }
 
-.stack .item[data-role="feature"] .item-title {
+.stack-header .item-title {
   font-size: 1rem;
   font-weight: 600;
 }
 
-.stack .item[data-role="feature"] .item-id {
-  color: var(--text-secondary);
+.stack-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
 
-.stack .item[data-role="child"] {
-  padding-left: 40px;
-  background: color-mix(in srgb, var(--text-primary) 22%, var(--bg-secondary));
-}
-
-.stack .item[data-role="child"] .item-title,
-.stack .item[data-role="child"] .item-id,
-.stack .item[data-role="child"] .item-meta {
-  color: var(--text-primary);
-}
-
-.stack .item[data-role="child"] .badge {
+.stack-toggle:hover {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
 
-.item {
-  display: flex;
+.stack-count {
+  flex: 0 0 auto;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  /* Title keeps a wide share of the row. A wide action cluster (a cloud run
-     plus its links) drops to the next line instead of squeezing the title. */
-  flex-wrap: wrap;
-  row-gap: 10px;
-  column-gap: 16px;
-  padding: 14px 16px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.grouping-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Children render on the secondary band, tied to the feature header by
+   a tree guide line so the group reads as one hierarchy at a glance. */
+.stack-children {
+  position: relative;
+  padding-left: 38px;
+  background: var(--bg-secondary);
+}
+
+.stack-children::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 24px;
+  left: 20px;
+  width: 1px;
+  background: var(--border-color);
+}
+
+.stack .tree-item {
+  position: relative;
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  background: transparent;
+}
+
+.stack .tree-item:first-child {
+  border-top: none;
+}
+
+.stack .tree-item:hover {
+  background: var(--bg-primary);
+}
+
+/* Horizontal tick connecting the vertical guide line to each child row. */
+.tree-item::before {
+  content: '';
+  position: absolute;
+  top: 25px;
+  left: -18px;
+  width: 18px;
+  height: 1px;
+  background: var(--border-color);
+}
+
+/* A compact, color-coded chip per work item type so a row is scannable
+   without reading the full type name. */
+.type-pill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  margin-top: 1px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.type-feature {
+  background: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  color: var(--accent-color);
+}
+
+.type-bug {
+  background: color-mix(in srgb, var(--error-color) 14%, transparent);
+  color: var(--error-color);
+}
+
+.type-pbi {
+  background: color-mix(in srgb, var(--success-color) 15%, transparent);
+  color: var(--success-color);
+}
+
+.type-tbi,
+.type-default {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+/* ---- Standalone and shared row internals ------------------------------ */
+
+.item {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -131,6 +234,34 @@
 .item:hover {
   border-color: var(--accent-color);
   box-shadow: var(--shadow-sm);
+}
+
+.stack .item,
+.stack-header {
+  border: none;
+  border-radius: 0;
+}
+
+.stack .item:hover {
+  box-shadow: none;
+}
+
+.row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  /* A crowded action cluster (session buttons + cloud run control) wraps onto
+     its own line instead of crushing the title and badges. */
+  flex-wrap: wrap;
+  row-gap: 12px;
+  column-gap: 10px;
+  padding: 16px 20px;
+}
+
+.stack-header .row-main,
+.tree-item .row-main {
+  padding: 13px 20px 13px 0;
+  align-items: center;
 }
 
 .item-info {
@@ -154,7 +285,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  row-gap: 6px;
   font-size: 0.8125rem;
   color: var(--text-secondary);
 }
@@ -701,8 +833,7 @@
   cursor: not-allowed;
 }
 
-/* Starting a run is one of two equal choices on every row, so it carries the
-   same weight as local development. The filled accent is kept for a row's
+/* Cloud start sits beside View Context. The filled accent is kept for a row's
    actual next step (View PR, Resume run), which only some rows have. */
 .cloud-dev-btn {
   display: inline-flex;
@@ -720,7 +851,7 @@
   color: var(--text-primary);
 }
 
-/* Keeps the cloud action distinguishable from local development at a glance
+/* Keeps the cloud action distinguishable from View Context at a glance
    without a filled button on every row. */
 .cloud-dev-btn .cloud-button-icon {
   color: var(--accent-color);
@@ -912,64 +1043,6 @@
   font-size: 0.8125rem;
   line-height: 1.45;
   word-break: break-word;
-}
-
-/* The reason stays mounted (aria-describedby target) but out of the layout
-   until the trigger is clicked. */
-.cloud-reason {
-  position: relative;
-  display: inline-flex;
-}
-
-.cloud-reason-trigger {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.cloud-reason-trigger:hover,
-.cloud-reason[data-pinned='true'] .cloud-reason-trigger {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.cloud-reason-popover {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
-  z-index: 5;
-  width: max-content;
-  max-width: 260px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-  font-size: 0.6875rem;
-  font-weight: 400;
-  line-height: 1.45;
-  text-align: left;
-  box-shadow: var(--shadow-md);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-
-.cloud-reason[data-pinned='true'] .cloud-reason-popover {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
 }
 
 .cloud-pr-link {

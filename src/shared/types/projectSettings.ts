@@ -182,6 +182,13 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   /** ADO: repo or project/repo. GitHub: organization/repo (required). */
   skillRepo: string;
   skillBranch: string;
+  /**
+   * Cloud Agent creates its branch from this and opens the pull request into it.
+   * Null uses skillBranch.
+   */
+  cloudAgentTargetBranch?: string | null;
+  /** Azure DevOps team or group names added as required reviewers on Cloud Agent pull requests. */
+  cloudAgentRequiredReviewers?: string[] | null;
   updatedBy?: string | null;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
@@ -304,6 +311,8 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   /** ADO: repo or project/repo. GitHub: organization/repo (required). */
   skillRepo: string;
   skillBranch: string;
+  cloudAgentTargetBranch?: string | null;
+  cloudAgentRequiredReviewers?: string[] | null;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
   adrInterviewSkillPath?: string | null;

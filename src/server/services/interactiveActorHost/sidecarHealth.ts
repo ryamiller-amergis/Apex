@@ -186,6 +186,37 @@ export function createDaprSidecarClient(daprHttpPort: string) {
   };
 }
 
+/**
+ * Answers from the last finished check and starts the next one in the
+ * background. The probes allow 1 s per call while a sidecar metadata fetch may
+ * take up to `METADATA_TIMEOUT_MS`, so awaiting it on a busy host made
+ * Container Apps restart the container mid-turn. Only the first call waits.
+ */
+export function createCachedHealthCheck(
+  check: () => Promise<InteractiveHealthReport>,
+): () => Promise<InteractiveHealthReport> {
+  let last: InteractiveHealthReport | null = null;
+  let inFlight: Promise<InteractiveHealthReport> | null = null;
+  return async () => {
+    if (!inFlight) {
+      inFlight = check()
+        .catch((error): InteractiveHealthReport => ({
+          status: 'degraded',
+          problem: 'sidecar-unreachable',
+          detail: error instanceof Error ? error.message : String(error),
+        }))
+        .then((report) => {
+          last = report;
+          return report;
+        })
+        .finally(() => {
+          inFlight = null;
+        });
+    }
+    return last ?? inFlight;
+  };
+}
+
 export function interactiveHealthRoute(
   check: () => Promise<InteractiveHealthReport>,
 ): (req: Request, res: Response) => Promise<void> {

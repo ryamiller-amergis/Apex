@@ -21,6 +21,30 @@ export interface AssignedWorkItem {
   cloudAgentEligibility?: CloudAgentEligibility;
 }
 
+/** One child of a Feature shown in the My Work View Context section. */
+export interface MyWorkItemContextChild {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+}
+
+/**
+ * Read-only Azure DevOps context for a My Work row.
+ * Text fields are plain text. `children` is empty unless the item is a Feature.
+ */
+export interface MyWorkItemContext {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+  description: string;
+  acceptanceCriteria: string;
+  reproSteps: string;
+  design: string;
+  children: MyWorkItemContextChild[];
+}
+
 /**
  * ADO work-item states from which a development session may be started.
  * "Active" is the Bug equivalent of "In Progress". Any other state (e.g.
@@ -223,6 +247,8 @@ export interface GuidedCloudJobOption {
   description: string;
   skillName: string;
   skillPath: string | null;
+  /** Site reports open a Bug. Investigations only gather context. */
+  opensBug: boolean;
 }
 
 export interface GuidedCloudAgentSession {

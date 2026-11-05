@@ -380,12 +380,12 @@ describe('FEAT-005 VT-21 BuildIntakeChatRoute', () => {
   it('shows the paused notice and keeps history when the flag is off', () => {
     setFlag(false);
     (useBuildIntake as jest.Mock).mockReturnValue({
-      data: { interviewId: 'iv-1', threadId: 'thread-iv-1' },
+      data: { interviewId: 'iv-1' },
       isLoading: false,
       isError: false,
       refetch: jest.fn(),
     });
-    render(wrap(<BuildIntakeChatRoute buildId="build-1" />));
+    render(wrap(<BuildIntakeChatRoute project="Apex" buildId="build-1" />));
 
     expect(screen.getByTestId('build-intake-chat')).toBeInTheDocument();
     expect(screen.getByTestId('build-intake-paused-notice')).toHaveTextContent(BUILD_INTAKE_PAUSED_MESSAGE);
@@ -396,12 +396,12 @@ describe('FEAT-005 VT-21 BuildIntakeChatRoute', () => {
 
   it('keeps the confirm submit control while the flag is on', () => {
     (useBuildIntake as jest.Mock).mockReturnValue({
-      data: { interviewId: 'iv-1', threadId: 'thread-iv-1' },
+      data: { interviewId: 'iv-1' },
       isLoading: false,
       isError: false,
       refetch: jest.fn(),
     });
-    render(wrap(<BuildIntakeChatRoute buildId="build-1" />));
+    render(wrap(<BuildIntakeChatRoute project="Apex" buildId="build-1" />));
 
     expect(screen.queryByTestId('build-intake-paused-notice')).not.toBeInTheDocument();
     expect(screen.getAllByTestId('interview-submit-answers').length).toBeGreaterThan(0);
@@ -409,12 +409,12 @@ describe('FEAT-005 VT-21 BuildIntakeChatRoute', () => {
 
   it('shows the not-started message before the interview exists', () => {
     (useBuildIntake as jest.Mock).mockReturnValue({
-      data: { interviewId: null, threadId: null },
+      data: { interviewId: null },
       isLoading: false,
       isError: false,
       refetch: jest.fn(),
     });
-    render(wrap(<BuildIntakeChatRoute buildId="build-1" />));
+    render(wrap(<BuildIntakeChatRoute project="Apex" buildId="build-1" />));
 
     expect(screen.getByTestId('build-intake-not-started')).toHaveTextContent(
       'Your build has not started its conversation yet.',
@@ -430,7 +430,7 @@ describe('FEAT-005 VT-21 BuildIntakeChatRoute', () => {
       isError: true,
       refetch,
     });
-    render(wrap(<BuildIntakeChatRoute buildId="build-1" />));
+    render(wrap(<BuildIntakeChatRoute project="Apex" buildId="build-1" />));
 
     expect(screen.getByTestId('build-intake-error')).toHaveTextContent('We could not open this conversation.');
     await user.click(screen.getByTestId('build-intake-retry'));

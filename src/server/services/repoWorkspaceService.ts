@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { git, safeArgs } from '../utils/asyncGit';
+import { removeTree } from '../utils/removeTree';
 import {
   COLD_CACHE_IDLE_TIMEOUT_MS,
   COLD_CACHE_TIMEOUT_MS,
@@ -8,10 +9,11 @@ import {
 } from './repoGitSettings';
 
 /**
- * Removes a directory without blocking the event loop. Synchronous `fs.rmSync`
- * on the Azure Files mount stalls every request on the instance, including
- * health probes. The directory is renamed first so the original path is free
- * immediately; the renamed copy is then deleted asynchronously.
+ * Removes a directory without blocking the event loop or the libuv pool.
+ * Synchronous `fs.rmSync` on the Azure Files mount stalls every request on the
+ * instance, and `fs.promises.rm` starves DNS and new DB connections instead.
+ * The directory is renamed first so the original path is free immediately; the
+ * renamed copy is then deleted by `removeTree` in a child process.
  */
 export async function removeDirectoryAsync(targetDir: string): Promise<void> {
   const trashDir = `${targetDir}.removing-${Date.now()}`;
@@ -20,11 +22,11 @@ export async function removeDirectoryAsync(targetDir: string): Promise<void> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
     // Rename failed (for example a locked directory); delete in place instead.
-    await fs.promises.rm(targetDir, { recursive: true, force: true });
+    await removeTree(targetDir);
     return;
   }
   try {
-    await fs.promises.rm(trashDir, { recursive: true, force: true });
+    await removeTree(trashDir);
   } catch (err) {
     console.warn(
       `[repo-workspace] failed to delete ${path.basename(trashDir)}: ${(err as Error).message}`

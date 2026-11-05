@@ -56,6 +56,7 @@ import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/proje
 import { logMyWorkSession } from '../services/myWorkSessionLogger';
 import { buildLocalDevContext } from '../services/localDevContextService';
 import { getApexFeatureContext } from '../services/devWorkbenchFeatureContextService';
+import { getMyWorkItemContext } from '../services/myWorkItemContextService';
 import {
   attachCloudAgentEligibility,
   cancelCloudAgentRun,
@@ -98,6 +99,20 @@ function sameAssignedToCaller(assignedTo: string | null, callerDisplayName: stri
   return assignedTo.toLowerCase() === callerDisplayName.trim().toLowerCase();
 }
 
+/** A feature you do not own is startable when one of your items sits under it. */
+async function callerCanStartCloudAgent(
+  ado: AzureDevOpsService,
+  workItemId: number,
+  fields: Record<string, unknown>,
+  callerDisplayName: string,
+): Promise<boolean> {
+  const assignedTo = assignedToDisplayName(fields['System.AssignedTo']);
+  if (sameAssignedToCaller(assignedTo, callerDisplayName)) return true;
+  if (fields['System.WorkItemType'] !== 'Feature') return false;
+  const children = await ado.getFeatureChildren(workItemId);
+  return children.some((child) => sameAssignedToCaller(child.assignedTo ?? null, callerDisplayName));
+}
+
 const router = Router();
 
 router.use(requirePermission('dev-workbench:view'));
@@ -128,13 +143,42 @@ router.get('/workitems', async (req: Request, res: Response) => {
     const withEligibility = await attachCloudAgentEligibility(items, {
       userId,
       project,
-      isSuperAdmin: isSuperAdminRequest(req),
     });
 
     res.json(withEligibility);
   } catch (err) {
     console.error('[dev-workbench] getWorkItems failed:', (err as Error).message);
     res.status(500).json({ error: 'Failed to fetch assigned work items' });
+  }
+});
+
+// GET /workitems/:id/context?project= — read-only work item and Feature children
+router.get('/workitems/:id/context', async (req: Request, res: Response) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project : '';
+    const workItemId = Number(req.params.id);
+    if (!project) {
+      res.status(400).json({ error: 'project query parameter is required' });
+      return;
+    }
+    if (!Number.isSafeInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'Invalid work item ID' });
+      return;
+    }
+    if (isAppNativeRequirementsProject(project)) {
+      res.status(400).json({ error: 'This project uses app-native PRD requirements' });
+      return;
+    }
+
+    const context = await getMyWorkItemContext(project, workItemId);
+    if (!context) {
+      res.status(404).json({ error: 'Work item not found' });
+      return;
+    }
+    res.json(context);
+  } catch (err) {
+    console.error('[dev-workbench] getWorkItemContext failed:', (err as Error).message);
+    res.status(500).json({ error: 'Failed to fetch work item context' });
   }
 });
 
@@ -950,8 +994,8 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       return;
     }
 
-    const assignedTo = assignedToDisplayName(fields['System.AssignedTo']);
-    if (!sameAssignedToCaller(assignedTo, displayName)) {
+    const canStart = await callerCanStartCloudAgent(stateService, workItemId, fields, displayName);
+    if (!canStart) {
       res.status(403).json({
         error: 'You can only start Cloud Development on work items assigned to you.',
       });
@@ -994,7 +1038,6 @@ router.post('/cloud-agent/start', async (req: Request, res: Response) => {
       initiatorName: displayName,
       initiatorEmail: getUserEmail(req),
       adoUserToken,
-      isSuperAdmin: isSuperAdminRequest(req),
       item: {
         state: (fields['System.State'] ?? '') as string,
         workItemType: (fields['System.WorkItemType'] ?? '') as string,

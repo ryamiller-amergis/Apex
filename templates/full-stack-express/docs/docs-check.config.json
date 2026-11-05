@@ -1,0 +1,100 @@
+{
+  "entryPoint": "AGENTS.md",
+  "index": "docs/agent-index.txt",
+  "documents": [
+    "AGENTS.md",
+    "README.md",
+    "docs/**/*.md",
+    ".cursor/skills/**/SKILL.md"
+  ],
+  "requiredDocuments": [
+    "docs/architecture.md",
+    "docs/module-map.md",
+    "docs/api.md",
+    "docs/testing.md",
+    "docs/design-system.md",
+    "docs/component-catalog.md",
+    "docs/compatibility.md",
+    "docs/adr/README.md",
+    "docs/runbooks/local-setup.md",
+    "docs/runbooks/migrations.md",
+    "docs/runbooks/common-failures.md",
+    "docs/handoff.md"
+  ],
+  "requiredSections": [
+    {
+      "match": "docs/runbooks/*.md",
+      "headings": [
+        "Purpose",
+        "Prerequisites",
+        "Steps",
+        "Verify",
+        "Troubleshooting"
+      ]
+    },
+    {
+      "match": "docs/adr/0*.md",
+      "headings": [
+        "Context and Problem Statement",
+        "Considered Options",
+        "Decision Outcome"
+      ]
+    },
+    {
+      "match": "AGENTS.md",
+      "headings": ["Start here", "Documentation map", "Skills", "Scripts"]
+    },
+    {
+      "match": ".cursor/skills/**/SKILL.md",
+      "headings": [
+        "When to use",
+        "Required references",
+        "Rules",
+        "Review checklist",
+        "Stop conditions"
+      ]
+    },
+    {
+      "match": ".cursor/skills/planner/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/ui/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/developer/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/qa/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/integration/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": ".cursor/skills/orchestrator/SKILL.md",
+      "headings": ["Purpose", "Inputs", "Procedure", "Outputs", "Boundaries"]
+    },
+    {
+      "match": "docs/handoff.md",
+      "headings": [
+        "What the Template Provides",
+        "Ownership",
+        "Contracts Platform Engineering Consumes",
+        "Replacement Placeholders",
+        "Unresolved Decision Register"
+      ]
+    }
+  ],
+  "moduleMap": {
+    "file": "docs/module-map.md",
+    "workspaceFile": "pnpm-workspace.yaml",
+    "fields": ["Responsibility", "Public interface"]
+  },
+  "ignorePaths": ["dist/**", "node_modules/**", ".env", "coverage/**"],
+  "forbiddenTerms": ["Apex", "Amergis", "ai-pilot"],
+  "originHeading": "Template origin"
+}

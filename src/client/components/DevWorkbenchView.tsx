@@ -19,6 +19,7 @@ import {
 import { useFeatureFlag, useFeatureFlags } from '../hooks/useFeatureFlags';
 import { CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import { CloudAgentLaunchDialog } from './CloudAgentLaunchDialog';
+import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import { useApexBacklogFeatures } from '../hooks/useApexBacklog';
 import { useAssignedBoardItems } from '../hooks/useApexWorkItems';
 import type { ApexWorkItem } from '../../shared/types/apexWorkItem';
@@ -39,8 +40,8 @@ import {
   rollupWorkStatus,
   type MyWorkStatus,
 } from '../../shared/utils/myWorkStatus';
-import StartLocalDevModal, { type StartLocalDevTarget } from './StartLocalDevModal';
 import FeatureContextModal from './FeatureContextModal';
+import WorkItemContextModal from './WorkItemContextModal';
 import { LeftoverWorkList } from './LeftoverWorkList';
 import { CurrentRunChecksSummary } from './CurrentRunChecksSummary';
 import {
@@ -765,8 +766,6 @@ const CloudAgentEnabledRowAction: React.FC<{
   const [cancelledRunId, setCancelledRunId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [reasonPinned, setReasonPinned] = useState(false);
-  const reasonRef = useRef<HTMLSpanElement | null>(null);
   const sessionId = startedSessionId ?? activeSession?.id ?? null;
   const { data: polledRun } = useCloudAgentRun(sessionId);
   const { data: sessionDetail } = useDevSession(sessionId);
@@ -784,31 +783,10 @@ const CloudAgentEnabledRowAction: React.FC<{
     latestRun && cancelledRunId === latestRun.runId
       ? { ...latestRun, status: 'cancelled' as const }
       : latestRun;
-  const eligibility = item.cloudAgentEligibility ?? {
-    allowed: false,
-    reason: 'Cloud Development is not available.',
-  };
-  const reasonId = `my-work-start-cloud-dev-reason-${item.id}`;
   const isLive =
     currentRun?.status === 'queued' ||
     currentRun?.status === 'dispatched' ||
     currentRun?.status === 'running';
-
-  useEffect(() => {
-    if (!reasonPinned) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!reasonRef.current?.contains(event.target as Node)) setReasonPinned(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setReasonPinned(false);
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [reasonPinned]);
 
   // Work items often arrive before sessions. Without this hold the row paints
   // "Start cloud agent" for a run that is already saved.
@@ -876,6 +854,7 @@ const CloudAgentEnabledRowAction: React.FC<{
   const followUpDialog = chooserIntent === 'followup';
   const launchDialog = chooserIntent ? (
     <CloudAgentLaunchDialog
+      {...{ 'data-testid': 'my-work-cloud-agent-launch-dialog' }}
       title={followUpDialog ? 'More work' : chooserIntent === 'retry' ? 'Retry cloud agent' : 'Start cloud agent'}
       requireTask={followUpDialog}
       taskLabel="What else should the cloud agent do?"
@@ -936,52 +915,11 @@ const CloudAgentEnabledRowAction: React.FC<{
   if (!currentRun) {
     return (
       <div className={styles['cloud-slot']}>
-        {/* Sits immediately left of the button it explains, so the button stays
-            the rightmost control and keeps its column aligned across rows. */}
-        {!eligibility.allowed && eligibility.reason ? (
-          <span
-            ref={reasonRef}
-            className={styles['cloud-reason']}
-            data-pinned={reasonPinned ? 'true' : undefined}
-          >
-            <button
-              type="button"
-              className={styles['cloud-reason-trigger']}
-              aria-expanded={reasonPinned}
-              aria-controls={reasonId}
-              title="Why can't I start this?"
-              onClick={() => setReasonPinned((pinned) => !pinned)}
-              {...{ 'data-testid': `my-work-cloud-reason-toggle-${item.id}` }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
-                <path
-                  d="M12 11v5M12 7.5v.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-              <span className={styles['visually-hidden']}>Why can&apos;t I start this?</span>
-            </button>
-            <span
-              id={reasonId}
-              role="tooltip"
-              className={styles['cloud-reason-popover']}
-              {...{ 'data-testid': reasonId }}
-            >
-              {eligibility.reason}
-            </span>
-          </span>
-        ) : null}
         <button
           className={styles['cloud-dev-btn']}
           type="button"
-          disabled={!eligibility.allowed || startCloud.isPending}
-          title={eligibility.allowed ? 'Start a Cloud Agent on this work item' : eligibility.reason}
-          aria-label={startCloud.isPending ? 'Starting cloud agent' : 'Start cloud agent'}
-          aria-describedby={eligibility.allowed ? undefined : reasonId}
+          disabled={startCloud.isPending}
+          title="Start a Cloud Agent on this work item"
           onClick={() => {
             // @feature-flag:cloud-agent-guided-launch start winner=enabled
             if (launchChooser) {
@@ -1258,6 +1196,7 @@ export function filterApexBacklogBySearch(
 }
 
 export type AdoStatusFilter = 'all' | 'new' | 'in_progress' | 'in_pr';
+export type AdoTypeFilter = 'all' | 'bug' | 'tbi' | 'pbi' | 'feature';
 export type AdoCloudFilter = 'all' | 'running' | 'completed' | 'failed';
 
 export const ADO_STATUS_FILTERS: { id: AdoStatusFilter; label: string; title: string }[] = [
@@ -1266,6 +1205,21 @@ export const ADO_STATUS_FILTERS: { id: AdoStatusFilter; label: string; title: st
   { id: 'in_progress', label: 'In Progress', title: 'State is In Progress or Active' },
   { id: 'in_pr', label: 'In PR', title: 'State is In Pull Request' },
 ];
+
+export const ADO_TYPE_FILTERS: { id: AdoTypeFilter; label: string; title: string }[] = [
+  { id: 'all', label: 'Any', title: 'Every work item type' },
+  { id: 'bug', label: 'Bug', title: 'Bugs' },
+  { id: 'tbi', label: 'TBI', title: 'Technical Backlog Items' },
+  { id: 'pbi', label: 'PBI', title: 'Product Backlog Items' },
+  { id: 'feature', label: 'Feature', title: 'Features' },
+];
+
+const WORK_ITEM_TYPE_NAMES: Record<Exclude<AdoTypeFilter, 'all'>, readonly string[]> = {
+  bug: ['bug'],
+  tbi: ['technical backlog item', 'tbi'],
+  pbi: ['product backlog item', 'pbi'],
+  feature: ['feature'],
+};
 
 export const ADO_CLOUD_FILTERS: { id: AdoCloudFilter; label: string; title: string }[] = [
   { id: 'all', label: 'Any', title: 'Any cloud agent run, including items with no run' },
@@ -1303,14 +1257,48 @@ function matchesCloudRun(
   return run.status === 'failed';
 }
 
+function matchesWorkItemType(item: AssignedWorkItem, type: AdoTypeFilter): boolean {
+  if (type === 'all') return true;
+  const normalized = item.workItemType.trim().toLowerCase();
+  return WORK_ITEM_TYPE_NAMES[type].includes(normalized);
+}
+
+/** Short label so a type pill reads at a glance instead of wrapping onto two lines. */
+function workItemTypeAbbrev(workItemType: string): string {
+  switch (workItemType.trim().toLowerCase()) {
+    case 'product backlog item':
+      return 'PBI';
+    case 'technical backlog item':
+      return 'TBI';
+    default:
+      return workItemType;
+  }
+}
+
+function workItemTypeBadgeClass(workItemType: string): string {
+  switch (workItemType.trim().toLowerCase()) {
+    case 'feature':
+      return styles['type-feature'];
+    case 'bug':
+      return styles['type-bug'];
+    case 'product backlog item':
+      return styles['type-pbi'];
+    case 'technical backlog item':
+      return styles['type-tbi'];
+    default:
+      return styles['type-default'];
+  }
+}
+
 /**
  * Client-side filter for ADO assigned work items. Search matches the title
- * or the work item id (`55031` and `#55031`). Status and cloud filters combine.
+ * or the work item id (`55031` and `#55031`). Status, type, and cloud filters combine.
  */
 export function filterAssignedWorkItems(
   items: AssignedWorkItem[],
   options: {
     status: AdoStatusFilter;
+    type?: AdoTypeFilter;
     cloud: AdoCloudFilter;
     search: string;
     cloudRunByWorkItemId?: ReadonlyMap<number, CloudAgentRunSummary | null | undefined>;
@@ -1318,6 +1306,7 @@ export function filterAssignedWorkItems(
 ): AssignedWorkItem[] {
   const query = options.search.trim().toLowerCase();
   const idQuery = query.startsWith('#') ? query.slice(1) : query;
+  const type = options.type ?? 'all';
 
   return items.filter((item) => {
     if (item.groupingOnly) return false;
@@ -1327,7 +1316,9 @@ export function filterAssignedWorkItems(
       if (!searchHit) return false;
     }
     const run = options.cloudRunByWorkItemId?.get(item.id);
-    return matchesAdoStatus(item, run, options.status) && matchesCloudRun(run, options.cloud);
+    return matchesAdoStatus(item, run, options.status)
+      && matchesWorkItemType(item, type)
+      && matchesCloudRun(run, options.cloud);
   });
 }
 
@@ -1447,9 +1438,9 @@ const ApexBacklogView: React.FC<{
   const startLocalFeature = useStartLocalFeature();
   const [closingId, setClosingId] = useState<string | null>(null);
   const [completingFeature, setCompletingFeature] = useState<string | null>(null);
+  const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
   const [openPrds, setOpenPrds] = useState<Set<string>>(() => new Set());
   const [openEpics, setOpenEpics] = useState<Set<string>>(() => new Set());
-  const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
   const [selectedContextFeature, setSelectedContextFeature] = useState<BacklogFeatureItem | null>(null);
   const [statusFilter, setStatusFilter] = useState<ApexStatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -1557,7 +1548,6 @@ const ApexBacklogView: React.FC<{
       {startLocalFeature.error && (
         <div className={styles.error}>{startLocalFeature.error.message}</div>
       )}
-
       <div className={styles['filters-row']}>
         <div
           className={styles.filters}
@@ -1791,20 +1781,20 @@ const ApexBacklogView: React.FC<{
         })
       )}
 
-      {localDevTarget && (
-        // data-testid-exempt — StartLocalDevModal root already sets data-testid
-        <StartLocalDevModal
-          target={localDevTarget}
-          onClose={() => setLocalDevTarget(null)}
-        />
-      )}
-
       {selectedContextFeature && (
         // data-testid-exempt — FeatureContextModal root already sets data-testid
         <FeatureContextModal
           project={project}
           feature={selectedContextFeature}
           onClose={() => setSelectedContextFeature(null)}
+        />
+      )}
+
+      {localDevTarget && (
+        // data-testid-exempt — StartLocalDevModal root already sets data-testid
+        <StartLocalDevModal
+          target={localDevTarget}
+          onClose={() => setLocalDevTarget(null)}
         />
       )}
     </div>
@@ -1827,8 +1817,11 @@ export const DevWorkbenchView: React.FC = () => {
   } = useActiveSessions(selectedProject || null);
   const cloudStatusPending = sessionsLoading && !activeSessions;
   const cloudStatusUnavailable = sessionsError && !activeSessions;
+  const [contextWorkItem, setContextWorkItem] = useState<AssignedWorkItem | null>(null);
   const [localDevTarget, setLocalDevTarget] = useState<StartLocalDevTarget | null>(null);
+  const [collapsedStacks, setCollapsedStacks] = useState<Set<number>>(() => new Set());
   const [adoStatusFilter, setAdoStatusFilter] = useState<AdoStatusFilter>('all');
+  const [adoTypeFilter, setAdoTypeFilter] = useState<AdoTypeFilter>('all');
   const [adoCloudFilter, setAdoCloudFilter] = useState<AdoCloudFilter>('all');
   const [adoSearch, setAdoSearch] = useState('');
 
@@ -1855,6 +1848,7 @@ export const DevWorkbenchView: React.FC = () => {
     });
     return filterAssignedWorkItems(stableWorkItems, {
       status: adoStatusFilter,
+      type: adoTypeFilter,
       cloud: cloudAgentEnabled ? adoCloudFilter : 'all',
       search: adoSearch,
       cloudRunByWorkItemId: cloudAgentEnabled ? cloudRunByWorkItemId : undefined,
@@ -1862,6 +1856,7 @@ export const DevWorkbenchView: React.FC = () => {
   }, [
     stableWorkItems,
     adoStatusFilter,
+    adoTypeFilter,
     adoCloudFilter,
     adoSearch,
     cloudSessionByWorkItem,
@@ -1884,19 +1879,39 @@ export const DevWorkbenchView: React.FC = () => {
     return stackAssignedWorkItems(stableWorkItems.filter((item) => keep.has(item.id)));
   }, [stableWorkItems, visibleWorkItems]);
 
+  const toggleStack = (stackKey: number) => {
+    setCollapsedStacks((prev) => {
+      const next = new Set(prev);
+      if (next.has(stackKey)) next.delete(stackKey); else next.add(stackKey);
+      return next;
+    });
+  };
+
   useEffect(() => {
     setAdoStatusFilter('all');
+    setAdoTypeFilter('all');
     setAdoCloudFilter('all');
     setAdoSearch('');
+    setCollapsedStacks(new Set());
   }, [selectedProject]);
+
+  // PBIs, TBIs, and bugs render under their feature. Selecting one of those
+  // types opens the group so the matching rows are visible without another click.
+  useEffect(() => {
+    if (adoTypeFilter === 'bug' || adoTypeFilter === 'tbi' || adoTypeFilter === 'pbi') {
+      setCollapsedStacks(new Set());
+    }
+  }, [adoTypeFilter]);
 
   const adoFiltersActive =
     adoStatusFilter !== 'all'
+    || adoTypeFilter !== 'all'
     || (cloudAgentEnabled && adoCloudFilter !== 'all')
     || adoSearch.trim() !== '';
 
   const clearAdoFilters = () => {
     setAdoStatusFilter('all');
+    setAdoTypeFilter('all');
     setAdoCloudFilter('all');
     setAdoSearch('');
   };
@@ -1935,7 +1950,7 @@ export const DevWorkbenchView: React.FC = () => {
     <div className={styles.container} {...{ 'data-testid': 'my-work-page' }}>
       <div className={styles.header} {...{ 'data-testid': 'my-work-header' }}>
         <h1 className={styles.title}>My Work</h1>
-        <p className={styles.subtitle}>Work items assigned to you — start a development session to begin coding</p>
+        <p className={styles.subtitle}>Work items assigned to you</p>
       </div>
 
       {selectedProject && <AssignedBacklogSection project={selectedProject} />}
@@ -1974,6 +1989,28 @@ export const DevWorkbenchView: React.FC = () => {
                     }
                     onClick={() => setAdoStatusFilter(id)}
                     {...{ 'data-testid': `my-work-ado-status-filter-${id}` }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className={styles['filter-divider']} aria-hidden="true" />
+              <div
+                className={styles['filter-group']}
+                role="group"
+                aria-label="Filter by work item type"
+                {...{ 'data-testid': 'my-work-ado-type-filters' }}
+              >
+                <span className={styles['filter-group-label']}>Type</span>
+                {ADO_TYPE_FILTERS.map(({ id, label, title }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`${styles['filter-pill']}${adoTypeFilter === id ? ` ${styles['filter-pill-active']}` : ''}`}
+                    aria-pressed={adoTypeFilter === id}
+                    title={title}
+                    onClick={() => setAdoTypeFilter(id)}
+                    {...{ 'data-testid': `my-work-ado-type-filter-${id}` }}
                   >
                     {label}
                   </button>
@@ -2066,34 +2103,40 @@ export const DevWorkbenchView: React.FC = () => {
           ) : (
         <div className={styles.list} {...{ 'data-testid': 'my-work-work-items-list' }}>
           {workItemStacks.map((stack) => {
-            const rows = [
-              ...(stack.feature ? [{ item: stack.feature, depth: 0 }] : []),
-              ...stack.children.map((item) => ({ item, depth: 1 })),
-            ];
             const stackKey = stack.feature?.id ?? stack.children[0]?.id;
             const grouped = Boolean(stack.feature && stack.children.length > 0);
-            const body = rows.map(({ item, depth }) => {
+
+            const renderRow = (item: AssignedWorkItem, extraMeta?: React.ReactNode) => {
               const cloudSession = cloudSessionByWorkItem.get(item.id);
-              const role = grouped ? (depth > 0 ? 'child' : 'feature') : undefined;
               return (
-                <div
-                  key={item.id}
-                  className={styles.item}
-                  data-role={role}
-                  data-depth={depth > 0 ? depth : undefined}
-                  {...{ 'data-testid': `my-work-work-item-${item.id}` }}
-                >
+                <div className={styles['row-main']}>
+                  <span className={`${styles['type-pill']} ${workItemTypeBadgeClass(item.workItemType)}`}>
+                    {workItemTypeAbbrev(item.workItemType)}
+                  </span>
                   <div className={styles['item-info']}>
                     <span className={styles['item-title']}>{item.title}</span>
                     <div className={styles['item-meta']}>
                       <span className={styles['item-id']}>#{item.id}</span>
-                      <span className={styles.badge}>{item.workItemType}</span>
                       <span className={styles.badge}>{item.state}</span>
-                      {item.groupingOnly ? <span className={styles.badge}>Parent feature</span> : null}
+                      {item.groupingOnly ? (
+                        <span className={styles['grouping-note']}>Not assigned to you</span>
+                      ) : null}
+                      {extraMeta}
                     </div>
                   </div>
-                  {item.groupingOnly ? null : (
-                    <div className={styles['item-actions']}>
+                  <div className={styles['item-actions']}>
+                    {item.groupingOnly ? null : (
+                      <button
+                        className={styles['view-context-btn']}
+                        onClick={() => setContextWorkItem(item)}
+                        type="button"
+                        title="Read the description, acceptance criteria, and child work items"
+                        {...{ 'data-testid': `my-work-view-context-${item.id}` }}
+                      >
+                        View Context
+                      </button>
+                    )}
+                    {item.groupingOnly ? null : (
                       <button
                         className={styles['local-dev-btn']}
                         onClick={() =>
@@ -2117,31 +2160,96 @@ export const DevWorkbenchView: React.FC = () => {
                         </span>
                         Start local
                       </button>
-                      <CloudAgentRowAction
-                        item={item}
-                        project={selectedProject!}
-                        activeSession={cloudSession}
-                        cloudStatusPending={cloudStatusPending}
-                        cloudStatusUnavailable={cloudStatusUnavailable}
-                      />
-                    </div>
-                  )}
+                    )}
+                    <CloudAgentRowAction
+                      item={item}
+                      project={selectedProject!}
+                      activeSession={cloudSession}
+                      cloudStatusPending={cloudStatusPending}
+                      cloudStatusUnavailable={cloudStatusUnavailable}
+                    />
+                  </div>
                 </div>
               );
-            });
-            if (stack.feature && stack.children.length > 0) {
+            };
+
+            if (!grouped) {
+              const item = stack.children[0] ?? stack.feature!;
               return (
-                <div key={stackKey} className={styles.stack} {...{ 'data-testid': `my-work-work-item-stack-${stackKey}` }}>
-                  {body}
+                <div
+                  key={stackKey}
+                  className={styles.item}
+                  {...{ 'data-testid': `my-work-work-item-${item.id}` }}
+                >
+                  {renderRow(item)}
                 </div>
               );
             }
-            return <React.Fragment key={stackKey}>{body}</React.Fragment>;
+
+            const feature = stack.feature!;
+            const collapsed = collapsedStacks.has(feature.id);
+            const childrenId = `my-work-stack-children-${feature.id}`;
+
+            return (
+              <div
+                key={stackKey}
+                className={styles.stack}
+                {...{ 'data-testid': `my-work-work-item-stack-${stackKey}` }}
+              >
+                <div
+                  className={`${styles.item} ${styles['stack-header']}`}
+                  data-role="feature"
+                  {...{ 'data-testid': `my-work-work-item-${feature.id}` }}
+                >
+                  <button
+                    className={styles['stack-toggle']}
+                    type="button"
+                    onClick={() => toggleStack(feature.id)}
+                    aria-expanded={!collapsed}
+                    aria-controls={childrenId}
+                    aria-label={collapsed ? 'Expand linked items' : 'Collapse linked items'}
+                    {...{ 'data-testid': `my-work-stack-toggle-${feature.id}` }}
+                  >
+                    <span className={styles['toggle-icon']}>{collapsed ? '▶' : '▼'}</span>
+                  </button>
+                  {renderRow(
+                    feature,
+                    <span className={styles['stack-count']}>
+                      {stack.children.length} linked item{stack.children.length === 1 ? '' : 's'}
+                    </span>,
+                  )}
+                </div>
+                {!collapsed && (
+                  <div className={styles['stack-children']} id={childrenId}>
+                    {stack.children.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`${styles.item} ${styles['tree-item']}`}
+                        {...{ 'data-testid': `my-work-work-item-${item.id}` }}
+                      >
+                        {renderRow(item)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+
           })}
             </div>
           )}
         </>
       ))}
+
+      {contextWorkItem && (
+        // data-testid-exempt — WorkItemContextModal root already sets data-testid
+        <WorkItemContextModal
+          project={selectedProject!}
+          workItemId={contextWorkItem.id}
+          title={contextWorkItem.title}
+          onClose={() => setContextWorkItem(null)}
+        />
+      )}
 
       {localDevTarget && (
         // data-testid-exempt — StartLocalDevModal root already sets data-testid

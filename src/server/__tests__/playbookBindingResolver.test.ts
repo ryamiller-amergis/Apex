@@ -33,6 +33,15 @@ describe('FEAT-014 Playbook binding resolver', () => {
     });
   });
 
+  it('says which step field was missing instead of substituting undefined', () => {
+    expect(() => resolvePlaybookBindings('${steps.score.reportMd}', context)).toThrow(
+      /did not produce reportMd/,
+    );
+    expect(() => resolvePlaybookBindings('${steps.missing.title}', context)).toThrow(
+      /has no output/,
+    );
+  });
+
   it('refuses nested traversal and unknown namespaces', () => {
     expect(() => resolvePlaybookBindings('${input.documentId.id}', context)).toThrow(
       PlaybookBindingError,

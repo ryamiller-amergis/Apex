@@ -28,12 +28,20 @@ import {
   assertCanvasConnection,
 } from '../services/playbookGuardService';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
+import {
+  PlaybookRecommendationError,
+  acceptPlaybookRecommendation,
+  recommendPlaybookSteps,
+} from '../services/playbookRecommenderService';
 import {
   getVersionLayout,
   replaceDraftVersionLayout,
 } from '../services/playbookVersionLayoutService';
 import {
   PlaybookDefinitionNotFoundError as PlaybookLifecycleDefinitionNotFoundError,
+  PlaybookDefinitionBusyError,
   PlaybookDraftConflictError,
   PlaybookDraftNotFoundError,
   PlaybookVersionImmutableError,
@@ -41,6 +49,7 @@ import {
   PlaybookVersionNotFoundError,
   PlaybookVersionTransitionError,
   createDefinition,
+  deleteDefinition,
   deprecateVersion,
   getDefinitionDetail,
   getVersionGraph,
@@ -91,17 +100,27 @@ import {
 import { getUserPermissions } from '../services/rbacService';
 import {
   PlaybookTemplateAlreadyPublishedError,
+  PlaybookTemplateConfirmationRequiredError,
   PlaybookTemplateInvalidError,
   PlaybookTemplateNotFoundError,
+  PlaybookTemplatePrerequisiteError,
+  PlaybookTemplateVersionError,
+  applyPlaybookTemplate,
+  assertTemplatePrerequisites,
+  getPlaybookTemplateDetail,
   installPlaybookTemplate,
+  listPlaybookTemplates,
 } from '../services/playbookTemplateService';
 import {
   getPlaybookStepOutput,
   PlaybookStepOutputNotFoundError,
   type PlaybookOutputPart,
 } from '../services/playbookStepOutputService';
+import playbookTriggersRouter from './playbookTriggers';
 
 const router = express.Router();
+
+router.use('/triggers', playbookTriggersRouter);
 
 /** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
 const MAX_RUN_PAGE = 50;
@@ -172,8 +191,18 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     return true;
   }
 
-  if (error instanceof PlaybookInterviewProfilePublishError || error instanceof PlaybookTemplateInvalidError) {
+  if (
+    error instanceof PlaybookInterviewProfilePublishError
+    || error instanceof PlaybookTemplateInvalidError
+    || error instanceof PlaybookTemplateVersionError
+    || error instanceof PlaybookTemplateConfirmationRequiredError
+  ) {
     res.status(400).json({ error: error.message });
+    return true;
+  }
+
+  if (error instanceof PlaybookTemplatePrerequisiteError) {
+    res.status(403).json({ error: error.message, missingFlags: error.missingFlags });
     return true;
   }
 
@@ -192,6 +221,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
     error instanceof PlaybookTemplateAlreadyPublishedError ||
+    error instanceof PlaybookDefinitionBusyError ||
     isUniqueViolation(error)
   ) {
     res.status(409).json({
@@ -287,37 +317,148 @@ router.patch(
   },
 );
 
+router.get(
+  '/templates',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    res.json({ templates: await listPlaybookTemplates(project) });
+  },
+);
+
+router.get(
+  '/templates/:templateKey',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    try {
+      res.json(await getPlaybookTemplateDetail(project, req.params.templateKey));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
 router.post(
   '/templates/:templateKey/install',
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await isFeatureEnabled('playbook-interview-step', {
-      userId: getUserId(req),
-      project,
-    });
-
-    // @feature-flag:playbook-interview-step start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbook-interview-step disabled-start
-      res.status(404).json({ error: 'Not found' });
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
       return;
-      // @feature-flag:playbook-interview-step disabled-end
     }
-
-    // @feature-flag:playbook-interview-step enabled-start
     try {
+      await assertTemplatePrerequisites({
+        templateKey: req.params.templateKey,
+        userId: actorUserId,
+        project,
+      });
       const installed = await installPlaybookTemplate({
         project,
         templateKey: req.params.templateKey,
-        createdByUserId: getUserId(req),
+        createdByUserId: actorUserId,
       });
       res.status(installed.created ? 201 : 200).json(installed.detail);
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbook-interview-step enabled-end
-    // @feature-flag:playbook-interview-step end
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/apply-template',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const actorUserId = getUserId(req);
+    const body = (req.body ?? {}) as RequestBody;
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (!isNonBlankString(body.templateKey) || typeof body.templateVersion !== 'number') {
+      res.status(400).json({ error: 'templateKey and templateVersion are required' });
+      return;
+    }
+    if (!isNonBlankString(body.expectedDraftUpdatedAt)) {
+      res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+    try {
+      await assertTemplatePrerequisites({
+        templateKey: body.templateKey,
+        userId: actorUserId,
+        project,
+      });
+      res.json(await applyPlaybookTemplate({
+        project,
+        definitionId: req.params.definitionId,
+        templateKey: body.templateKey,
+        templateVersion: body.templateVersion,
+        expectedDraftUpdatedAt: body.expectedDraftUpdatedAt,
+        confirmed: body.confirmed === true,
+        actorUserId,
+      }));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/recommend',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const goal = (req.body ?? {}).goal;
+    if (typeof goal !== 'string' || !goal.trim()) {
+      res.status(400).json({ error: 'goal is required' });
+      return;
+    }
+    const plan = recommendPlaybookSteps(goal);
+    console.info('[playbook-recommender]', JSON.stringify({
+      event: plan.kind === 'suggestions' ? 'suggest' : 'gap',
+      definitionId: req.params.definitionId,
+      stepTypes: plan.kind === 'suggestions' ? plan.suggestions.map((item) => item.stepType) : [],
+    }));
+    res.json(plan);
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/recommend/accept',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const body = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(body.expectedDraftUpdatedAt)) {
+      res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+    try {
+      const detail = await getDefinitionDetail(project, req.params.definitionId);
+      const graph = acceptPlaybookRecommendation(detail.draft.graph, body.suggestion);
+      const saved = await updateDraft({
+        project,
+        definitionId: req.params.definitionId,
+        name: detail.definition.name,
+        description: detail.definition.description,
+        graph,
+        expectedDraftUpdatedAt: body.expectedDraftUpdatedAt,
+      });
+      console.info('[playbook-recommender]', JSON.stringify({
+        event: 'accept',
+        definitionId: req.params.definitionId,
+      }));
+      res.json(saved);
+    } catch (error) {
+      if (error instanceof PlaybookRecommendationError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      if (!sendDefinitionError(error, res)) throw error;
+    }
   },
 );
 
@@ -380,6 +521,20 @@ router.get(
     const project = resolveRequestProject(req)!;
     try {
       res.json(await getDefinitionDetail(project, req.params.definitionId));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.delete(
+  '/definitions/:definitionId',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    try {
+      await deleteDefinition(project, req.params.definitionId);
+      res.status(204).end();
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
@@ -498,6 +653,14 @@ router.get(
   requirePermission('playbooks:view'),
   async (_req: Request, res: Response): Promise<void> => {
     res.json({ items: listPlaybookStepPaletteItems() });
+  },
+);
+
+router.get(
+  '/skills',
+  requirePermission('playbooks:author'),
+  async (_req: Request, res: Response): Promise<void> => {
+    res.json({ skills: await listPlaybookSkillOptions() });
   },
 );
 
@@ -746,6 +909,23 @@ router.get(
       }
       throw error;
     }
+  }
+);
+
+router.get(
+  '/runs/:runId/steps/:stepRunId/activity',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const activity = await getPlaybookStepActivity({
+      project: resolveRequestProject(req)!,
+      runId: req.params.runId,
+      stepRunId: req.params.stepRunId,
+    });
+    if (!activity) {
+      res.status(404).json({ error: 'No such Playbook step in this project.' });
+      return;
+    }
+    res.json(activity);
   }
 );
 

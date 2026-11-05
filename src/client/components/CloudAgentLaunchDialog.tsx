@@ -105,6 +105,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [images, setImages] = useState<SiteIssueImage[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [showChoices, setShowChoices] = useState(chooseSkillAndModel);
   const {
     register,
@@ -239,7 +240,28 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
             </label>
           ) : null}
           {allowImages ? (
-            <div className={styles.images}>
+            <div
+              className={`${styles.images} ${dragOver ? styles.imagesActive : ''}`}
+              data-testid="cloud-agent-launch-drop"
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setDragOver(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+                setDragOver(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setDragOver(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragOver(false);
+                void addImages(event.dataTransfer.files);
+              }}
+            >
               <input
                 ref={fileInputRef}
                 type="file"
@@ -257,7 +279,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
               >
                 Add file
               </button>
-              <p className={styles.reason}>{imageHint}</p>
+              <p className={styles.reason}>Or drop a screenshot here. {imageHint}</p>
               {images.length > 0 ? (
                 <div className={styles.imageList}>
                   {images.map((image, index) => (

@@ -12,7 +12,7 @@ import {
   buildGuidedCloudAgentPrompt,
   guidedSiteIssueBranchName,
   parseSiteIssueReport,
-  recommendGuidedSiteSkill,
+  recommendGuidedJobSkill,
   SITE_ISSUE_BUG_TAGS,
   type SiteIssueImage,
   customPromptForCloudAgentLaunch,
@@ -28,8 +28,6 @@ import { skillNameFromPath } from '../../shared/skillPaths';
 import * as skillCatalog from './skillCatalogFacade';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import {
-  canStartDevelopment,
-  DEV_START_ALLOWED_STATES,
   isAppNativeRequirementsProject,
   type AssignedWorkItem,
   type CloudAgentEligibility,
@@ -51,6 +49,7 @@ import type {
 import { deriveFailingChecks } from '../../shared/utils/runCheckResults';
 import { isFeatureEnabled } from './featureFlagService';
 import { getSkillConfig } from './projectSettingsService';
+import { getCloudAgentDelivery } from './cloudAgentDeliverySettings';
 import { buildLocalDevContext } from './localDevContextService';
 import { logMyWorkSession } from './myWorkSessionLogger';
 import { trackEvent } from './telemetry';
@@ -75,6 +74,7 @@ import {
   buildWorkItemReferenceText,
   linkWorkItemToPullRequest,
   parsePullRequestNumber,
+  transitionWorkItemForPullRequest as applyPullRequestWorkItemState,
 } from './workItemPrLinkService';
 import { AzureDevOpsService } from './azureDevOps';
 import { getPullRequestStatus as getGithubPullRequestStatus } from './skillCatalogGitHub';
@@ -101,6 +101,8 @@ import {
 import { prepareCloudAgentKickoff, type CloudAgentKickoffInput } from './cloudAgentKickoff';
 import {
   buildPullRequestDescriptionInstructions,
+  buildPullRequestTitle,
+  cloudAgentBranchName,
   implementationBranchName,
 } from './implementationDelivery';
 import {
@@ -157,16 +159,13 @@ export class CloudAgentConflictError extends Error {
 export interface EvaluateCloudAgentEligibilityInput {
   flagEnabled: boolean;
   project: string;
-  item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
-  isSuperAdmin: boolean;
   skillProvider?: string | null;
   skillRepo?: string | null;
   skillBranch?: string | null;
   hasLiveRun: boolean;
-  /** Follow-up after a pull request is already open. The work item may be In Pull Request. */
-  bypassWorkItemState?: boolean;
 }
 
+/** Work item state, type, and APEX origin do not gate a Cloud Agent start. */
 export function evaluateCloudAgentEligibility(
   input: EvaluateCloudAgentEligibilityInput,
 ): CloudAgentEligibility {
@@ -177,12 +176,6 @@ export function evaluateCloudAgentEligibility(
     return {
       allowed: false,
       reason: 'Cloud Development is only available on Azure DevOps-configured projects.',
-    };
-  }
-  if (!input.bypassWorkItemState && !canStartDevelopment(input.item.state)) {
-    return {
-      allowed: false,
-      reason: `Start Development is only available for ${DEV_START_ALLOWED_STATES.join(', ')} work items (current state: ${input.item.state || 'unknown'}).`,
     };
   }
   const missingField = missingSkillField(input);
@@ -329,6 +322,59 @@ function toRunSummary(
   };
 }
 
+/**
+ * The pull request for this run, from Cursor's own git metadata or Azure DevOps.
+ *
+ * The agent is told to open the pull request as its last action, so an open
+ * pull request on the run's branch means the work arrived. Waiting for Cursor to
+ * also report the run finished left steps sitting on a pull request that already
+ * existed, sometimes for a long time.
+ */
+async function pullRequestForRun(
+  observed: { prUrl: string | null; agentFinished?: boolean; branchName?: string | null },
+  input: {
+    project: string;
+    repo: string | null;
+    workItemId: number | null;
+    sourceBranch: string | null;
+  },
+  deps: CloudAgentServiceDeps,
+): Promise<string | null> {
+  if (observed.prUrl) return observed.prUrl;
+  if (!input.repo || !input.workItemId) return null;
+  try {
+    return await deps.findWorkItemPullRequest({
+      project: input.project,
+      repo: input.repo,
+      workItemId: input.workItemId,
+      sourceBranch: input.sourceBranch,
+    });
+  } catch (err) {
+    console.warn(
+      '[cloud-agent] could not look up the pull request for a run',
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+async function deliveryForProject(project: string): Promise<{
+  targetBranch: string | null;
+  requiredReviewers: string[];
+}> {
+  try {
+    const config = await getSkillConfig(project);
+    if (!config?.id) return { targetBranch: null, requiredReviewers: [] };
+    return await getCloudAgentDelivery(config.id);
+  } catch (err) {
+    console.warn(
+      '[cloud-agent] could not read pull request settings',
+      err instanceof Error ? err.message : String(err),
+    );
+    return { targetBranch: null, requiredReviewers: [] };
+  }
+}
+
 function mapObservedStatus(status: string): AgentRunStatus | null {
   const normalized = status.toLowerCase();
   if (normalized === 'creating') return 'dispatched';
@@ -348,6 +394,11 @@ export interface CloudAgentServiceDeps {
   streamCloudAgentRun: typeof streamCloudAgentRun;
   cancelCursorCloudAgentRun: typeof cancelCursorCloudAgentRun;
   linkWorkItemToPullRequest: typeof linkWorkItemToPullRequest;
+  /**
+   * Feature stays In Progress. Children still New, Approved, Committed, or
+   * In Progress move to In Pull Request. A leaf work item moves itself.
+   */
+  transitionWorkItemForPullRequest: (project: string, workItemId: number) => Promise<void>;
   addAdoWorkItemHyperlink: (
     project: string,
     workItemId: number,
@@ -367,13 +418,24 @@ export interface CloudAgentServiceDeps {
     project: string;
     workItemId: number;
     workItemTitle?: string;
+    workItemType?: string;
     branchName?: string;
     skillPath?: string;
     model?: string;
+    targetBranch?: string | null;
+    createdByName?: string | null;
+    createdByEmail?: string | null;
   }) => Promise<string>;
   persistLeftoverWork: typeof persistLeftoverWork;
   writeLeftoverWorkToAdo: typeof writeLeftoverWorkToAdo;
   openCloudAgentPullRequest: (input: OpenCloudAgentPullRequestInput) => Promise<string>;
+  /** Active pull request already opened for this work item, when Cursor has not reported one. */
+  findWorkItemPullRequest: (input: {
+    project: string;
+    repo: string;
+    workItemId: number;
+    sourceBranch?: string | null;
+  }) => Promise<string | null>;
 }
 
 const defaultDeps: CloudAgentServiceDeps = {
@@ -385,6 +447,9 @@ const defaultDeps: CloudAgentServiceDeps = {
   streamCloudAgentRun,
   cancelCursorCloudAgentRun,
   linkWorkItemToPullRequest,
+  transitionWorkItemForPullRequest: async (project, workItemId) => {
+    await applyPullRequestWorkItemState(new AzureDevOpsService(project), workItemId);
+  },
   addAdoWorkItemHyperlink: async (project, workItemId, prUrl, comment) => {
     await new AzureDevOpsService(project).addWorkItemHyperlink(workItemId, prUrl, comment);
   },
@@ -398,15 +463,21 @@ const defaultDeps: CloudAgentServiceDeps = {
   persistLeftoverWork,
   writeLeftoverWorkToAdo,
   openCloudAgentPullRequest,
+  findWorkItemPullRequest: async (input) => new AzureDevOpsService(input.project).findPullRequestUrlForWorkItem(input),
 };
 
 export async function buildCloudAgentPrompt(input: {
   project: string;
   workItemId: number;
   workItemTitle?: string;
+  workItemType?: string;
   branchName?: string;
   skillPath?: string;
   model?: string;
+  /** Branch the work is cut from and the pull request merges into. */
+  targetBranch?: string | null;
+  createdByName?: string | null;
+  createdByEmail?: string | null;
 }): Promise<string> {
   const [pack, skillConfig] = await Promise.all([
     buildLocalDevContext({
@@ -428,8 +499,17 @@ export async function buildCloudAgentPrompt(input: {
     : configured;
   const workItemTitle = input.workItemTitle?.trim() || `wi-${input.workItemId}`;
   const branchName = input.branchName?.trim()
-    || implementationBranchName(input.workItemId, workItemTitle);
-  const pullRequestTitle = `[APEX] ${branchName.replace('feature/', '')}`;
+    || (input.workItemType?.trim()
+      ? cloudAgentBranchName(input.workItemId, workItemTitle, input.workItemType)
+      : implementationBranchName(input.workItemId, workItemTitle));
+  const pullRequestTitle = buildPullRequestTitle({
+    branchName,
+    workItemId: input.workItemId,
+    workItemTitle: input.workItemTitle?.trim() || null,
+    workItemType: input.workItemType,
+  });
+  const targetBranch = input.targetBranch?.trim();
+  const creator = input.createdByName?.trim();
   const files = pack.files
     .map((file) => `### ${file.name}\n\n${file.content}`)
     .join('\n\n');
@@ -442,19 +522,24 @@ export async function buildCloudAgentPrompt(input: {
     `Implement this Azure DevOps work item in the project's configured repository.`,
     `Work item id: ${input.workItemId}.`,
     buildCloudDevelopmentKickoffSection(development),
-    `Work on branch \`${branchName}\` and no other branch.`,
+    targetBranch
+      ? `Create branch \`${branchName}\` from \`${targetBranch}\`. Open the pull request into \`${targetBranch}\` and no other branch.`
+      : `Work on branch \`${branchName}\` and no other branch.`,
+    creator
+      ? `Make the git author and committer ${creator}${input.createdByEmail?.trim() ? ` <${input.createdByEmail.trim()}>` : ''}, the person who created this work item.`
+      : '',
     descriptionInstructions
       ?? `Open a pull request titled \`${pullRequestTitle}\`. Write ${buildWorkItemReferenceText(input.workItemId)} in the description. Add the pull request label \`${CLOUD_AGENT_PULL_REQUEST_LABEL}\`.`,
     `Do not change Azure DevOps work item state, due date, or due date reason.`,
     `Do not move this work item or its backlog items to In Pull Request.`,
     files,
-  ].join('\n\n');
+  ].filter((part) => part.trim()).join('\n\n');
   return prefixDevelopmentSkillInvocation(body, development);
 }
 
 export async function attachCloudAgentEligibility(
   items: AssignedWorkItem[],
-  opts: { userId: string; project: string; isSuperAdmin: boolean },
+  opts: { userId: string; project: string },
   deps: CloudAgentServiceDeps = defaultDeps,
 ): Promise<AssignedWorkItem[]> {
   const flagEnabled = await deps.isFeatureEnabled(MY_WORK_CLOUD_AGENT_FLAG, {
@@ -479,8 +564,6 @@ export async function attachCloudAgentEligibility(
     cloudAgentEligibility: evaluateCloudAgentEligibility({
       flagEnabled: true,
       project: opts.project,
-      item,
-      isSuperAdmin: opts.isSuperAdmin,
       skillProvider: skillConfig?.skillProvider,
       skillRepo: skillConfig?.skillRepo,
       skillBranch: skillConfig?.skillBranch,
@@ -525,17 +608,19 @@ export interface StartCloudAgentRunInput {
   userId: string;
   project: string;
   workItemId: number;
+  /** Optional per-run override; otherwise use the project's development model. */
+  model?: string;
   workItemTitle?: string;
   initiatorName?: string;
   initiatorEmail?: string;
   adoUserToken?: string | null;
-  isSuperAdmin: boolean;
+  /** Passed by the Playbook step. Cloud Agent start does not use the Start Development type gate. */
+  isSuperAdmin?: boolean;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
   /** Set by the route when cloud-agent-guided-launch is on. */
   launchChooser?: boolean;
   intent?: CloudAgentLaunchIntent;
   skillPath?: string;
-  model?: string;
   /** Text from the start dialog. Resume ignores this and reuses the saved prompt. */
   customPrompt?: unknown;
   /** Continue the cloud agent that already opened this work item's pull request. */
@@ -557,13 +642,10 @@ export async function startCloudAgentRun(
   const eligibility = evaluateCloudAgentEligibility({
     flagEnabled,
     project: input.project,
-    item: input.item,
-    isSuperAdmin: input.isSuperAdmin,
     skillProvider: skillConfig?.skillProvider,
     skillRepo: skillConfig?.skillRepo,
     skillBranch: skillConfig?.skillBranch,
     hasLiveRun: liveByWorkItem.has(input.workItemId),
-    bypassWorkItemState: input.followUp === true,
   });
   if (!eligibility.allowed) {
     if (liveByWorkItem.has(input.workItemId)) {
@@ -817,7 +899,8 @@ export async function startGuidedCloudAgentRun(
   if ((intent === 'resume' || intent === 'retry') && !input.sessionId) {
     throw new CloudAgentLaunchError('Resume and retry need the original guided job.');
   }
-  const recommendedPath = recommendGuidedSiteSkill({
+  const recommendedPath = recommendGuidedJobSkill({
+    skillName: job.skillName,
     skills: input.availableSkills,
     configuredSkillPath: skillConfig?.developmentSkillPath,
   }).skillPath;
@@ -857,6 +940,8 @@ export async function startGuidedCloudAgentRun(
     imageCount: images.length,
     bugWorkItemId: bug.bugWorkItemId,
     bugUrl: bug.bugUrl,
+    mode: job.opensBug ? 'fix' : 'investigate',
+    requestedSkillName: job.skillName,
     pullRequestInstructions: bug.bugWorkItemId
       ? buildPullRequestDescriptionInstructions({
         workItemId: bug.bugWorkItemId,
@@ -866,13 +951,14 @@ export async function startGuidedCloudAgentRun(
       : null,
   });
   const nowIso = new Date().toISOString();
-  // A new site-issue run is owned by this process until the Bug is stored.
+  // A new report that opens a Bug is owned by this process until the Bug is stored.
   // The queue pump claims queued runs with a null owner, including during the
   // Azure DevOps call, so the run must not be claimable until the prompt,
   // branch, and Bug id are on the snapshot. The short pre-identity deadline
   // starts only when this process is about to launch; the reaper would
   // otherwise fail the run while Azure DevOps is still creating the Bug.
-  const holdUntilBugIsStored = intent === 'start';
+  const needsBug = job.opensBug && bug.bugWorkItemId == null && intent !== 'resume';
+  const holdUntilBugIsStored = needsBug;
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
   const lockKey = `cloud-agent-guided:${input.project}:${sessionId}`;
 
@@ -939,7 +1025,7 @@ export async function startGuidedCloudAgentRun(
           initiatorName: input.initiatorName,
           initiatorEmail: input.initiatorEmail,
           delivery: 'guided',
-          opensPullRequest: true,
+          opensPullRequest: job.opensBug,
           guidedJobId: job.id,
           task: taskText,
           ...(images.length ? { images } : {}),
@@ -966,7 +1052,7 @@ export async function startGuidedCloudAgentRun(
     return { sessionId, runId, bugWorkItemId: bug.bugWorkItemId, bugUrl: bug.bugUrl };
   });
 
-  if (intent === 'start') {
+  if (needsBug) {
     let created: { bugWorkItemId: number; bugUrl: string };
     try {
       created = await createSiteIssueBug({
@@ -1311,6 +1397,26 @@ async function resolveFollowUp(
   };
 }
 
+/**
+ * Creator and title from Azure DevOps. A Playbook step starts a run with only a
+ * work item id, so without this read the branch and pull request would be named
+ * from `wi-<id>` rather than the work item.
+ */
+async function readWorkItemFacts(
+  project: string,
+  workItemId: number,
+): Promise<{ name: string | null; email: string | null; title: string | null }> {
+  try {
+    return await new AzureDevOpsService(project).getWorkItemCreatorAndTitle(workItemId);
+  } catch (err) {
+    console.warn(
+      '[cloud-agent] could not read the work item creator and title',
+      err instanceof Error ? err.message : String(err),
+    );
+    return { name: null, email: null, title: null };
+  }
+}
+
 async function persistQueuedRun(
   input: StartCloudAgentRunInput,
   skillConfig: ProjectSkillConfig,
@@ -1322,16 +1428,28 @@ async function persistQueuedRun(
   const lockKey = `cloud-agent:${input.project}:${input.workItemId}:${input.userId}`;
   const nowIso = new Date().toISOString();
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
-  const workItemTitle = input.workItemTitle?.trim() || `wi-${input.workItemId}`;
-  const branchName = implementationBranchName(input.workItemId, workItemTitle);
+  const delivery = skillConfig.id
+    ? await getCloudAgentDelivery(skillConfig.id).catch(() => ({ targetBranch: null, requiredReviewers: [] as string[] }))
+    : { targetBranch: null, requiredReviewers: [] as string[] };
+  const targetBranch = delivery.targetBranch || skillConfig.skillBranch;
+  const facts = await readWorkItemFacts(input.project, input.workItemId);
+  const resolvedTitle = input.workItemTitle?.trim() || facts.title;
+  const workItemTitle = resolvedTitle || `wi-${input.workItemId}`;
+  const branchName = input.item.workItemType?.trim()
+    ? cloudAgentBranchName(input.workItemId, workItemTitle, input.item.workItemType)
+    : implementationBranchName(input.workItemId, workItemTitle);
   const basePrompt = await deps.buildPrompt({
     project: input.project,
     workItemId: input.workItemId,
-    workItemTitle,
+    ...(resolvedTitle ? { workItemTitle: resolvedTitle } : {}),
+    workItemType: input.item.workItemType,
     branchName,
     ...(launchSettings
       ? { skillPath: launchSettings.skillPath, model: launchSettings.model }
       : {}),
+    targetBranch,
+    createdByName: facts.name,
+    createdByEmail: facts.email,
   });
   const configuredDevelopment = resolveDevelopmentSettings(skillConfig);
   const development = launchSettings
@@ -1416,9 +1534,11 @@ async function persistQueuedRun(
           repository: skillConfig.skillRepo,
           cloudAgent: {
             workItemId: input.workItemId,
-            workItemTitle: input.workItemTitle,
+            ...(resolvedTitle ? { workItemTitle: resolvedTitle } : {}),
+            ...(input.item.workItemType?.trim() ? { workItemType: input.item.workItemType.trim() } : {}),
             branchName,
-            baseBranch: skillConfig.skillBranch,
+            baseBranch: targetBranch,
+            ...(delivery.requiredReviewers.length ? { requiredReviewers: delivery.requiredReviewers } : {}),
             initiatorName: input.initiatorName,
             initiatorEmail: input.initiatorEmail,
             ...(skillName ? { skillName } : {}),
@@ -1810,14 +1930,21 @@ export async function reconcileRunningCloudAgentRuns(
           cloudAgentId: row.cloudAgentIdentity,
           cursorRunId: row.dispatchMessageId,
         });
-        const mapped = mapObservedStatus(observed.status);
+        const snapshot = backgroundSnapshot(row.executionSnapshot);
+        const prUrl = await pullRequestForRun(observed, {
+          project: row.projectId,
+          repo: snapshot?.repository ?? null,
+          workItemId: snapshot?.cloudAgent?.workItemId ?? null,
+          sourceBranch: metaBranchName(row.executionSnapshot) ?? observed.branchName ?? null,
+        }, deps);
+        const mapped = prUrl ? 'completed' : mapObservedStatus(observed.status);
         if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
         const skipPullRequest = guidedSkipsPullRequest(row.executionSnapshot);
         if (
           !skipPullRequest
           && awaitingCloudAgentPullRequest({
             status: mapped,
-            prUrl: observed.prUrl,
+            prUrl,
             noChanges: observed.noChanges,
             branchName: observed.branchName,
           })
@@ -1830,7 +1957,7 @@ export async function reconcileRunningCloudAgentRuns(
           sessionId,
           project: row.projectId,
           status: mapped,
-          prUrl: observed.prUrl,
+          prUrl,
           dispatchMessageId: row.dispatchMessageId,
           detail: mapped === 'failed' ? (observed.resultText ?? undefined) : undefined,
           usage: usageFromObservation(observed),
@@ -1937,9 +2064,13 @@ async function writeWorkItemPullRequest(
     repository: string;
     prUrl: string;
     workItemId: number;
+    workItemTitle?: string | null;
+    workItemType?: string | null;
     runId: string;
     sessionId: string;
     titleBranch?: string | null;
+    targetBranch?: string | null;
+    requiredReviewers?: string[];
   },
   deps: CloudAgentServiceDeps,
 ): Promise<void> {
@@ -1953,51 +2084,77 @@ async function writeWorkItemPullRequest(
     sessionId: input.sessionId,
   };
 
-  if (input.provider !== 'github' && input.titleBranch) {
-    try {
-      await deps.alignCloudAgentPullRequest({
-        project: input.project,
-        repo: input.repository,
-        prUrl: input.prUrl,
-        workItemId: input.workItemId,
-        sourceBranch: input.titleBranch,
-        titleBranch: input.titleBranch,
-      });
-    } catch (err) {
-      console.warn('[cloud-agent] could not set the pull request title', JSON.stringify({
-        runId: input.runId,
-        sessionId: input.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+  try {
+    if (input.provider !== 'github' && input.titleBranch) {
+      try {
+        await deps.alignCloudAgentPullRequest({
+          project: input.project,
+          repo: input.repository,
+          prUrl: input.prUrl,
+          workItemId: input.workItemId,
+          workItemTitle: input.workItemTitle,
+          workItemType: input.workItemType,
+          sourceBranch: input.titleBranch,
+          titleBranch: input.titleBranch,
+          targetBranch: input.targetBranch,
+          requiredReviewers: input.requiredReviewers,
+        });
+      } catch (err) {
+        console.warn('[cloud-agent] could not set the pull request title', JSON.stringify({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
     }
-  }
 
-  if (input.provider === 'github') {
-    try {
-      await deps.linkWorkItemToPullRequest(linkInput);
-    } catch (err) {
-      console.warn('[cloud-agent] GitHub AB# verification failed', JSON.stringify({
-        runId: input.runId,
-        sessionId: input.sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }));
+    if (input.provider === 'github') {
+      try {
+        await deps.linkWorkItemToPullRequest(linkInput);
+      } catch (err) {
+        console.warn('[cloud-agent] GitHub AB# verification failed', JSON.stringify({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+      await deps.retryWithBackoff(
+        () => deps.addAdoWorkItemHyperlink(
+          input.project,
+          input.workItemId,
+          input.prUrl,
+          'Implementation PR',
+        ),
+        { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
+      );
+      return;
     }
+
     await deps.retryWithBackoff(
-      () => deps.addAdoWorkItemHyperlink(
-        input.project,
-        input.workItemId,
-        input.prUrl,
-        'Implementation PR',
-      ),
+      () => deps.linkWorkItemToPullRequest(linkInput),
       { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
     );
-    return;
+  } finally {
+    // The pull request already exists. A failed link must not leave the
+    // Feature's children in New or In Progress.
+    await movePullRequestWorkItemState(input, deps);
   }
+}
 
-  await deps.retryWithBackoff(
-    () => deps.linkWorkItemToPullRequest(linkInput),
-    { maxRetries: 3, initialDelay: 250, shouldRetry: () => true, jitter: true },
-  );
+async function movePullRequestWorkItemState(
+  input: { project: string; workItemId: number; runId: string; sessionId: string },
+  deps: CloudAgentServiceDeps,
+): Promise<void> {
+  try {
+    await deps.transitionWorkItemForPullRequest(input.project, input.workItemId);
+  } catch (err) {
+    console.warn('[cloud-agent] work item state update failed', JSON.stringify({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      workItemId: input.workItemId,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+  }
 }
 
 function cloudAgentWasLaunched(run: {
@@ -2189,11 +2346,12 @@ export async function applyCloudAgentCompletion(input: {
   // ADO appends only when this callback won the leftover_work IS NULL write.
   // Resume clears leftoverWork to null at enqueue so the next terminal run
   // can win again. Clean summaries persist null and never set firstWrite.
-  if (persisted.firstWrite && summary && session.workItemId) {
+  const leftoverWorkItemId = session.workItemId ?? terminalSnapshot?.cloudAgent?.bugWorkItemId ?? null;
+  if (persisted.firstWrite && summary && leftoverWorkItemId) {
     await deps.writeLeftoverWorkToAdo({
       sessionId,
       project: input.project,
-      workItemId: session.workItemId,
+      workItemId: leftoverWorkItemId,
       runId: input.runId,
       summary,
     });
@@ -2213,15 +2371,22 @@ export async function applyCloudAgentCompletion(input: {
     if (!provider || !repository) {
       throw new Error('Cloud Agent run is missing work-item repository context');
     }
+    const delivery = await deliveryForProject(input.project);
     await writeWorkItemPullRequest({
       provider,
       project: input.project,
       repository,
       prUrl,
       workItemId: bugWorkItemId,
+      workItemTitle: terminalSnapshot?.cloudAgent?.workItemTitle ?? null,
+      workItemType: terminalSnapshot?.cloudAgent?.workItemType ?? null,
       runId: input.runId,
       sessionId,
       titleBranch: terminalSnapshot?.cloudAgent?.branchName ?? session.branchName ?? null,
+      targetBranch: delivery.targetBranch || terminalSnapshot?.cloudAgent?.baseBranch || null,
+      requiredReviewers: delivery.requiredReviewers.length
+        ? delivery.requiredReviewers
+        : terminalSnapshot?.cloudAgent?.requiredReviewers ?? [],
     }, deps);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -2269,8 +2434,14 @@ export async function getCloudAgentRunStatus(
         cloudAgentId: run.cloudAgentIdentity,
         cursorRunId: run.dispatchMessageId,
       });
-      const mapped = mapObservedStatus(observed.status);
-      const prUrl = observed.prUrl;
+      const statusSnapshot = backgroundSnapshot(run.executionSnapshot);
+      const prUrl = await pullRequestForRun(observed, {
+        project: session.project,
+        repo: statusSnapshot?.repository ?? null,
+        workItemId: statusSnapshot?.cloudAgent?.workItemId ?? session.workItemId ?? null,
+        sourceBranch: metaBranchName(run.executionSnapshot) ?? observed.branchName ?? null,
+      }, deps);
+      const mapped = prUrl ? 'completed' : mapObservedStatus(observed.status);
       const canonicalBranch = metaBranchName(run.executionSnapshot);
       const pushedBranch = observed.noChanges ? null : observed.branchName ?? run.cloudBranchName;
       if (canonicalBranch && pushedBranch && pushedBranch !== canonicalBranch) {

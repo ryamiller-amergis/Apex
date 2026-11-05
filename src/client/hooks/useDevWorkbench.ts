@@ -18,10 +18,12 @@ import type {
   CloudAgentActivityEvent,
   CloudAgentActivityStreamEvent,
   CloudAgentRunSummary,
+  MyWorkItemContext,
 } from '../../shared/types/devWorkbench';
 import type { AgentRunStatus } from '../../shared/types/agentRunLifecycle';
 import { isAgentRunTerminalStatus } from '../../shared/types/agentRunLifecycle';
 import type { FeatureRequest } from '../../shared/types/featureRequest';
+import { appendCloudActivityEvent } from '../utils/cloudAgentActivityLog';
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...options });
@@ -30,6 +32,16 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+export function useMyWorkItemContext(project: string | null, workItemId: number | null) {
+  return useQuery<MyWorkItemContext>({
+    queryKey: ['dev-workbench', 'work-item-context', project, workItemId],
+    queryFn: () => apiFetch(
+      `/api/dev-workbench/workitems/${workItemId}/context?project=${encodeURIComponent(project!)}`,
+    ),
+    enabled: !!project && workItemId != null,
+  });
 }
 
 export function useAssignedWorkItems(project: string | null) {
@@ -132,7 +144,7 @@ export function useCloudAgentActivityStream(
         if (payload.type === 'activity') {
           if (seen.has(payload.event.id)) return;
           seen.add(payload.event.id);
-          setEvents((current) => [...current, payload.event].slice(-500));
+          setEvents((current) => appendCloudActivityEvent(current, payload.event));
         } else if (payload.type === 'stream_end') {
           setIsConnected(false);
           source.close();

@@ -1,11 +1,11 @@
 import fs from 'fs';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatThreads } from '../db/schema';
+import { agentRuns, chatThreads } from '../db/schema';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import { buildPassingValidationReasonsMarkdown, collectValidationGaps, buildUnusableValidationScorecard, parseAgentValidationScorecard, NO_SCORECARD_REASON, VALIDATION_TIMEOUT_REASON, normalizeCrossCuttingCheck } from '../../shared/utils/validationReport';
 import { readOutputValidationScorecard, readOutputValidationScorecardMd, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, cancelRun, sendMessage, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration } from './agentRunReaperService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
@@ -174,9 +174,24 @@ export async function autoStartDocumentValidation(adapter: DocumentValidationAda
     skillSettingsId: settingsId ?? skillConfig.id ?? null,
   }, { skipAutoKickoff: true });
 
+  const v2Transport = await usesV2DocumentTransport({
+    userId: adapter.getAuthorId(),
+    project,
+    workflowClass: 'validation',
+  });
   stopDocumentValidationWatcher(adapter.getDocumentId());
   await adapter.updateDbForValidationStart(thread.id);
-  startDocumentValidationWatcher(adapter, thread.id);
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing scorecards.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startDocumentValidationWatcher(adapter, thread.id);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 
   await routeDocumentValidationKickoff({
     userId: adapter.getAuthorId(),
@@ -255,6 +270,18 @@ export async function routeDocumentValidationKickoff(opts: {
   } catch {
     await reportPreparationFailure();
   }
+}
+
+/** A V2 run is applied by harvest, so its thread needs no share watcher. */
+export async function isV2RunThread(threadId: string): Promise<boolean> {
+  const run = await db.query.agentRuns.findFirst({
+    where: and(
+      eq(agentRuns.threadId, threadId),
+      eq(agentRuns.transportVersion, 'servicebus-blob-v2'),
+    ),
+    columns: { id: true },
+  });
+  return Boolean(run);
 }
 
 export function startDocumentValidationWatcher(

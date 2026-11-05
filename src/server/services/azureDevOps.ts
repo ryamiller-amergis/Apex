@@ -1,16 +1,31 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
-import { WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
+import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
 import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { ExcludeFlags, TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
 import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
+import type {
+  QaAdoExistingTestCase,
+  QaAdoSuiteCaseIndex,
+  QaAdoSuiteCaseIndexEntry,
+  QaAdoTestPlanOption,
+  QaAdoTestSuiteOption,
+} from '../../shared/types/qaLab';
 import {
   computeLastEnterInProgressToDone,
   summarizeRelatedItemCycleTimes,
 } from './relatedItemCycleTime';
+
+function adoParentId(fields: Record<string, unknown>): number | null {
+  const raw = fields['System.Parent'];
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
+  return null;
+}
 
 /**
  * Ensures the canonical APEX origin tag is present in a tag list without
@@ -30,6 +45,15 @@ function withApexOriginTag(tags?: string[]): string[] {
   return hasApex ? base : [...base, APEX_ORIGIN_TAG];
 }
 
+function pullRequestIdFromArtifact(url: string): number | null {
+  const encoded = url.match(/%2[fF](\d+)$/);
+  const plain = url.match(/PullRequestId\/(?:[^/]+\/){2}(\d+)$/i);
+  const raw = encoded?.[1] ?? plain?.[1];
+  if (!raw) return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 /** Walk the parent chain to compute depth (0 = root). */
 function computeDepth(id: number, parentMap: Map<number, number | null>): number {
   let depth = 0;
@@ -40,6 +64,104 @@ function computeDepth(id: number, parentMap: Map<number, number | null>): number
     if (depth > 20) break; // guard against cycles
   }
   return depth;
+}
+
+const MAX_TEST_PLANS = 200;
+export const MAX_SUITE_CASE_INDEX_ENTRIES = 5_000;
+const SUITE_CASE_INDEX_CONCURRENCY = 8;
+const TESTED_BY_FORWARD = 'Microsoft.VSTS.Common.TestedBy-Forward';
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCharCode(Number(code)))
+    .replace(/&amp;/gi, '&');
+}
+
+/** Step text is HTML inside XML; return what a tester reads. */
+function stepText(raw: string): string {
+  return decodeEntities(
+    decodeEntities(raw)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div)>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Parses `Microsoft.VSTS.TCM.Steps` into action and expected pairs. Shared-step
+ * references (`<compref>`) have no text of their own and are skipped.
+ */
+export function parseTestCaseStepsXml(
+  xml: string | null | undefined,
+): Array<{ order: number; action: string; expected: string }> {
+  if (!xml) return [];
+  const steps: Array<{ order: number; action: string; expected: string }> = [];
+  for (const match of xml.matchAll(/<step\b[^>]*>([\s\S]*?)<\/step>/gi)) {
+    const strings = [...match[1].matchAll(/<parameterizedString\b[^>]*>([\s\S]*?)<\/parameterizedString>/gi)]
+      .map((part) => stepText(part[1]));
+    const action = strings[0] ?? '';
+    if (!action) continue;
+    steps.push({ order: steps.length + 1, action, expected: strings[1] ?? '' });
+  }
+  return steps;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  map: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await map(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * Static suites of one plan with paths below the plan's root suite. A suite
+ * whose parent chain breaks (a parent outside the page) is left out.
+ */
+/** Static and requirement suites with their paths below the plan root. Query-based suites are left out. */
+export function placeableSuitePaths(suites: TestSuite[]): QaAdoTestSuiteOption[] {
+  const byId = new Map(suites.map((suite) => [suite.id, suite]));
+  const pathOf = (suite: TestSuite): string[] | null => {
+    const names: string[] = [];
+    let current: TestSuite | undefined = suite;
+    for (let depth = 0; current?.parentSuite; depth++) {
+      if (depth > 20) return null;
+      names.unshift(current.name);
+      current = byId.get(current.parentSuite.id);
+    }
+    return current ? names : null;
+  };
+  const options: QaAdoTestSuiteOption[] = [];
+  for (const suite of suites) {
+    const requirement = suite.suiteType === TestSuiteType.RequirementTestSuite;
+    if (suite.suiteType !== TestSuiteType.StaticTestSuite && !requirement) continue;
+    const names = pathOf(suite);
+    if (!names) continue;
+    options.push({
+      id: suite.id,
+      path: names.join(' > '),
+      ...(requirement && typeof suite.requirementId === 'number' ? { requirementId: suite.requirementId } : {}),
+    });
+  }
+  return options.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 export class AzureDevOpsService {
@@ -301,6 +423,54 @@ export class AzureDevOpsService {
     });
   }
 
+  /**
+   * Every Epic, Feature, PBI, TBI, and Bug in the project.
+   * No area-path and no due-date filter — those belong to the calendar query.
+   */
+  async listProjectBacklogWorkItems(): Promise<{
+    items: Array<{ id: number; title: string; state: string; workItemType: string }>;
+    truncated: boolean;
+  }> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const project = this.project.replace(/'/g, "''");
+      const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug') ORDER BY [System.ChangedDate] DESC`;
+      const top = 20_000;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+        undefined,
+        top,
+      );
+
+      const ids = (queryResult.workItems ?? [])
+        .map((wi: { id?: number }) => wi.id)
+        .filter((id: number | undefined): id is number => typeof id === 'number');
+      if (ids.length === 0) {
+        return { items: [], truncated: false };
+      }
+
+      const workItems = await this.getWorkItemsInBatches(witApi, ids, [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+      ]);
+
+      return {
+        truncated: ids.length >= top,
+        items: workItems
+          .filter((wi) => typeof wi.id === 'number')
+          .map((wi) => ({
+            id: wi.id as number,
+            title: String(wi.fields?.['System.Title'] ?? ''),
+            state: String(wi.fields?.['System.State'] ?? ''),
+            workItemType: String(wi.fields?.['System.WorkItemType'] ?? ''),
+          })),
+      };
+    });
+  }
+
   async getWorkItems(from?: string, to?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
@@ -518,6 +688,73 @@ export class AzureDevOpsService {
           design: wi.fields['Custom.Design'] || '',
           discussions: wi.fields['System.History'] || '',
         }));
+    });
+  }
+
+  /**
+   * Capture the requirement context used to generate QA cases from an
+   * ADO-native work item. PBIs and Bugs own cases; TBIs are context only.
+   */
+  async getQaTestGenerationContext(
+    rootId: number,
+  ): Promise<import('../../shared/types/qaLab').QaAdoGenerationContext | null> {
+    return retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      const wiql = `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.Id] = ${rootId}) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+      const queryResult = await witApi.queryByWiql(
+        { query: wiql },
+        { project: this.project },
+      );
+
+      const parentMap = new Map<number, number | null>([[rootId, null]]);
+      for (const relation of queryResult?.workItemRelations ?? []) {
+        if (typeof relation.source?.id === 'number' && typeof relation.target?.id === 'number') {
+          parentMap.set(relation.target.id, relation.source.id);
+        }
+      }
+
+      const fields = [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+        'System.AreaPath',
+        'System.Description',
+        'Microsoft.VSTS.Common.AcceptanceCriteria',
+        'Microsoft.VSTS.TCM.ReproSteps',
+      ];
+      const rawItems = await this.getWorkItemsInBatches(
+        witApi,
+        Array.from(parentMap.keys()),
+        fields,
+      );
+
+      const items: import('../../shared/types/qaLab').QaAdoGenerationItem[] = rawItems
+        .filter((item) => typeof item?.id === 'number' && !!item.fields)
+        .map((item) => ({
+          id: item.id as number,
+          parentId: parentMap.get(item.id as number) ?? null,
+          workItemType: String(item.fields?.['System.WorkItemType'] ?? ''),
+          title: String(item.fields?.['System.Title'] ?? ''),
+          state: String(item.fields?.['System.State'] ?? ''),
+          areaPath: String(item.fields?.['System.AreaPath'] ?? ''),
+          description: String(item.fields?.['System.Description'] ?? ''),
+          acceptanceCriteria: String(
+            item.fields?.['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? '',
+          ),
+          reproSteps: String(item.fields?.['Microsoft.VSTS.TCM.ReproSteps'] ?? ''),
+        }));
+
+      const root = items.find((item) => item.id === rootId);
+      if (!root) return null;
+
+      const targets = items.filter((item) =>
+        item.workItemType === 'Product Backlog Item' || item.workItemType === 'Bug',
+      );
+      const technicalContext = items.filter(
+        (item) => item.workItemType === 'Technical Backlog Item',
+      );
+      return { root, targets, technicalContext };
     });
   }
 
@@ -2644,51 +2881,68 @@ export class AzureDevOpsService {
   async searchWorkItems(query: string, typeFilter?: string): Promise<WorkItem[]> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
-
-      // Build WIQL query
-      let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.project}'`;
-
-      if (this.areaPath) {
-        wiql += ` AND [System.AreaPath] = '${this.areaPath}'`;
-      }
-
-      // Filter by work item type if specified
-      if (typeFilter && typeFilter !== 'All') {
-        wiql += ` AND [System.WorkItemType] = '${typeFilter}'`;
-      } else {
-        wiql += ` AND ([System.WorkItemType] = 'Epic' OR [System.WorkItemType] = 'Feature' OR [System.WorkItemType] = 'Product Backlog Item' OR [System.WorkItemType] = 'Technical Backlog Item' OR [System.WorkItemType] = 'Bug')`;
-      }
-
-      // Search by ID or title/description
-      const numericQuery = parseInt(query, 10);
-      if (!isNaN(numericQuery)) {
-        wiql += ` AND [System.Id] = ${numericQuery}`;
-      } else {
-        wiql += ` AND ([System.Title] CONTAINS '${query}' OR [System.Description] CONTAINS '${query}')`;
-      }
-
-      wiql += ' ORDER BY [System.ChangedDate] DESC';
-
-      const queryResult = await witApi.queryByWiql(
-        { query: wiql },
-        { project: this.project }
-      );
-
-      if (!queryResult.workItems || queryResult.workItems.length === 0) {
-        return [];
-      }
-
-      const ids = queryResult.workItems.map((wi) => wi.id!).slice(0, 50); // Limit to 50 results
-
+      const hasTypeFilter = !!typeFilter && typeFilter !== 'All';
+      const defaultTypes = ['Epic', 'Feature', 'Product Backlog Item', 'Technical Backlog Item', 'Bug'];
       const fields = [
         'System.Id',
         'System.Title',
         'System.State',
         'System.AssignedTo',
         'System.WorkItemType',
+        'System.TeamProject',
       ];
 
-      const workItems = await witApi.getWorkItems(ids, fields);
+      let workItems: Awaited<ReturnType<typeof witApi.getWorkItems>>;
+      const trimmedQuery = query.trim().replace(/^#/, '');
+
+      if (/^\d+$/.test(trimmedQuery)) {
+        // Any area in the project is allowed; findReleaseAssignments checks release epics project-wide
+        // so linking still detects an existing assignment outside the selected area.
+        const found = await witApi.getWorkItems(
+          [parseInt(trimmedQuery, 10)],
+          fields,
+          undefined,
+          undefined,
+          WorkItemErrorPolicy.Omit
+        );
+        const project = this.project.toLowerCase();
+        workItems = (found ?? []).filter((wi) => {
+          if (!wi?.fields) return false;
+          const type = wi.fields['System.WorkItemType'];
+          const inProject = String(wi.fields['System.TeamProject'] ?? '').toLowerCase() === project;
+          const typeMatches = hasTypeFilter ? type === typeFilter : defaultTypes.includes(type);
+          return inProject && typeMatches;
+        });
+      } else {
+        const escape = (value: string) => value.replace(/'/g, "''");
+        let wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${escape(this.project)}'`;
+
+        if (this.areaPath) {
+          wiql += ` AND [System.AreaPath] UNDER '${escape(this.areaPath)}'`;
+        }
+
+        if (hasTypeFilter) {
+          wiql += ` AND [System.WorkItemType] = '${escape(typeFilter!)}'`;
+        } else {
+          wiql += ` AND (${defaultTypes.map((t) => `[System.WorkItemType] = '${t}'`).join(' OR ')})`;
+        }
+
+        const escapedQuery = escape(query);
+        wiql += ` AND ([System.Title] CONTAINS '${escapedQuery}' OR [System.Description] CONTAINS '${escapedQuery}')`;
+        wiql += ' ORDER BY [System.ChangedDate] DESC';
+
+        const queryResult = await witApi.queryByWiql(
+          { query: wiql },
+          { project: this.project }
+        );
+
+        if (!queryResult.workItems || queryResult.workItems.length === 0) {
+          return [];
+        }
+
+        const ids = queryResult.workItems.map((wi) => wi.id!).slice(0, 50); // Limit to 50 results
+        workItems = await witApi.getWorkItems(ids, fields);
+      }
 
       return workItems.map((wi) => ({
         id: wi.id!,
@@ -2872,16 +3126,14 @@ export class AzureDevOpsService {
 
   /**
    * Find release Epics currently related to each requested work item.
+   * Searches the whole project, not just the selected area, because the
+   * link search can return items from any area in the project.
    */
   async findReleaseAssignments(workItemIds: number[]): Promise<Record<number, number[]>> {
     const uniqueIds = [...new Set(workItemIds)].filter((id) => Number.isInteger(id) && id > 0);
     if (uniqueIds.length === 0) return {};
 
     const escapedProject = this.project.replace(/'/g, "''");
-    const escapedAreaPath = this.areaPath?.replace(/'/g, "''");
-    const areaClause = escapedAreaPath
-      ? ` AND [Source].[System.AreaPath] = '${escapedAreaPath}'`
-      : '';
     const wiql = `
       SELECT [System.Id]
       FROM WorkItemLinks
@@ -2889,7 +3141,6 @@ export class AzureDevOpsService {
         [Source].[System.TeamProject] = '${escapedProject}'
         AND [Source].[System.WorkItemType] = 'Epic'
         AND [Source].[System.Tags] CONTAINS 'ReleaseVersion'
-        ${areaClause}
       )
       AND [System.Links.LinkType] = 'System.LinkTypes.Related'
       AND [Target].[System.Id] IN (${uniqueIds.join(', ')})
@@ -5732,8 +5983,9 @@ export class AzureDevOpsService {
     type: string;
     title: string;
     description?: string;
-    acceptanceCriteriaHtml?: string;
+    /** HTML for the Bug form's Repro Steps field. Description is not on that form. */
     reproStepsHtml?: string;
+    acceptanceCriteriaHtml?: string;
     systemInfoHtml?: string;
     priority?: string;
     parentId?: number;
@@ -5759,12 +6011,12 @@ export class AzureDevOpsService {
           patch.push({ op: 'add', path: '/fields/System.Description', value: spec.description });
         }
 
-        if (spec.acceptanceCriteriaHtml) {
-          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
-        }
-
         if (spec.reproStepsHtml) {
           patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: spec.reproStepsHtml });
+        }
+
+        if (spec.acceptanceCriteriaHtml) {
+          patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: spec.acceptanceCriteriaHtml });
         }
 
         if (spec.systemInfoHtml) {
@@ -5932,24 +6184,37 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Create a Test Case work item linked as a child under `parentId`.
-   * Falls back to TestedBy-Reverse if hierarchy link is rejected.
+   * Create a Test Case linked to `parentId`. PRD export keeps its historical
+   * hierarchy preference; QA Lab publishing requests ADO's Tested By relation.
    */
   async createTestCaseWorkItem(spec: {
     title: string;
     stepsHtml: string;
     parentId: number;
     assignedTo?: string;
+    /** ADO-native QA publishing uses the Tested By relationship. */
+    linkType?: 'hierarchy' | 'tested-by' | 'related';
+    /** Overrides the area path this service was created with. */
+    areaPath?: string;
+    iterationPath?: string;
+    tags?: string[];
   }): Promise<{ id: number; url: string }> {
     const witApi = await this.connection.getWorkItemTrackingApi();
     const orgUrl = this.organization.replace(/\/$/, '');
+    const areaPath = spec.areaPath ?? this.areaPath;
 
     const buildPatch = (linkRel: string, includeAssignedTo: boolean): any[] => {
       const patch: any[] = [
         { op: 'add', path: '/fields/System.Title', value: spec.title },
       ];
-      if (this.areaPath) {
-        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: this.areaPath });
+      if (areaPath) {
+        patch.push({ op: 'add', path: '/fields/System.AreaPath', value: areaPath });
+      }
+      if (spec.iterationPath) {
+        patch.push({ op: 'add', path: '/fields/System.IterationPath', value: spec.iterationPath });
+      }
+      if (spec.tags?.length) {
+        patch.push({ op: 'add', path: '/fields/System.Tags', value: spec.tags.join('; ') });
       }
       if (spec.stepsHtml) {
         patch.push({ op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: spec.stepsHtml });
@@ -5969,25 +6234,35 @@ export class AzureDevOpsService {
       return patch;
     };
 
+    const preferredLink = spec.linkType === 'tested-by'
+      ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
+      : spec.linkType === 'related'
+        ? 'System.LinkTypes.Related'
+        : 'System.LinkTypes.Hierarchy-Reverse';
+    const fallbackLink = preferredLink === 'System.LinkTypes.Hierarchy-Reverse'
+      ? 'Microsoft.VSTS.Common.TestedBy-Reverse'
+      : 'System.LinkTypes.Hierarchy-Reverse';
+
     let wi: any;
     try {
-      wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', true), this.project, 'Test Case');
+      wi = await witApi.createWorkItem({}, buildPatch(preferredLink, true), this.project, 'Test Case');
     } catch (firstErr: any) {
-      // Identity errors: retry without assignee. Other 400s: hierarchy likely rejected → TestedBy.
+      // Identity errors retry without assignee. Other 400s retry the alternate
+      // relation because ADO process templates differ in their allowed links.
       if (/identity/i.test(String(firstErr?.message))) {
         try {
-          wi = await witApi.createWorkItem({}, buildPatch('System.LinkTypes.Hierarchy-Reverse', false), this.project, 'Test Case');
+          wi = await witApi.createWorkItem({}, buildPatch(preferredLink, false), this.project, 'Test Case');
         } catch (noAssigneeErr: any) {
           if (noAssigneeErr?.status === 400) {
-            console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
-            wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', false), this.project, 'Test Case');
+            console.warn(`[ADO] createTestCaseWorkItem: preferred link rejected for work item ${spec.parentId}, trying alternate relation`);
+            wi = await witApi.createWorkItem({}, buildPatch(fallbackLink, false), this.project, 'Test Case');
           } else {
             throw noAssigneeErr;
           }
         }
       } else if (firstErr?.status === 400) {
-        console.warn(`[ADO] createTestCaseWorkItem: hierarchy link rejected for PBI ${spec.parentId}, falling back to TestedBy-Reverse`);
-        wi = await witApi.createWorkItem({}, buildPatch('Microsoft.VSTS.Common.TestedBy-Reverse', true), this.project, 'Test Case');
+        console.warn(`[ADO] createTestCaseWorkItem: preferred link rejected for work item ${spec.parentId}, trying alternate relation`);
+        wi = await witApi.createWorkItem({}, buildPatch(fallbackLink, true), this.project, 'Test Case');
       } else {
         throw firstErr;
       }
@@ -5998,6 +6273,242 @@ export class AzureDevOpsService {
       id: wi.id,
       url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
     };
+  }
+
+  /**
+   * Replaces an existing Test Case's title and steps, and links it to `testedById`
+   * by Tested By when no such link exists yet.
+   */
+  async updateTestCaseWorkItem(spec: {
+    id: number;
+    title: string;
+    stepsHtml: string;
+    testedById?: number;
+  }): Promise<{ id: number; url: string }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const patch: any[] = [
+      { op: 'add', path: '/fields/System.Title', value: spec.title },
+      { op: 'add', path: '/fields/Microsoft.VSTS.TCM.Steps', value: spec.stepsHtml },
+    ];
+    if (spec.testedById !== undefined) {
+      const current = await witApi.getWorkItem(spec.id, undefined, undefined, WorkItemExpand.Relations, this.project);
+      const linked = (current?.relations ?? []).some((relation) =>
+        relation.rel === 'Microsoft.VSTS.Common.TestedBy-Reverse'
+        && Number(relation.url?.split('/').pop()) === spec.testedById);
+      if (!linked) {
+        patch.push({
+          op: 'add',
+          path: '/relations/-',
+          value: {
+            rel: 'Microsoft.VSTS.Common.TestedBy-Reverse',
+            url: `${orgUrl}/_apis/wit/workItems/${spec.testedById}`,
+          },
+        });
+      }
+    }
+    const wi = await witApi.updateWorkItem({}, patch, spec.id, this.project);
+    if (!wi?.id) throw new Error(`Failed to update Test Case ${spec.id}`);
+    return {
+      id: wi.id,
+      url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}`,
+    };
+  }
+
+  /**
+   * Active Test Plans with their static and requirement suites. Query-based
+   * suites are left out because their cases come from a query.
+   */
+  async listStaticTestPlanSuites(): Promise<QaAdoTestPlanOption[]> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const plans: Array<{ id: number; name: string }> = [];
+    let planToken: string | undefined;
+    do {
+      const page = await testPlanApi.getTestPlans(this.project, undefined, planToken, false, true);
+      for (const plan of page ?? []) {
+        if (typeof plan.id === 'number' && plan.name) plans.push({ id: plan.id, name: plan.name });
+      }
+      planToken = page?.continuationToken || undefined;
+    } while (planToken && plans.length < MAX_TEST_PLANS);
+
+    const options: QaAdoTestPlanOption[] = [];
+    for (const plan of plans.slice(0, MAX_TEST_PLANS)) {
+      const suites: TestSuite[] = [];
+      let suiteToken: string | undefined;
+      do {
+        const page = await testPlanApi.getTestSuitesForPlan(this.project, plan.id, undefined, suiteToken, false);
+        suites.push(...(page ?? []));
+        suiteToken = page?.continuationToken || undefined;
+      } while (suiteToken);
+      options.push({ id: plan.id, name: plan.name, suites: placeableSuitePaths(suites) });
+    }
+    return options;
+  }
+
+  /**
+   * Creates an active Test Plan with the area path and iteration most active
+   * plans in the project use, so it is set up like the plans QA already has.
+   */
+  async createTestPlan(name: string): Promise<{ id: number; rootSuiteId: number }> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const counts = new Map<string, { areaPath?: string; iteration: string; count: number }>();
+    let token: string | undefined;
+    do {
+      const page = await testPlanApi.getTestPlans(this.project, undefined, token, true, true);
+      for (const plan of page ?? []) {
+        if (!plan.iteration) continue;
+        const key = `${plan.areaPath ?? ''}\u0000${plan.iteration}`;
+        const entry = counts.get(key) ?? { areaPath: plan.areaPath, iteration: plan.iteration, count: 0 };
+        entry.count += 1;
+        counts.set(key, entry);
+      }
+      token = page?.continuationToken || undefined;
+    } while (token);
+    const common = [...counts.values()].sort((left, right) => right.count - left.count)[0];
+    const created = await testPlanApi.createTestPlan({
+      name,
+      iteration: common?.iteration ?? this.project,
+      areaPath: common?.areaPath ?? this.project,
+    }, this.project);
+    const rootSuiteId = created?.rootSuite?.id;
+    if (!created?.id || typeof rootSuiteId !== 'number') {
+      throw new Error(`Failed to create Test Plan "${name}"`);
+    }
+    return { id: created.id, rootSuiteId };
+  }
+
+  /** Creates a static suite, or a requirement suite for `requirementId`, under `parentSuiteId`. */
+  async createTestSuite(
+    planId: number,
+    parentSuiteId: number,
+    spec: { name: string; requirementId?: number },
+  ): Promise<number> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const created = await testPlanApi.createTestSuite({
+      name: spec.name,
+      parentSuite: { id: parentSuiteId, name: '' },
+      ...(spec.requirementId !== undefined
+        ? { suiteType: TestSuiteType.RequirementTestSuite, requirementId: spec.requirementId }
+        : { suiteType: TestSuiteType.StaticTestSuite }),
+    }, this.project, planId);
+    if (typeof created?.id !== 'number') throw new Error(`Failed to create Test Suite "${spec.name}"`);
+    return created.id;
+  }
+
+  async addTestCasesToSuite(planId: number, suiteId: number, testCaseIds: number[]): Promise<void> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    await testPlanApi.addTestCasesToSuite(
+      testCaseIds.map((id) => ({ workItem: { id } })),
+      this.project,
+      planId,
+      suiteId,
+    );
+  }
+
+  /** Test Cases linked to each work item by Tested By, keyed by work item id. */
+  async listLinkedTestCases(workItemIds: number[]): Promise<Map<number, QaAdoExistingTestCase[]>> {
+    const result = new Map<number, QaAdoExistingTestCase[]>();
+    if (workItemIds.length === 0) return result;
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const linkedByOwner = new Map<number, number[]>();
+    for (let i = 0; i < workItemIds.length; i += this.WORK_ITEM_BATCH_SIZE) {
+      const batch = workItemIds.slice(i, i + this.WORK_ITEM_BATCH_SIZE);
+      const items = await retryWithBackoff(() =>
+        witApi.getWorkItems(batch, undefined, undefined, WorkItemExpand.Relations, WorkItemErrorPolicy.Omit));
+      for (const item of items ?? []) {
+        if (typeof item?.id !== 'number') continue;
+        const linked = (item.relations ?? [])
+          .filter((relation) => relation.rel === TESTED_BY_FORWARD)
+          .map((relation) => Number(relation.url?.match(/\/(\d+)$/)?.[1]))
+          .filter((id) => Number.isInteger(id) && id > 0);
+        linkedByOwner.set(item.id, [...new Set(linked)]);
+      }
+    }
+    const cases = new Map(
+      (await this.getTestCasesById([...new Set([...linkedByOwner.values()].flat())]))
+        .map((testCase) => [testCase.id, testCase]),
+    );
+    for (const id of workItemIds) {
+      result.set(id, (linkedByOwner.get(id) ?? []).flatMap((caseId) => {
+        const testCase = cases.get(caseId);
+        return testCase ? [testCase] : [];
+      }));
+    }
+    return result;
+  }
+
+  /** Title, state, and steps of Test Cases; ids that are missing or not Test Cases are left out. */
+  async getTestCasesById(ids: number[]): Promise<QaAdoExistingTestCase[]> {
+    if (ids.length === 0) return [];
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const cases: QaAdoExistingTestCase[] = [];
+    for (let i = 0; i < ids.length; i += this.WORK_ITEM_BATCH_SIZE) {
+      const batch = ids.slice(i, i + this.WORK_ITEM_BATCH_SIZE);
+      const items = await retryWithBackoff(() => witApi.getWorkItems(
+        batch,
+        ['System.Title', 'System.State', 'System.WorkItemType', 'Microsoft.VSTS.TCM.Steps'],
+        undefined,
+        undefined,
+        WorkItemErrorPolicy.Omit,
+      ));
+      for (const item of items ?? []) {
+        if (typeof item?.id !== 'number' || item.fields?.['System.WorkItemType'] !== 'Test Case') continue;
+        cases.push({
+          id: item.id,
+          title: String(item.fields?.['System.Title'] ?? ''),
+          state: String(item.fields?.['System.State'] ?? ''),
+          steps: parseTestCaseStepsXml(item.fields?.['Microsoft.VSTS.TCM.Steps']),
+          url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${item.id}`,
+        });
+      }
+    }
+    return cases;
+  }
+
+  /**
+   * Case ids and titles in every static suite, for the agent to compare new
+   * cases against. Stops at MAX_SUITE_CASE_INDEX_ENTRIES.
+   */
+  async listSuiteCaseIndex(plans: QaAdoTestPlanOption[]): Promise<QaAdoSuiteCaseIndex> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const targets = plans.flatMap((plan) => plan.suites.map((suite) => ({ plan, suite })));
+    let collected = 0;
+    let truncated = false;
+    const perSuite = await mapWithConcurrency(targets, SUITE_CASE_INDEX_CONCURRENCY, async ({ plan, suite }) => {
+      const entries: QaAdoSuiteCaseIndexEntry[] = [];
+      let token: string | undefined;
+      do {
+        if (collected >= MAX_SUITE_CASE_INDEX_ENTRIES) {
+          truncated = true;
+          return entries;
+        }
+        const page = await retryWithBackoff(() => testPlanApi.getTestCaseList(
+          this.project,
+          plan.id,
+          suite.id,
+          undefined,
+          undefined,
+          undefined,
+          token,
+          false,
+          false,
+          ExcludeFlags.PointAssignments | ExcludeFlags.ExtraInformation,
+          false,
+        ));
+        for (const testCase of page ?? []) {
+          const item = testCase.workItem;
+          if (typeof item?.id !== 'number') continue;
+          entries.push({ id: item.id, title: item.name ?? '', planName: plan.name, suitePath: suite.path });
+          collected += 1;
+        }
+        token = page?.continuationToken || undefined;
+      } while (token);
+      return entries;
+    });
+    const entries = perSuite.flat();
+    if (entries.length > MAX_SUITE_CASE_INDEX_ENTRIES) truncated = true;
+    return { entries: entries.slice(0, MAX_SUITE_CASE_INDEX_ENTRIES), truncated };
   }
 
   /**
@@ -6056,7 +6567,7 @@ export class AzureDevOpsService {
       const byId = new Map(items.map((item) => [item.id, item]));
 
       const loadByIds = async (ids: number[]) => {
-        const missing = ids.filter((id) => !byId.has(id));
+        const missing = [...new Set(ids.filter((id) => !byId.has(id)))];
         if (missing.length === 0) return;
         const loaded = await this.queryWorkItemsByWiql({
           wiql: `SELECT [System.Id] FROM WorkItems WHERE [System.Id] IN (${missing.join(',')})`,
@@ -6068,6 +6579,7 @@ export class AzureDevOpsService {
         }
       };
 
+      // One hop for a PBI under a Feature, a second for a Bug under that PBI.
       await loadByIds(items.flatMap((item) => (item.parentId ? [item.parentId] : [])));
       await loadByIds(
         [...byId.values()].flatMap((item) => (
@@ -6098,7 +6610,11 @@ export class AzureDevOpsService {
       for (const item of items) {
         if (item.workItemType === 'Feature' || !item.parentId) continue;
         const feature = byId.get(item.parentId);
-        if (feature?.workItemType === 'Feature' && feature.groupingOnly && !stacked.some((row) => row.id === feature.id)) {
+        if (
+          feature?.workItemType === 'Feature'
+          && feature.groupingOnly
+          && !stacked.some((row) => row.id === feature.id)
+        ) {
           stacked.push(feature);
         }
       }
@@ -6366,6 +6882,179 @@ export class AzureDevOpsService {
       return 'abandoned';
     }
     return 'open';
+  }
+
+  /** Display name and email of the person who created the work item. */
+  async getWorkItemCreator(
+    workItemId: number,
+  ): Promise<{ name: string; email: string | null } | null> {
+    const facts = await this.getWorkItemCreatorAndTitle(workItemId);
+    if (!facts.name) return null;
+    return { name: facts.name, email: facts.email };
+  }
+
+  /** Creator and title in one read, for the Cloud Agent branch and pull-request title. */
+  async getWorkItemCreatorAndTitle(
+    workItemId: number,
+  ): Promise<{ name: string | null; email: string | null; title: string | null }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const item = await witApi.getWorkItem(
+      workItemId,
+      ['System.CreatedBy', 'System.Title'],
+      undefined,
+      undefined,
+      this.project,
+    );
+    const createdBy = item?.fields?.['System.CreatedBy'] as
+      | { displayName?: string; uniqueName?: string }
+      | undefined;
+    const title = item?.fields?.['System.Title'];
+    return {
+      name: createdBy?.displayName?.trim() || null,
+      email: createdBy?.uniqueName?.trim() || null,
+      title: typeof title === 'string' ? title.trim() || null : null,
+    };
+  }
+
+  /**
+   * Active pull request linked to the work item, preferring one opened from
+   * the expected source branch.
+   */
+  async findPullRequestUrlForWorkItem(opts: {
+    repo: string;
+    project: string;
+    workItemId: number;
+    sourceBranch?: string | null;
+  }): Promise<string | null> {
+    if (opts.sourceBranch?.trim()) {
+      const byBranch = await this.findPullRequestUrlBySourceBranch(
+        opts.repo,
+        opts.project,
+        opts.sourceBranch.trim(),
+      );
+      if (byBranch) return byBranch;
+    }
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const item = await witApi.getWorkItem(
+      opts.workItemId,
+      undefined,
+      undefined,
+      WorkItemExpand.Relations,
+      opts.project,
+    );
+    const ids = (item?.relations ?? [])
+      .map((relation) => pullRequestIdFromArtifact(relation.url ?? ''))
+      .filter((id): id is number => id !== null);
+    if (!ids.length) return null;
+    const gitApi = await this.connection.getGitApi();
+    const matches = await Promise.all(ids.map(async (pullRequestId) => {
+      try {
+        return await gitApi.getPullRequestById(pullRequestId, opts.project);
+      } catch {
+        return null;
+      }
+    }));
+    const active = matches
+      .filter((pullRequest) => pullRequest?.status === PullRequestStatus.Active && pullRequest.pullRequestId)
+      .sort((left, right) => (right?.pullRequestId ?? 0) - (left?.pullRequestId ?? 0));
+    const chosen = active[0];
+    if (!chosen?.pullRequestId) return null;
+    const repo = chosen.repository?.name || opts.repo;
+    return `${this.organization}/${opts.project}/_git/${repo}/pullrequest/${chosen.pullRequestId}`;
+  }
+
+  /** Points an open pull request at the project's configured branch. */
+  async setPullRequestTargetBranch(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    targetBranch: string;
+  }): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    const wanted = `refs/heads/${opts.targetBranch}`;
+    const current = await gitApi.getPullRequest(opts.repo, opts.pullRequestId, opts.project);
+    if (current?.targetRefName === wanted) return;
+    await gitApi.updatePullRequest(
+      { targetRefName: wanted },
+      opts.repo,
+      opts.pullRequestId,
+      opts.project,
+    );
+  }
+
+  /**
+   * Adds each name as a required reviewer. A name matches a project team first,
+   * then an Azure DevOps group or user with that display name.
+   */
+  async addRequiredPullRequestReviewers(opts: {
+    repo: string;
+    project: string;
+    pullRequestId: number;
+    names: string[];
+  }): Promise<void> {
+    const gitApi = await this.connection.getGitApi();
+    for (const name of opts.names) {
+      const reviewerId = await this.findReviewerId(opts.project, name);
+      if (!reviewerId) {
+        console.warn('[ado] required reviewer was not found', JSON.stringify({
+          project: opts.project,
+          name,
+        }));
+        continue;
+      }
+      try {
+        await gitApi.createPullRequestReviewer(
+          { id: reviewerId, isRequired: true, displayName: name },
+          opts.repo,
+          opts.pullRequestId,
+          reviewerId,
+          opts.project,
+        );
+      } catch (err) {
+        console.warn('[ado] could not add required reviewer', JSON.stringify({
+          project: opts.project,
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    }
+  }
+
+  private async findReviewerId(project: string, name: string): Promise<string | null> {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const coreApi = await this.connection.getCoreApi();
+    const teams = await coreApi.getTeams(project);
+    const team = (teams ?? []).find(
+      (item) => item.name?.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (team?.id) return team.id;
+
+    const org = this.organization.replace(/\/$/, '');
+    const pat = process.env.ADO_PAT;
+    if (!pat) return null;
+    const response = await fetch(`${org}/_apis/IdentityPicker/Identities?api-version=5.0-preview.1`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: trimmed,
+        identityTypes: ['group', 'user'],
+        operationScopes: ['ims', 'source'],
+        options: { MinResults: 1, MaxResults: 5 },
+      }),
+    });
+    if (!response.ok) return null;
+    const body = await response.json() as {
+      results?: Array<{ identities?: Array<{ localId?: string; originId?: string; displayName?: string }> }>;
+    };
+    const identities = body.results?.flatMap((result) => result.identities ?? []) ?? [];
+    const match = identities.find(
+      (identity) => identity.displayName?.trim().toLowerCase() === trimmed.toLowerCase(),
+    ) ?? identities[0];
+    return match?.originId || match?.localId || null;
   }
 
   /**

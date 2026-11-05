@@ -78,7 +78,7 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({
               className={styles.stepDetailButton}
               onClick={() => setSelectedStepId(step.id)}
               aria-label={`View details for ${step.stepId}`}
-              data-testid={`playbook-step-view-${step.stepId}`}
+              {...{ 'data-testid': `playbook-step-view-${step.stepId}` }}
             >
               View details
             </button>
@@ -97,9 +97,11 @@ export const PlaybookRunStepList: React.FC<PlaybookRunStepListProps> = ({
           project={run.project}
           runId={run.runId}
           step={selectedStep}
+          steps={run.steps}
+          onSelectStep={setSelectedStepId}
           suspension={run.suspension}
           onClose={() => setSelectedStepId(null)}
-          data-testid="playbook-run-step-detail"
+          {...{ 'data-testid': "playbook-run-step-detail" }}
         />
       ) : null}
     </>

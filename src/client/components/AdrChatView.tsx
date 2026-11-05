@@ -51,6 +51,7 @@ import {
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import { useReviewerAvailability } from '../hooks/useReviewerAvailability';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
+import { choiceBlocksAnsweredByLaterMessages } from '../utils/choiceAnswerMatching';
 import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewComments';
 import styles from './InterviewChatView.module.css';
 import { ApexLoader } from './ApexLoader';
@@ -553,6 +554,9 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [seededKickoffPrompt, session.sendError]);
 
   useEffect(() => {
+    // A failed POST sets sendError and waits for Retry. Resetting the sent
+    // flag on that false return must not start another request.
+    if (session.sendError) return;
     if (kickoffSentRef.current || !seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
     const alreadyPersisted = messages.some(
       (message) => message.role === 'user' && message.text === seededKickoffPrompt,
@@ -567,7 +571,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
       duringPreparation: true,
     }).then((sent) => {
-      if (!sent) kickoffSentRef.current = false;
+      if (!sent && !session.sendRejectedRef.current) kickoffSentRef.current = false;
     }).catch(() => {
       kickoffSentRef.current = false;
     });
@@ -667,7 +671,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
       ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
       duringPreparation: true,
     }).then((sent) => {
-      if (!sent) kickoffSentRef.current = false;
+      if (!sent && !session.sendRejectedRef.current) kickoffSentRef.current = false;
     }).catch(() => {
       kickoffSentRef.current = false;
     });
@@ -744,19 +748,32 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   );
   const showPreparationState = awaitingFirstAgentReply;
 
-  let lastUserIndex = -1;
-  visibleMessages.forEach((message, index) => {
-    if (message.role === 'user') lastUserIndex = index;
-  });
   let runningQCount = 0;
   const messageQOffsets = new Map<string, number>();
+  const messageChoiceBlocks = new Map<string, ChoiceBlock[]>();
   for (const message of visibleMessages) {
     if (message.role === 'agent') {
       messageQOffsets.set(message.id, runningQCount);
       const parts = parseAgentMessage(message.text);
-      runningQCount += parts.filter((part): part is ChoiceBlock => part.type === 'choices').length;
+      const blocks = parts.filter((part): part is ChoiceBlock => part.type === 'choices');
+      messageChoiceBlocks.set(message.id, blocks);
+      runningQCount += blocks.length;
     }
   }
+
+  // An agent message's choice block is answered only once a *later* user
+  // message actually quotes its question text (via `formatChoiceAnswers`'s
+  // `Q{n} · {question}` line) — a later reply merely existing is not enough,
+  // since it may answer a different, more recently asked question.
+  const isChoiceMessageAnswered = (candidateId: string, candidateIndex: number): boolean => {
+    const blocks = messageChoiceBlocks.get(candidateId);
+    if (!blocks || blocks.length === 0) return false;
+    const laterUserTexts = visibleMessages
+      .slice(candidateIndex + 1)
+      .filter((message) => message.role === 'user')
+      .map((message) => message.text);
+    return choiceBlocksAnsweredByLaterMessages(blocks, laterUserTexts);
+  };
   const generationStartedAt = Date.parse(adr.updatedAt);
   const generationElapsed = Number.isFinite(generationStartedAt)
     ? formatElapsed(generationNow - generationStartedAt)
@@ -1056,7 +1073,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                     isRunning={isInteractionBusy}
                     questionOffset={messageQOffsets.get(message.id) ?? 0}
                     interviewLocked={chatLocked}
-                    alreadyAnswered={index < lastUserIndex}
+                    alreadyAnswered={isChoiceMessageAnswered(message.id, index)}
                   />
                 );
               }
