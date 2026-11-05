@@ -950,7 +950,8 @@ export async function startGuidedCloudAgentRun(
   // branch, and Bug id are on the snapshot. The short pre-identity deadline
   // starts only when this process is about to launch; the reaper would
   // otherwise fail the run while Azure DevOps is still creating the Bug.
-  const holdUntilBugIsStored = intent === 'start' && job.opensBug;
+  const needsBug = job.opensBug && bug.bugWorkItemId == null && intent !== 'resume';
+  const holdUntilBugIsStored = needsBug;
   const timeoutAt = new Date(Date.now() + CLOUD_AGENT_QUEUE_WAIT_MS).toISOString();
   const lockKey = `cloud-agent-guided:${input.project}:${sessionId}`;
 
@@ -1044,7 +1045,7 @@ export async function startGuidedCloudAgentRun(
     return { sessionId, runId, bugWorkItemId: bug.bugWorkItemId, bugUrl: bug.bugUrl };
   });
 
-  if (intent === 'start' && job.opensBug) {
+  if (needsBug) {
     let created: { bugWorkItemId: number; bugUrl: string };
     try {
       created = await createSiteIssueBug({
@@ -2296,11 +2297,12 @@ export async function applyCloudAgentCompletion(input: {
   // ADO appends only when this callback won the leftover_work IS NULL write.
   // Resume clears leftoverWork to null at enqueue so the next terminal run
   // can win again. Clean summaries persist null and never set firstWrite.
-  if (persisted.firstWrite && summary && session.workItemId) {
+  const leftoverWorkItemId = session.workItemId ?? terminalSnapshot?.cloudAgent?.bugWorkItemId ?? null;
+  if (persisted.firstWrite && summary && leftoverWorkItemId) {
     await deps.writeLeftoverWorkToAdo({
       sessionId,
       project: input.project,
-      workItemId: session.workItemId,
+      workItemId: leftoverWorkItemId,
       runId: input.runId,
       summary,
     });
