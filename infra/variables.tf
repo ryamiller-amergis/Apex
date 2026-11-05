@@ -1357,9 +1357,15 @@ variable "ai_platform_v2_interactive_workspace_storage_name" {
 }
 
 variable "ai_platform_v2_interactive_workspace_mount_path" {
-  description = "Mount path for the shared actor-host workspace."
+  description = "Mount path for the shared actor-host workspace. AI_PILOT_DATA_DIR uses this path whether or not the share is mounted."
   type        = string
   default     = "/home/data/ai-pilot"
+}
+
+variable "ai_platform_v2_interactive_mount_workspace_share" {
+  description = "Mount the Azure Files workspace share on the V2 agentic and fast-interactive hosts. Set false once Brainstorm sources and grounding come from Blob bundles in this environment."
+  type        = bool
+  default     = true
 }
 
 variable "ai_platform_v2_interactive_grounding_container_name" {

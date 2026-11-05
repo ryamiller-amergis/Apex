@@ -41,6 +41,7 @@ import { runGroundingService } from './runGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { RepoReaderError } from './repoReader';
 import { isRepositorySyncingError } from './repoRead/mirrorHydration';
+import { resolveRepoReadServiceUrl } from './repoRead/repoServiceReader';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
@@ -1289,7 +1290,23 @@ async function resolveLightweightGroundingFallback(
   };
 }
 
-async function defaultResolveGrounding(
+async function readsThroughRepoReadService(
+  input: ResolveGroundingInput,
+): Promise<boolean> {
+  if (!resolveRepoReadServiceUrl()) return false;
+  const project = input.thread.kickoff.project;
+  const [wholeV2, repoRead] = await Promise.all([
+    isFlagEnabledForWholeProject('ai-runs-v2-transport', project).catch(() => false),
+    isFeatureEnabled('repo-read-service', {
+      userId: input.userId,
+      project,
+      caller: 'durable-interactive',
+    }).catch(() => false),
+  ]);
+  return wholeV2 && repoRead;
+}
+
+export async function defaultResolveGrounding(
   input: ResolveGroundingInput,
 ): Promise<FrozenGrounding> {
   const repository = {
@@ -1300,6 +1317,12 @@ async function defaultResolveGrounding(
       input.thread.kickoff.branch ??
       'main',
   } as const;
+  // The chat host checks out its own copy and every App Service read goes
+  // through repo-read, so an App Service checkout would never be read.
+  if (await readsThroughRepoReadService(input)) {
+    const pinned = await resolveLightweightGroundingFallback(input, repository);
+    if (pinned) return pinned;
+  }
   const start = () =>
     callerGroundingService.start({
       caller: 'durable-interactive',
