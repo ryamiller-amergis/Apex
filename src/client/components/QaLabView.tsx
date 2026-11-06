@@ -429,7 +429,7 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
             />
           )}
 
-          {review && (isPublished || testCase.existing) && (
+          {review && isQaCase(testCase) && (
             <QaLabCaseRun suiteId={review.suiteId} localCaseId={testCase.id} />
           )}
         </div>

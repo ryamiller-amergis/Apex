@@ -4,6 +4,7 @@ import { QaLabCaseRun, suggestedOutcome } from '../QaLabCaseRun';
 import { useCaseRun, useCaseRunActions } from '../../hooks/useQaLab';
 
 jest.mock('../../hooks/useQaLab', () => ({
+  caseRunUrl: (suiteId: string, localCaseId: string) => `/api/interviews/ado-test-suites/${suiteId}/cases/${localCaseId}/run`,
   useCaseRun: jest.fn(),
   useCaseRunActions: jest.fn(),
 }));
@@ -27,20 +28,13 @@ const run = (overrides: Partial<QaLabCaseRunRecord> = {}): QaLabCaseRunRecord =>
 });
 
 const runState = (overrides: Partial<QaLabCaseRunState> = {}): QaLabCaseRunState => ({
-  target: {
-    adoTestCaseId: 600,
-    adoTestCaseUrl: 'https://ado.example/600',
-    title: 'Clock in',
-    planId: 15,
-    planName: '15 Timesheets',
-    suiteId: 151,
-    suiteName: 'Geofence',
-    steps: [
-      { stepId: 2, order: 1, action: 'Open the timesheet', expected: 'Timesheet shows' },
-      { stepId: 3, order: 2, action: 'Clock in', expected: 'Clock-in is saved' },
-    ],
-  },
+  steps: [
+    { order: 1, action: 'Open the timesheet', expected: 'Timesheet shows' },
+    { order: 2, action: 'Clock in', expected: 'Clock-in is saved' },
+  ],
+  adoTestCase: null,
   draft: null,
+  changedSteps: [],
   lastPublished: null,
   ...overrides,
 });
@@ -67,42 +61,48 @@ beforeEach(() => {
 describe('QaLabCaseRun', () => {
   it('suggests Failed when a step fails and Passed only when every step passes', () => {
     const steps = (outcomes: Array<'passed' | 'failed' | null>) =>
-      new Map(outcomes.map((outcome, index) => [index, { stepId: index, outcome, comment: '' }]));
+      new Map(outcomes.map((outcome, index) => [index, { order: index, outcome, comment: '' }]));
     expect(suggestedOutcome([0, 1], steps(['passed', 'failed']))).toBe('failed');
     expect(suggestedOutcome([0, 1], steps(['passed', null]))).toBeNull();
     expect(suggestedOutcome([0, 1], steps(['passed', 'passed']))).toBe('passed');
   });
 
-  it('shows the Azure DevOps steps and why a case cannot run yet', () => {
-    renderRun(runState({ target: null, unavailableReason: 'Publish this case to a Test Plan suite before running it.' }));
+  it('runs a case before it is published and says the results go with it on publish', () => {
+    renderRun(runState());
 
-    expect(screen.getByTestId('qa-lab-run-TC-1-unavailable').textContent).toMatch(/Publish this case/);
+    expect(screen.getByTestId('qa-lab-run-TC-1-unpublished').textContent).toMatch(/when you publish/);
+    expect(screen.getByTestId('qa-lab-run-TC-1-step-1-pass')).toBeInTheDocument();
+    expect(screen.getByTestId('qa-lab-run-TC-1-case-attach')).toBeInTheDocument();
     expect(screen.queryByTestId('qa-lab-run-TC-1-publish')).toBeNull();
   });
 
-  it('marks the case Failed when a step fails and offers a Bug once the failure has a comment', async () => {
+  it('asks before creating the Bug, after the failure has a comment', async () => {
     renderRun(runState());
 
-    fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-step-3-fail'));
+    fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-step-2-fail'));
     expect(screen.getByTestId('qa-lab-run-TC-1-case-fail').getAttribute('aria-pressed')).toBe('true');
     expect(screen.queryByTestId('qa-lab-run-TC-1-create-bug')).toBeNull();
 
-    fireEvent.change(screen.getByTestId('qa-lab-run-TC-1-step-3-comment'), { target: { value: 'Spinner never stops' } });
+    fireEvent.change(screen.getByTestId('qa-lab-run-TC-1-step-2-comment'), { target: { value: 'Spinner never stops' } });
     fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-create-bug'));
+    expect(screen.getByTestId('qa-lab-run-TC-1-bug-confirm').textContent).toMatch(/linked to the Test Case when you publish/);
+    expect(actions.createBug.mutateAsync).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-bug-submit'));
     await waitFor(() => expect(actions.createBug.mutateAsync).toHaveBeenCalled());
     expect(actions.save.mutateAsync).toHaveBeenCalledWith({
       outcome: 'failed',
       comment: '',
-      stepResults: [{ stepId: 3, outcome: 'failed', comment: 'Spinner never stops' }],
+      stepResults: [{ order: 2, outcome: 'failed', comment: 'Spinner never stops' }],
     });
   });
 
-  it('saves, then publishes the results', async () => {
-    renderRun(runState());
+  it('publishes on its own once the case is in Azure DevOps', async () => {
+    renderRun(runState({ adoTestCase: { id: 600, url: 'https://ado.example/600' } }));
 
+    expect(screen.getByTestId('qa-lab-run-TC-1-case-link')).toHaveAttribute('href', 'https://ado.example/600');
+    fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-step-1-pass'));
     fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-step-2-pass'));
-    fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-step-3-pass'));
     expect(screen.getByTestId('qa-lab-run-TC-1-case-pass').getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-publish'));
 
@@ -110,18 +110,21 @@ describe('QaLabCaseRun', () => {
     expect(actions.save.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'passed' }));
   });
 
-  it('keeps publish disabled until the case has an outcome', () => {
-    renderRun(runState({ draft: run() }));
-
-    expect(screen.getByTestId('qa-lab-run-TC-1-publish')).toBeDisabled();
-  });
-
-  it('lists Bugs and the last published run', () => {
+  it('links files to Apex, notes changed steps, and lists Bugs and the last run', () => {
     renderRun(runState({
-      draft: run({ outcome: 'failed', comment: 'Broken', bugs: [{ id: 777, url: 'https://ado.example/777', title: 'Failed: Clock in' }] }),
+      changedSteps: [2],
+      draft: run({
+        outcome: 'failed',
+        comment: 'Broken',
+        attachments: [{ id: 'file-1', fileName: 'screen.png', size: 3, stepOrder: 1 }],
+        bugs: [{ id: 777, url: 'https://ado.example/777', title: 'Failed: Clock in', linkedToTestCase: false }],
+      }),
       lastPublished: run({ status: 'published', outcome: 'passed', adoRunUrl: 'https://ado.example/run/900', publishedAt: '2026-11-04T10:00:00.000Z' }),
     }));
 
+    expect(screen.getByTestId('qa-lab-run-TC-1-step-1-file-file-1'))
+      .toHaveAttribute('href', '/api/interviews/ado-test-suites/suite-1/cases/TC-1/run/attachments/file-1');
+    expect(screen.getByTestId('qa-lab-run-TC-1-changed').textContent).toMatch(/Step 2 changed/);
     expect(screen.getByTestId('qa-lab-run-TC-1-bug-777')).toHaveAttribute('href', 'https://ado.example/777');
     expect(screen.getByTestId('qa-lab-run-TC-1-last-link')).toHaveAttribute('href', 'https://ado.example/run/900');
   });

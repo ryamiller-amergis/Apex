@@ -381,26 +381,33 @@ export interface QaLabRunStep extends QaLabTestCaseStep {
   stepId: number;
 }
 
+/** A step result, keyed by the step's 1-based order in the case. */
 export interface QaLabRunStepResult {
-  stepId: number;
+  order: number;
   outcome: QaLabRunOutcome | null;
   comment: string;
+}
+
+/** A saved step result with the step text QA tested, so a later edit to the step can be detected. */
+export interface QaLabRecordedStepResult extends QaLabRunStepResult {
+  action: string;
+  expected: string;
 }
 
 export interface QaLabRunAttachment {
   id: string;
   fileName: string;
   size: number;
-  /** Azure DevOps work item attachment URL. */
-  url: string;
   /** Set when the file belongs to one step rather than the whole case. */
-  stepId?: number;
+  stepOrder?: number;
 }
 
 export interface QaLabRunBug {
   id: number;
   url: string;
   title: string;
+  /** False until the case has a Test Case in Azure DevOps to link the Bug to. */
+  linkedToTestCase: boolean;
 }
 
 /** Where a case runs in Azure DevOps. */
@@ -420,7 +427,7 @@ export interface QaLabCaseRun {
   status: 'draft' | 'published';
   outcome: QaLabRunOutcome | null;
   comment: string;
-  stepResults: QaLabRunStepResult[];
+  stepResults: QaLabRecordedStepResult[];
   attachments: QaLabRunAttachment[];
   bugs: QaLabRunBug[];
   adoRunUrl: string | null;
@@ -429,13 +436,15 @@ export interface QaLabCaseRun {
 }
 
 export interface QaLabCaseRunState {
-  /** Null when the case has no Test Case in a Test Plan suite yet. */
-  target: QaLabRunTarget | null;
-  /** Why the case cannot be run, when `target` is null. */
-  unavailableReason?: string;
+  /** The case's steps as QA runs them and as they are published. */
+  steps: QaLabTestCaseStep[];
+  /** The case's Test Case, once it is in Azure DevOps. */
+  adoTestCase: { id: number; url: string } | null;
   /** The open draft, or null before QA records anything. */
   draft: QaLabCaseRun | null;
-  /** The most recent published run of this Test Case. */
+  /** Step orders whose step text changed after QA recorded a result; those results are not kept. */
+  changedSteps: number[];
+  /** The most recent published run of this case. */
   lastPublished: QaLabCaseRun | null;
 }
 
@@ -443,4 +452,10 @@ export interface QaLabSaveCaseRunRequest {
   outcome: QaLabRunOutcome | null;
   comment: string;
   stepResults: QaLabRunStepResult[];
+}
+
+export interface QaLabRunPublishResult {
+  /** Cases whose results went to Azure DevOps as a test run. */
+  publishedLocalCaseIds: string[];
+  failures: Array<{ localCaseId: string; message: string }>;
 }

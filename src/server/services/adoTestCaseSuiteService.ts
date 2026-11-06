@@ -21,6 +21,7 @@ import type {
   QaLabNewPlacement,
   QaLabNewPlacementApproval,
   QaLabPublishedCase,
+  QaLabTestCaseStep,
 } from '../../shared/types/qaLab';
 import { DEVELOPER_ONLY_AUTOMATION_TIERS } from '../../shared/types/qaLab';
 import type { SkillProvider } from '../../shared/types/projectSettings';
@@ -2270,6 +2271,13 @@ function resolveLinkTarget(
       throw new Error(`Unknown placement.linkTo: ${String(unhandled)}`);
     }
   }
+}
+
+/** A case's steps numbered as `buildTestCaseStepsXml` publishes them. */
+export function caseRunSteps(testCase: Record<string, unknown>): QaLabTestCaseStep[] {
+  return stepsFrom(testCase.steps).map((step, index) => (typeof step === 'string'
+    ? { order: index + 1, action: step, expected: '' }
+    : { order: index + 1, action: step.action, expected: step.expected ?? '' }));
 }
 
 function stepsFrom(value: unknown): PublishableCase['steps'] {

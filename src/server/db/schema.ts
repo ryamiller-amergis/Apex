@@ -1,13 +1,12 @@
-import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, smallint, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, smallint, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type {
   QaAdoGenerationContext,
-  QaLabRunAttachment,
+  QaLabRecordedStepResult,
   QaLabRunBug,
   QaLabRunOutcome,
-  QaLabRunStepResult,
 } from '../../shared/types/qaLab';
 import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
 import type {
@@ -942,16 +941,17 @@ export const qaCaseComments = pgTable('qa_case_comments', {
 
 export const qaCaseRuns = pgTable('qa_case_runs', {
   id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
   project: text('project').notNull(),
-  adoTestCaseId: integer('ado_test_case_id').notNull(),
-  adoPlanId: integer('ado_plan_id').notNull(),
-  adoSuiteId: integer('ado_suite_id').notNull(),
+  adoTestCaseId: integer('ado_test_case_id'),
+  adoPlanId: integer('ado_plan_id'),
+  adoSuiteId: integer('ado_suite_id'),
   parentWorkItemId: integer('parent_work_item_id'),
   status: text('status').$type<'draft' | 'published'>().notNull().default('draft'),
   outcome: text('outcome').$type<QaLabRunOutcome>(),
   comment: text('comment').notNull().default(''),
-  stepResults: jsonb('step_results').$type<QaLabRunStepResult[]>().notNull().default(sql`'[]'::jsonb`),
-  attachments: jsonb('attachments').$type<QaLabRunAttachment[]>().notNull().default(sql`'[]'::jsonb`),
+  stepResults: jsonb('step_results').$type<QaLabRecordedStepResult[]>().notNull().default(sql`'[]'::jsonb`),
   bugs: jsonb('bugs').$type<QaLabRunBug[]>().notNull().default(sql`'[]'::jsonb`),
   adoRunId: integer('ado_run_id'),
   adoResultId: integer('ado_result_id'),
@@ -963,9 +963,25 @@ export const qaCaseRuns = pgTable('qa_case_runs', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 }, (t) => ({
   oneDraft: uniqueIndex('qa_case_runs_one_draft_idx')
-    .on(t.project, t.adoTestCaseId)
+    .on(t.suiteId, t.localCaseId)
     .where(sql`${t.status} = 'draft'`),
-  caseIdx: index('qa_case_runs_case_idx').on(t.project, t.adoTestCaseId, t.createdAt),
+  caseIdx: index('qa_case_runs_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
+
+export const qaCaseRunFiles = pgTable('qa_case_run_files', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: uuid('run_id').notNull().references(() => qaCaseRuns.id, { onDelete: 'cascade' }),
+  stepOrder: integer('step_order'),
+  fileName: text('file_name').notNull(),
+  contentType: text('content_type'),
+  size: integer('size').notNull(),
+  content: bytea('content').notNull(),
+  adoUrl: text('ado_url'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runIdx: index('qa_case_run_files_run_idx').on(t.runId, t.createdAt),
 }));
 
 export const designDocs = pgTable('design_docs', {

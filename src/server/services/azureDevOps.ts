@@ -130,16 +130,6 @@ export function testStepActionPath(stepId: number): string {
   return stepId.toString(16).padStart(8, '0');
 }
 
-async function readStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  return Buffer.concat(chunks);
-}
-
-function attachmentIdFromUrl(url: string): string | null {
-  return /\/attachments\/([0-9a-f-]{36})/i.exec(url)?.[1] ?? null;
-}
-
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -6543,12 +6533,11 @@ export class AzureDevOpsService {
     outcome: 'Passed' | 'Failed';
     comment: string;
     steps: Array<{ stepId: number; outcome: 'Passed' | 'Failed'; comment: string }>;
-    attachments: Array<{ url: string; fileName: string; stepId?: number }>;
+    attachments: Array<{ fileName: string; content: Buffer; stepId?: number }>;
     bugIds: number[];
   }): Promise<{ runId: number; resultId: number; runUrl: string }> {
     const testPlanApi = await this.connection.getTestPlanApi();
     const testApi = await this.connection.getTestApi();
-    const witApi = await this.connection.getWorkItemTrackingApi();
     const orgUrl = this.organization.replace(/\/$/, '');
 
     const points = await testPlanApi.getPointsList(this.project, spec.planId, spec.suiteId, undefined, String(spec.testCaseId));
@@ -6592,10 +6581,7 @@ export class AzureDevOpsService {
     }], this.project, run.id);
 
     for (const attachment of spec.attachments) {
-      const attachmentId = attachmentIdFromUrl(attachment.url);
-      if (!attachmentId) continue;
-      const content = await readStream(await witApi.getAttachmentContent(attachmentId, attachment.fileName, this.project, true));
-      const model = { fileName: attachment.fileName, stream: content.toString('base64'), attachmentType: 'GeneralAttachment' };
+      const model = { fileName: attachment.fileName, stream: attachment.content.toString('base64'), attachmentType: 'GeneralAttachment' };
       if (attachment.stepId === undefined) {
         await testApi.createTestResultAttachment(model, this.project, run.id, result.id);
       } else {
@@ -6628,15 +6614,26 @@ export class AzureDevOpsService {
     }], bugId, this.project);
   }
 
+  /** Adds the Tested By link from a Bug to the Test Case it was found with. */
+  async linkBugToTestCase(bugId: number, testCaseId: number): Promise<void> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    await witApi.updateWorkItem({}, [{
+      op: 'add',
+      path: '/relations/-',
+      value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: `${orgUrl}/_apis/wit/workItems/${testCaseId}` },
+    }], bugId, this.project);
+  }
+
   /**
-   * Creates a Bug as a child of `parentId`, tested by `testCaseId`, in the parent's
-   * iteration, with the given files attached.
+   * Creates a Bug as a child of `parentId`, tested by `testCaseId` when given, in the
+   * parent's iteration, with the given files attached.
    */
   async createBugWorkItem(spec: {
     title: string;
     reproStepsHtml: string;
     parentId: number;
-    testCaseId: number;
+    testCaseId?: number;
     areaPath: string;
     attachments: Array<{ url: string; fileName: string }>;
   }): Promise<{ id: number; url: string }> {
@@ -6650,7 +6647,9 @@ export class AzureDevOpsService {
       { op: 'add', path: '/fields/System.AreaPath', value: spec.areaPath },
       { op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: spec.reproStepsHtml },
       { op: 'add', path: '/relations/-', value: { rel: 'System.LinkTypes.Hierarchy-Reverse', url: workItemUrl(spec.parentId) } },
-      { op: 'add', path: '/relations/-', value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: workItemUrl(spec.testCaseId) } },
+      ...(spec.testCaseId !== undefined
+        ? [{ op: 'add', path: '/relations/-', value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: workItemUrl(spec.testCaseId) } }]
+        : []),
       ...spec.attachments.map((attachment) => ({
         op: 'add',
         path: '/relations/-',

@@ -222,6 +222,20 @@
   flex-wrap: wrap;
 }
 
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--error-color);
+  border-radius: 6px;
+}
+
+.confirmText {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 .primaryBtn,
 .secondaryBtn,
 .bugBtn {

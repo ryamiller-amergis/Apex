@@ -165,6 +165,7 @@ import {
 } from '../services/qaCaseRegenerationService';
 import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
 import qaCaseRunRouter from './qaCaseRuns';
+import { publishSuiteRuns } from '../services/qaCaseRunService';
 import type {
   QaAdoSuiteSelection,
   QaLabAddCaseCommentRequest,
@@ -624,7 +625,7 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       return;
     }
     const adoService = await adoWriteForRequest(req, suite.project);
-    res.json(await publishAdoTestCases(suite.id, {
+    const published = await publishAdoTestCases(suite.id, {
       ado: adoService,
       ...(selections ? { selections } : {}),
       ...(localCaseIds ? { localCaseIds } : {}),
@@ -633,7 +634,8 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
         ? { newPlacements: newPlacements.filter((entry): entry is QaLabNewPlacementApproval => entry !== null) }
         : {}),
       ...(newPlacementSelections ? { newPlacementSelections } : {}),
-    }));
+    });
+    res.json({ ...published, runs: await publishSuiteRuns(suite.id, adoService) });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
       res.status(403).json({ error: err.message });

@@ -5,7 +5,7 @@ import type {
   QaLabRunOutcome,
   QaLabRunStepResult,
 } from '../../shared/types/qaLab';
-import { useCaseRun, useCaseRunActions } from '../hooks/useQaLab';
+import { caseRunUrl, useCaseRun, useCaseRunActions } from '../hooks/useQaLab';
 import styles from './QaLabCaseRun.module.css';
 
 interface RunForm {
@@ -18,13 +18,13 @@ function formFrom(run: QaLabCaseRunRecord | null): RunForm {
   return {
     outcome: run?.outcome ?? null,
     comment: run?.comment ?? '',
-    steps: new Map((run?.stepResults ?? []).map((step) => [step.stepId, step])),
+    steps: new Map((run?.stepResults ?? []).map(({ order, outcome, comment }) => [order, { order, outcome, comment }])),
   };
 }
 
 /** Failed when any step failed, Passed when every step passed, otherwise no suggestion. */
-export function suggestedOutcome(stepIds: number[], steps: Map<number, QaLabRunStepResult>): QaLabRunOutcome | null {
-  const outcomes = stepIds.map((id) => steps.get(id)?.outcome ?? null);
+export function suggestedOutcome(orders: number[], steps: Map<number, QaLabRunStepResult>): QaLabRunOutcome | null {
+  const outcomes = orders.map((order) => steps.get(order)?.outcome ?? null);
   if (outcomes.includes('failed')) return 'failed';
   return outcomes.length > 0 && outcomes.every((outcome) => outcome === 'passed') ? 'passed' : null;
 }
@@ -67,18 +67,19 @@ const OutcomeButtons: React.FC<{
 
 const Attachments: React.FC<{
   attachments: QaLabRunAttachment[];
+  fileUrl: (id: string) => string;
   onAdd: (file: File) => void;
   onRemove: (id: string) => void;
   testId: string;
   disabled: boolean;
-}> = ({ attachments, onAdd, onRemove, testId, disabled }) => {
+}> = ({ attachments, fileUrl, onAdd, onRemove, testId, disabled }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div className={styles.attachments}>
       {attachments.map((attachment) => (
         <span key={attachment.id} className={styles.attachment}>
           <a
-            href={attachment.url}
+            href={fileUrl(attachment.id)}
             target="_blank"
             rel="noreferrer"
             {...{ 'data-testid': `${testId}-file-${attachment.id}` }}
@@ -126,19 +127,21 @@ interface QaLabCaseRunProps {
   localCaseId: string;
 }
 
-/** Runs a published Test Case and records the result in Azure DevOps. */
+/** Records a manual run of a case in Apex; the results go to Azure DevOps when the case is published. */
 export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId }) => {
   const [open, setOpen] = useState(false);
   const runQuery = useCaseRun(suiteId, localCaseId, open);
   const actions = useCaseRunActions(suiteId, localCaseId);
   const [form, setForm] = useState(() => formFrom(null));
   const [dirty, setDirty] = useState(false);
+  const [confirmingBug, setConfirmingBug] = useState(false);
   const testId = `qa-lab-run-${localCaseId}`;
 
   const state = runQuery.data;
   const draft = state?.draft ?? null;
-  const target = state?.target ?? null;
-  const stepIds = useMemo(() => (target?.steps ?? []).map((step) => step.stepId), [target]);
+  const steps = useMemo(() => state?.steps ?? [], [state]);
+  const orders = useMemo(() => steps.map((step) => step.order), [steps]);
+  const adoTestCase = state?.adoTestCase ?? null;
 
   const draftKey = draft ? `${draft.id}:${draft.updatedAt}` : '';
   const [syncedKey, setSyncedKey] = useState('');
@@ -157,13 +160,13 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
     setDirty(true);
   };
 
-  const updateStep = (stepId: number, next: Partial<QaLabRunStepResult>) => {
+  const updateStep = (order: number, next: Partial<QaLabRunStepResult>) => {
     setForm((current) => {
-      const steps = new Map(current.steps);
-      const previous = steps.get(stepId) ?? { stepId, outcome: null, comment: '' };
-      steps.set(stepId, { ...previous, ...next });
-      const outcome = current.outcome ?? suggestedOutcome(stepIds, steps);
-      return { ...current, steps, outcome: next.outcome === 'failed' ? 'failed' : outcome };
+      const stepResults = new Map(current.steps);
+      const previous = stepResults.get(order) ?? { order, outcome: null, comment: '' };
+      stepResults.set(order, { ...previous, ...next });
+      const outcome = current.outcome ?? suggestedOutcome(orders, stepResults);
+      return { ...current, steps: stepResults, outcome: next.outcome === 'failed' ? 'failed' : outcome };
     });
     setDirty(true);
   };
@@ -172,8 +175,8 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
     await actions.save.mutateAsync({
       outcome: form.outcome,
       comment: form.comment,
-      stepResults: stepIds.flatMap((id) => {
-        const step = form.steps.get(id);
+      stepResults: orders.flatMap((order) => {
+        const step = form.steps.get(order);
         return step && (step.outcome || step.comment.trim()) ? [step] : [];
       }),
     });
@@ -204,10 +207,11 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
     );
   }
 
-  const attachmentsFor = (stepId?: number) => (draft?.attachments ?? [])
-    .filter((attachment) => attachment.stepId === stepId);
-  const attach = (stepId?: number) => (file: File) => {
-    void saveThen(() => actions.attach.mutateAsync({ file, ...(stepId !== undefined ? { stepId } : {}) }));
+  const fileUrl = (id: string) => `${caseRunUrl(suiteId, localCaseId)}/attachments/${encodeURIComponent(id)}`;
+  const attachmentsFor = (stepOrder?: number) => (draft?.attachments ?? [])
+    .filter((attachment) => attachment.stepOrder === stepOrder);
+  const attach = (stepOrder?: number) => (file: File) => {
+    void saveThen(() => actions.attach.mutateAsync({ file, ...(stepOrder !== undefined ? { stepOrder } : {}) }));
   };
   const removeAttachment = (id: string) => {
     void actions.removeAttachment.mutateAsync(id).catch(() => undefined);
@@ -217,17 +221,17 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
   const bugRun = draft || dirty ? null : lastPublished;
   const bugs = (draft ?? bugRun)?.bugs ?? [];
   const showCreateBug = canFileBug(bugRun ? formFrom(bugRun) : form);
+  const changedSteps = state?.changedSteps ?? [];
 
   return (
     <section className={styles.run} {...{ 'data-testid': testId }}>
       <header className={styles.runHeader}>
         <h4 className={styles.runTitle}>Run this test</h4>
-        {target && (
+        {adoTestCase && (
           <span className={styles.runWhere}>
-            <a href={target.adoTestCaseUrl} target="_blank" rel="noreferrer" {...{ 'data-testid': `${testId}-case-link` }}>
-              Test Case #{target.adoTestCaseId}
+            <a href={adoTestCase.url} target="_blank" rel="noreferrer" {...{ 'data-testid': `${testId}-case-link` }}>
+              Test Case #{adoTestCase.id}
             </a>
-            {` in ${target.planName} > ${target.suiteName}`}
           </span>
         )}
         <button
@@ -240,9 +244,16 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
         </button>
       </header>
 
-      {runQuery.isLoading && <p className={styles.note}>Loading the Test Case from Azure DevOps…</p>}
-      {state && !target && (
-        <p className={styles.note} {...{ 'data-testid': `${testId}-unavailable` }}>{state.unavailableReason}</p>
+      {runQuery.isLoading && <p className={styles.note}>Loading the run…</p>}
+      {state && !adoTestCase && (
+        <p className={styles.note} {...{ 'data-testid': `${testId}-unpublished` }}>
+          Results are saved in Apex. They go to Azure DevOps with the case when you publish.
+        </p>
+      )}
+      {changedSteps.length > 0 && (
+        <p className={styles.note} {...{ 'data-testid': `${testId}-changed` }}>
+          Step {changedSteps.join(', ')} changed since you tested {changedSteps.length === 1 ? 'it' : 'them'}. Record {changedSteps.length === 1 ? 'it' : 'them'} again.
+        </p>
       )}
       {lastPublished && (
         <p className={styles.note} {...{ 'data-testid': `${testId}-last` }}>
@@ -259,7 +270,7 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
         </p>
       )}
 
-      {target && (
+      {state && (
         <>
           <table className={styles.runTable}>
             <thead>
@@ -271,18 +282,18 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
               </tr>
             </thead>
             <tbody>
-              {target.steps.map((step) => {
-                const result = form.steps.get(step.stepId);
-                const stepTestId = `${testId}-step-${step.stepId}`;
+              {steps.map((step) => {
+                const result = form.steps.get(step.order);
+                const stepTestId = `${testId}-step-${step.order}`;
                 return (
-                  <tr key={step.stepId} className={result?.outcome === 'failed' ? styles.rowFailed : undefined}>
+                  <tr key={step.order} className={result?.outcome === 'failed' ? styles.rowFailed : undefined}>
                     <td className={styles.numberCol}>{step.order}</td>
                     <td className={styles.multiline}>{step.action}</td>
                     <td className={styles.multiline}>{step.expected}</td>
                     <td className={styles.resultCol}>
                       <OutcomeButtons
                         value={result?.outcome ?? null}
-                        onChange={(outcome) => updateStep(step.stepId, { outcome })}
+                        onChange={(outcome) => updateStep(step.order, { outcome })}
                         data-testid={stepTestId}
                         disabled={busy}
                       />
@@ -292,13 +303,14 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
                         maxLength={4000}
                         placeholder={result?.outcome === 'failed' ? 'What happened instead?' : 'Comment'}
                         value={result?.comment ?? ''}
-                        onChange={(event) => updateStep(step.stepId, { comment: event.target.value })}
+                        onChange={(event) => updateStep(step.order, { comment: event.target.value })}
                         aria-label={`Comment on step ${step.order}`}
                         {...{ 'data-testid': `${stepTestId}-comment` }}
                       />
                       <Attachments
-                        attachments={attachmentsFor(step.stepId)}
-                        onAdd={attach(step.stepId)}
+                        attachments={attachmentsFor(step.order)}
+                        fileUrl={fileUrl}
+                        onAdd={attach(step.order)}
                         onRemove={removeAttachment}
                         testId={stepTestId}
                         disabled={busy}
@@ -332,6 +344,7 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
             />
             <Attachments
               attachments={attachmentsFor(undefined)}
+              fileUrl={fileUrl}
               onAdd={attach(undefined)}
               onRemove={removeAttachment}
               testId={`${testId}-case`}
@@ -352,6 +365,40 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
             </ul>
           )}
 
+          {confirmingBug && (
+            <div className={styles.confirm} role="group" aria-label="Create Bug" {...{ 'data-testid': `${testId}-bug-confirm` }}>
+              <p className={styles.confirmText}>
+                This creates a Bug in Azure DevOps now, as a child of the PBI, with the failed steps, comments and attachments.
+                {adoTestCase ? '' : ' It is linked to the Test Case when you publish.'}
+              </p>
+              <div className={styles.actions}>
+                <button
+                  type="button"
+                  className={styles.secondaryBtn}
+                  disabled={busy}
+                  onClick={() => setConfirmingBug(false)}
+                  {...{ 'data-testid': `${testId}-bug-cancel` }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.bugBtn}
+                  disabled={busy}
+                  onClick={() => {
+                    void saveThen(async () => {
+                      await actions.createBug.mutateAsync();
+                      setConfirmingBug(false);
+                    });
+                  }}
+                  {...{ 'data-testid': `${testId}-bug-submit` }}
+                >
+                  {actions.createBug.isPending ? 'Creating…' : 'Create Bug in Azure DevOps'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {error && <p className={styles.error} role="alert">{error}</p>}
 
           <div className={styles.actions}>
@@ -364,27 +411,29 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
             >
               Save progress
             </button>
-            {showCreateBug && (
+            {showCreateBug && !confirmingBug && (
               <button
                 type="button"
                 className={styles.bugBtn}
                 disabled={busy}
-                onClick={() => { void saveThen(() => actions.createBug.mutateAsync()); }}
+                onClick={() => setConfirmingBug(true)}
                 {...{ 'data-testid': `${testId}-create-bug` }}
               >
                 Create Bug
               </button>
             )}
-            <button
-              type="button"
-              className={styles.primaryBtn}
-              disabled={busy || !form.outcome}
-              title={form.outcome ? undefined : 'Mark the test case Passed or Failed first'}
-              onClick={() => { void saveThen(() => actions.publish.mutateAsync()); }}
-              {...{ 'data-testid': `${testId}-publish` }}
-            >
-              {actions.publish.isPending ? 'Publishing…' : 'Publish results to Azure DevOps'}
-            </button>
+            {adoTestCase && (
+              <button
+                type="button"
+                className={styles.primaryBtn}
+                disabled={busy || !form.outcome}
+                title={form.outcome ? undefined : 'Mark the test case Passed or Failed first'}
+                onClick={() => { void saveThen(() => actions.publish.mutateAsync()); }}
+                {...{ 'data-testid': `${testId}-publish` }}
+              >
+                {actions.publish.isPending ? 'Publishing…' : 'Publish results to Azure DevOps'}
+              </button>
+            )}
           </div>
         </>
       )}

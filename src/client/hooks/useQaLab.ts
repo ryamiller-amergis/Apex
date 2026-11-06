@@ -15,6 +15,7 @@ import type {
   QaLabGenerationCandidates,
   QaLabNewPlacementApproval,
   QaLabPublishedCase,
+  QaLabRunPublishResult,
   QaLabWorkItemList,
   QaLabWorkItemTestCases,
 } from '../../shared/types/qaLab';
@@ -183,6 +184,7 @@ export function usePublishAdoTestSuite() {
         published: QaLabPublishedCase[];
         skippedLocalCaseIds: string[];
         failures: Array<{ localCaseId: string; message: string }>;
+        runs: QaLabRunPublishResult;
       }>(`/api/interviews/ado-test-suites/${suiteId}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -197,6 +199,12 @@ export function usePublishAdoTestSuite() {
       if (result.failures.length > 0) {
         throw new Error(
           `${result.failures.length} test case${result.failures.length === 1 ? '' : 's'} could not be published: ${result.failures[0].message}`,
+        );
+      }
+      const runFailures = result.runs.failures;
+      if (runFailures.length > 0) {
+        throw new Error(
+          `The cases were published, but the results of ${runFailures.length} case${runFailures.length === 1 ? '' : 's'} were not: ${runFailures[0].message}`,
         );
       }
       return result;
@@ -304,10 +312,10 @@ export function useRegenerateCase() {
 const caseRunKey = (suiteId: string, localCaseId: string) =>
   ['qa-lab', 'case-run', suiteId, localCaseId] as const;
 
-const caseRunUrl = (suiteId: string, localCaseId: string) =>
+export const caseRunUrl = (suiteId: string, localCaseId: string) =>
   `/api/interviews/ado-test-suites/${suiteId}/cases/${encodeURIComponent(localCaseId)}/run`;
 
-/** The Azure DevOps Test Case to run, the draft in progress, and the last published run. */
+/** The case's steps, the draft in progress, and the last published run. */
 export function useCaseRun(suiteId: string, localCaseId: string, enabled: boolean) {
   return useQuery<QaLabCaseRunState>({
     queryKey: caseRunKey(suiteId, localCaseId),
@@ -331,11 +339,11 @@ export function useCaseRunActions(suiteId: string, localCaseId: string) {
     }),
     onSettled,
   });
-  const attach = useMutation<QaLabCaseRun, Error, { file: File; stepId?: number }>({
-    mutationFn: ({ file, stepId }) => {
+  const attach = useMutation<QaLabCaseRun, Error, { file: File; stepOrder?: number }>({
+    mutationFn: ({ file, stepOrder }) => {
       const form = new FormData();
       form.append('file', file);
-      if (stepId !== undefined) form.append('stepId', String(stepId));
+      if (stepOrder !== undefined) form.append('stepOrder', String(stepOrder));
       return apiFetch(`${url}/attachments`, { method: 'POST', body: form });
     },
     onSettled,

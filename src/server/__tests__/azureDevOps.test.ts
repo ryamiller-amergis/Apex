@@ -1,4 +1,3 @@
-import { Readable } from 'stream';
 import { AzureDevOpsService, parseTestCaseStepsXml, placeableSuitePaths } from '../services/azureDevOps';
 import { TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import * as azdev from 'azure-devops-node-api';
@@ -1564,12 +1563,9 @@ describe('AzureDevOpsService', () => {
         createTestIterationResultAttachment,
         updateTestRun,
       });
-      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({
-        getAttachmentContent: jest.fn(async () => Readable.from([Buffer.from('png')])),
-        updateWorkItem,
-      });
+      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({ updateWorkItem });
       const service = new AzureDevOpsService('MatterWorx');
-      const attachmentUrl = 'https://dev.azure.com/test-org/_apis/wit/attachments/0f9b1c4e-2d3a-4b5c-8d7e-1a2b3c4d5e6f';
+      const content = Buffer.from('png');
 
       const result = await service.publishManualTestResult({
         planId: 15,
@@ -1579,7 +1575,7 @@ describe('AzureDevOpsService', () => {
         outcome: 'Failed',
         comment: 'Blocked at clock-in',
         steps: [{ stepId: 2, outcome: 'Passed', comment: '' }, { stepId: 11, outcome: 'Failed', comment: 'Spinner' }],
-        attachments: [{ url: attachmentUrl, fileName: 'case.png' }, { url: attachmentUrl, fileName: 'step.png', stepId: 11 }],
+        attachments: [{ fileName: 'case.png', content }, { fileName: 'step.png', content, stepId: 11 }],
         bugIds: [777],
       });
 
@@ -1642,6 +1638,34 @@ describe('AzureDevOpsService', () => {
         expect.objectContaining({ value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: 'https://dev.azure.com/test-org/_apis/wit/workItems/600' } }),
         expect.objectContaining({ value: { rel: 'AttachedFile', url: 'https://ado.example/att', attributes: { name: 'screen.png' } } }),
       ]));
+    });
+
+    it('leaves out the Tested By link for a case not in Azure DevOps yet, and adds it later', async () => {
+      const createWorkItem = jest.fn().mockResolvedValue({ id: 777 });
+      const updateWorkItem = jest.fn().mockResolvedValue({ id: 777 });
+      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({
+        getWorkItem: jest.fn().mockResolvedValue({ fields: {} }),
+        createWorkItem,
+        updateWorkItem,
+      });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await service.createBugWorkItem({
+        title: 'Failed: Clock in',
+        reproStepsHtml: '<p>Broken</p>',
+        parentId: 18452,
+        areaPath: 'MatterWorx',
+        attachments: [],
+      });
+      await service.linkBugToTestCase(777, 600);
+
+      const [[, patch]] = createWorkItem.mock.calls;
+      expect(JSON.stringify(patch)).not.toContain('TestedBy');
+      expect(updateWorkItem).toHaveBeenCalledWith({}, [{
+        op: 'add',
+        path: '/relations/-',
+        value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: 'https://dev.azure.com/test-org/_apis/wit/workItems/600' },
+      }], 777, 'MatterWorx');
     });
   });
 });

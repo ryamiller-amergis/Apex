@@ -11,6 +11,7 @@ import {
   addRunAttachment,
   createRunBug,
   getCaseRunState,
+  getRunAttachmentFile,
   publishCaseRun,
   removeRunAttachment,
   saveCaseRun,
@@ -20,6 +21,8 @@ import type { QaLabSaveCaseRunRequest } from '../../shared/types/qaLab';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_RUN_ATTACHMENT_BYTES, files: 1 } });
 const RUN_PATH = '/ado-test-suites/:suiteId/cases/:localCaseId/run';
+/** Only these open in the browser; anything else downloads, so an uploaded file cannot run script. */
+const INLINE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf', 'text/plain']);
 
 async function runAdo(req: Request) {
   const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
@@ -61,7 +64,7 @@ function sendRunError(err: unknown, res: Response, next: NextFunction): void {
 
 router.get(RUN_PATH, requirePermission('interviews:manage'), async (req, res, next) => {
   try {
-    res.json(await getCaseRunState(req.params.suiteId, req.params.localCaseId, await runAdo(req)));
+    res.json(await getCaseRunState(req.params.suiteId, req.params.localCaseId));
   } catch (err) {
     sendRunError(err, res, next);
   }
@@ -74,7 +77,6 @@ router.put(RUN_PATH, requirePermission('interviews:manage'), async (req, res, ne
       req.params.localCaseId,
       (req.body ?? {}) as QaLabSaveCaseRunRequest,
       runUser(req),
-      await runAdo(req),
     ));
   } catch (err) {
     sendRunError(err, res, next);
@@ -94,18 +96,22 @@ router.post(`${RUN_PATH}/attachments`, requirePermission('interviews:manage'), (
         res.status(400).json({ error: 'file is required' });
         return;
       }
-      const rawStepId = (req.body as { stepId?: unknown } | undefined)?.stepId;
-      const stepId = rawStepId === undefined || rawStepId === '' ? undefined : Number(rawStepId);
-      if (stepId !== undefined && !Number.isInteger(stepId)) {
-        res.status(400).json({ error: 'stepId must be a step id' });
+      const rawStep = (req.body as { stepOrder?: unknown } | undefined)?.stepOrder;
+      const stepOrder = rawStep === undefined || rawStep === '' ? undefined : Number(rawStep);
+      if (stepOrder !== undefined && !Number.isInteger(stepOrder)) {
+        res.status(400).json({ error: 'stepOrder must be a step number' });
         return;
       }
       res.status(201).json(await addRunAttachment(
         req.params.suiteId,
         req.params.localCaseId,
-        { fileName: file.originalname.slice(0, 200), content: file.buffer, ...(stepId !== undefined ? { stepId } : {}) },
+        {
+          fileName: file.originalname.slice(0, 200),
+          contentType: file.mimetype || null,
+          content: file.buffer,
+          ...(stepOrder !== undefined ? { stepOrder } : {}),
+        },
         runUser(req),
-        await runAdo(req),
       ));
     } catch (err) {
       sendRunError(err, res, next);
@@ -113,9 +119,25 @@ router.post(`${RUN_PATH}/attachments`, requirePermission('interviews:manage'), (
   });
 });
 
-router.delete(`${RUN_PATH}/attachments/:attachmentId`, requirePermission('interviews:manage'), async (req, res, next) => {
+router.get(`${RUN_PATH}/attachments/:fileId`, requirePermission('interviews:manage'), async (req, res, next) => {
   try {
-    res.json(await removeRunAttachment(req.params.suiteId, req.params.localCaseId, req.params.attachmentId));
+    const file = await getRunAttachmentFile(req.params.suiteId, req.params.localCaseId, req.params.fileId);
+    const inline = file.contentType !== null && INLINE_TYPES.has(file.contentType);
+    res.setHeader('Content-Type', inline && file.contentType ? file.contentType : 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader(
+      'Content-Disposition',
+      `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    );
+    res.send(file.content);
+  } catch (err) {
+    sendRunError(err, res, next);
+  }
+});
+
+router.delete(`${RUN_PATH}/attachments/:fileId`, requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await removeRunAttachment(req.params.suiteId, req.params.localCaseId, req.params.fileId));
   } catch (err) {
     sendRunError(err, res, next);
   }
