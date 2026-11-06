@@ -220,6 +220,61 @@ describe('useAgentChatSession', () => {
     ]);
   });
 
+  it('keeps the pending question above a reply that arrives before its echo', async () => {
+    const earlier: ChatMessage[] = [
+      { id: 'u1', role: 'user', text: 'Same question', ts: '2026-01-01T00:00:00Z' },
+      { id: 'a1', role: 'agent', text: 'First answer', ts: '2026-01-01T00:00:01Z' },
+    ];
+    currentStreamReturn = { ...mockStreamReturn, messages: earlier };
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 })
+    );
+
+    await act(async () => {
+      await result.current.send('Same question');
+    });
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      messages: [
+        ...earlier,
+        { id: 'a2', role: 'agent', text: 'Second answer', ts: '2026-01-01T00:00:03Z' },
+      ],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages.map((message) => message.id)).toEqual([
+      'u1',
+      'a1',
+      TURN_ID_1,
+      'a2',
+    ]);
+  });
+
+  it('treats a persisted message with the turn id as the echo', async () => {
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 })
+    );
+
+    await act(async () => {
+      await result.current.send('User answer');
+    });
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      messages: [
+        { id: TURN_ID_1, role: 'user', text: 'User answer', ts: '2026-01-01T00:00:00Z' },
+        { id: 'a1', role: 'agent', text: 'Answer', ts: '2026-01-01T00:00:01Z' },
+      ],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages.map((message) => message.id)).toEqual([
+      TURN_ID_1,
+      'a1',
+    ]);
+  });
+
   it('send includes model and attachments when provided', async () => {
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
