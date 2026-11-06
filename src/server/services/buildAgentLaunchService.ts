@@ -281,6 +281,18 @@ async function failLaunch(
   return { ok: false, conflict: true, reason };
 }
 
+/** Only `build-feature` fix-up passes resume; multi-task plans keep one fresh agent per attempt. */
+async function previousCloudAgentForTask(buildTaskId: string, currentRunId: string): Promise<string | null> {
+  const [previous] = await db
+    .select({ cloudAgentIdentity: agentRuns.cloudAgentIdentity, snapshot: agentRuns.buildLaunchSnapshot })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.buildTaskId, buildTaskId), sql`${agentRuns.id} <> ${currentRunId}`, sql`${agentRuns.cloudAgentIdentity} IS NOT NULL`))
+    .orderBy(sql`${agentRuns.createdAt} DESC`)
+    .limit(1);
+  const taskKey = (previous?.snapshot as { taskKey?: unknown } | null)?.taskKey;
+  return taskKey === 'build-feature' ? previous?.cloudAgentIdentity ?? null : null;
+}
+
 /** A paid agent must not run untracked. Returns whether Cursor accepted the stop. */
 async function stopUntrackedAgent(
   project: string,
@@ -349,6 +361,10 @@ export async function launchBuildAgentRun(
     return refuseLaunch(runId, labels, [{ code: 'prompt_contains_held_secret', fieldPath: 'prompt' }]);
   }
 
+  const resumeCloudAgentId = snapshot.attempt > 1
+    ? await previousCloudAgentForTask(row.buildTaskId, runId)
+    : null;
+
   const launchStartedMs = Date.now();
   let launched: LaunchCloudAgentResult;
   try {
@@ -363,6 +379,7 @@ export async function launchBuildAgentRun(
         startingBranch: snapshot.startingBranch,
         branchName: snapshot.targetBranch,
         openPullRequest: snapshot.pullRequest.open,
+        resumeCloudAgentId,
       },
     });
   } catch (err) {

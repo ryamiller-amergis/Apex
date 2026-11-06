@@ -618,13 +618,25 @@ export function isDocumentAssistant(
   );
 }
 
+function isBuildIntakeKickoff(kickoff: ChatThreadKickoff): boolean {
+  const playbookKey = (
+    kickoff as ChatThreadKickoff & {
+      playbookInterview?: { snapshot?: { key?: string } };
+    }
+  ).playbookInterview?.snapshot?.key;
+  if (playbookKey === 'build-intake') return true;
+  const skillPath = kickoff.skillPath?.replace(/\\/g, '/').toLowerCase() ?? '';
+  return skillPath.includes('/build-intake/');
+}
+
 export function isRepositoryReadingChatCaller(
   kickoff: ChatThreadKickoff,
   isDevSession: boolean
 ): boolean {
   return !isDevSession
     && kickoff.assistantType !== 'calendar-work-item'
-    && kickoff.assistantType !== 'mcp-server';
+    && kickoff.assistantType !== 'mcp-server'
+    && !isBuildIntakeKickoff(kickoff);
 }
 
 export type GroundingCallerKey =
@@ -698,6 +710,11 @@ export function buildMcpServers(
   const servers: Record<string, McpServerConfig> = {};
 
   const port = process.env.PORT ?? '3001';
+
+  // Build intake chats reply directly in plain language without repository or ADO tool round-trips.
+  if (isBuildIntakeKickoff(kickoff)) {
+    return servers;
+  }
 
   /*
    * Playbook profiles are server-selected, never merged with user pills or always-on operational
@@ -1954,9 +1971,9 @@ async function buildNewAgentTurnPrompt(
         key: 'skill' | 'context' | 'agents';
         path: string;
       }> = [];
-      if (kickoff.skillPath)
+      if (kickoff.skillPath && !isBuildIntakeKickoff(kickoff))
         requests.push({ key: 'skill', path: kickoff.skillPath });
-      if (options?.preloadRepositoryContext && !options.productPhaseInterview) {
+      if (options?.preloadRepositoryContext && !options.productPhaseInterview && !isBuildIntakeKickoff(kickoff)) {
         requests.push(
           { key: 'context', path: 'context.md' },
           { key: 'agents', path: 'AGENTS.md' }
@@ -2016,7 +2033,7 @@ async function buildNewAgentTurnPrompt(
       ? skillPathCandidates(skillName, skillPathNorm)
       : [skillPathNorm];
 
-    if (!skillContent && !skipProviderCatalog) {
+    if (!skillContent && !skipProviderCatalog && !isBuildIntakeKickoff(kickoff)) {
       for (const candidate of candidates.slice(1)) {
         try {
           const content = options?.repoReader && !hasSeparateSkillRepo(kickoff)
@@ -3339,6 +3356,9 @@ export function classifyError(err: unknown): ErrorTier {
   return 'transient';
 }
 
+/** Cursor's per-minute limits: retrying inside the same minute hits the limit again. */
+const RUN_RATE_LIMIT_RETRY_DELAY_MS = 30_000;
+
 export function isRateLimitError(err: unknown): boolean {
   const statusCode = getErrorStatusCode(err);
   if (statusCode === 429) return true;
@@ -4330,6 +4350,9 @@ async function tryDispatchInteractiveTurn(
       if (usesGuidedInterview(state.thread.kickoff.skillPath)) {
         return bypass('guided-interview');
       }
+      if (isBuildIntakeKickoff(state.thread.kickoff)) {
+        return bypass('build-intake');
+      }
       // Custom MCP pills are arbitrary by design and cannot execute in the
       // actor while its MCP map is intentionally empty.
       if (state.thread.kickoff.mcpPill) {
@@ -5058,7 +5081,15 @@ async function sendMessageLegacy(
   }
 
   const agentWorkspaceDir = state.thread.workspaceDir;
-  let localAgentOptions = repositoryRuntime.local;
+  const isBuildIntake = isBuildIntakeKickoff(state.thread.kickoff);
+  let localAgentOptions = isBuildIntake
+    ? {
+        ...repositoryRuntime.local,
+        settingSources: [],
+        sandboxOptions: { enabled: false },
+        customTools: {},
+      }
+    : repositoryRuntime.local;
   const mcpServers = repositoryRuntime.mcpServers;
   console.log(
     '[chat] MCP servers for turn:',
@@ -5140,7 +5171,9 @@ async function sendMessageLegacy(
     };
     const agentCapabilities = isMcpServerChat
       ? { tools: ['mcp'] as ToolName[] }
-      : { agents: { 'code-reviewer': codeReviewerAgent } };
+      : isBuildIntake
+        ? { tools: [] as ToolName[], disallowedTools: ['task'] as ToolName[] }
+        : { agents: { 'code-reviewer': codeReviewerAgent } };
 
     if (guidedFreshAgent && state.agent) {
       await state.agent[Symbol.asyncDispose]().catch(() => {});
@@ -5971,6 +6004,15 @@ async function sendMessageLegacy(
             maxAttempts: MAX_RUN_RETRIES + 1,
           });
 
+          if (isRateLimitError(new Error(reason))) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, RUN_RATE_LIMIT_RETRY_DELAY_MS * (attempt + 1));
+            });
+            if (turnWasCancelled()) {
+              throw makeCancelledError('Run cancelled before retry');
+            }
+          }
+
           if (state.agent) {
             await state.agent[Symbol.asyncDispose]().catch(() => {});
             state.agent = null;
@@ -6010,7 +6052,10 @@ async function sendMessageLegacy(
         trackAgentError(threadId, new Error(reason), {
           model: state.thread.kickoff?.model ?? 'unknown',
         });
-        state.thread.lastError = reason;
+        const shownReason = isRateLimitError(new Error(reason))
+          ? 'Cursor is busy right now. Wait a minute, then send your message again.'
+          : reason;
+        state.thread.lastError = shownReason;
         // @feature-flag:event-driven-run-termination start winner=enabled
         if (eventDrivenTerminationEnabled) {
           // @feature-flag:event-driven-run-termination enabled-start
@@ -6018,9 +6063,9 @@ async function sendMessageLegacy(
             state,
             agentRunId!,
             'failed',
-            reason,
+            shownReason,
             [
-              { type: 'error', error: reason },
+              { type: 'error', error: shownReason },
               { type: 'done', runId: agentRunId },
             ]
           );
@@ -6031,7 +6076,7 @@ async function sendMessageLegacy(
             .update(agentRuns)
             .set({
               status: 'failed',
-              lastError: reason,
+              lastError: shownReason,
               updatedAt: new Date().toISOString(),
             })
             .where(
@@ -6050,7 +6095,7 @@ async function sendMessageLegacy(
             );
           await publishRunEvent(state, agentRunId!, {
             type: 'error',
-            error: reason,
+            error: shownReason,
           });
           // @feature-flag:event-driven-run-termination disabled-end
         }
@@ -6678,6 +6723,31 @@ export async function sendMessage(
       internalContext: options?.internalContext,
     });
     options?.onLegacySettled?.();
+    return { route: 'legacy' };
+  }
+
+  // Fast, tool-free build-intake turns execute in-process and stream directly to interactiveLiveBus.
+  if (isBuildIntakeKickoff(state.thread.kickoff)) {
+    const execution = sendMessageLegacy(threadId, text, modelOverride, attachments, {
+      hidden: options?.hidden,
+      turnSkill: options?.turnSkill,
+      internalContext: options?.internalContext,
+    });
+    if (legacyCompletion === 'await') {
+      try {
+        await execution;
+      } finally {
+        options?.onLegacySettled?.();
+      }
+      return { route: 'legacy' };
+    }
+    void execution
+      .catch((error: unknown) => {
+        reportDetachedLegacyError(threadId, error);
+      })
+      .finally(() => {
+        options?.onLegacySettled?.();
+      });
     return { route: 'legacy' };
   }
 

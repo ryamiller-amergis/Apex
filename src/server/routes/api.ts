@@ -91,6 +91,7 @@ const sessionFreeFullPaths = new Set(['/api/telemetry-config', '/api/messages'])
 const sessionFreeFullPrefixes = [
   '/api/internal/load-test-runs',
   '/api/internal/ai-runs',
+  '/api/internal/build-deployments',
   '/api/internal/foundation-skills',
   '/api/public',
 ];

@@ -14,7 +14,10 @@ import { stopRunningAgents } from './buildAgentStopper';
 import { deriveResumeStage } from './buildCaps';
 import { appendBuildEvent } from './buildEventsService';
 import { suspensionReasonPlainMessage } from './buildNotificationCopy';
-import { reconcileBuildRuns } from './buildOrchestrator/dispatchWiring';
+import {
+  reconcileBuildRuns,
+  recheckStoppedBuildFeature,
+} from './buildOrchestrator/dispatchWiring';
 import { defaultPreviewLeaseService } from './buildPreviewLeaseService';
 import { redactText } from './buildRedactionService';
 import {
@@ -100,6 +103,8 @@ export interface BuildRunControlDeps {
     updatedCaps?: { costLimitUsd?: number; elapsedLimitMs?: number },
   ) => Promise<boolean>;
   reconcileRun: (buildId: string) => Promise<void>;
+  /** Re-reads a stopped single-agent build's last report before any new agent runs. */
+  recheckStoppedTask?: (buildId: string) => Promise<'merged' | 'fix_up' | 'none'>;
   appendEvent: (input: {
     buildRunId: string;
     eventType: string;
@@ -251,6 +256,7 @@ function createDefaultControlDeps(): BuildRunControlDeps {
     async reconcileRun() {
       await reconcileBuildRuns();
     },
+    recheckStoppedTask: (buildId) => recheckStoppedBuildFeature(buildId),
     async appendEvent(input) {
       await appendBuildEvent(input);
     },
@@ -500,6 +506,9 @@ export function createBuildRunControlService(
         actorUserId: input.actor.userId,
       });
 
+      if (reason === 'repair_cap' && deps.recheckStoppedTask) {
+        await deps.recheckStoppedTask(run.id);
+      }
       await deps.reconcileRun(run.id);
 
       const updatedRunView = {

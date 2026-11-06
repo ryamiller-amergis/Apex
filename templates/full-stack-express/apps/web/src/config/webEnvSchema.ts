@@ -74,6 +74,10 @@ export const webEnvSchema = z.strictObject({
       .refine(isApiBaseUrl, { error: API_BASE_MESSAGE })
       .default('')
   ),
+  VITE_APEX_PREVIEW_MODE: z.preprocess(
+    unsetBlank,
+    z.enum(['sample']).optional(),
+  ),
 });
 
 const devServerObject = z.object({

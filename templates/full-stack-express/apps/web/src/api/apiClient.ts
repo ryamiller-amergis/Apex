@@ -8,6 +8,11 @@ import {
 } from '@project-scope/contracts';
 import type { ZodType } from 'zod';
 import { ApiError } from './ApiError';
+import { readPreviewProfile, writePreviewProfile } from './previewSampleStore';
+
+function isPreviewSampleMode(): boolean {
+  return import.meta.env.VITE_APEX_PREVIEW_MODE === 'sample';
+}
 
 async function readProblem(response: Response): Promise<ProblemDetails | null> {
   let text = '';
@@ -79,6 +84,9 @@ async function request(
 
 /** Reads the caller's profile. The URL is the contract path, with no query. */
 export function getMe(): Promise<Profile> {
+  if (isPreviewSampleMode()) {
+    return Promise.resolve(readPreviewProfile());
+  }
   return request(getMeRoute.path, getMeRoute.responses[200].body, {
     method: 'GET',
     headers: { Accept: 'application/json' },
@@ -90,6 +98,9 @@ export function getMe(): Promise<Profile> {
  * `null`, which is the wire value the profile API already accepts for a clear.
  */
 export function putMe(body: UpdateProfileBody): Promise<Profile> {
+  if (isPreviewSampleMode()) {
+    return Promise.resolve(writePreviewProfile(body));
+  }
   const payload = {
     displayName: body.displayName,
     email: body.email ?? null,

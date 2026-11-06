@@ -8,6 +8,7 @@ import { and, asc, eq, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { buildPreviewLeases, buildRevisions, buildRuns } from '../db/schema';
 import { appendBuildEvent } from './buildEventsService';
+import { deletePreviewBundlesForRun } from './buildPreviewArtifactService';
 
 export const PREVIEW_LEASE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -309,6 +310,11 @@ export function createPreviewLeaseService(
           },
         });
         freedPairs.push({ project: item.project, repository: item.repository });
+        try {
+          await deletePreviewBundlesForRun(item.buildRunId);
+        } catch {
+          // Best-effort cleanup; the lease is already released.
+        }
       }
 
       return freedPairs;

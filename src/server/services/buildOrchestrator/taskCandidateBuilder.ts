@@ -3,7 +3,7 @@
  * prompt for `implementer`, `qa`, and `check` build tasks.
  */
 import { createHash } from 'crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, isNotNull } from 'drizzle-orm';
 import {
   integrationBranchName,
   type BuildQualityManifestSnapshot,
@@ -15,7 +15,7 @@ import {
 import type { BuildLaunchSnapshot } from '../../../shared/types/buildLaunchSnapshot';
 import { formatVisualBriefForPrompt, type BuildVisualBrief } from '../../../shared/buildVisualBrief';
 import { db } from '../../db/drizzle';
-import { buildRevisions, buildRuns, buildTasks } from '../../db/schema';
+import { agentRuns, buildEvents, buildRevisions, buildRuns, buildTasks } from '../../db/schema';
 import {
   BUILD_PROMPT_KEY_PREFIX,
   storeLocalBuildPromptBlob,
@@ -53,6 +53,43 @@ export interface TaskPromptEnvelopeInput {
   };
   skillPath: string;
   visualBriefSection?: string | null;
+  priorAttemptFindings?: PriorAttemptFinding[];
+  previousBranch?: string | null;
+}
+
+export interface PriorAttemptFinding {
+  attemptNumber: number;
+  message: string;
+  violations: Array<{ code: string; requirementId: string | null }>;
+  visualFindings: string[];
+}
+
+function formatPriorAttemptFindings(
+  findings: PriorAttemptFinding[],
+  previousBranch: string | null,
+  targetBranch: string
+): string[] {
+  if (findings.length === 0) return [];
+  const lines = ['## Prior Attempt Findings (fix these first)'];
+  if (previousBranch) {
+    lines.push(
+      `Your earlier work is on \`${previousBranch}\`. Create \`${targetBranch}\` from it (\`git checkout -b ${targetBranch} ${previousBranch}\` if it is not already checked out) — do not start over.`
+    );
+  }
+  for (const finding of findings) {
+    lines.push(`- Attempt ${finding.attemptNumber}: ${finding.message}`);
+    for (const v of finding.violations) {
+      lines.push(`  - ${v.code}${v.requirementId ? ` (${v.requirementId})` : ''}`);
+    }
+    for (const visual of finding.visualFindings) {
+      lines.push(`  - visual: ${visual}`);
+    }
+  }
+  lines.push(
+    'Start from the existing task branch, keep the work that passed, and resolve every item above before emitting evidence.',
+    ''
+  );
+  return lines;
 }
 
 export function buildTaskExecutionPrompt(
@@ -86,7 +123,7 @@ export function buildTaskExecutionPrompt(
   const ownedFilesLines =
     input.ownedFiles.length > 0
       ? input.ownedFiles.map((f) => `- ${f}`).join('\n')
-      : '- (Small path: repository files needed for this feature)';
+      : '- (Unrestricted: create or edit any repository files needed to deliver the complete end-to-end feature — contracts, database migrations/schema, API routes, and UI screens)';
 
   const reuseLines =
     input.reuse.length > 0
@@ -102,7 +139,10 @@ export function buildTaskExecutionPrompt(
     `Read and follow the skill at \`${input.skillPath}\`.`,
     '',
     '## Repository Build',
-    'Plan the change internally, then implement it completely in this run. Do not pause for plan approval.',
+    'Plan the change internally, then implement the COMPLETE feature end-to-end in this single run (including database migrations/schema, Zod contracts, OpenAPI regeneration, backend API routes, frontend screens, and tests).',
+    'NEVER stop after writing red tests, NEVER write a `plan.json` escalation file, and NEVER escalate or defer implementation to another path — you are the full-stack builder for this entire feature.',
+    'Push your task branch to `origin` (`git push -u origin <targetBranch>`) immediately after the red test commit, immediately after the green implementation commit, and after any fix commit so your work is preserved on the remote before final checks run.',
+    'Do NOT start a live Vite dev server or run `playwright test` in the cloud container (there is no live backend/database for browser e2e in the container, and waiting on Playwright exhausts the container timeout). Verify UI and API behavior with fast Vitest tests (`corepack pnpm test:unit`), and for any Playwright visual snapshot requirement (`DOD-*`), commit the spec file (`apps/web/e2e/*.spec.ts`) and defer e2e execution in `apex-evidence` (`"tier": "e2e"`, `"deferral": { "reason": "Playwright browser snapshots deferred to CI; verified via Vitest component tests." }`, `"red": null`, `"green": null`).',
     'Inspect existing repository patterns and shared components before creating new code.',
     'Add or update automated tests, run the quality commands below, and repair failures before finishing.',
     'Apex will open the pull request after verification; do not open or complete one yourself.',
@@ -152,8 +192,63 @@ export function buildTaskExecutionPrompt(
     `- codeMap: \`${input.standards.codeMap.path}\` (sha256: \`${input.standards.codeMap.contentHash}\`)`,
     '',
     ...(input.visualBriefSection ? [input.visualBriefSection, ''] : []),
+    ...formatPriorAttemptFindings(
+      input.priorAttemptFindings ?? [],
+      input.previousBranch ?? null,
+      input.targetBranch
+    ),
     'Commit your work to the target branch and end your final message with the required fenced `apex-evidence` JSON block.',
   ].join('\n');
+}
+
+const MAX_PRIOR_ATTEMPTS_IN_PROMPT = 2;
+
+async function loadPriorAttemptFindings(
+  buildRunId: string,
+  taskKey: string,
+  attempt: number
+): Promise<PriorAttemptFinding[]> {
+  const rows = await db
+    .select({ message: buildEvents.message, detail: buildEvents.detail })
+    .from(buildEvents)
+    .where(
+      and(
+        eq(buildEvents.buildRunId, buildRunId),
+        eq(buildEvents.eventType, 'verification.refused')
+      )
+    )
+    .orderBy(desc(buildEvents.ordinal));
+
+  const findings: PriorAttemptFinding[] = [];
+  for (const row of rows) {
+    const detail = row.detail ?? {};
+    const attemptNumber = Number(detail.attemptNumber);
+    if (detail.taskKey !== taskKey || !(attemptNumber < attempt)) continue;
+    const violations = Array.isArray(detail.violations)
+      ? (detail.violations as Array<{ code?: unknown; requirementId?: unknown }>)
+          .filter((v) => typeof v.code === 'string')
+          .map((v) => ({
+            code: v.code as string,
+            requirementId: typeof v.requirementId === 'string' ? v.requirementId : null,
+          }))
+      : [];
+    const visualFindings = Array.isArray(detail.visualFindings)
+      ? detail.visualFindings.filter((f): f is string => typeof f === 'string')
+      : [];
+    findings.push({ attemptNumber, message: row.message, violations, visualFindings });
+    if (findings.length >= MAX_PRIOR_ATTEMPTS_IN_PROMPT) break;
+  }
+  return findings.reverse();
+}
+
+async function loadPreviousTaskBranch(buildTaskId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ branch: agentRuns.cloudBranchName })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.buildTaskId, buildTaskId), isNotNull(agentRuns.cloudBranchName)))
+    .orderBy(desc(agentRuns.createdAt))
+    .limit(1);
+  return row?.branch ?? null;
 }
 
 function resolveRoleSkill(
@@ -262,10 +357,22 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
       ? formatVisualBriefForPrompt(visualBrief)
       : null;
 
+  const priorAttemptFindings =
+    request.attempt > 1
+      ? await loadPriorAttemptFindings(runRow.id, headTask.key, request.attempt)
+      : [];
+  const previousBranch =
+    request.attempt > 1 ? await loadPreviousTaskBranch(headTask.id) : null;
+
   const promptText = buildTaskExecutionPrompt({
     buildRunId: runRow.id,
     revisionNumber: revRow.revisionNumber,
-    classification: revRow.classification === 'small' ? 'small' : 'full',
+    classification:
+      headTask.key === 'build-feature'
+        ? 'full'
+        : revRow.classification === 'small'
+          ? 'small'
+          : 'full',
     integrationBranch,
     targetBranch: request.branchName,
     taskKey: headTask.key,
@@ -281,6 +388,8 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
     standards,
     skillPath: roleSkill.path,
     visualBriefSection,
+    priorAttemptFindings,
+    previousBranch,
   });
 
   const container =
@@ -310,7 +419,7 @@ export const buildTaskLaunchCandidate: BuildLaunchCandidateBuilder = async (
     taskKey: headTask.key,
     role: headTask.role,
     attempt: request.attempt,
-    model: roleSkill.model,
+    model: runRow.modelOverride?.trim() || roleSkill.model,
     skill: {
       path: roleSkill.path,
       contentHash: roleSkill.contentHash,

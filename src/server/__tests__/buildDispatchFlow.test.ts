@@ -616,6 +616,37 @@ describe('applyAgentCompletion (TBI-019)', () => {
     expect(h.dispatchSpy).toHaveBeenCalledWith(RUN_ID);
   });
 
+  it('a build-feature agent that finished with refused evidence gets one fix-up pass, then the run stops', async () => {
+    const h = harness();
+    h.store.addRun();
+    h.store.addTask('build-feature', 'running');
+    const first = h.store.addAgentRun('task-build-feature', 'completed');
+    h.mayReportDone.mockResolvedValue(false);
+
+    await expect(h.applyCompletion({ agentRunId: first })).resolves.toBe('failed');
+    expect(h.store.eventTypes()).toEqual(['task.failed', 'task.requeued', 'task.launched']);
+    expect(h.store.task('build-feature').attempt).toBe(2);
+    expect(h.store.run().status).toBe('building');
+
+    const second = h.store.agentRuns[h.store.agentRuns.length - 1].id;
+    h.store.setAgentStatus(second, 'completed');
+    await expect(h.applyCompletion({ agentRunId: second })).resolves.toBe('failed');
+    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: 'repair_cap' });
+    expect(h.launches).toHaveLength(1);
+  });
+
+  it('a build-feature agent that errored suspends without a fix-up pass', async () => {
+    const h = harness();
+    h.store.addRun();
+    h.store.addTask('build-feature', 'running');
+    const agentRunId = h.store.addAgentRun('task-build-feature', 'cancelled');
+    h.mayReportDone.mockResolvedValue(false);
+
+    await expect(h.applyCompletion({ agentRunId })).resolves.toBe('failed');
+    expect(h.store.run().status).toBe('suspended');
+    expect(h.launches).toHaveLength(0);
+  });
+
   it('VT-21: a late completion from an earlier agent run is ignored', async () => {
     const h = harness();
     const earlier = runningTask(h, 'running');

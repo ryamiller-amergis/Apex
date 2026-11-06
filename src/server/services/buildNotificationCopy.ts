@@ -28,7 +28,7 @@ export function suspensionReasonPlainMessage(
       return 'This build exceeded its parallel agent limit. Resume to continue.';
     case 'cap_reached':
     case 'repair_cap':
-      return 'This build reached its repair or revision limit. Contact a Project Admin.';
+      return 'Apex could not finish this build on its own. Resume it to check it again, or contact a Project Admin.';
     case 'flag_disabled':
       return 'Builds are paused by a Platform Admin. You can resume once builds are back on.';
     case 'permission_revoked':

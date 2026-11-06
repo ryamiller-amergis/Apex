@@ -21,6 +21,8 @@ export interface BuildLaunchOptions {
   branchName: string;
   /** Build agents never open a pull request; true is refused. */
   openPullRequest: boolean;
+  /** A fix-up pass continues this Cloud Agent, so the earlier checkout and commits are already there. */
+  resumeCloudAgentId?: string | null;
 }
 
 interface LaunchCloudAgentBase {
@@ -228,12 +230,32 @@ function resolveLaunchTarget(input: LaunchCloudAgentInput): ResolvedLaunchTarget
   };
 }
 
+async function resumeCloudAgent(
+  cloudAgentId: string,
+  model: string,
+): Promise<Awaited<ReturnType<typeof Agent.resume>> | null> {
+  try {
+    return await Agent.resume(cloudAgentId, {
+      apiKey: cursorUserLevelApiKey(),
+      model: { id: model },
+    });
+  } catch (err) {
+    console.warn(
+      '[cloud-agent] could not resume the earlier Cloud Agent; starting a new one',
+      JSON.stringify({ cloudAgentId, error: err instanceof Error ? err.message : String(err) }),
+    );
+    return null;
+  }
+}
+
 export async function launchCloudAgent(
   input: LaunchCloudAgentInput,
 ): Promise<LaunchCloudAgentResult> {
   const target = resolveLaunchTarget(input);
   const repoUrl = buildCloudRepoUrl(input.skillProvider, input.project, input.skillRepo);
-  const agent = await Agent.create({
+  const resumeId = input.build?.resumeCloudAgentId?.trim() || null;
+  const resumed = resumeId ? await resumeCloudAgent(resumeId, target.model) : null;
+  const agent = resumed ?? await Agent.create({
     apiKey: cursorUserLevelApiKey(),
     model: { id: target.model },
     name: input.workItemTitle,

@@ -8,7 +8,6 @@ import React, {
 import { Link, useNavigate } from 'react-router-dom';
 import {
   BUILD_PROMPT_MAX_LENGTH,
-  buildStatusLabel,
   type BuildRunStatus,
 } from '../../shared/types/build';
 import type { ChatMessage } from '../../shared/types/chat';
@@ -32,6 +31,7 @@ import {
   useEnsureBuildPlanning,
   useRequestBuildRevision,
   useResumeBuild,
+  useRetryBuildDeployment,
   useStartBuild,
 } from '../hooks/useBuilds';
 import { useChatThread } from '../hooks/useChatThreads';
@@ -46,7 +46,12 @@ import { stripInterviewPhaseMarkers } from '../utils/interviewPhaseProgress';
 import { AgentComposer } from './agentChat';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
-import { buildProgressHeadline, userFacingBuildEvent } from './buildProgressCopy';
+import {
+  buildProgressHeadline,
+  buildUserStatus,
+  userFacingBuildEvent,
+} from './buildProgressCopy';
+import { BuildSandboxPreview } from './BuildSandboxPreview';
 import styles from './BuildWorkspace.module.css';
 
 export interface BuildWorkspaceProps {
@@ -505,6 +510,8 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const [rememberForProject, setRememberForProject] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [optimisticPrompt, setOptimisticPrompt] = useState<string | null>(null);
+  const [optimisticStartingBuild, setOptimisticStartingBuild] = useState(false);
 
   const isMinimized = sidePanelState === 'minimized';
   const isExpanded = sidePanelState === 'expanded';
@@ -531,6 +538,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const revisionMutation = useRequestBuildRevision(project, buildId ?? '');
   const cancelMutation = useCancelBuild(project, buildId ?? '');
   const resumeMutation = useResumeBuild(project, buildId ?? '');
+  const retryDeploymentMutation = useRetryBuildDeployment(project, buildId ?? '');
 
   const detail = buildQuery.data ?? null;
   const buildStatus = detail?.build.status;
@@ -570,10 +578,30 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     return () => window.clearInterval(timer);
   }, [buildStatus, chatThreadId, refetchChatThread]);
 
-  const { turns, pendingActivity } = useMemo(
+  const { turns: rawTurns, pendingActivity } = useMemo(
     () => groupChatMessagesIntoTurns(chatSession.messages ?? []),
     [chatSession.messages]
   );
+
+  const turns = useMemo<GroupedChatTurn[]>(() => {
+    if (rawTurns.length > 0) return rawTurns;
+    if (optimisticPrompt && (startBuildMutation.isPending || Boolean(buildId))) {
+      return [
+        {
+          id: 'optimistic-seed-user',
+          role: 'user',
+          text: optimisticPrompt,
+          activity: [],
+        },
+      ];
+    }
+    return rawTurns;
+  }, [buildId, optimisticPrompt, rawTurns, startBuildMutation.isPending]);
+
+  const effectiveBuildStatus: BuildRunStatus | undefined =
+    optimisticStartingBuild && buildStatus === 'intake'
+      ? 'planning'
+      : buildStatus;
 
   const streamingText = chatSession.streamingText
     ? cleanDisplayText(chatSession.streamingText)
@@ -582,21 +610,45 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     () => chatSession.toolProgress ?? [],
     [chatSession.toolProgress]
   );
+  const threadError =
+    chatSession.sendError ??
+    (effectiveBuildStatus === 'intake' && !rawTurns.some((t) => t.role === 'agent')
+      ? (chatThreadQuery.data?.lastError ?? null)
+      : null);
+  const isStartingFirstTurn =
+    startBuildMutation.isPending ||
+    (Boolean(buildId) &&
+      effectiveBuildStatus === 'intake' &&
+      !threadError &&
+      Boolean(optimisticPrompt) &&
+      rawTurns.length === 0) ||
+    (Boolean(buildId) &&
+      effectiveBuildStatus === 'intake' &&
+      !threadError &&
+      rawTurns.length === 1 &&
+      rawTurns[0].role === 'user' &&
+      (chatThreadQuery.data?.status === 'running' ||
+        Boolean(chatThreadQuery.data?.activeRunId)));
   const isTurnStreaming =
+    isStartingFirstTurn ||
     chatSession.isRunning ||
     chatSession.isSending ||
     chatSession.isPreparing ||
     chatSession.isAwaitingAgentResponse ||
     Boolean(streamingText) ||
     pendingActivity.length > 0;
-  const intakeBusy = isTurnStreaming || confirmIntakeMutation.isPending;
+  const intakeBusy =
+    isTurnStreaming ||
+    confirmIntakeMutation.isPending ||
+    optimisticStartingBuild;
   const prUrl = detail?.pullRequest?.url ?? null;
   const hasPr = Boolean(prUrl);
-  const live = isBuildLive(buildStatus);
+  const pushedBranch = detail?.pushedBranch ?? null;
+  const live = isBuildLive(effectiveBuildStatus);
   const tasks = detail?.currentRevision?.tasks ?? [];
   const events = eventsQuery.data?.events ?? [];
   const progress = buildProgressHeadline({
-    status: buildStatus,
+    status: effectiveBuildStatus,
     events,
     hasPullRequest: hasPr,
     // eslint-disable-next-line react-hooks/purity -- staleness uses the time of this render
@@ -626,14 +678,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   ]);
 
   const handleConfirmAndBuild = useCallback(async () => {
-    if (!buildId || confirmIntakeMutation.isPending) return;
+    if (!buildId || confirmIntakeMutation.isPending || optimisticStartingBuild) return;
     setActionError(null);
+    setOptimisticStartingBuild(true);
     try {
       await confirmIntakeMutation.mutateAsync({});
       await buildQuery.refetch();
       await eventsQuery.refetch();
       void refetchChatThread();
     } catch (err) {
+      setOptimisticStartingBuild(false);
       setActionError(
         err instanceof Error ? err.message : 'Could not start planning.'
       );
@@ -643,6 +697,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     buildQuery,
     confirmIntakeMutation,
     eventsQuery,
+    optimisticStartingBuild,
     refetchChatThread,
   ]);
 
@@ -683,6 +738,8 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
         setActionError('Choose a repository to start your build.');
         return;
       }
+      setOptimisticPrompt(text);
+      setDraft('');
       try {
         const created = await startBuildMutation.mutateAsync({
           repository: effectiveRepo,
@@ -690,9 +747,10 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
           clientRequestId: requestIdRef.current,
           model: selectedModel || undefined,
         });
-        setDraft('');
         navigate(`/builds/${encodeURIComponent(created.buildRunId)}`);
       } catch (err) {
+        setOptimisticPrompt(null);
+        setDraft(text);
         requestIdRef.current = newClientRequestId();
         if (!(err instanceof BuildApiError)) {
           setActionError(
@@ -792,26 +850,55 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     startBuildMutation.error instanceof BuildApiError
       ? startBuildMutation.error
       : null;
-  const pipelineSteps = derivePipelineSteps(buildStatus, hasPr);
-  const previewUrl = detail?.currentRevision
-    ? (detail.revisions.find(
-        (revision) => revision.number === detail.currentRevision?.number
-      )?.previewUrl ?? null)
-    : null;
+  const pipelineSteps = derivePipelineSteps(effectiveBuildStatus, hasPr);
+  const livePreviewUrl =
+    detail?.previews?.find((entry) => entry.isLive)?.previewUrl
+    ?? detail?.deployment?.previewUrl
+    ?? null;
+
+  const pipelineStepList = (
+    <ol
+      className={styles.stepperList}
+      {...{
+        'data-testid': 'build-workspace-pipeline-steps',
+      }}
+    >
+      {pipelineSteps.map((step) => (
+        <li
+          key={step.key}
+          className={`${styles.stepperItem}${step.state === 'active' ? ` ${styles.stepperItemActive}` : ''}${step.state === 'done' ? ` ${styles.stepperItemDone}` : ''}${step.state === 'failed' ? ` ${styles.stepperItemFailed}` : ''}`}
+          {...{
+            'data-testid': `build-workspace-step-${step.key}`,
+          }}
+        >
+          <span aria-hidden="true">
+            {step.state === 'done'
+              ? '✓'
+              : step.state === 'failed'
+                ? '!'
+                : step.state === 'active'
+                  ? '●'
+                  : '○'}
+          </span>
+          <span>{step.label}</span>
+        </li>
+      ))}
+    </ol>
+  );
 
   const composerBusy =
     startBuildMutation.isPending ||
     intakeBusy ||
     revisionMutation.isPending ||
     (Boolean(buildId) &&
-      buildStatus !== 'intake' &&
-      buildStatus !== 'preview_ready' &&
-      buildStatus !== 'accepted' &&
-      buildStatus !== 'failed' &&
-      buildStatus !== 'cancelled' &&
-      buildStatus !== 'deployment_failed' &&
-      buildStatus !== 'suspended' &&
-      buildStatus !== 'needs_developer');
+      effectiveBuildStatus !== 'intake' &&
+      effectiveBuildStatus !== 'preview_ready' &&
+      effectiveBuildStatus !== 'accepted' &&
+      effectiveBuildStatus !== 'failed' &&
+      effectiveBuildStatus !== 'cancelled' &&
+      effectiveBuildStatus !== 'deployment_failed' &&
+      effectiveBuildStatus !== 'suspended' &&
+      effectiveBuildStatus !== 'needs_developer');
 
   const composerDisabled = composerBusy && !canAskBuildQuestion;
 
@@ -823,39 +910,33 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
 
   const composerPlaceholder = isNewMode
     ? 'Describe what you want to build (e.g. Add a calendar component to the home page)…'
-    : buildStatus === 'intake'
+    : effectiveBuildStatus === 'intake'
       ? 'Reply to the collaborator, or click Confirm & Start Build…'
       : canAskBuildQuestion
         ? 'Ask what is happening with this build…'
-      : buildStatus === 'preview_ready' || buildStatus === 'accepted'
+      : effectiveBuildStatus === 'preview_ready' || effectiveBuildStatus === 'accepted'
         ? 'Ask for a change or revision to this build…'
-        : buildStatus === 'failed' ||
-            buildStatus === 'deployment_failed' ||
-            buildStatus === 'suspended' ||
-            buildStatus === 'needs_developer'
+        : effectiveBuildStatus === 'failed' ||
+            effectiveBuildStatus === 'deployment_failed' ||
+            effectiveBuildStatus === 'suspended' ||
+            effectiveBuildStatus === 'needs_developer'
           ? 'This build stopped. You can review what happened above.'
           : 'Apex is building and testing your feature…';
 
   const statusText = isNewMode
     ? 'New Build'
-    : hasPr
-      ? 'Ready to review'
-      : progress.failed
-        ? 'Failed'
-        : buildStatus === 'cancelled'
-          ? 'Cancelled'
-          : buildStatus
-            ? buildStatusLabel(buildStatus)
-            : 'Loading…';
+    : buildUserStatus({ status: effectiveBuildStatus, hasPullRequest: hasPr });
 
   const fallbackStageLabel =
-    buildStatus === 'planning'
+    effectiveBuildStatus === 'planning'
       ? 'Understanding the request and preparing the repository…'
-      : buildStatus === 'building'
+      : effectiveBuildStatus === 'building'
         ? 'Building the feature and running its checks…'
-        : buildStatus === 'checking'
+        : effectiveBuildStatus === 'checking'
           ? 'Checking the finished feature and preparing the pull request…'
-          : undefined;
+          : isStartingFirstTurn
+            ? 'Understanding your request…'
+            : undefined;
 
   return (
     <main className={styles.root} {...{ 'data-testid': 'build-workspace' }}>
@@ -982,7 +1063,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               className={styles.thread}
               {...{ 'data-testid': 'build-workspace-thread' }}
             >
-              {isNewMode && (
+              {isNewMode && !optimisticPrompt && (
                 <div
                   className={styles.emptyHero}
                   {...{ 'data-testid': 'build-workspace-empty' }}
@@ -1034,7 +1115,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     ) : null}
                     {isLatestAgentTurn &&
                       choiceBlocks.length > 0 &&
-                      buildStatus === 'intake' && (
+                      effectiveBuildStatus === 'intake' && (
                         <div className={styles.choiceRow}>
                           {choiceBlocks.flatMap((block) =>
                             block.options.map((opt) => (
@@ -1076,7 +1157,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               )}
 
               {/* One-click Confirm & Start Build bar during Intake */}
-              {buildStatus === 'intake' &&
+              {effectiveBuildStatus === 'intake' &&
                 turns.some((t) => t.role === 'agent') &&
                 !isTurnStreaming && (
                   <div
@@ -1105,7 +1186,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 )}
 
               {/* Build Pipeline Stage Progress Card (Planning / Building / Checking) */}
-              {buildId && buildStatus && buildStatus !== 'intake' && (
+              {buildId && effectiveBuildStatus && effectiveBuildStatus !== 'intake' && (
                 <article
                   className={`${styles.message} ${styles.collaborator}`}
                   aria-label="Autonomous build status"
@@ -1170,6 +1251,20 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                               <span>
                                 <span>{userFacingBuildEvent(ev.message)}</span>
                               </span>
+                              {ev.cloudAgentUrl && (
+                                <a
+                                  className={styles.agentRunLink}
+                                  href={ev.cloudAgentUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  {...{
+                                    'data-testid':
+                                      'build-workspace-agent-run-link',
+                                  }}
+                                >
+                                  Open agent run
+                                </a>
+                              )}
                             </div>
                           ))
                         )}
@@ -1255,10 +1350,11 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   )}
                 </div>
               )}
+
             </div>
 
             <div className={styles.composerWrap}>
-              {(startError || actionError || chatSession.sendError) && (
+              {(startError || actionError || threadError) && (
                 <div
                   role="alert"
                   className={styles.errorBanner}
@@ -1267,7 +1363,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   <strong>
                     {startError?.message ??
                       actionError ??
-                      chatSession.sendError}
+                      threadError}
                   </strong>
                   {startError && startError.refusals.length > 0 && (
                     <ul
@@ -1421,75 +1517,14 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 aria-label="Preview"
                 {...{ 'data-testid': 'build-workspace-preview-panel' }}
               >
-                <div
-                  className={styles.sandboxWindow}
-                  {...{ 'data-testid': 'build-workspace-sandbox-frame' }}
-                >
-                  <div className={styles.sandboxChrome}>
-                    <span className={styles.sandboxDots} aria-hidden="true">
-                      <span className={styles.sandboxDot} />
-                      <span className={styles.sandboxDot} />
-                      <span className={styles.sandboxDot} />
-                    </span>
-                    <span className={styles.sandboxUrl}>
-                      {previewUrl ??
-                        `preview://building/${detail?.build.repository ?? (effectiveRepo || 'app')}`}
-                    </span>
-                  </div>
-                  <div className={styles.sandboxViewport}>
-                    {previewUrl ? (
-                      <iframe
-                        className={styles.previewFrame}
-                        src={previewUrl}
-                        title="Build preview"
-                        sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
-                        {...{ 'data-testid': 'build-workspace-preview-iframe' }}
-                      />
-                    ) : (
-                      <>
-                        <h3 className={styles.sectionHeading}>
-                          {previewUrl
-                            ? 'Preview'
-                            : progress.failed
-                              ? 'No preview'
-                              : 'Your preview will appear here'}
-                        </h3>
-                        <p className={styles.emptySub}>
-                          {progress.failed
-                            ? 'This build stopped before a preview was available.'
-                            : 'A preview appears here when this project provides one.'}
-                        </p>
-                        <ol
-                          className={styles.stepperList}
-                          {...{
-                            'data-testid': 'build-workspace-pipeline-steps',
-                          }}
-                        >
-                          {pipelineSteps.map((step) => (
-                            <li
-                              key={step.key}
-                              className={`${styles.stepperItem}${step.state === 'active' ? ` ${styles.stepperItemActive}` : ''}${step.state === 'done' ? ` ${styles.stepperItemDone}` : ''}${step.state === 'failed' ? ` ${styles.stepperItemFailed}` : ''}`}
-                              {...{
-                                'data-testid': `build-workspace-step-${step.key}`,
-                              }}
-                            >
-                              <span aria-hidden="true">
-                                {step.state === 'done'
-                                  ? '✓'
-                                  : step.state === 'failed'
-                                    ? '!'
-                                    : step.state === 'active'
-                                      ? '●'
-                                      : '○'}
-                              </span>
-                              <span>{step.label}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      </>
-                    )}
-                  </div>
-                </div>
+                <BuildSandboxPreview
+                  buildStatus={buildStatus}
+                  deployment={detail?.deployment ?? null}
+                  previews={detail?.previews}
+                  livePreviewUrl={livePreviewUrl}
+                  showPipelineSteps={!livePreviewUrl}
+                  pipelineSteps={pipelineStepList}
+                />
 
                 {detail && (
                   <div
@@ -1503,6 +1538,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     <div className={styles.metricCard}>
                       <span className={styles.metricValue}>
                         {detail.verificationSummary.pass}
+                        {' of '}
+                        {detail.verificationSummary.total -
+                          detail.verificationSummary.retired}
                       </span>
                       <span>Checks Passed</span>
                     </div>
@@ -1579,6 +1617,57 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       confirmed.
                     </p>
                   )}
+                </div>
+
+                <div {...{ 'data-testid': 'build-workspace-developers-section' }}>
+                  <h3 className={styles.sectionHeading}>For developers</h3>
+                  {pushedBranch ? (
+                    <p className={styles.emptySub}>
+                      <a
+                        href={pushedBranch.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={styles.linkInline}
+                        {...{ 'data-testid': 'build-workspace-branch-link' }}
+                      >
+                        View branch in ADO ↗
+                      </a>
+                    </p>
+                  ) : (
+                    <p className={styles.emptySub}>
+                      Branch links appear here after an agent pushes code.
+                    </p>
+                  )}
+                  {detail?.deployment?.pipelineUrl ? (
+                    <p className={styles.emptySub}>
+                      <a
+                        href={detail.deployment.pipelineUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={styles.linkInline}
+                        {...{ 'data-testid': 'build-workspace-pipeline-link' }}
+                      >
+                        View preview pipeline run ↗
+                      </a>
+                    </p>
+                  ) : null}
+                  {detail?.viewer?.canRetryDeployment &&
+                  (buildStatus === 'deployment_failed' ||
+                    detail.deployment?.status === 'failed') ? (
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={retryDeploymentMutation.isPending}
+                      onClick={() => {
+                        void retryDeploymentMutation.mutateAsync({});
+                      }}
+                      {...{ 'data-testid': 'build-workspace-retry-deployment' }}
+                    >
+                      {retryDeploymentMutation.isPending
+                        ? 'Retrying preview…'
+                        : 'Retry preview deployment'}
+                    </button>
+                  ) : null}
                 </div>
               </section>
             ))}

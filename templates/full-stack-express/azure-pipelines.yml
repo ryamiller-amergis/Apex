@@ -1,3 +1,5 @@
+# Static Apex preview pipeline (deploy pipeline id configured on the project build profile).
+# Triggered by Apex with parameters: buildRunId, revisionNumber, commit.
 trigger: none
 
 parameters:
@@ -7,12 +9,65 @@ parameters:
   - name: branch
     type: string
     default: 'main'
+  - name: buildRunId
+    type: string
+    default: ''
+  - name: revisionNumber
+    type: string
+    default: '1'
+
+variables:
+  - name: nodeVersion
+    value: '20.x'
+  - name: webAppPath
+    value: 'apps/web'
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: ubuntu-latest
 
 steps:
   - checkout: self
+    fetchDepth: 1
+
+  - task: NodeTool@0
+    inputs:
+      versionSpec: $(nodeVersion)
+    displayName: Use Node.js
+
+  - script: npm ci
+    displayName: Install dependencies
+
+  - script: npm run lint --if-present && npm run test --if-present && npm run typecheck --if-present
+    displayName: Quality checks
+
   - script: |
-      echo "Preview deployment for branch ${{ parameters.branch }} at commit ${{ parameters.commitSha }}"
-    displayName: 'Preview deploy'
+      cd $(webAppPath)
+      npm run build
+    displayName: Build web app (sample preview mode)
+    env:
+      VITE_APEX_PREVIEW_MODE: sample
+
+  - script: |
+      cd $(webAppPath)
+      tar -czf preview-bundle.tar.gz -C dist .
+    displayName: Package static preview bundle
+
+  - script: |
+      set -euo pipefail
+      if [ -z "${BUILD_DEPLOY_CALLBACK_TOKEN:-}" ] || [ -z "${APEX_PUBLIC_URL:-}" ]; then
+        echo "BUILD_DEPLOY_CALLBACK_TOKEN and APEX_PUBLIC_URL must be set on the pipeline."
+        exit 1
+      fi
+      PIPELINE_RUN_ID="$(Build.BuildId)"
+      COMMIT="$(Build.SourceVersion)"
+      curl -fsS -X POST \
+        -H "Authorization: Bearer ${BUILD_DEPLOY_CALLBACK_TOKEN}" \
+        -H "Content-Type: application/gzip" \
+        -H "x-pipeline-run-id: ${PIPELINE_RUN_ID}" \
+        -H "x-commit-sha: ${COMMIT}" \
+        --data-binary @"$(webAppPath)/preview-bundle.tar.gz" \
+        "${APEX_PUBLIC_URL%/}/api/internal/build-deployments/preview-bundle"
+    displayName: Upload preview bundle to Apex
+    env:
+      BUILD_DEPLOY_CALLBACK_TOKEN: $(BUILD_DEPLOY_CALLBACK_TOKEN)
+      APEX_PUBLIC_URL: $(APEX_PUBLIC_URL)

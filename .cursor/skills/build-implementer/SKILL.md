@@ -39,12 +39,12 @@ The per-task envelope supplies these inputs. Read the repository files before th
 | ID      | Rule                                                                                                                                                                                                 | Enforced by                  |
 | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
 | IMP-R01 | Search the code map, the reuse list, and the repository before creating any new component, hook, service, or helper. Reuse existing modules whenever they fit.                                       | Standards review             |
-| IMP-R02 | Add focused failing tests for the owned requirements, commit them together as `test(build): <summary>`, then commit the passing implementation separately as `feat(build): <summary>`.               | Verification evidence check  |
+| IMP-R02 | Add focused failing tests for the owned requirements (`test(<ID>): <summary>` or `test(build): <summary>`), then commit the passing implementation separately (`feat(<ID>): <summary>` or `feat(build): <summary>`). | Verification evidence check |
 | IMP-R03 | Every owned requirement and risk decision must map to a named test and to the red and green commits; related requirements may share the same commit pair.                                               | Verification evidence check  |
 | IMP-R04 | Run the quality manifest commands (`typeCheck`, `lint`, `relatedTests`), fix breaks in-session, and report only the final passing run (`exitCode: 0`) so in-session fixes use zero repair attempts. | Verification evidence check  |
 | IMP-R05 | Review the diff against the frozen standards contract (`design-system`, `coding rules`, `code map`) for duplicated helpers, hard-coded colours, off-library components, and missing accessibility.   | Standards review             |
 | IMP-R06 | Never put a hard-coded secret, bearer token, connection string, or personal identity value in code, tests, commit messages, or evidence output.                                                      | Redaction & evidence check   |
-| IMP-R07 | On the `small` path, if the feature requires more than two tasks, a database migration, or a high-risk decision, keep the committed red tests on the branch, write the full plan to `planPath`, and escalate. | Small-path escalation check |
+| IMP-R07 | Implement the complete feature end-to-end in this session — including database migrations, Zod contracts, API routes, and UI screens. Do not stop after red tests or escalate to `planPath` unless the prompt explicitly restricts you to a small-only probe (if escalating, keep committed red tests on the branch). | Verification evidence check |
 
 ## Runtime
 
@@ -56,23 +56,23 @@ Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type
 2. **Create one focused red test set**:
    - Write named tests for every owned requirement and risk decision. Test names begin with their IDs.
    - Run the focused tests and confirm the relevant assertions fail for the missing behavior.
-   - Commit the test set once as `test(build): <summary>` and record that commit and final red output for each covered ID.
+   - Commit the test set once as `test(build): <summary>`, push to `origin` (`git push -u origin <targetBranch>`), and record that commit and final red output for each covered ID.
 3. **Implement the complete feature**:
    - Reuse repository patterns and shared components wherever they fit.
-   - Implement the smallest coherent change that makes the focused test set pass.
-   - Commit the implementation separately as `feat(build): <summary>`. The red and green commit SHAs must differ.
+   - Implement the complete end-to-end change that makes the focused test set pass.
+   - Commit the implementation separately as `feat(build): <summary>` and immediately push to `origin` (`git push -u origin <targetBranch>`). The red and green commit SHAs must differ.
 4. **Verify every requirement**:
    - Run the focused tests again and map each owned requirement and risk decision to its named passing test and the shared red/green commit pair.
 5. **Run quality manifest checks (`typeCheck`, `lint`, `relatedTests`)**:
    - Run the manifest's `typeCheck` command, `lint` command, and `relatedTests` command (replacing `{files}` with the changed files).
-   - If any check or related test fails because of your change, fix the break inside the current session and re-run until `typeCheck`, `lint`, and `relatedTests` all exit with `0`.
+   - If any check or related test fails because of your change, fix the break inside the current session, commit and `git push` the fix, and re-run until `typeCheck`, `lint`, and `relatedTests` all exit with `0`.
    - Record only the final passing run of each check in `checks.typeCheck`, `checks.lint`, and `checks.relatedTests`.
 6. **Review against the standards contract**:
    - Read the frozen standards contract files (design-system file, coding rules, and code map) and check the diff against [standards-review.md](../build-final-check/standards-review.md).
    - Fix every finding before finishing, then set `standardsReview: { "completed": true, "findings": [] }`.
 7. **Visual self-review (UI work)**:
-   - Render the changed screen at phone and desktop widths in light and dark modes.
-   - Add Playwright visual snapshot tests for the primary route and reference them in evidence.
+   - Verify responsive layout, hierarchy, and theme tokens with fast Vitest component tests (`corepack pnpm test:unit`). Do **not** launch a live Vite dev server or run `playwright test` inside the cloud container (which stalls without a live backend/database and risks hitting the container timeout).
+   - Commit the Playwright visual snapshot spec file (`apps/web/e2e/*.spec.ts`) and, for any Playwright visual snapshot requirement (`DOD-*`), record it in `apex-evidence` using the `e2e` deferral rule (`"tier": "e2e"`, `"deferral": { "reason": "Playwright browser snapshots deferred to CI; verified via Vitest component tests." }`, `"red": null`, `"green": null`).
    - Prefer `PageHeader`, `ContentSurface`, catalog components, and `@mui/x-date-pickers` when appropriate; record reuse rationale.
    - Set `visualReview: { "completed": true, "findings": [], "screenshotPaths": ["..."], "componentReuseRationale": "..." }`.
 8. **Emit the `apex-evidence` block**:
@@ -83,31 +83,16 @@ Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type
 
 A requirement may be deferred only when its tier is `e2e` or its kind is `nfr` and the test environment cannot observe it during the task run. Even when deferred, you must still commit the test file and include a valid `testReferences` entry, set `deferral: { "reason": "<non-empty explanation>" }`, and set `red: null` and `green: null`. Unit and integration acceptance criteria (`AC-*`, `DOD-*`, `BR-*`) and risk decisions (`RD-*`) may never be deferred.
 
-## Small-path escalation rule
+## Full-stack execution & escalation rule
 
-When running on the `small` path, if you find that the feature requires more than two tasks, a database migration, or a high-risk decision:
+In single-agent repository builds (`taskKey: "build-feature"`), you own the **entire feature end-to-end** — database schema/migrations, contracts, backend API routes, frontend screens, and tests. Always implement the complete green feature in this session (`escalation: null`), even when the feature spans multiple layers or includes a migration.
 
-1. Stop before making green implementation commits.
-2. Keep the committed red tests on the integration branch so the red tests carry over to the full build path.
-3. Write the full build plan JSON to the `planPath` given in the task envelope.
-4. Emit the `apex-evidence` block with `escalation: { "reason": "<why the work exceeds the small path>", "planPath": "<planPath from the envelope>" }` and include the committed `red` evidence entries so Apex switches the run to the full path and preserves the red tests.
-
-## Review checklist
-
-| Item                                                                                     | Evidence source                       | Met? (yes, no, not applicable) |
-| ---------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------ |
-| Searched code map and reuse list before creating new modules (IMP-R01)                   | Commit diff and reuse list            |                                |
-| Every owned requirement maps to a named red/green test and a distinct red/green commit pair (IMP-R02) | `entries[].red` and `entries[].green` |                                |
-| Every owned risk decision (`RD-*`) maps to evidence; related IDs may share a commit pair (IMP-R03) | `entries[]` for `RD-*`                |                                |
-| `typeCheck`, `lint`, and `relatedTests` exited with `0` (IMP-R04)                        | `checks` object                       |                                |
-| Standards contract reviewed with zero open findings (IMP-R05)                            | `standardsReview`                     |                                |
-| No secrets, tokens, or personal identity values appear in code or output (IMP-R06)       | Diff and `apex-evidence`              |                                |
+Only if a task explicitly runs as a restricted `small`-path probe and cannot proceed without a separate planner (`planPath`), keep the committed red tests on the branch so the red tests carry over, write the plan to `planPath`, and set `escalation` in `apex-evidence`.
 
 ## Stop conditions
 
 - A required standards contract file cannot be read.
-- The task requires editing a file outside `ownedFiles` on the `full` path.
-- On the `small` path, the work exceeds two tasks, needs a migration, or introduces a high-risk decision — stop after committing red tests and emit the `escalation` block.
+- The task requires editing a file outside `ownedFiles` when a non-empty `ownedFiles` list is set.
 
 ## Boundaries
 

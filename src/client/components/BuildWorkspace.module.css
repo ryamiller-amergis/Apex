@@ -209,6 +209,11 @@
   color: var(--text-secondary);
 }
 
+.linkInline {
+  color: var(--accent-color);
+  text-decoration: underline;
+}
+
 .secretsNote {
   margin: 0;
   font-size: 0.78rem;
@@ -314,6 +319,21 @@
 
 .stepBullet {
   color: var(--text-muted);
+}
+
+.agentRunLink {
+  color: var(--accent-color);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.agentRunLink:hover {
+  color: var(--accent-hover);
+}
+
+.agentRunLink:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .stepStatus {

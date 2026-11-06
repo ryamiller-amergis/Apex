@@ -33,6 +33,42 @@ function updatedSuffix(ms: number): string {
   return ` Updated ${agoLabel(ms)} ago.`;
 }
 
+/** The few states a requester sees in the header, whatever the internal stage. */
+export function buildUserStatus(input: {
+  status: BuildRunStatus | undefined;
+  hasPullRequest: boolean;
+}): string {
+  if (input.hasPullRequest) return 'Ready to review';
+  switch (input.status) {
+    case undefined:
+      return 'Loading…';
+    case 'queued':
+      return 'Queued';
+    case 'intake':
+      return 'Understanding your request';
+    case 'planning':
+    case 'building':
+      return 'Building';
+    case 'checking':
+    case 'deploying':
+    case 'accepted':
+      return 'Finishing up';
+    case 'preview_ready':
+      return 'Ready to review';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'suspended':
+    case 'needs_developer':
+    case 'deployment_failed':
+    case 'failed':
+      return 'Needs your attention';
+    default: {
+      const exhaustive: never = input.status;
+      return exhaustive;
+    }
+  }
+}
+
 /** Turns stored event text into a sentence a requester can read. */
 export function userFacingBuildEvent(message: string): string {
   const runtime = describeRuntimeFailure(message);
@@ -49,8 +85,14 @@ export function userFacingBuildEvent(message: string): string {
   if (/^Task [\w-]+ failed\.\s*/i.test(message)) {
     return message.replace(/^Task [\w-]+ failed\.\s*/i, '');
   }
-  if (/^Task [\w-]+ will run again\.?$/i.test(message)) {
-    return 'Apex is trying the build again.';
+  if (/^Task [\w-]+ will run again\.?$/i.test(message) || /^Apex is trying the build again\.?$/i.test(message)) {
+    return 'Apex is going back to finish this. No action needed.';
+  }
+  if (/^The agent finished without the required test evidence\.?$/i.test(message)) {
+    return 'The feature is built, but its test report left out some checks.';
+  }
+  if (/a task kept failing and no repair attempts are left/i.test(message)) {
+    return 'This build needs your attention: Apex could not finish it on its own. Select Resume build to check it again, or contact a support contact for this project.';
   }
   if (/^Task [\w-]+ finished and is waiting to merge\.?$/i.test(message)) {
     return 'The feature passed its checks.';
@@ -60,7 +102,8 @@ export function userFacingBuildEvent(message: string): string {
 
 function latestEvent(events: readonly BuildProgressEvent[]): BuildProgressEvent | null {
   if (events.length === 0) return null;
-  return [...events].sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt)).at(-1) ?? null;
+  const sorted = [...events].sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
+  return sorted[sorted.length - 1] ?? null;
 }
 
 export function buildProgressHeadline(input: {

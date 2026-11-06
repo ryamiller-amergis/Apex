@@ -150,7 +150,8 @@ export function useBuild(project: string, buildId: string) {
       if (depStatus === 'queued' || depStatus === 'deploying') return BUILD_POLL_MS;
       return isBuildLive(data?.build.status) ? BUILD_POLL_MS : false;
     },
-    refetchIntervalInBackground: false,
+    // A build page in a side panel stays visibility:hidden, so background polling is what keeps the steps moving.
+    refetchIntervalInBackground: true,
     staleTime: 0,
     retry: retryUnlessDenied,
   });
@@ -168,7 +169,7 @@ export function useBuildEvents(project: string, buildId: string, options: { enab
       const detail = client.getQueryData<BuildDetailResponse>(buildDetailKey(project, buildId));
       return isBuildLive(detail?.build.status) ? BUILD_POLL_MS : false;
     },
-    refetchIntervalInBackground: false,
+    refetchIntervalInBackground: true,
     staleTime: 0,
     retry: retryUnlessDenied,
   });

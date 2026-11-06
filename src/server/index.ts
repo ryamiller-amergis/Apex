@@ -93,7 +93,13 @@ import { groundingMaintenanceScheduler } from './services/groundingMaintenanceSc
 import { workBoardScheduler } from './services/workBoardScheduler';
 import { startBrainstormCleanupScheduler, stopBrainstormCleanupScheduler } from './services/brainstorm/cleanupScheduler';
 import buildsRoutes from './routes/builds';
+import buildDeploymentsInternalRoutes from './routes/buildDeploymentsInternal';
+import buildPreviewAssetsRouter from './routes/buildPreviewAssets';
 import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
+import {
+  startBuildDeploymentScheduler,
+  stopBuildDeploymentScheduler,
+} from './services/buildDeploymentScheduler';
 import { startBuildReconciliation, stopBuildReconciliation } from './services/buildReconciliationScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import {
@@ -215,6 +221,7 @@ const internalOnlyPaths = [
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
 // AI runner ingest — session-free; requireAiRunnerAuth validates callback identity.
 const aiRunnerCallbackPaths = ['/internal/ai-runs'];
+const buildDeployCallbackPaths = ['/internal/build-deployments'];
 
 // @apex/skills CLI entitlement lookup — session-free because the CLI runs on
 // developer machines and in CI with no Apex session. Read-only and returns no
@@ -237,6 +244,9 @@ app.use('/api', (req, res, next) => {
   const isAiRunnerCallback = aiRunnerCallbackPaths.some((p) =>
     req.path.startsWith(p),
   );
+  const isBuildDeployCallback = buildDeployCallbackPaths.some((p) =>
+    req.path.startsWith(p),
+  );
   const isFoundationSkillCli = foundationSkillCliPaths.some((p) =>
     req.path.startsWith(p),
   );
@@ -246,6 +256,7 @@ app.use('/api', (req, res, next) => {
     isHealthPath
     || isLoadTestRunnerCallback
     || isAiRunnerCallback
+    || isBuildDeployCallback
     || isFoundationSkillCli
     || isPublicApi
   ) return next();
@@ -265,6 +276,8 @@ app.use('/api', (req, res, next) => {
 
   ensureAuthenticated(req, res, next);
 }, apiRoutes);
+app.use('/api/internal/build-deployments', buildDeploymentsInternalRoutes);
+app.use('/api/builds', buildPreviewAssetsRouter);
 app.use('/api/builds', ensureAuthenticated, buildsRoutes);
 app.use('/api/azure', ensureAuthenticated, azureCostRoutes);
 app.use('/api/ai-cost', ensureAuthenticated, aiCostRoutes);
@@ -495,6 +508,10 @@ const server = app.listen(PORT, () => {
   startBuildQueueScheduler();
   server.once('close', stopBuildQueueScheduler);
   console.log('Build queue scheduler started');
+
+  startBuildDeploymentScheduler();
+  server.once('close', stopBuildDeploymentScheduler);
+  console.log('Build deployment scheduler started');
 
   bootstrapAdmin();
 

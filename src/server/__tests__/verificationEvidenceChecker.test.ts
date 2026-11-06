@@ -70,6 +70,7 @@ function makeBlock(overrides: Partial<EvidenceBlock> = {}): EvidenceBlock {
     standardsReview: { completed: true, findings: [] },
     escalation: null,
     ...overrides,
+    visualReview: overrides.visualReview ?? null,
   };
 }
 
@@ -134,23 +135,23 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
     });
   });
 
-  describe('VT-07: missing red evidence refuses the task for that criterion only', () => {
-    it('VT-07: returns refused with missing_red_evidence for AC-2 only, marks AC-2 fail and AC-1 pass', () => {
+  describe('VT-07: missing red evidence is a note when the final run passed', () => {
+    it('VT-07: returns done, records a missing_red_evidence note, and marks AC-2 deferred with a reason', () => {
       const block = makeBlock({
         entries: [makePassingEntry('AC-1'), makePassingEntry('AC-2', { red: null })],
       });
 
       const result = decideTaskDone(makeInput({ block }));
 
-      expect(result.outcome).toBe('refused');
-      expect(result.mayReportDone).toBe(false);
-      expect(result.violations).toEqual([
-        { code: 'missing_red_evidence', requirementId: 'AC-2' },
-      ]);
+      expect(result.outcome).toBe('done');
+      expect(result.mayReportDone).toBe(true);
+      expect(result.violations).toEqual([]);
+      expect(result.notes).toEqual([{ code: 'missing_red_evidence', requirementId: 'AC-2' }]);
       const ac1Row = result.rows.find((r) => r.requirementId === 'AC-1');
       const ac2Row = result.rows.find((r) => r.requirementId === 'AC-2');
       expect(ac1Row?.status).toBe('pass');
-      expect(ac2Row?.status).toBe('fail');
+      expect(ac2Row?.status).toBe('deferred');
+      expect(ac2Row?.deferralReason).toMatch(/final test run passed/i);
       expect(ac2Row?.red).toBeNull();
       expect(ac2Row?.green).not.toBeNull();
     });
@@ -190,7 +191,7 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
   });
 
   describe('VT-09: exit codes, distinct commits, and test execution membership', () => {
-    it('VT-09: returns red_not_failing when red run exits with 0', () => {
+    it('VT-09: records red_not_failing as a note when red run exits with 0', () => {
       const ac1 = makePassingEntry('AC-1');
       const block = makeBlock({
         entries: [
@@ -201,9 +202,10 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
 
       const result = decideTaskDone(makeInput({ block }));
 
-      expect(result.outcome).toBe('refused');
-      expect(result.violations).toEqual([{ code: 'red_not_failing', requirementId: 'AC-1' }]);
-      expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('fail');
+      expect(result.outcome).toBe('done');
+      expect(result.violations).toEqual([]);
+      expect(result.notes).toEqual([{ code: 'red_not_failing', requirementId: 'AC-1' }]);
+      expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('pass');
     });
 
     it('VT-09: returns green_not_passing when green run exits with non-zero', () => {
@@ -222,7 +224,7 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
       expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('fail');
     });
 
-    it('VT-09: returns red_green_same_commit when red and green commits are identical', () => {
+    it('VT-09: records red_green_same_commit as a note when red and green commits are identical', () => {
       const ac1 = makePassingEntry('AC-1');
       const block = makeBlock({
         entries: [
@@ -237,14 +239,15 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
 
       const result = decideTaskDone(makeInput({ block }));
 
-      expect(result.outcome).toBe('refused');
-      expect(result.violations).toEqual([
+      expect(result.outcome).toBe('done');
+      expect(result.violations).toEqual([]);
+      expect(result.notes).toEqual([
         { code: 'red_green_same_commit', requirementId: 'AC-1' },
       ]);
-      expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('fail');
+      expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('pass');
     });
 
-    it('VT-09: returns test_not_in_run when test reference name is absent from failedTests or passedTests', () => {
+    it('VT-09: notes a red-side name mismatch, but refuses when the test is absent from the passing run', () => {
       const ac1 = makePassingEntry('AC-1');
       const ac2 = makePassingEntry('AC-2');
       const block = makeBlock({
@@ -258,11 +261,29 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
 
       expect(result.outcome).toBe('refused');
       expect(result.violations).toEqual([
-        { code: 'test_not_in_run', requirementId: 'AC-1' },
         { code: 'test_not_in_run', requirementId: 'AC-2' },
       ]);
-      expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('fail');
+      expect(result.notes).toEqual([{ code: 'test_not_in_run', requirementId: 'AC-1' }]);
+      expect(result.rows.find((r) => r.requirementId === 'AC-1')?.status).toBe('pass');
       expect(result.rows.find((r) => r.requirementId === 'AC-2')?.status).toBe('fail');
+    });
+
+    it('VT-09: matches test names across spacing, case, and a describe-block prefix', () => {
+      const ac1 = makePassingEntry('AC-1');
+      const block = makeBlock({
+        entries: [
+          {
+            ...ac1,
+            green: { ...ac1.green!, passedTests: ['Shifts API > ac-1:  Meets the requirement.'] },
+          },
+          makePassingEntry('AC-2'),
+        ],
+      });
+
+      const result = decideTaskDone(makeInput({ block }));
+
+      expect(result.outcome).toBe('done');
+      expect(result.violations).toEqual([]);
     });
   });
 
@@ -304,6 +325,42 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
 
       expect(result.outcome).toBe('refused');
       expect(result.mayReportDone).toBe(false);
+      expect(result.violations).toEqual([{ code: 'command_mismatch', requirementId: null }]);
+    });
+
+    it('VT-10: accepts the same tool phrased differently (the c62bff41 pnpm/vitest report)', () => {
+      const manifest = {
+        typeCheck: 'corepack pnpm typecheck',
+        lint: 'corepack pnpm lint',
+        relatedTests: 'corepack pnpm vitest related --run {files}',
+      };
+      const block = makeBlock({
+        checks: {
+          typeCheck: { command: 'corepack pnpm run typecheck', exitCode: 0 },
+          lint: { command: 'pnpm lint', exitCode: 0 },
+          relatedTests: {
+            command:
+              'corepack pnpm exec vitest run --project api apps/api/test/api/shifts.api.test.ts',
+            exitCode: 0,
+          },
+        },
+      });
+
+      const result = decideTaskDone(makeInput({ block, manifest }));
+
+      expect(result.outcome).toBe('done');
+      expect(result.violations).toEqual([]);
+    });
+
+    it('VT-10: still refuses a related-tests run with a different test runner', () => {
+      const block = makeBlock({
+        checks: makePassingChecks({
+          relatedTests: { command: 'npx vitest run src/server/services/widget.ts', exitCode: 0 },
+        }),
+      });
+
+      const result = decideTaskDone(makeInput({ block }));
+
       expect(result.violations).toEqual([{ code: 'command_mismatch', requirementId: null }]);
     });
   });

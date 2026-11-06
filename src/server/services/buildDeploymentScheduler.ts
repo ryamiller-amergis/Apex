@@ -237,3 +237,27 @@ export function createBuildDeploymentSweepPass(
     return outcome;
   };
 }
+
+export const BUILD_DEPLOYMENT_SWEEP_INTERVAL_MS = 30_000;
+
+let deploymentSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startBuildDeploymentScheduler(): void {
+  if (deploymentSweepTimer) return;
+  const pass = createBuildDeploymentSweepPass();
+  deploymentSweepTimer = setInterval(() => {
+    void pass().catch((error: unknown) => {
+      console.warn(
+        '[buildDeploymentScheduler] sweep failed:',
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+  }, BUILD_DEPLOYMENT_SWEEP_INTERVAL_MS);
+  deploymentSweepTimer.unref?.();
+}
+
+export function stopBuildDeploymentScheduler(): void {
+  if (!deploymentSweepTimer) return;
+  clearInterval(deploymentSweepTimer);
+  deploymentSweepTimer = null;
+}

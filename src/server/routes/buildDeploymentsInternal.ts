@@ -3,13 +3,14 @@
  *
  * Mounted outside `ensureAuthenticated` at `/internal/build-deployments`.
  */
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type {
   BuildDeploymentCallbackRequest,
   BuildDeploymentCallbackResponse,
 } from '../../shared/types/build';
 import { requireBuildDeploymentCallbackAuth } from '../middleware/buildDeploymentCallbackAuth';
 import { defaultBuildDeploymentService } from '../services/buildDeploymentService';
+import { ingestPreviewBundle } from '../services/buildPreviewBundleIngestService';
 import { redactText } from '../services/buildRedactionService';
 import { trackEvent } from '../services/telemetry';
 
@@ -142,6 +143,60 @@ router.post(
         default: {
           const exhaustive: never = result;
           throw new Error(`Unhandled callback result: ${JSON.stringify(exhaustive)}`);
+        }
+      }
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.post(
+  '/preview-bundle',
+  requireBuildDeploymentCallbackAuth,
+  express.raw({ type: 'application/gzip', limit: '80mb' }),
+  async (req, res, next) => {
+    try {
+      const pipelineRunId =
+        typeof req.header('x-pipeline-run-id') === 'string'
+          ? req.header('x-pipeline-run-id')!.trim()
+          : '';
+      const commit =
+        typeof req.header('x-commit-sha') === 'string'
+          ? req.header('x-commit-sha')!.trim()
+          : '';
+      if (!pipelineRunId || !commit) {
+        res.status(422).json({
+          error: 'x-pipeline-run-id and x-commit-sha headers are required.',
+          code: 'INVALID_PREVIEW_UPLOAD',
+        });
+        return;
+      }
+      const archive = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (archive.length === 0) {
+        res.status(422).json({
+          error: 'Preview bundle body is required.',
+          code: 'INVALID_PREVIEW_UPLOAD',
+        });
+        return;
+      }
+      const result = await ingestPreviewBundle({ pipelineRunId, commit, archive });
+      switch (result.kind) {
+        case 'ok':
+          res.status(200).json({ previewUrl: result.previewUrl });
+          return;
+        case 'not_found':
+          res.status(404).json({ error: 'Unknown pipelineRunId.', code: 'PIPELINE_RUN_NOT_FOUND' });
+          return;
+        case 'commit_mismatch':
+          res.status(422).json({ error: 'Commit mismatch.', code: 'COMMIT_MISMATCH' });
+          return;
+        case 'error':
+          res.status(500).json({ error: result.message, code: 'PREVIEW_UPLOAD_FAILED' });
+          return;
+        default: {
+          const exhaustive: never = result;
+          throw new Error(`Unhandled ingest result: ${JSON.stringify(exhaustive)}`);
         }
       }
     } catch (error) {

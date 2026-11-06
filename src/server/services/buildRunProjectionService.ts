@@ -2,9 +2,16 @@
  * Read projection for the Build Run View (TBI-014). Each mapper copies named fields only, and every
  * free-text field passes through the shared redaction step before it leaves the server.
  */
-import { asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { buildEvents, buildRevisions, buildRuns, buildTasks, buildVerificationRows } from '../db/schema';
+import {
+  agentRuns,
+  buildEvents,
+  buildRevisions,
+  buildRuns,
+  buildTasks,
+  buildVerificationRows,
+} from '../db/schema';
 import type {
   BuildClassification,
   BuildDeploymentStatus,
@@ -32,6 +39,10 @@ import {
 import { redactText } from './buildRedactionService';
 import { queuePositionFor } from './buildOrchestrator/store';
 import { deriveBuildStage, deriveBuildTiming } from './buildStageDerivation';
+import {
+  projectBuildDeploymentFields,
+  type BuildDetailViewer,
+} from './buildRunDeploymentProjection';
 
 export const REDACTION_PLACEHOLDER = '[Text hidden: it could not be checked]';
 
@@ -47,7 +58,12 @@ export interface ProjectionRevisionRow {
   classification: BuildClassification | null;
   repairAttempts: number;
   elapsedSecondsUsed: number;
+  validatedCommit: string | null;
   deploymentStatus: BuildDeploymentStatus;
+  deploymentQueuedAt: string | null;
+  deployedAt: string | null;
+  deploymentFailedStage: string | null;
+  deploymentPipelineUrl: string | null;
   previewUrl: string | null;
   createdAt: string;
 }
@@ -94,6 +110,7 @@ export interface ProjectionEventRow {
   eventType: string;
   message: string;
   taskKey: string | null;
+  cloudAgentIdentity: string | null;
   createdAt: string;
 }
 
@@ -102,12 +119,19 @@ export interface BuildRunProjectionDeps {
   loadRunProject: (buildId: string) => Promise<{ id: string; project: string } | null>;
   loadTasks: (revisionId: string) => Promise<ProjectionTaskRow[]>;
   loadVerificationCounts: (revisionId: string) => Promise<Array<{ status: BuildVerificationStatus; count: number }>>;
+  /** Latest branch a build agent pushed for this revision, or null before any push. */
+  loadPushedBranch?: (revisionId: string) => Promise<string | null>;
   queuePosition: (project: string, buildId: string) => Promise<number | null>;
   /** Latest `limit` rows, newest first, plus the full count. */
   loadEvents: (buildId: string, limit: number) => Promise<{ rows: ProjectionEventRow[]; total: number }>;
   redact: (text: string) => string;
   now: () => Date;
   warn: (event: string, fields: Record<string, unknown>) => void;
+  loadDeploymentProjection: (input: {
+    run: ProjectionRunRow;
+    currentRevision: ProjectionRevisionRow | null;
+    viewer?: BuildDetailViewer;
+  }) => ReturnType<typeof projectBuildDeploymentFields>;
 }
 
 const defaultDeps: BuildRunProjectionDeps = {
@@ -148,7 +172,12 @@ const defaultDeps: BuildRunProjectionDeps = {
             classification: true,
             repairAttempts: true,
             elapsedSecondsUsed: true,
+            validatedCommit: true,
             deploymentStatus: true,
+            deploymentQueuedAt: true,
+            deployedAt: true,
+            deploymentFailedStage: true,
+            deploymentPipelineUrl: true,
             previewUrl: true,
             createdAt: true,
           },
@@ -187,6 +216,16 @@ const defaultDeps: BuildRunProjectionDeps = {
     .from(buildVerificationRows)
     .where(eq(buildVerificationRows.buildRevisionId, revisionId))
     .groupBy(buildVerificationRows.status),
+  loadPushedBranch: async (revisionId) => {
+    const [row] = await db
+      .select({ branch: agentRuns.cloudBranchName })
+      .from(agentRuns)
+      .innerJoin(buildTasks, eq(buildTasks.id, agentRuns.buildTaskId))
+      .where(and(eq(buildTasks.buildRevisionId, revisionId), isNotNull(agentRuns.cloudBranchName)))
+      .orderBy(desc(agentRuns.createdAt))
+      .limit(1);
+    return row?.branch ?? null;
+  },
   queuePosition: queuePositionFor,
   loadEvents: async (buildId, limit) => {
     const [rows, totals] = await Promise.all([
@@ -196,9 +235,11 @@ const defaultDeps: BuildRunProjectionDeps = {
           eventType: buildEvents.eventType,
           message: buildEvents.message,
           taskKey: sql<string | null>`${buildEvents.detail} ->> 'taskKey'`,
+          cloudAgentIdentity: agentRuns.cloudAgentIdentity,
           createdAt: buildEvents.createdAt,
         })
         .from(buildEvents)
+        .leftJoin(agentRuns, sql`${buildEvents.correlationKind} = 'agent_run' AND ${buildEvents.correlationId} = ${agentRuns.id}::text`)
         .where(eq(buildEvents.buildRunId, buildId))
         .orderBy(desc(buildEvents.ordinal))
         .limit(limit),
@@ -209,6 +250,7 @@ const defaultDeps: BuildRunProjectionDeps = {
   redact: (text) => redactText(text),
   now: () => new Date(),
   warn: (event, fields) => console.warn(event, fields),
+  loadDeploymentProjection: (input) => projectBuildDeploymentFields(input),
 };
 
 export type BuildDetailResult =
@@ -325,8 +367,17 @@ async function loadOwned<T extends { project: string }>(
   return run;
 }
 
+function branchWebUrl(project: string, repository: string, branch: string): string {
+  const org = (process.env.ADO_ORG ?? 'https://dev.azure.com/org').replace(/\/$/, '');
+  return `${org}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repository)}?version=GB${encodeURIComponent(branch)}`;
+}
+
 export async function getBuildDetail(
-  input: { project: string; buildId: string },
+  input: {
+    project: string;
+    buildId: string;
+    viewer?: BuildDetailViewer;
+  },
   deps: BuildRunProjectionDeps = defaultDeps,
 ): Promise<BuildDetailResult> {
   const run = await loadOwned(input.project, input.buildId, deps.loadRun);
@@ -334,10 +385,17 @@ export async function getBuildDetail(
 
   const redact = makeRedactor(deps, input.buildId);
   const current = run.revisions.find((row) => row.revisionNumber === run.currentRevisionNumber) ?? null;
-  const [taskRows, verificationCounts, queuePosition] = await Promise.all([
+  const [taskRows, verificationCounts, queuePosition, pushedBranchName, deploymentFields] =
+    await Promise.all([
     current ? deps.loadTasks(current.id) : Promise.resolve([]),
     current ? deps.loadVerificationCounts(current.id) : Promise.resolve([]),
     run.status === 'queued' ? deps.queuePosition(run.project, run.id) : Promise.resolve(null),
+    current && deps.loadPushedBranch ? deps.loadPushedBranch(current.id) : Promise.resolve(null),
+    deps.loadDeploymentProjection({
+      run,
+      currentRevision: current,
+      viewer: input.viewer,
+    }),
   ]);
 
   let brief: BuildBriefView = { status: 'unavailable' };
@@ -364,10 +422,10 @@ export async function getBuildDetail(
     timing: deriveBuildTiming({
       classification: current?.classification ?? null,
       startedAt: current?.createdAt ?? null,
-      deployStartedAt: null,
-      deployFinishedAt: null,
+      deployStartedAt: deploymentFields.deployStartedAt,
+      deployFinishedAt: deploymentFields.deployFinishedAt,
       endedAt: run.endedAt,
-      deploymentTimesKnown: false,
+      deploymentTimesKnown: deploymentFields.deploymentTimesKnown,
       now: deps.now(),
     }),
     caps: {
@@ -399,7 +457,13 @@ export async function getBuildDetail(
       }
       : null,
     verificationSummary: summarizeVerification(verificationCounts),
-    lease: null,
+    pushedBranch: pushedBranchName
+      ? { name: pushedBranchName, url: branchWebUrl(run.project, run.repository, pushedBranchName) }
+      : null,
+    lease: deploymentFields.lease,
+    deployment: deploymentFields.deployment,
+    previews: deploymentFields.previews,
+    ...(deploymentFields.viewer ? { viewer: deploymentFields.viewer } : {}),
     ...(run.status === 'accepted' && run.pullRequestUrl
       ? {
           pullRequest: {
@@ -422,6 +486,9 @@ function mapEvent(row: ProjectionEventRow, redact: (text: string) => string): Bu
     kind: row.eventType,
     message: redact(row.message),
     taskKey: row.taskKey,
+    cloudAgentUrl: row.cloudAgentIdentity?.startsWith('bc-')
+      ? `https://cursor.com/agents/${row.cloudAgentIdentity}`
+      : null,
   };
 }
 

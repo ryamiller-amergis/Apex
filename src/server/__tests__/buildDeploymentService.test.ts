@@ -180,6 +180,19 @@ function createDeploymentHarness() {
       events.push(ev);
     },
     sleep: async () => undefined,
+    casEnqueueRevision: async (revisionId, buildRunId, queuedAtIso) => {
+      const rev = revisions.get(revisionId);
+      if (!rev || (rev.deploymentStatus !== 'not_started' && rev.deploymentStatus !== 'failed')) {
+        return false;
+      }
+      rev.deploymentStatus = 'queued';
+      rev.deploymentQueuedAt = queuedAtIso;
+      const r = runs.get(buildRunId);
+      if (r && ['checking', 'building', 'deploying', 'preview_ready', 'deployment_failed'].includes(r.status)) {
+        r.status = 'deploying';
+      }
+      return true;
+    },
   };
 
   return {

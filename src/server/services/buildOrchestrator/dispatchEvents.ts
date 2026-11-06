@@ -23,7 +23,7 @@ export function suspensionMessage(reason: BuildSuspendReason): string {
     case 'configuration':
       return 'This build stopped because Apex could not prepare the next task. Contact a support contact for this project.';
     case 'repair_cap':
-      return 'This build stopped because a task kept failing and no repair attempts are left.';
+      return 'This build needs your attention: Apex could not finish it on its own. Select Resume build to check it again, or contact a support contact for this project.';
     case 'plan_invalid':
       return 'This build stopped because its plan no longer matches its tasks. Contact a support contact for this project.';
     case 'cost_cap':

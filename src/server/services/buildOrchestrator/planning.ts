@@ -25,11 +25,17 @@ import { beginPlanningRow, loadBuild } from './store';
 import { buildTaskLaunchCandidate } from './taskCandidateBuilder';
 import { createTaskLauncher } from './taskLauncher';
 import {
+  approveBuildBrief,
+  draftBuildBrief,
+  getRedactedBuildBrief,
+} from '../buildBriefService';
+import {
   createSingleAgentPlan,
   startSingleAgentBuild,
 } from './singleAgentBuild';
 
 const activeOrchestrations = new Set<string>();
+const activeIntakeConfirmations = new Set<string>();
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ITERATIONS = 720;
 
@@ -47,7 +53,7 @@ export async function beginPlanning(
   stepRunId: string
 ): Promise<boolean> {
   const row = await loadBuild(buildRunId);
-  if (!row || row.status !== 'intake') return false;
+  if (!row || (row.status !== 'intake' && row.status !== 'planning')) return false;
   const started = await beginPlanningRow(buildRunId, stepRunId);
   if (started && process.env.NODE_ENV !== 'test') {
     void driveBuildOrchestration(buildRunId);
@@ -103,6 +109,56 @@ async function markOrchestrationFailed(
   });
 }
 
+export async function confirmAndStartPlanning(
+  buildRunId: string,
+  actorId: string
+): Promise<boolean> {
+  const row = await loadBuild(buildRunId);
+  if (!row?.interviewId) return false;
+  const started = await beginPlanningRow(buildRunId);
+  if (!started) return false;
+
+  if (process.env.NODE_ENV !== 'test') {
+    void finalizeIntakeAndDrive(row.id, row.interviewId, actorId);
+  }
+  return true;
+}
+
+async function finalizeIntakeAndDrive(
+  buildRunId: string,
+  interviewId: string,
+  actorId: string
+): Promise<void> {
+  if (activeIntakeConfirmations.has(buildRunId)) return;
+  activeIntakeConfirmations.add(buildRunId);
+  try {
+    const existingBrief = await getRedactedBuildBrief(interviewId);
+    if (!existingBrief) {
+      await draftBuildBrief({
+        interviewId,
+        actorId,
+        mode: 'manual',
+      });
+    }
+    if (existingBrief?.status !== 'approved') {
+      await approveBuildBrief({
+        interviewId,
+        actorId,
+      });
+    }
+  } catch (error) {
+    console.error(
+      '[build-orchestrator] intake confirmation background step failed:',
+      error instanceof Error ? error.message : String(error)
+    );
+    await markOrchestrationFailed(buildRunId, error);
+    return;
+  } finally {
+    activeIntakeConfirmations.delete(buildRunId);
+  }
+  await driveBuildOrchestration(buildRunId);
+}
+
 /**
  * The Playbook `build` step delegates to one durable repository-agent run.
  * Scheduling, terminal events, retries, and recovery remain owned by the
@@ -112,12 +168,44 @@ export async function driveBuildOrchestration(
   buildRunId: string,
   _deps: OrchestrationDriverDeps = {}
 ): Promise<{ status: string }> {
-  if (activeOrchestrations.has(buildRunId)) {
+  if (
+    activeOrchestrations.has(buildRunId) ||
+    activeIntakeConfirmations.has(buildRunId)
+  ) {
     return { status: 'already_running' };
   }
   activeOrchestrations.add(buildRunId);
 
   try {
+    const [revision] = await db
+      .select({ id: buildRevisions.id })
+      .from(buildRevisions)
+      .where(
+        and(
+          eq(buildRevisions.buildRunId, buildRunId),
+          eq(buildRevisions.revisionNumber, 1)
+        )
+      )
+      .limit(1);
+    if (!revision) {
+      const row = await loadBuild(buildRunId);
+      if (row?.interviewId) {
+        const existingBrief = await getRedactedBuildBrief(row.interviewId);
+        if (!existingBrief) {
+          await draftBuildBrief({
+            interviewId: row.interviewId,
+            actorId: row.requestedByUserId,
+            mode: 'manual',
+          });
+        }
+        if (existingBrief?.status !== 'approved') {
+          await approveBuildBrief({
+            interviewId: row.interviewId,
+            actorId: row.requestedByUserId,
+          });
+        }
+      }
+    }
     return await startSingleAgentBuild(buildRunId);
   } catch (error) {
     console.error(

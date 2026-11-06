@@ -75,7 +75,11 @@ function budgetLines(questionsAsked: number, budget: number, extraBudget: number
       'Ask no more questions. State each remaining default as an assumption, then offer the confirm choice.',
     );
   }
-  lines.push('Never ask whether something might break. Decide it yourself and state the decision.');
+  lines.push(
+    'Never ask whether something might break. Decide it yourself and state the decision.',
+    'Do not call tools or read repository files during intake; reply immediately from the conversation so the user gets a fast response. Technical grounding happens automatically in the background after confirmation.',
+    'Write in warm, everyday non-technical language (1-2 short sentences restating what people see and do, plus 2-4 short plain-English assumptions). Never mention routes/URLs, APIs, databases, tables, client/server/browser state, components, shells, themes, or loading/empty/error states.',
+  );
   return lines;
 }
 

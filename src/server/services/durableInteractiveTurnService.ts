@@ -43,6 +43,7 @@ import { isRepositorySyncingError } from './repoRead/mirrorHydration';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
+import { isBuildIntakeThread } from './buildIntakeThread';
 import { resolveSkillConfig } from './projectSettingsService';
 import {
   buildDocumentAssistantEditGuidance,
@@ -687,6 +688,12 @@ function skillRegistration(
   builtInRoots: ReadonlyArray<BuiltInSkillRoot>,
 ): DurableInteractiveSkillRegistration | null {
   if (!skill) return null;
+  if (
+    isBuildIntakeThread(thread) &&
+    isAllowlistedBuiltInSkillPath(skill.path, builtInRoots)
+  ) {
+    return 'built-in';
+  }
   const normalized = strictPortableSkillPath(skill.path).toLowerCase();
   const frozenOnThread =
     !turnSkill &&
@@ -1611,20 +1618,24 @@ export function createDurableInteractiveTurnService(
         'workspace',
       ) || registration === 'project';
       const guidedInterview = await guidedInterviewLookup;
+      const buildIntake = isBuildIntakeThread(thread);
       // Discovery and Delivery carry the application brief instead of AGENTS.md.
-      const productPhaseInterview = guidedInterview?.phase === 'product';
+      const productPhaseInterview =
+        guidedInterview?.phase === 'product' || buildIntake;
       const groundInBackground = await backgroundGroundingLookup;
+      // An MCP connection chat answers from that server alone; build-intake
+      // replies immediately in plain language without repository grounding.
+      const skipRepositoryGrounding =
+        thread.kickoff.assistantType === 'mcp-server' || buildIntake;
       // Discovery and Delivery cannot read the repository, so their turns go
       // out on the branch-tip skill and brief while the thread's pin is prepared
       // for Technical. Keeping these turns ungrounded also keeps the worker's
       // workspace, and so its warm agent, the same across the product phase.
       const requiresRepositoryPreparation =
+        !skipRepositoryGrounding &&
         skillNeedsRepository &&
         !groundInBackground &&
         input.workflowClass !== 'brainstorm';
-      // An MCP connection chat answers from that server alone.
-      const skipRepositoryGrounding =
-        thread.kickoff.assistantType === 'mcp-server';
 
       const immutableAttachments = [];
       for (

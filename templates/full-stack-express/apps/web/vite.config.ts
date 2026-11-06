@@ -7,10 +7,13 @@ const envDir = fileURLToPath(new URL('../..', import.meta.url));
 
 export default defineConfig(({ mode }) => {
   parseWebEnv(loadEnv(mode, envDir, 'VITE_'));
+  const viteEnv = loadEnv(mode, envDir, 'VITE_');
+  const previewSample = viteEnv.VITE_APEX_PREVIEW_MODE === 'sample';
   const { PORT } = parseDevServerEnv(loadEnv(mode, envDir, ''));
   const target = `http://localhost:${PORT}`;
   return {
     envDir,
+    base: previewSample ? './' : '/',
     plugins: [react()],
     server: {
       proxy: {

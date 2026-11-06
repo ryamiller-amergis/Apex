@@ -36,15 +36,11 @@ import {
   startBuild,
 } from '../services/buildOrchestrator/startBuild';
 import {
+  confirmAndStartPlanning,
   driveBuildOrchestration,
   getActiveBuildAgentSummary,
 } from '../services/buildOrchestrator/planning';
 import { loadBuild } from '../services/buildOrchestrator/store';
-import {
-  approveBuildBrief,
-  draftBuildBrief,
-  getRedactedBuildBrief,
-} from '../services/buildBriefService';
 import {
   getBuildDetail,
   listBuildRunEvents,
@@ -211,9 +207,20 @@ router.get(
   requirePermission('builds:view'),
   async (req, res, next) => {
     try {
+      const userId = getUserId(req);
+      const userPerms = (req as Request & { userPermissions?: Set<string> })
+        .userPermissions;
       const result = await getBuildDetail({
         project: resolveRequestProject(req) as string,
         buildId: req.params.id,
+        viewer:
+          userId && userId !== 'anonymous'
+            ? {
+                userId,
+                isProjectAdmin: Boolean(userPerms?.has('admin:roles')),
+                isSuperAdmin: isSuperAdminRequest(req),
+              }
+            : undefined,
       });
       switch (result.kind) {
         case 'ok':
@@ -505,23 +512,19 @@ router.post(
           });
         return;
       }
-      const existingBrief = await getRedactedBuildBrief(row.interviewId);
-      if (!existingBrief) {
-        await draftBuildBrief({
-          interviewId: row.interviewId,
-          actorId: userId,
-          mode: 'manual',
-        });
+      const started = await confirmAndStartPlanning(row.id, userId);
+      if (!started) {
+        res
+          .status(409)
+          .json({
+            error: 'Could not transition the build into planning.',
+            code: 'PLANNING_START_FAILED',
+          });
+        return;
       }
-      const approved = await approveBuildBrief({
-        interviewId: row.interviewId,
-        actorId: userId,
-      });
-      void driveBuildOrchestration(row.id);
-      res.status(200).json({
+      res.status(202).json({
         buildRunId: row.id,
         status: 'planning',
-        classification: approved.classification.value,
       });
     } catch (error) {
       next(error);

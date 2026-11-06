@@ -386,7 +386,9 @@ export async function markValidated(
   });
 
   if (targetBuildRunId && process.env.NODE_ENV !== 'test') {
-    // Pull request creation runs only after preview acceptance (see acceptBuild).
+    void autoOpenPullRequestForPoc(targetBuildRunId);
+    const { defaultBuildDeploymentService } = await import('../buildDeploymentService');
+    void defaultBuildDeploymentService.enqueueRevisionDeployment(targetBuildRunId);
   }
 }
 

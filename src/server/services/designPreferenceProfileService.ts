@@ -134,11 +134,14 @@ export async function saveApprovedDesignPreferenceProfile(input: {
       },
     });
 
-  trackEvent('DesignPreferenceProfileSaved', {
-    settingsId: input.settingsId,
-    project: row.project,
-    version: nextVersion,
-  });
+  trackEvent(
+    'DesignPreferenceProfileSaved',
+    {
+      settingsId: input.settingsId,
+      project: row.project,
+    },
+    { version: nextVersion },
+  );
 
   return {
     settingsId: row.id,

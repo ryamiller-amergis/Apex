@@ -22,6 +22,9 @@ export type CompletionOutcome =
 
 type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
+/** Fix-up passes a finished `build-feature` agent gets before the build stops for the requester. */
+export const BUILD_FEATURE_FIX_UP_ATTEMPTS = 1;
+
 export interface CloudAgentTarget {
   project: string;
   cloudAgentId: string;
@@ -55,11 +58,11 @@ export function terminalStatusFromObservation(status: string): TerminalStatus {
 function failureDetail(status: TerminalStatus): string {
   switch (status) {
     case 'completed':
-      return 'The agent finished without the required test evidence.';
+      return 'The feature is built, but its test report left out some checks.';
     case 'failed':
-      return 'The agent run failed.';
+      return 'The build agent stopped before it finished.';
     case 'cancelled':
-      return 'The agent run was cancelled.';
+      return 'The build agent was stopped.';
     default: {
       const exhaustive: never = status;
       return exhaustive;
@@ -74,7 +77,14 @@ function unitMembers(head: DispatchTaskRow, tasks: DispatchTaskRow[]): DispatchT
 type Decision =
   | { kind: 'done'; outcome: CompletionOutcome }
   | { kind: 'merge'; buildRunId: string; headTaskId: string; taskIds: string[]; inserted: boolean }
-  | { kind: 'fail'; buildRunId: string; revisionId: string; headKey: string; taskIds: string[] };
+  | {
+      kind: 'fail';
+      buildRunId: string;
+      revisionId: string;
+      headKey: string;
+      taskIds: string[];
+      noAutoRequeue?: boolean;
+    };
 
 export function createCompletionHandler(deps: CompletionDeps): (input: { agentRunId: string }) => Promise<CompletionOutcome> {
   const { store } = deps;
@@ -112,7 +122,11 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
     if (context.task.status === 'merged') return done('already_applied');
     if (context.task.status !== 'running') return done('ignored_superseded');
 
-    if (status === 'completed' && await deps.mayReportDone({ buildRunId: run.id, taskIds: memberIds })) {
+    if (
+      (status === 'completed' ||
+        (status === 'failed' && context.task.key === 'build-feature')) &&
+      await deps.mayReportDone({ buildRunId: run.id, taskIds: memberIds })
+    ) {
       const inserted = await store.appendEvent({
         buildRunId: run.id,
         buildRevisionId: context.revisionId,
@@ -123,6 +137,22 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
         dedupeKey,
       });
       return { kind: 'merge', buildRunId: run.id, headTaskId: context.task.id, taskIds: memberIds, inserted };
+    }
+    // Single-agent repository builds (`build-feature`) never start a second agent from scratch.
+    // An agent that finished with refused evidence gets one fix-up pass; the launcher resumes
+    // that same Cloud Agent, so its checkout and commits carry over.
+    if (
+      context.task.key === 'build-feature' &&
+      !(status === 'completed' && context.task.attempt < BUILD_FEATURE_FIX_UP_ATTEMPTS + 1)
+    ) {
+      return {
+        kind: 'fail',
+        buildRunId: run.id,
+        revisionId: context.revisionId,
+        headKey: context.task.key,
+        taskIds: memberIds,
+        noAutoRequeue: true,
+      };
     }
     return { kind: 'fail', buildRunId: run.id, revisionId: context.revisionId, headKey: context.task.key, taskIds: memberIds };
   };
@@ -166,6 +196,7 @@ export function createCompletionHandler(deps: CompletionDeps): (input: { agentRu
           taskIds: decision.taskIds,
           detail: failureDetail(status),
           dedupeKey: `completion:${agentRunId}`,
+          ...(decision.noAutoRequeue ? { noAutoRequeue: true } : {}),
         });
         if (result === 'already_handled') return 'already_applied';
         if (result === 'requeued') await deps.dispatchNext(decision.buildRunId);
@@ -197,6 +228,10 @@ export interface CompletionWatcher {
 export function createCompletionWatcher(deps: {
   stream: (target: CloudAgentTarget) => AsyncIterator<unknown>;
   apply: (input: { agentRunId: string }) => Promise<CompletionOutcome>;
+  onActivity?: (
+    target: CloudAgentTarget & { agentRunId: string },
+    event: unknown
+  ) => Promise<void> | void;
   logError?: (message: string, detail: string) => void;
 }): CompletionWatcher {
   const active = new Set<string>();
@@ -208,8 +243,14 @@ export function createCompletionWatcher(deps: {
       void (async () => {
         try {
           const iterator = deps.stream(target);
-          while (!(await iterator.next()).done) {
-            // Drain until the agent stops.
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) break;
+            if (deps.onActivity) {
+              await Promise.resolve(deps.onActivity(target, next.value)).catch(
+                () => undefined
+              );
+            }
           }
           await deps.apply({ agentRunId: target.agentRunId });
         } catch (error) {

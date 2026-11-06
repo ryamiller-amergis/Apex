@@ -617,7 +617,16 @@ export async function main(): Promise<void> {
           model: bootstrap.specification.model,
           effort: bootstrap.specification.effort,
           workspaceRef: checkout.workspacePath,
-          interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
+          interviewPhase:
+            bootstrap.specification.guidedInterview?.phase ??
+            (bootstrap.specification.skill?.name
+              ?.toLowerCase()
+              .includes('intake') ||
+            bootstrap.specification.skill?.path
+              ?.toLowerCase()
+              .includes('/build-intake/')
+              ? 'product'
+              : null),
         },
         (checkout as ReaderCheckout).reader,
         {

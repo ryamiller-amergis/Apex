@@ -40,6 +40,11 @@ function revision(number: number, overrides: Partial<ProjectionRunRow['revisions
     repairAttempts: 1,
     elapsedSecondsUsed: 120,
     deploymentStatus: 'not_started' as const,
+    validatedCommit: null,
+    deploymentQueuedAt: null,
+    deployedAt: null,
+    deploymentFailedStage: null,
+    deploymentPipelineUrl: null,
     previewUrl: null,
     createdAt: '2026-10-28T10:00:00.000Z',
     ...overrides,
@@ -102,6 +107,15 @@ function deps(overrides: Partial<BuildRunProjectionDeps> = {}) {
     redact: (text: string) => text.replace(connection, '[REDACTED:connection-string]').replace(bearer, '[REDACTED:bearer-token]'),
     now: () => new Date('2026-10-28T10:05:00.000Z'),
     warn,
+    loadDeploymentProjection: async () => ({
+      lease: { state: 'none' as const, queuePosition: null },
+      deployment: undefined,
+      previews: [],
+      viewer: undefined,
+      deployStartedAt: null,
+      deployFinishedAt: null,
+      deploymentTimesKnown: false,
+    }),
     ...overrides,
   };
   return { deps: base, calls, warn };
@@ -138,7 +152,7 @@ describe('getBuildDetail', () => {
     });
     expect(detail.timing).toEqual({ elapsedSeconds: 300, targetSeconds: 300, state: 'within', includesDeployment: true });
     expect(detail.supportContacts).toEqual([{ displayName: 'Dana', email: 'dana@example.com' }]);
-    expect(detail.lease).toBeNull();
+    expect(detail.lease).toEqual({ state: 'none', queuePosition: null });
   });
 
   it('VT-07 TBI-014 DoD-3 returns wrong-project and loads nothing else', async () => {
@@ -262,6 +276,7 @@ describe('listBuildRunEvents', () => {
       eventType: 'task.merged',
       message: `Event ${index}`,
       taskKey: index % 2 === 0 ? 'task-a' : null,
+      cloudAgentIdentity: null,
       createdAt: new Date(Date.UTC(2026, 9, 28, 10, 0, index)).toISOString(),
     }));
   }
@@ -274,8 +289,20 @@ describe('listBuildRunEvents', () => {
     expect(result.response.total).toBe(600);
     expect(result.response.events.map((event) => event.id)).toEqual(['e0', 'e1', 'e2']);
     for (const event of result.response.events) {
-      expect(Object.keys(event).sort()).toEqual(['id', 'kind', 'message', 'occurredAt', 'taskKey']);
+      expect(Object.keys(event).sort()).toEqual(['cloudAgentUrl', 'id', 'kind', 'message', 'occurredAt', 'taskKey']);
     }
+  });
+
+  it('includes a Cursor URL only for a Cloud Agent event', async () => {
+    const { deps: d } = deps({
+      loadEvents: async () => ({
+        rows: [{ ...rows(1)[0], cloudAgentIdentity: 'bc-agent-1' }],
+        total: 1,
+      }),
+    });
+    const result = await listBuildRunEvents({ project: 'Apex', buildId: BUILD_ID, limit: 200 }, d);
+    if (result.kind !== 'ok') throw new Error('expected ok');
+    expect(result.response.events[0]?.cloudAgentUrl).toBe('https://cursor.com/agents/bc-agent-1');
   });
 
   it('VT-09 PBI-018 AC-3 redacts event messages', async () => {

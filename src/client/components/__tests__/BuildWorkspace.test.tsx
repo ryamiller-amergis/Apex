@@ -18,6 +18,7 @@ import {
   useEnsureBuildPlanning,
   useRequestBuildRevision,
   useResumeBuild,
+  useRetryBuildDeployment,
   useStartBuild,
 } from '../../hooks/useBuilds';
 import { useInterview } from '../../hooks/useInterviews';
@@ -39,6 +40,7 @@ jest.mock('../../hooks/useBuilds', () => {
     useRequestBuildRevision: jest.fn(),
     useCancelBuild: jest.fn(),
     useResumeBuild: jest.fn(),
+    useRetryBuildDeployment: jest.fn(),
   };
 });
 
@@ -68,6 +70,7 @@ const mockAcceptBuild = useAcceptBuild as jest.Mock;
 const mockRequestRevision = useRequestBuildRevision as jest.Mock;
 const mockCancelBuild = useCancelBuild as jest.Mock;
 const mockResumeBuild = useResumeBuild as jest.Mock;
+const mockRetryBuildDeployment = useRetryBuildDeployment as jest.Mock;
 const mockUseInterview = useInterview as jest.Mock;
 const mockUseChatThread = useChatThread as jest.Mock;
 const mockUseAgentChat = useAgentChatSession as jest.Mock;
@@ -206,6 +209,10 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
       isPending: false,
     });
     mockResumeBuild.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+    });
+    mockRetryBuildDeployment.mockReturnValue({
       mutateAsync: jest.fn(),
       isPending: false,
     });
@@ -486,6 +493,7 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
             kind: 'build.planning_started',
             message: 'Planning started',
             taskKey: 't-impl-1',
+            cloudAgentUrl: 'https://cursor.com/agents/bc-agent-1',
           },
         ],
         total: 1,
@@ -511,6 +519,9 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     expect(screen.getByTestId('build-workspace-event-row')).toHaveTextContent(
       'Planning started'
     );
+    expect(
+      screen.getByTestId('build-workspace-agent-run-link')
+    ).toHaveAttribute('href', 'https://cursor.com/agents/bc-agent-1');
     expect(
       screen.getByTestId('build-workspace-stage-headline')
     ).toHaveTextContent('Preparing your build');

@@ -15,7 +15,7 @@ export async function executeBuildStep(context: PlaybookStepExecutionContext): P
     throw new BuildStepRefusedError('This build is not part of the current Playbook run.');
   }
 
-  if (row.status !== 'intake') {
+  if (row.status !== 'intake' && !(row.status === 'planning' && !row.playbookStepRunId)) {
     if (row.playbookStepRunId === context.stepRunId) {
       return { kind: 'suspended', expiresAt: deadlineFromNow(BUILD_STEP_DEADLINE_MS) };
     }

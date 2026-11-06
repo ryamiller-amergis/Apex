@@ -244,3 +244,18 @@
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+.agentLink {
+  color: var(--accent-color);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.agentLink:hover {
+  color: var(--accent-hover);
+}
+
+.agentLink:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}

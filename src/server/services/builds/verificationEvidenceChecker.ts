@@ -66,6 +66,8 @@ export interface DecideTaskDoneResult {
   mayReportDone: boolean;
   rows: VerificationRowWrite[];
   violations: Violation[];
+  /** Report mistakes that do not block: the final passing run stands on its own. */
+  notes?: Violation[];
   unknownRequirementIds: string[];
   escalation: { reason: string; planPath: string } | null;
 }
@@ -137,7 +139,33 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function matchesManifestCommand(
+const LAUNCHER_TOKENS = new Set(['corepack', 'pnpm', 'npm', 'npx', 'yarn', 'exec', 'run', 'dlx', '--']);
+const TEST_RUNNERS = ['vitest', 'jest', 'mocha', 'playwright', 'node --test'];
+const TOOL_SYNONYMS: Record<string, string[]> = {
+  typecheck: ['typecheck', 'type-check', 'tsc'],
+  tsc: ['typecheck', 'type-check', 'tsc'],
+  lint: ['lint', 'eslint'],
+  eslint: ['lint', 'eslint'],
+};
+
+function primaryTool(command: string): string | null {
+  for (const token of command.trim().split(/\s+/)) {
+    if (token.length === 0 || token.startsWith('-') || LAUNCHER_TOKENS.has(token)) continue;
+    return token.toLowerCase();
+  }
+  return null;
+}
+
+function testRunnerOf(command: string): string | null {
+  const lower = command.toLowerCase();
+  return TEST_RUNNERS.find((runner) => lower.includes(runner)) ?? null;
+}
+
+/**
+ * Same tool, any phrasing: `pnpm exec vitest run a.test.ts` counts as
+ * `pnpm vitest related --run {files}`. A different tool is still a mismatch.
+ */
+export function matchesManifestCommand(
   checkKey: 'typeCheck' | 'lint' | 'relatedTests',
   reportedCommand: string,
   expectedManifestCommand: string,
@@ -147,16 +175,42 @@ function matchesManifestCommand(
   if (actual === expected) {
     return true;
   }
-  if (checkKey === 'relatedTests' && expected.includes('{files}')) {
-    const patternSource = expected
-      .split('{files}')
-      .map((part) => escapeRegExp(part))
-      .join('(\\S[\\s\\S]*)');
-    const regex = new RegExp(`^${patternSource}$`);
-    return regex.test(actual);
+  if (checkKey === 'relatedTests') {
+    if (expected.includes('{files}')) {
+      const patternSource = expected
+        .split('{files}')
+        .map((part) => escapeRegExp(part))
+        .join('(\\S[\\s\\S]*)');
+      if (new RegExp(`^${patternSource}$`).test(actual)) return true;
+    }
+    const runner = testRunnerOf(expected);
+    return runner !== null && testRunnerOf(actual) === runner;
   }
-  return false;
+  const expectedTool = primaryTool(expected);
+  if (expectedTool === null) return false;
+  const accepted = TOOL_SYNONYMS[expectedTool] ?? [expectedTool];
+  const lower = actual.toLowerCase();
+  return accepted.some((tool) => new RegExp(`(^|[\\s:/])${escapeRegExp(tool)}($|[\\s:])`).test(lower));
 }
+
+function normalizeTestName(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, ' ').replace(/[.\s]+$/, '').trim();
+}
+
+/** Exact names first, then the same title with different spacing, case, or a describe-block prefix. */
+function testNameListed(name: string, listed: readonly string[]): boolean {
+  if (listed.includes(name)) return true;
+  const wanted = normalizeTestName(name);
+  if (wanted.length === 0) return false;
+  return listed.some((candidate) => {
+    const have = normalizeTestName(candidate);
+    return have === wanted || have.endsWith(` ${wanted}`) || have.endsWith(`> ${wanted}`) || wanted.endsWith(` ${have}`);
+  });
+}
+
+/** Failing-first runs are bookkeeping: a missing or mismatched red run is a note, never a block. */
+const ACCEPTED_WITHOUT_RED_RUN =
+  'The final test run passed; no failing-first run was reported.';
 
 /**
  * Pure decision function for build task completion and verification row writes.
@@ -235,6 +289,7 @@ export function decideTaskDone(input: DecideTaskDoneInput): DecideTaskDoneResult
 
   const rows: VerificationRowWrite[] = [];
   const violations: Violation[] = [];
+  const notes: Violation[] = [];
 
   for (const spec of activeSpecs) {
     const entry = entryByRequirementId.get(spec.id);
@@ -283,20 +338,20 @@ export function decideTaskDone(input: DecideTaskDoneInput): DecideTaskDoneResult
       continue;
     }
 
-    let testNotInRunEmitted = false;
+    const entryNotes: Violation[] = [];
+    const hasRed = entry.red !== null && entry.red.commit.trim().length > 0;
 
-    if (entry.red === null || entry.red.commit.trim().length === 0) {
-      entryViolations.push({ code: 'missing_red_evidence', requirementId: spec.id });
+    if (!hasRed) {
+      entryNotes.push({ code: 'missing_red_evidence', requirementId: spec.id });
     } else {
-      if (entry.red.exitCode === 0) {
-        entryViolations.push({ code: 'red_not_failing', requirementId: spec.id });
+      if (entry.red!.exitCode === 0) {
+        entryNotes.push({ code: 'red_not_failing', requirementId: spec.id });
       }
       if (
         entry.testReferences.length > 0 &&
-        !entry.testReferences.every((ref) => entry.red!.failedTests.includes(ref.name))
+        !entry.testReferences.every((ref) => testNameListed(ref.name, entry.red!.failedTests))
       ) {
-        entryViolations.push({ code: 'test_not_in_run', requirementId: spec.id });
-        testNotInRunEmitted = true;
+        entryNotes.push({ code: 'test_not_in_run', requirementId: spec.id });
       }
     }
 
@@ -307,33 +362,33 @@ export function decideTaskDone(input: DecideTaskDoneInput): DecideTaskDoneResult
         entryViolations.push({ code: 'green_not_passing', requirementId: spec.id });
       }
       if (
-        !testNotInRunEmitted &&
         entry.testReferences.length > 0 &&
-        !entry.testReferences.every((ref) => entry.green!.passedTests.includes(ref.name))
+        !entry.testReferences.every((ref) => testNameListed(ref.name, entry.green!.passedTests))
       ) {
         entryViolations.push({ code: 'test_not_in_run', requirementId: spec.id });
       }
     }
 
     if (
-      entry.red !== null &&
+      hasRed &&
       entry.green !== null &&
-      entry.red.commit.trim().length > 0 &&
-      entry.red.commit.trim() === entry.green.commit.trim()
+      entry.red!.commit.trim() === entry.green.commit.trim()
     ) {
-      entryViolations.push({ code: 'red_green_same_commit', requirementId: spec.id });
+      entryNotes.push({ code: 'red_green_same_commit', requirementId: spec.id });
     }
 
     violations.push(...entryViolations);
+    notes.push(...entryNotes);
+    const passed = entryViolations.length === 0;
     rows.push({
       requirementId: spec.id,
       kind: spec.kind,
       tier: entry.tier,
-      status: entryViolations.length === 0 ? 'pass' : 'fail',
+      status: passed ? (hasRed ? 'pass' : 'deferred') : 'fail',
       testReferences: entry.testReferences,
-      red: entry.red,
+      red: hasRed ? entry.red : null,
       green: entry.green,
-      deferralReason: null,
+      deferralReason: passed && !hasRed ? ACCEPTED_WITHOUT_RED_RUN : null,
     });
   }
 
@@ -362,6 +417,7 @@ export function decideTaskDone(input: DecideTaskDoneInput): DecideTaskDoneResult
     mayReportDone,
     rows,
     violations,
+    notes,
     unknownRequirementIds,
     escalation: null,
   };

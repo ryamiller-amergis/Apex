@@ -10,6 +10,8 @@ export interface TaskFailureInput {
   detail: string;
   /** Repeats with the same key write no second event. */
   dedupeKey: string;
+  /** When true, suspend immediately instead of spinning up a fresh duplicate agent. */
+  noAutoRequeue?: boolean;
 }
 
 export type TaskFailureResult = 'requeued' | 'suspended' | 'already_handled';
@@ -38,6 +40,13 @@ export function createTaskFailurePolicy(deps: {
       dedupeKey: input.dedupeKey,
     });
 
+    if (input.noAutoRequeue) {
+      if (await deps.store.suspend(input.buildRunId, 'repair_cap')) {
+        deps.track('build_run.suspended', { buildRunId: input.buildRunId, reason: 'repair_cap' });
+      }
+      return 'suspended';
+    }
+
     const repair = await deps.store.consumeRepairAttempt(input.revisionId);
     if (repair === 'none_left') {
       if (await deps.store.suspend(input.buildRunId, 'repair_cap')) {
@@ -51,7 +60,7 @@ export function createTaskFailurePolicy(deps: {
       buildRunId: input.buildRunId,
       buildRevisionId: input.revisionId,
       eventType: DISPATCH_EVENT_TYPES.taskRequeued,
-      message: 'Apex is trying the build again.',
+      message: 'Apex is going back to finish this. No action needed.',
       detail: { taskKey: input.headKey },
       dedupeKey: `${input.dedupeKey}:requeued`,
     });

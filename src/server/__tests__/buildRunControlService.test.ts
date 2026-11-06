@@ -38,6 +38,7 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
   const leasesReleased: string[] = [];
   const playbooksCancelled: string[] = [];
   const reconciledRuns: string[] = [];
+  const rechecks: string[] = [];
 
   const service = createBuildRunControlService({
     loadRun: async (buildId, projectId) =>
@@ -87,6 +88,10 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
     reconcileRun: async (runId) => {
       reconciledRuns.push(runId);
     },
+    recheckStoppedTask: async (runId) => {
+      rechecks.push(runId);
+      return 'merged';
+    },
     appendEvent: async (ev) => {
       events.push(ev);
     },
@@ -99,6 +104,7 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
     leasesReleased,
     playbooksCancelled,
     reconciledRuns,
+    rechecks,
     setStopResult: (r: { stopped: number; unconfirmed: string[] }) => {
       stopResult = r;
     },
@@ -211,7 +217,26 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
     expect(resumed.status).toBe('building');
     expect(h.run.costLimitUsd).toBe(50);
     expect(h.reconciledRuns).toEqual([h.run.id]);
+    expect(h.rechecks).toEqual([]);
     expect(h.events.map((e) => e.eventType)).toContain('run_resumed');
+  });
+
+  it('re-checks the stopped task report before reconciling when resumed from repair_cap', async () => {
+    const h = createControlHarness({
+      status: 'suspended',
+      suspendReason: 'repair_cap',
+      tasks: [{ status: 'failed' }],
+    });
+
+    const resumed = await h.service.resume({
+      buildId: h.run.id,
+      projectId: 'Apex',
+      actor: { userId: 'u-req', isProjectAdmin: false, isSuperAdmin: false },
+    });
+
+    expect(resumed.status).toBe('building');
+    expect(h.rechecks).toEqual([h.run.id]);
+    expect(h.reconciledRuns).toEqual([h.run.id]);
   });
 
   it('VT-09, VT-11, VT-39 PBI-036 AC-1..2 handles flag_disabled, permission_revoked, and allows cancel when flag is off', async () => {

@@ -420,8 +420,15 @@ describe('Timeline tab (PBI-018)', () => {
   it('VT-33 PBI-018 AC-3 renders messages as text in an ordered list with times and a total', async () => {
     stubFetch(() => json(200, detail()), () => json(200, {
       events: [
-        { id: 'e1', occurredAt: '2026-10-28T10:00:00.000Z', kind: 'task.merged', message: '<img src=x onerror=alert(1)>', taskKey: 'a' },
-        { id: 'e2', occurredAt: '2026-10-28T10:01:00.000Z', kind: 'task.failed', message: 'Token [REDACTED:bearer-token]', taskKey: null },
+        {
+          id: 'e1',
+          occurredAt: '2026-10-28T10:00:00.000Z',
+          kind: 'task.merged',
+          message: '<img src=x onerror=alert(1)>',
+          taskKey: 'a',
+          cloudAgentUrl: 'https://cursor.com/agents/bc-agent-1',
+        },
+        { id: 'e2', occurredAt: '2026-10-28T10:01:00.000Z', kind: 'task.failed', message: 'Token [REDACTED:bearer-token]', taskKey: null, cloudAgentUrl: null },
       ],
       total: 600,
     }));
@@ -432,6 +439,7 @@ describe('Timeline tab (PBI-018)', () => {
     expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
     expect(screen.getByText('Token [REDACTED:bearer-token]')).toBeInTheDocument();
     expect(list.querySelectorAll('time[datetime]')).toHaveLength(2);
+    expect(screen.getByTestId('build-timeline-agent-link')).toHaveAttribute('href', 'https://cursor.com/agents/bc-agent-1');
     expect(screen.getByTestId('build-timeline-total')).toHaveTextContent('Showing the latest 2 of 600');
     expect(fetchMock).toHaveBeenCalledWith(`/api/builds/${BUILD_ID}/events?project=Apex`, expect.objectContaining({ credentials: 'include' }));
   });

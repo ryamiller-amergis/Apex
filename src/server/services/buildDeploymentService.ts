@@ -4,7 +4,7 @@
  * Owns `enqueueRevisionDeployment`, `grantNext`, `settleFromCallback`,
  * `retryDeployment`, `assertMayRetry`, and `buildPreviewsList`.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import {
   type BuildDeploymentCallbackRequest,
   type BuildDeploymentCallbackResponse,
@@ -27,6 +27,7 @@ import {
 import { defaultPreviewLeaseService } from './buildPreviewLeaseService';
 import { redactText } from './buildRedactionService';
 import { isFeatureEnabled } from './featureFlagService';
+import { loadSettingsForRepository } from './buildProfileService';
 
 export interface DeploymentRunRecord {
   id: string;
@@ -162,6 +163,11 @@ export interface BuildDeploymentServiceDeps {
     actorUserId?: string | null;
   }) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
+  casEnqueueRevision: (
+    revisionId: string,
+    buildRunId: string,
+    queuedAtIso: string,
+  ) => Promise<boolean>;
 }
 
 function isRetryableTriggerError(err: unknown): boolean {
@@ -354,13 +360,48 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
       await appendBuildEvent(input);
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    async casEnqueueRevision(revisionId, buildRunId, queuedAtIso) {
+      return db.transaction(async (tx) => {
+        const rows = await tx
+          .update(buildRevisions)
+          .set({
+            deploymentStatus: 'queued',
+            deploymentQueuedAt: queuedAtIso,
+            updatedAt: queuedAtIso,
+          })
+          .where(
+            and(
+              eq(buildRevisions.id, revisionId),
+              inArray(buildRevisions.deploymentStatus, ['not_started', 'failed']),
+            ),
+          )
+          .returning({ id: buildRevisions.id });
+        if (rows.length === 0) return false;
+        await tx
+          .update(buildRuns)
+          .set({ status: 'deploying', updatedAt: queuedAtIso })
+          .where(
+            and(
+              eq(buildRuns.id, buildRunId),
+              inArray(buildRuns.status, [
+                'checking',
+                'building',
+                'deploying',
+                'preview_ready',
+                'deployment_failed',
+              ]),
+            ),
+          );
+        return true;
+      });
+    },
   };
 }
 
 export function createBuildDeploymentService(
   deps: BuildDeploymentServiceDeps = createDefaultDeploymentDeps(),
 ) {
-  return {
+  const service = {
     async settleFromCallback(
       input: BuildDeploymentCallbackRequest,
     ): Promise<
@@ -402,8 +443,31 @@ export function createBuildDeploymentService(
       if (input.status === 'succeeded') {
         const previewUrl =
           input.previewUrl
+          ?? revision.previewUrl
           ?? run.defaultPreviewUrl
-          ?? `https://preview.example.com/${encodeURIComponent(run.id)}`;
+          ?? null;
+        if (!previewUrl) {
+          await deps.appendEvent({
+            buildRunId: run.id,
+            buildRevisionId: revision.id,
+            eventType: 'deployment_failed',
+            severity: 'error',
+            message: 'Preview deployment succeeded without a preview URL.',
+            detail: { pipelineRunId: input.pipelineRunId, failedStage: 'preview_url' },
+          });
+          await deps.casSettleRevision(input.pipelineRunId, {
+            deploymentStatus: 'failed',
+            deployedAt: finishedAt,
+            failedStage: 'preview_url',
+            errorText: 'Preview URL was missing when the deployment completed.',
+            pipelineUrl: input.pipelineUrl ?? revision.deploymentPipelineUrl,
+          });
+          if (run.status === 'deploying') {
+            await deps.setRunStatus(run.id, 'deployment_failed');
+          }
+          await deps.releaseLease(run.id, 'failure');
+          return { kind: 'ok', response: { applied: true } };
+        }
 
         const won = await deps.casSettleRevision(input.pipelineRunId, {
           deploymentStatus: 'succeeded',
@@ -506,7 +570,12 @@ export function createBuildDeploymentService(
 
       const commit = revision.validatedCommit ?? '';
       const branch = run.integrationBranch ?? `apex/build/${run.id}`;
-      const pipelineDefinitionId = run.deployPipelineId ?? 1;
+      let pipelineDefinitionId = run.deployPipelineId ?? null;
+      if (pipelineDefinitionId == null) {
+        const settings = await loadSettingsForRepository(run.project, run.repository);
+        pipelineDefinitionId = settings?.buildProfile?.deployPipelineId ?? null;
+      }
+      const pipelineId = pipelineDefinitionId ?? 1;
 
       const retryDelays = [1_000, 4_000];
       let lastError: unknown = null;
@@ -516,7 +585,7 @@ export function createBuildDeploymentService(
         try {
           queued = await deps.queuePipelineBuild({
             adoProject: run.project,
-            pipelineDefinitionId,
+            pipelineDefinitionId: pipelineId,
             sourceBranch: branch,
             commit,
             buildRunId: run.id,
@@ -587,6 +656,47 @@ export function createBuildDeploymentService(
       return true;
     },
 
+    async enqueueRevisionDeployment(buildRunId: string): Promise<
+      | { kind: 'ok' }
+      | { kind: 'not_found' }
+      | { kind: 'skipped'; reason: 'not_validated' }
+    > {
+      const loaded = await deps.loadRunAndCurrentRevision(buildRunId);
+      if (!loaded) return { kind: 'not_found' };
+
+      const { run, revision } = loaded;
+      if (!revision.validatedCommit) {
+        return { kind: 'skipped', reason: 'not_validated' };
+      }
+
+      if (
+        revision.deploymentStatus === 'queued'
+        || revision.deploymentStatus === 'deploying'
+        || revision.deploymentStatus === 'succeeded'
+      ) {
+        await service.grantNext(run.project, run.repository);
+        return { kind: 'ok' };
+      }
+
+      const queuedAt = deps.now().toISOString();
+      const changed = await deps.casEnqueueRevision(revision.id, run.id, queuedAt);
+      if (changed) {
+        await deps.appendEvent({
+          buildRunId: run.id,
+          buildRevisionId: revision.id,
+          eventType: 'deployment_queued',
+          message: `Preview deployment queued for revision ${revision.revisionNumber}.`,
+          detail: {
+            revisionNumber: revision.revisionNumber,
+            commit: revision.validatedCommit,
+          },
+        });
+      }
+
+      await service.grantNext(run.project, run.repository);
+      return { kind: 'ok' };
+    },
+
     async retryDeployment(input: {
       buildRunId: string;
       actor: RetryActor;
@@ -642,6 +752,7 @@ export function createBuildDeploymentService(
       };
     },
   };
+  return service;
 }
 
 export const defaultBuildDeploymentService = createBuildDeploymentService();

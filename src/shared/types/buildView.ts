@@ -143,6 +143,8 @@ export interface BuildDetailResponse {
     tasks: BuildTaskView[];
   } | null;
   verificationSummary: BuildVerificationSummary;
+  /** The latest branch a build agent pushed, so the requester can see the code before the pull request. */
+  pushedBranch?: { name: string; url: string } | null;
   /** Null until the preview lease manager fills it. */
   lease: { state: 'waiting' | 'held' | 'none'; queuePosition: number | null } | null;
   deployment?: BuildDeploymentView;
@@ -160,6 +162,8 @@ export interface BuildEventView {
   kind: string;
   message: string;
   taskKey: string | null;
+  /** Direct Cursor Cloud Agent page for events correlated to a Cloud Agent run. */
+  cloudAgentUrl: string | null;
 }
 
 export interface BuildEventsResponse {

@@ -237,19 +237,19 @@ export async function loadBuild(buildRunId: string): Promise<StoredBuild | null>
   return row ?? null;
 }
 
-export async function beginPlanningRow(buildRunId: string, stepRunId: string): Promise<boolean> {
+export async function beginPlanningRow(buildRunId: string, stepRunId?: string | null): Promise<boolean> {
   const now = new Date().toISOString();
   const moved = await db.update(buildRuns).set({
     status: 'planning',
-    playbookStepRunId: stepRunId,
+    ...(stepRunId ? { playbookStepRunId: stepRunId } : {}),
     updatedAt: now,
-  }).where(and(eq(buildRuns.id, buildRunId), eq(buildRuns.status, 'intake'))).returning({ id: buildRuns.id });
+  }).where(and(eq(buildRuns.id, buildRunId), inArray(buildRuns.status, ['intake', 'planning']))).returning({ id: buildRuns.id });
   if (moved.length === 0) return false;
   await appendBuildEvent({
     buildRunId,
     eventType: 'build.planning_started',
     message: 'Planning started',
-    dedupeKey: `planning:${stepRunId}`,
+    dedupeKey: `planning:${buildRunId}`,
   });
   return true;
 }

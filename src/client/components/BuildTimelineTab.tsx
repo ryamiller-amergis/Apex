@@ -46,6 +46,17 @@ export const BuildTimelineTab: React.FC<BuildTimelineTabProps> = ({ project, bui
           <li key={event.id} className={styles.event} {...{ 'data-testid': 'build-timeline-event' }}>
             <time dateTime={event.occurredAt}>{absoluteTime(event.occurredAt)}</time>
             <span>{event.message}</span>
+            {event.cloudAgentUrl && (
+              <a
+                className={styles.agentLink}
+                href={event.cloudAgentUrl}
+                target="_blank"
+                rel="noreferrer"
+                {...{ 'data-testid': 'build-timeline-agent-link' }}
+              >
+                Open agent run
+              </a>
+            )}
           </li>
         ))}
       </ol>

@@ -1,5 +1,5 @@
 import { describeRuntimeFailure, missingChecksMessage } from '../../../shared/buildRuntimeFailure';
-import { buildProgressHeadline, userFacingBuildEvent } from '../buildProgressCopy';
+import { buildProgressHeadline, buildUserStatus, userFacingBuildEvent } from '../buildProgressCopy';
 
 describe('build progress copy', () => {
   it('explains a Node engine install failure in plain language', () => {
@@ -75,5 +75,25 @@ describe('build progress copy', () => {
     });
     expect(headline.failed).toBe(true);
     expect(headline.headline).toContain('Node 24');
+  });
+
+  it('shows a few plain states instead of internal stages', () => {
+    expect(buildUserStatus({ status: 'planning', hasPullRequest: false })).toBe('Building');
+    expect(buildUserStatus({ status: 'checking', hasPullRequest: false })).toBe('Finishing up');
+    expect(buildUserStatus({ status: 'accepted', hasPullRequest: true })).toBe('Ready to review');
+    expect(buildUserStatus({ status: 'suspended', hasPullRequest: false })).toBe('Needs your attention');
+    expect(buildUserStatus({ status: 'failed', hasPullRequest: false })).toBe('Needs your attention');
+  });
+
+  it('rewrites older stored failure messages to the current wording', () => {
+    expect(userFacingBuildEvent('The agent finished without the required test evidence.')).toBe(
+      'The feature is built, but its test report left out some checks.',
+    );
+    expect(userFacingBuildEvent('Apex is trying the build again.')).toBe(
+      'Apex is going back to finish this. No action needed.',
+    );
+    expect(
+      userFacingBuildEvent('This build stopped because a task kept failing and no repair attempts are left.'),
+    ).toMatch(/^This build needs your attention/);
   });
 });

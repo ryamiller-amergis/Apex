@@ -1,5 +1,5 @@
 import type { BuildVisualBrief } from '../../shared/buildVisualBrief';
-import type { EvidenceBlock } from './evidenceBlockParser';
+import type { EvidenceBlock } from './builds/evidenceBlockParser';
 
 export interface VisualQualityResult {
   passed: boolean;
