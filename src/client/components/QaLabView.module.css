@@ -848,6 +848,21 @@
   padding-top: 12px;
 }
 
+.metaRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.metaRow .metaGrid {
+  flex: 1;
+}
+
+.runToggle {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 .metaGrid {
   display: grid;
   grid-template-columns: max-content 1fr;

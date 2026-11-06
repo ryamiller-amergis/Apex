@@ -237,6 +237,8 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
   const openComments = comments.filter((comment) => comment.status === 'open').length;
   const regeneration = review?.regenerationByCase.get(testCase.id) ?? null;
   const isRegenerating = regeneration?.status === 'generating';
+  const canRun = review !== null && isQaCase(testCase);
+  const [runOpen, setRunOpen] = useState(false);
 
   return (
     <div
@@ -325,35 +327,48 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
       {expanded && (
         <div className={styles.cardBody}>
           {testCase.existing && <ExistingCaseNote testCase={testCase} existing={testCase.existing} />}
-          <dl className={styles.metaGrid}>
-            {testCase.persona && (
-              <>
-                <dt>Persona</dt>
-                <dd>{testCase.persona}</dd>
-              </>
+          <div className={styles.metaRow}>
+            <dl className={styles.metaGrid}>
+              {testCase.persona && (
+                <>
+                  <dt>Persona</dt>
+                  <dd>{testCase.persona}</dd>
+                </>
+              )}
+              {testCase.priority && (
+                <>
+                  <dt>Priority</dt>
+                  <dd>{testCase.priority}</dd>
+                </>
+              )}
+              {testCase.featureFlag && (
+                <>
+                  <dt>Feature flag</dt>
+                  <dd>
+                    {testCase.featureFlag}
+                    {testCase.featureFlagState ? ` (${testCase.featureFlagState})` : ''}
+                  </dd>
+                </>
+              )}
+              {traceBits.length > 0 && (
+                <>
+                  <dt>Traces to</dt>
+                  <dd>{traceBits.join(', ')}</dd>
+                </>
+              )}
+            </dl>
+            {canRun && (
+              <button
+                type="button"
+                className={`${styles.secondaryBtn} ${styles.runToggle}`}
+                onClick={() => setRunOpen((open) => !open)}
+                aria-expanded={runOpen}
+                {...{ 'data-testid': `qa-lab-run-${testCase.id}-open` }}
+              >
+                {runOpen ? 'Hide test run' : 'Run this test'}
+              </button>
             )}
-            {testCase.priority && (
-              <>
-                <dt>Priority</dt>
-                <dd>{testCase.priority}</dd>
-              </>
-            )}
-            {testCase.featureFlag && (
-              <>
-                <dt>Feature flag</dt>
-                <dd>
-                  {testCase.featureFlag}
-                  {testCase.featureFlagState ? ` (${testCase.featureFlagState})` : ''}
-                </dd>
-              </>
-            )}
-            {traceBits.length > 0 && (
-              <>
-                <dt>Traces to</dt>
-                <dd>{traceBits.join(', ')}</dd>
-              </>
-            )}
-          </dl>
+          </div>
 
           {testCase.preconditions.length > 0 && (
             <section className={styles.section}>
@@ -429,8 +444,13 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
             />
           )}
 
-          {review && isQaCase(testCase) && (
-            <QaLabCaseRun suiteId={review.suiteId} localCaseId={testCase.id} />
+          {canRun && review && (
+            <QaLabCaseRun
+              suiteId={review.suiteId}
+              localCaseId={testCase.id}
+              open={runOpen}
+              onClose={() => setRunOpen(false)}
+            />
           )}
         </div>
       )}

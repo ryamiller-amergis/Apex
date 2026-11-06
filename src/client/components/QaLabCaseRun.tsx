@@ -125,11 +125,15 @@ const Attachments: React.FC<{
 interface QaLabCaseRunProps {
   suiteId: string;
   localCaseId: string;
+  open: boolean;
+  onClose: () => void;
 }
 
-/** Records a manual run of a case in Apex; the results go to Azure DevOps when the case is published. */
-export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId }) => {
-  const [open, setOpen] = useState(false);
+/**
+ * Records a manual run of a case in Apex; the results go to Azure DevOps when the case is published.
+ * Stays mounted while closed so unsaved results survive hiding the panel.
+ */
+export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId, open, onClose }) => {
   const runQuery = useCaseRun(suiteId, localCaseId, open);
   const actions = useCaseRunActions(suiteId, localCaseId);
   const [form, setForm] = useState(() => formFrom(null));
@@ -192,20 +196,7 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
     }
   };
 
-  if (!open) {
-    return (
-      <div className={styles.runClosed}>
-        <button
-          type="button"
-          className={styles.secondaryBtn}
-          onClick={() => setOpen(true)}
-          {...{ 'data-testid': `${testId}-open` }}
-        >
-          Run this test
-        </button>
-      </div>
-    );
-  }
+  if (!open) return null;
 
   const fileUrl = (id: string) => `${caseRunUrl(suiteId, localCaseId)}/attachments/${encodeURIComponent(id)}`;
   const attachmentsFor = (stepOrder?: number) => (draft?.attachments ?? [])
@@ -237,7 +228,7 @@ export const QaLabCaseRun: React.FC<QaLabCaseRunProps> = ({ suiteId, localCaseId
         <button
           type="button"
           className={styles.linkBtn}
-          onClick={() => setOpen(false)}
+          onClick={onClose}
           {...{ 'data-testid': `${testId}-close` }}
         >
           Close

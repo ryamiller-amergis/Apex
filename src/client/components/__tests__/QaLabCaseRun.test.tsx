@@ -43,8 +43,7 @@ let actions: Record<'save' | 'attach' | 'removeAttachment' | 'createBug' | 'publ
 
 function renderRun(state: QaLabCaseRunState) {
   jest.mocked(useCaseRun).mockReturnValue({ data: state, isLoading: false, error: null } as unknown as ReturnType<typeof useCaseRun>);
-  render(<QaLabCaseRun suiteId="suite-1" localCaseId="TC-1" />);
-  fireEvent.click(screen.getByTestId('qa-lab-run-TC-1-open'));
+  render(<QaLabCaseRun suiteId="suite-1" localCaseId="TC-1" open onClose={jest.fn()} />);
 }
 
 beforeEach(() => {
