@@ -21,6 +21,7 @@ import {
   useSavePlaybookDraft,
 } from '../hooks/usePlaybookDefinitions';
 import {
+  usePlaybookGraphIssues,
   usePlaybookStepPalette,
   usePlaybookVersionLayout,
   useSavePlaybookLayout,
@@ -30,6 +31,7 @@ import { layoutPlaybookGraph, positionsOverlap } from '../utils/playbookCanvasLa
 import { initialStepConfig, newPlaybookNodeId, syncBranchEdges } from '../utils/playbookCanvasGraph';
 import { PlaybookCanvas } from './PlaybookCanvas';
 import { PlaybookDryRunPanel } from './PlaybookDryRunPanel';
+import { PlaybookIssueSummary } from './PlaybookIssueSummary';
 import { PlaybookStepInspector } from './PlaybookStepInspector';
 import { PlaybookStepLibrary } from './PlaybookStepLibrary';
 import { PlaybookSuggestPopover, type PlaybookStepSuggestion } from './PlaybookSuggestPopover';
@@ -174,6 +176,23 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     for (const item of palette.data?.items ?? []) map[item.stepType] = item.label;
     return map;
   }, [palette.data?.items]);
+
+  // The same check publish runs, on the graph as drawn, so a bad step or connection is marked
+  // while the author is still editing rather than when Publish is pressed.
+  const graphIssues = usePlaybookGraphIssues(project, graph, canAuthor);
+  const issues = useMemo(() => graphIssues.data?.issues ?? [], [graphIssues.data]);
+  const nodeIssues = useMemo(() => {
+    const byNode: Record<string, string[]> = {};
+    for (const issue of issues) {
+      if (!issue.nodeId) continue;
+      byNode[issue.nodeId] = [...(byNode[issue.nodeId] ?? []), issue.message];
+    }
+    return byNode;
+  }, [issues]);
+  const edgeIssues = useMemo(
+    () => issues.flatMap((issue) => (issue.edge ? [issue.edge] : [])),
+    [issues],
+  );
 
   const recordUsage = useCallback((stepTypes: string[]) => {
     if (!stepTypes.length) return;
@@ -353,6 +372,13 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
         tone: 'error',
         text: error instanceof PlaybookApiError ? error.message : 'Publish failed.',
       });
+      // Take the author to the step the server blames, where its settings list the problem.
+      const blamedNodeId = error instanceof PlaybookApiError ? error.nodeId : undefined;
+      if (blamedNodeId && graph.nodes.some((node) => node.id === blamedNodeId)) {
+        setDryRunOpen(false);
+        setTriggersOpen(false);
+        setSelectedNodeId(blamedNodeId);
+      }
     }
   };
 
@@ -534,7 +560,20 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
             onValidateConnection={async (candidate) => {
               await validateConnection.mutateAsync({ graph: candidate });
             }}
+            nodeIssues={canAuthor ? nodeIssues : undefined}
+            edgeIssues={canAuthor ? edgeIssues : undefined}
           />
+
+          {canAuthor ? (
+            <PlaybookIssueSummary
+              issues={issues}
+              onSelectNode={(nodeId) => {
+                setDryRunOpen(false);
+                setTriggersOpen(false);
+                setSelectedNodeId(nodeId);
+              }}
+            />
+          ) : null}
 
           {graph.nodes.length === 0 ? (
             <div className={styles.emptyHint} {...{ 'data-testid': 'playbook-canvas-empty' }}>
@@ -599,6 +638,7 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               priorNodeIds={priorNodeIds(graph, selectedNode.id)}
               allNodes={graph.nodes}
               paletteItems={palette.data?.items ?? []}
+              issues={nodeIssues[selectedNode.id]}
               canAuthor={canAuthor}
               onChange={updateNodeConfig}
               onDelete={() => deleteStep(selectedNode.id)}

@@ -29,12 +29,18 @@ import {
   isBranchStepType,
   isRegisteredStepType,
 } from './playbookSteps/registry';
-import { validateBranchCondition } from './playbookSteps/branchConditionEvaluator';
 import {
+  PlaybookBranchConditionError,
+  validateBranchCondition,
+} from './playbookSteps/branchConditionEvaluator';
+import {
+  PlaybookMcpCapabilityError,
+  assertCursorAgentsUseReadOnlyMcp,
   isReadOnlyCursorAgentNode,
 } from './playbookMcpCapabilityService';
 import {
   PLAYBOOK_GUARD_LIMITS,
+  type PlaybookDryRunIssue,
   type PlaybookGraph,
   type PlaybookGraphNode,
   type PlaybookGuardViolation,
@@ -51,12 +57,28 @@ import {
  */
 export class PlaybookGuardViolationError extends Error {
   readonly violation: PlaybookGuardViolation;
+  /** The step this violation is on, when it is on one. Not part of `violation`, which callers match exactly. */
+  readonly nodeId?: string;
+  /** The connection this violation is on, when it is on one. */
+  readonly edge?: { from: string; to: string };
 
-  constructor(kind: PlaybookGuardViolationKind, message: string) {
+  constructor(
+    kind: PlaybookGuardViolationKind,
+    message: string,
+    scope: { nodeId?: string; edge?: { from: string; to: string } } = {}
+  ) {
     super(message);
     this.name = 'PlaybookGuardViolationError';
     this.violation = { kind, message };
+    if (scope.nodeId !== undefined) this.nodeId = scope.nodeId;
+    if (scope.edge !== undefined) this.edge = scope.edge;
   }
+}
+
+/** The step id an error is about, when it carries one. */
+export function nodeIdOfError(error: unknown): string | undefined {
+  const nodeId = (error as { nodeId?: unknown } | null | undefined)?.nodeId;
+  return typeof nodeId === 'string' && nodeId ? nodeId : undefined;
 }
 
 /** How many nodes in this graph are agent turns. The registry decides which types those are. */
@@ -176,12 +198,26 @@ const registryLookup: PlaybookStepDescriptorLookup = (stepType) =>
 
 /** A graph node naming a step type the registry cannot resolve. */
 export class PlaybookGraphStepTypeError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
   constructor(nodeId: string, stepType: string) {
     super(
       `Playbook step "${nodeId}" names the step type "${stepType}", which no registered step ` +
         'type matches. A step nothing can execute must not reach a published version.'
     );
     this.name = 'PlaybookGraphStepTypeError';
+    this.nodeId = nodeId;
+  }
+}
+
+/** A rule that holds one step to account, such as an approval gate that names no step to protect. */
+export class PlaybookGraphNodeRuleError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
+  constructor(nodeId: string, message: string) {
+    super(message);
+    this.name = 'PlaybookGraphNodeRuleError';
+    this.nodeId = nodeId;
   }
 }
 
@@ -203,19 +239,25 @@ export class PlaybookGraphNodeConfigError extends PlaybookStepSchemaError {
 }
 
 export class PlaybookGraphBindingError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
   constructor(nodeId: string, placeholder: string, reason: string) {
     super(`Playbook step "${nodeId}" cannot use binding "${placeholder}": ${reason}.`);
     this.name = 'PlaybookGraphBindingError';
+    this.nodeId = nodeId;
   }
 }
 
 export class PlaybookGraphStepVersionError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
   constructor(nodeId: string, stepType: string, version: number, currentVersion: number) {
     super(
       `Playbook step "${nodeId}" uses ${stepType} contract version ${version}, but this Apex ` +
         `version supports contract versions 1 through ${currentVersion}.`
     );
     this.name = 'PlaybookGraphStepVersionError';
+    this.nodeId = nodeId;
   }
 }
 
@@ -256,14 +298,20 @@ function outputHasField(descriptor: PlaybookStepTypeDescriptor, field: string): 
   return schema instanceof z.ZodObject && field in schema.shape;
 }
 
-/** Every cross-step binding names an ancestor and a declared output field. */
+/**
+ * Every cross-step binding names an ancestor and a declared output field.
+ *
+ * `targets` narrows the check to some steps, so the issue collector can report each step's
+ * problem on its own. Publish passes none and checks them all.
+ */
 export function assertBindingsResolvable(
   graph: PlaybookGraph,
-  lookup: PlaybookStepDescriptorLookup = registryLookup
+  lookup: PlaybookStepDescriptorLookup = registryLookup,
+  targets: readonly PlaybookGraphNode[] = graph.nodes
 ): void {
   const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
 
-  for (const target of graph.nodes) {
+  for (const target of targets) {
     for (const binding of collectStepBindingReferences(target.config ?? {})) {
       const source = nodes.get(binding.stepId);
       if (!source) {
@@ -414,7 +462,8 @@ function ungatedViolation(nodeIds: string[]): PlaybookGuardViolationError {
     `${nodeIds.length === 1 ? 'Step' : 'Steps'} ${named} act outside Apex, so every path that ` +
       'reaches them must cross an approval gate first. Add a gate upstream of each one, or route ' +
       'every path into it through an existing gate; a step that leaves Apex cannot be the first ' +
-      'step, because nothing precedes it.'
+      'step, because nothing precedes it.',
+    nodeIds.length === 1 ? { nodeId: nodeIds[0] } : {}
   );
 }
 
@@ -456,9 +505,10 @@ export function assertStepGateSatisfied(
  */
 export function assertGraphStepsResolvable(
   graph: PlaybookGraph,
-  lookup: PlaybookStepDescriptorLookup = registryLookup
+  lookup: PlaybookStepDescriptorLookup = registryLookup,
+  nodes: readonly PlaybookGraphNode[] = graph.nodes
 ): void {
-  for (const node of graph.nodes) {
+  for (const node of nodes) {
     const descriptor = lookup(node.stepType);
     if (!descriptor) throw new PlaybookGraphStepTypeError(node.id, node.stepType);
     const stepTypeVersion = node.stepTypeVersion ?? 1;
@@ -486,7 +536,8 @@ export function assertGraphStepsResolvable(
       const approverPool = node.config?.approverPool;
       const gatedStepId = node.config?.gatedStepId;
       if ((approverPool || gatedStepId) && !(approverPool && gatedStepId)) {
-        throw new PlaybookStepTypeError(
+        throw new PlaybookGraphNodeRuleError(
+          node.id,
           `Approval gate "${node.id}" must name both approverPool and gatedStepId.`,
         );
       }
@@ -495,7 +546,8 @@ export function assertGraphStepsResolvable(
       const gatesNextStep = typeof gatedStepId === 'string'
         && graph.edges.some((edge) => edge.from === node.id && edge.to === gatedStepId);
       if (gatedStepId && !reviewsPriorStep && !gatesNextStep) {
-        throw new PlaybookStepTypeError(
+        throw new PlaybookGraphNodeRuleError(
+          node.id,
           `Approval gate "${node.id}" must review a prior step or directly precede its gated ` +
             `step "${gatedStepId}".`,
         );
@@ -510,48 +562,79 @@ export function assertGraphStepsResolvable(
  * Step budgets and gate/MCP rules stay on the publish path only. The canvas must allow a
  * `cursor-agent` → `notify` draft with no gate while the author is still composing.
  */
-function assertGraphTopologyGuards(graph: PlaybookGraph): void {
+function findTopologyViolations(graph: PlaybookGraph): PlaybookGuardViolationError[] {
   const { maxFanOutWidth } = PLAYBOOK_GUARD_LIMITS;
+  const violations: PlaybookGuardViolationError[] = [];
 
-  const invalidFanOut = graph.nodes.find((node) => {
-    const outbound = graph.edges.filter((edge) => edge.from === node.id);
-    if (node.parallel) return outbound.length < 2 || outbound.length > 8;
-    return outbound.length > (isBranchStepType(node.stepType) ? 2 : maxFanOutWidth);
-  });
-  if (invalidFanOut) {
-    const fanOut = graph.edges.filter((edge) => edge.from === invalidFanOut.id).length;
-    const step = `${invalidFanOut.stepType} step "${invalidFanOut.id}"`;
-    const message = invalidFanOut.parallel
+  for (const node of graph.nodes) {
+    const fanOut = graph.edges.filter((edge) => edge.from === node.id).length;
+    const invalid = node.parallel
+      ? fanOut < 2 || fanOut > 8
+      : fanOut > (isBranchStepType(node.stepType) ? 2 : maxFanOutWidth);
+    if (!invalid) continue;
+    const step = `${node.stepType} step "${node.id}"`;
+    const message = node.parallel
       ? `A parallel split needs 2 to 8 arms. The ${step} leads to ${fanOut}.`
-      : isBranchStepType(invalidFanOut.stepType)
+      : isBranchStepType(node.stepType)
         ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
         : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
-    throw new PlaybookGuardViolationError('max-fan-out', message);
+    violations.push(new PlaybookGuardViolationError('max-fan-out', message, { nodeId: node.id }));
   }
 
   const inboundCounts = new Map<string, number>();
   for (const edge of graph.edges) {
     inboundCounts.set(edge.to, (inboundCounts.get(edge.to) ?? 0) + 1);
   }
-  const join = [...inboundCounts.entries()].find(([id, count]) => {
-    if (count <= 1) return false;
-    const node = graph.nodes.find((candidate) => candidate.id === id);
-    return node?.stepType !== 'join';
-  });
-  if (join) {
-    throw new PlaybookGuardViolationError(
-      'join',
-      `Step "${join[0]}" has ${join[1]} inbound paths. Only a join step can receive more than one.`
+  for (const [id, inbound] of inboundCounts) {
+    if (inbound <= 1) continue;
+    if (graph.nodes.find((candidate) => candidate.id === id)?.stepType === 'join') continue;
+    violations.push(
+      new PlaybookGuardViolationError(
+        'join',
+        `Step "${id}" has ${inbound} inbound paths. Only a join step can receive more than one.`,
+        { nodeId: id }
+      )
     );
   }
 
   const cycle = findCycle(graph);
   if (cycle) {
-    throw new PlaybookGuardViolationError(
-      'loop',
-      `This Playbook contains a loop: ${cycle.join(' → ')} → ${cycle[0]}. ` +
-        'Loops are not permitted; a Playbook must reach an end.'
+    violations.push(
+      new PlaybookGuardViolationError(
+        'loop',
+        `This Playbook contains a loop: ${cycle.join(' → ')} → ${cycle[0]}. ` +
+          'Loops are not permitted; a Playbook must reach an end.',
+        { nodeId: cycle[0] }
+      )
     );
+  }
+  return violations;
+}
+
+function assertGraphTopologyGuards(graph: PlaybookGraph): void {
+  const [first] = findTopologyViolations(graph);
+  if (first) throw first;
+}
+
+/** A connection whose start or end is not a step in the graph, or undefined when both are. */
+function danglingEdgeViolation(
+  edge: PlaybookGraph['edges'][number],
+  nodeIds: ReadonlySet<string>
+): PlaybookGuardViolationError | undefined {
+  if (nodeIds.has(edge.from) && nodeIds.has(edge.to)) return undefined;
+  const anchor = nodeIds.has(edge.from) ? edge.from : nodeIds.has(edge.to) ? edge.to : undefined;
+  return new PlaybookGuardViolationError(
+    'join',
+    `Connection from "${edge.from}" to "${edge.to}" references a step that is not on the canvas.`,
+    { edge: { from: edge.from, to: edge.to }, ...(anchor ? { nodeId: anchor } : {}) }
+  );
+}
+
+function assertEdgesReferenceSteps(graph: PlaybookGraph): void {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const edge of graph.edges) {
+    const violation = danglingEdgeViolation(edge, nodeIds);
+    if (violation) throw violation;
   }
 }
 
@@ -561,20 +644,12 @@ function assertGraphTopologyGuards(graph: PlaybookGraph): void {
  * Publish still runs the full guard set, including ungated `leaves-apex` and read-only MCP.
  */
 export function assertCanvasConnection(graph: PlaybookGraph): void {
-  const nodeIds = new Set(graph.nodes.map((node) => node.id));
   for (const node of graph.nodes) {
     if (!isRegisteredStepType(node.stepType)) {
       throw new PlaybookGraphStepTypeError(node.id, node.stepType);
     }
   }
-  for (const edge of graph.edges) {
-    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
-      throw new PlaybookGuardViolationError(
-        'join',
-        `Connection from "${edge.from}" to "${edge.to}" references a step that is not on the canvas.`
-      );
-    }
-  }
+  assertEdgesReferenceSteps(graph);
   assertGraphTopologyGuards(graph);
   assertBindingsResolvable(graph);
 }
@@ -604,6 +679,7 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
     );
   }
 
+  assertEdgesReferenceSteps(graph);
   assertGraphTopologyGuards(graph);
 
   assertGraphStepsResolvable(graph);
@@ -611,6 +687,86 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
 
   const ungated = findUngatedLeavesApexSteps(graph);
   if (ungated.length > 0) throw ungatedViolation(ungated);
+}
+
+function issueFromError(error: unknown, fallbackNodeId: string): PlaybookDryRunIssue {
+  const edge = (error as { edge?: { from: string; to: string } } | null)?.edge;
+  return {
+    nodeId: nodeIdOfError(error) ?? fallbackNodeId,
+    kind:
+      error instanceof PlaybookBranchConditionError
+        ? 'branch'
+        : error instanceof PlaybookMcpCapabilityError
+          ? 'capability'
+          : 'graph',
+    message: error instanceof Error ? error.message : 'Graph validation failed.',
+    ...(edge ? { edge } : {}),
+  };
+}
+
+/**
+ * Every problem in the graph, each tied to the step or connection it is on.
+ *
+ * The assertions above stop at the first problem, which is right for publish: one reason is enough
+ * to refuse. An author fixing a draft needs the whole list, so this runs the same checks one step
+ * and one connection at a time and keeps what each throws. It covers every step type, connectors
+ * included, because it asks the registry rather than naming types.
+ */
+export function collectGraphIssues(
+  graph: PlaybookGraph,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): PlaybookDryRunIssue[] {
+  const issues: PlaybookDryRunIssue[] = [];
+  const attempt = (check: () => void, fallbackNodeId = ''): void => {
+    try {
+      check();
+    } catch (error) {
+      issues.push(issueFromError(error, fallbackNodeId));
+    }
+  };
+
+  const { maxStepsPerRun, maxAgentStepsPerRun } = PLAYBOOK_GUARD_LIMITS;
+  attempt(() => {
+    if (graph.nodes.length > maxStepsPerRun) {
+      throw new PlaybookGuardViolationError(
+        'max-steps',
+        `This Playbook has ${graph.nodes.length} steps, above the limit of ${maxStepsPerRun} per run.`
+      );
+    }
+  });
+  attempt(() => {
+    const agentSteps = worstCaseAgentSteps(graph);
+    if (agentSteps > maxAgentStepsPerRun) {
+      throw new PlaybookGuardViolationError(
+        'max-agent-steps',
+        `This Playbook has ${agentSteps} agent steps, above the limit of ${maxAgentStepsPerRun} per run.`
+      );
+    }
+  });
+
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const edge of graph.edges) {
+    attempt(() => {
+      const violation = danglingEdgeViolation(edge, nodeIds);
+      if (violation) throw violation;
+    });
+  }
+
+  for (const violation of findTopologyViolations(graph)) issues.push(issueFromError(violation, ''));
+
+  for (const node of graph.nodes) {
+    attempt(() => assertGraphStepsResolvable(graph, lookup, [node]), node.id);
+    attempt(() => assertBindingsResolvable(graph, lookup, [node]), node.id);
+    attempt(() => assertCursorAgentsUseReadOnlyMcp({ nodes: [node], edges: [] }), node.id);
+  }
+
+  for (const nodeId of findUngatedLeavesApexSteps(graph, lookup)) {
+    attempt(() => {
+      throw ungatedViolation([nodeId]);
+    }, nodeId);
+  }
+
+  return issues;
 }
 
 /**
