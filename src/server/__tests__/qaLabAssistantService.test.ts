@@ -6,20 +6,23 @@ import { AdoTestSuiteConflictError } from '../services/adoTestCaseSuiteService';
 import { createThread, getThread } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import {
-  assistantAddCase,
-  assistantEditCase,
+  applyAddCase,
+  applyEditCase,
+  listAssistantCases,
   openQaLabAssistantThread,
   QaLabAssistantThreadError,
 } from '../services/qaLabAssistantService';
 
 interface DbState {
   suite: Record<string, unknown> | null;
+  otherSuites: Array<Record<string, unknown>>;
+  runs: Array<Record<string, unknown>>;
   inserts: Array<{ table: unknown; values: Record<string, unknown> }>;
   updates: Array<{ table: unknown; values: Record<string, unknown> }>;
 }
 
 jest.mock('../db/drizzle', () => {
-  const state: DbState = { suite: null, inserts: [], updates: [] };
+  const state: DbState = { suite: null, otherSuites: [], runs: [], inserts: [], updates: [] };
   const update = (table: unknown) => {
     const chain = {
       set(values: Record<string, unknown>) {
@@ -37,8 +40,10 @@ jest.mock('../db/drizzle', () => {
   };
   const db = {
     query: {
-      qaAdoTestSuites: { findFirst: jest.fn(async () => state.suite) },
+      qaAdoTestSuites: { findFirst: jest.fn(async () => state.suite), findMany: jest.fn(async () => state.otherSuites) },
       qaCaseComments: { findMany: jest.fn(async () => []) },
+      qaCaseRuns: { findMany: jest.fn(async () => state.runs) },
+      qaLabAssistantProposals: { findMany: jest.fn(async () => []) },
       qaCaseRegenerations: { findFirst: jest.fn(async () => null) },
     },
     insert: jest.fn((table: unknown) => ({
@@ -150,6 +155,8 @@ describe('qaLabAssistantService', () => {
     jest.clearAllMocks();
     workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-lab-assistant-'));
     dbState.suite = readySuite();
+    dbState.otherSuites = [];
+    dbState.runs = [];
     dbState.inserts = [];
     dbState.updates = [];
     (getThread as jest.Mock).mockResolvedValue(thread());
@@ -167,14 +174,14 @@ describe('qaLabAssistantService', () => {
   it('refuses tool calls from a thread that is not bound to a suite', async () => {
     (getThread as jest.Mock).mockResolvedValue(thread({ kickoff: {} }));
 
-    await expect(assistantEditCase({ threadId: 'thread-other', localCaseId: 'PBI-58989-2', patch: { title: 'x' } }))
-      .rejects.toBeInstanceOf(QaLabAssistantThreadError);
+    await expect(listAssistantCases('thread-other')).rejects.toBeInstanceOf(QaLabAssistantThreadError);
     expect(dbState.updates).toHaveLength(0);
   });
 
   it('edits only the given fields, keeps the id, and records the old case for restore', async () => {
-    const edit = await assistantEditCase({
-      threadId: 'thread-qa',
+    const edit = await applyEditCase({
+      suiteId: 'suite-1',
+      userId: 'u1',
       localCaseId: 'PBI-58989-1',
       patch: { id: 'renamed', steps: [step(1, 'Access Env.'), step(2, 'Login as Location Timesheet Approver')] },
     });
@@ -194,21 +201,49 @@ describe('qaLabAssistantService', () => {
   it('will not edit a published case', async () => {
     dbState.suite = readySuite([{ localCaseId: 'PBI-58989-1', adoTestCaseId: 9, adoTestCaseUrl: 'u', parentWorkItemId: 58989, publishedAt: 'now' }]);
 
-    await expect(assistantEditCase({ threadId: 'thread-qa', localCaseId: 'PBI-58989-1', patch: { title: 'x' } }))
+    await expect(applyEditCase({ suiteId: 'suite-1', userId: 'u1', localCaseId: 'PBI-58989-1', patch: { title: 'x' } }))
       .rejects.toBeInstanceOf(AdoTestSuiteConflictError);
   });
 
   it('adds a case to the work item under a new id', async () => {
-    const added = await assistantAddCase({
-      threadId: 'thread-qa',
+    const added = await applyAddCase({
+      suiteId: 'suite-1',
       pbiId: '58989',
       testCase: { id: 'PBI-58989-1', title: 'Validate approval email', steps: [step(1, 'Access Env.')] },
     });
 
     expect(added.localCaseId).toBe('PBI-58989-3');
     expect(savedCases().map((testCase) => testCase.id)).toEqual(['PBI-58989-1', 'PBI-58989-2', 'PBI-58989-3']);
-    await expect(assistantAddCase({ threadId: 'thread-qa', pbiId: 'PBI-58989', testCase: { title: 'No steps', steps: [] } }))
+    await expect(applyAddCase({ suiteId: 'suite-1', pbiId: 'PBI-58989', testCase: { title: 'No steps', steps: [] } }))
       .rejects.toThrow('A case needs at least one step');
+  });
+
+  it('gives the chat runs, Bugs, every other work item, and how QA Lab works', async () => {
+    (getThread as jest.Mock).mockResolvedValue(thread({ workspaceDir }));
+    dbState.runs = [{
+      localCaseId: 'PBI-58989-1',
+      status: 'draft',
+      outcome: 'failed',
+      stepResults: [{ order: 1, outcome: 'passed' }, { order: 2, outcome: 'failed' }],
+      bugs: [{ id: 777, title: 'Failed: Approve', url: 'https://ado.example/777' }],
+      publishedAt: null,
+      adoRunUrl: null,
+    }];
+    dbState.otherSuites = [
+      { id: 'suite-2', rootWorkItemId: 60001, rootWorkItemType: 'Feature', rootTitle: 'Timesheet export', testCasesJson: { suites: [] }, publishedCases: [], updatedAt: 'now' },
+      { id: 'suite-old', rootWorkItemId: 60001, rootWorkItemType: 'Feature', rootTitle: 'Timesheet export', testCasesJson: { suites: [] }, publishedCases: [], updatedAt: 'then' },
+      { id: 'suite-1', rootWorkItemId: 58977, rootWorkItemType: 'Feature', rootTitle: 'Approval notifications', testCasesJson: { suites: [] }, publishedCases: [], updatedAt: 'now' },
+    ];
+
+    await openQaLabAssistantThread({ suiteId: 'suite-1', userId: 'u1', threadId: 'thread-qa', ado });
+
+    const context = fs.readFileSync(path.join(workspaceDir, '.ai-pilot', 'kickoff-context.md'), 'utf-8');
+    expect(context).toContain('Every change you make is a proposal');
+    expect(context).toContain('## How QA Lab works');
+    expect(context).toContain('Feature 60001 Timesheet export: 0 cases, 0 published (suiteId: suite-2)');
+    expect(context).not.toContain('suite-old');
+    expect(context).toContain('"stepsFailed": 1');
+    expect(context).toContain('"id": 777');
   });
 
   it("reuses the user's own thread for the suite and replaces anyone else's", async () => {

@@ -454,6 +454,30 @@ export interface QaLabSaveCaseRunRequest {
   stepResults: QaLabRunStepResult[];
 }
 
+export type QaLabAssistantProposalKind = 'edit' | 'add' | 'delete' | 'comment' | 'regenerate';
+export type QaLabAssistantProposalStatus = 'pending' | 'applied' | 'discarded' | 'failed';
+
+/** A change Ask Apex proposed; it is applied only when QA confirms it. */
+export interface QaLabAssistantProposal {
+  id: string;
+  kind: QaLabAssistantProposalKind;
+  status: QaLabAssistantProposalStatus;
+  suiteId: string;
+  workItem: { id: number; title: string };
+  /** Null for a case that is not added yet. */
+  localCaseId: string | null;
+  /** Why Ask Apex proposes it. */
+  reason: string;
+  /** The case now; null for an added case. */
+  before: QaLabTestCase | null;
+  /** The case after an edit or add. */
+  after: QaLabTestCase | null;
+  /** The comment text, for a comment. */
+  commentBody: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
 export interface QaLabRunPublishResult {
   /** Cases whose results went to Azure DevOps as a test run. */
   publishedLocalCaseIds: string[];

@@ -4,6 +4,8 @@ import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
 import type {
   QaAdoGenerationContext,
+  QaLabAssistantProposalKind,
+  QaLabAssistantProposalStatus,
   QaLabRecordedStepResult,
   QaLabRunBug,
   QaLabRunOutcome,
@@ -966,6 +968,26 @@ export const qaCaseRuns = pgTable('qa_case_runs', {
     .on(t.suiteId, t.localCaseId)
     .where(sql`${t.status} = 'draft'`),
   caseIdx: index('qa_case_runs_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
+export const qaLabAssistantProposals = pgTable('qa_lab_assistant_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id'),
+  kind: text('kind').$type<QaLabAssistantProposalKind>().notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  beforeCase: jsonb('before_case').$type<Record<string, unknown>>(),
+  afterCase: jsonb('after_case').$type<Record<string, unknown>>(),
+  reason: text('reason').notNull().default(''),
+  status: text('status').$type<QaLabAssistantProposalStatus>().notNull().default('pending'),
+  error: text('error'),
+  createdBy: text('created_by'),
+  decidedBy: text('decided_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  threadIdx: index('qa_lab_assistant_proposals_thread_idx').on(t.threadId, t.createdAt),
 }));
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });

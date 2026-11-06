@@ -165,6 +165,7 @@ import {
 } from '../services/qaCaseRegenerationService';
 import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
 import qaCaseRunRouter from './qaCaseRuns';
+import qaLabAssistantProposalRouter from './qaLabAssistantProposals';
 import { publishSuiteRuns } from '../services/qaCaseRunService';
 import type {
   QaAdoSuiteSelection,
@@ -199,6 +200,7 @@ import { resolveReviewerAvailability } from '../services/reviewerAvailabilitySer
 const router = Router();
 
 router.use(qaCaseRunRouter);
+router.use(qaLabAssistantProposalRouter);
 
 router.get('/reviewer-availability', requirePermission('interviews:manage'), async (req, res, next) => {
   try {

@@ -5,6 +5,7 @@ import type { WorkItem } from '../types/workitem';
 import type {
   QaAdoSuiteSelection,
   QaAdoTestPlanOption,
+  QaLabAssistantProposal,
   QaLabCaseComment,
   QaLabCaseRegeneration,
   QaLabCaseReview,
@@ -361,6 +362,47 @@ export function useCaseRunActions(suiteId: string, localCaseId: string) {
     onSettled,
   });
   return { save, attach, removeAttachment, createBug, publish };
+}
+
+const proposalsKey = (threadId: string | null) => ['qa-lab', 'assistant-proposals', threadId] as const;
+
+const proposalsUrl = (threadId: string) =>
+  `/api/interviews/qa-lab/assistant-threads/${encodeURIComponent(threadId)}/proposals`;
+
+/** Changes Ask Apex proposed that wait for QA, plus ones that failed to apply. */
+export function useAssistantProposals(threadId: string | null, isRunning: boolean) {
+  return useQuery<QaLabAssistantProposal[]>({
+    queryKey: proposalsKey(threadId),
+    queryFn: () => apiFetch(proposalsUrl(threadId ?? '')),
+    enabled: !!threadId,
+    refetchInterval: isRunning ? 3000 : false,
+  });
+}
+
+/** Confirm or discard proposals; each refreshes the cases and the proposals when it settles. */
+export function useAssistantProposalActions(threadId: string | null) {
+  const queryClient = useQueryClient();
+  const onSettled = () => {
+    void queryClient.invalidateQueries({ queryKey: ['qa-lab'] });
+  };
+  const post = <T,>(path: string) => apiFetch<T>(`${proposalsUrl(threadId ?? '')}${path}`, { method: 'POST' });
+  const confirm = useMutation<QaLabAssistantProposal, Error, string>({
+    mutationFn: (proposalId) => post(`/${encodeURIComponent(proposalId)}/confirm`),
+    onSettled,
+  });
+  const discard = useMutation<QaLabAssistantProposal, Error, string>({
+    mutationFn: (proposalId) => post(`/${encodeURIComponent(proposalId)}/discard`),
+    onSettled,
+  });
+  const confirmAll = useMutation<QaLabAssistantProposal[], Error, void>({
+    mutationFn: () => post('/confirm-all'),
+    onSettled,
+  });
+  const discardAll = useMutation<QaLabAssistantProposal[], Error, void>({
+    mutationFn: () => post('/discard-all'),
+    onSettled,
+  });
+  return { confirm, discard, confirmAll, discardAll };
 }
 
 export function useRestoreCase() {
