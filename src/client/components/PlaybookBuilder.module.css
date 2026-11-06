@@ -782,6 +782,84 @@
   color: var(--accent-color);
 }
 
+.problemCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-secondary));
+}
+
+.problemTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--error-color);
+}
+
+.problemList {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.issueSummary {
+  position: absolute;
+  z-index: 6;
+  top: 0.75rem;
+  left: 0.75rem;
+  width: min(380px, calc(100% - 1.5rem));
+  border: 1px solid color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px var(--shadow-md);
+  overflow: hidden;
+}
+
+.issueSummaryToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--error-color);
+  font-size: 0.78rem;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.issueSummaryToggle svg:last-child {
+  margin-left: auto;
+}
+
+.issueSummaryList {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.issueSummaryItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
 .readsList {
   display: flex;
   flex-direction: column;

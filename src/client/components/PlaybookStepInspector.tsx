@@ -7,7 +7,7 @@
  * the whole config is always available as raw JSON.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, Link2, Maximize2, Minimize2, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Link2, Maximize2, Minimize2, Trash2, TriangleAlert, X } from 'lucide-react';
 import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
 import { availableBindings, tokenReferences } from '../utils/playbookBindings';
 import { PlaybookBindingText } from './PlaybookBindingText';
@@ -51,6 +51,8 @@ interface PlaybookStepInspectorProps {
   nextNodeIds?: readonly string[];
   allNodes: readonly PlaybookGraphNode[];
   paletteItems: readonly PlaybookStepTypePaletteItem[];
+  /** What the server's check found wrong with this step. Publish would refuse for each one. */
+  issues?: readonly string[];
   canAuthor: boolean;
   onChange: (config: Config) => void;
   onDelete: () => void;
@@ -359,6 +361,7 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   nextNodeIds = [],
   allNodes,
   paletteItems,
+  issues = [],
   canAuthor,
   onChange,
   onDelete,
@@ -498,6 +501,16 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
           </div>
 
           <div className={styles.inspectorBody}>
+            {issues.length > 0 ? (
+              <section className={styles.problemCard} role="alert" {...{ 'data-testid': 'playbook-inspector-issues' }}>
+                <span className={styles.problemTitle}>
+                  <TriangleAlert size={13} aria-hidden /> {issues.length === 1 ? 'Fix before publishing' : `${issues.length} problems to fix before publishing`}
+                </span>
+                <ul className={styles.problemList}>
+                  {issues.map((issue) => <li key={issue}>{issue}</li>)}
+                </ul>
+              </section>
+            ) : null}
             {reads.length > 0 ? (
               <section className={styles.readsCard} {...{ 'data-testid': "playbook-inspector-reads" }}>
                 <span className={styles.readsTitle}>

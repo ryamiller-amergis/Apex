@@ -862,6 +862,63 @@ describe('V2 document execution', () => {
     expect(createExecution).toHaveBeenCalledTimes(1);
   });
 
+  it('opens the pinned repository and signs in to Azure for an investigation step', async () => {
+    const spec = specification({
+      workflowClass: 'playbook-step',
+      groundedSha: 'abc123',
+      repository: 'MaxView',
+      provider: 'ado',
+      skillPath: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+      scratchInputs: [{ path: '.ai-pilot/kickoff-context.md', content: '# Document' }],
+    });
+    const repoReader = { kind: 'repo' };
+    const openRepository = jest.fn().mockResolvedValue(repoReader);
+    const signInAzure = jest.fn().mockResolvedValue(undefined);
+    const createExecution = jest.fn(async (_snapshot, checkout) => {
+      expect(checkout).toBe(repoReader);
+      return {
+        run: {
+          supports: () => false,
+          async *stream() { yield undefined as never; },
+          async wait() { return { status: 'finished' }; },
+        },
+        dispose: jest.fn().mockResolvedValue(undefined),
+      };
+    });
+    const execute = createDocumentExecute({
+      openRepository,
+      createExecution,
+      signInAzure,
+    });
+
+    await execute({
+      specification: {
+        ...spec,
+        playbookAgentPolicy: {
+          schemaVersion: 1,
+          resolverVersion: 1,
+          executionProfile: 'repository-read-only',
+          capabilities: ['repository-read', 'network-read'],
+          skill: { path: spec.skillPath, sha256: spec.skillSha256 },
+          mcpServers: [],
+          localAgent: {
+            cwdMode: 'scratch',
+            allowBuiltinWrites: false,
+            customTools: 'native-read-only',
+          },
+          enforcement: 'enforce',
+          resolvedAt: '2026-10-19T00:00:00.000Z',
+        },
+      },
+      command: command(),
+      checkpoints: checkpoints(),
+      signal: new AbortController().signal,
+    });
+
+    expect(openRepository).toHaveBeenCalledTimes(1);
+    expect(signInAzure).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a Playbook policy hashed from different Skill bytes', async () => {
     const spec = specification({
       workflowClass: 'playbook-step',

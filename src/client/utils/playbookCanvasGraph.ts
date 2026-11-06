@@ -7,6 +7,8 @@ export type PlaybookFlowNodeData = {
   config: Record<string, unknown>;
   readOnly?: boolean;
   runStatus?: string;
+  /** What is wrong with this step, as the server's check words it. Empty or absent when nothing is. */
+  issues?: string[];
   /** Copied from the graph node so a canvas edit does not drop a parallel split. */
   parallel?: boolean;
 };

@@ -7,11 +7,14 @@ import type {
 import { getStepTypeDescriptor } from './registry';
 
 export class PlaybookBranchConditionError extends Error {
+  readonly nodeId: string;
+
   constructor(nodeId: string, sourceStepId: string, field: string, reason: string) {
     super(
       `Branch step "${nodeId}" cannot use "${sourceStepId}.${field}": ${reason}.`
     );
     this.name = 'PlaybookBranchConditionError';
+    this.nodeId = nodeId;
   }
 }
 
@@ -61,7 +64,12 @@ export function validateBranchCondition(graph: PlaybookGraph, node: PlaybookGrap
   const { sourceStepId, field } = parsed.condition;
   const source = graph.nodes.find((candidate) => candidate.id === sourceStepId);
   if (!source) {
-    throw new PlaybookBranchConditionError(node.id, sourceStepId, field, 'the source step is absent');
+    throw new PlaybookBranchConditionError(
+      node.id,
+      sourceStepId,
+      field,
+      'no step on this Playbook has that id. Use the id shown under the step title',
+    );
   }
   if (source.id === node.id || !canReach(graph, source.id, node.id)) {
     throw new PlaybookBranchConditionError(

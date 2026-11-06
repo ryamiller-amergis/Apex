@@ -2139,6 +2139,8 @@ export interface PreparedBackgroundWorkflowTurn {
   projectId: string;
   threadWorkspacePath: string;
   repository: RepositoryPreparationTarget;
+  /** Pinned commit, when this thread has a local or recorded checkout. */
+  groundedSha?: string;
 }
 
 export function buildBackgroundWorkflowPrompt(
@@ -2235,6 +2237,11 @@ export async function prepareBackgroundWorkflowTurn(
         : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
+    ...(grounding.mode === 'local'
+      ? { groundedSha: grounding.resolvedSha }
+      : state.thread.groundedSha?.trim()
+        ? { groundedSha: state.thread.groundedSha.trim() }
+        : {}),
     repository: {
       provider: kickoff.skillProvider ?? 'ado',
       project: kickoff.project,

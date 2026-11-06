@@ -233,6 +233,29 @@
   border-color: var(--accent-color);
 }
 
+.flowNode.nodeInvalid,
+.flowNode.nodeInvalid:hover,
+.connectorNode.nodeInvalid {
+  border-color: var(--error-color);
+}
+
+.nodeIssue {
+  position: absolute;
+  top: -0.6rem;
+  left: 0.6rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  border: 1px solid var(--error-color);
+  background: var(--bg-secondary);
+  color: var(--error-color);
+}
+
 .nodeStatus {
   position: absolute;
   top: -0.6rem;

@@ -203,7 +203,10 @@ export interface PlaybookSkillOption {
 export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch' | 'capability';
 
 export interface PlaybookDryRunIssue {
+  /** The step or connector the problem is on. Empty when it belongs to the whole graph. */
   nodeId: string;
+  /** Set when the problem is on one connection between two steps. */
+  edge?: { from: string; to: string };
   kind: PlaybookDryRunIssueKind;
   message: string;
 }

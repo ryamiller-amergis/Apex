@@ -1,20 +1,12 @@
 import type { PlaybookDryRunIssue, PlaybookDryRunResult, PlaybookGraph } from '../../shared/types/playbook';
 import { PLAYBOOK_DRY_RUN_LIMIT as DRY_RUN_LIMIT } from '../../shared/types/playbook';
 import { getUserPermissions } from './rbacService';
-import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
-import {
-  PlaybookGraphNodeConfigError,
-  PlaybookGraphStepTypeError,
-  PlaybookGuardViolationError,
-  assertGraphWithinGuards,
-} from './playbookGuardService';
+import { collectGraphIssues } from './playbookGuardService';
 import {
   PlaybookBranchConditionError,
   evaluateBranchCondition,
   validateBranchCondition,
 } from './playbookSteps/branchConditionEvaluator';
-import { PlaybookStepSchemaError } from './playbookSteps/descriptorValidation';
-import { PlaybookStepTypeError } from './playbookSteps/registry';
 import {
   getStepTypeDescriptor,
   isBranchStepType,
@@ -24,25 +16,6 @@ import {
 import { getDefinitionDetail } from './playbookDefinitionService';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
 import { getSkillConfig } from './projectSettingsService';
-
-function graphIssuesFromError(error: unknown): PlaybookDryRunIssue[] {
-  if (error instanceof PlaybookGuardViolationError) {
-    return [{ nodeId: '', kind: 'graph', message: error.message }];
-  }
-  if (error instanceof PlaybookGraphStepTypeError) {
-    return [{ nodeId: error.message.match(/"([^"]+)"/)?.[1] ?? '', kind: 'graph', message: error.message }];
-  }
-  if (error instanceof PlaybookGraphNodeConfigError) {
-    return [{ nodeId: error.nodeId, kind: 'graph', message: error.message }];
-  }
-  if (error instanceof PlaybookStepSchemaError || error instanceof PlaybookStepTypeError) {
-    return [{ nodeId: '', kind: 'graph', message: error.message }];
-  }
-  if (error instanceof Error) {
-    return [{ nodeId: '', kind: 'graph', message: error.message }];
-  }
-  return [{ nodeId: '', kind: 'graph', message: 'Graph validation failed.' }];
-}
 
 function buildManifest(graph: PlaybookGraph): string[] {
   const keys = new Set<string>();
@@ -66,12 +39,7 @@ export async function dryRunPlaybookDraft(input: {
   const issues: PlaybookDryRunIssue[] = [];
   let capabilityManifest: PlaybookDryRunResult['capabilityManifest'] = [];
 
-  try {
-    assertGraphWithinGuards(graph);
-    assertCursorAgentsUseReadOnlyMcp(graph);
-  } catch (error) {
-    issues.push(...graphIssuesFromError(error));
-  }
+  issues.push(...collectGraphIssues(graph));
 
   try {
     let settings: Awaited<ReturnType<typeof getSkillConfig>> = null;
@@ -120,6 +88,8 @@ export async function dryRunPlaybookDraft(input: {
 
   for (const node of graph.nodes) {
     if (!isBranchStepType(node.stepType)) continue;
+    // The structure check above already reported a branch whose condition is wrong.
+    if (issues.some((issue) => issue.nodeId === node.id && issue.kind === 'branch')) continue;
     try {
       validateBranchCondition(graph, node);
       const config = getStepTypeDescriptor('branch').inputSchema.parse(node.config ?? {}) as {
