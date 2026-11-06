@@ -47,11 +47,12 @@ Each case may carry:
 }
 ```
 
-- `up-to-date`: the case's title and steps copy the existing case; it does not count toward the per-PBI case limit.
-- `needs-update`: title and steps are the suggested version; it counts toward the limit.
-- The agent writes a new case only when no linked or suite case covers the scenario.
+- `up-to-date`: the case's title and steps copy the existing case.
+- `needs-update`: title and steps are the suggested version.
 
-The foundation `create-test-case` skill and schema add `existing` (shipped in foundation 2.2.0). MatterWorx gets the same in `## Project notes` and its schema now, as with `placement`.
+Apex's prompt states only this contract. When each status applies, case limits, and format rules belong to the project's skill. MatterWorx keeps them in QA's own files: its `create-test-case` project notes point at `qa-automation/.github/skills/testing/apex-qa-lab.md` and `ado-manual-test-cases.md`, so QA changes them without an Apex PR.
+
+The foundation `create-test-case` skill and schema add `existing` (shipped in foundation 2.2.0).
 
 ### After the run
 

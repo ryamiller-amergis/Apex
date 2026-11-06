@@ -1815,11 +1815,10 @@ export function renderExistingCasesSection(existing: ExistingCaseContext): strin
       : []),
     '',
     'When an existing case covers the scenario, set the case\'s `existing` to',
-    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`:',
-    '- `up-to-date`: it still matches the work item. Copy its title and steps exactly, even when they do not follow the case format.',
-    '- `needs-update`: it covers the scenario but no longer matches what the work item requires. Write the suggested title and steps, and say in `reason` what changed. A format difference alone is not a reason to update.',
-    'Cases with `existing` do not count toward the per-PBI case limit; never drop one to stay under it.',
-    'Write a new case only when no existing case covers the scenario. Only use ids from these two files.',
+    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`.',
+    'For `up-to-date`, the case\'s title and steps are the existing case\'s. For `needs-update`, they are the',
+    'suggested change, which QA can apply in Apex. When each status applies is set by the skill.',
+    'Only use ids from these two files.',
     '',
   ];
 }
