@@ -3054,14 +3054,11 @@ export async function createThread(
  * ID was known) with the actual thread UUID, so the system prompt contains the
  * correct thread_id when the agent first runs.
  */
-export function updateThreadKickoffContext(
+export async function updateThreadKickoffContext(
   threadId: string,
   freeformContext: string
-): void {
-  const state = threads.get(threadId);
-  if (!state) return;
-  state.thread.kickoff = { ...state.thread.kickoff, freeformContext };
-  persistThread(state.thread);
+): Promise<boolean> {
+  return updateThreadKickoff(threadId, { freeformContext });
 }
 
 export async function updateThreadKickoffTranscript(

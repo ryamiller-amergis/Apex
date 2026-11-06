@@ -12,7 +12,7 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
+import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread, updateThreadKickoffContext } from './chatAgentService';
 import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration, getThreadRunStateSnapshot } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
@@ -2401,8 +2401,10 @@ export async function triggerFixValidation(
       assistantType: 'design-doc',
     }, { skipAutoKickoff: true });
 
+    const realContext = buildDocContext(thread.id);
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, buildDocContext(thread.id), 'utf-8');
+    fs.writeFileSync(contextPath, realContext, 'utf-8');
+    await updateThreadKickoffContext(thread.id, realContext);
 
     threadId = thread.id;
 
@@ -2416,31 +2418,32 @@ export async function triggerFixValidation(
       .from(chatThreads)
       .where(eq(chatThreads.id, threadId))
       .limit(1);
+    const context = [
+      '# Design Doc Assistant Context',
+      `doc_id: ${designDocId}`,
+      `thread_id: ${threadId}`,
+      `status: ${doc.status}`,
+      '',
+      '> Use the `update_design_doc` MCP tool to apply edits back to the database.',
+      '> Pass the doc_id and thread_id values above when calling the tool.',
+      '',
+      ...(prd ? ['## Source PRD', prd.content || '(empty)', ''] : []),
+      '## Design',
+      doc.designContent || '(empty)',
+      '',
+      '## Tech Spec',
+      doc.techSpecContent || '(empty)',
+      '',
+      '## Assumptions',
+      doc.assumptionsContent || '(empty)',
+    ].join('\n');
     if (threadRow?.workspaceDir) {
       const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-      const context = [
-        '# Design Doc Assistant Context',
-        `doc_id: ${designDocId}`,
-        `thread_id: ${threadId}`,
-        `status: ${doc.status}`,
-        '',
-        '> Use the `update_design_doc` MCP tool to apply edits back to the database.',
-        '> Pass the doc_id and thread_id values above when calling the tool.',
-        '',
-        ...(prd ? ['## Source PRD', prd.content || '(empty)', ''] : []),
-        '## Design',
-        doc.designContent || '(empty)',
-        '',
-        '## Tech Spec',
-        doc.techSpecContent || '(empty)',
-        '',
-        '## Assumptions',
-        doc.assumptionsContent || '(empty)',
-      ].join('\n');
       try {
         fs.writeFileSync(contextPath, context, 'utf-8');
       } catch { /* non-fatal */ }
     }
+    await updateThreadKickoffContext(threadId, context);
   }
 
   // Persist the baseline with the fix thread ID so recovery can find the

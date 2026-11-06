@@ -94,6 +94,30 @@ Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" 
   - Unmount: c38372a8 adds `ai_platform_v2_interactive_mount_workspace_share` (default true) and makes the volume and mount dynamic on the agentic/fast hosts. fmt + validate pass. No plan or apply. Dev tfvars are with Ryan, prod tfvars with the user. Rollout: Ryan sets `false` in dev tfvars and plans (expect only the volume/mount removal and new revisions on the two hosts; anything touching the old host or Redis = stop), then dev test (Ask Apex on a design doc, chat with attachment, Brainstorm with a catalog repo and a temp repo), then the user does prod.
   - User 2026-11-04: `ai-runs-interactive` is ON in dev and prod. Do not scale the old host to 0: chats for non-V2 projects (flag-off/error path of `ai-runs-v2-transport`) can still go to it through `AI_RUNS_INTERACTIVE_DISPATCH_URL`. Next: find who the flag targets and how many legacy actor turns run (`interactive.route.decision` route `actor`), then either move those projects to V2 or lower the floor to 1–2.
 
+## Status 2026-11-05
+- Dev and prod: share unmounted from the agentic and fast-interactive hosts (dev by `az rest` PATCH 2026-11-05; prod by targeted `terraform apply`, state `infra/terraform.tfstate.d/prd/terraform.tfstate` in the main checkout, backup `terraform.tfstate.pre-unmount-20261105T1935Z.backup`; `terraform.prd.tfvars` has `ai_platform_v2_interactive_mount_workspace_share = false`). Ryan still has to add the same line to the dev tfvars.
+- A full prod plan from an agent shell is unsafe: without the user's `TF_VAR_*` secrets it errors on `github_token` (main.tf:130) and plans to rewrite the repo-read secrets. Use `-target` for narrow changes, or have the user run it.
+- `ai-runs-interactive` flag: off in dev (verified, all turns durable); user to turn off in prod. Every project it targeted (Apex, MaxView, MatterWorx, Amego) is on `ai-runs-v2-transport`, and the legacy router only runs when V2 is off.
+- #273 merged and in prod: `defaultResolveGrounding` skips App Service's checkout for whole-V2 projects with `repo-read-service` on and `REPO_READ_SERVICE_URL` set (lightweight pin). Dev Ask Apex: handover ~1 s, total ~12 s.
+- Prod `resource_exhausted` from the Cursor SDK 18:50–18:59Z on one Brainstorm thread and App Service: Cursor account/API limit, not our change. Cleared by 19:31Z.
+- Blob: `stapexprdasync` ~40 GiB flat, 1,505 blobs (from 240 in a month). Lifecycle rules cover `repo-grounding/` (14 d last access), `cursor-prompts/` (1 d), load tests (90 d); the V2 artifact container has none. Follow-up: add a rule to `lt_artifacts_lifecycle` after checking nothing reads old V2 artifacts.
+
+## Workstream F: V2 document scratch inputs from the DB (branch `feat/v2-scratch-inputs-from-db`)
+Goal: V2 document runs stop reading `.ai-pilot/*` from the share. Only `backgroundWorkflowRouter.readDocumentScratchInputs` reads them (V2 chats already use `thread.kickoff` from the DB).
+- What the files hold today:
+  - `kickoff-context.md` = `kickoff.freeformContext` (DB) when written by `injectKickoffFiles` or by routes that also call `updateThreadKickoffContext`. Some writers update the file only (check each): `testCaseService.ts` ~974, `adoTestCaseSuiteService.ts` ~1891, `designDocService.ts` ~2404/2420, `qaCaseRegenerationService.ts` ~487, `qaLabAssistantService.ts` ~289, and the assistant-thread refreshes in `routes/interviews.ts` ~1485/2532, `routes/api.ts` ~4747, `routes/adr.ts` ~529.
+  - `kickoff-transcript.md` = `kickoff.transcript`; `session.json` is built in `injectKickoffFiles` from threadId + kickoff.
+  - test-cases: `.ai-pilot/output/<slug>.prd.md` + `.backlog.json` written by `testCaseService` from the PRD row.
+  - QA Lab: `test-plans.md`, `existing-test-cases.json`, `test-case-index.md` written by `adoTestCaseSuiteService` from ADO at thread start (only copy).
+- Design:
+  1. `PreparedBackgroundWorkflowTurn` gains optional `scratchInputs`. When V2 and it is set, the router uses it and skips the disk read; legacy keeps the files.
+  2. `prepareBackgroundWorkflowTurn` builds the base set from the thread: context, session (shared `buildSessionMarker` with `injectKickoffFiles`), transcript for prd/adr. Filtered by `isAllowedDocumentScratchInputPath`.
+  3. Writers that change `kickoff-context.md` for document runs also call `updateThreadKickoffContext` so DB and file agree.
+  4. test-cases prepare adds PRD/backlog from the PRD row; QA Lab uploads its three files to Blob at write time and reads them back in prepare (user choice: Blob).
+  5. Assistant-thread context refreshes (file only today) also update the DB; V2 chats read the DB, so they currently see the context from thread creation. Verify before fixing.
+  6. Later, separate: stop writing these files to the share for V2 projects.
+- Also found: V2 document prepare still waits on App Service grounding (`waitForReadyThreadGrounding` in `prepareBackgroundWorkflowTurn`), same cost #273 removed for chats. Follow-up.
+
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.
 

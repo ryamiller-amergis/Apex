@@ -983,7 +983,7 @@ export async function triggerTestCaseGeneration(
       'utf-8',
     );
   }
-  updateThreadKickoffContext(thread.id, context);
+  await updateThreadKickoffContext(thread.id, context);
 
   const [testCaseRow] = await db
     .insert(testCases)

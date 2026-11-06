@@ -477,7 +477,7 @@ export async function triggerAdoTestCaseGeneration(
   });
   writeTestPlanFile(thread.workspaceDir, testPlans);
   writeExistingCaseFiles(thread.workspaceDir, existingCases);
-  updateThreadKickoffContext(thread.id, freeformContext);
+  await updateThreadKickoffContext(thread.id, freeformContext);
 
   const [inserted] = await db
     .insert(qaAdoTestSuites)
