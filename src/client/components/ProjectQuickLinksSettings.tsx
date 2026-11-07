@@ -17,6 +17,12 @@ import {
   quickLinkLabelField,
   quickLinkUrlField,
 } from '../utils/quickLinkForm';
+import {
+  groupQuickLinks,
+  moveQuickLink,
+  moveQuickLinkCategory,
+  type DropPlacement,
+} from '../utils/quickLinkOrder';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { CategoryPill, OTHER_CATEGORY_LABEL } from './QuickLinkCategory';
 import { QuickLinkCategoryField } from './QuickLinkCategoryField';
@@ -40,6 +46,8 @@ type QuickLinkFormValues = z.infer<typeof quickLinkSchema>;
 
 interface QuickLinkFormModalProps {
   link: ProjectQuickLink | null;
+  /** Sort order a new link starts with, so it lands at the end. */
+  newSortOrder: number;
   categories: string[];
   isPending: boolean;
   serverError: string | null;
@@ -50,6 +58,7 @@ interface QuickLinkFormModalProps {
 
 const QuickLinkFormModal: React.FC<QuickLinkFormModalProps> = ({
   link,
+  newSortOrder,
   categories,
   isPending,
   serverError,
@@ -69,7 +78,7 @@ const QuickLinkFormModal: React.FC<QuickLinkFormModalProps> = ({
       label: link?.label ?? '',
       url: link?.url ?? '',
       category: link?.category ?? '',
-      sortOrder: link?.sortOrder ?? 0,
+      sortOrder: link?.sortOrder ?? newSortOrder,
     },
   });
 
@@ -210,6 +219,50 @@ function moveWithinCategory(links: ProjectQuickLink[], id: string, direction: -1
   return ids;
 }
 
+/** Moves a whole category one place up or down and returns every id in display order. */
+function moveCategory(links: ProjectQuickLink[], category: string | null, direction: -1 | 1): string[] | null {
+  const groups = groupQuickLinks(links);
+  const index = groups.findIndex((g) => g.category === category);
+  const neighbour = groups[index + direction];
+  if (index < 0 || !neighbour) return null;
+  return moveQuickLinkCategory(links, category, neighbour.category, direction < 0 ? 'before' : 'after')?.ids ?? null;
+}
+
+/** Drops `dragId` before or after `target`; links only move within their own category. */
+function dropLink(
+  links: ProjectQuickLink[],
+  dragId: string,
+  target: ProjectQuickLink,
+  placement: DropPlacement,
+): string[] | null {
+  const category = target.category ?? null;
+  const siblings = links.filter((l) => (l.category ?? null) === category);
+  const beforeId = placement === 'before'
+    ? target.id
+    : (siblings[siblings.findIndex((l) => l.id === target.id) + 1]?.id ?? null);
+  return moveQuickLink(links, dragId, category, beforeId)?.ids ?? null;
+}
+
+/** What the user is dragging in the grid. */
+type DragItem = { kind: 'link'; id: string; category: string | null } | { kind: 'category'; category: string | null };
+
+interface DropHint {
+  rowId: string;
+  placement: DropPlacement;
+}
+
+function placementFor(e: React.DragEvent<HTMLElement>): DropPlacement {
+  const rect = e.currentTarget.getBoundingClientRect();
+  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+}
+
+function moveDirection(e: React.KeyboardEvent): -1 | 1 | null {
+  if (!e.altKey) return null;
+  if (e.key === 'ArrowUp') return -1;
+  if (e.key === 'ArrowDown') return 1;
+  return null;
+}
+
 type EditTarget = ProjectQuickLink | 'new' | null;
 type DeleteTarget = ProjectQuickLink | null;
 
@@ -231,7 +284,14 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
   const deleteLink = useDeleteProjectQuickLink(project);
   const reorderLinks = useReorderProjectQuickLinks(project);
 
-  const links = useMemo(() => linksQuery.data ?? [], [linksQuery.data]);
+  const links = useMemo(
+    () => groupQuickLinks(linksQuery.data ?? []).flatMap((group) => group.links),
+    [linksQuery.data],
+  );
+  const newSortOrder = useMemo(
+    () => links.reduce((highest, link) => Math.max(highest, link.sortOrder), -1) + 1,
+    [links],
+  );
 
   const categories = useMemo(
     () => categoriesOf(links),
@@ -290,11 +350,90 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
     }
   };
 
-  const handleMove = (id: string, direction: -1 | 1) => {
-    const ids = moveWithinCategory(links, id, direction);
+  const saveOrder = (ids: string[] | null) => {
     if (!ids) return;
     setActionError(null);
     reorderLinks.mutate({ ids }, { onError: (err) => setActionError(err.message) });
+  };
+  const [drag, setDrag] = useState<DragItem | null>(null);
+  const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  const hasFilter = Boolean(search.trim() || categoryFilter);
+  const canReorder = !hasFilter && !reorderLinks.isPending;
+
+  const endDrag = () => {
+    setDrag(null);
+    setDropHint(null);
+  };
+
+  const startDrag = (e: React.DragEvent<HTMLElement>, item: DragItem, label: string) => {
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', label);
+    }
+    setDrag(item);
+  };
+
+  /** A link may land on a row of its own category; a category may land on any other category. */
+  const acceptsDrop = (target: ProjectQuickLink): boolean => {
+    if (!drag) return false;
+    const category = target.category ?? null;
+    return drag.kind === 'link' ? drag.category === category && drag.id !== target.id : drag.category !== category;
+  };
+
+  const rowDragHandlers = (link: ProjectQuickLink) => ({
+    draggable: canReorder,
+    onDragStart: (e: React.DragEvent<HTMLTableRowElement>) =>
+      startDrag(e, { kind: 'link', id: link.id, category: link.category ?? null }, link.label),
+    onDragEnd: endDrag,
+    onDragOver: (e: React.DragEvent<HTMLTableRowElement>) => {
+      if (!acceptsDrop(link)) return;
+      e.preventDefault();
+      const placement = placementFor(e);
+      if (dropHint?.rowId !== link.id || dropHint.placement !== placement) setDropHint({ rowId: link.id, placement });
+    },
+    onDrop: (e: React.DragEvent<HTMLTableRowElement>) => {
+      if (!drag || !acceptsDrop(link)) return;
+      e.preventDefault();
+      const placement = placementFor(e);
+      endDrag();
+      saveOrder(
+        drag.kind === 'link'
+          ? dropLink(links, drag.id, link, placement)
+          : (moveQuickLinkCategory(links, drag.category, link.category ?? null, placement)?.ids ?? null),
+      );
+    },
+    onKeyDown: (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+      const direction = moveDirection(e);
+      if (!direction || !canReorder) return;
+      e.preventDefault();
+      saveOrder(moveWithinCategory(links, link.id, direction));
+    },
+  });
+
+  const categoryDragHandlers = (link: ProjectQuickLink) => {
+    const category = link.category ?? null;
+    return {
+      draggable: canReorder,
+      onDragStart: (e: React.DragEvent<HTMLSpanElement>) =>
+        startDrag(e, { kind: 'category', category }, category ?? OTHER_CATEGORY_LABEL),
+      onDragEnd: endDrag,
+      onKeyDown: (e: React.KeyboardEvent<HTMLSpanElement>) => {
+        const direction = moveDirection(e);
+        if (!direction || !canReorder) return;
+        e.preventDefault();
+        e.stopPropagation();
+        saveOrder(moveCategory(links, category, direction));
+      },
+    };
+  };
+
+  const rowClass = (link: ProjectQuickLink): string => {
+    const classes = [canReorder ? styles.rowDraggable : ''];
+    if (drag?.kind === 'link' && drag.id === link.id) classes.push(styles.dragging);
+    if (drag?.kind === 'category' && drag.category === (link.category ?? null)) classes.push(styles.dragging);
+    if (dropHint?.rowId === link.id) classes.push(dropHint.placement === 'before' ? styles.dropBefore : styles.dropAfter);
+    return classes.filter(Boolean).join(' ');
   };
 
   const handleConfirmDelete = () => {
@@ -312,7 +451,6 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
     );
   };
 
-  const hasFilter = Boolean(search.trim() || categoryFilter);
   const emptyMessage = links.length === 0
     ? 'No shared links yet. Links you add under “My links” in the header are private to you and don’t appear here.'
     : 'No shared links match your search or filter.';
@@ -402,35 +540,32 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
             </thead>
             <tbody>
               {filteredLinks.map((link) => (
-                <tr key={link.id} {...{ 'data-testid': `quick-link-row-${link.id}` }}>
+                <tr
+                  key={link.id}
+                  className={rowClass(link)}
+                  tabIndex={canReorder ? 0 : undefined}
+                  title={canReorder ? 'Drag to reorder within its category, or press Alt+↑/↓' : undefined}
+                  {...rowDragHandlers(link)}
+                  {...{ 'data-testid': `quick-link-row-${link.id}` }}
+                >
                   <td>
-                    <CategoryPill category={link.category} data-testid={`quick-link-category-${link.id}`} />
+                    <span
+                      className={canReorder ? styles.categoryDraggable : undefined}
+                      role={canReorder ? 'button' : undefined}
+                      tabIndex={canReorder ? 0 : undefined}
+                      title={canReorder ? 'Drag to move this category, or press Alt+↑/↓' : undefined}
+                      aria-label={canReorder ? `Category ${link.category ?? OTHER_CATEGORY_LABEL}, drag to move` : undefined}
+                      {...categoryDragHandlers(link)}
+                      {...{ 'data-testid': `quick-link-category-handle-${link.id}` }}
+                    >
+                      <CategoryPill category={link.category} data-testid={`quick-link-category-${link.id}`} />
+                    </span>
                   </td>
                   <td>{link.label}</td>
                   <td className={styles.urlCell} title={link.url}>{link.url}</td>
                   <td>{link.sortOrder}</td>
                   <td>
                     <div className={gridStyles.rowActions} {...{ 'data-testid': `quick-link-row-actions-${link.id}` }}>
-                      <button
-                        type="button"
-                        className={gridStyles.buttonGhost}
-                        onClick={() => handleMove(link.id, -1)}
-                        disabled={hasFilter || reorderLinks.isPending || !moveWithinCategory(links, link.id, -1)}
-                        aria-label={`Move ${link.label} up`}
-                        {...{ 'data-testid': `quick-link-move-up-${link.id}` }}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className={gridStyles.buttonGhost}
-                        onClick={() => handleMove(link.id, 1)}
-                        disabled={hasFilter || reorderLinks.isPending || !moveWithinCategory(links, link.id, 1)}
-                        aria-label={`Move ${link.label} down`}
-                        {...{ 'data-testid': `quick-link-move-down-${link.id}` }}
-                      >
-                        ↓
-                      </button>
                       <button
                         type="button"
                         className={gridStyles.buttonGhost}
@@ -459,6 +594,7 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
       {editing && (
         <QuickLinkFormModal
           link={editing === 'new' ? null : editing}
+          newSortOrder={newSortOrder}
           categories={categories}
           isPending={isSaving}
           serverError={saveError}

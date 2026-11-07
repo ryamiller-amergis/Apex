@@ -523,18 +523,19 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
         .from(chatThreads)
         .where(eq(chatThreads.id, adr.adrAssistantThreadId))
         .limit(1);
+      const refreshedContext = buildContext(adr.adrAssistantThreadId);
       if (threadRow?.workspaceDir) {
         try {
           fs.writeFileSync(
             path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md'),
-            buildContext(adr.adrAssistantThreadId),
+            refreshedContext,
             'utf-8',
           );
-          updateThreadKickoffContext(adr.adrAssistantThreadId, buildContext(adr.adrAssistantThreadId));
         } catch {
           // The persisted thread remains usable even if its old workspace was cleaned.
         }
       }
+      await updateThreadKickoffContext(adr.adrAssistantThreadId, refreshedContext);
       res.json({ threadId: adr.adrAssistantThreadId });
       return;
     }
@@ -562,7 +563,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
 
     const context = buildContext(thread.id);
     fs.writeFileSync(path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md'), context, 'utf-8');
-    updateThreadKickoffContext(thread.id, context);
+    await updateThreadKickoffContext(thread.id, context);
     await setAdrAssistantThread(adr.id, userId, thread.id);
     res.status(201).json({ threadId: thread.id });
   } catch (error) {

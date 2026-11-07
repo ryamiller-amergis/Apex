@@ -248,14 +248,11 @@ export async function routeDocumentValidationKickoff(opts: {
             );
           }
         }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          VALIDATION_KICKOFF_MESSAGE,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, VALIDATION_KICKOFF_MESSAGE, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () =>
         sendMessage(

@@ -57,15 +57,21 @@ jest.mock('../services/chatAgentService', () => ({
   isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   createThread: jest.fn(),
   sendMessage: jest.fn().mockResolvedValue(undefined),
-  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+  prepareBackgroundWorkflowTurn: jest.fn().mockImplementation(async (
+    _threadId: string,
+    _prompt: string,
+    options?: { findTargetGrounding?: () => Promise<unknown> },
+  ) => ({
     prompt: 'complete frozen design prompt',
     model: 'design-model',
     skillPath: '/skills/design.md',
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/ws',
-  }),
+    targetGrounding: await options?.findTargetGrounding?.(),
+  })),
   cancelRun: jest.fn().mockResolvedValue(undefined),
   hydrateThread: jest.fn().mockResolvedValue(true),
+  updateThreadKickoffContext: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({

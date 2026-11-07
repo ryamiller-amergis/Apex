@@ -3,6 +3,27 @@
   scroll-margin-top: 24px;
 }
 
+.rowDraggable {
+  cursor: grab;
+}
+
+.categoryDraggable {
+  display: inline-flex;
+  cursor: grab;
+}
+
+.dragging {
+  opacity: 0.45;
+}
+
+.dropBefore > td {
+  box-shadow: inset 0 2px 0 var(--accent-color);
+}
+
+.dropAfter > td {
+  box-shadow: inset 0 -2px 0 var(--accent-color);
+}
+
 .urlCell {
   max-width: 360px;
   overflow: hidden;

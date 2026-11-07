@@ -65,10 +65,26 @@ export async function publishSourceBundleIfConfigured(
   }
 }
 
-async function writeReadyMarkerOnly(destination: string, sha: string): Promise<void> {
+/**
+ * True when V2 hosts fetch the source from its Blob bundle or repo-read, which
+ * is every clone path while Blob bundles are configured, and catalog repos
+ * when only repo-read is. Readiness then comes from the source row, and App
+ * Service keeps no copy on disk.
+ */
+export function isSourceServedRemotely(source: {
+  kind: string;
+  commitSha: string | null;
+  groundingRepository: string | null;
+}): boolean {
+  if (!source.commitSha || !source.groundingRepository) return false;
+  if (isCloudBundleStorageConfigured()) return true;
+  return source.kind === 'project-repository'
+    && Boolean(process.env.REPO_READ_SERVICE_URL?.trim())
+    && !process.env.JEST_WORKER_ID;
+}
+
+async function clearRemoteSourceDestination(destination: string): Promise<void> {
   await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
-  await fs.mkdir(destination, { recursive: true });
-  await fs.writeFile(path.join(destination, '.apex-brainstorm-ready'), `${sha.toLowerCase()}\n`);
 }
 
 const LOCK = [
@@ -115,7 +131,7 @@ export async function cloneTemporaryAtSha(input: {
   identity?: BrainstormBundleIdentity;
 }): Promise<'ok' | 'moved'> {
   if (input.identity && await hasPublishedSourceBundle({ ...input.identity, sha: input.sha })) {
-    await writeReadyMarkerOnly(input.destination, input.sha);
+    await clearRemoteSourceDestination(input.destination);
     return 'ok';
   }
   const creds = credentialsForCloneUrl(new URL(input.url));
@@ -136,7 +152,7 @@ export async function cloneTemporaryAtSha(input: {
         sha: input.sha,
         signal: input.signal,
       });
-      await writeReadyMarkerOnly(input.destination, input.sha);
+      await clearRemoteSourceDestination(input.destination);
       return 'ok';
     } finally {
       await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
@@ -173,13 +189,13 @@ export async function cloneCachedCommit(input: {
   await clearReadOnlyTopLevel(input.destination);
   await fs.rm(input.destination, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
   if (input.identity && await hasPublishedSourceBundle({ ...input.identity, sha: input.sha })) {
-    await writeReadyMarkerOnly(input.destination, input.sha);
+    await clearRemoteSourceDestination(input.destination);
     return;
   }
   const hasWorkingTreeGit = await fs.stat(path.join(input.cacheDir, '.git')).then(() => true, () => false);
   const isBareRepo = !hasWorkingTreeGit && await fs.stat(path.join(input.cacheDir, 'HEAD')).then(() => true, () => false);
   if (!hasWorkingTreeGit && !isBareRepo && input.identity && Boolean(process.env.REPO_READ_SERVICE_URL?.trim()) && !process.env.JEST_WORKER_ID) {
-    await writeReadyMarkerOnly(input.destination, input.sha);
+    await clearRemoteSourceDestination(input.destination);
     return;
   }
   try {
@@ -200,7 +216,7 @@ export async function cloneCachedCommit(input: {
             sha: input.sha,
             signal: input.signal,
           });
-          await writeReadyMarkerOnly(input.destination, input.sha);
+          await clearRemoteSourceDestination(input.destination);
           return;
         } finally {
           await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
@@ -220,7 +236,7 @@ export async function cloneCachedCommit(input: {
           sha: input.sha,
           signal: input.signal,
         });
-        await writeReadyMarkerOnly(input.destination, input.sha);
+        await clearRemoteSourceDestination(input.destination);
         return;
       }
       // Link a depth-1 catalog mirror on the same machine via a directory

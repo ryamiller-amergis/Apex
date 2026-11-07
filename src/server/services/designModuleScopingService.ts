@@ -193,7 +193,7 @@ export async function startScoping(
       input,
       repoMeta,
     );
-    updateThreadKickoffContext(resumeThreadId, freeformContext);
+    await updateThreadKickoffContext(resumeThreadId, freeformContext);
 
     const row = await db.query.chatThreads.findFirst({
       where: eq(chatThreads.id, resumeThreadId),

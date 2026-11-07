@@ -48,6 +48,8 @@ export interface CitationDeps {
   files: CitationFiles;
   dataRoot: string;
   persistence: CitationPersistence;
+  /** True when hosts fetch this source from Blob or repo-read, so no local copy is needed. */
+  isServedRemotely?: (source: SourceRecord) => boolean;
 }
 
 export type CitationRejection = 'bad-path' | 'no-call-record' | 'source-not-ready';
@@ -96,7 +98,9 @@ export function createCitationService(deps: CitationDeps) {
       const target = resolveCitationPath(workspace, input.requestedPath);
       if (!target) return { ok: false, reason: 'bad-path' };
       const stat = await deps.files.lstat(target);
-      if (!stat) {
+      if (!stat && deps.isServedRemotely?.(source)) {
+        // The host reads this source remotely; the path was validated above.
+      } else if (!stat) {
         const marker = await deps.files.lstat(path.join(workspace, '.apex-brainstorm-ready'));
         const hasLocalGit = await deps.files.lstat(path.join(workspace, '.git'));
         if (!marker || !marker.isFile || marker.isSymbolicLink || hasLocalGit) {

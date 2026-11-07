@@ -74,7 +74,7 @@ export async function openQaLabAssistantThread(input: {
     && existing.kickoff.qaLabSuiteId === suite.id
     && existing.workspaceDir
   ) {
-    writeContext(existing.workspaceDir, existing.id, render(existing.id), testPlans);
+    await writeContext(existing.workspaceDir, existing.id, render(existing.id), testPlans);
     return { threadId: existing.id };
   }
 
@@ -92,7 +92,7 @@ export async function openQaLabAssistantThread(input: {
     { skipAutoKickoff: true },
   );
   if (!thread.workspaceDir) throw new Error('Ask Apex thread has no workspace');
-  writeContext(thread.workspaceDir, thread.id, render(thread.id), testPlans);
+  await writeContext(thread.workspaceDir, thread.id, render(thread.id), testPlans);
   return { threadId: thread.id };
 }
 
@@ -457,14 +457,14 @@ function renderAssistantContext(input: {
   ].join('\n');
 }
 
-function writeContext(
+async function writeContext(
   workspaceDir: string,
   threadId: string,
   context: string,
   testPlans: Parameters<typeof writeTestPlanFile>[1],
-): void {
+): Promise<void> {
   fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
   fs.writeFileSync(path.join(workspaceDir, '.ai-pilot', 'kickoff-context.md'), context, 'utf-8');
   writeTestPlanFile(workspaceDir, testPlans);
-  updateThreadKickoffContext(threadId, context);
+  await updateThreadKickoffContext(threadId, context);
 }
