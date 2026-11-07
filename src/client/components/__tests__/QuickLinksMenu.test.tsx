@@ -617,3 +617,41 @@ describe('reordering My links', () => {
     expect(screen.queryByTestId('quick-links-menu-category-handle-personal-0')).not.toBeInTheDocument();
   });
 });
+
+describe('the "new: drag to reorder" tip', () => {
+  beforeEach(() => {
+    mockUseMyQuickLinks.mockReturnValue({ data: myLinks });
+  });
+
+  it('shows a dot on the icon and a tip in My links until the user clicks Got it', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+
+    expect(screen.getByTestId('quick-links-menu-new-dot')).toBeInTheDocument();
+    openMenu();
+    expect(screen.getByTestId('quick-links-menu-reorder-tip')).toHaveTextContent('Drag categories and links');
+
+    fireEvent.click(screen.getByTestId('quick-links-menu-reorder-tip-dismiss'));
+
+    expect(screen.queryByTestId('quick-links-menu-reorder-tip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-new-dot')).not.toBeInTheDocument();
+  });
+
+  it('goes away once the user reorders something', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+
+    fireEvent.keyDown(screen.getByTestId('quick-links-menu-category-toggle-personal-0'), {
+      key: 'ArrowDown',
+      altKey: true,
+    });
+
+    expect(screen.queryByTestId('quick-links-menu-reorder-tip')).not.toBeInTheDocument();
+  });
+
+  it('does not show for users with fewer than two personal links', () => {
+    mockUseMyQuickLinks.mockReturnValue({ data: [myLinks[0]] });
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+
+    expect(screen.queryByTestId('quick-links-menu-new-dot')).not.toBeInTheDocument();
+  });
+});

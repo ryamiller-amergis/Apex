@@ -22,6 +22,7 @@ import {
   useUpdateProjectQuickLink,
 } from '../hooks/useProjectQuickLinks';
 import { useCollapsedQuickLinkCategories } from '../hooks/useCollapsedQuickLinkCategories';
+import { useQuickLinksReorderTip } from '../hooks/useQuickLinksReorderTip';
 import {
   groupQuickLinks,
   moveQuickLink,
@@ -268,6 +269,7 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
   }, [toast]);
 
   const { collapsed, toggle: toggleCollapsed } = useCollapsedQuickLinkCategories(project);
+  const reorderTip = useQuickLinksReorderTip(canAddPersonal && myLinks.length > 1);
   const navigate = useNavigate();
 
   const openDialog = (next: DialogState) => {
@@ -347,6 +349,7 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
 
   const saveMyOrder = (plan: ReorderUserQuickLinksInput | null, focusTestId?: string) => {
     if (!plan) return;
+    reorderTip.dismiss();
     if (focusTestId) pendingFocusRef.current = focusTestId;
     reorderMyLinks.mutate(plan, {
       onError: (err) => setToast(err.message || 'Could not save the new order'),
@@ -751,14 +754,17 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
         className={`${styles.trigger} ${isOpen ? styles.triggerOpen : ''}`}
         onClick={() => setIsOpen((open) => !open)}
         onKeyDown={handleTriggerKeyDown}
-        title="Quick links"
-        aria-label={`Quick links for ${project}`}
+        title={reorderTip.visible ? 'Quick links — new: drag to reorder My links' : 'Quick links'}
+        aria-label={`Quick links for ${project}${reorderTip.visible ? ', new: drag to reorder My links' : ''}`}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-controls={isOpen ? 'quick-links-menu-list' : undefined}
         {...{ 'data-testid': 'quick-links-menu-trigger' }}
       >
         <LinkIcon className={styles.icon} />
+        {reorderTip.visible && (
+          <span className={styles.newDot} aria-hidden="true" {...{ 'data-testid': 'quick-links-menu-new-dot' }} />
+        )}
       </button>
 
       {isOpen && (
@@ -843,6 +849,25 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
                   <span id="quick-links-section-mine" className={styles.sectionTitle}>My links</span>
                   <span className={styles.sectionHint}>Only visible to you</span>
                 </div>
+                {reorderTip.visible && canReorderMine && (
+                  <div className={styles.tip} role="note" {...{ 'data-testid': 'quick-links-menu-reorder-tip' }}>
+                    <span className={styles.tipBadge}>New</span>
+                    <span className={styles.tipText}>
+                      Drag categories and links to reorder them, or drop a link on another category to move it.
+                      Keyboard: Alt+↑ / Alt+↓.
+                    </span>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      tabIndex={-1}
+                      className={styles.tipDismiss}
+                      onClick={reorderTip.dismiss}
+                      {...{ 'data-testid': 'quick-links-menu-reorder-tip-dismiss' }}
+                    >
+                      Got it
+                    </button>
+                  </div>
+                )}
                 {myLinks.length === 0 ? (
                   <p className={styles.empty} {...{ 'data-testid': 'quick-links-menu-mine-empty' }}>
                     No personal links yet. Add one or import your bookmarks.

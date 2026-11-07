@@ -10,10 +10,23 @@
   background: color-mix(in srgb, var(--accent-color) 5%, var(--bg-primary));
   color: var(--text-primary);
   cursor: pointer;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
+}
+
+.newDot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  border: 2px solid var(--bg-primary);
+  box-shadow: var(--glow-accent);
 }
 
 .trigger:hover {
@@ -162,6 +175,57 @@
 .sectionHint {
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 4px 8px;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-primary));
+}
+
+.tipBadge {
+  flex: none;
+  margin-top: 1px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tipText {
+  flex: 1;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.tipDismiss {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent-color);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tipDismiss:hover,
+.tipDismiss:focus-visible {
+  outline: none;
+  background: var(--bg-tertiary);
 }
 
 .category {

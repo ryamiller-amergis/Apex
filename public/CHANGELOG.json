@@ -1,5 +1,32 @@
 [
   {
+    "version": "1.41.0",
+    "date": "2026-11-07",
+    "title": "Quick Links",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Open your project's go-to sites from the new Quick Links icon in the header; Project links are shared with everyone in the project"
+      },
+      {
+        "type": "feature",
+        "description": "Keep your own My links, visible only to you, and add them one at a time or import your browser bookmarks"
+      },
+      {
+        "type": "feature",
+        "description": "Drag My links categories and links into any order, or drop a link onto another category to move it there; keyboard users can press Alt+↑ or Alt+↓"
+      },
+      {
+        "type": "feature",
+        "description": "Search your links, collapse categories, and see each category in its own color"
+      },
+      {
+        "type": "feature",
+        "description": "Project admins manage shared links, including bulk import, in Project Settings → Quick Links"
+      }
+    ]
+  },
+  {
     "version": "1.40.0",
     "date": "2026-10-29",
     "title": "Brainstorm Sessions",
