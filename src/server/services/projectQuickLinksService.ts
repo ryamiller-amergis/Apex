@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, max } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { projectQuickLinks } from '../db/schema';
 import {
@@ -11,6 +11,7 @@ import {
   type UpdateProjectQuickLinkInput,
 } from '../../shared/types/projectQuickLinks';
 import { assertImportItems, planQuickLinkImport } from './quickLinkImport';
+import { assertCompleteOrder, nextSortOrder, parseReorderInput, sortOrderCase } from './quickLinkOrder';
 import {
   normalizeCategory,
   normalizeLabel,
@@ -48,11 +49,7 @@ export async function listLinks(project: string): Promise<ProjectQuickLink[]> {
     .select()
     .from(projectQuickLinks)
     .where(eq(projectQuickLinks.project, requireProject(project)))
-    .orderBy(
-      asc(projectQuickLinks.category),
-      asc(projectQuickLinks.sortOrder),
-      asc(projectQuickLinks.label),
-    );
+    .orderBy(asc(projectQuickLinks.sortOrder), asc(projectQuickLinks.label));
   return rows.map(toDto);
 }
 
@@ -66,18 +63,19 @@ export async function createLink(
     label: normalizeLabel(input?.label),
     url: normalizeUrl(input?.url),
     category: normalizeCategory(input?.category),
-    sortOrder: normalizeSortOrder(input?.sortOrder),
     createdBy: actor,
     updatedBy: actor,
   };
+  const requestedOrder = input?.sortOrder === undefined ? undefined : normalizeSortOrder(input.sortOrder);
   const [existing] = await db
-    .select({ value: count() })
+    .select({ value: count(), highestOrder: max(projectQuickLinks.sortOrder) })
     .from(projectQuickLinks)
     .where(eq(projectQuickLinks.project, values.project));
   if (Number(existing?.value ?? 0) >= PROJECT_QUICK_LINKS_MAX_PER_PROJECT) {
     throw new ProjectQuickLinkError(PROJECT_QUICK_LINKS_LIMIT_MESSAGE, 'LIMIT_REACHED');
   }
-  const [row] = await db.insert(projectQuickLinks).values(values).returning();
+  const sortOrder = requestedOrder ?? Number(existing?.highestOrder ?? -1) + 1;
+  const [row] = await db.insert(projectQuickLinks).values({ ...values, sortOrder }).returning();
   return toDto(row);
 }
 
@@ -120,30 +118,23 @@ export async function reorderLinks(
   actor: string,
 ): Promise<ProjectQuickLink[]> {
   const projectName = requireProject(project);
-  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || !id)) {
-    throw new ProjectQuickLinkError('ids must be a list of quick link ids');
-  }
-  const orderedIds = ids as string[];
-  if (new Set(orderedIds).size !== orderedIds.length) {
-    throw new ProjectQuickLinkError('ids must not repeat');
-  }
-  if (orderedIds.length > 0) {
-    await db.transaction(async (tx) => {
-      const existing = await tx
-        .select({ id: projectQuickLinks.id })
-        .from(projectQuickLinks)
-        .where(and(eq(projectQuickLinks.project, projectName), inArray(projectQuickLinks.id, orderedIds)));
-      if (existing.length !== orderedIds.length) {
-        throw new ProjectQuickLinkError('Quick link not found', 'NOT_FOUND');
-      }
-      for (const [index, id] of orderedIds.entries()) {
-        await tx
-          .update(projectQuickLinks)
-          .set({ sortOrder: index, updatedBy: actor, updatedAt: new Date().toISOString() })
-          .where(and(eq(projectQuickLinks.id, id), eq(projectQuickLinks.project, projectName)));
-      }
-    });
-  }
+  const { ids: orderedIds } = parseReorderInput({ ids }, PROJECT_QUICK_LINKS_MAX_PER_PROJECT);
+  await db.transaction(async (tx) => {
+    const existing = await tx
+      .select({ id: projectQuickLinks.id })
+      .from(projectQuickLinks)
+      .where(eq(projectQuickLinks.project, projectName));
+    assertCompleteOrder(existing.map((r) => r.id), orderedIds);
+    if (orderedIds.length === 0) return;
+    await tx
+      .update(projectQuickLinks)
+      .set({
+        sortOrder: sortOrderCase(projectQuickLinks.id, orderedIds),
+        updatedBy: actor,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(projectQuickLinks.project, projectName));
+  });
   return listLinks(projectName);
 }
 
@@ -157,9 +148,10 @@ export async function importLinks(
   assertImportItems(items);
   return db.transaction(async (tx) => {
     const existingRows = await tx
-      .select({ url: projectQuickLinks.url })
+      .select({ url: projectQuickLinks.url, sortOrder: projectQuickLinks.sortOrder })
       .from(projectQuickLinks)
       .where(eq(projectQuickLinks.project, projectName));
+    const nextOrder = nextSortOrder(existingRows);
     const plan = planQuickLinkImport(
       items,
       existingRows.map((r) => r.url),
@@ -173,7 +165,7 @@ export async function importLinks(
           label: item.label,
           url: item.url,
           category: item.category,
-          sortOrder: existingRows.length + i,
+          sortOrder: nextOrder + i,
           createdBy: actor,
           updatedBy: actor,
         })),

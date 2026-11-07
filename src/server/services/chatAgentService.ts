@@ -172,6 +172,9 @@ import type {
 import { groundingTelemetry } from './groundingTelemetry';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { isRepositorySyncingError } from './repoRead/mirrorHydration';
+import { RepoServiceReader } from './repoRead/repoServiceReader';
+import { readsThroughRepoReadService } from './repoRead/wholeProjectRepoRead';
+import type { RunGrounding } from '../../shared/types/runGrounding';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 import { readInterviewBaBrief } from './interviewBaBrief';
 import {
@@ -201,6 +204,7 @@ import {
   type CursorTokenUsage,
 } from './cursorExecutionCore';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
+import type { AiRunV2DocumentScratchInput } from '../../shared/types/aiRunV2DocumentSpec';
 import type { RepositoryPreparationTarget } from './repositoryPreparationService';
 import {
   buildCursorModelSelection,
@@ -426,6 +430,37 @@ function cleanupStaleWorkspaces() {
   }
 }
 
+function buildSessionMarker(threadId: string, kickoff: ChatThreadKickoff): string {
+  return JSON.stringify(
+    {
+      threadId,
+      skillPath: kickoff.skillPath,
+      project: kickoff.project,
+      repo: kickoff.repo,
+      branch: kickoff.branch,
+      startedAt: new Date().toISOString(),
+    },
+    null,
+    2
+  );
+}
+
+/** The kickoff files a document run needs, built from the saved thread rather than its workspace. */
+export function buildKickoffScratchInputs(
+  threadId: string,
+  kickoff: ChatThreadKickoff
+): AiRunV2DocumentScratchInput[] {
+  return [
+    ...(kickoff.freeformContext
+      ? [{ path: '.ai-pilot/kickoff-context.md', content: kickoff.freeformContext }]
+      : []),
+    ...(kickoff.transcript
+      ? [{ path: '.ai-pilot/kickoff-transcript.md', content: kickoff.transcript }]
+      : []),
+    { path: '.ai-pilot/session.json', content: buildSessionMarker(threadId, kickoff) },
+  ];
+}
+
 function injectKickoffFiles(
   workspaceDir: string,
   kickoff: ChatThreadKickoff,
@@ -458,18 +493,7 @@ function injectKickoffFiles(
   // Write a session marker so the skill can reference provenance
   fs.writeFileSync(
     path.join(aiPilotDir, 'session.json'),
-    JSON.stringify(
-      {
-        threadId,
-        skillPath: kickoff.skillPath,
-        project: kickoff.project,
-        repo: kickoff.repo,
-        branch: kickoff.branch,
-        startedAt: new Date().toISOString(),
-      },
-      null,
-      2
-    ),
+    buildSessionMarker(threadId, kickoff),
     'utf-8'
   );
 }
@@ -1083,7 +1107,7 @@ async function enrichKickoffForInterviewWebResearch(
   }
 }
 
-export type GroundingStorageLabel = 'bare mirror' | 'Azure Files checkout';
+export type GroundingStorageLabel = 'bare mirror' | 'Azure Files checkout' | 'repository read service';
 
 export interface GroundingProvenance {
   storage: GroundingStorageLabel;
@@ -2138,6 +2162,10 @@ export interface PreparedBackgroundWorkflowTurn {
   skillRepositorySyncing?: boolean;
   projectId: string;
   threadWorkspacePath: string;
+  /** Kickoff files from the saved thread; V2 document runs prefer these over the workspace copies. */
+  scratchInputs: AiRunV2DocumentScratchInput[];
+  /** Set when the caller passed `findTargetGrounding`. */
+  targetGrounding?: RunGrounding | null;
   repository: RepositoryPreparationTarget;
 }
 
@@ -2163,6 +2191,39 @@ export function buildBackgroundWorkflowPrompt(
   });
 }
 
+async function resolveBackgroundGroundingReader(
+  state: ThreadState,
+  kickoff: ChatThreadKickoff
+): Promise<{
+  repoReader: RepoReader | undefined;
+  skipProviderCatalogFetch: boolean;
+  groundingProvenance: GroundingProvenance | undefined;
+}> {
+  const grounding = await waitForReadyThreadGrounding(state);
+  if (grounding.mode !== 'local') {
+    return { repoReader: undefined, skipProviderCatalogFetch: false, groundingProvenance: undefined };
+  }
+  let repoReader: RepoReader | undefined;
+  if (grounding.nativeReads) {
+    try {
+      const resolved = await groundingProfileResolver.resolveConnectionProfile(
+        grounding.profileId
+      );
+      if (isExactGroundingReader(resolved, grounding, kickoff)) {
+        repoReader = resolved;
+      }
+    } catch {
+      repoReader = undefined;
+    }
+  }
+  return {
+    repoReader,
+    // Local grounding must never HTTP-fetch the old GitHub/ADO skill catalog.
+    skipProviderCatalogFetch: !repoReader,
+    groundingProvenance: groundingProvenanceFor(grounding, kickoff),
+  };
+}
+
 /**
  * Freezes the same first-turn system and skill context used by sendMessage,
  * while directing a background worker to its pinned local checkout only.
@@ -2171,7 +2232,15 @@ export function buildBackgroundWorkflowPrompt(
  */
 export async function prepareBackgroundWorkflowTurn(
   threadId: string,
-  promptText: string
+  promptText: string,
+  options?: {
+    /**
+     * Looks up the run's pinned commit. Whole-V2 projects call it first and,
+     * when it finds one, read the skill through repo-read with no checkout.
+     * Otherwise it runs after the checkout, which may create the grounding.
+     */
+    findTargetGrounding?: () => Promise<RunGrounding | null | undefined>;
+  }
 ): Promise<PreparedBackgroundWorkflowTurn> {
   const state = await ensureThreadState(threadId);
   if (!state) {
@@ -2183,23 +2252,44 @@ export async function prepareBackgroundWorkflowTurn(
   let skipProviderCatalogFetch = false;
   let groundingProvenance: GroundingProvenance | undefined;
 
-  const grounding = await waitForReadyThreadGrounding(state);
-  if (grounding.mode === 'local') {
-    if (grounding.nativeReads) {
-      try {
-        const resolved = await groundingProfileResolver.resolveConnectionProfile(
-          grounding.profileId
-        );
-        if (isExactGroundingReader(resolved, grounding, kickoff)) {
-          repoReader = resolved;
-        }
-      } catch {
-        repoReader = undefined;
-      }
-    }
-    // Local grounding must never HTTP-fetch the old GitHub/ADO skill catalog.
-    skipProviderCatalogFetch = !repoReader;
-    groundingProvenance = groundingProvenanceFor(grounding, kickoff);
+  const findTarget = options?.findTargetGrounding;
+  let target: RunGrounding | null | undefined;
+  if (
+    findTarget
+    && (await readsThroughRepoReadService({
+      userId: state.thread.userId,
+      project: kickoff.project,
+      caller: 'background-document',
+    }))
+  ) {
+    target = await findTarget();
+  }
+  const pinnedSha = target?.isActive ? target.groundedSha.trim().toLowerCase() : '';
+  if (target && /^[0-9a-f]{40}$/.test(pinnedSha)) {
+    repoReader = new RepoServiceReader({
+      identity: {
+        provider: target.provider === 'azure_devops' ? 'ado' : 'github',
+        project: kickoff.project,
+        repo: target.repository,
+        sha: pinnedSha,
+      },
+      telemetryContext: {
+        caller: 'background-document',
+        project: kickoff.project,
+        runId: threadId,
+      },
+    });
+    skipProviderCatalogFetch = true;
+    groundingProvenance = {
+      storage: 'repository read service',
+      repository: targetedRepositoryName(kickoff),
+      branch: kickoff.skillBranch ?? kickoff.branch ?? 'main',
+      sha: pinnedSha,
+    };
+  } else {
+    ({ repoReader, skipProviderCatalogFetch, groundingProvenance } =
+      await resolveBackgroundGroundingReader(state, kickoff));
+    target = findTarget ? await findTarget() : undefined;
   }
 
   let resolvedSkill: { path: string; content: string } | null = null;
@@ -2235,6 +2325,8 @@ export async function prepareBackgroundWorkflowTurn(
         : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
+    scratchInputs: buildKickoffScratchInputs(threadId, kickoff),
+    ...(findTarget ? { targetGrounding: target ?? null } : {}),
     repository: {
       provider: kickoff.skillProvider ?? 'ado',
       project: kickoff.project,
@@ -3054,14 +3146,11 @@ export async function createThread(
  * ID was known) with the actual thread UUID, so the system prompt contains the
  * correct thread_id when the agent first runs.
  */
-export function updateThreadKickoffContext(
+export async function updateThreadKickoffContext(
   threadId: string,
   freeformContext: string
-): void {
-  const state = threads.get(threadId);
-  if (!state) return;
-  state.thread.kickoff = { ...state.thread.kickoff, freeformContext };
-  persistThread(state.thread);
+): Promise<boolean> {
+  return updateThreadKickoff(threadId, { freeformContext });
 }
 
 export async function updateThreadKickoffTranscript(

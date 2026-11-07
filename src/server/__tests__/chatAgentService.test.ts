@@ -174,6 +174,20 @@ jest.mock('../services/groundingProfileResolver', () => ({
   },
 }));
 
+const mockReadsThroughRepoReadService = jest.fn().mockResolvedValue(false);
+jest.mock('../services/repoRead/wholeProjectRepoRead', () => ({
+  readsThroughRepoReadService: (...args: unknown[]) => mockReadsThroughRepoReadService(...args),
+}));
+
+const mockRepoServiceReaderReadFile = jest.fn();
+jest.mock('../services/repoRead/repoServiceReader', () => ({
+  ...jest.requireActual('../services/repoRead/repoServiceReader'),
+  RepoServiceReader: jest.fn().mockImplementation((options: { identity: unknown }) => ({
+    identity: options.identity,
+    readFile: (...args: unknown[]) => mockRepoServiceReaderReadFile(...args),
+  })),
+}));
+
 const mockIsThreadRunAlive = jest.fn().mockResolvedValue(false);
 jest.mock('../services/agentRunReaperService', () => ({
   isThreadRunAlive: (...args: unknown[]) => mockIsThreadRunAlive(...args),
@@ -219,6 +233,8 @@ import {
   isThreadIdle,
 } from '../services/chatAgentService';
 import { dispatchRunEventForTest } from '../services/pgNotifyService';
+import { RepoServiceReader } from '../services/repoRead/repoServiceReader';
+import type { RunGrounding } from '../../shared/types/runGrounding';
 import type {
   AgentRunEventEnvelope,
   ChatMessage,
@@ -1047,6 +1063,98 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     } finally {
       await closeThread(thread.id);
     }
+  });
+
+  describe('prepareBackgroundWorkflowTurn on whole-V2 projects', () => {
+    const pinned = {
+      repoRole: 'target',
+      isActive: true,
+      provider: 'azure_devops',
+      repository: 'Apex',
+      groundedSha: 'a'.repeat(40),
+    } as unknown as RunGrounding;
+
+    afterEach(() => {
+      mockReadsThroughRepoReadService.mockReset();
+      mockReadsThroughRepoReadService.mockResolvedValue(false);
+      mockRepoServiceReaderReadFile.mockReset();
+      mockCallerGroundingStart.mockReset();
+    });
+
+    it('reads the skill through repo-read at the pinned commit without an App Service checkout', async () => {
+      mockReadsThroughRepoReadService.mockResolvedValue(true);
+      mockRepoServiceReaderReadFile.mockResolvedValue('# PRD skill');
+      const findTargetGrounding = jest.fn().mockResolvedValue(pinned);
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff({
+          skillPath: '.cursor/skills/to-prd/SKILL.md',
+          skillProvider: 'ado',
+          freeformContext: '# Context',
+          transcript: '# Transcript',
+        }),
+        { skipAutoKickoff: true }
+      );
+      mockCallerGroundingStart.mockClear();
+
+      try {
+        const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.', {
+          findTargetGrounding,
+        });
+        expect(mockCallerGroundingStart).not.toHaveBeenCalled();
+        expect(findTargetGrounding).toHaveBeenCalledTimes(1);
+        expect(RepoServiceReader).toHaveBeenCalledWith(expect.objectContaining({
+          identity: expect.objectContaining({ provider: 'ado', repo: 'Apex', sha: 'a'.repeat(40) }),
+        }));
+        expect(prepared.skillContent).toBe('# PRD skill');
+        expect(prepared.targetGrounding).toBe(pinned);
+        expect(prepared.scratchInputs.map((input) => input.path)).toEqual([
+          '.ai-pilot/kickoff-context.md',
+          '.ai-pilot/kickoff-transcript.md',
+          '.ai-pilot/session.json',
+        ]);
+      } finally {
+        await closeThread(thread.id);
+      }
+    });
+
+    it('keeps the checkout-first order when the project is not whole-V2', async () => {
+      const order: string[] = [];
+      mockEvaluateBindingContinuity.mockReturnValue({ decision: 'resume' });
+      mockCallerGroundingSelectionToBinding.mockReturnValue({ mode: 'local', sha: 'sha-gen' });
+      mockResolveConnectionProfile.mockRejectedValue(new Error('no reader'));
+      mockCallerGroundingStart.mockImplementation(async () => {
+        order.push('checkout');
+        return {
+          mode: 'local',
+          cwd: 'C:\\data\\grounding-workspaces\\gen',
+          profileId: 'profile-gen' as GroundingProfileId,
+          resolvedSha: 'sha-gen',
+          nativeReads: true,
+          workingTree: true,
+          release: jest.fn().mockResolvedValue(undefined),
+        } satisfies CallerGroundingSelection;
+      });
+      const findTargetGrounding = jest.fn().mockImplementation(async () => {
+        order.push('lookup');
+        return pinned;
+      });
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff({ skillPath: '.cursor/skills/to-prd/SKILL.md' }),
+        { skipAutoKickoff: true }
+      );
+
+      try {
+        const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.', {
+          findTargetGrounding,
+        });
+        expect(order).toEqual(['checkout', 'lookup']);
+        expect(prepared.targetGrounding).toBe(pinned);
+      } finally {
+        await closeThread(thread.id);
+      }
+    });
   });
 
   it('AC-1 / VT-06 fallback prompt remains sandbox and provider-MCP directed', () => {

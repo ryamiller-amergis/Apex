@@ -178,7 +178,7 @@ export async function regenerateAdoTestCase(input: {
   if (!thread.workspaceDir) throw new Error('Case regeneration thread has no workspace');
   writeWorkspace(thread.workspaceDir, freeformContext);
   writeTestPlanFile(thread.workspaceDir, testPlans);
-  updateThreadKickoffContext(thread.id, freeformContext);
+  await updateThreadKickoffContext(thread.id, freeformContext);
 
   let row: RegenerationRow | undefined;
   try {

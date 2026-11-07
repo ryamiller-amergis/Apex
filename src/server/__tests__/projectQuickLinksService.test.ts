@@ -131,6 +131,15 @@ describe('createLink', () => {
     expect(result).toEqual(row);
   });
 
+  it('puts a link without a sort order after the last one', async () => {
+    selectWhere.mockResolvedValue([{ value: 3, highestOrder: 7 }]);
+    returning.mockResolvedValue([row]);
+
+    await createLink('MaxView', { label: 'Clerk', url: 'https://dashboard.clerk.com' }, 'user-1');
+
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ sortOrder: 8 }));
+  });
+
   it('rejects a javascript: URL without touching the database', async () => {
     await expect(
       createLink('MaxView', { label: 'Bad', url: 'javascript:alert(1)' }, 'user-1'),
@@ -156,6 +165,14 @@ describe('createLink', () => {
 describe('reorderLinks', () => {
   it.each([[undefined], ['abc'], [[1, 2]], [['a', 'a']]])('rejects ids %p', async (ids) => {
     await expect(reorderLinks('MaxView', ids, 'user-1')).rejects.toBeInstanceOf(ProjectQuickLinkError);
+  });
+
+  it('rejects a list that leaves out a link', async () => {
+    const first = '00000000-0000-4000-8000-000000000001';
+    const second = '00000000-0000-4000-8000-000000000002';
+    selectWhere.mockResolvedValue([{ id: first }, { id: second }]);
+
+    await expect(reorderLinks('MaxView', [first], 'user-1')).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 });
 
@@ -186,7 +203,7 @@ describe('shared link cap on single adds and moves', () => {
 
 describe('importLinks (shared project links)', () => {
   it('skips URLs the project already has, rejects invalid items, and records the importer', async () => {
-    selectWhere.mockResolvedValue([{ url: 'https://dashboard.clerk.com/' }]);
+    selectWhere.mockResolvedValue([{ url: 'https://dashboard.clerk.com/', sortOrder: 0 }]);
 
     const result = await importLinks(
       'MaxView',

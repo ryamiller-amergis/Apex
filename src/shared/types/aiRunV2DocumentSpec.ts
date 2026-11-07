@@ -129,7 +129,7 @@ export function isAllowedDocumentScratchInputPath(
   }
 }
 
-function hasRequiredScratchInputs(
+export function hasRequiredScratchInputs(
   workflowClass: BackgroundWorkflowClass,
   inputs: ReadonlyArray<AiRunV2DocumentScratchInput>,
 ): boolean {

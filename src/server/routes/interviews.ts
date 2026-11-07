@@ -1488,14 +1488,16 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, prd.prdAssistantThreadId))
         .limit(1);
+      const refreshedContext = buildPrdContext(prd.prdAssistantThreadId);
       if (threadRow?.workspaceDir) {
         const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
         try {
-          fs.writeFileSync(contextPath, buildPrdContext(prd.prdAssistantThreadId), 'utf-8');
+          fs.writeFileSync(contextPath, refreshedContext, 'utf-8');
         } catch {
           // Non-fatal: workspace may have been cleaned up
         }
       }
+      await updateThreadKickoffContext(prd.prdAssistantThreadId, refreshedContext);
       res.json({ threadId: prd.prdAssistantThreadId });
       return;
     }
@@ -1519,7 +1521,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
     const realContext = buildPrdContext(thread.id);
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
     fs.writeFileSync(contextPath, realContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realContext);
+    await updateThreadKickoffContext(thread.id, realContext);
 
     await inheritAssistantPin({
       sourceThreadId: prd.chatThreadId,
@@ -2535,14 +2537,16 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, doc.docAssistantThreadId))
         .limit(1);
+      const refreshedContext = buildDocContext(doc.docAssistantThreadId);
       if (threadRow?.workspaceDir) {
         const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
         try {
-          fs.writeFileSync(contextPath, buildDocContext(doc.docAssistantThreadId), 'utf-8');
+          fs.writeFileSync(contextPath, refreshedContext, 'utf-8');
         } catch {
           // Non-fatal: workspace may have been cleaned up; the thread can still run
         }
       }
+      await updateThreadKickoffContext(doc.docAssistantThreadId, refreshedContext);
       res.json({ threadId: doc.docAssistantThreadId });
       return;
     }
@@ -2574,7 +2578,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
     const realDocContext = buildDocContext(thread.id);
     const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
     fs.writeFileSync(contextPath, realDocContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realDocContext);
+    await updateThreadKickoffContext(thread.id, realDocContext);
 
     await inheritAssistantPin({
       sourceThreadId: doc.chatThreadId ?? prd?.chatThreadId,

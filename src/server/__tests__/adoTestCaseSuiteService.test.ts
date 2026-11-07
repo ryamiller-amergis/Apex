@@ -326,7 +326,7 @@ describe('ADO test suite generation and publish', () => {
       workspaceDir,
     } as never);
     jest.mocked(prepareBackgroundWorkflowTurn).mockReset();
-    jest.mocked(prepareBackgroundWorkflowTurn).mockResolvedValue({
+    jest.mocked(prepareBackgroundWorkflowTurn).mockImplementation(async (_threadId, _prompt, options) => ({
       prompt: 'prompt',
       model: 'gpt-test',
       skillPath: skillConfig.testCaseSkillPath,
@@ -338,7 +338,8 @@ describe('ADO test suite generation and publish', () => {
         repository: 'skills',
         branch: 'main',
       },
-    } as never);
+      targetGrounding: await options?.findTargetGrounding?.(),
+    }) as never);
     jest.mocked(sendMessage).mockReset();
     jest.mocked(sendMessage).mockResolvedValue({ route: 'legacy' });
     jest.mocked(isThreadIdle).mockReset();
@@ -508,6 +509,7 @@ describe('ADO test suite generation and publish', () => {
     expect(prepareBackgroundWorkflowTurn).toHaveBeenCalledWith(
       'thread-ado',
       'Generate QA test cases only for these backlog items: PBI-18452, PBI-18499. Do not write cases for any other PBI. Write the required output files.',
+      { findTargetGrounding: expect.any(Function) },
     );
     expect(routeBackgroundWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       workflowClass: 'test-cases',

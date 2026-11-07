@@ -68,6 +68,7 @@ import {
   createBlobInteractiveArtifactReader,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
+import { updateThreadKickoffTranscript } from './chatAgentService';
 import { isCursorModelBlockedMessage } from '../../shared/utils/modelAvailability';
 
 // Ingest persists worker events without emitting them to this instance's
@@ -949,7 +950,7 @@ async function verifyAndApplyActorArtifactManifest(input: {
       'AI_RUN_ILLEGAL_TRANSITION',
     );
   }
-  await applyInteractiveArtifacts({
+  const applied = await applyInteractiveArtifacts({
     workspaceRoot,
     manifest: parsed,
     expected: {
@@ -963,6 +964,15 @@ async function verifyAndApplyActorArtifactManifest(input: {
         .downloadToBuffer(),
     ),
   });
+  // Document runs build their inputs from the saved thread, so the transcript
+  // the agent wrote must land there as well as in the workspace.
+  if (applied.transcript !== null) {
+    await updateThreadKickoffTranscript(input.threadId, applied.transcript).catch((error: unknown) => {
+      console.warn(
+        `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
 }
 
 /**

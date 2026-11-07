@@ -43,6 +43,7 @@ jest.mock('../services/repoCacheService', () => ({
 }));
 
 import { defaultResolveGrounding } from '../services/durableInteractiveTurnService';
+import { runGroundingService } from '../services/runGroundingService';
 
 const SHA = 'a'.repeat(40);
 
@@ -79,6 +80,22 @@ describe('defaultResolveGrounding', () => {
 
     expect(startCallerGrounding).not.toHaveBeenCalled();
     expect(grounding).toMatchObject({ sha: SHA, profileId: 'profile-light' });
+    expect(runGroundingService.activateGroundings).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses the active pin on a later turn without saving it again', async () => {
+    isFlagEnabledForWholeProject.mockResolvedValue(true);
+    isFeatureEnabled.mockResolvedValue(true);
+    const pinned = 'c'.repeat(40);
+    jest.mocked(runGroundingService.getGroundings).mockResolvedValueOnce([
+      { repoRole: 'target', isActive: true, groundedSha: pinned },
+    ] as unknown as Awaited<ReturnType<typeof runGroundingService.getGroundings>>);
+
+    const grounding = await defaultResolveGrounding({ thread, userId: 'user-1' });
+
+    expect(grounding).toMatchObject({ sha: pinned });
+    expect(runGroundingService.activateGroundings).not.toHaveBeenCalled();
+    expect(readRemoteBranchTip).not.toHaveBeenCalled();
   });
 
   it('keeps the App Service checkout when repo-read is off for the project', async () => {

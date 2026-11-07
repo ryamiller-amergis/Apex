@@ -98,16 +98,15 @@ export async function applyInteractiveArtifacts(options: {
     attemptNumber: number;
   }>;
   reader: InteractiveArtifactReader;
-}): Promise<void> {
+}): Promise<{ transcript: string | null }> {
   assertInteractiveArtifactManifestIdentity(options.manifest, options.expected);
 
+  let transcript: string | null = null;
   for (const entry of options.manifest.files) {
-    const target = resolveUnderWorkspace(
-      options.workspaceRoot,
-      entry.path.startsWith('.ai-pilot/')
-        ? entry.path
-        : path.posix.join('.ai-pilot', entry.path),
-    );
+    const relativePath = entry.path.startsWith('.ai-pilot/')
+      ? entry.path
+      : path.posix.join('.ai-pilot', entry.path);
+    const target = resolveUnderWorkspace(options.workspaceRoot, relativePath);
     const body = await options.reader.readFile(entry);
     const digest = createHash('sha256').update(body).digest('hex');
     if (digest !== entry.sha256 || body.byteLength !== entry.sizeBytes) {
@@ -117,7 +116,11 @@ export async function applyInteractiveArtifacts(options: {
     }
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, body, { flag: 'wx', mode: 0o600 });
+    if (assertAllowedPath(relativePath) === ALLOWED_TRANSCRIPT) {
+      transcript = body.toString('utf8');
+    }
   }
+  return { transcript };
 }
 
 /** Convenience: build a Blob-backed reader using an injectable download fn. */
