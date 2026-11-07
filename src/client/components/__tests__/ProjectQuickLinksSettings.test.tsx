@@ -85,25 +85,39 @@ describe('ProjectQuickLinksSettings', () => {
     expect(screen.getByTestId('quick-link-row-clerk')).toBeInTheDocument();
   });
 
-  it('reorders within a category', () => {
+  // jsdom drag events carry no pointer position, so every drop lands "after" the target row.
+  it('drags a link within its category', () => {
     render(<ProjectQuickLinksSettings project="MaxView" />);
-    expect(screen.getByTestId('quick-link-move-up-prod')).toBeDisabled();
-    expect(screen.getByTestId('quick-link-move-down-test')).toBeDisabled();
-
-    fireEvent.click(screen.getByTestId('quick-link-move-down-prod'));
+    fireEvent.dragStart(screen.getByTestId('quick-link-row-prod'));
+    fireEvent.dragOver(screen.getByTestId('quick-link-row-test'));
+    fireEvent.drop(screen.getByTestId('quick-link-row-test'));
 
     expect(reorderMutate).toHaveBeenCalledWith({ ids: ['test', 'prod', 'clerk'] }, expect.any(Object));
   });
 
-  it('moves a whole category, even one with a single link', () => {
+  it('does not drop a link into another category', () => {
     render(<ProjectQuickLinksSettings project="MaxView" />);
-    expect(screen.getByTestId('quick-link-category-up-prod')).toBeDisabled();
-    expect(screen.getByTestId('quick-link-category-down-clerk')).toBeDisabled();
-    expect(screen.queryByTestId('quick-link-category-up-test')).not.toBeInTheDocument();
+    fireEvent.dragStart(screen.getByTestId('quick-link-row-clerk'));
+    fireEvent.drop(screen.getByTestId('quick-link-row-prod'));
 
-    fireEvent.click(screen.getByTestId('quick-link-category-up-clerk'));
+    expect(reorderMutate).not.toHaveBeenCalled();
+  });
+
+  it('drags a whole category past a single-link category', () => {
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    fireEvent.dragStart(screen.getByTestId('quick-link-category-handle-prod'));
+    fireEvent.drop(screen.getByTestId('quick-link-row-clerk'));
 
     expect(reorderMutate).toHaveBeenCalledWith({ ids: ['clerk', 'prod', 'test'] }, expect.any(Object));
+  });
+
+  it('moves with Alt+arrow keys', () => {
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    fireEvent.keyDown(screen.getByTestId('quick-link-row-prod'), { key: 'ArrowDown', altKey: true });
+    expect(reorderMutate).toHaveBeenLastCalledWith({ ids: ['test', 'prod', 'clerk'] }, expect.any(Object));
+
+    fireEvent.keyDown(screen.getByTestId('quick-link-category-handle-clerk'), { key: 'ArrowUp', altKey: true });
+    expect(reorderMutate).toHaveBeenLastCalledWith({ ids: ['clerk', 'prod', 'test'] }, expect.any(Object));
   });
 
   it('shows categories where their first link sits, not A to Z', () => {
@@ -117,10 +131,10 @@ describe('ProjectQuickLinksSettings', () => {
     expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual(['quick-link-row-clerk', 'quick-link-row-prod']);
   });
 
-  it('hides category moves while a filter is on', () => {
+  it('turns dragging off while a filter is on', () => {
     render(<ProjectQuickLinksSettings project="MaxView" />);
     fireEvent.change(screen.getByTestId('quick-links-search'), { target: { value: 'max' } });
-    expect(screen.queryByTestId('quick-link-category-up-prod')).not.toBeInTheDocument();
+    expect(screen.getByTestId('quick-link-row-prod')).toHaveAttribute('draggable', 'false');
   });
 
   it('rejects a javascript: URL in the add form', async () => {
