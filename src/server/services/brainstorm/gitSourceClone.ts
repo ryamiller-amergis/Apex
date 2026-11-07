@@ -5,6 +5,8 @@ import type { RepositoryIdentity } from '../../../shared/types/repoReader';
 import { git } from '../../utils/asyncGit';
 import { bundleRepositoryName } from '../grounding/bundleCheckout';
 import { createGroundingBundleStore } from '../grounding/bundleStoreService';
+import type { PublishBundleHttpRequest, PublishBundleHttpResponse } from '../repoRead/httpProtocol';
+import { resolveRepoReadServiceToken, resolveRepoReadServiceUrl } from '../repoRead/repoServiceReader';
 import { credentialsForCloneUrl } from './cloneCredentials';
 
 export interface BrainstormBundleIdentity {
@@ -123,6 +125,72 @@ export async function resolveTemporarySha(input: {
   }
 }
 
+export interface TemporaryBundleInput {
+  url: string;
+  sha: string;
+  identity: BrainstormBundleIdentity;
+  signal?: AbortSignal;
+}
+
+/**
+ * Fetches one commit of a temporary repository into scratch space and
+ * publishes it as the source's Blob bundle. Repo-read runs this so App Service
+ * holds no clone; App Service runs it only when repo-read is not configured.
+ */
+export async function publishTemporaryCloneBundle(input: TemporaryBundleInput): Promise<'ok' | 'moved'> {
+  const creds = credentialsForCloneUrl(new URL(input.url));
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-temp-clone-'));
+  const repoDir = path.join(scratch, 'repo');
+  try {
+    await git(['init', repoDir], { abortSignal: input.signal });
+    await git([
+      ...LOCK, '-C', repoDir, 'fetch', '--no-tags', '--depth=1', '--', input.url, input.sha,
+    ], { timeout: 120_000, abortSignal: input.signal, env: creds.env });
+    await git(['-C', repoDir, 'checkout', '--detach', 'FETCH_HEAD'], { abortSignal: input.signal });
+    const head = (await git(['-C', repoDir, 'rev-parse', 'HEAD'])).trim().toLowerCase();
+    if (head !== input.sha.toLowerCase()) return 'moved';
+    const published = await publishSourceBundleIfConfigured({
+      ...input.identity,
+      repoDir,
+      sha: input.sha,
+      signal: input.signal,
+    });
+    if (!published) throw new Error('Blob bundle storage is not configured.');
+    return 'ok';
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export async function requestRepoReadBundlePublish(
+  input: TemporaryBundleInput,
+  options: { baseUrl?: string; authToken?: string; fetchImpl?: typeof fetch } = {},
+): Promise<'ok' | 'moved'> {
+  const baseUrl = (options.baseUrl ?? resolveRepoReadServiceUrl())?.replace(/\/+$/, '');
+  if (!baseUrl) throw new Error('The repository read service is not configured.');
+  const authToken = options.authToken ?? resolveRepoReadServiceToken();
+  const body: PublishBundleHttpRequest = {
+    provider: input.identity.provider,
+    project: input.identity.project,
+    repository: input.identity.repository,
+    url: input.url,
+    sha: input.sha,
+  };
+  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/publish-bundle`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    signal: input.signal,
+    body: JSON.stringify(body),
+  });
+  const parsed = (await response.json().catch(() => null)) as PublishBundleHttpResponse | null;
+  if (!parsed) throw new Error(`The repository read service returned ${response.status}.`);
+  if (!parsed.ok) throw new Error(parsed.message);
+  return parsed.state;
+}
+
 export async function cloneTemporaryAtSha(input: {
   url: string;
   sha: string;
@@ -134,30 +202,16 @@ export async function cloneTemporaryAtSha(input: {
     await clearRemoteSourceDestination(input.destination);
     return 'ok';
   }
-  const creds = credentialsForCloneUrl(new URL(input.url));
   if (input.identity && isCloudBundleStorageConfigured()) {
-    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'brainstorm-temp-clone-'));
-    const repoDir = path.join(scratch, 'repo');
-    try {
-      await git(['init', repoDir], { abortSignal: input.signal });
-      await git([
-        ...LOCK, '-C', repoDir, 'fetch', '--no-tags', '--depth=1', '--', input.url, input.sha,
-      ], { timeout: 120_000, abortSignal: input.signal, env: creds.env });
-      await git(['-C', repoDir, 'checkout', '--detach', 'FETCH_HEAD'], { abortSignal: input.signal });
-      const head = (await git(['-C', repoDir, 'rev-parse', 'HEAD'])).trim().toLowerCase();
-      if (head !== input.sha.toLowerCase()) return 'moved';
-      await publishSourceBundleIfConfigured({
-        ...input.identity,
-        repoDir,
-        sha: input.sha,
-        signal: input.signal,
-      });
-      await clearRemoteSourceDestination(input.destination);
-      return 'ok';
-    } finally {
-      await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
-    }
+    const bundleInput = { url: input.url, sha: input.sha, identity: input.identity, signal: input.signal };
+    const result = resolveRepoReadServiceUrl()
+      ? await requestRepoReadBundlePublish(bundleInput)
+      : await publishTemporaryCloneBundle(bundleInput);
+    if (result === 'moved') return 'moved';
+    await clearRemoteSourceDestination(input.destination);
+    return 'ok';
   }
+  const creds = credentialsForCloneUrl(new URL(input.url));
   await fs.mkdir(path.dirname(input.destination), { recursive: true });
   await fs.rm(input.destination, { recursive: true, force: true });
   await git(['init', input.destination], { abortSignal: input.signal });

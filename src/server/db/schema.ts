@@ -192,6 +192,17 @@ export const chatThreads = pgTable('chat_threads', {
   lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+/** Files a V2 chat turn wrote under `.ai-pilot/`, so App Service reads them without the share. */
+export const chatThreadOutputs = pgTable('chat_thread_outputs', {
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  path: text('path').notNull(),
+  content: text('content').notNull(),
+  runId: uuid('run_id'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.threadId, t.path] }),
+}));
+
 export const chatMessages = pgTable('chat_messages', {
   id: uuid('id').primaryKey(),
   threadId: uuid('thread_id').notNull(),

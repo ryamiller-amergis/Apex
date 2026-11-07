@@ -153,6 +153,7 @@ jest.mock('../services/durableInteractiveTurnService', () => ({
 const mockIsFeatureEnabled = jest.fn().mockResolvedValue(false);
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+  isFlagEnabledForWholeProject: jest.fn().mockResolvedValue(false),
   isLifecycleBindingEnabledForCaller: jest.fn().mockResolvedValue(false),
 }));
 

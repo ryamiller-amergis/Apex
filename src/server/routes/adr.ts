@@ -23,6 +23,7 @@ import {
 } from '../services/adrService';
 import { routeAdrGenerationKickoff } from '../services/adrGenerationService';
 import { createThread, getThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
+import { writeThreadFolderFile } from '../services/threadFolder';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import type { AdrStatus } from '../../shared/types/adr';
@@ -562,7 +563,12 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
     });
 
     const context = buildContext(thread.id);
-    fs.writeFileSync(path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md'), context, 'utf-8');
+    await writeThreadFolderFile({
+      project: adr.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: context,
+    });
     await updateThreadKickoffContext(thread.id, context);
     await setAdrAssistantThread(adr.id, userId, thread.id);
     res.status(201).json({ threadId: thread.id });

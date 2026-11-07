@@ -106,6 +106,7 @@ function makeDependencies(
       retain: jest.fn(),
     },
     clearGenerationOutput: jest.fn().mockResolvedValue(undefined),
+    keepsThreadFolder: jest.fn().mockResolvedValue(true),
     enqueue: jest.fn().mockResolvedValue({ runId: 'run-1' }),
     resolveHardLimitMs: jest.fn().mockReturnValue(60_000),
     resolveModelChoice: jest.fn(async (model: string, effort?: string) => ({ model, effort })),
@@ -655,6 +656,27 @@ describe('background workflow routing', () => {
         }),
       }),
     );
+    expect(dependencies.clearGenerationOutput).toHaveBeenCalledWith('C:\\threads\\thread-1');
+  });
+
+  it('with the whole project on V2, leaves the thread folder on the share alone', async () => {
+    const dependencies = makeDependencies({
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+      admitV2Run: jest.fn().mockResolvedValue({
+        status: 'dispatched',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        outboxId: 'outbox-1',
+      }),
+      keepsThreadFolder: jest.fn().mockResolvedValue(false),
+    });
+
+    const decision = await createBackgroundWorkflowRouter(dependencies).route(makeInput());
+
+    expect(decision.route).toBe('worker');
+    expect(dependencies.clearGenerationOutput).not.toHaveBeenCalled();
   });
 
   it('admits under the caller agent run id when one is given', async () => {

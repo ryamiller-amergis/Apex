@@ -1,4 +1,3 @@
-import fs from 'fs';
 import path from 'path';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
@@ -10,7 +9,9 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
+import { clearThreadOutput, readThreadOutput } from './chatThreadOutputStore';
 import { resolveSkillConfig } from './projectSettingsService';
+import { writeThreadFolderFile } from './threadFolder';
 import { getDefaultModel } from './appSettingsService';
 import type {
   DesignModuleScopingConfidence,
@@ -199,24 +200,24 @@ export async function startScoping(
       where: eq(chatThreads.id, resumeThreadId),
       columns: { workspaceDir: true },
     });
-    if (row?.workspaceDir) {
-      const outputPath = path.join(row.workspaceDir, ...OUTPUT_RELATIVE_PATH);
-      try {
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-      } catch {
-        // Best-effort; stale output is still validated on poll.
-      }
-      try {
-        const kickoffPath = path.join(
-          row.workspaceDir,
-          '.ai-pilot',
-          'kickoff-context.md'
-        );
-        fs.mkdirSync(path.dirname(kickoffPath), { recursive: true });
-        fs.writeFileSync(kickoffPath, freeformContext, 'utf-8');
-      } catch {
-        // Best-effort; in-memory kickoff update still applies on next turn.
-      }
+    try {
+      await clearThreadOutput({
+        threadId: resumeThreadId,
+        workspaceDir: row?.workspaceDir,
+        relativePath: OUTPUT_RELATIVE_PATH,
+      });
+    } catch {
+      // Best-effort; stale output is still validated on poll.
+    }
+    try {
+      await writeThreadFolderFile({
+        project: projectId,
+        workspaceDir: row?.workspaceDir,
+        relativePath: '.ai-pilot/kickoff-context.md',
+        content: freeformContext,
+      });
+    } catch {
+      // Best-effort; in-memory kickoff update still applies on next turn.
     }
 
     const message = [
@@ -287,18 +288,8 @@ export async function startScoping(
   return { threadId: thread.id };
 }
 
-function resolveOutputPath(workspaceDir: string): string {
-  return path.join(workspaceDir, ...OUTPUT_RELATIVE_PATH);
-}
-
-function readOutput(workspaceDir: string): string | null {
-  const outputPath = resolveOutputPath(workspaceDir);
-  if (!fs.existsSync(outputPath)) return null;
-  try {
-    return fs.readFileSync(outputPath, 'utf-8');
-  } catch {
-    return null;
-  }
+function readOutput(threadId: string, workspaceDir: string): Promise<string | null> {
+  return readThreadOutput({ threadId, workspaceDir, relativePath: OUTPUT_RELATIVE_PATH });
 }
 
 export function parseScopingResult(raw: string): DesignModuleScopingResult {
@@ -401,7 +392,7 @@ export async function getScopingResult(
     return { status: 'pending' };
   }
 
-  const raw = readOutput(row.workspaceDir);
+  const raw = await readOutput(threadId, row.workspaceDir);
   if (!raw) {
     // Kickoff is fire-and-forget; status stays idle until sendMessage starts.
     // Treat that gap (and the whole in-flight run) as pending, not failure.

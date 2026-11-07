@@ -74,6 +74,43 @@ export function parseRepoReadHttpRequest(
   };
 }
 
+/** Publish one commit of a Brainstorm temporary repository as its Blob bundle. */
+export interface PublishBundleHttpRequest {
+  provider: 'github' | 'ado';
+  project: string;
+  repository: string;
+  url: string;
+  sha: string;
+}
+
+export type PublishBundleHttpResponse =
+  | { ok: true; state: 'ok' | 'moved' }
+  | { ok: false; message: string };
+
+export function parsePublishBundleHttpRequest(
+  body: unknown,
+): PublishBundleHttpRequest | { error: string } {
+  if (!body || typeof body !== 'object') {
+    return { error: 'Request body must be a JSON object' };
+  }
+  const candidate = body as Record<string, unknown>;
+  const provider = candidate.provider;
+  if (provider !== 'ado' && provider !== 'github') {
+    return { error: 'provider must be ado or github' };
+  }
+  const project = asNonEmptyString(candidate.project);
+  const repository = asNonEmptyString(candidate.repository);
+  const url = asNonEmptyString(candidate.url);
+  const sha = asNonEmptyString(candidate.sha);
+  if (!project || !repository || !url || !sha) {
+    return { error: 'project, repository, url, and sha are required' };
+  }
+  if (!SHA_RE.test(sha)) {
+    return { error: 'sha must be a 40-character commit hash' };
+  }
+  return { provider, project, repository, url, sha: sha.toLowerCase() };
+}
+
 function asNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0
     ? value.trim()

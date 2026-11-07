@@ -24,6 +24,9 @@ jest.mock('../db/drizzle', () => ({
     query: {
       chatThreads: { findFirst: jest.fn() },
     },
+    select: jest.fn(() => ({
+      from: jest.fn(() => ({ where: jest.fn(() => ({ limit: jest.fn().mockResolvedValue([]) })) })),
+    })),
   },
 }));
 
