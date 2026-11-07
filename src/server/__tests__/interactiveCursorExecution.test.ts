@@ -62,9 +62,9 @@ describe('interactive Cursor execution repository tools', () => {
           },
           mcpServers,
           model: { id: 'composer-2.5' },
-          disallowedTools: ['task'],
         }),
       );
+      expect(mockCreateAgent.mock.calls[0][0].disallowedTools).toBeUndefined();
       expect(execution.agentId).toBe('agent-1');
       expect(execution.mode).toBe('recreated');
     } finally {
@@ -129,7 +129,9 @@ describe('interactive Cursor execution repository tools', () => {
       );
 
       expect(mockCreateNativeReadTools).not.toHaveBeenCalled();
-      const local = mockCreateAgent.mock.calls[0][0].local;
+      const createdOptions = mockCreateAgent.mock.calls[0][0];
+      expect(createdOptions.disallowedTools).toEqual(['task']);
+      const local = createdOptions.local;
       expect(local.sandboxOptions).toEqual({ enabled: false });
       expect(Object.keys(local.customTools).sort()).toEqual([
         'get_skill_file',
@@ -146,7 +148,7 @@ describe('interactive Cursor execution repository tools', () => {
     }
   });
 
-  it('opens known-file reads without search for a technical-phase guided interview', async () => {
+  it('opens known-file reads without search and allows task subagents for a technical-phase guided interview', async () => {
     process.env.CURSOR_API_KEY = 'test-key';
     mockCreateAgent.mockResolvedValue({
       id: 'agent-1',
@@ -169,7 +171,9 @@ describe('interactive Cursor execution repository tools', () => {
       );
 
       expect(mockCreateNativeReadTools).toHaveBeenCalledWith(checkout, { allowSearch: false });
-      const local = mockCreateAgent.mock.calls[0][0].local;
+      const createdOptions = mockCreateAgent.mock.calls[0][0];
+      expect(createdOptions.disallowedTools).toBeUndefined();
+      const local = createdOptions.local;
       await expect(local.customTools.search_repo_code.execute({})).resolves.toMatchObject({
         isError: true,
       });
@@ -322,7 +326,44 @@ describe('interactive Cursor execution repository tools', () => {
       expect(mockCreateAgent).not.toHaveBeenCalled();
       expect(mockResumeAgent).toHaveBeenCalledWith(
         'agent-live',
-        expect.objectContaining({ disallowedTools: ['task'] }),
+        expect.objectContaining({
+          model: { id: 'auto' },
+          mcpServers,
+        }),
+      );
+      expect(mockResumeAgent.mock.calls[0][1].disallowedTools).toBeUndefined();
+    } finally {
+      delete process.env.CURSOR_API_KEY;
+      jest.clearAllMocks();
+    }
+  });
+
+  it('keeps task disallowed when resuming a product-phase guided interview agent', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockResumeAgent.mockResolvedValue({
+      id: 'agent-product',
+      send: jest.fn(),
+      [Symbol.asyncDispose]: jest.fn().mockResolvedValue(undefined),
+    });
+
+    try {
+      const acquired = await acquireInteractiveCursorAgent(
+        {
+          model: 'composer-2.5',
+          effort: null,
+          workspaceRef: '/warm',
+          interviewPhase: 'product',
+        },
+        {} as RepoReader,
+        { resumeAgentId: 'agent-product', mcpServers: {} },
+      );
+
+      expect(acquired.mode).toBe('resumed');
+      expect(mockResumeAgent).toHaveBeenCalledWith(
+        'agent-product',
+        expect.objectContaining({
+          disallowedTools: ['task'],
+        }),
       );
     } finally {
       delete process.env.CURSOR_API_KEY;

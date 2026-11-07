@@ -1,9 +1,14 @@
 # Repo read service — Stage 3 of design-docs/repo-grounding-consolidation.md
 #
 # Dedicated Container App that serves git cat-file / ls-tree / grep from a
-# bare mirror on ephemeral local disk. Azure Files is intentionally not
-# mounted (git on SMB is the hot-path we are leaving). Blob container
-# repo-grounding remains the durable restore source.
+# bare mirror on ephemeral local disk. Mirrors never live on Azure Files (git
+# on SMB is the hot-path we are leaving). Blob container repo-grounding
+# remains the durable restore source.
+#
+# With GROUNDING_MAINTENANCE_MODE=v2-projects the service also runs repo
+# upkeep for projects wholly on ai-runs-v2-transport and cleans the shared
+# workspace share, which is mounted only at <data dir>/workspaces for that
+# cleanup.
 #
 # Gated by enable_repo_read_service (default false). Shares the runner
 # identity, ACR, and Key Vault with ai-runs. The Container Apps Environment
@@ -23,6 +28,23 @@ locals {
     var.repo_read_service_environment_id,
     azurerm_container_app_environment.ai_runs.id,
   )
+  repo_read_service_own_environment = local.repo_read_service_environment_id != azurerm_container_app_environment.ai_runs.id
+  repo_read_service_workspace_storage_name = local.repo_read_service_own_environment ? (
+    azurerm_container_app_environment_storage.repo_read_workspace[0].name
+  ) : azurerm_container_app_environment_storage.ai_runs_workspace.name
+}
+
+# The ai-runs environment already has this share; a dedicated repo-read
+# environment needs its own registration to mount it.
+resource "azurerm_container_app_environment_storage" "repo_read_workspace" {
+  count = local.repo_read_service_enabled && local.repo_read_service_own_environment ? 1 : 0
+
+  name                         = "ai-runs-workspace"
+  container_app_environment_id = local.repo_read_service_environment_id
+  account_name                 = azurerm_storage_account.shared.name
+  share_name                   = azurerm_storage_share.ai_runs_workspace.name
+  access_key                   = azurerm_storage_account.shared.primary_access_key
+  access_mode                  = "ReadWrite"
 }
 
 resource "azurerm_role_assignment" "repo_read_service_blob_contributor" {
@@ -78,6 +100,15 @@ resource "azurerm_container_app" "repo_read_service" {
     }
   }
 
+  dynamic "secret" {
+    for_each = local.ai_runs_cursor_api_key_secret_id != null ? [1] : []
+    content {
+      name                = "cursor-api-key"
+      key_vault_secret_id = local.ai_runs_cursor_api_key_secret_id
+      identity            = azurerm_user_assigned_identity.ai_runs_runner.id
+    }
+  }
+
   ingress {
     external_enabled = true
     target_port      = var.repo_read_service_target_port
@@ -93,11 +124,24 @@ resource "azurerm_container_app" "repo_read_service" {
     min_replicas = 1
     max_replicas = 1
 
+    volume {
+      name         = "ai-pilot-workspaces"
+      storage_type = "AzureFile"
+      storage_name = local.repo_read_service_workspace_storage_name
+    }
+
     container {
       name   = "repo-read-service"
       image  = var.repo_read_service_image
       cpu    = var.repo_read_service_cpu
       memory = var.repo_read_service_memory
+
+      # Same layout as App Service: <data dir>/workspaces is the share, so
+      # eviction sees the folders App Service and the workers create.
+      volume_mounts {
+        name = "ai-pilot-workspaces"
+        path = "${local.repo_read_service_data_dir}/workspaces"
+      }
 
       env {
         name  = "NODE_ENV"
@@ -153,6 +197,26 @@ resource "azurerm_container_app" "repo_read_service" {
       env {
         name        = "DATABASE_URL"
         secret_name = "database-url"
+      }
+      dynamic "env" {
+        for_each = var.repo_read_service_grounding_maintenance_mode != null ? [1] : []
+        content {
+          name  = "GROUNDING_MAINTENANCE_MODE"
+          value = var.repo_read_service_grounding_maintenance_mode
+        }
+      }
+      dynamic "env" {
+        for_each = local.ai_runs_cursor_api_key_secret_id != null ? [1] : []
+        content {
+          name        = "CURSOR_API_KEY"
+          secret_name = "cursor-api-key"
+        }
+      }
+      # Share deletes run in rm child processes, but git and Blob I/O still use
+      # the libuv pool alongside live reads.
+      env {
+        name  = "UV_THREADPOOL_SIZE"
+        value = "16"
       }
       env {
         name  = "AI_RUNS_ALLOW_STATIC_CALLBACK_TOKEN"

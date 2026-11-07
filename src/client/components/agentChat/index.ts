@@ -1,5 +1,6 @@
 export { AgentMessage } from './AgentMessage';
 export { AgentTranscript } from './AgentTranscript';
+export { AssistantConversation } from './AssistantConversation';
 export { AgentComposer } from './AgentComposer';
 export { AgentPanelShell } from './AgentPanelShell';
 export { AgentTypingIndicator } from './AgentTypingIndicator';

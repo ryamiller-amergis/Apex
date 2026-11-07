@@ -31,6 +31,7 @@ const FEATURE_OUTCOME_LABELS: Record<string, string> = {
   'design-doc': 'design documents',
   'design-prototype': 'UI prototypes',
   'my-work': 'dev work sessions',
+  'cloud-agent': 'cloud agent runs',
   standup: 'standup facilitations',
   'ui-lab': 'UI Lab designs',
 };

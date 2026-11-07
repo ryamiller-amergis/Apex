@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, type KeyboardEvent } from 'react';
+import React, { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { formatAttachmentSize } from '../../hooks/useChatAttachments';
 import styles from './agentChat.module.css';
 
@@ -6,6 +6,9 @@ export interface AgentComposerAttachment {
   id: string;
   name: string;
   size: number;
+  type?: string;
+  content?: string;
+  encoding?: 'base64';
 }
 
 export interface AgentComposerModelOption {
@@ -79,6 +82,12 @@ export interface AgentComposerProps {
   fileInput?: React.ReactNode;
   /** Optional keydown handler. If it calls preventDefault(), Enter-to-send is skipped. */
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  /** Optional clipboard paste handler (e.g. pasting screenshots or files into the composer). */
+  onPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
+  /** Optional callback to add pasted files directly into attachments. */
+  onPasteFiles?: (files: File[]) => void;
+  /** Optional pill badge rendered on the left side of the bottom action bar (e.g. "∞ Collaborator"). */
+  modeBadge?: React.ReactNode;
   /** Root landmark test id (also accepted via spread `'data-testid'`). */
   'data-testid'?: string;
 }
@@ -107,6 +116,246 @@ const MicIcon: React.FC = () => (
 function testId(prefix: string | undefined, suffix: string): string | undefined {
   return prefix ? `${prefix}-${suffix}` : undefined;
 }
+
+function describeModelOption(item: AgentComposerModelOption): { badge: string; subtitle: string; family: 'composer' | 'claude' | 'gpt' | 'gemini' | 'grok' | 'other' } {
+  const lower = `${item.id} ${item.displayName}`.toLowerCase();
+  if (lower.includes('composer')) {
+    return {
+      badge: 'Cursor',
+      subtitle: 'Fast multi-step reasoning and codebase synthesis',
+      family: 'composer',
+    };
+  }
+  if (lower.includes('opus')) {
+    return {
+      badge: 'Anthropic',
+      subtitle: 'Deep architectural reasoning and complex trade-offs',
+      family: 'claude',
+    };
+  }
+  if (lower.includes('sonnet') || lower.includes('claude')) {
+    return {
+      badge: 'Anthropic',
+      subtitle: 'Balanced speed, structured writing, and code analysis',
+      family: 'claude',
+    };
+  }
+  if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3')) {
+    return {
+      badge: 'OpenAI',
+      subtitle: 'High-precision analytical reasoning and problem solving',
+      family: 'gpt',
+    };
+  }
+  if (lower.includes('gemini')) {
+    return {
+      badge: 'Google',
+      subtitle: 'Broad context synthesis and multimodal exploration',
+      family: 'gemini',
+    };
+  }
+  if (lower.includes('grok')) {
+    return {
+      badge: 'xAI',
+      subtitle: 'Direct technical exploration and fast iteration',
+      family: 'grok',
+    };
+  }
+  return {
+    badge: 'Model',
+    subtitle: 'AI collaborator model for this session',
+    family: 'other',
+  };
+}
+
+const ModelGlyph: React.FC<{ family: ReturnType<typeof describeModelOption>['family'] }> = ({ family }) => {
+  switch (family) {
+    case 'composer':
+      return (
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M10 2.8l2 4.4 4.4 2-4.4 2-2 4.4-2-4.4-4.4-2 4.4-2 2-4.4z" />
+        </svg>
+      );
+    case 'claude':
+      return (
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="6.8" />
+          <path d="M10 5.5v9M5.5 10h9" />
+        </svg>
+      );
+    case 'gpt':
+      return (
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <polygon points="10 3 16.2 6.5 16.2 13.5 10 17 3.8 13.5 3.8 6.5 10 3" />
+          <circle cx="10" cy="10" r="2.2" />
+        </svg>
+      );
+    case 'gemini':
+      return (
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M10 3c1.6 3.8 3.2 5.4 7 7-3.8 1.6-5.4 3.2-7 7-1.6-3.8-3.2-5.4-7-7 3.8-1.6 5.4-3.2 7-7z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="4" y="4" width="12" height="12" rx="3" />
+          <circle cx="10" cy="10" r="2" />
+        </svg>
+      );
+  }
+};
+
+const AgentModelPicker: React.FC<{
+  model: string;
+  models: AgentComposerModelOption[] | undefined;
+  modelsLoading: boolean;
+  disabled: boolean;
+  modelTestId?: string;
+  testIdPrefix?: string;
+  onModelChange?: (modelId: string) => void;
+}> = ({
+  model,
+  models,
+  modelsLoading,
+  disabled,
+  modelTestId,
+  testIdPrefix,
+  onModelChange,
+}) => {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutside = (event: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open]);
+
+  const normalizedOptions: AgentComposerModelOption[] = React.useMemo(() => {
+    if (modelsLoading || !models?.length) {
+      return model ? [{ id: model, displayName: model }] : [];
+    }
+    const hasCurrent = models.some((item) => item.id === model);
+    if (!hasCurrent && model) {
+      return [{ id: model, displayName: model }, ...models];
+    }
+    return models;
+  }, [model, models, modelsLoading]);
+
+  const currentOption = normalizedOptions.find((item) => item.id === model)
+    ?? { id: model, displayName: model || (modelsLoading ? 'Loading models…' : 'Select model') };
+  const currentMeta = describeModelOption(currentOption);
+  const triggerTestId = testId(testIdPrefix, 'model-trigger') ?? 'agent-composer-model-trigger';
+  const menuTestId = testId(testIdPrefix, 'model-menu') ?? 'agent-composer-model-menu';
+
+  return (
+    <div ref={wrapRef} className={styles.modelPickerWrap}>
+      <button
+        type="button"
+        className={`${styles.modelTrigger} ${open ? styles.modelTriggerOpen : ''}`}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Selected model: ${currentOption.displayName}`}
+        title={currentMeta.subtitle}
+        onClick={() => setOpen((prev) => !prev)}
+        {...{ 'data-testid': triggerTestId }}
+      >
+        <span className={styles.modelTriggerIcon} aria-hidden="true">
+          <ModelGlyph family={currentMeta.family} />
+        </span>
+        <span className={styles.modelTriggerLabel}>{currentOption.displayName}</span>
+        <span className={styles.modelCaret} aria-hidden="true">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {/* Accessible native select kept synchronized for keyboard/screen-reader and test compatibility */}
+      <select
+        className={styles.srOnlyModelSelect}
+        tabIndex={-1}
+        value={model}
+        onChange={(event) => {
+          onModelChange?.(event.target.value);
+          setOpen(false);
+        }}
+        disabled={disabled}
+        aria-label="Model"
+        {...(modelTestId ? { 'data-testid': modelTestId } : {})}
+      >
+        {modelsLoading || !models?.length ? (
+          <option value={model}>{model || 'Loading models…'}</option>
+        ) : (
+          <>
+            {!models.some((item) => item.id === model) && model && (
+              <option value={model}>{model}</option>
+            )}
+            {models.map((item) => (
+              <option key={item.id} value={item.id}>{item.displayName}</option>
+            ))}
+          </>
+        )}
+      </select>
+
+      {open && (
+        <div
+          className={styles.modelMenu}
+          role="listbox"
+          aria-label="Select AI model"
+          {...{ 'data-testid': menuTestId }}
+        >
+          <div className={styles.modelMenuHeader}>Model — powers the collaborator</div>
+          <div className={styles.modelMenuList}>
+            {normalizedOptions.map((item) => {
+              const active = item.id === model;
+              const meta = describeModelOption(item);
+              const optionTestId = testId(testIdPrefix, `model-option-${item.id}`) ?? `agent-composer-model-option-${item.id}`;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`${styles.modelOption} ${active ? styles.modelOptionActive : ''}`}
+                  onClick={() => {
+                    onModelChange?.(item.id);
+                    setOpen(false);
+                  }}
+                  {...{ 'data-testid': optionTestId }}
+                >
+                  <span className={styles.modelOptionIcon} aria-hidden="true">
+                    <ModelGlyph family={meta.family} />
+                  </span>
+                  <span className={styles.modelOptionBody}>
+                    <span className={styles.modelOptionTitleRow}>
+                      <span className={styles.modelOptionTitle}>{item.displayName}</span>
+                      <span className={styles.modelOptionPill}>{meta.badge}</span>
+                    </span>
+                    <span className={styles.modelOptionSubtitle}>{meta.subtitle}</span>
+                  </span>
+                  {active && (
+                    <span className={styles.modelOptionCheck} aria-hidden="true">✓</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const AgentComposer: React.FC<AgentComposerProps> = ({
   value,
@@ -145,6 +394,9 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
   after,
   fileInput,
   onKeyDown,
+  onPaste,
+  onPasteFiles,
+  modeBadge,
   'data-testid': dataTestId,
 }) => {
   const internalTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -173,6 +425,36 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
       if (canSend) onSend();
     }
   }, [canSend, onKeyDown, onSend]);
+
+  const handlePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+    onPaste?.(event);
+    if (event.defaultPrevented || !onPasteFiles) return;
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const extracted: File[] = [];
+    if (clipboard.items && clipboard.items.length > 0) {
+      for (let i = 0; i < clipboard.items.length; i += 1) {
+        const item = clipboard.items[i];
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            const hasExt = /\.[a-z0-9]+$/i.test(file.name);
+            const fallbackExt = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
+            const named = !file.name || file.name === 'image.png' || !hasExt
+              ? new File([file], `screenshot-${Date.now()}-${i + 1}.${fallbackExt}`, { type: file.type || 'image/png' })
+              : file;
+            extracted.push(named);
+          }
+        }
+      }
+    } else if (clipboard.files && clipboard.files.length > 0) {
+      extracted.push(...Array.from(clipboard.files));
+    }
+    if (extracted.length > 0) {
+      event.preventDefault();
+      onPasteFiles(extracted);
+    }
+  }, [onPaste, onPasteFiles]);
 
   const resolvedPlaceholder = placeholder
     ?? (isRunning ? 'Agent is thinking…' : 'Type a message… (Enter to send)');
@@ -213,6 +495,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={resolvedPlaceholder}
           rows={rows}
           disabled={!canType}
@@ -222,48 +505,65 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
         />
 
         {attachments.length > 0 && (
-          <div className={styles.attachmentList}>
-            {attachments.map((attachment) => (
-              <span key={attachment.id} className={styles.attachmentChip}>
-                <span className={styles.attachmentName}>{attachment.name}</span>
-                <span className={styles.attachmentSize}>{formatAttachmentSize(attachment.size)}</span>
-                {onRemoveAttachment && (
-                  <button
-                    type="button"
-                    className={styles.attachmentRemove}
-                    onClick={() => onRemoveAttachment(attachment.id)}
-                    disabled={busy || shellDisabled}
-                    aria-label={`Remove ${attachment.name}`}
-                    {...(testId(testIdPrefix, `attachment-remove-${attachment.id}`)
-                      ? { 'data-testid': testId(testIdPrefix, `attachment-remove-${attachment.id}`) }
-                      : {})}
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))}
+          <div className={styles.attachmentList} {...{ 'data-testid': testId(testIdPrefix, 'attachments') ?? 'agent-composer-attachments' }}>
+            {attachments.map((attachment) => {
+              const isImage = Boolean(
+                attachment.type?.startsWith('image/') && attachment.content && attachment.encoding === 'base64',
+              );
+              return (
+                <span key={attachment.id} className={styles.attachmentChip}>
+                  {isImage && (
+                    <img
+                      src={`data:${attachment.type};base64,${attachment.content}`}
+                      alt={attachment.name}
+                      className={styles.attachmentThumb}
+                    />
+                  )}
+                  <span className={styles.attachmentName}>{attachment.name}</span>
+                  <span className={styles.attachmentSize}>{formatAttachmentSize(attachment.size)}</span>
+                  {onRemoveAttachment && (
+                    <button
+                      type="button"
+                      className={styles.attachmentRemove}
+                      onClick={() => onRemoveAttachment(attachment.id)}
+                      disabled={busy || shellDisabled}
+                      aria-label={`Remove ${attachment.name}`}
+                      {...(testId(testIdPrefix, `attachment-remove-${attachment.id}`)
+                        ? { 'data-testid': testId(testIdPrefix, `attachment-remove-${attachment.id}`) }
+                        : {})}
+                    >
+                      ×
+                    </button>
+                  )}
+                </span>
+              );
+            })}
           </div>
         )}
 
-        {attachmentError && <div className={styles.attachmentError}>{attachmentError}</div>}
-        {speech?.speechError && <div className={styles.speechError}>{speech.speechError}</div>}
+        {attachmentError && <div className={styles.attachmentError} role="alert">{attachmentError}</div>}
+        {speech?.speechError && <div className={styles.speechError} role="alert">{speech.speechError}</div>}
 
-        <div className={styles.inputActions}>
-            {showAttach && (
-              <button
-                className={styles.attachBtn}
-                onClick={onAttachClick}
-                type="button"
-                aria-label="Attach files"
-                title="Attach files for context"
-                disabled={busy || shellDisabled}
-                {...(attachTestId ? { 'data-testid': attachTestId } : {})}
-              >
-                <AttachIcon />
-              </button>
-            )}
+        <div className={`${styles.inputActions} ${(modeBadge || showModel) ? styles.inputActionsSplit : ''}`}>
+          {(modeBadge || showModel) && (
+            <div className={styles.inputActionsLeft}>
+              {modeBadge}
+              {showModel && typeof model === 'string' && (
+                // data-testid-exempt — AgentModelPicker forwards modelTestId and option testids
+                <AgentModelPicker
+                  model={model}
+                  models={models}
+                  modelsLoading={modelsLoading}
+                  disabled={busy || shellDisabled}
+                  modelTestId={modelTestId}
+                  testIdPrefix={testIdPrefix}
+                  onModelChange={onModelChange}
+                />
+              )}
+            </div>
+          )}
 
+          <div className={styles.inputActionsRight}>
             {showSpeech && speech && (
               <button
                 className={`${styles.micBtn} ${speech.isListening ? styles.micBtnActive : ''}`}
@@ -280,28 +580,18 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
               </button>
             )}
 
-            {showModel && (
-              <select
-                className={styles.modelSelect}
-                value={model}
-                onChange={(event) => onModelChange?.(event.target.value)}
+            {showAttach && (
+              <button
+                className={styles.attachBtn}
+                onClick={onAttachClick}
+                type="button"
+                aria-label="Attach files"
+                title="Attach files or paste a screenshot (Ctrl+V)"
                 disabled={busy || shellDisabled}
-                aria-label="Model"
-                {...(modelTestId ? { 'data-testid': modelTestId } : {})}
+                {...(attachTestId ? { 'data-testid': attachTestId } : {})}
               >
-                {modelsLoading || !models?.length ? (
-                  <option value={model}>{model || 'Loading models…'}</option>
-                ) : (
-                  <>
-                    {!models.some((item) => item.id === model) && model && (
-                      <option value={model}>{model}</option>
-                    )}
-                    {models.map((item) => (
-                      <option key={item.id} value={item.id}>{item.displayName}</option>
-                    ))}
-                  </>
-                )}
-              </select>
+                <AttachIcon />
+              </button>
             )}
 
             {trailingActions}
@@ -340,6 +630,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
                 </button>
               )
             )}
+          </div>
         </div>
 
         {speech?.isListening && (

@@ -1206,6 +1206,8 @@ interface EditState {
   skillProvider: SkillProvider;
   skillRepo: string;
   skillBranch: string;
+  cloudAgentTargetBranch: string;
+  cloudAgentRequiredReviewers: string;
   interviewSkillPath: string;
   prdSkillPath: string;
   adrInterviewSkillPath: string;
@@ -1298,6 +1300,7 @@ interface EditState {
 const emptyEdit = (): EditState => ({
   id: null, project: '', friendlyName: '', isDefault: false,
   skillProvider: 'ado', skillRepo: '', skillBranch: '',
+  cloudAgentTargetBranch: '', cloudAgentRequiredReviewers: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
@@ -1865,6 +1868,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       skillProvider: config.skillProvider ?? 'ado',
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
+      cloudAgentTargetBranch: config.cloudAgentTargetBranch ?? '',
+      cloudAgentRequiredReviewers: (config.cloudAgentRequiredReviewers ?? []).join('\n'),
       interviewSkillPath: config.interviewSkillPath ?? '',
       prdSkillPath: config.prdSkillPath ?? '',
       adrInterviewSkillPath: config.adrInterviewSkillPath ?? '',
@@ -1990,6 +1995,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         skillProvider: edit.skillProvider,
         skillRepo: edit.skillRepo.trim(),
         skillBranch: edit.skillBranch.trim(),
+        cloudAgentTargetBranch: edit.cloudAgentTargetBranch.trim() || null,
+        cloudAgentRequiredReviewers: edit.cloudAgentRequiredReviewers
+          .split(/[\n,]/)
+          .map((name) => name.trim())
+          .filter(Boolean),
         interviewSkillPath: edit.interviewSkillPath || null,
         prdSkillPath: edit.prdSkillPath || null,
         adrInterviewSkillPath: edit.adrInterviewSkillPath || null,
@@ -2387,6 +2397,32 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     disabled={upsert.isPending || !edit.skillRepo}
                     onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)} {...{ 'data-testid': 'ps-branch-combobox' }} />
                 </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-cloud-agent-target">Cloud agent merge branch</label>
+                  <BranchCombobox
+                    value={edit.cloudAgentTargetBranch}
+                    branches={branches}
+                    isLoading={isLoadingBranches}
+                    disabled={upsert.isPending || !edit.skillRepo}
+                    onChange={(branch) => setEdit((prev) => prev ? { ...prev, cloudAgentTargetBranch: branch } : prev)}
+                    {...{ 'data-testid': 'ps-cloud-agent-target' }}
+                  />
+                  <span className={styles.modelDefault}>The cloud agent cuts its branch from this and opens the pull request into it. Leave blank to use the skill branch.</span>
+                </div>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-cloud-agent-reviewers">Cloud agent required reviewers</label>
+                <textarea
+                  id="ps-cloud-agent-reviewers"
+                  className={styles.select}
+                  rows={3}
+                  value={edit.cloudAgentRequiredReviewers}
+                  placeholder={'Maxview - Dev'}
+                  disabled={upsert.isPending}
+                  onChange={(event) => setEdit((prev) => prev ? { ...prev, cloudAgentRequiredReviewers: event.target.value } : prev)}
+                  {...{ 'data-testid': 'ps-cloud-agent-reviewers' }}
+                />
+                <span className={styles.modelDefault}>One Azure DevOps team or group per line. Each cloud agent pull request in this project adds them as required reviewers.</span>
               </div>
 
               <div className={styles.formGrid}>

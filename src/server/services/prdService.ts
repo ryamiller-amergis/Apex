@@ -11,7 +11,7 @@ import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBackl
 import type { EffortLevel } from '../../shared/types/effort';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
 import { normalizeBacklogUserStories, resolveUserStoryIWant } from '../../shared/utils/userStory';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -937,6 +937,31 @@ function stopPrdWatcher(prdId: string): void {
 
 export function isPrdWatcherActive(prdId: string): boolean {
   return activePrdWatchers.has(prdId);
+}
+
+/** Starts the output watcher unless the run goes to the V2 worker, whose harvest applies the result. */
+export async function startPrdGenerationWatcher(input: {
+  prdId: string;
+  chatThreadId: string;
+  userId: string;
+  project: string;
+}): Promise<void> {
+  const v2Transport = await usesV2DocumentTransport({
+    userId: input.userId,
+    project: input.project,
+    workflowClass: 'prd',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing output.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startPrdWatcher(input.prdId, input.chatThreadId);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 }
 
 export function startPrdWatcher(prdId: string, chatThreadId: string): void {

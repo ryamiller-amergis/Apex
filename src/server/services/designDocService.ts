@@ -13,7 +13,7 @@ import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding'
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration, getThreadRunStateSnapshot } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
@@ -1551,6 +1551,32 @@ export function startSingleFeatureDocWatcher(
   });
 }
 
+/** Starts the output watcher unless the run goes to the V2 worker, whose harvest applies the result. */
+export async function startDesignDocGenerationWatcher(input: {
+  designDocId: string;
+  chatThreadId: string;
+  prdId: string;
+  project: string;
+  userId: string;
+}): Promise<void> {
+  const v2Transport = await usesV2DocumentTransport({
+    userId: input.userId,
+    project: input.project,
+    workflowClass: 'design-doc',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing output.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startSingleFeatureDocWatcher(input.designDocId, input.chatThreadId, input.prdId, input.project);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
+}
+
 /**
  * Idempotently creates one design_docs row for a specific prototype+feature pair and
  * starts the generation watcher. The doc is grounded in interview transcript + PRD
@@ -1722,7 +1748,13 @@ export async function startSingleFeatureDesignDocWatcher(
   await db.update(prds).set({ backlogJson: updatedBacklog as any, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdId));
 
   // Watcher must be started before the kickoff message fires.
-  startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+  await startDesignDocGenerationWatcher({
+    designDocId,
+    chatThreadId: thread.id,
+    prdId,
+    project: prd.project,
+    userId: prd.authorId,
+  });
 
   // Now safe to start the agent — the row and watcher are in place.
   // Fire-and-forget kickoff so prototype approval / auto-start isn't blocked on
@@ -1937,8 +1969,22 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     })
     .where(eq(designDocs.id, designDocId));
 
-
-  startValidationWatcher(designDocId, thread.id);
+  const v2Transport = await usesV2DocumentTransport({
+    userId: doc.authorId,
+    project: doc.project,
+    workflowClass: 'validation',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing scorecards.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startValidationWatcher(designDocId, thread.id);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 
   const kickoffMessage =
     'Score the design doc in `.ai-pilot/kickoff-context.md` using the validation skill. ' +

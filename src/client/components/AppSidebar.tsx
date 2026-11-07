@@ -43,6 +43,7 @@ interface AppSidebarProps {
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
+  onNavigateQaLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
@@ -55,6 +56,12 @@ interface AppSidebarProps {
   onNavigateBuilds?: () => void;
   /** `build-from-prompt` evaluated for this user and project. */
   buildsEnabled?: boolean;
+  onNavigateBrainstorm?: () => void;
+  /** Brainstorm stays hidden until its flag and the project menu are both on. */
+  brainstormEnabled?: boolean;
+  onNavigateReportIssue?: () => void;
+  /** Prod Support stays hidden until the guided cloud-agent flags and the project menu are on. */
+  reportIssueEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   /** MCP Servers stays hidden until the project flag and menu are both on. */
   mcpServersEnabled?: boolean;
@@ -138,6 +145,14 @@ const IconUiLab: React.FC = () => (
   </svg>
 );
 
+const IconQaLab: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6.5 2.5h7" />
+    <path d="M8 2.5v4l-3.4 8A1.5 1.5 0 006 16.5h8a1.5 1.5 0 001.4-2l-3.4-8v-4" />
+    <path d="M7 11.5h6" />
+  </svg>
+);
+
 const IconFeatureRequests: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 3a4 4 0 014 4c0 1.5-.8 2.5-1.5 3.3-.5.5-.5 1-.5 1.7h-4c0-.7 0-1.2-.5-1.7C6.8 9.5 6 8.5 6 7a4 4 0 014-4z" />
@@ -176,6 +191,21 @@ const IconPlaybooks: React.FC = () => (
     <circle cx="10" cy="10" r="1.6" />
     <circle cx="16" cy="10" r="1.6" />
     <path d="M5.6 10h2.8M11.6 10h2.8" />
+  </svg>
+);
+
+const IconReportIssue: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="10" cy="10" r="7" />
+    <path d="M10 6.5v4" />
+    <path d="M10 13.5h.01" />
+  </svg>
+);
+
+const IconBrainstorm: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 3a5 5 0 00-2 9.6V14h4v-1.4A5 5 0 0010 3z" />
+    <path d="M8.5 16.5h3" />
   </svg>
 );
 
@@ -237,6 +267,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
+  onNavigateQaLab,
   onNavigateFeatureRequests,
   onNavigateAiCost,
   onNavigateDesignModule,
@@ -247,6 +278,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigatePlaybooks,
   onNavigateBuilds,
   buildsEnabled = false,
+  onNavigateBrainstorm,
+  brainstormEnabled = false,
+  onNavigateReportIssue,
+  reportIssueEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -260,10 +295,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       id: 'build',
       label: 'Build',
       items: [
+        { label: 'Brainstorm', view: 'brainstorm', icon: <IconBrainstorm />, permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
         { label: 'Interview', view: 'backlog', icon: <IconInterview />, permission: 'interviews:view', onNavigate: onNavigateBacklog },
         { label: 'ADR', view: 'adr', icon: <IconAdr />, permission: 'adr:view', onNavigate: onNavigateAdr },
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
         { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
+        { label: 'Prod Support', view: 'prod-support', icon: <IconReportIssue />, permission: 'chat:create', onNavigate: onNavigateReportIssue ?? (() => {}) },
         { label: 'Builds', view: 'builds', icon: <IconBuilds />, permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
         { label: 'Diagrams', view: 'diagrams', icon: <IconDiagrams />, permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}), testId: 'nav-diagrams' },
       ],
@@ -290,6 +327,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       label: 'Tools',
       items: [
         { label: 'UI Lab', view: 'ui-lab', icon: <IconUiLab />, permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
+        { label: 'QA Lab', view: 'qa-lab', icon: <IconQaLab />, permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}), testId: 'nav-qa-lab' },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
         { label: 'MCP Servers', view: 'mcp-servers', icon: <IconMcpServers />, permission: 'mcp-servers:view', onNavigate: onNavigateMcpServers ?? (() => {}) },
@@ -321,9 +359,16 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     if (item.view === 'builds') {
       return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
     }
+    if (item.view === 'brainstorm') {
+      if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
+      return isSuperAdmin || can('brainstorm:view');
+    }
+    if (item.view === 'prod-support') {
+      if (!reportIssueEnabled || !menuEnabledViews.includes('prod-support')) return false;
+      return isSuperAdmin || can('chat:create');
+    }
     if (item.view === 'playbooks') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
-      return isSuperAdmin || can('playbooks:view');
+      return menuEnabledViews.includes('playbooks') && can('playbooks:view');
     }
     if (item.view === 'mcp-servers') {
       if (!mcpServersEnabled) return false;

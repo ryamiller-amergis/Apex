@@ -43,7 +43,9 @@ jest.mock('../../hooks/useFeatureRequests', () => ({
 }));
 
 jest.mock('../FeatureRequestDetailPanel', () => ({
-  FeatureRequestDetailPanel: () => null,
+  FeatureRequestDetailPanel: ({ fr }: { fr: FeatureRequest }) => (
+    <div data-testid="feature-request-detail-panel">{fr.title}</div>
+  ),
 }));
 
 jest.mock('../FeatureRequestModal', () => ({
@@ -355,5 +357,17 @@ describe('FeatureRequestsView assignment, ranking, and pagination', () => {
     expect(
       screen.queryByTestId('feature-request-assignee-f'),
     ).not.toBeInTheDocument();
+  });
+
+  it('opens the exact technical feature request when deep-linked via ?selected=<id>', () => {
+    const requests = [
+      makeRequest('f-1', 'Feature Alpha', 1, null, 'feature'),
+      makeRequest('t-42', 'Brainstorm Technical Plan', 1, null, 'technical'),
+    ];
+    renderView(requests, '/feature-requests?selected=t-42');
+
+    expect(screen.getByTestId('feature-request-detail-panel')).toHaveTextContent(
+      'Brainstorm Technical Plan',
+    );
   });
 });

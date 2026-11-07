@@ -114,7 +114,10 @@ export function resolveInteractiveThreadWorkspacePath(
 ): string {
   const configured = env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim();
   const root = configured && configured.length > 0 ? configured : os.tmpdir();
-  const revision = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') || 'ungrounded';
+  // Cap revision length so `.cursor/projects/<encoded-cwd>/sdk-agent-store/<hash>/index.db-wal`
+  // stays under Windows MAX_PATH (260 chars), avoiding SQLite "unable to open database file".
+  const cleaned = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') ?? '';
+  const revision = cleaned.length > 0 ? cleaned.slice(0, 8) : 'ungrounded';
   return path.join(root, 'apex-interactive-thread', threadId, revision);
 }
 
@@ -272,15 +275,15 @@ export interface InteractiveActorDependencies {
     options?: { reclaimDisk(): Promise<void> },
   ): Promise<WarmThreadCheckout>;
   /**
-   * Collect attempt-local outputs, upload attempt-scoped blobs, write the
-   * manifest last, and return its blob ref. Required for durable completed
-   * terminals that claim `artifactsFlushed: true`.
+   * Collect attempt-local outputs and upload them when there is something to
+   * store. Returns no ref when the workspace has no eligible files. A durable
+   * completed terminal still sets `artifactsFlushed: true`.
    */
   uploadAttemptArtifacts?(
     bootstrap: InteractiveActorBootstrap,
     workspacePath: string,
     signal: AbortSignal,
-  ): Promise<AiRunBlobRef>;
+  ): Promise<AiRunBlobRef | undefined>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -1050,12 +1053,14 @@ export function createInteractiveSessionActor(
       }
     };
 
-    const armToolTimer = (): void => {
+    const armToolTimer = (toolName?: string): void => {
       clearToolTimer();
-      const toolMs = Math.min(
-        effectiveDeadlines.toolCallMs,
-        absoluteMs - now(),
-      );
+      const remainingMs = absoluteMs - now();
+      // toolCallMs bounds a stalled MCP call. A shell is the step itself, so
+      // it keeps the rest of the turn instead of the MCP stall limit.
+      const configuredMs =
+        toolName?.toLowerCase() === 'shell' ? remainingMs : effectiveDeadlines.toolCallMs;
+      const toolMs = Math.min(configuredMs, remainingMs);
       if (!(toolMs > 0)) {
         failureCategory = 'tool_timeout';
         throw Object.assign(new Error('tool_timeout'), { code: 'tool_timeout' });
@@ -1091,26 +1096,56 @@ export function createInteractiveSessionActor(
       }
     };
 
+    const heartbeatStats = { lastAcceptedAt: now(), maxGapMs: 0, sent: 0, failed: 0 };
+    const recordHeartbeatGap = (at: number): void => {
+      heartbeatStats.maxGapMs = Math.max(heartbeatStats.maxGapMs, at - heartbeatStats.lastAcceptedAt);
+    };
     const heartbeat = (): void => {
-      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).catch(() => {});
+      heartbeatStats.sent += 1;
+      void post({ kind: 'heartbeat', dispatchMessageId, attemptId }).then(
+        () => {
+          const at = now();
+          recordHeartbeatGap(at);
+          heartbeatStats.lastAcceptedAt = at;
+        },
+        () => {
+          heartbeatStats.failed += 1;
+        },
+      );
     };
     heartbeat();
     const heartbeatTimer = setInterval(heartbeat, durableHeartbeatMs);
     activeDurableThreads.add(threadId);
 
     let startupSequence = 0;
-    const publishStartupPhase = (
+    const publishStartupPhase = async (
       phase: 'setup' | 'analysis',
       detail: string,
-    ): Promise<void> =>
-      publishLive(threadId, createCursorRunEventEnvelope({
+    ): Promise<void> => {
+      const event: SseEvent = {
+        type: 'phase',
+        phase,
+        status: 'running',
+        detail,
+      };
+      await publishLive(threadId, createCursorRunEventEnvelope({
         threadId,
         runId,
         sourceInstance,
         sequence: (startupSequence += 1),
         timestamp: new Date(now()).toISOString(),
-        event: { type: 'phase', phase, status: 'running', detail },
+        event,
       })).catch(() => {});
+      await post({
+        dispatchMessageId,
+        attemptId,
+        kind: 'progress',
+        phase,
+        status: 'running',
+        detail,
+        event,
+      }).catch(() => {});
+    };
 
     try {
       await publishStartupPhase(
@@ -1483,11 +1518,11 @@ export function createInteractiveSessionActor(
               observeEvent();
               if (event.type === 'tool_call') {
                 if (mcpServerChat) mcpToolUsedThisAttempt = true;
-                armToolTimer();
+                armToolTimer(event.toolName);
               } else if (event.type === 'tool_status') {
                 if (mcpServerChat) mcpToolUsedThisAttempt = true;
                 if (event.status === 'running') {
-                  armToolTimer();
+                  armToolTimer(event.toolName);
                 } else {
                   clearToolTimer();
                 }
@@ -1583,18 +1618,22 @@ export function createInteractiveSessionActor(
           mcpToolRequired && !mcpToolUsedThisAttempt
             ? mcpServerNoToolFallback('the connected MCP server')
             : result.text;
-        if (finalText && finalText.trim().length > 0) {
-          const finalMessage: ChatMessage = {
-            id: randomUUID(),
-            role: 'agent',
-            text: specification.guidedInterview
-              ? normalizeGuidedInterviewResponse(
-                  finalText,
-                  specification.guidedInterview.turn,
-                )
-              : finalText,
-            ts: new Date(now()).toISOString(),
-          };
+        const finalMessage: ChatMessage | null =
+          finalText && finalText.trim().length > 0
+            ? {
+                id: randomUUID(),
+                role: 'agent',
+                text: specification.guidedInterview
+                  ? normalizeGuidedInterviewResponse(
+                      finalText,
+                      specification.guidedInterview.turn,
+                    )
+                  : finalText,
+                ts: new Date(now()).toISOString(),
+              }
+            : null;
+        if (finalMessage) {
+          await publishLiveEnvelope({ type: 'message', message: finalMessage });
           await post({
             dispatchMessageId,
             attemptId,
@@ -1643,8 +1682,12 @@ export function createInteractiveSessionActor(
           artifactsFlushed: true,
           artifactManifestRef,
           cursorAgentId: reusableAgentId,
+          ...(finalMessage
+            ? { event: { type: 'message', message: finalMessage } }
+            : {}),
           stageTimings: stageTimings(),
         });
+        await publishLiveEnvelope({ type: 'done', runId });
 
         if (result.runLeftUnsettled) {
           if (agentCache.get(threadId)?.handle === agentHandle) {
@@ -1750,6 +1793,19 @@ export function createInteractiveSessionActor(
     } finally {
       activeDurableThreads.delete(threadId);
       clearInterval(heartbeatTimer);
+      recordHeartbeatGap(now());
+      try {
+        telemetry.interactiveHeartbeats(
+          { runId, dispatchMessageId, project: projectId, lane: INTERACTIVE_LANE },
+          {
+            maxGapMs: heartbeatStats.maxGapMs,
+            sent: heartbeatStats.sent,
+            failed: heartbeatStats.failed,
+          },
+        );
+      } catch {
+        // Telemetry must not change the turn outcome.
+      }
       clearTimeout(absoluteTimer);
       clearToolTimer();
       clearEventTimers();

@@ -317,16 +317,17 @@ describe('AppSidebar — Work Board flag', () => {
 });
 
 describe('AppSidebar — Playbooks visibility', () => {
-  it('renders Playbooks for a super admin', () => {
+  it('hides Playbooks from a platform admin when the project menu omits the module', () => {
     render(
       <AppSidebar
         {...baseProps}
         isSuperAdmin
+        can={(key: string) => key === 'playbooks:view'}
         selectedProject="Apex"
         onNavigatePlaybooks={jest.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: 'Playbooks' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
   });
 
   it('hides Playbooks when Platform Admin has not enabled it for the project', () => {
@@ -390,6 +391,37 @@ describe('AppSidebar — Builds visibility (FEAT-002 VT-06)', () => {
     expect(screen.getByTestId('nav-item-builds')).toBeInTheDocument();
     rerender(<AppSidebar {...baseProps} isSuperAdmin buildsEnabled={false} onNavigateBuilds={jest.fn()} />);
     expect(screen.queryByTestId('nav-item-builds')).not.toBeInTheDocument();
+  });
+});
+
+describe('AppSidebar — Brainstorm under Build', () => {
+  it('shows Brainstorm in the Build group when the flag, menu and permission are on', () => {
+    const onNavigateBrainstorm = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'brainstorm:view'}
+        menuEnabledViews={['brainstorm']}
+        brainstormEnabled
+        onNavigateBrainstorm={onNavigateBrainstorm}
+      />,
+    );
+    expect(screen.getByText('Build')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('nav-item-brainstorm'));
+    expect(onNavigateBrainstorm).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Brainstorm when the flag is off', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key) => key === 'brainstorm:view'}
+        menuEnabledViews={['brainstorm']}
+        brainstormEnabled={false}
+        onNavigateBrainstorm={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('nav-item-brainstorm')).not.toBeInTheDocument();
   });
 });
 

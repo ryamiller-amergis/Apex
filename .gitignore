@@ -91,6 +91,12 @@ e2e-*.log
 # never commit it (see tests/e2e/support/capture-storage-state.ts)
 tests/e2e/.auth/
 
+# Local cloud-agent scorecards. The export includes work-item text.
+evals/cloud-agent/cases.json
+evals/cloud-agent/summary.json
+evals/cloud-agent/results.json
+.promptfoo/
+
 # Local agent scratch state — per-machine, not shared
 .agents/
 .superpowers/

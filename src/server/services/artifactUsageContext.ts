@@ -91,8 +91,10 @@ export function labelUsageRun(opts: {
   if (feature === 'prd-review') return 'Edit';
   if (feature === 'interview') return 'Interview';
   if (feature === 'adr') return 'ADR';
+  if (feature === 'brainstorm') return 'Brainstorm';
   if (feature === 'design-prototype') return 'Prototype';
   if (feature === 'design-plan') return 'Design plan';
+  if (feature === 'cloud-agent') return 'Cloud Agent';
   return 'Agent run';
 }
 
@@ -140,6 +142,16 @@ export function adrUsageCtx(project: string, adrId: string, userId?: string): Ar
     project,
     entityType: 'adr',
     entityId: adrId,
+    userId,
+  };
+}
+
+export function brainstormUsageCtx(project: string, sessionId: string, userId?: string): ArtifactBedrockUsageCtx {
+  return {
+    feature: 'brainstorm',
+    project,
+    entityType: 'brainstorm-session',
+    entityId: sessionId,
     userId,
   };
 }

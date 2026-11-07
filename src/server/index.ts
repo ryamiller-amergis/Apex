@@ -18,6 +18,7 @@ import chatRoutes from './routes/chat';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
 import adrRoutes from './routes/adr';
+import brainstormRoutes from './routes/brainstorm';
 import notificationRoutes from './routes/notifications';
 import reviewCommentRoutes from './routes/reviewComments';
 import deploymentOutcomesRouter from './routes/deploymentOutcomes';
@@ -58,7 +59,7 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
-import { startReaper, stopReaper } from './services/agentRunReaperService';
+import { startReaper } from './services/agentRunReaperService';
 import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
@@ -71,7 +72,7 @@ import {
   startPlaybookStepOutputCleanup,
   stopPlaybookStepOutputCleanup,
 } from './services/playbookStepOutputCleanupScheduler';
-import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
+import { initPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
   shutdownInteractiveLiveBus,
@@ -90,8 +91,10 @@ import { apiKeyExpiryNotificationScheduler } from './services/apiKeyExpiryNotifi
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { workBoardScheduler } from './services/workBoardScheduler';
+import { startBrainstormCleanupScheduler, stopBrainstormCleanupScheduler } from './services/brainstorm/cleanupScheduler';
 import buildsRoutes from './routes/builds';
 import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
+import { startBuildReconciliation, stopBuildReconciliation } from './services/buildReconciliationScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import {
   isInteractiveGatewayEnabled,
@@ -108,6 +111,7 @@ import apiKeysRoutes from './routes/apiKeys';
 import publicRoutes from './routes/public';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import aiRunsInternalRoutes from './routes/aiRunsInternal';
+import cabReleaseBrokerRoutes from './routes/cabReleaseBroker';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
@@ -151,7 +155,14 @@ app.use(cors({
     : ['http://localhost:3000', 'http://localhost:5173'],
   credentials: true
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    if (req.url?.includes('/api/public/playbooks/triggers/')) {
+      (req as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    }
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Production sessions default to PostgreSQL so OAuth state and authenticated
@@ -204,7 +215,7 @@ const internalOnlyPaths = [
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
 // AI runner ingest — session-free; requireAiRunnerAuth validates callback identity.
-const aiRunnerCallbackPaths = ['/internal/ai-runs'];
+const aiRunnerCallbackPaths = ['/internal/ai-runs', '/internal/cab-release'];
 
 // @apex/skills CLI entitlement lookup — session-free because the CLI runs on
 // developer machines and in CI with no Apex session. Read-only and returns no
@@ -263,6 +274,7 @@ app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
 app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
 app.use('/api/adr', ensureAuthenticated, adrRoutes);
+app.use('/api/brainstorm', ensureAuthenticated, brainstormRoutes);
 app.use('/api/notifications', ensureAuthenticated, notificationRoutes);
 app.use('/api/design-prototypes', ensureAuthenticated, designPrototypeRoutes);
 app.use('/api/design-plans', ensureAuthenticated, designPlanRoutes);
@@ -294,6 +306,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 // AI runner ingest — session-free; auth is runner MI + AiRun.Runner (or local test token).
 app.use('/api/internal/ai-runs', aiRunsInternalRoutes);
+app.use('/api/internal/cab-release', cabReleaseBrokerRoutes);
 // @apex/skills CLI entitlement lookup — session-free, read-only, no secrets returned.
 app.use('/api/internal/foundation-skills', foundationSkillsAuthorizeRoutes);
 app.use('/api/admin', adminRouter);
@@ -331,7 +344,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Global error-handling middleware — sends unhandled errors to App Insights
-app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error & { status?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   captureServerError(req, err, res);
   if (telemetryClient) {
     telemetryClient.trackException({
@@ -477,6 +490,10 @@ const server = app.listen(PORT, () => {
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
 
+  startBrainstormCleanupScheduler();
+  server.once('close', stopBrainstormCleanupScheduler);
+  console.log('Brainstorm cleanup scheduler started');
+
   startBuildQueueScheduler();
   server.once('close', stopBuildQueueScheduler);
   console.log('Build queue scheduler started');
@@ -492,6 +509,8 @@ const server = app.listen(PORT, () => {
   // Playbook recovery always starts. A restart has to resume parked runs.
   void startPlaybookReconciliation();
   server.once('close', stopPlaybookReconciliation);
+  startBuildReconciliation();
+  server.once('close', stopBuildReconciliation);
   startPlaybookStepOutputCleanup();
   server.once('close', stopPlaybookStepOutputCleanup);
   startLoadTestRunReaper();

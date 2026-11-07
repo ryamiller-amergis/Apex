@@ -159,7 +159,7 @@ export const FeatureRequestsView: React.FC = () => {
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const dragIndexRef = useRef<number | null>(null);
   const tabParam = searchParams.get('tab');
-  const deepLinkId = searchParams.get('id');
+  const deepLinkId = searchParams.get('id') || searchParams.get('selected');
   const activeType: WorkItemType = WORK_ITEM_TYPES.includes(
     tabParam as WorkItemType,
   )
@@ -183,11 +183,13 @@ export const FeatureRequestsView: React.FC = () => {
     canManage && sortMode === 'rank' && statusFilter === '' && searchQuery === '';
 
   useEffect(() => {
-    setSelectedId(null);
+    if (!deepLinkId) {
+      setSelectedId(null);
+    }
     setPage(1);
-  }, [activeType, selectedProject]);
+  }, [activeType, selectedProject, deepLinkId]);
 
-  // Deep link from Work Board Source: /feature-requests?id=<frId>
+  // Deep link from Work Board Source or Brainstorm handoff: /feature-requests?id=<frId> or ?selected=<frId>
   useEffect(() => {
     if (!deepLinkId || !requests?.length) return;
     const match = requests.find((r) => r.id === deepLinkId);
@@ -197,6 +199,7 @@ export const FeatureRequestsView: React.FC = () => {
         const next = new URLSearchParams(prev);
         next.set('tab', match.type);
         next.set('id', match.id);
+        next.delete('selected');
         return next;
       }, { replace: true });
       return;
@@ -344,6 +347,15 @@ export const FeatureRequestsView: React.FC = () => {
       selectedId ? (requests?.find((r) => r.id === selectedId) ?? null) : null,
     [requests, selectedId],
   );
+
+  useEffect(() => {
+    if (!deepLinkId || selectedId !== deepLinkId) return;
+    const idx = sorted.findIndex((r) => r.id === deepLinkId);
+    if (idx >= 0) {
+      const targetPage = Math.floor(idx / pageSize) + 1;
+      setPage((prev) => (prev === targetPage ? prev : targetPage));
+    }
+  }, [deepLinkId, selectedId, sorted, pageSize]);
 
   const filtersActive = statusFilter !== '' || searchQuery !== '';
   const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
@@ -505,7 +517,17 @@ export const FeatureRequestsView: React.FC = () => {
                         dragIndex !== null &&
                         dragIndex !== idx
                       }
-                      onEdit={() => setSelectedId(fr.id)}
+                      onEdit={() => {
+                        setSelectedId(fr.id);
+                        if (searchParams.has('id') || searchParams.has('selected')) {
+                          setSearchParams((prev) => {
+                            const next = new URLSearchParams(prev);
+                            next.set('id', fr.id);
+                            next.delete('selected');
+                            return next;
+                          }, { replace: true });
+                        }
+                      }}
                       onAssign={(assigneeId) =>
                         handleUpdate(fr.id, { assigneeId })
                       }
@@ -595,7 +617,17 @@ export const FeatureRequestsView: React.FC = () => {
         <FeatureRequestDetailPanel
           fr={selectedRequest}
           canManage={canManage}
-          onClose={() => setSelectedId(null)}
+          onClose={() => {
+            setSelectedId(null);
+            if (searchParams.has('id') || searchParams.has('selected')) {
+              setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete('id');
+                next.delete('selected');
+                return next;
+              }, { replace: true });
+            }
+          }}
           onUpdate={handleUpdate}
           assignees={assignees}
           onReanalyze={(id) => reanalyzeMutation.mutate(id)}

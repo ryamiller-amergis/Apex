@@ -94,6 +94,7 @@ export interface PreparedBackgroundWorkflowWorker {
   skillPath: string;
   skillContent?: string;
   skillSha256?: string;
+  skillCompanions?: Array<{ path: string; content: string }>;
   /** No Skill was frozen because the mirror was still fetching the pinned commit. */
   skillRepositorySyncing?: boolean;
   projectId: string;
@@ -236,6 +237,9 @@ export async function readDocumentScratchInputs(
     '.ai-pilot/kickoff-context.md',
     '.ai-pilot/kickoff-transcript.md',
     '.ai-pilot/session.json',
+    '.ai-pilot/test-plans.md',
+    '.ai-pilot/existing-test-cases.json',
+    '.ai-pilot/test-case-index.md',
   ]) {
     if (!isAllowedDocumentScratchInputPath(workflowClass, relativePath)) {
       continue;
@@ -604,6 +608,9 @@ export function createBackgroundWorkflowRouter(
           skillPath: prepared.skillPath,
           skillContent: prepared.skillContent,
           skillSha256: prepared.skillSha256,
+          ...(prepared.skillCompanions?.length
+            ? { skillCompanions: prepared.skillCompanions }
+            : {}),
           workflowClass: input.workflowClass,
           projectId: prepared.projectId,
           threadId: input.threadId,
@@ -732,6 +739,68 @@ export function createBackgroundWorkflowRouter(
         preparationStartedAt,
       );
     }
+
+    // The V2 document worker checks out the grounded commit itself, so App
+    // Service neither reads its mirror nor prepares a checkout.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      try {
+        await clearGenerationOutput(prepared.threadWorkspacePath);
+      } catch {
+        return recover(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+      const v2Reason = 'v2-commit-only';
+      safeTrack(
+        'background.materialization.outcome',
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          route: 'worker',
+          reason: v2Reason,
+        },
+        { durationMs: Math.max(0, now() - preparationStartedAt) },
+      );
+      const v2ModelChoice = await resolveModelChoice(prepared.model, prepared.effort);
+      const v2Snapshot: ExecutionSnapshot = {
+        prompt: prepared.prompt,
+        model: v2ModelChoice.model,
+        effort: v2ModelChoice.effort,
+        workspaceRef: prepared.threadWorkspacePath,
+        groundedSha: prepared.targetGrounding.groundedSha,
+        repository: prepared.targetGrounding.repository,
+        workflowClass: input.workflowClass,
+        skillPath: prepared.skillPath,
+        projectId: prepared.projectId,
+        threadId: input.threadId,
+        ...(input.playbookAgentPolicy
+          ? { playbookAgentPolicy: input.playbookAgentPolicy }
+          : {}),
+      };
+      let v2RunId: string;
+      try {
+        v2RunId = await dispatch(v2Snapshot, prepared.targetGrounding);
+      } catch (error) {
+        return recover(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+          error,
+        );
+      }
+      routeDecision(input, 'worker', v2Reason);
+      return {
+        route: 'worker',
+        workspacePath: prepared.threadWorkspacePath,
+        runId: v2RunId,
+      };
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
 
     // PRD / design-doc / test-cases: prefer the bare mirror when the worker
     // can actually open it (same disk or HTTP). Else reuse the interview's
@@ -976,6 +1045,26 @@ export function createBackgroundWorkflowRouter(
 }
 
 export const backgroundWorkflowRouter = createBackgroundWorkflowRouter();
+
+/**
+ * Whether the router sends this workflow to the V2 document worker, which then
+ * owns the run's ending through harvest.
+ */
+export async function usesV2DocumentTransport(input: {
+  userId: string;
+  project: string;
+  workflowClass: BackgroundWorkflowClass;
+}): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(V2_TRANSPORT_FLAG, {
+      userId: input.userId,
+      project: input.project,
+      caller: input.workflowClass,
+    });
+  } catch {
+    return false;
+  }
+}
 
 export function routeBackgroundWorkflow(
   input: BackgroundWorkflowRouteInput,

@@ -2,8 +2,8 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import mermaid from 'mermaid';
 import {
+  extractMermaidChartFromCode,
   normalizeMermaidBlocks,
   normalizeMermaidChart,
 } from '../utils/mermaidMarkdown';
@@ -27,6 +27,10 @@ function renderMermaid(
 ): { id: string; result: Promise<string> } {
   const id = `apex-mermaid-${mermaidDiagramCounter++}`;
   const render = async (): Promise<string> => {
+    const mermaidModule = await import('mermaid');
+    const mermaid =
+      mermaidModule.default ??
+      (mermaidModule as unknown as typeof mermaidModule.default);
     mermaid.initialize({
       startOnLoad: false,
       suppressErrorRendering: true,
@@ -275,7 +279,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        data-testid="mermaid-lightbox"
+        {...{ 'data-testid': 'mermaid-lightbox' }}
         onClick={(event) => {
           if (event.target === event.currentTarget) closeLightbox();
         }}
@@ -294,6 +298,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
               <button
                 type="button"
                 className={styles.zoomButton}
+                {...{ 'data-testid': 'mermaid-lightbox-zoom-out' }}
                 onClick={() => setZoom((value) => clampZoom(value - 0.25))}
                 aria-label="Zoom out"
                 title="Zoom out (−)"
@@ -306,6 +311,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
               <button
                 type="button"
                 className={styles.zoomButton}
+                {...{ 'data-testid': 'mermaid-lightbox-zoom-in' }}
                 onClick={() => setZoom((value) => clampZoom(value + 0.25))}
                 aria-label="Zoom in"
                 title="Zoom in (+)"
@@ -315,6 +321,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
               <button
                 type="button"
                 className={styles.zoomButton}
+                {...{ 'data-testid': 'mermaid-lightbox-reset' }}
                 onClick={resetView}
                 aria-label="Reset zoom"
                 title="Reset zoom and pan (0)"
@@ -325,6 +332,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
                 ref={closeRef}
                 type="button"
                 className={styles.closeButton}
+                {...{ 'data-testid': 'mermaid-lightbox-close' }}
                 onClick={closeLightbox}
                 aria-label="Close diagram"
               >
@@ -335,7 +343,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
           <div
             ref={viewportRef}
             className={`${styles.lightboxBody}${isPanning ? ` ${styles.lightboxBodyPanning}` : ''}`}
-            data-testid="mermaid-pan-viewport"
+            {...{ 'data-testid': 'mermaid-pan-viewport' }}
             onMouseDown={(event) => {
               if (event.button !== 0) return;
               handlePanStart(event.clientX, event.clientY);
@@ -406,7 +414,7 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart }) => {
             onClick={openLightbox}
             aria-label="Expand diagram"
             title="Expand diagram"
-            data-testid="mermaid-expand"
+            {...{ 'data-testid': 'mermaid-expand' }}
           >
             <svg
               viewBox="0 0 24 24"
@@ -441,19 +449,34 @@ interface MarkdownWithMermaidProps {
   content: string;
   components?: Components;
   className?: string;
+  skipHtml?: boolean;
 }
 
 export const MarkdownWithMermaid: React.FC<MarkdownWithMermaidProps> = ({
   content,
   components,
   className,
+  skipHtml,
 }) => {
   const markdownComponents: Components = {
     ...components,
+    pre({ children, ...props }) {
+      const childArray = React.Children.toArray(children);
+      if (
+        childArray.length === 1 &&
+        React.isValidElement(childArray[0]) &&
+        childArray[0].type === MermaidDiagram
+      ) {
+        return <>{children}</>;
+      }
+      return <pre {...props}>{children}</pre>;
+    },
     code({ className: codeClassName, children, ...props }) {
-      const language = /language-(\w+)/.exec(codeClassName ?? '')?.[1];
-      if (language === 'mermaid') {
-        return <MermaidDiagram chart={String(children).replace(/\n$/, '')} />;
+      const language = /language-([\w-]+)/.exec(codeClassName ?? '')?.[1];
+      const codeText = String(children).replace(/\n$/, '');
+      const mermaidChart = extractMermaidChartFromCode(language, codeText);
+      if (mermaidChart !== null) {
+        return <MermaidDiagram chart={mermaidChart} />;
       }
       return (
         <code className={codeClassName} {...props}>
@@ -468,6 +491,7 @@ export const MarkdownWithMermaid: React.FC<MarkdownWithMermaidProps> = ({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={markdownComponents}
+        {...(skipHtml !== undefined ? { skipHtml } : {})}
       >
         {normalizeMermaidBlocks(stripYamlFrontmatter(content))}
       </ReactMarkdown>

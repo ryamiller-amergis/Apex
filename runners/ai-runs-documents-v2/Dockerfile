@@ -5,6 +5,14 @@
 
 FROM node:24-bookworm-slim
 
+# The MaxView investigation Skill logs in with az. The slim image has no CLI,
+# and installing it during a run needs tools this image does not ship.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl apt-transport-https gnupg \
+  && curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./

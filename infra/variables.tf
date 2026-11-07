@@ -556,6 +556,30 @@ variable "ai_runs_runner_identity_name" {
   default     = null
 }
 
+variable "ai_runs_insights_reader_name" {
+  description = "Shared user-assigned identity for MaxView telemetry reads. Dev creates this identity. Prod attaches the same one. Do not create a second identity per environment."
+  type        = string
+  default     = "mi-apex-insights-reader-dev"
+}
+
+variable "ai_runs_insights_reader_resource_group_name" {
+  description = "Resource group of mi-apex-insights-reader-dev. The identity stays in the dev group when prod workers use it."
+  type        = string
+  default     = "rg-scrum-dev"
+}
+
+variable "ai_runs_insights_reader_location" {
+  description = "Region of mi-apex-insights-reader-dev. Must match the identity that already exists."
+  type        = string
+  default     = "East US"
+}
+
+variable "ai_runs_insights_reader_subscription_id" {
+  description = "Subscription that holds mi-apex-insights-reader-dev. Prod apply reads the identity from here."
+  type        = string
+  default     = "9d08693d-0c89-4f11-aa43-6cbdb89cf1cb"
+}
+
 variable "ai_runs_max_in_flight" {
   description = "Global background in-flight cap. Must match App Service AI_RUNS_BACKGROUND_INFLIGHT_LIMIT and KEDA max_executions (Phase 1: 8–12; default 10)."
   type        = number
@@ -917,6 +941,17 @@ variable "repo_read_service_environment_id" {
   description = "Container Apps Environment to host repo-read. Null reuses the ai-runs environment. Prod runs its own environment so repo-read can sit on a dedicated workload profile without giving one to every ai-runs app."
   type        = string
   default     = null
+}
+
+variable "repo_read_service_grounding_maintenance_mode" {
+  description = "GROUNDING_MAINTENANCE_MODE for repo-read. \"v2-projects\" makes it own repo upkeep for projects wholly on ai-runs-v2-transport and clean the workspace share. Null leaves upkeep on App Service."
+  type        = string
+  default     = "v2-projects"
+
+  validation {
+    condition     = var.repo_read_service_grounding_maintenance_mode == null || var.repo_read_service_grounding_maintenance_mode == "v2-projects"
+    error_message = "repo_read_service_grounding_maintenance_mode must be null or \"v2-projects\"."
+  }
 }
 
 variable "repo_read_service_workload_profile_name" {
@@ -1322,9 +1357,15 @@ variable "ai_platform_v2_interactive_workspace_storage_name" {
 }
 
 variable "ai_platform_v2_interactive_workspace_mount_path" {
-  description = "Mount path for the shared actor-host workspace."
+  description = "Mount path for the shared actor-host workspace. AI_PILOT_DATA_DIR uses this path whether or not the share is mounted."
   type        = string
   default     = "/home/data/ai-pilot"
+}
+
+variable "ai_platform_v2_interactive_mount_workspace_share" {
+  description = "Mount the Azure Files workspace share on the V2 agentic and fast-interactive hosts. Set false once Brainstorm sources and grounding come from Blob bundles in this environment."
+  type        = bool
+  default     = true
 }
 
 variable "ai_platform_v2_interactive_grounding_container_name" {

@@ -7,6 +7,7 @@
 import { sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import {
+  AI_RUN_V2_MAX_ATTEMPTS,
   isAiRunBlobRef,
   isAiRunV2CapacityClass,
   isAiRunV2WorkloadLane,
@@ -280,7 +281,7 @@ export function createReconciler(deps: ReconcilerDeps): Reconciler {
   const listStale = deps.listStaleRunning ?? defaultListStaleRunning;
   const listChecking = deps.listCheckingWorkers ?? defaultListCheckingWorkers;
   const loadRetryContext = deps.loadRetryContext ?? defaultLoadRetryContext;
-  const maxAttempts = deps.maxAttempts ?? 3;
+  const maxAttempts = deps.maxAttempts ?? AI_RUN_V2_MAX_ATTEMPTS;
 
   /**
    * A confirmed loss leaves the run with no live attempt, so replace it with a

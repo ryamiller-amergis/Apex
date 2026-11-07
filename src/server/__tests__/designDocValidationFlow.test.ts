@@ -56,6 +56,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
     await input.runInProcess();
     return { route: 'in-process', reason: 'flag-disabled' };
   }),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/runGroundingService', () => ({

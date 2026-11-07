@@ -84,6 +84,7 @@ jest.mock('../services/wikiCatalog', () => ({
 
 jest.mock('../services/chatThreadRepository', () => ({
   toggleFlag: jest.fn(),
+  isBackgroundWorkflowThread: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../utils/requestUser', () => ({
