@@ -95,6 +95,34 @@ describe('ProjectQuickLinksSettings', () => {
     expect(reorderMutate).toHaveBeenCalledWith({ ids: ['test', 'prod', 'clerk'] }, expect.any(Object));
   });
 
+  it('moves a whole category, even one with a single link', () => {
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    expect(screen.getByTestId('quick-link-category-up-prod')).toBeDisabled();
+    expect(screen.getByTestId('quick-link-category-down-clerk')).toBeDisabled();
+    expect(screen.queryByTestId('quick-link-category-up-test')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('quick-link-category-up-clerk'));
+
+    expect(reorderMutate).toHaveBeenCalledWith({ ids: ['clerk', 'prod', 'test'] }, expect.any(Object));
+  });
+
+  it('shows categories where their first link sits, not A to Z', () => {
+    mockUseProjectQuickLinks.mockReturnValue({
+      data: [makeLink('clerk', 'Clerk', 'Tools', 0), makeLink('prod', 'MaxView Prod', 'Environments', 1)],
+      isLoading: false,
+      isError: false,
+    });
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    const rows = screen.getAllByTestId(/^quick-link-row-(clerk|prod)$/);
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual(['quick-link-row-clerk', 'quick-link-row-prod']);
+  });
+
+  it('hides category moves while a filter is on', () => {
+    render(<ProjectQuickLinksSettings project="MaxView" />);
+    fireEvent.change(screen.getByTestId('quick-links-search'), { target: { value: 'max' } });
+    expect(screen.queryByTestId('quick-link-category-up-prod')).not.toBeInTheDocument();
+  });
+
   it('rejects a javascript: URL in the add form', async () => {
     render(<ProjectQuickLinksSettings project="MaxView" />);
     fireEvent.click(screen.getByTestId('quick-links-add'));
@@ -116,7 +144,7 @@ describe('ProjectQuickLinksSettings', () => {
 
     await waitFor(() =>
       expect(createMutate).toHaveBeenCalledWith(
-        { label: 'SendGrid', url: 'https://app.sendgrid.com', category: 'Tools', sortOrder: 0 },
+        { label: 'SendGrid', url: 'https://app.sendgrid.com', category: 'Tools', sortOrder: 2 },
         expect.any(Object),
       ),
     );

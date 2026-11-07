@@ -3,6 +3,17 @@
   scroll-margin-top: 24px;
 }
 
+.categoryCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.categoryMoves {
+  display: inline-flex;
+  gap: 2px;
+}
+
 .urlCell {
   max-width: 360px;
   overflow: hidden;

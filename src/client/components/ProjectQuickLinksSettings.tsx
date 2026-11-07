@@ -17,6 +17,7 @@ import {
   quickLinkLabelField,
   quickLinkUrlField,
 } from '../utils/quickLinkForm';
+import { groupQuickLinks, moveQuickLinkCategory } from '../utils/quickLinkOrder';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { CategoryPill, OTHER_CATEGORY_LABEL } from './QuickLinkCategory';
 import { QuickLinkCategoryField } from './QuickLinkCategoryField';
@@ -40,6 +41,8 @@ type QuickLinkFormValues = z.infer<typeof quickLinkSchema>;
 
 interface QuickLinkFormModalProps {
   link: ProjectQuickLink | null;
+  /** Sort order a new link starts with, so it lands at the end. */
+  newSortOrder: number;
   categories: string[];
   isPending: boolean;
   serverError: string | null;
@@ -50,6 +53,7 @@ interface QuickLinkFormModalProps {
 
 const QuickLinkFormModal: React.FC<QuickLinkFormModalProps> = ({
   link,
+  newSortOrder,
   categories,
   isPending,
   serverError,
@@ -69,7 +73,7 @@ const QuickLinkFormModal: React.FC<QuickLinkFormModalProps> = ({
       label: link?.label ?? '',
       url: link?.url ?? '',
       category: link?.category ?? '',
-      sortOrder: link?.sortOrder ?? 0,
+      sortOrder: link?.sortOrder ?? newSortOrder,
     },
   });
 
@@ -210,6 +214,15 @@ function moveWithinCategory(links: ProjectQuickLink[], id: string, direction: -1
   return ids;
 }
 
+/** Moves a whole category one place up or down and returns every id in display order. */
+function moveCategory(links: ProjectQuickLink[], category: string | null, direction: -1 | 1): string[] | null {
+  const groups = groupQuickLinks(links);
+  const index = groups.findIndex((g) => g.category === category);
+  const neighbour = groups[index + direction];
+  if (index < 0 || !neighbour) return null;
+  return moveQuickLinkCategory(links, category, neighbour.category, direction < 0 ? 'before' : 'after')?.ids ?? null;
+}
+
 type EditTarget = ProjectQuickLink | 'new' | null;
 type DeleteTarget = ProjectQuickLink | null;
 
@@ -231,7 +244,14 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
   const deleteLink = useDeleteProjectQuickLink(project);
   const reorderLinks = useReorderProjectQuickLinks(project);
 
-  const links = useMemo(() => linksQuery.data ?? [], [linksQuery.data]);
+  const links = useMemo(
+    () => groupQuickLinks(linksQuery.data ?? []).flatMap((group) => group.links),
+    [linksQuery.data],
+  );
+  const newSortOrder = useMemo(
+    () => links.reduce((highest, link) => Math.max(highest, link.sortOrder), -1) + 1,
+    [links],
+  );
 
   const categories = useMemo(
     () => categoriesOf(links),
@@ -290,12 +310,14 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
     }
   };
 
-  const handleMove = (id: string, direction: -1 | 1) => {
-    const ids = moveWithinCategory(links, id, direction);
+  const saveOrder = (ids: string[] | null) => {
     if (!ids) return;
     setActionError(null);
     reorderLinks.mutate({ ids }, { onError: (err) => setActionError(err.message) });
   };
+  const handleMove = (id: string, direction: -1 | 1) => saveOrder(moveWithinCategory(links, id, direction));
+  const handleMoveCategory = (category: string | null, direction: -1 | 1) =>
+    saveOrder(moveCategory(links, category, direction));
 
   const handleConfirmDelete = () => {
     if (!deleting) return;
@@ -401,10 +423,43 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
               </tr>
             </thead>
             <tbody>
-              {filteredLinks.map((link) => (
+              {filteredLinks.map((link, index) => {
+                const category = link.category ?? null;
+                const startsCategory =
+                  !hasFilter && (index === 0 || (filteredLinks[index - 1].category ?? null) !== category);
+                const categoryName = category ?? OTHER_CATEGORY_LABEL;
+                return (
                 <tr key={link.id} {...{ 'data-testid': `quick-link-row-${link.id}` }}>
                   <td>
-                    <CategoryPill category={link.category} data-testid={`quick-link-category-${link.id}`} />
+                    <div className={styles.categoryCell}>
+                      <CategoryPill category={link.category} data-testid={`quick-link-category-${link.id}`} />
+                      {startsCategory && categoryOptions.length > 1 && (
+                        <span className={styles.categoryMoves}>
+                          <button
+                            type="button"
+                            className={gridStyles.buttonGhost}
+                            onClick={() => handleMoveCategory(category, -1)}
+                            disabled={reorderLinks.isPending || !moveCategory(links, category, -1)}
+                            aria-label={`Move category ${categoryName} up`}
+                            title="Move category up"
+                            {...{ 'data-testid': `quick-link-category-up-${link.id}` }}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            className={gridStyles.buttonGhost}
+                            onClick={() => handleMoveCategory(category, 1)}
+                            disabled={reorderLinks.isPending || !moveCategory(links, category, 1)}
+                            aria-label={`Move category ${categoryName} down`}
+                            title="Move category down"
+                            {...{ 'data-testid': `quick-link-category-down-${link.id}` }}
+                          >
+                            ↓
+                          </button>
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td>{link.label}</td>
                   <td className={styles.urlCell} title={link.url}>{link.url}</td>
@@ -450,7 +505,8 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -459,6 +515,7 @@ const ProjectQuickLinksSettingsBody: React.FC<ProjectQuickLinksSettingsBodyProps
       {editing && (
         <QuickLinkFormModal
           link={editing === 'new' ? null : editing}
+          newSortOrder={newSortOrder}
           categories={categories}
           isPending={isSaving}
           serverError={saveError}
