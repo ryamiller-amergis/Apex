@@ -1497,15 +1497,17 @@ describe('resolveDocumentScratchInputs', () => {
       { path: '.ai-pilot/kickoff-context.md', content: '# Stale context' },
       { path: '.ai-pilot/kickoff-transcript.md', content: '# Agent transcript' },
     ]);
+    const readSnapshot = jest.fn();
     const resolved = await resolveDocumentScratchInputs({
       threadId: 'thread-1',
       workflowClass: 'prd',
       threadWorkspacePath: '/share/thread-1',
       recorded: [context, session],
-      readSnapshot: async () => null,
+      readSnapshot,
       readWorkspace,
     });
 
+    expect(readSnapshot).not.toHaveBeenCalled();
     expect(resolved.source).toBe('workspace-fallback');
     expect(resolved.inputs).toEqual([
       context,

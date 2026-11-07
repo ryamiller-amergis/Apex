@@ -1249,17 +1249,19 @@ async function resolveLightweightGroundingFallback(
 
   if (!sha) return null;
 
-  await runGroundingService
-    .activateGroundings({
-      run: { runType: 'chat', runId: input.thread.id, project },
-      target: {
-        provider: groundingProvider,
-        repository: bareRepo,
-        branch: repository.branch,
-        groundedSha: sha,
-      },
-    })
-    .catch(() => undefined);
+  if (!activeExisting) {
+    await runGroundingService
+      .activateGroundings({
+        run: { runType: 'chat', runId: input.thread.id, project },
+        target: {
+          provider: groundingProvider,
+          repository: bareRepo,
+          branch: repository.branch,
+          groundedSha: sha,
+        },
+      })
+      .catch(() => undefined);
+  }
 
   const runRef = `chat:${input.thread.id}`;
   const profile = groundingProfileResolver.registerConnectionProfile(

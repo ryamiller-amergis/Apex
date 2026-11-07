@@ -316,7 +316,9 @@ export async function resolveDocumentScratchInputs(input: {
     }
   };
   add(input.recorded);
-  add((await input.readSnapshot(input.threadId).catch(() => null)) ?? []);
+  if (input.workflowClass === 'test-cases') {
+    add((await input.readSnapshot(input.threadId).catch(() => null)) ?? []);
+  }
 
   let source: DocumentScratchInputSource = 'records';
   if (!hasRequiredScratchInputs(input.workflowClass, [...byPath.values()])) {
