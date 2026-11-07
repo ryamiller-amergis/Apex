@@ -14,6 +14,8 @@ import type {
   QaAdoSuiteCaseIndexEntry,
   QaAdoTestPlanOption,
   QaAdoTestSuiteOption,
+  QaLabRunStep,
+  QaLabRunTarget,
 } from '../../shared/types/qaLab';
 import {
   computeLastEnterInProgressToDone,
@@ -106,6 +108,26 @@ export function parseTestCaseStepsXml(
     steps.push({ order: steps.length + 1, action, expected: strings[1] ?? '' });
   }
   return steps;
+}
+
+/** Steps with the ids Azure DevOps uses for step results. Shared steps are skipped. */
+export function parseTestCaseRunSteps(xml: string | null | undefined): QaLabRunStep[] {
+  if (!xml) return [];
+  const steps: QaLabRunStep[] = [];
+  for (const match of xml.matchAll(/<step\b([^>]*)>([\s\S]*?)<\/step>/gi)) {
+    const stepId = Number(/\bid="(\d+)"/i.exec(match[1])?.[1]);
+    const strings = [...match[2].matchAll(/<parameterizedString\b[^>]*>([\s\S]*?)<\/parameterizedString>/gi)]
+      .map((part) => stepText(part[1]));
+    const action = strings[0] ?? '';
+    if (!action || !Number.isInteger(stepId)) continue;
+    steps.push({ stepId, order: steps.length + 1, action, expected: strings[1] ?? '' });
+  }
+  return steps;
+}
+
+/** Azure DevOps addresses a step result by its step id as 8 hex digits. */
+export function testStepActionPath(stepId: number): string {
+  return stepId.toString(16).padStart(8, '0');
 }
 
 async function mapWithConcurrency<T, R>(
@@ -6339,29 +6361,25 @@ export class AzureDevOpsService {
   }
 
   /**
-   * Creates an active Test Plan with the area path and iteration most active
-   * plans in the project use, so it is set up like the plans QA already has.
+   * Creates an active Test Plan at the project's top-level area, with the
+   * iteration most active plans in the project use.
    */
   async createTestPlan(name: string): Promise<{ id: number; rootSuiteId: number }> {
     const testPlanApi = await this.connection.getTestPlanApi();
-    const counts = new Map<string, { areaPath?: string; iteration: string; count: number }>();
+    const counts = new Map<string, number>();
     let token: string | undefined;
     do {
       const page = await testPlanApi.getTestPlans(this.project, undefined, token, true, true);
       for (const plan of page ?? []) {
-        if (!plan.iteration) continue;
-        const key = `${plan.areaPath ?? ''}\u0000${plan.iteration}`;
-        const entry = counts.get(key) ?? { areaPath: plan.areaPath, iteration: plan.iteration, count: 0 };
-        entry.count += 1;
-        counts.set(key, entry);
+        if (plan.iteration) counts.set(plan.iteration, (counts.get(plan.iteration) ?? 0) + 1);
       }
       token = page?.continuationToken || undefined;
     } while (token);
-    const common = [...counts.values()].sort((left, right) => right.count - left.count)[0];
+    const commonIteration = [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0];
     const created = await testPlanApi.createTestPlan({
       name,
-      iteration: common?.iteration ?? this.project,
-      areaPath: common?.areaPath ?? this.project,
+      iteration: commonIteration ?? this.project,
+      areaPath: this.project,
     }, this.project);
     const rootSuiteId = created?.rootSuite?.id;
     if (!created?.id || typeof rootSuiteId !== 'number') {
@@ -6457,6 +6475,193 @@ export class AzureDevOpsService {
       }
     }
     return cases;
+  }
+
+  /**
+   * The Test Case and the suite to run it in: `preferred` when the case is in that
+   * suite, else the first suite Azure DevOps lists. Null when it is in no suite.
+   */
+  async getTestCaseRunTarget(
+    testCaseId: number,
+    preferred?: { planId: number; suiteId: number },
+  ): Promise<QaLabRunTarget | null> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const [item] = await retryWithBackoff(() => witApi.getWorkItems(
+      [testCaseId],
+      ['System.Title', 'System.WorkItemType', 'Microsoft.VSTS.TCM.Steps'],
+      undefined,
+      undefined,
+      WorkItemErrorPolicy.Omit,
+    )) ?? [];
+    if (!item || item.fields?.['System.WorkItemType'] !== 'Test Case') return null;
+    const suites = (await retryWithBackoff(() => testPlanApi.getSuitesByTestCaseId(testCaseId))) ?? [];
+    const suite = suites.find((entry) => entry.id === preferred?.suiteId && entry.plan?.id === preferred?.planId)
+      ?? suites[0];
+    if (typeof suite?.id !== 'number' || typeof suite.plan?.id !== 'number') return null;
+    return {
+      adoTestCaseId: testCaseId,
+      adoTestCaseUrl: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${testCaseId}`,
+      title: String(item.fields?.['System.Title'] ?? ''),
+      planId: suite.plan.id,
+      planName: suite.plan.name ?? '',
+      suiteId: suite.id,
+      suiteName: suite.name ?? '',
+      steps: parseTestCaseRunSteps(item.fields?.['Microsoft.VSTS.TCM.Steps']),
+    };
+  }
+
+  /** Uploads a file to the work item attachment store. */
+  async uploadWorkItemAttachment(fileName: string, content: Buffer): Promise<{ id: string; url: string }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const created = await witApi.createAttachment(null, Readable.from(content), fileName, undefined, this.project);
+    if (!created?.id || !created.url) throw new Error(`Failed to upload "${fileName}"`);
+    return { id: created.id, url: created.url };
+  }
+
+  /**
+   * Records one manual run of a Test Case: creates the run for its test point, sets the
+   * case and step outcomes, copies attachments onto the result or step, links Bugs,
+   * and completes the run.
+   */
+  async publishManualTestResult(spec: {
+    planId: number;
+    suiteId: number;
+    testCaseId: number;
+    title: string;
+    outcome: 'Passed' | 'Failed';
+    comment: string;
+    steps: Array<{ stepId: number; outcome: 'Passed' | 'Failed'; comment: string }>;
+    attachments: Array<{ fileName: string; content: Buffer; stepId?: number }>;
+    bugIds: number[];
+  }): Promise<{ runId: number; resultId: number; runUrl: string }> {
+    const testPlanApi = await this.connection.getTestPlanApi();
+    const testApi = await this.connection.getTestApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+
+    const points = await testPlanApi.getPointsList(this.project, spec.planId, spec.suiteId, undefined, String(spec.testCaseId));
+    const pointId = points?.find((point) => typeof point.id === 'number')?.id;
+    if (pointId === undefined) {
+      throw new Error(`Test Case ${spec.testCaseId} has no test point in suite ${spec.suiteId}`);
+    }
+
+    const run = await testApi.createTestRun({
+      name: `QA Lab: ${spec.title}`.slice(0, 256),
+      plan: { id: String(spec.planId) },
+      pointIds: [pointId],
+      configurationIds: [],
+      automated: false,
+    }, this.project);
+    if (typeof run?.id !== 'number') throw new Error(`Failed to create a test run for Test Case ${spec.testCaseId}`);
+    const [result] = await testApi.getTestResults(this.project, run.id) ?? [];
+    if (typeof result?.id !== 'number') throw new Error(`Test run ${run.id} has no result to update`);
+
+    const now = new Date();
+    await testApi.updateTestResults([{
+      id: result.id,
+      outcome: spec.outcome,
+      state: 'Completed',
+      comment: spec.comment || undefined,
+      completedDate: now,
+      associatedBugs: spec.bugIds.map((id) => ({ id: String(id) })),
+      iterationDetails: [{
+        id: 1,
+        outcome: spec.outcome,
+        completedDate: now,
+        actionResults: spec.steps.map((step) => ({
+          actionPath: testStepActionPath(step.stepId),
+          iterationId: 1,
+          stepIdentifier: String(step.stepId),
+          outcome: step.outcome,
+          comment: step.comment || undefined,
+          errorMessage: step.outcome === 'Failed' ? step.comment || undefined : undefined,
+        })),
+      }],
+    }], this.project, run.id);
+
+    for (const attachment of spec.attachments) {
+      const model = { fileName: attachment.fileName, stream: attachment.content.toString('base64'), attachmentType: 'GeneralAttachment' };
+      if (attachment.stepId === undefined) {
+        await testApi.createTestResultAttachment(model, this.project, run.id, result.id);
+      } else {
+        await testApi.createTestIterationResultAttachment(
+          model, this.project, run.id, result.id, 1, testStepActionPath(attachment.stepId),
+        );
+      }
+    }
+
+    await testApi.updateTestRun({ state: 'Completed' }, this.project, run.id);
+    for (const bugId of spec.bugIds) await this.linkBugToTestResult(bugId, run.id, result.id);
+    return {
+      runId: run.id,
+      resultId: result.id,
+      runUrl: `${orgUrl}/${encodeURIComponent(this.project)}/_testManagement/runs?_a=resultSummary&runId=${run.id}&resultId=${result.id}`,
+    };
+  }
+
+  /** Adds the Test Result link Azure DevOps shows on a Bug filed from a run. */
+  async linkBugToTestResult(bugId: number, runId: number, resultId: number): Promise<void> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    await witApi.updateWorkItem({}, [{
+      op: 'add',
+      path: '/relations/-',
+      value: {
+        rel: 'ArtifactLink',
+        url: `vstfs:///TestManagement/TcmResult/${runId}.${resultId}`,
+        attributes: { name: 'Test Result' },
+      },
+    }], bugId, this.project);
+  }
+
+  /** Adds the Tested By link from a Bug to the Test Case it was found with. */
+  async linkBugToTestCase(bugId: number, testCaseId: number): Promise<void> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    await witApi.updateWorkItem({}, [{
+      op: 'add',
+      path: '/relations/-',
+      value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: `${orgUrl}/_apis/wit/workItems/${testCaseId}` },
+    }], bugId, this.project);
+  }
+
+  /**
+   * Creates a Bug as a child of `parentId`, tested by `testCaseId` when given, in the
+   * parent's iteration, with the given files attached.
+   */
+  async createBugWorkItem(spec: {
+    title: string;
+    reproStepsHtml: string;
+    parentId: number;
+    testCaseId?: number;
+    areaPath: string;
+    attachments: Array<{ url: string; fileName: string }>;
+  }): Promise<{ id: number; url: string }> {
+    const witApi = await this.connection.getWorkItemTrackingApi();
+    const orgUrl = this.organization.replace(/\/$/, '');
+    const parent = await witApi.getWorkItem(spec.parentId, ['System.IterationPath'], undefined, undefined, this.project);
+    const iterationPath = parent?.fields?.['System.IterationPath'];
+    const workItemUrl = (id: number) => `${orgUrl}/_apis/wit/workItems/${id}`;
+    const patch: any[] = [
+      { op: 'add', path: '/fields/System.Title', value: spec.title },
+      { op: 'add', path: '/fields/System.AreaPath', value: spec.areaPath },
+      { op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: spec.reproStepsHtml },
+      { op: 'add', path: '/relations/-', value: { rel: 'System.LinkTypes.Hierarchy-Reverse', url: workItemUrl(spec.parentId) } },
+      ...(spec.testCaseId !== undefined
+        ? [{ op: 'add', path: '/relations/-', value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: workItemUrl(spec.testCaseId) } }]
+        : []),
+      ...spec.attachments.map((attachment) => ({
+        op: 'add',
+        path: '/relations/-',
+        value: { rel: 'AttachedFile', url: attachment.url, attributes: { name: attachment.fileName } },
+      })),
+    ];
+    if (typeof iterationPath === 'string' && iterationPath) {
+      patch.push({ op: 'add', path: '/fields/System.IterationPath', value: iterationPath });
+    }
+    const wi = await witApi.createWorkItem({}, patch, this.project, 'Bug');
+    if (!wi?.id) throw new Error(`Failed to create Bug "${spec.title}"`);
+    return { id: wi.id, url: `${orgUrl}/${encodeURIComponent(this.project)}/_workitems/edit/${wi.id}` };
   }
 
   /** The ids, among `ids`, of Test Cases that are in at least one Test Plan suite. */

@@ -41,6 +41,10 @@ jest.mock('../FeatureRequestFab', () => ({
   FeatureRequestFab: () => null,
 }));
 
+jest.mock('../QuickLinksMenu', () => ({
+  QuickLinksMenu: () => null,
+}));
+
 // ── No menu config, not super admin (default) ─────────────────────────────────
 
 describe('AppHeader — no menuEnabledViews, not super admin', () => {

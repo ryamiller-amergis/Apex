@@ -1311,20 +1311,20 @@ describe('ADO test suite generation and publish', () => {
     expect(createTestCaseWorkItem).toHaveBeenNthCalledWith(1, expect.objectContaining({
       parentId: 18000,
       linkType: 'related',
-      areaPath: 'Apex\\Alerts',
+      areaPath: 'Apex',
       tags: ['qa-lab'],
     }));
     expect(createTestCaseWorkItem).toHaveBeenNthCalledWith(2, expect.objectContaining({
       parentId: 18000,
       linkType: 'related',
-      areaPath: 'Apex\\Alerts',
+      areaPath: 'Apex',
       iterationPath: 'Apex\\Sprint 9',
       tags: ['qa-lab', 'regression'],
     }));
     expect(result.published.map((item) => item.parentWorkItemId)).toEqual([18000, 18000]);
   });
 
-  it('defaults to a Tested By link and the root area when the skill sets no placement', async () => {
+  it('defaults to a Tested By link and the project top-level area when the skill sets no placement', async () => {
     const createTestCaseWorkItem = jest.fn().mockResolvedValue({ id: 9201, url: 'https://ado.example/9201' });
     dbMock.state.suiteRow = {
       id: 'suite-1',
@@ -1343,7 +1343,7 @@ describe('ADO test suite generation and publish', () => {
     expect(spec).toEqual(expect.objectContaining({
       parentId: 18452,
       linkType: 'tested-by',
-      areaPath: 'Apex\\QA',
+      areaPath: 'Apex',
     }));
     expect(spec).not.toHaveProperty('tags');
   });
@@ -1361,7 +1361,7 @@ describe('ADO test suite generation and publish', () => {
           pbiId: 'PBI-18452',
           testCases: [
             { id: 'TC-1', title: 'Bad link', steps: ['x'], placement: { linkTo: 'epic' } },
-            { id: 'TC-2', title: 'Other project', steps: ['x'], placement: { areaPath: 'OtherProject\\Team' } },
+            { id: 'TC-2', title: 'Other project', steps: ['x'], placement: { iterationPath: 'OtherProject\\Sprint 1' } },
             { id: 'TC-3', title: 'No parent', steps: ['x'], placement: { linkTo: 'parent' } },
           ],
         }],
@@ -1476,7 +1476,7 @@ describe('ADO test suite generation and publish', () => {
 
     await publishAdoTestCases('suite-1', { req });
 
-    expect(adoWriteForRequest).toHaveBeenCalledWith(req, 'Apex', 'Apex\\QA');
+    expect(adoWriteForRequest).toHaveBeenCalledWith(req, 'Apex', 'Apex');
     expect(createTestCaseWorkItem).toHaveBeenCalledTimes(1);
 
     dbMock.state.suiteRow.status = 'generating';

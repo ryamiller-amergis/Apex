@@ -21,6 +21,7 @@ import type {
   QaLabNewPlacement,
   QaLabNewPlacementApproval,
   QaLabPublishedCase,
+  QaLabTestCaseStep,
 } from '../../shared/types/qaLab';
 import { DEVELOPER_ONLY_AUTOMATION_TIERS } from '../../shared/types/qaLab';
 import type { SkillProvider } from '../../shared/types/projectSettings';
@@ -733,7 +734,7 @@ export async function publishAdoTestCases(
   ];
   const writer = await resolveTestCaseWriter(row.project, row.sourceSnapshot, options);
   // A writer passed in may carry the server's default area, which can belong to another project.
-  const rootAreaPath = areaPathFromSnapshot(row.sourceSnapshot);
+  const rootAreaPath = projectAreaPath(row.project, row.sourceSnapshot);
   const context = generationContextFrom(row.sourceSnapshot);
   const published: QaAdoPublishedCase[] = [];
   const skippedLocalCaseIds: string[] = [];
@@ -853,7 +854,7 @@ export async function publishAdoTestCases(
       continue;
     }
     const { placement } = testCase;
-    const outsideProject = [placement.areaPath, placement.iterationPath]
+    const outsideProject = [placement.iterationPath]
       .find((value) => value !== undefined && !isUnderProject(value, row.project));
     if (outsideProject !== undefined) {
       failures.push({
@@ -901,7 +902,7 @@ export async function publishAdoTestCases(
         stepsHtml: buildTestCaseStepsXml(testCase.steps),
         parentId: linkTarget.id,
         linkType,
-        ...((placement.areaPath ?? rootAreaPath) ? { areaPath: placement.areaPath ?? rootAreaPath } : {}),
+        areaPath: rootAreaPath,
         ...(placement.iterationPath ? { iterationPath: placement.iterationPath } : {}),
         ...(placement.tags?.length ? { tags: placement.tags } : {}),
         ...(options.assignedTo ? { assignedTo: options.assignedTo } : {}),
@@ -1827,11 +1828,10 @@ export function renderExistingCasesSection(existing: ExistingCaseContext): strin
       : []),
     '',
     'When an existing case covers the scenario, set the case\'s `existing` to',
-    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`:',
-    '- `up-to-date`: it still matches the work item. Copy its title and steps exactly, even when they do not follow the case format.',
-    '- `needs-update`: it covers the scenario but no longer matches what the work item requires. Write the suggested title and steps, and say in `reason` what changed. A format difference alone is not a reason to update.',
-    'Cases with `existing` do not count toward the per-PBI case limit; never drop one to stay under it.',
-    'Write a new case only when no existing case covers the scenario. Only use ids from these two files.',
+    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`.',
+    'For `up-to-date`, the case\'s title and steps are the existing case\'s. For `needs-update`, they are the',
+    'suggested change, which QA can apply in Apex. When each status applies is set by the skill.',
+    'Only use ids from these two files.',
     '',
   ];
 }
@@ -2090,7 +2090,7 @@ async function resolveTestCaseWriter(
   options: PublishAdoTestCasesOptions,
 ): Promise<AdoTestCaseWriter> {
   if (options.ado) return options.ado;
-  const areaPath = areaPathFromSnapshot(sourceSnapshot);
+  const areaPath = projectAreaPath(project, sourceSnapshot);
   if (options.req) return adoWriteForRequest(options.req, project, areaPath);
   if (options.adoToken !== undefined) return adoWriteFromToken(options.adoToken, project, areaPath);
   throw new Error(
@@ -2098,10 +2098,11 @@ async function resolveTestCaseWriter(
   );
 }
 
-function areaPathFromSnapshot(snapshot: unknown): string | undefined {
+/** QA keeps every published item at the project's top-level area, not the PBI's team area. */
+export function projectAreaPath(project: string, snapshot: unknown): string {
   const root = asRecord(asRecord(snapshot)?.root);
-  const areaPath = stringFrom(root?.areaPath)?.trim();
-  return areaPath ? areaPath : undefined;
+  const topLevel = stringFrom(root?.areaPath)?.trim().split('\\')[0]?.trim();
+  return topLevel || project;
 }
 
 function collectPublishableCases(testCasesJson: unknown): PublishableCase[] {
@@ -2284,6 +2285,13 @@ function resolveLinkTarget(
       throw new Error(`Unknown placement.linkTo: ${String(unhandled)}`);
     }
   }
+}
+
+/** A case's steps numbered as `buildTestCaseStepsXml` publishes them. */
+export function caseRunSteps(testCase: Record<string, unknown>): QaLabTestCaseStep[] {
+  return stepsFrom(testCase.steps).map((step, index) => (typeof step === 'string'
+    ? { order: index + 1, action: step, expected: '' }
+    : { order: index + 1, action: step.action, expected: step.expected ?? '' }));
 }
 
 function stepsFrom(value: unknown): PublishableCase['steps'] {

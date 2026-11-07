@@ -1479,11 +1479,11 @@ describe('AzureDevOpsService', () => {
   });
 
   describe('creating Test Plans and suites', () => {
-    it('creates a plan with the area and iteration most plans use', async () => {
+    it('creates a plan at the project top-level area with the iteration most plans use', async () => {
       const getTestPlans = jest.fn().mockResolvedValue([
-        { id: 1, name: 'A', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
-        { id: 2, name: 'B', areaPath: 'MatterWorx\\QA Automation', iteration: 'MatterWorx' },
-        { id: 3, name: 'C', areaPath: 'MatterWorx', iteration: 'MatterWorx' },
+        { id: 1, name: 'A', areaPath: 'MatterWorx\\The Bakery', iteration: 'MatterWorx' },
+        { id: 2, name: 'B', areaPath: 'MatterWorx\\QA Automation', iteration: 'MatterWorx\\Sprint 4' },
+        { id: 3, name: 'C', areaPath: 'MatterWorx\\The Bakery', iteration: 'MatterWorx' },
       ]);
       const createTestPlan = jest.fn().mockResolvedValue({ id: 50, rootSuite: { id: 500 } });
       mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getTestPlans, createTestPlan });
@@ -1510,6 +1510,162 @@ describe('AzureDevOpsService', () => {
         suiteType: TestSuiteType.RequirementTestSuite,
         requirementId: 18452,
       }, 'MatterWorx', 50);
+    });
+  });
+
+  describe('running Test Cases', () => {
+    it('reads the steps with their ids and prefers the suite the case was published to', async () => {
+      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({
+        getWorkItems: jest.fn().mockResolvedValue([{
+          id: 600,
+          fields: {
+            'System.Title': 'Clock in',
+            'System.WorkItemType': 'Test Case',
+            'Microsoft.VSTS.TCM.Steps': '<steps><step id="2"><parameterizedString>Open</parameterizedString><parameterizedString>Shows</parameterizedString></step></steps>',
+          },
+        }]),
+      });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({
+        getSuitesByTestCaseId: jest.fn().mockResolvedValue([
+          { id: 140, name: 'Other', plan: { id: 14, name: '14 Old' } },
+          { id: 151, name: 'Geofence', plan: { id: 15, name: '15 Timesheets' } },
+        ]),
+      });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await expect(service.getTestCaseRunTarget(600, { planId: 15, suiteId: 151 })).resolves.toEqual({
+        adoTestCaseId: 600,
+        adoTestCaseUrl: 'https://dev.azure.com/test-org/MatterWorx/_workitems/edit/600',
+        title: 'Clock in',
+        planId: 15,
+        planName: '15 Timesheets',
+        suiteId: 151,
+        suiteName: 'Geofence',
+        steps: [{ stepId: 2, order: 1, action: 'Open', expected: 'Shows' }],
+      });
+    });
+
+    it('records the case and step outcomes, copies attachments, links Bugs, and completes the run', async () => {
+      const getPointsList = jest.fn().mockResolvedValue([{ id: 31 }]);
+      const createTestRun = jest.fn().mockResolvedValue({ id: 900 });
+      const getTestResults = jest.fn().mockResolvedValue([{ id: 100000 }]);
+      const updateTestResults = jest.fn().mockResolvedValue([]);
+      const createTestResultAttachment = jest.fn().mockResolvedValue({});
+      const createTestIterationResultAttachment = jest.fn().mockResolvedValue({});
+      const updateTestRun = jest.fn().mockResolvedValue({});
+      const updateWorkItem = jest.fn().mockResolvedValue({ id: 777 });
+      mockConnection.getTestPlanApi = jest.fn().mockResolvedValue({ getPointsList });
+      mockConnection.getTestApi = jest.fn().mockResolvedValue({
+        createTestRun,
+        getTestResults,
+        updateTestResults,
+        createTestResultAttachment,
+        createTestIterationResultAttachment,
+        updateTestRun,
+      });
+      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({ updateWorkItem });
+      const service = new AzureDevOpsService('MatterWorx');
+      const content = Buffer.from('png');
+
+      const result = await service.publishManualTestResult({
+        planId: 15,
+        suiteId: 151,
+        testCaseId: 600,
+        title: 'Clock in',
+        outcome: 'Failed',
+        comment: 'Blocked at clock-in',
+        steps: [{ stepId: 2, outcome: 'Passed', comment: '' }, { stepId: 11, outcome: 'Failed', comment: 'Spinner' }],
+        attachments: [{ fileName: 'case.png', content }, { fileName: 'step.png', content, stepId: 11 }],
+        bugIds: [777],
+      });
+
+      expect(getPointsList).toHaveBeenCalledWith('MatterWorx', 15, 151, undefined, '600');
+      expect(createTestRun).toHaveBeenCalledWith(expect.objectContaining({
+        plan: { id: '15' },
+        pointIds: [31],
+        automated: false,
+      }), 'MatterWorx');
+      const [[[update]]] = updateTestResults.mock.calls;
+      expect(update).toEqual(expect.objectContaining({
+        id: 100000,
+        outcome: 'Failed',
+        state: 'Completed',
+        comment: 'Blocked at clock-in',
+        associatedBugs: [{ id: '777' }],
+      }));
+      expect(update.iterationDetails[0].actionResults).toEqual([
+        expect.objectContaining({ actionPath: '00000002', stepIdentifier: '2', outcome: 'Passed' }),
+        expect.objectContaining({ actionPath: '0000000b', stepIdentifier: '11', outcome: 'Failed', errorMessage: 'Spinner' }),
+      ]);
+      expect(createTestResultAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({ fileName: 'case.png', stream: Buffer.from('png').toString('base64') }),
+        'MatterWorx', 900, 100000,
+      );
+      expect(createTestIterationResultAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({ fileName: 'step.png' }), 'MatterWorx', 900, 100000, 1, '0000000b',
+      );
+      expect(updateTestRun).toHaveBeenCalledWith({ state: 'Completed' }, 'MatterWorx', 900);
+      expect(updateWorkItem).toHaveBeenCalledWith({}, [expect.objectContaining({
+        value: expect.objectContaining({ rel: 'ArtifactLink', url: 'vstfs:///TestManagement/TcmResult/900.100000' }),
+      })], 777, 'MatterWorx');
+      expect(result).toEqual(expect.objectContaining({ runId: 900, resultId: 100000 }));
+    });
+
+    it('creates a Bug as a child of the PBI, tested by the case, in the PBI iteration', async () => {
+      const createWorkItem = jest.fn().mockResolvedValue({ id: 777 });
+      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({
+        getWorkItem: jest.fn().mockResolvedValue({ fields: { 'System.IterationPath': 'MatterWorx\\Sprint 9' } }),
+        createWorkItem,
+      });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await service.createBugWorkItem({
+        title: 'Failed: Clock in',
+        reproStepsHtml: '<p>Broken</p>',
+        parentId: 18452,
+        testCaseId: 600,
+        areaPath: 'MatterWorx',
+        attachments: [{ url: 'https://ado.example/att', fileName: 'screen.png' }],
+      });
+
+      const [[, patch, project, type]] = createWorkItem.mock.calls;
+      expect([project, type]).toEqual(['MatterWorx', 'Bug']);
+      expect(patch).toEqual(expect.arrayContaining([
+        { op: 'add', path: '/fields/System.AreaPath', value: 'MatterWorx' },
+        { op: 'add', path: '/fields/System.IterationPath', value: 'MatterWorx\\Sprint 9' },
+        { op: 'add', path: '/fields/Microsoft.VSTS.TCM.ReproSteps', value: '<p>Broken</p>' },
+        expect.objectContaining({ value: { rel: 'System.LinkTypes.Hierarchy-Reverse', url: 'https://dev.azure.com/test-org/_apis/wit/workItems/18452' } }),
+        expect.objectContaining({ value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: 'https://dev.azure.com/test-org/_apis/wit/workItems/600' } }),
+        expect.objectContaining({ value: { rel: 'AttachedFile', url: 'https://ado.example/att', attributes: { name: 'screen.png' } } }),
+      ]));
+    });
+
+    it('leaves out the Tested By link for a case not in Azure DevOps yet, and adds it later', async () => {
+      const createWorkItem = jest.fn().mockResolvedValue({ id: 777 });
+      const updateWorkItem = jest.fn().mockResolvedValue({ id: 777 });
+      mockConnection.getWorkItemTrackingApi = jest.fn().mockResolvedValue({
+        getWorkItem: jest.fn().mockResolvedValue({ fields: {} }),
+        createWorkItem,
+        updateWorkItem,
+      });
+      const service = new AzureDevOpsService('MatterWorx');
+
+      await service.createBugWorkItem({
+        title: 'Failed: Clock in',
+        reproStepsHtml: '<p>Broken</p>',
+        parentId: 18452,
+        areaPath: 'MatterWorx',
+        attachments: [],
+      });
+      await service.linkBugToTestCase(777, 600);
+
+      const [[, patch]] = createWorkItem.mock.calls;
+      expect(JSON.stringify(patch)).not.toContain('TestedBy');
+      expect(updateWorkItem).toHaveBeenCalledWith({}, [{
+        op: 'add',
+        path: '/relations/-',
+        value: { rel: 'Microsoft.VSTS.Common.TestedBy-Forward', url: 'https://dev.azure.com/test-org/_apis/wit/workItems/600' },
+      }], 777, 'MatterWorx');
     });
   });
 });

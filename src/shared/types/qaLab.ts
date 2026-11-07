@@ -373,3 +373,113 @@ export interface QaLabGenerateRequest {
   matchLevel?: QaLabMatchLevel;
   matchedTitle?: string;
 }
+
+export type QaLabRunOutcome = 'passed' | 'failed';
+
+/** A Test Case step as Azure DevOps stores it; `stepId` is the id in the steps XML. */
+export interface QaLabRunStep extends QaLabTestCaseStep {
+  stepId: number;
+}
+
+/** A step result, keyed by the step's 1-based order in the case. */
+export interface QaLabRunStepResult {
+  order: number;
+  outcome: QaLabRunOutcome | null;
+  comment: string;
+}
+
+/** A saved step result with the step text QA tested, so a later edit to the step can be detected. */
+export interface QaLabRecordedStepResult extends QaLabRunStepResult {
+  action: string;
+  expected: string;
+}
+
+export interface QaLabRunAttachment {
+  id: string;
+  fileName: string;
+  size: number;
+  /** Set when the file belongs to one step rather than the whole case. */
+  stepOrder?: number;
+}
+
+export interface QaLabRunBug {
+  id: number;
+  url: string;
+  title: string;
+  /** False until the case has a Test Case in Azure DevOps to link the Bug to. */
+  linkedToTestCase: boolean;
+}
+
+/** Where a case runs in Azure DevOps. */
+export interface QaLabRunTarget {
+  adoTestCaseId: number;
+  adoTestCaseUrl: string;
+  title: string;
+  planId: number;
+  planName: string;
+  suiteId: number;
+  suiteName: string;
+  steps: QaLabRunStep[];
+}
+
+export interface QaLabCaseRun {
+  id: string;
+  status: 'draft' | 'published';
+  outcome: QaLabRunOutcome | null;
+  comment: string;
+  stepResults: QaLabRecordedStepResult[];
+  attachments: QaLabRunAttachment[];
+  bugs: QaLabRunBug[];
+  adoRunUrl: string | null;
+  publishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface QaLabCaseRunState {
+  /** The case's steps as QA runs them and as they are published. */
+  steps: QaLabTestCaseStep[];
+  /** The case's Test Case, once it is in Azure DevOps. */
+  adoTestCase: { id: number; url: string } | null;
+  /** The open draft, or null before QA records anything. */
+  draft: QaLabCaseRun | null;
+  /** Step orders whose step text changed after QA recorded a result; those results are not kept. */
+  changedSteps: number[];
+  /** The most recent published run of this case. */
+  lastPublished: QaLabCaseRun | null;
+}
+
+export interface QaLabSaveCaseRunRequest {
+  outcome: QaLabRunOutcome | null;
+  comment: string;
+  stepResults: QaLabRunStepResult[];
+}
+
+export type QaLabAssistantProposalKind = 'edit' | 'add' | 'delete' | 'comment' | 'regenerate';
+export type QaLabAssistantProposalStatus = 'pending' | 'applied' | 'discarded' | 'failed';
+
+/** A change Ask Apex proposed; it is applied only when QA confirms it. */
+export interface QaLabAssistantProposal {
+  id: string;
+  kind: QaLabAssistantProposalKind;
+  status: QaLabAssistantProposalStatus;
+  suiteId: string;
+  workItem: { id: number; title: string };
+  /** Null for a case that is not added yet. */
+  localCaseId: string | null;
+  /** Why Ask Apex proposes it. */
+  reason: string;
+  /** The case now; null for an added case. */
+  before: QaLabTestCase | null;
+  /** The case after an edit or add. */
+  after: QaLabTestCase | null;
+  /** The comment text, for a comment. */
+  commentBody: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface QaLabRunPublishResult {
+  /** Cases whose results went to Azure DevOps as a test run. */
+  publishedLocalCaseIds: string[];
+  failures: Array<{ localCaseId: string; message: string }>;
+}

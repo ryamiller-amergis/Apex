@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
+import { QaLabAssistantProposals } from './QaLabAssistantProposals';
 import styles from './QaLabAssistantPanel.module.css';
 
 /** What owns the cases in view; the assistant thread is scoped to it. */
@@ -33,6 +34,7 @@ const PRD_SUGGESTIONS = [
 const SUITE_SUGGESTIONS = [
   'Review the unpublished cases against the skill and list the problems by case id. Do not change anything yet.',
   'Add a case for each acceptance criterion that no case covers yet',
+  'Which cases failed their last run, and are Bugs filed for them?',
   'Make each login step sign in as the role the case tests, and move other roles\' setup into the precondition step',
 ] as const;
 
@@ -68,8 +70,8 @@ function configFor(target: QaLabAssistantTarget): TargetConfig {
         storageKey: `qa-lab-assistant-thread:${target.suiteId}`,
         suggestions: SUITE_SUGGESTIONS,
         invalidateKeys: [['qa-lab']],
-        welcomeTitle: 'Change these cases in plain language',
-        welcomeBody: 'Ask Apex can explain, edit, add, delete, comment on, or regenerate the unpublished cases. Edits show what changed on the case and can be restored. Publishing stays with you.',
+        welcomeTitle: 'Ask about QA Lab or change cases in plain language',
+        welcomeBody: 'Ask Apex knows this work item\'s cases, runs, Bugs and publish status, every other work item in QA Lab, and how QA Lab works. Every edit, new case, deletion, comment or regenerate shows the old and new text here first, and changes nothing until you confirm. Publishing stays with you.',
         placeholder: 'Ask Apex to change the cases… (Enter to send)',
       };
     default: {
@@ -248,30 +250,35 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
           </div>
         ) : undefined}
         composer={(
-          <AgentComposer
-            className={styles.composerEmbed}
-            value={input}
-            onChange={setInput}
-            onSend={() => void handleSend()}
-            onCancel={isRunning ? () => void session.cancel() : undefined}
-            disabled={composerBusy}
-            isRunning={isRunning}
-            isSending={isSending}
-            placeholder={
-              isCreating
-                ? 'Starting assistant…'
-                : isRunning
-                  ? 'Agent is thinking…'
-                  : config.placeholder
-            }
-            testIdPrefix="qa-lab-assistant"
-            textareaRef={textareaRef}
-            model={selectedModel}
-            models={availableModels}
-            modelsLoading={modelsLoading}
-            onModelChange={setSelectedModel}
-            {...{ 'data-testid': 'qa-lab-assistant-composer' }}
-          />
+          <>
+            {target.kind === 'suite' && threadId && (
+              <QaLabAssistantProposals threadId={threadId} isRunning={isRunning} />
+            )}
+            <AgentComposer
+              className={styles.composerEmbed}
+              value={input}
+              onChange={setInput}
+              onSend={() => void handleSend()}
+              onCancel={isRunning ? () => void session.cancel() : undefined}
+              disabled={composerBusy}
+              isRunning={isRunning}
+              isSending={isSending}
+              placeholder={
+                isCreating
+                  ? 'Starting assistant…'
+                  : isRunning
+                    ? 'Agent is thinking…'
+                    : config.placeholder
+              }
+              testIdPrefix="qa-lab-assistant"
+              textareaRef={textareaRef}
+              model={selectedModel}
+              models={availableModels}
+              modelsLoading={modelsLoading}
+              onModelChange={setSelectedModel}
+              {...{ 'data-testid': 'qa-lab-assistant-composer' }}
+            />
+          </>
         )}
       >
         <AssistantConversation
