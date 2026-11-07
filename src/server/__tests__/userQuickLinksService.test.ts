@@ -63,6 +63,7 @@ import {
   deleteUserLink,
   importUserLinks,
   listUserLinks,
+  reorderUserLinks,
   updateUserLink,
 } from '../services/userQuickLinksService';
 
@@ -164,8 +165,8 @@ describe('ownership isolation', () => {
     expect(params).toEqual(['link-1', 'mallory', 'MaxView']);
   });
 
-  it('creates the link for the given user and project', async () => {
-    queue([{ value: 3 }], [row]);
+  it('creates the link for the given user and project, after their last link', async () => {
+    queue([{ value: 3, maxOrder: 7 }], [row]);
 
     await createUserLink('alice', 'MaxView', { label: ' Clerk ', url: 'https://dashboard.clerk.com' });
 
@@ -175,7 +176,7 @@ describe('ownership isolation', () => {
       label: 'Clerk',
       url: 'https://dashboard.clerk.com/',
       category: null,
-      sortOrder: 3,
+      sortOrder: 8,
     });
   });
 
@@ -229,7 +230,7 @@ describe('create: dedupe and cap', () => {
 
 describe('importUserLinks', () => {
   it('creates new links, skips existing and repeated URLs, and rejects invalid items', async () => {
-    queue([{ url: 'https://dashboard.clerk.com/' }], [{ id: 'a' }, { id: 'b' }]);
+    queue([{ url: 'https://dashboard.clerk.com/', sortOrder: 4 }], [{ id: 'a' }, { id: 'b' }]);
 
     const result = await importUserLinks('alice', 'MaxView', [
       { label: 'Clerk', url: 'https://dashboard.clerk.com' },
@@ -249,8 +250,8 @@ describe('importUserLinks', () => {
 
     const insert = mock.calls.find((c) => c.op === 'insert');
     expect(insert?.values).toEqual([
-      expect.objectContaining({ userId: 'alice', project: 'MaxView', url: 'https://app.pendo.io/', category: 'Analytics', sortOrder: 1 }),
-      expect.objectContaining({ userId: 'alice', project: 'MaxView', url: 'https://app.sendgrid.com/', sortOrder: 2 }),
+      expect.objectContaining({ userId: 'alice', project: 'MaxView', url: 'https://app.pendo.io/', category: 'Analytics', sortOrder: 5 }),
+      expect.objectContaining({ userId: 'alice', project: 'MaxView', url: 'https://app.sendgrid.com/', sortOrder: 6 }),
     ]);
   });
 
@@ -306,5 +307,54 @@ describe('importUserLinks', () => {
     }));
     await expect(importUserLinks('alice', 'MaxView', items)).rejects.toMatchObject({ code: 'VALIDATION' });
     expect(mock.calls).toHaveLength(0);
+  });
+});
+
+describe('reorderUserLinks', () => {
+  const A = '00000000-0000-4000-8000-00000000000a';
+  const B = '00000000-0000-4000-8000-00000000000b';
+  const C = '00000000-0000-4000-8000-00000000000c';
+
+  it.each([
+    [undefined],
+    [{ ids: 'abc' }],
+    [{ ids: ['not-a-uuid'] }],
+    [{ ids: [A, A] }],
+    [{ ids: [A], move: { id: B, category: 'Azure' } }],
+  ])('rejects %p', async (input) => {
+    await expect(reorderUserLinks('alice', 'MaxView', input)).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(mock.calls).toHaveLength(0);
+  });
+
+  it('reports a conflict when the list does not match the user’s links', async () => {
+    queue([{ id: A }, { id: B }, { id: C }]);
+
+    await expect(reorderUserLinks('alice', 'MaxView', { ids: [B, A] })).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mock.calls.map((c) => c.op)).toEqual(['select']);
+  });
+
+  it('renumbers every link in one update scoped to the owner, then moves the dropped link', async () => {
+    queue([{ id: A }, { id: B }, { id: C }], [], [], [row]);
+
+    await reorderUserLinks('alice', 'MaxView', { ids: [C, A, B], move: { id: C, category: ' Azure ' } });
+
+    const [, renumber, move] = mock.calls;
+    expect(renumber.op).toBe('update');
+    const order = dialect.sqlToQuery((renumber.set as { sortOrder: SQL }).sortOrder);
+    expect(order.sql).toMatch(/^CASE WHEN .*"id" = \$1 THEN 0 WHEN .*"id" = \$2 THEN 1 WHEN .*"id" = \$3 THEN 2 END$/);
+    expect(order.params).toEqual([C, A, B]);
+    expect(whereOf(renumber).params).toEqual(['alice', 'MaxView']);
+
+    expect(move.op).toBe('update');
+    expect(move.set).toEqual({ category: 'Azure' });
+    expect(whereOf(move).params).toEqual([C, 'alice', 'MaxView']);
+  });
+
+  it('skips the category update when nothing moved between categories', async () => {
+    queue([{ id: A }, { id: B }], [], [row]);
+
+    await reorderUserLinks('alice', 'MaxView', { ids: [B, A] });
+
+    expect(mock.calls.map((c) => c.op)).toEqual(['select', 'update', 'select']);
   });
 });

@@ -6,6 +6,7 @@ import type {
   ImportQuickLinksResult,
   ProjectQuickLink,
   QuickLinkScope,
+  ReorderUserQuickLinksInput,
   UserQuickLink,
 } from '../../shared/types/projectQuickLinks';
 import {
@@ -16,13 +17,21 @@ import {
   useDeleteProjectQuickLink,
   useMyQuickLinks,
   useProjectQuickLinks,
+  useReorderMyQuickLinks,
   useUpdateMyQuickLink,
   useUpdateProjectQuickLink,
 } from '../hooks/useProjectQuickLinks';
 import { useCollapsedQuickLinkCategories } from '../hooks/useCollapsedQuickLinkCategories';
+import {
+  groupQuickLinks,
+  moveQuickLink,
+  moveQuickLinkCategory,
+  type DropPlacement,
+  type QuickLinkGroup,
+} from '../utils/quickLinkOrder';
 import { BookmarkImportModal } from './BookmarkImportModal';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
-import { CategoryToggle, QuickLinkFavicon, categoryToneClass, hostnameOf } from './QuickLinkCategory';
+import { CategoryToggle, GripIcon, QuickLinkFavicon, categoryToneClass, hostnameOf } from './QuickLinkCategory';
 import { QuickLinkEditModal, type QuickLinkEditValues } from './QuickLinkEditModal';
 import styles from './QuickLinksMenu.module.css';
 
@@ -43,21 +52,28 @@ type DialogState =
   | { kind: 'delete'; target: LinkTarget }
   | { kind: 'import' };
 
-interface QuickLinkGroup<T extends AnyQuickLink> {
-  category: string | null;
-  links: T[];
+/** What the user is dragging inside My links. */
+type DragItem = { kind: 'link'; id: string } | { kind: 'category'; category: string | null };
+
+/** Where the drop line shows: before/after a link or category, or "into" a category heading. */
+interface DropHint {
+  key: string;
+  placement: DropPlacement | 'into';
 }
 
-function groupByCategory<T extends AnyQuickLink>(links: T[]): QuickLinkGroup<T>[] {
-  const groups: QuickLinkGroup<T>[] = [];
-  for (const link of links) {
-    const category = link.category ?? null;
-    const last = groups[groups.length - 1];
-    if (last && last.category === category) last.links.push(link);
-    else groups.push({ category, links: [link] });
-  }
-  return groups;
+const linkKey = (id: string) => `link:${id}`;
+const categoryKey = (category: string | null) => `category:${category ?? ''}`;
+
+function placementFor(e: React.DragEvent<HTMLElement>): DropPlacement {
+  const rect = e.currentTarget.getBoundingClientRect();
+  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
 }
+
+function isMoveKey(e: React.KeyboardEvent): e is React.KeyboardEvent & { key: 'ArrowUp' | 'ArrowDown' } {
+  return e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
+}
+
+const MOVE_SHORTCUTS = 'Alt+ArrowUp Alt+ArrowDown';
 
 /** Case-insensitive match on label, URL, hostname, or category. */
 export function matchesQuickLinkSearch(link: AnyQuickLink, query: string): boolean {
@@ -179,29 +195,35 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showAllCategories, setShowAllCategories] = useState<Set<string>>(new Set());
+  const [drag, setDrag] = useState<DragItem | null>(null);
+  const [dropHint, setDropHint] = useState<DropHint | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const pendingFocusRef = useRef<string | null>(null);
 
   const { data: projectLinks = [] } = useProjectQuickLinks(project);
   const { data: myLinks = [] } = useMyQuickLinks(project, canAddPersonal);
   const createMyLink = useCreateMyQuickLink(project);
   const updateMyLink = useUpdateMyQuickLink(project);
   const deleteMyLink = useDeleteMyQuickLink(project);
+  const reorderMyLinks = useReorderMyQuickLinks(project);
   const createProjectLink = useCreateProjectQuickLink(project);
   const updateProjectLink = useUpdateProjectQuickLink(project);
   const deleteProjectLink = useDeleteProjectQuickLink(project);
 
   const query = search.trim().toLowerCase();
   const projectGroups = useMemo(
-    () => groupByCategory(projectLinks.filter((l) => matchesQuickLinkSearch(l, query))),
+    () => groupQuickLinks(projectLinks.filter((l) => matchesQuickLinkSearch(l, query))),
     [projectLinks, query],
   );
   const myGroups = useMemo(
-    () => groupByCategory(myLinks.filter((l) => matchesQuickLinkSearch(l, query))),
+    () => groupQuickLinks(myLinks.filter((l) => matchesQuickLinkSearch(l, query))),
     [myLinks, query],
   );
+  /** A filtered list hides where links really sit, so reordering waits until search is cleared. */
+  const canReorderMine = !query && myLinks.length > 1;
   const projectCategories = useMemo(() => categoriesOf(projectLinks), [projectLinks]);
   const personalCategories = useMemo(() => categoriesOf(myLinks), [myLinks]);
 
@@ -231,6 +253,13 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen, close, menuItems]);
+
+  useEffect(() => {
+    const testIdToFocus = pendingFocusRef.current;
+    if (!testIdToFocus) return;
+    pendingFocusRef.current = null;
+    menuRef.current?.querySelector<HTMLElement>(`[data-testid="${testIdToFocus}"]`)?.focus();
+  }, [myLinks]);
 
   useEffect(() => {
     if (!toast) return;
@@ -315,6 +344,126 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
       setIsOpen(true);
     }
   };
+
+  const saveMyOrder = (plan: ReorderUserQuickLinksInput | null, focusTestId?: string) => {
+    if (!plan) return;
+    if (focusTestId) pendingFocusRef.current = focusTestId;
+    reorderMyLinks.mutate(plan, {
+      onError: (err) => setToast(err.message || 'Could not save the new order'),
+    });
+  };
+
+  const endDrag = () => {
+    setDrag(null);
+    setDropHint(null);
+  };
+
+  const showDropHint = (key: string, placement: DropHint['placement']) => {
+    if (dropHint?.key !== key || dropHint.placement !== placement) setDropHint({ key, placement });
+  };
+
+  const dropHintClass = (key: string): string => {
+    if (dropHint?.key !== key) return '';
+    switch (dropHint.placement) {
+      case 'before':
+        return styles.dropBefore;
+      case 'after':
+        return styles.dropAfter;
+      case 'into':
+        return styles.dropInto;
+      default: {
+        const unhandled: never = dropHint.placement;
+        return unhandled;
+      }
+    }
+  };
+
+  /** The link's category in My links, and where the link sits in it. */
+  const positionOf = (link: UserQuickLink) => {
+    const siblings = myGroups.find((g) => g.category === (link.category ?? null))?.links ?? [];
+    return { siblings, index: siblings.findIndex((l) => l.id === link.id) };
+  };
+
+  const startDrag = (e: React.DragEvent<HTMLElement>, item: DragItem, label: string) => {
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', label);
+    }
+    setDrag(item);
+  };
+
+  const linkDragHandlers = (link: UserQuickLink) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent<HTMLDivElement>) => startDrag(e, { kind: 'link', id: link.id }, link.label),
+    onDragEnd: endDrag,
+    onDragOver: (e: React.DragEvent<HTMLDivElement>) => {
+      if (drag?.kind !== 'link') return;
+      e.preventDefault();
+      e.stopPropagation();
+      showDropHint(linkKey(link.id), placementFor(e));
+    },
+    onDrop: (e: React.DragEvent<HTMLDivElement>) => {
+      if (drag?.kind !== 'link') return;
+      e.preventDefault();
+      e.stopPropagation();
+      const { siblings, index } = positionOf(link);
+      const beforeId = placementFor(e) === 'before' ? link.id : (siblings[index + 1]?.id ?? null);
+      endDrag();
+      saveMyOrder(moveQuickLink(myLinks, drag.id, link.category ?? null, beforeId));
+    },
+    onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!isMoveKey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const { siblings, index } = positionOf(link);
+      if (e.key === 'ArrowUp' && index <= 0) return;
+      if (e.key === 'ArrowDown' && index >= siblings.length - 1) return;
+      const beforeId = e.key === 'ArrowUp' ? siblings[index - 1].id : (siblings[index + 2]?.id ?? null);
+      saveMyOrder(
+        moveQuickLink(myLinks, link.id, link.category ?? null, beforeId),
+        `quick-links-menu-my-item-${link.id}`,
+      );
+    },
+  });
+
+  const categoryDropHandlers = (category: string | null) => ({
+    onDragOver: (e: React.DragEvent<HTMLDivElement>) => {
+      if (!drag) return;
+      e.preventDefault();
+      showDropHint(categoryKey(category), drag.kind === 'link' ? 'into' : placementFor(e));
+    },
+    onDrop: (e: React.DragEvent<HTMLDivElement>) => {
+      if (!drag) return;
+      e.preventDefault();
+      const placement = placementFor(e);
+      endDrag();
+      saveMyOrder(
+        drag.kind === 'link'
+          ? moveQuickLink(myLinks, drag.id, category, null)
+          : moveQuickLinkCategory(myLinks, drag.category, category, placement),
+      );
+    },
+  });
+
+  const categoryHandleProps = (category: string | null, index: number) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent<HTMLDivElement>) =>
+      startDrag(e, { kind: 'category', category }, category ?? 'Other'),
+    onDragEnd: endDrag,
+    onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!isMoveKey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const newIndex = e.key === 'ArrowUp' ? index - 1 : index + 1;
+      const neighbour = myGroups[newIndex];
+      if (!neighbour) return;
+      saveMyOrder(
+        moveQuickLinkCategory(myLinks, category, neighbour.category, e.key === 'ArrowUp' ? 'before' : 'after'),
+        `quick-links-menu-category-toggle-personal-${newIndex}`,
+      );
+    },
+  });
 
   const createIn = async (scope: QuickLinkScope, input: CreateUserQuickLinkInput): Promise<void> => {
     switch (scope) {
@@ -445,17 +594,34 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
         ? { item: `quick-links-menu-item-${link.id}`, edit: `quick-links-menu-edit-${link.id}`, del: `quick-links-menu-delete-${link.id}` }
         : { item: `quick-links-menu-my-item-${link.id}`, edit: `quick-links-menu-my-edit-${link.id}`, del: `quick-links-menu-my-delete-${link.id}` };
     const host = hostnameOf(link.url);
+    const reorder = target.scope === 'personal' && canReorderMine ? linkDragHandlers(target.link) : null;
+    const isDragged = drag?.kind === 'link' && drag.id === link.id;
+    const rowClasses = [
+      styles.row,
+      canEdit ? styles.rowEditable : '',
+      reorder ? styles.rowDraggable : '',
+      isDragged ? styles.dragging : '',
+      dropHintClass(linkKey(link.id)),
+    ];
     return (
-      <div key={link.id} className={`${styles.row} ${canEdit ? styles.rowEditable : ''}`}>
+      <div
+        key={link.id}
+        className={rowClasses.filter(Boolean).join(' ')}
+        {...(reorder ?? {})}
+        {...(reorder ? { 'data-testid': `quick-links-menu-my-row-${link.id}` } : {})}
+      >
+        {reorder && <GripIcon className={styles.rowGrip} />}
         <a
           href={link.url}
           target="_blank"
           rel="noopener noreferrer"
           role="menuitem"
           tabIndex={-1}
+          draggable={reorder ? false : undefined}
           className={styles.rowLink}
-          title={link.url}
+          title={reorder ? `${link.url}\nDrag, or press Alt+↑/↓, to reorder` : link.url}
           aria-label={`${link.label} (${host}, opens in a new tab)`}
+          aria-keyshortcuts={reorder ? MOVE_SHORTCUTS : undefined}
           onClick={() => close(false)}
           {...{ 'data-testid': ids.item }}
         >
@@ -510,21 +676,43 @@ const QuickLinksMenuBody: React.FC<QuickLinksMenuBodyProps> = ({
       const showEverything = showAllCategories.has(key);
       const rows = showEverything ? group.links : group.links.slice(0, CATEGORY_RENDER_LIMIT);
       const testKey = `${scope}-${index}`;
+      const reorderable = scope === 'personal' && canReorderMine;
+      const isDragged = drag?.kind === 'category' && drag.category === group.category;
+      const categoryClasses = [
+        styles.category,
+        categoryToneClass(group.category),
+        isDragged ? styles.dragging : '',
+        reorderable ? dropHintClass(categoryKey(group.category)) : '',
+      ];
+      const toggle = (
+        <CategoryToggle
+          category={group.category}
+          count={group.links.length}
+          expanded={isOpen}
+          onToggle={() => toggleCollapsed(key)}
+          reorderable={reorderable}
+          data-testid={`quick-links-menu-category-toggle-${testKey}`}
+        />
+      );
       return (
         <div
           key={key}
           role="group"
           aria-label={group.category ?? 'Other'}
-          className={`${styles.category} ${categoryToneClass(group.category)}`}
+          className={categoryClasses.filter(Boolean).join(' ')}
+          {...(reorderable ? categoryDropHandlers(group.category) : {})}
           {...{ 'data-testid': `quick-links-menu-category-${testKey}` }}
         >
-          <CategoryToggle
-            category={group.category}
-            count={group.links.length}
-            expanded={isOpen}
-            onToggle={() => toggleCollapsed(key)}
-            data-testid={`quick-links-menu-category-toggle-${testKey}`}
-          />
+          {reorderable ? (
+            <div
+              {...categoryHandleProps(group.category, index)}
+              {...{ 'data-testid': `quick-links-menu-category-handle-${testKey}` }}
+            >
+              {toggle}
+            </div>
+          ) : (
+            toggle
+          )}
           {isOpen && rows.map((link) => renderRow(toTarget(link), canEdit))}
           {isOpen && group.links.length > CATEGORY_RENDER_LIMIT && (
             <button

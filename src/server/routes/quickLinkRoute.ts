@@ -12,6 +12,7 @@ function statusForCode(code: ProjectQuickLinkErrorCode): number {
       return 404;
     case 'DUPLICATE':
     case 'LIMIT_REACHED':
+    case 'CONFLICT':
       return 409;
     default: {
       const unhandled: never = code;

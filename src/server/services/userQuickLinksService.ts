@@ -1,4 +1,4 @@
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq, max } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { userQuickLinks } from '../db/schema';
 import {
@@ -11,6 +11,7 @@ import {
   type UserQuickLink,
 } from '../../shared/types/projectQuickLinks';
 import { assertImportItems, planQuickLinkImport } from './quickLinkImport';
+import { assertCompleteOrder, nextSortOrder, parseReorderInput, sortOrderCase } from './quickLinkOrder';
 import { normalizeCategory, normalizeLabel, normalizeUrl } from './quickLinkValidation';
 
 type UserQuickLinkRow = typeof userQuickLinks.$inferSelect;
@@ -48,9 +49,14 @@ function isUniqueViolation(err: unknown): boolean {
   return e?.code === '23505' || e?.cause?.code === '23505';
 }
 
-async function countOwned(owner: { userId: string; project: string }): Promise<number> {
-  const [row] = await db.select({ value: count() }).from(userQuickLinks).where(ownedBy(owner));
-  return Number(row?.value ?? 0);
+async function countOwned(
+  owner: { userId: string; project: string },
+): Promise<{ total: number; nextOrder: number }> {
+  const [row] = await db
+    .select({ value: count(), maxOrder: max(userQuickLinks.sortOrder) })
+    .from(userQuickLinks)
+    .where(ownedBy(owner));
+  return { total: Number(row?.value ?? 0), nextOrder: (row?.maxOrder ?? -1) + 1 };
 }
 
 export async function listUserLinks(userId: string, project: string): Promise<UserQuickLink[]> {
@@ -59,7 +65,7 @@ export async function listUserLinks(userId: string, project: string): Promise<Us
     .select()
     .from(userQuickLinks)
     .where(ownedBy(owner))
-    .orderBy(asc(userQuickLinks.category), asc(userQuickLinks.sortOrder), asc(userQuickLinks.label));
+    .orderBy(asc(userQuickLinks.sortOrder), asc(userQuickLinks.label));
   return rows.map(toDto);
 }
 
@@ -75,13 +81,13 @@ export async function createUserLink(
     url: normalizeUrl(input?.url),
     category: normalizeCategory(input?.category),
   };
-  const existing = await countOwned(owner);
-  if (existing >= USER_QUICK_LINKS_MAX_PER_PROJECT) {
+  const { total, nextOrder } = await countOwned(owner);
+  if (total >= USER_QUICK_LINKS_MAX_PER_PROJECT) {
     throw new ProjectQuickLinkError(USER_QUICK_LINKS_LIMIT_MESSAGE, 'LIMIT_REACHED');
   }
   const [row] = await db
     .insert(userQuickLinks)
-    .values({ ...values, sortOrder: existing })
+    .values({ ...values, sortOrder: nextOrder })
     .onConflictDoNothing()
     .returning();
   if (!row) throw new ProjectQuickLinkError(DUPLICATE_MESSAGE, 'DUPLICATE');
@@ -124,6 +130,33 @@ export async function deleteUserLink(userId: string, project: string, id: string
   if (deleted.length === 0) throw new ProjectQuickLinkError('Quick link not found', 'NOT_FOUND');
 }
 
+/** Renumbers every personal link from `input.ids`, optionally moving one link to another category. */
+export async function reorderUserLinks(
+  userId: string,
+  project: string,
+  input: unknown,
+): Promise<UserQuickLink[]> {
+  const owner = requireOwner(userId, project);
+  const { ids, move } = parseReorderInput(input, USER_QUICK_LINKS_MAX_PER_PROJECT);
+  await db.transaction(async (tx) => {
+    const existing = await tx.select({ id: userQuickLinks.id }).from(userQuickLinks).where(ownedBy(owner));
+    assertCompleteOrder(existing.map((r) => r.id), ids);
+    if (ids.length === 0) return;
+    const updatedAt = new Date().toISOString();
+    await tx
+      .update(userQuickLinks)
+      .set({ sortOrder: sortOrderCase(userQuickLinks.id, ids), updatedAt })
+      .where(ownedBy(owner));
+    if (move) {
+      await tx
+        .update(userQuickLinks)
+        .set({ category: move.category })
+        .where(and(eq(userQuickLinks.id, move.id), ownedBy(owner)));
+    }
+  });
+  return listUserLinks(owner.userId, owner.project);
+}
+
 /**
  * Creates personal links from a bookmark import. Each item is validated on its own: invalid
  * items are rejected, URLs the user already has (or that repeat in the batch) are skipped,
@@ -138,9 +171,10 @@ export async function importUserLinks(
   assertImportItems(items);
   return db.transaction(async (tx) => {
     const existingRows = await tx
-      .select({ url: userQuickLinks.url })
+      .select({ url: userQuickLinks.url, sortOrder: userQuickLinks.sortOrder })
       .from(userQuickLinks)
       .where(ownedBy(owner));
+    const nextOrder = nextSortOrder(existingRows);
     const plan = planQuickLinkImport(
       items,
       existingRows.map((r) => r.url),
@@ -158,7 +192,7 @@ export async function importUserLinks(
             label: item.label,
             url: item.url,
             category: item.category,
-            sortOrder: existingRows.length + i,
+            sortOrder: nextOrder + i,
           })),
         )
         .onConflictDoNothing()

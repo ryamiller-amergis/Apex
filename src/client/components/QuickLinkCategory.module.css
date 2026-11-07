@@ -22,6 +22,43 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ql-tone) 20%, transparent);
 }
 
+.dotSlot {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 8px;
+  height: 8px;
+}
+
+.dotSlot .dot,
+.grip {
+  transition: all 0.2s ease;
+}
+
+.grip {
+  position: absolute;
+  width: 8px;
+  height: 13px;
+  color: var(--text-secondary);
+  opacity: 0;
+}
+
+.headingReorderable {
+  cursor: grab;
+}
+
+.headingReorderable:hover .dotSlot .dot,
+.headingReorderable:focus-visible .dotSlot .dot {
+  opacity: 0;
+  transform: scale(0.5);
+}
+
+.headingReorderable:hover .grip,
+.headingReorderable:focus-visible .grip {
+  opacity: 1;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

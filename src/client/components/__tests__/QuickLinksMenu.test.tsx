@@ -15,6 +15,7 @@ const deleteMy = jest.fn();
 const createShared = jest.fn();
 const updateShared = jest.fn();
 const deleteShared = jest.fn();
+const reorderMy = jest.fn();
 
 function mutation(mutateAsync: jest.Mock) {
   return { mutateAsync, mutate: jest.fn(), reset: jest.fn(), isPending: false, error: null };
@@ -27,6 +28,7 @@ jest.mock('../../hooks/useProjectQuickLinks', () => ({
   useCreateMyQuickLink: () => mutation(createMy),
   useUpdateMyQuickLink: () => mutation(updateMy),
   useDeleteMyQuickLink: () => mutation(deleteMy),
+  useReorderMyQuickLinks: () => ({ mutate: reorderMy, isPending: false }),
   useCreateProjectQuickLink: () => mutation(createShared),
   useUpdateProjectQuickLink: () => mutation(updateShared),
   useDeleteProjectQuickLink: () => mutation(deleteShared),
@@ -551,5 +553,67 @@ describe('collapsible categories', () => {
     fireEvent.click(showAll);
     expect(document.querySelectorAll('[data-testid^="quick-links-menu-my-item-"]')).toHaveLength(CATEGORY_RENDER_LIMIT + 15);
     expect(showAll).toHaveTextContent('Show fewer');
+  });
+});
+
+describe('reordering My links', () => {
+  const dataTransfer = () => ({ setData: jest.fn(), effectAllowed: '' });
+
+  beforeEach(() => {
+    mockUseMyQuickLinks.mockReturnValue({ data: myLinks });
+  });
+
+  it('drops a link onto another category heading to move it there', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+
+    fireEvent.dragStart(screen.getByTestId('quick-links-menu-my-row-notes'), { dataTransfer: dataTransfer() });
+    const work = screen.getByTestId('quick-links-menu-category-personal-0');
+    fireEvent.dragOver(work);
+    fireEvent.drop(work);
+
+    expect(reorderMy).toHaveBeenCalledWith(
+      { ids: ['jira', 'notes'], move: { id: 'notes', category: 'Work' } },
+      expect.anything(),
+    );
+  });
+
+  it('drags a category below another', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+
+    fireEvent.dragStart(screen.getByTestId('quick-links-menu-category-handle-personal-0'), {
+      dataTransfer: dataTransfer(),
+    });
+    const other = screen.getByTestId('quick-links-menu-category-personal-1');
+    fireEvent.dragOver(other, { clientY: 10 });
+    fireEvent.drop(other, { clientY: 10 });
+
+    expect(reorderMy).toHaveBeenCalledWith({ ids: ['notes', 'jira'] }, expect.anything());
+  });
+
+  it('moves a category with Alt+ArrowDown', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal />);
+    openMenu();
+
+    fireEvent.keyDown(screen.getByTestId('quick-links-menu-category-toggle-personal-0'), {
+      key: 'ArrowDown',
+      altKey: true,
+    });
+
+    expect(reorderMy).toHaveBeenCalledWith({ ids: ['notes', 'jira'] }, expect.anything());
+  });
+
+  it('turns dragging off while searching, and never offers it for project links', () => {
+    render(<QuickLinksMenu project="MaxView" canAddPersonal canManage />);
+    openMenu();
+
+    expect(screen.getByTestId('quick-links-menu-my-row-jira')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-category-handle-project-0')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('quick-links-menu-search'), { target: { value: 'jira' } });
+
+    expect(screen.queryByTestId('quick-links-menu-my-row-jira')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('quick-links-menu-category-handle-personal-0')).not.toBeInTheDocument();
   });
 });

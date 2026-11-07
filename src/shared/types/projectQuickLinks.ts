@@ -72,6 +72,21 @@ export interface UserQuickLinksListResponse {
   items: UserQuickLink[];
 }
 
+/** A personal link dropped into a different category as part of a reorder. */
+export interface QuickLinkMove {
+  id: string;
+  category: string | null;
+}
+
+/**
+ * Every personal link id in display order; each link's sortOrder becomes its index. Categories
+ * show in the order their first link appears, so this one list also orders the categories.
+ */
+export interface ReorderUserQuickLinksInput {
+  ids: string[];
+  move?: QuickLinkMove;
+}
+
 export interface ImportQuickLinksInput {
   items: CreateUserQuickLinkInput[];
 }
@@ -90,7 +105,12 @@ export interface ImportQuickLinksResult {
   rejected: RejectedQuickLinkImport[];
 }
 
-export type ProjectQuickLinkErrorCode = 'VALIDATION' | 'NOT_FOUND' | 'DUPLICATE' | 'LIMIT_REACHED';
+export type ProjectQuickLinkErrorCode =
+  | 'VALIDATION'
+  | 'NOT_FOUND'
+  | 'DUPLICATE'
+  | 'LIMIT_REACHED'
+  | 'CONFLICT';
 
 export class ProjectQuickLinkError extends Error {
   readonly code: ProjectQuickLinkErrorCode;

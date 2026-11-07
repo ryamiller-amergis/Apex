@@ -71,6 +71,18 @@ router.post(
   }),
 );
 
+router.put(
+  '/order',
+  route(async (req, res) => {
+    const items = await userQuickLinksService.reorderUserLinks(
+      authUserId(req),
+      req.params.projectId,
+      req.body,
+    );
+    res.json({ items });
+  }),
+);
+
 router.patch(
   '/:id',
   route(async (req, res) => {

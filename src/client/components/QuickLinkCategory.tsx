@@ -32,11 +32,25 @@ export function categoryToneClass(category: string | null | undefined): string {
   return index === null ? styles.toneOther : TONES[index];
 }
 
+/** Six-dot drag handle, cropped to the dots so it fits in a row's left padding. */
+export const GripIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="5.5 3 9 14" fill="currentColor" aria-hidden="true" className={className}>
+    <circle cx="7.5" cy="5" r="1.4" />
+    <circle cx="12.5" cy="5" r="1.4" />
+    <circle cx="7.5" cy="10" r="1.4" />
+    <circle cx="12.5" cy="10" r="1.4" />
+    <circle cx="7.5" cy="15" r="1.4" />
+    <circle cx="12.5" cy="15" r="1.4" />
+  </svg>
+);
+
 interface CategoryToggleProps {
   category: string | null;
   count: number;
   expanded: boolean;
   onToggle: () => void;
+  /** Swaps the dot for a drag grip on hover and focus. */
+  reorderable?: boolean;
   'data-testid': string;
 }
 
@@ -46,6 +60,7 @@ export const CategoryToggle: React.FC<CategoryToggleProps> = ({
   count,
   expanded,
   onToggle,
+  reorderable = false,
   'data-testid': testId,
 }) => {
   const name = category ?? OTHER_CATEGORY_LABEL;
@@ -54,14 +69,22 @@ export const CategoryToggle: React.FC<CategoryToggleProps> = ({
       type="button"
       role="menuitem"
       tabIndex={-1}
-      className={`${styles.heading} ${styles.headingButton} ${categoryToneClass(category)}`}
+      className={`${styles.heading} ${styles.headingButton} ${reorderable ? styles.headingReorderable : ''} ${categoryToneClass(category)}`}
       aria-expanded={expanded}
       aria-label={`${name}, ${count} link${count === 1 ? '' : 's'}`}
-      title={expanded ? `Collapse ${name}` : `Expand ${name}`}
+      aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
+      title={`${expanded ? 'Collapse' : 'Expand'} ${name}${reorderable ? '. Drag, or press Alt+↑/↓, to reorder' : ''}`}
       onClick={onToggle}
       {...{ 'data-testid': testId }}
     >
-      <span className={styles.dot} />
+      {reorderable ? (
+        <span className={styles.dotSlot}>
+          <span className={styles.dot} />
+          <GripIcon className={styles.grip} />
+        </span>
+      ) : (
+        <span className={styles.dot} />
+      )}
       <span className={styles.headingName}>{name}</span>
       <span className={styles.headingCount}>{count}</span>
       <span className={`${styles.headingChevron} ${expanded ? styles.headingChevronOpen : ''}`} aria-hidden="true">

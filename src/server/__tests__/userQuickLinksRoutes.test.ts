@@ -36,8 +36,10 @@ const createUserLink = jest.fn();
 const updateUserLink = jest.fn();
 const deleteUserLink = jest.fn();
 const importUserLinks = jest.fn();
+const reorderUserLinks = jest.fn();
 
 jest.mock('../services/userQuickLinksService', () => ({
+  reorderUserLinks: (...args: unknown[]) => reorderUserLinks(...args),
   listUserLinks: (...args: unknown[]) => listUserLinks(...args),
   createUserLink: (...args: unknown[]) => createUserLink(...args),
   updateUserLink: (...args: unknown[]) => updateUserLink(...args),
@@ -174,5 +176,28 @@ describe('error mapping', () => {
 
     expect(res.status).toBe(status);
     expect(res.body).toEqual({ error: 'nope', code });
+  });
+});
+
+describe('PUT /order', () => {
+  it('passes the body for the authenticated user and returns the new list', async () => {
+    const items = [{ id: 'b' }, { id: 'a' }];
+    reorderUserLinks.mockResolvedValue(items);
+    const body = { ids: ['b', 'a'], move: { id: 'b', category: 'Azure' } };
+
+    const res = await request(buildApp()).put(`${base}/order`).send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items });
+    expect(reorderUserLinks).toHaveBeenCalledWith('alice', 'MaxView', body);
+  });
+
+  it('maps a stale list to 409', async () => {
+    reorderUserLinks.mockRejectedValue(new ProjectQuickLinkError('changed', 'CONFLICT'));
+
+    const res = await request(buildApp()).put(`${base}/order`).send({ ids: [] });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'changed', code: 'CONFLICT' });
   });
 });

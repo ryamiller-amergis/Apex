@@ -275,6 +275,48 @@
   opacity: 0;
 }
 
+.rowDraggable {
+  cursor: grab;
+}
+
+/* Sits in the 12px left padding of .rowLink, clear of the favicon. */
+.rowGrip {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 6px;
+  height: 10px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+
+.row:hover .rowGrip,
+.row:focus-within .rowGrip {
+  opacity: 1;
+}
+
+.dragging {
+  opacity: 0.45;
+  background: var(--bg-secondary);
+}
+
+.dropBefore {
+  box-shadow: inset 0 2px 0 var(--accent-color);
+}
+
+.dropAfter {
+  box-shadow: inset 0 -2px 0 var(--accent-color);
+}
+
+.dropInto {
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  box-shadow: inset 0 0 0 1px var(--accent-color);
+}
+
 .rowActions {
   position: absolute;
   right: 6px;

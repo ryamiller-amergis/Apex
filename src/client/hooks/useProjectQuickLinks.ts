@@ -5,11 +5,13 @@ import type {
   ImportQuickLinksResult,
   ProjectQuickLink,
   ProjectQuickLinksListResponse,
+  ReorderUserQuickLinksInput,
   UpdateProjectQuickLinkInput,
   UpdateUserQuickLinkInput,
   UserQuickLink,
   UserQuickLinksListResponse,
 } from '../../shared/types/projectQuickLinks';
+import { applyQuickLinkReorder } from '../utils/quickLinkOrder';
 
 export class ProjectQuickLinksApiError extends Error {
   status: number;
@@ -202,6 +204,38 @@ export function useDeleteMyQuickLink(project: string | null | undefined) {
     mutationFn: ({ id }) =>
       apiFetch<void>(myLinksUrl(project!, encodeURIComponent(id)), { method: 'DELETE' }),
     onSuccess: invalidate,
+  });
+}
+
+/** Saves a drag-and-drop reorder of personal links, showing the new order before the server answers. */
+export function useReorderMyQuickLinks(project: string | null | undefined) {
+  const queryClient = useQueryClient();
+  const queryKey = myQuickLinksQueryKey(project ?? '');
+  return useMutation<
+    UserQuickLink[],
+    ProjectQuickLinksApiError,
+    ReorderUserQuickLinksInput,
+    { previous: UserQuickLink[] | undefined }
+  >({
+    mutationFn: (input) =>
+      apiFetch<UserQuickLinksListResponse>(myLinksUrl(project!, 'order'), {
+        method: 'PUT',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(input),
+      }).then((data) => data.items),
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<UserQuickLink[]>(queryKey);
+      if (previous) queryClient.setQueryData(queryKey, applyQuickLinkReorder(previous, input));
+      return { previous };
+    },
+    onError: (_err, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+    },
+    onSuccess: (items) => queryClient.setQueryData(queryKey, items),
+    onSettled: () => {
+      if (project) void queryClient.invalidateQueries({ queryKey });
+    },
   });
 }
 
