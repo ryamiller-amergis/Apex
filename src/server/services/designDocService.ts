@@ -9,7 +9,7 @@ const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
-import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
+import type { PipelinePinPolicy, RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
 import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread, updateThreadKickoffContext } from './chatAgentService';
@@ -253,6 +253,41 @@ export async function routeDesignDocGenerationKickoff(opts: {
       },
     );
   };
+  const findTargetGrounding = async (): Promise<RunGrounding | undefined> => {
+    const findActive = async () => (
+      await runGroundingService.getGroundings(destinationRun)
+    ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+    const existing = await findActive();
+    if (existing) return existing;
+
+    let sourceRun: RunRef | null = opts.sourceThreadId
+      ? {
+          runType: 'chat',
+          runId: opts.sourceThreadId,
+          project: opts.project,
+        }
+      : null;
+    if (!sourceRun && opts.prdId) {
+      sourceRun = (await resolveRunGroundingSurface('prd', opts.prdId))?.run ?? null;
+    }
+    if (!sourceRun) return undefined;
+    try {
+      await propagatePipelineGrounding(
+        sourceRun,
+        destinationRun,
+        opts.userId,
+        {
+          deferMaterialization: true,
+          pinPolicy: opts.pinPolicy ?? 'inherit',
+        },
+      );
+    } catch {
+      console.warn(
+        `[run-grounding] Design Doc retry propagation unavailable (designDocId=${opts.designDocId})`,
+      );
+    }
+    return findActive();
+  };
 
   try {
     await routeBackgroundWorkflow({
@@ -260,50 +295,11 @@ export async function routeDesignDocGenerationKickoff(opts: {
       workflowClass: 'design-doc',
       destinationRun,
       threadId: opts.threadId,
-      prepareWorker: async () => {
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          opts.kickoffMessage,
-        );
-        let targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-
-        if (!targetGrounding) {
-          let sourceRun: RunRef | null = opts.sourceThreadId
-            ? {
-                runType: 'chat',
-                runId: opts.sourceThreadId,
-                project: opts.project,
-              }
-            : null;
-          if (!sourceRun && opts.prdId) {
-            sourceRun = (await resolveRunGroundingSurface('prd', opts.prdId))?.run ?? null;
-          }
-          if (sourceRun) {
-            try {
-              await propagatePipelineGrounding(
-                sourceRun,
-                destinationRun,
-                opts.userId,
-                {
-                  deferMaterialization: true,
-                  pinPolicy: opts.pinPolicy ?? 'inherit',
-                },
-              );
-            } catch {
-              console.warn(
-                `[run-grounding] Design Doc retry propagation unavailable (designDocId=${opts.designDocId})`,
-              );
-            }
-            targetGrounding = (
-              await runGroundingService.getGroundings(destinationRun)
-            ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-          }
-        }
-
-        return { ...prepared, targetGrounding };
-      },
+      prepareWorker: () => prepareBackgroundWorkflowTurn(
+        opts.threadId,
+        opts.kickoffMessage,
+        { findTargetGrounding },
+      ),
       runInProcess: () =>
         sendMessage(
           opts.threadId,
@@ -2034,14 +2030,11 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
             );
           }
         }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          thread.id,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(thread.id, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () => {
         void sendMessage(

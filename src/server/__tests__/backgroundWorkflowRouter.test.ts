@@ -32,6 +32,7 @@ import {
   errorMessage,
   prepareBackgroundWorkflowWorkspace,
   readDocumentScratchInputs,
+  resolveDocumentScratchInputs,
   workerCanReadWithoutWorkingTree,
   type BackgroundWorkflowRouteInput,
   type BackgroundWorkflowRouterDependencies,
@@ -1457,5 +1458,73 @@ describe('background route error messages', () => {
       'Document execution specification is incomplete',
     );
     expect(errorMessage('boom')).toBe('boom');
+  });
+});
+
+describe('resolveDocumentScratchInputs', () => {
+  const context = { path: '.ai-pilot/kickoff-context.md', content: '# Context' };
+  const session = { path: '.ai-pilot/session.json', content: '{}' };
+  const transcript = { path: '.ai-pilot/kickoff-transcript.md', content: '# Transcript' };
+
+  it('uses the saved thread and the snapshot without reading the workspace', async () => {
+    const readWorkspace = jest.fn();
+    const resolved = await resolveDocumentScratchInputs({
+      threadId: 'thread-1',
+      workflowClass: 'test-cases',
+      threadWorkspacePath: '/share/thread-1',
+      recorded: [context, session, transcript],
+      readSnapshot: async () => [
+        { path: '.ai-pilot/output/feature.prd.md', content: '# PRD' },
+        { path: '.ai-pilot/output/feature.backlog.json', content: '{}' },
+        { path: '.ai-pilot/test-plans.md', content: '# Plans' },
+      ],
+      readWorkspace,
+    });
+
+    expect(readWorkspace).not.toHaveBeenCalled();
+    expect(resolved.source).toBe('records');
+    expect(resolved.inputs.map((input) => input.path)).toEqual([
+      '.ai-pilot/kickoff-context.md',
+      '.ai-pilot/output/feature.backlog.json',
+      '.ai-pilot/output/feature.prd.md',
+      '.ai-pilot/session.json',
+      '.ai-pilot/test-plans.md',
+    ]);
+  });
+
+  it('fills a missing required file from the workspace and keeps the saved copies', async () => {
+    const readWorkspace = jest.fn().mockResolvedValue([
+      { path: '.ai-pilot/kickoff-context.md', content: '# Stale context' },
+      { path: '.ai-pilot/kickoff-transcript.md', content: '# Agent transcript' },
+    ]);
+    const resolved = await resolveDocumentScratchInputs({
+      threadId: 'thread-1',
+      workflowClass: 'prd',
+      threadWorkspacePath: '/share/thread-1',
+      recorded: [context, session],
+      readSnapshot: async () => null,
+      readWorkspace,
+    });
+
+    expect(resolved.source).toBe('workspace-fallback');
+    expect(resolved.inputs).toEqual([
+      context,
+      { path: '.ai-pilot/kickoff-transcript.md', content: '# Agent transcript' },
+      session,
+    ]);
+  });
+
+  it('reads the workspace when the caller has no saved inputs', async () => {
+    const readWorkspace = jest.fn().mockResolvedValue([context]);
+    const resolved = await resolveDocumentScratchInputs({
+      threadId: 'thread-1',
+      workflowClass: 'design-doc',
+      threadWorkspacePath: '/share/thread-1',
+      readSnapshot: async () => null,
+      readWorkspace,
+    });
+
+    expect(readWorkspace).toHaveBeenCalledWith('/share/thread-1', 'design-doc');
+    expect(resolved).toEqual({ inputs: [context], source: 'workspace' });
   });
 });

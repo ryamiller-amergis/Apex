@@ -50,14 +50,11 @@ export async function routeAdrGenerationKickoff(opts: {
       destinationRun,
       threadId: opts.threadId,
       prepareWorker: async () => {
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          opts.kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, opts.kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       // The watcher polls the App Service workspace, which only an in-process
       // run writes to. V2 results and failures arrive through the harvest.

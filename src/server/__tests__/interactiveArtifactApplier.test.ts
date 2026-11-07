@@ -64,6 +64,33 @@ describe('interactiveArtifactApplier', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it('returns the transcript it wrote so ingest can save it on the thread', async () => {
+    const body = Buffer.from('# Interview transcript', 'utf8');
+    const applied = await applyInteractiveArtifacts({
+      workspaceRoot: root,
+      manifest: {
+        schemaVersion: 2,
+        transport: 'servicebus-blob-v2',
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        files: [
+          {
+            path: '.ai-pilot/kickoff-transcript.md',
+            sha256: createHash('sha256').update(body).digest('hex'),
+            sizeBytes: body.byteLength,
+            ref: { container: 'c', key: 'k' },
+          },
+        ],
+        writtenAt: '2026-09-23T15:00:00.000Z',
+      },
+      expected: { runId: 'run-1', attemptId: 'attempt-1', attemptNumber: 1 },
+      reader: { readFile: async () => body },
+    });
+
+    expect(applied.transcript).toBe('# Interview transcript');
+  });
+
   it('verifies checksums and writes files beneath the thread workspace', async () => {
     const body = Buffer.from('hello output', 'utf8');
     const manifest: AiRunV2ArtifactManifest = {
@@ -83,7 +110,7 @@ describe('interactiveArtifactApplier', () => {
       writtenAt: '2026-09-23T15:00:00.000Z',
     };
 
-    await applyInteractiveArtifacts({
+    const applied = await applyInteractiveArtifacts({
       workspaceRoot: root,
       manifest,
       expected: {
@@ -99,6 +126,7 @@ describe('interactiveArtifactApplier', () => {
     expect(
       await fs.readFile(path.join(root, '.ai-pilot', 'output', 'notes.md'), 'utf8'),
     ).toBe('hello output');
+    expect(applied.transcript).toBeNull();
   });
 
   it('rejects identity mismatch and path escape', async () => {

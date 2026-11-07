@@ -40,6 +40,8 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
+import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import type { AiRunV2DocumentScratchInput } from '../../shared/types/aiRunV2DocumentSpec';
 import { resolveSkillConfig } from './projectSettingsService';
 import { readRemoteBranchTip } from './repoCacheService';
 import { existingAdoTestCaseId, rawTestCaseRecords } from './testCaseLookupService';
@@ -467,7 +469,7 @@ export async function triggerAdoTestCaseGeneration(
     throw new Error('Test-case generation thread has no workspace');
   }
 
-  writeGenerationWorkspace({
+  const sourceInputs = writeGenerationWorkspace({
     workspaceDir: thread.workspaceDir,
     slug,
     prdMarkdown,
@@ -475,8 +477,9 @@ export async function triggerAdoTestCaseGeneration(
     pbiIds,
     freeformContext,
   });
-  writeTestPlanFile(thread.workspaceDir, testPlans);
-  writeExistingCaseFiles(thread.workspaceDir, existingCases);
+  const adoInputs = [...renderTestPlanFile(testPlans), ...renderExistingCaseFiles(existingCases)];
+  writeScratchFiles(thread.workspaceDir, adoInputs);
+  await saveDocumentInputSnapshot(thread.id, [...sourceInputs, ...adoInputs]);
   await updateThreadKickoffContext(thread.id, freeformContext);
 
   const [inserted] = await db
@@ -645,13 +648,13 @@ export async function dispatchQaLabRun(input: {
             );
           }
         }
-        const prepared = await prepareBackgroundWorkflowTurn(input.threadId, input.kickoffMessage);
-        const targetGrounding = await pinBranchTipWhenUngrounded(
-          destinationRun,
-          input.repository,
-          input.logLabel,
-        );
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(input.threadId, input.kickoffMessage, {
+          findTargetGrounding: () => pinBranchTipWhenUngrounded(
+            destinationRun,
+            input.repository,
+            input.logLabel,
+          ),
+        });
       },
       runInProcess: () => sendMessage(
         input.threadId,
@@ -1773,15 +1776,17 @@ export async function readExistingCaseContext(
   }
 }
 
-/** Writes the linked cases and the suite index the kickoff points at; no-op when unchecked. */
-export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingCaseContext): void {
-  if (!existing.checked) return;
-  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
-  fs.writeFileSync(
-    path.join(workspaceDir, EXISTING_CASES_FILE),
-    `${JSON.stringify(existing.linked, null, 2)}\n`,
-    'utf-8',
-  );
+function writeScratchFiles(workspaceDir: string, inputs: AiRunV2DocumentScratchInput[]): void {
+  for (const input of inputs) {
+    const target = path.join(workspaceDir, ...input.path.split('/'));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, input.content, 'utf-8');
+  }
+}
+
+/** The linked cases and the suite index the kickoff points at; empty when unchecked. */
+export function renderExistingCaseFiles(existing: ExistingCaseContext): AiRunV2DocumentScratchInput[] {
+  if (!existing.checked) return [];
   const lines = ['# Test Cases in static suites', '', '`{id} | {suite path} | {title}`, grouped by Test Plan.'];
   let plan: string | null = null;
   for (const entry of existing.index.entries) {
@@ -1791,7 +1796,14 @@ export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingC
     }
     lines.push(`- ${entry.id} | ${entry.suitePath || '(plan root)'} | ${entry.title}`);
   }
-  fs.writeFileSync(path.join(workspaceDir, SUITE_CASE_INDEX_FILE), `${lines.join('\n')}\n`, 'utf-8');
+  return [
+    { path: EXISTING_CASES_FILE, content: `${JSON.stringify(existing.linked, null, 2)}\n` },
+    { path: SUITE_CASE_INDEX_FILE, content: `${lines.join('\n')}\n` },
+  ];
+}
+
+export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingCaseContext): void {
+  writeScratchFiles(workspaceDir, renderExistingCaseFiles(existing));
 }
 
 export function renderExistingCasesSection(existing: ExistingCaseContext): string[] {
@@ -1845,9 +1857,9 @@ export function renderTestPlanSection(testPlans: QaAdoTestPlanOption[]): string[
   ];
 }
 
-/** Writes the full Test Plan list the kickoff context points at; no-op when there are none. */
-export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlanOption[]): void {
-  if (testPlans.length === 0) return;
+/** The full Test Plan list the kickoff context points at; empty when there are none. */
+export function renderTestPlanFile(testPlans: QaAdoTestPlanOption[]): AiRunV2DocumentScratchInput[] {
+  if (testPlans.length === 0) return [];
   const lines = ['# Azure Test Plans', ''];
   for (const plan of testPlans) {
     lines.push(`- ${plan.name}`);
@@ -1855,8 +1867,11 @@ export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlan
       if (suite.path) lines.push(`  - ${suite.path}${suite.requirementId !== undefined ? ' (requirement)' : ''}`);
     }
   }
-  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
-  fs.writeFileSync(path.join(workspaceDir, TEST_PLANS_FILE), `${lines.join('\n')}\n`, 'utf-8');
+  return [{ path: TEST_PLANS_FILE, content: `${lines.join('\n')}\n` }];
+}
+
+export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlanOption[]): void {
+  writeScratchFiles(workspaceDir, renderTestPlanFile(testPlans));
 }
 
 function buildKickoffMessage(pbiIds: string[]): string {
@@ -1873,15 +1888,13 @@ function writeGenerationWorkspace(input: {
   backlog: SyntheticAdoBacklog;
   pbiIds: string[];
   freeformContext: string;
-}): void {
+}): AiRunV2DocumentScratchInput[] {
   const outputDir = path.join(input.workspaceDir, '.ai-pilot', 'output');
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(path.join(outputDir, `${input.slug}.prd.md`), input.prdMarkdown, 'utf-8');
-  fs.writeFileSync(
-    path.join(outputDir, `${input.slug}.backlog.json`),
-    JSON.stringify(input.backlog, null, 2),
-    'utf-8',
-  );
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${input.slug}.prd.md`, content: input.prdMarkdown },
+    { path: `.ai-pilot/output/${input.slug}.backlog.json`, content: JSON.stringify(input.backlog, null, 2) },
+  ];
+  writeScratchFiles(input.workspaceDir, sourceInputs);
   fs.writeFileSync(
     path.join(outputDir, QA_LAB_SCOPE_FILE),
     JSON.stringify({ pbiIds: input.pbiIds }),
@@ -1892,6 +1905,7 @@ function writeGenerationWorkspace(input: {
     input.freeformContext,
     'utf-8',
   );
+  return sourceInputs;
 }
 
 function startAdoTestSuiteWatcher(suiteId: string, chatThreadId: string): void {

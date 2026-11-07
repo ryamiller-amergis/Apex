@@ -290,14 +290,11 @@ export async function routePrdGenerationKickoff(opts: {
       destinationRun,
       threadId: opts.threadId,
       prepareWorker: async () => {
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () =>
         sendMessage(

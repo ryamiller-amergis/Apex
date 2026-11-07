@@ -18,6 +18,7 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
+import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
 import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   canThisInstanceFailGeneration,
@@ -838,14 +839,11 @@ export async function routeTestCaseGenerationKickoff(opts: {
             `[run-grounding] Test-case propagation unavailable (testCaseId=${opts.testCaseId})`,
           );
         }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () =>
         sendMessage(
@@ -960,16 +958,14 @@ export async function triggerTestCaseGeneration(
 
   const outputDir = path.join(thread.workspaceDir, '.ai-pilot', 'output');
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(outputDir, `${slug}.prd.md`),
-    prdRow.content || '',
-    'utf-8'
-  );
-  fs.writeFileSync(
-    path.join(outputDir, `${slug}.backlog.json`),
-    JSON.stringify(backlogJson, null, 2),
-    'utf-8'
-  );
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${slug}.prd.md`, content: prdRow.content || '' },
+    { path: `.ai-pilot/output/${slug}.backlog.json`, content: JSON.stringify(backlogJson, null, 2) },
+  ];
+  for (const input of sourceInputs) {
+    fs.writeFileSync(path.join(thread.workspaceDir, ...input.path.split('/')), input.content, 'utf-8');
+  }
+  await saveDocumentInputSnapshot(thread.id, sourceInputs);
   fs.writeFileSync(
     path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md'),
     context,

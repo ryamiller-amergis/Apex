@@ -126,6 +126,24 @@ resource "azurerm_storage_management_policy" "lt_artifacts_lifecycle" {
     }
   }
 
+  # V2 run specifications, outputs, and document-input snapshots. Apex reads them
+  # only while a run is starting or being harvested, or its Playbook step completes.
+  rule {
+    name    = "ai-run-artifacts-30day"
+    enabled = true
+
+    filters {
+      prefix_match = ["${local.ai_platform_v2_artifact_container}/"]
+      blob_types   = ["blockBlob"]
+    }
+
+    actions {
+      base_blob {
+        delete_after_days_since_modification_greater_than = 30
+      }
+    }
+  }
+
   rule {
     name    = "lt-artifacts-90day"
     enabled = true
