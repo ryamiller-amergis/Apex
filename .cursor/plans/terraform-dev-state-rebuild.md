@@ -94,6 +94,25 @@ Anything else (especially repo-read losing its GitHub token) → stop and review
   `ai_runs_api_sb_sender` / `ai_runs_runner_sb_receiver` show as create only
   because of that replacement.
 
+## Update 2026-11-08 15:30 (pushed as 190b1139 on PR #249)
+
+- Committed `infra/env/dev.tfvars` and `infra/scripts/dev-tf-secrets.sh`; README dev runbook updated.
+- `ai_runs_deployer_kv_secrets_officer` is now `for_each` over
+  `ai_runs_key_vault_secrets_officer_ids`. Dev lists Ryan (`110b196f…`, imported
+  into dev state) and Aneesh (`1ceaafde…`, create at apply). Dev state: 100 entries.
+- Prod migration must: add `ai_runs_key_vault_secrets_officer_ids = ["1ceaafde-4871-4411-9ef7-5432c7b4e080"]`
+  to local `terraform.prd.tfvars` (back it up first) and
+  `terraform state mv 'azurerm_role_assignment.ai_runs_deployer_kv_secrets_officer[0]' 'azurerm_role_assignment.ai_runs_deployer_kv_secrets_officer["1ceaafde-4871-4411-9ef7-5432c7b4e080"]'`.
+- Do the prod push from a clean folder (like tf-dev-rebuild): `init` in `infra/`
+  prompts to migrate local workspaces. After prod plan shows no changes, move
+  `infra/terraform.tfstate.d/` out of the repo (keep a backup).
+- Blocked on access (Aneesh asking admins):
+  - Dev: RBAC Administrator on `rg-scrum-dev`; Key Vault Secrets Officer on `kv-apex-ai-dev`;
+    `rg-apex-tfstate-dev` created with Aneesh as Owner.
+  - Prod: `rg-apex-tfstate-prd` created with Aneesh as Owner (he has only Reader
+    on the subscription; do not bootstrap into `rg-apex-prd-data` — the script's
+    `az group create` would overwrite that group's tags).
+
 ## Next steps
 
 1. Pass 1: generate import blocks for non-role-assignment resources, verify IDs
