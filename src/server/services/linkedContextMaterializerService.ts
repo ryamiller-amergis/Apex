@@ -18,6 +18,7 @@ import {
   type ActorContext,
 } from './interviewLinkService';
 import { trackEvent } from './telemetry';
+import { keepsThreadFolder } from './threadFolder';
 import { LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH } from '../../shared/types/interviewLinks';
 import type { RunRef } from '../../shared/types/runGrounding';
 
@@ -421,6 +422,7 @@ export async function materializeLinkedContextForPipelineHandoff(
   let surface: PipelineHandoffSurface | null = null;
 
   try {
+    if (!(await keepsThreadFolder(to.project))) return null;
     const handoff = await resolvePipelineHandoff(from, to);
     if (!handoff) return null;
     surface = handoff.surface;

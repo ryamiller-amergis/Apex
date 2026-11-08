@@ -877,6 +877,7 @@ describe('testCaseService', () => {
       (mockDb.select as jest.Mock).mockReturnValue({
         from: () => ({
           where: () => ({
+            limit: () => Promise.resolve([]),
             orderBy: () => ({
               limit: () => Promise.resolve([{
                 testCasesJson: { suites: [{ pbiId: 'PBI-1', testCases: [{ id: 'TC-old' }] }] },

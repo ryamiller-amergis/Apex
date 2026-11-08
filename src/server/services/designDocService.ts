@@ -20,6 +20,7 @@ import { assignApprovers, recordApproverResponse, isAssignedApprover, isApproval
 import { getUnresolvedCount } from './reviewCommentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
+import { writeThreadFolderFile } from './threadFolder';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
@@ -2395,8 +2396,12 @@ export async function triggerFixValidation(
     }, { skipAutoKickoff: true });
 
     const realContext = buildDocContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realContext, 'utf-8');
+    await writeThreadFolderFile({
+      project: doc.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realContext,
+    });
     await updateThreadKickoffContext(thread.id, realContext);
 
     threadId = thread.id;

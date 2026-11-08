@@ -33,7 +33,7 @@ import {
 } from './agentRunReaperService';
 import { adoWriteForRequest, adoWriteFromToken } from './adoFactory';
 import { AzureDevOpsService } from './azureDevOps';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   createThread,
   isThreadIdle,
@@ -42,6 +42,8 @@ import {
   updateThreadKickoffContext,
 } from './chatAgentService';
 import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { saveThreadOutputs } from './chatThreadOutputStore';
+import { writeThreadFolderFile } from './threadFolder';
 import type { AiRunV2DocumentScratchInput } from '../../shared/types/aiRunV2DocumentSpec';
 import { resolveSkillConfig } from './projectSettingsService';
 import { readRemoteBranchTip } from './repoCacheService';
@@ -470,7 +472,9 @@ export async function triggerAdoTestCaseGeneration(
     throw new Error('Test-case generation thread has no workspace');
   }
 
-  const sourceInputs = writeGenerationWorkspace({
+  const sourceInputs = await writeGenerationWorkspace({
+    project,
+    threadId: thread.id,
     workspaceDir: thread.workspaceDir,
     slug,
     prdMarkdown,
@@ -479,7 +483,7 @@ export async function triggerAdoTestCaseGeneration(
     freeformContext,
   });
   const adoInputs = [...renderTestPlanFile(testPlans), ...renderExistingCaseFiles(existingCases)];
-  writeScratchFiles(thread.workspaceDir, adoInputs);
+  await writeScratchFiles(project, thread.workspaceDir, adoInputs);
   await saveDocumentInputSnapshot(thread.id, [...sourceInputs, ...adoInputs]);
   await updateThreadKickoffContext(thread.id, freeformContext);
 
@@ -531,7 +535,23 @@ async function dispatchAdoTestSuite(input: {
     logLabel: `suiteId=${input.suiteId}`,
     onPreparationFailure: () => markAdoTestSuiteFailed(input.suiteId, input.threadId, input.workspaceDir),
   });
-  if (dispatched) startAdoTestSuiteWatcher(input.suiteId, input.threadId);
+  if (!dispatched) return;
+  const v2Transport = await usesV2DocumentTransport({
+    userId: input.userId,
+    project: input.project,
+    workflowClass: 'test-cases',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing output.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startAdoTestSuiteWatcher(input.suiteId, input.threadId);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 }
 
 /**
@@ -1670,7 +1690,7 @@ function toAcceptanceCriteria(
   return criteria;
 }
 
-function renderSyntheticPrd(
+export function renderSyntheticPrd(
   context: QaAdoGenerationContext,
   pbiIds: string[],
 ): string {
@@ -1777,11 +1797,13 @@ export async function readExistingCaseContext(
   }
 }
 
-function writeScratchFiles(workspaceDir: string, inputs: AiRunV2DocumentScratchInput[]): void {
+async function writeScratchFiles(
+  project: string,
+  workspaceDir: string,
+  inputs: AiRunV2DocumentScratchInput[],
+): Promise<void> {
   for (const input of inputs) {
-    const target = path.join(workspaceDir, ...input.path.split('/'));
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, input.content, 'utf-8');
+    await writeThreadFolderFile({ project, workspaceDir, relativePath: input.path, content: input.content });
   }
 }
 
@@ -1801,10 +1823,6 @@ export function renderExistingCaseFiles(existing: ExistingCaseContext): AiRunV2D
     { path: EXISTING_CASES_FILE, content: `${JSON.stringify(existing.linked, null, 2)}\n` },
     { path: SUITE_CASE_INDEX_FILE, content: `${lines.join('\n')}\n` },
   ];
-}
-
-export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingCaseContext): void {
-  writeScratchFiles(workspaceDir, renderExistingCaseFiles(existing));
 }
 
 export function renderExistingCasesSection(existing: ExistingCaseContext): string[] {
@@ -1870,10 +1888,6 @@ export function renderTestPlanFile(testPlans: QaAdoTestPlanOption[]): AiRunV2Doc
   return [{ path: TEST_PLANS_FILE, content: `${lines.join('\n')}\n` }];
 }
 
-export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlanOption[]): void {
-  writeScratchFiles(workspaceDir, renderTestPlanFile(testPlans));
-}
-
 function buildKickoffMessage(pbiIds: string[]): string {
   if (pbiIds.length === 1) {
     return `Generate QA test cases for backlog item ${pbiIds[0]} only. Use --pbi ${pbiIds[0]}. Do not write cases for any other PBI. Write the required output files.`;
@@ -1881,30 +1895,30 @@ function buildKickoffMessage(pbiIds: string[]): string {
   return `Generate QA test cases only for these backlog items: ${pbiIds.join(', ')}. Do not write cases for any other PBI. Write the required output files.`;
 }
 
-function writeGenerationWorkspace(input: {
+async function writeGenerationWorkspace(input: {
+  project: string;
+  threadId: string;
   workspaceDir: string;
   slug: string;
   prdMarkdown: string;
   backlog: SyntheticAdoBacklog;
   pbiIds: string[];
   freeformContext: string;
-}): AiRunV2DocumentScratchInput[] {
-  const outputDir = path.join(input.workspaceDir, '.ai-pilot', 'output');
+}): Promise<AiRunV2DocumentScratchInput[]> {
   const sourceInputs = [
     { path: `.ai-pilot/output/${input.slug}.prd.md`, content: input.prdMarkdown },
     { path: `.ai-pilot/output/${input.slug}.backlog.json`, content: JSON.stringify(input.backlog, null, 2) },
   ];
-  writeScratchFiles(input.workspaceDir, sourceInputs);
-  fs.writeFileSync(
-    path.join(outputDir, QA_LAB_SCOPE_FILE),
-    JSON.stringify({ pbiIds: input.pbiIds }),
-    'utf-8',
-  );
-  fs.writeFileSync(
-    path.join(input.workspaceDir, '.ai-pilot', 'kickoff-context.md'),
-    input.freeformContext,
-    'utf-8',
-  );
+  const scopeFile = {
+    path: `.ai-pilot/output/${QA_LAB_SCOPE_FILE}`,
+    content: JSON.stringify({ pbiIds: input.pbiIds }),
+  };
+  await writeScratchFiles(input.project, input.workspaceDir, [
+    ...sourceInputs,
+    scopeFile,
+    { path: '.ai-pilot/kickoff-context.md', content: input.freeformContext },
+  ]);
+  await saveThreadOutputs(input.threadId, null, [scopeFile]);
   return sourceInputs;
 }
 

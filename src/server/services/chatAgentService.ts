@@ -125,6 +125,7 @@ import type {
 } from '../../shared/types/chat';
 import { retryWithBackoff } from '../utils/retry';
 import { trackAgentError, trackEvent } from './telemetry';
+import { keepsThreadFolder } from './threadFolder';
 import {
   clearRunEventSequence,
   finalizeOwnedAgentRun,
@@ -2932,7 +2933,11 @@ async function ensureThreadState(
   // reboot, or the stale-workspace cleanup pass). Without this, Agent.resume /
   // Agent.create would fail because its cwd no longer exists, and a resumed
   // interview would silently produce no agent output.
-  if (thread.workspaceDir && !fs.existsSync(thread.workspaceDir)) {
+  if (
+    thread.workspaceDir &&
+    !fs.existsSync(thread.workspaceDir) &&
+    (await keepsThreadFolder(thread.kickoff.project))
+  ) {
     try {
       fs.mkdirSync(thread.workspaceDir, { recursive: true });
       injectKickoffFiles(thread.workspaceDir, thread.kickoff, thread.id);
@@ -3075,7 +3080,7 @@ export async function createThread(
       options?.dependenciesPrepared ?? enrichedKickoff.dependenciesPrepared,
   };
 
-  if (!options?.workspaceDirOverride) {
+  if (!options?.workspaceDirOverride && (await keepsThreadFolder(resolvedKickoff.project))) {
     fs.mkdirSync(workspaceDir, { recursive: true });
     injectKickoffFiles(workspaceDir, resolvedKickoff, threadId);
   }

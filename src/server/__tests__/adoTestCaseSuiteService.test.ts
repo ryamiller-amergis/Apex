@@ -103,6 +103,11 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
   routeBackgroundWorkflow: jest.fn(),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
+}));
+
+jest.mock('../services/chatThreadOutputStore', () => ({
+  saveThreadOutputs: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({

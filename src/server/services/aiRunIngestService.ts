@@ -64,11 +64,15 @@ import type { InteractiveTerminalInput } from './brainstormTurnLedger';
 import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
 import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
 import {
-  applyInteractiveArtifacts,
   createBlobInteractiveArtifactReader,
+  interactiveTranscript,
+  readInteractiveArtifacts,
+  writeInteractiveArtifacts,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
 import { updateThreadKickoffTranscript } from './chatAgentService';
+import { saveThreadOutputs } from './chatThreadOutputStore';
+import { keepsThreadFolder } from './threadFolder';
 import { isCursorModelBlockedMessage } from '../../shared/utils/modelAvailability';
 
 // Ingest persists worker events without emitting them to this instance's
@@ -939,19 +943,14 @@ async function verifyAndApplyActorArtifactManifest(input: {
     );
   }
   const [thread] = await db
-    .select({ workspaceDir: chatThreads.workspaceDir })
+    .select({ workspaceDir: chatThreads.workspaceDir, kickoff: chatThreads.kickoff })
     .from(chatThreads)
     .where(eq(chatThreads.id, input.threadId))
     .limit(1);
-  const workspaceRoot = thread?.workspaceDir?.trim();
-  if (!workspaceRoot) {
-    throw new AiRunIngestError(
-      'Completed terminal ingest requires a workspace reference',
-      'AI_RUN_ILLEGAL_TRANSITION',
-    );
+  if (!thread) {
+    throw new AiRunIngestError('Completed terminal ingest has no thread', 'AI_RUN_ILLEGAL_TRANSITION');
   }
-  const applied = await applyInteractiveArtifacts({
-    workspaceRoot,
+  const files = await readInteractiveArtifacts({
     manifest: parsed,
     expected: {
       runId: input.runId,
@@ -964,10 +963,20 @@ async function verifyAndApplyActorArtifactManifest(input: {
         .downloadToBuffer(),
     ),
   });
+  await saveThreadOutputs(
+    input.threadId,
+    input.runId,
+    files.map((file) => ({ path: file.path, content: file.body.toString('utf8') })),
+  );
+  const workspaceRoot = thread.workspaceDir?.trim();
+  if (workspaceRoot && (await keepsThreadFolder(thread.kickoff.project))) {
+    await writeInteractiveArtifacts(workspaceRoot, files);
+  }
   // Document runs build their inputs from the saved thread, so the transcript
-  // the agent wrote must land there as well as in the workspace.
-  if (applied.transcript !== null) {
-    await updateThreadKickoffTranscript(input.threadId, applied.transcript).catch((error: unknown) => {
+  // the agent wrote must land there as well.
+  const transcript = interactiveTranscript(files);
+  if (transcript !== null) {
+    await updateThreadKickoffTranscript(input.threadId, transcript).catch((error: unknown) => {
       console.warn(
         `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
       );

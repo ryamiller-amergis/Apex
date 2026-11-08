@@ -76,6 +76,7 @@ jest.mock('../services/chatAgentService', () => ({
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
   routeBackgroundWorkflow: jest.fn().mockResolvedValue(undefined),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/projectSettingsService', () => ({
@@ -261,5 +262,18 @@ describe('qaLabAssistantService', () => {
     await expect(openQaLabAssistantThread({ suiteId: 'suite-1', userId: 'u2', threadId: 'thread-qa', ado }))
       .resolves.toEqual({ threadId: 'thread-new' });
     expect((createThread as jest.Mock).mock.calls[0][1]).toEqual(expect.objectContaining({ qaLabSuiteId: 'suite-1' }));
+  });
+
+  it('puts the Test Plan list in the context, since the V2 chat host gets no other files', async () => {
+    (getThread as jest.Mock).mockResolvedValue(thread({ workspaceDir }));
+    ado.listStaticTestPlanSuites.mockResolvedValueOnce([
+      { id: 1, name: 'Timesheets', suites: [{ id: 2, path: 'Approvals > Email' }] },
+    ]);
+
+    await openQaLabAssistantThread({ suiteId: 'suite-1', userId: 'u1', threadId: 'thread-qa', ado });
+
+    const context = fs.readFileSync(path.join(workspaceDir, '.ai-pilot', 'kickoff-context.md'), 'utf-8');
+    expect(context).toContain('- Timesheets\n  - Approvals > Email');
+    expect(fs.existsSync(path.join(workspaceDir, '.ai-pilot', 'test-plans.md'))).toBe(false);
   });
 });

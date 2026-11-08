@@ -14,6 +14,7 @@ import {
   type AiRunV2DocumentSpecification,
 } from '../../shared/types/aiRunV2DocumentSpec';
 import { readDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { keepsThreadFolder } from './threadFolder';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
@@ -160,6 +161,7 @@ export interface BackgroundWorkflowRouterDependencies {
   clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
   readDocumentScratchInputs?: typeof readDocumentScratchInputs;
   readDocumentInputSnapshot?: typeof readDocumentInputSnapshot;
+  keepsThreadFolder?: typeof keepsThreadFolder;
   getRepoCacheDir?: (options: RepoCacheOptions) => string;
   isUsableBareMirror?: (path: string | undefined) => boolean;
   /**
@@ -432,6 +434,7 @@ export function createBackgroundWorkflowRouter(
     dependencies.readDocumentScratchInputs ?? readDocumentScratchInputs;
   const readInputSnapshot =
     dependencies.readDocumentInputSnapshot ?? readDocumentInputSnapshot;
+  const threadFolderKept = dependencies.keepsThreadFolder ?? keepsThreadFolder;
   const enqueueRun = dependencies.enqueue ?? enqueue;
   const admitV2Run =
     dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
@@ -742,7 +745,9 @@ export function createBackgroundWorkflowRouter(
     // No grounding, shared checkout, or MaxView clone.
     if (SCRATCH_ONLY_WORKFLOW_CLASSES.has(input.workflowClass)) {
       try {
-        await clearGenerationOutput(prepared.threadWorkspacePath);
+        if (!useV2Transport || (await threadFolderKept(input.destinationRun.project))) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+        }
       } catch {
         return recover(
           input,
@@ -811,7 +816,9 @@ export function createBackgroundWorkflowRouter(
     if (useV2Transport) {
       // @feature-flag:ai-runs-v2-transport enabled-start
       try {
-        await clearGenerationOutput(prepared.threadWorkspacePath);
+        if (await threadFolderKept(input.destinationRun.project)) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+        }
       } catch {
         return recover(
           input,
