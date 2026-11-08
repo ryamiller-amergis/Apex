@@ -48,7 +48,7 @@ import { publishDraft } from '../services/playbookDefinitionService';
 
 const PROJECT = 'Project A';
 const USER_OID = 'author-oid';
-const FLAG = 'playbook-interview-step';
+const INTERVIEW_FLAG = 'playbook-interview-step';
 const publishDraftMock = publishDraft as jest.MockedFunction<typeof publishDraft>;
 
 function buildApp() {
@@ -99,18 +99,19 @@ describe('VT-TEMPLATE-5 — install entry point', () => {
     expect(installPlaybookTemplate).not.toHaveBeenCalled();
   });
 
-  it('returns 404 when playbook-interview-step is disabled', async () => {
+  it('returns 403 when the template requires a flag that is off', async () => {
+    isFeatureEnabled.mockResolvedValue(false);
+
     const res = await request(buildApp())
       .post('/api/playbooks/templates/core-interview/install')
       .send({ project: PROJECT });
 
-    expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: 'Not found' });
-    expect(isFeatureEnabled).toHaveBeenCalledWith(FLAG, { userId: USER_OID, project: PROJECT });
+    expect(res.status).toBe(403);
+    expect(res.body.missingFlags).toEqual([INTERVIEW_FLAG]);
     expect(installPlaybookTemplate).not.toHaveBeenCalled();
   });
 
-  it('invokes the installer when the flag is enabled', async () => {
+  it('invokes the installer when the required interview flag is enabled', async () => {
     isFeatureEnabled.mockResolvedValue(true);
 
     const res = await request(buildApp())
@@ -125,35 +126,12 @@ describe('VT-TEMPLATE-5 — install entry point', () => {
     });
   });
 
-  it('keeps balanced cleanup-ready markers around the install split', () => {
+  it('does not gate the catalog routes on a feature flag', () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), 'src/server/routes/playbooks.ts'),
       'utf8',
     );
-    const markers = [
-      `// @feature-flag:${FLAG} start winner=enabled`,
-      `// @feature-flag:${FLAG} disabled-start`,
-      `// @feature-flag:${FLAG} disabled-end`,
-      `// @feature-flag:${FLAG} enabled-start`,
-      `// @feature-flag:${FLAG} enabled-end`,
-      `// @feature-flag:${FLAG} end`,
-    ];
-    for (const marker of markers) {
-      const occurrences = source.split(marker).length - 1;
-      expect(occurrences).toBe(1);
-    }
-
-    const start = source.indexOf(markers[0]);
-    const disabledStart = source.indexOf(markers[1]);
-    const disabledEnd = source.indexOf(markers[2]);
-    const enabledStart = source.indexOf(markers[3]);
-    const enabledEnd = source.indexOf(markers[4]);
-    const end = source.indexOf(markers[5]);
-    expect(start).toBeLessThan(disabledStart);
-    expect(disabledStart).toBeLessThan(disabledEnd);
-    expect(disabledEnd).toBeLessThan(enabledStart);
-    expect(enabledStart).toBeLessThan(enabledEnd);
-    expect(enabledEnd).toBeLessThan(end);
+    expect(source).not.toContain('playbook-template-catalog');
   });
 });
 

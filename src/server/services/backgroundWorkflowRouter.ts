@@ -7,11 +7,14 @@ import type {
   WorkflowRouteDecision,
 } from '../../shared/types/backgroundWorkflow';
 import {
+  hasRequiredScratchInputs,
   isAllowedDocumentScratchInputPath,
   isAiRunV2DocumentSpecification,
   type AiRunV2DocumentScratchInput,
   type AiRunV2DocumentSpecification,
 } from '../../shared/types/aiRunV2DocumentSpec';
+import { readDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { keepsThreadFolder } from './threadFolder';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
@@ -94,9 +97,12 @@ export interface PreparedBackgroundWorkflowWorker {
   skillPath: string;
   skillContent?: string;
   skillSha256?: string;
+  skillCompanions?: Array<{ path: string; content: string }>;
   /** No Skill was frozen because the mirror was still fetching the pinned commit. */
   skillRepositorySyncing?: boolean;
   projectId: string;
+  /** Kickoff files from the saved thread. When absent, V2 reads the workspace copies. */
+  scratchInputs?: AiRunV2DocumentScratchInput[];
 }
 
 export interface BackgroundWorkflowRouteInput {
@@ -154,6 +160,8 @@ export interface BackgroundWorkflowRouterDependencies {
   >;
   clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
   readDocumentScratchInputs?: typeof readDocumentScratchInputs;
+  readDocumentInputSnapshot?: typeof readDocumentInputSnapshot;
+  keepsThreadFolder?: typeof keepsThreadFolder;
   getRepoCacheDir?: (options: RepoCacheOptions) => string;
   isUsableBareMirror?: (path: string | undefined) => boolean;
   /**
@@ -236,6 +244,9 @@ export async function readDocumentScratchInputs(
     '.ai-pilot/kickoff-context.md',
     '.ai-pilot/kickoff-transcript.md',
     '.ai-pilot/session.json',
+    '.ai-pilot/test-plans.md',
+    '.ai-pilot/existing-test-cases.json',
+    '.ai-pilot/test-case-index.md',
   ]) {
     if (!isAllowedDocumentScratchInputPath(workflowClass, relativePath)) {
       continue;
@@ -272,6 +283,54 @@ export async function readDocumentScratchInputs(
   }
 
   return inputs.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export type DocumentScratchInputSource = 'records' | 'workspace-fallback' | 'workspace';
+
+/**
+ * Builds a V2 document run's scratch files from the saved thread and the Blob
+ * snapshot. The workspace share is read only when a required file is in
+ * neither, which happens for threads set up before the snapshot existed.
+ */
+export async function resolveDocumentScratchInputs(input: {
+  threadId: string;
+  workflowClass: BackgroundWorkflowClass;
+  threadWorkspacePath: string;
+  recorded?: AiRunV2DocumentScratchInput[];
+  readSnapshot: (threadId: string) => Promise<AiRunV2DocumentScratchInput[] | null>;
+  readWorkspace: typeof readDocumentScratchInputs;
+}): Promise<{ inputs: AiRunV2DocumentScratchInput[]; source: DocumentScratchInputSource }> {
+  if (!input.recorded) {
+    return {
+      inputs: await input.readWorkspace(input.threadWorkspacePath, input.workflowClass),
+      source: 'workspace',
+    };
+  }
+  const byPath = new Map<string, AiRunV2DocumentScratchInput>();
+  const add = (entries: AiRunV2DocumentScratchInput[]) => {
+    for (const entry of entries) {
+      if (
+        isAllowedDocumentScratchInputPath(input.workflowClass, entry.path)
+        && !byPath.has(entry.path)
+      ) {
+        byPath.set(entry.path, entry);
+      }
+    }
+  };
+  add(input.recorded);
+  if (input.workflowClass === 'test-cases') {
+    add((await input.readSnapshot(input.threadId).catch(() => null)) ?? []);
+  }
+
+  let source: DocumentScratchInputSource = 'records';
+  if (!hasRequiredScratchInputs(input.workflowClass, [...byPath.values()])) {
+    add(await input.readWorkspace(input.threadWorkspacePath, input.workflowClass));
+    source = 'workspace-fallback';
+  }
+  return {
+    inputs: [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path)),
+    source,
+  };
 }
 
 async function copyDirectoryContentsSafely(
@@ -373,6 +432,9 @@ export function createBackgroundWorkflowRouter(
     dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
   const readScratchInputs =
     dependencies.readDocumentScratchInputs ?? readDocumentScratchInputs;
+  const readInputSnapshot =
+    dependencies.readDocumentInputSnapshot ?? readDocumentInputSnapshot;
+  const threadFolderKept = dependencies.keepsThreadFolder ?? keepsThreadFolder;
   const enqueueRun = dependencies.enqueue ?? enqueue;
   const admitV2Run =
     dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
@@ -573,10 +635,20 @@ export function createBackgroundWorkflowRouter(
     let documentScratchInputs: AiRunV2DocumentScratchInput[] = [];
     if (useV2Transport) {
       try {
-        documentScratchInputs = await readScratchInputs(
-          prepared.threadWorkspacePath,
-          input.workflowClass,
-        );
+        const resolved = await resolveDocumentScratchInputs({
+          threadId: input.threadId,
+          workflowClass: input.workflowClass,
+          threadWorkspacePath: prepared.threadWorkspacePath,
+          recorded: prepared.scratchInputs,
+          readSnapshot: readInputSnapshot,
+          readWorkspace: readScratchInputs,
+        });
+        documentScratchInputs = resolved.inputs;
+        safeTrack('background.scratch-inputs.source', {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          source: resolved.source,
+        });
       } catch {
         return recover(
           input,
@@ -604,6 +676,9 @@ export function createBackgroundWorkflowRouter(
           skillPath: prepared.skillPath,
           skillContent: prepared.skillContent,
           skillSha256: prepared.skillSha256,
+          ...(prepared.skillCompanions?.length
+            ? { skillCompanions: prepared.skillCompanions }
+            : {}),
           workflowClass: input.workflowClass,
           projectId: prepared.projectId,
           threadId: input.threadId,
@@ -670,7 +745,9 @@ export function createBackgroundWorkflowRouter(
     // No grounding, shared checkout, or MaxView clone.
     if (SCRATCH_ONLY_WORKFLOW_CLASSES.has(input.workflowClass)) {
       try {
-        await clearGenerationOutput(prepared.threadWorkspacePath);
+        if (!useV2Transport || (await threadFolderKept(input.destinationRun.project))) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+        }
       } catch {
         return recover(
           input,
@@ -732,6 +809,70 @@ export function createBackgroundWorkflowRouter(
         preparationStartedAt,
       );
     }
+
+    // The V2 document worker checks out the grounded commit itself, so App
+    // Service neither reads its mirror nor prepares a checkout.
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (useV2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      try {
+        if (await threadFolderKept(input.destinationRun.project)) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+        }
+      } catch {
+        return recover(
+          input,
+          'workspace-preparation-failed',
+          preparationStartedAt,
+        );
+      }
+      const v2Reason = 'v2-commit-only';
+      safeTrack(
+        'background.materialization.outcome',
+        {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          route: 'worker',
+          reason: v2Reason,
+        },
+        { durationMs: Math.max(0, now() - preparationStartedAt) },
+      );
+      const v2ModelChoice = await resolveModelChoice(prepared.model, prepared.effort);
+      const v2Snapshot: ExecutionSnapshot = {
+        prompt: prepared.prompt,
+        model: v2ModelChoice.model,
+        effort: v2ModelChoice.effort,
+        workspaceRef: prepared.threadWorkspacePath,
+        groundedSha: prepared.targetGrounding.groundedSha,
+        repository: prepared.targetGrounding.repository,
+        workflowClass: input.workflowClass,
+        skillPath: prepared.skillPath,
+        projectId: prepared.projectId,
+        threadId: input.threadId,
+        ...(input.playbookAgentPolicy
+          ? { playbookAgentPolicy: input.playbookAgentPolicy }
+          : {}),
+      };
+      let v2RunId: string;
+      try {
+        v2RunId = await dispatch(v2Snapshot, prepared.targetGrounding);
+      } catch (error) {
+        return recover(
+          input,
+          'worker-enqueue-failed',
+          preparationStartedAt,
+          error,
+        );
+      }
+      routeDecision(input, 'worker', v2Reason);
+      return {
+        route: 'worker',
+        workspacePath: prepared.threadWorkspacePath,
+        runId: v2RunId,
+      };
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
 
     // PRD / design-doc / test-cases: prefer the bare mirror when the worker
     // can actually open it (same disk or HTTP). Else reuse the interview's
@@ -976,6 +1117,26 @@ export function createBackgroundWorkflowRouter(
 }
 
 export const backgroundWorkflowRouter = createBackgroundWorkflowRouter();
+
+/**
+ * Whether the router sends this workflow to the V2 document worker, which then
+ * owns the run's ending through harvest.
+ */
+export async function usesV2DocumentTransport(input: {
+  userId: string;
+  project: string;
+  workflowClass: BackgroundWorkflowClass;
+}): Promise<boolean> {
+  try {
+    return await isFeatureEnabled(V2_TRANSPORT_FLAG, {
+      userId: input.userId,
+      project: input.project,
+      caller: input.workflowClass,
+    });
+  } catch {
+    return false;
+  }
+}
 
 export function routeBackgroundWorkflow(
   input: BackgroundWorkflowRouteInput,

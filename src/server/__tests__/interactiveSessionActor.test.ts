@@ -63,6 +63,7 @@ function makeRequest(overrides: Partial<InteractiveTurnRequest> = {}): Interacti
 interface FakeAgentOptions {
   tokens?: string[];
   toolCall?: boolean;
+  toolName?: string;
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
@@ -82,7 +83,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
       capability === 'stream' || capability === 'cancel',
     async *stream(): AsyncIterable<CursorStreamEvent> {
       if (options.toolCall) {
-        yield { type: 'tool_call', name: 'ReadFile', status: 'running' };
+        yield { type: 'tool_call', name: options.toolName ?? 'ReadFile', status: 'running' };
       }
       for (const text of options.tokens ?? []) {
         yield { type: 'assistant', message: { content: [{ type: 'text', text }] } };
@@ -135,6 +136,7 @@ function makeTelemetry(): WorkerTierTelemetry {
     interactiveActorHealth: jest.fn(),
     interactiveReplay: jest.fn(),
     interactiveStage: jest.fn(),
+    interactiveHeartbeats: jest.fn(),
   } as unknown as WorkerTierTelemetry;
 }
 
@@ -1555,6 +1557,65 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     setTimeoutSpy.mockRestore();
   }, 15_000);
 
+  it('lets a shell step run for the rest of the turn instead of the MCP stall limit', async () => {
+    const waitGate = deferred();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          toolCall: true,
+          toolName: 'shell',
+          tokens: [],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+          onCancel: () => waitGate.resolve(),
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const turnPromise = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        absoluteDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 60_000,
+          toolCallMs: 40,
+        },
+      }),
+    });
+
+    const longTimers: Array<{ delay: number; cb: () => void }> = [];
+    for (let i = 0; i < 100 && longTimers.length < 2; i += 1) {
+      await new Promise((r) => setImmediate(r));
+      longTimers.length = 0;
+      for (const call of setTimeoutSpy.mock.calls) {
+        const delay = call[1];
+        if (typeof delay === 'number' && delay > 60_000) {
+          longTimers.push({ delay, cb: call[0] as () => void });
+        }
+      }
+    }
+    expect(longTimers.length).toBeGreaterThanOrEqual(2);
+    // Both timers count down to the same deadline and tie when armed in the same
+    // millisecond; the shell timer is armed later, so ties go to the later one.
+    const shellTimer = longTimers.reduce((shorter, timer) =>
+      timer.delay <= shorter.delay ? timer : shorter,
+    );
+    shellTimer.cb();
+    await expect(turnPromise).resolves.toEqual({
+      status: 'failed',
+      failureCategory: 'tool_timeout',
+    });
+    setTimeoutSpy.mockRestore();
+  }, 15_000);
+
   it('heartbeats from the start of a durable turn until it ends', async () => {
     const posted: AiRunIngestBody[] = [];
     const waitGate = deferred();
@@ -1598,6 +1659,56 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(beats).toBeGreaterThanOrEqual(3);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(posted.filter((body) => body.kind === 'heartbeat')).toHaveLength(beats);
+  });
+
+  it('reports the longest heartbeat gap and failed heartbeats when a durable turn ends', async () => {
+    const telemetry = makeTelemetry();
+    let clock = 0;
+    let heartbeatCalls = 0;
+    const waitGate = deferred();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        if (body.kind === 'heartbeat') {
+          heartbeatCalls += 1;
+          clock += 1_000;
+          if (heartbeatCalls === 2) throw new Error('ingest unavailable');
+        }
+        return { ok: true, cancelRequested: false };
+      },
+      durableHeartbeatMs: 20,
+      now: () => clock,
+      telemetry,
+    });
+
+    const turn = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    for (let i = 0; i < 200 && heartbeatCalls < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    waitGate.resolve();
+    await turn;
+
+    expect(telemetry.interactiveHeartbeats).toHaveBeenCalledTimes(1);
+    const [context, measurements] = jest.mocked(telemetry.interactiveHeartbeats).mock.calls[0]!;
+    expect(context).toMatchObject({ lane: 'ai-runs-interactive' });
+    expect(measurements.failed).toBe(1);
+    expect(measurements.sent).toBeGreaterThanOrEqual(3);
+    expect(measurements.maxGapMs).toBeGreaterThanOrEqual(2_000);
   });
 
   it('fails with hard_timeout when the Cursor run never settles past the absolute deadline', async () => {

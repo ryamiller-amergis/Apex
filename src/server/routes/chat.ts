@@ -17,7 +17,7 @@ import {
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
 import { agentRuns, prds } from '../db/schema';
-import { toggleFlag } from '../services/chatThreadRepository';
+import { isBackgroundWorkflowThread, toggleFlag } from '../services/chatThreadRepository';
 import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
 import type {
@@ -39,6 +39,7 @@ import type { ThreadAccess } from '../services/threadAccessService';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { requirePermission } from '../middleware/rbac';
 import { prepareAutonomousInterviewTurn } from '../services/interviewOrchestratorService';
+import { autoDraftBuildBriefForThread } from '../services/buildBriefService';
 import { prepareBuildIntakeTurn } from '../services/buildIntakeService';
 import { isBuildIntakeThread } from '../services/buildIntakeThread';
 import { isBuildFromPromptEnabled } from '../services/buildAccessService';
@@ -418,6 +419,7 @@ router.post('/threads', async (req: Request, res: Response) => {
       effort: _clientEffort,
       agentModule: _clientAgentModule,
       skillPathIsAppDefault: _clientSkillPathIsAppDefault,
+      askApex: _clientAskApex,
       ...clientKickoff
     } = body.kickoff;
     const skillConfig = await resolveSkillConfig({
@@ -575,6 +577,7 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
       ? (!res.writableEnded && !res.destroyed && (() => {
           try {
             res.write(`id: ${eventId}\ndata: ${JSON.stringify(event)}\n\n`);
+            (res as Response & { flush?: () => void }).flush?.();
             return true;
           } catch {
             return false;
@@ -651,11 +654,10 @@ router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: R
   unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
   // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
-  // another worker's run are forwarded to this SSE connection.
+  // another worker's run are forwarded to this SSE connection. `sendEnvelope`
+  // deduplicates by `eventId`, so a local in-memory delivery will not be sent
+  // twice.
   unsubNotify = subscribeRunEvents(req.params.id, (envelope) => {
-    // The owner already delivered this envelope through its in-memory
-    // subscriber. PostgreSQL echoes are only for other workers.
-    if (!shouldForwardPgRunEvent(envelope)) return;
     queueOrSendEnvelope(envelope);
   });
 
@@ -753,6 +755,12 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
   }
 
   const thread = (req as ThreadRequest).thread!;
+  if (await isBackgroundWorkflowThread(thread.id)) {
+    return res.status(409).json({
+      error: 'This thread belongs to a background document job and does not accept chat messages. Start a new chat.',
+      code: 'BACKGROUND_WORKFLOW_THREAD',
+    });
+  }
   const requesterUserId = getUserId(req);
   const buildIntake = isBuildIntakeThread(thread);
   if (buildIntake) {
@@ -832,6 +840,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
     attachmentCount: String(attachments.length),
   });
   let internalContext: string | undefined;
+  let draftBriefAfterSend = false;
   if (buildIntake) {
     try {
       const prepared = await prepareBuildIntakeTurn({
@@ -840,6 +849,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         turnId: body.turnId ?? '',
       });
       internalContext = prepared.internalContext;
+      draftBriefAfterSend = prepared.confirmed;
     } catch (err: unknown) {
       console.error(
         `[chat] build intake preparation failed for thread ${threadId}:`,
@@ -881,6 +891,7 @@ router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, re
         ...(internalContext ? { internalContext } : {}),
       },
     );
+    if (draftBriefAfterSend) void autoDraftBuildBriefForThread(threadId);
     if (submission?.route === 'durable') {
       releaseAdoWriteTurn();
       const accepted = submission.response;

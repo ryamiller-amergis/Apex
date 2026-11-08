@@ -19,6 +19,7 @@ import {
   isThreadLoaded,
   sendMessage,
 } from './chatAgentService';
+import { readThreadOutput } from './chatThreadOutputStore';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getWalkthroughAiOptions } from './walkthroughAiOptionsService';
@@ -634,18 +635,8 @@ export async function startGeneration(
 
 // ── getGenerationResult ──────────────────────────────────────────────────────────
 
-function resolveOutputPath(workspaceDir: string): string {
-  return path.join(workspaceDir, ...OUTPUT_RELATIVE_PATH);
-}
-
-function readOutput(workspaceDir: string): string | null {
-  const outputPath = resolveOutputPath(workspaceDir);
-  if (!fs.existsSync(outputPath)) return null;
-  try {
-    return fs.readFileSync(outputPath, 'utf-8');
-  } catch {
-    return null;
-  }
+function readOutput(threadId: string, workspaceDir: string): Promise<string | null> {
+  return readThreadOutput({ threadId, workspaceDir, relativePath: OUTPUT_RELATIVE_PATH });
 }
 
 async function loadThreadForUser(
@@ -686,7 +677,7 @@ export async function getGenerationResult(
   // sendMessage promise open (summarizing, extra tool calls) well after writing
   // the output file, and waiting for that burned the whole client-side timeout
   // on runs that had already succeeded.
-  const raw = readOutput(row.workspaceDir);
+  const raw = await readOutput(threadId, row.workspaceDir);
   if (!raw) {
     // Kickoff sendMessage is async; keep pending until it settles or the agent runs.
     if (generationInFlight.has(threadId)) {

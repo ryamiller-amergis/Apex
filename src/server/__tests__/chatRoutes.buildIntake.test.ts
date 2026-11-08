@@ -30,7 +30,10 @@ jest.mock('../services/chatAgentService', () => ({
 }));
 
 jest.mock('../services/projectSettingsService', () => ({ resolveSkillConfig: jest.fn() }));
-jest.mock('../services/chatThreadRepository', () => ({ toggleFlag: jest.fn() }));
+jest.mock('../services/chatThreadRepository', () => ({
+  toggleFlag: jest.fn(),
+  isBackgroundWorkflowThread: jest.fn().mockResolvedValue(false),
+}));
 jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
   replayRunEventPage: jest.fn().mockResolvedValue({ events: [], nextEventId: null, hasMore: false }),
@@ -73,6 +76,11 @@ const mockPrepareBuildIntakeTurn = jest.fn();
 jest.mock('../services/buildIntakeService', () => ({
   ...jest.requireActual('../services/buildIntakeService'),
   prepareBuildIntakeTurn: (...args: unknown[]) => mockPrepareBuildIntakeTurn(...args),
+}));
+
+const mockAutoDraftBuildBriefForThread = jest.fn();
+jest.mock('../services/buildBriefService', () => ({
+  autoDraftBuildBriefForThread: (...args: unknown[]) => mockAutoDraftBuildBriefForThread(...args),
 }));
 
 import chatRouter from '../routes/chat';
@@ -143,6 +151,27 @@ describe('POST /threads/:id/messages on a build-intake thread', () => {
       [],
       expect.objectContaining({ internalContext: CONTEXT }),
     );
+  });
+
+  it('FEAT-006 U1: confirming the intake summary drafts the brief after the message is sent', async () => {
+    mockPrepareBuildIntakeTurn.mockResolvedValue({ internalContext: CONTEXT, sensitiveClasses: [], confirmed: true });
+
+    const res = await request(buildApp())
+      .post('/api/chat/threads/thread-1/messages')
+      .send({ text: 'Answer: A — Confirm', turnId: 't-confirm' });
+
+    expect(res.status).toBe(202);
+    expect(mockChat.sendMessage).toHaveBeenCalled();
+    expect(mockAutoDraftBuildBriefForThread).toHaveBeenCalledWith('thread-1');
+  });
+
+  it('FEAT-006 U1: an ordinary answer does not draft the brief', async () => {
+    const res = await request(buildApp())
+      .post('/api/chat/threads/thread-1/messages')
+      .send({ text: 'Only managers', turnId: 't-answer' });
+
+    expect(res.status).toBe(202);
+    expect(mockAutoDraftBuildBriefForThread).not.toHaveBeenCalled();
   });
 
   it('VT-09 (route): a hook failure still sends the message', async () => {

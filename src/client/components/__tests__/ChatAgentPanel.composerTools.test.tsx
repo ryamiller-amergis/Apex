@@ -7,6 +7,9 @@ jest.mock('../BuildAgentHomePill', () => ({
     <button type="button" {...{ 'data-testid': 'agent-home-build-pill' }}>Build</button>
   ),
 }));
+jest.mock('../BrainstormHomeEntry', () => ({
+  BrainstormHomeEntry: () => null,
+}));
 
 const mockSend = jest.fn();
 const mockAddFiles = jest.fn();

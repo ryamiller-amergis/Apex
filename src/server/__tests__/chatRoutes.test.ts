@@ -79,8 +79,10 @@ jest.mock('../services/wikiCatalog', () => ({
   saveWikiPage: jest.fn(),
 }));
 
+const mockIsBackgroundWorkflowThread = jest.fn().mockResolvedValue(false);
 jest.mock('../services/chatThreadRepository', () => ({
   toggleFlag: jest.fn(),
+  isBackgroundWorkflowThread: (...args: unknown[]) => mockIsBackgroundWorkflowThread(...args),
 }));
 
 jest.mock('../services/pgNotifyService', () => ({
@@ -1294,6 +1296,58 @@ describe('POST /api/chat/threads/:id/messages — stale running self-heal', () =
     expect(res.body).toEqual({ error: 'Agent is already running' });
     expect(mockChatService.sendMessage).toHaveBeenCalled();
     expect(mockChatService.recoverStaleRunningThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/chat/threads/:id/messages — background document threads', () => {
+  const threadId = 'validation-thread-id';
+
+  beforeEach(() => {
+    mockPermissionGranted = true;
+    jest.clearAllMocks();
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: {
+        id: threadId,
+        userId: 'user-1',
+        kickoff: { project: 'Apex', repo: 'Apex' },
+        messages: [],
+        status: 'idle',
+        workspaceDir: '/tmp/ws',
+        flagged: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastActivityAt: '2026-01-01T00:00:00.000Z',
+      },
+      access: 'owner',
+    });
+    mockCanWriteThread.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    mockIsBackgroundWorkflowThread.mockResolvedValue(false);
+  });
+
+  it('refuses a chat turn on a thread owned by a document job', async () => {
+    mockIsBackgroundWorkflowThread.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'what is on the home page?' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('BACKGROUND_WORKFLOW_THREAD');
+    expect(mockIsBackgroundWorkflowThread).toHaveBeenCalledWith(threadId);
+    expect(mockChatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('accepts a chat turn on an ordinary thread', async () => {
+    mockChatService.sendMessage.mockResolvedValue({ route: 'legacy' });
+
+    const res = await request(buildApp())
+      .post(`/api/chat/threads/${threadId}/messages`)
+      .send({ text: 'what is on the home page?' });
+
+    expect(res.status).toBe(202);
+    expect(mockChatService.sendMessage).toHaveBeenCalled();
   });
 });
 

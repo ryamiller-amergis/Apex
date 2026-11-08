@@ -37,15 +37,25 @@ const taskKeySchema = z.string().regex(BUILD_TASK_KEY_PATTERN);
 const subjectIdSchema = z.string().regex(
   new RegExp(`${BUILD_REQUIREMENT_ID_PATTERN.source}|${BUILD_RISK_DECISION_ID_PATTERN.source}`),
 );
-const relativePathSchema = z.string().min(1).refine(
+const singleLineSchema = z.string().min(1).max(200).refine(
+  (value) => !/[\r\n]/.test(value),
+  { message: 'single line' },
+);
+
+const relativePathSchema = singleLineSchema.refine(
   (value) => !value.startsWith('/') && !value.split('/').includes('..'),
   { message: 'repository-relative path' },
 );
 
 const reuseEntrySchema = z.strictObject({
   path: relativePathSchema,
-  symbol: z.string().min(1).optional(),
-  reason: z.string().min(1).optional(),
+  symbol: singleLineSchema.optional(),
+  reason: singleLineSchema.optional(),
+});
+
+const reuseJustificationSchema = z.strictObject({
+  searches: z.array(singleLineSchema).min(1),
+  conclusion: singleLineSchema,
 });
 
 const taskSchema = z.strictObject({
@@ -53,9 +63,18 @@ const taskSchema = z.strictObject({
   role: z.enum(BUILD_PLAN_TASK_ROLES),
   blockers: z.array(taskKeySchema),
   ownedFiles: z.array(relativePathSchema),
-  reuse: z.array(reuseEntrySchema).min(1),
+  reuse: z.array(reuseEntrySchema),
+  reuseJustification: reuseJustificationSchema.optional(),
   runMode: z.enum(BUILD_TASK_RUN_MODES),
   covers: z.array(subjectIdSchema).min(1),
+}).superRefine((task, ctx) => {
+  if (task.reuse.length === 0 && task.reuseJustification == null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['reuse'],
+      message: 'empty reuse',
+    });
+  }
 });
 
 const testRefSchema = z.strictObject({
@@ -116,10 +135,10 @@ export type BuildPlanParseResult =
   | { success: true; data: BuildPlan }
   | { success: false; code: BuildPlanSchemaViolationCode };
 
-function issueCode(issue: z.ZodError['issues'][number]): BuildPlanSchemaViolationCode | null {
+export function buildPlanIssueCode(issue: z.ZodError['issues'][number]): BuildPlanSchemaViolationCode | null {
   if (issue.code === 'unrecognized_keys') return 'unknown_property';
   const last = issue.path[issue.path.length - 1];
-  if (last === 'reuse' && issue.code === 'too_small') return 'empty_reuse';
+  if (last === 'reuse' && (issue.code === 'too_small' || issue.code === 'custom')) return 'empty_reuse';
   if (issue.code === 'invalid_type' && issue.message.includes('received undefined')) {
     return 'missing_field';
   }
@@ -128,7 +147,7 @@ function issueCode(issue: z.ZodError['issues'][number]): BuildPlanSchemaViolatio
 
 export function buildPlanViolationCode(error: z.ZodError): BuildPlanSchemaViolationCode {
   for (const issue of error.issues) {
-    const code = issueCode(issue);
+    const code = buildPlanIssueCode(issue);
     if (code === 'unknown_property' || code === 'empty_reuse' || code === 'missing_field') {
       return code;
     }
@@ -141,3 +160,16 @@ export function parseBuildPlan(input: unknown): BuildPlanParseResult {
   if (parsed.success) return { success: true, data: parsed.data };
   return { success: false, code: buildPlanViolationCode(parsed.error) };
 }
+
+export interface PlanViolation {
+  code: BuildPlanViolationCode;
+  message: string;
+  taskKeys?: string[];
+  requirementId?: string;
+  riskDecisionId?: string;
+  path?: string;
+}
+
+export type PlanValidationResult =
+  | { ok: true }
+  | { ok: false; violations: PlanViolation[] };

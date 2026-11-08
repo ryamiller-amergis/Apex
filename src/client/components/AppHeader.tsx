@@ -4,6 +4,7 @@ import { BrandLogo } from './BrandLogo';
 import { FeatureRequestFab } from './FeatureRequestFab';
 import { FeatureRequestModal } from './FeatureRequestModal';
 import { NotificationBell } from './NotificationBell';
+import { QuickLinksMenu } from './QuickLinksMenu';
 import { UserMenu } from './UserMenu';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { canAccessMyWork } from '../utils/canAccessMyWork';
@@ -24,7 +25,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -54,6 +55,7 @@ interface AppHeaderProps {
   onNavigateMyWork?: () => void;
   onNavigateStandup?: () => void;
   onNavigateUiLab?: () => void;
+  onNavigateQaLab?: () => void;
   onNavigateFeatureRequests?: () => void;
   onNavigateAiCost?: () => void;
   onNavigateDesignModule?: () => void;
@@ -66,6 +68,11 @@ interface AppHeaderProps {
   onNavigateBuilds?: () => void;
   /** `build-from-prompt` evaluated for this user and project. */
   buildsEnabled?: boolean;
+  onNavigateBrainstorm?: () => void;
+  brainstormEnabled?: boolean;
+  onNavigateReportIssue?: () => void;
+  /** Prod Support stays hidden until the guided cloud-agent flags and the project menu are on. */
+  reportIssueEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   mcpServersEnabled?: boolean;
   onNavigateAdmin: () => void;
@@ -101,6 +108,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateMyWork,
   onNavigateStandup,
   onNavigateUiLab,
+  onNavigateQaLab,
   onNavigateFeatureRequests,
   onNavigateAiCost,
   onNavigateDesignModule,
@@ -111,6 +119,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigatePlaybooks,
   onNavigateBuilds,
   buildsEnabled = false,
+  onNavigateBrainstorm,
+  brainstormEnabled = false,
+  onNavigateReportIssue,
+  reportIssueEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -147,12 +159,15 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Planning', view: 'planning', permission: 'planning:view', onNavigate: onNavigatePlanning },
     { label: 'Cloud Cost', view: 'cloudcost', permission: 'cost:view', onNavigate: onNavigateCloudCost },
     { label: 'AI Cost Analytics', view: 'ai-cost', permission: 'analytics:ai-cost:view', onNavigate: onNavigateAiCost ?? (() => {}) },
+    { label: 'Brainstorm', view: 'brainstorm', permission: 'brainstorm:view', onNavigate: onNavigateBrainstorm ?? (() => {}) },
+    { label: 'Prod Support', view: 'prod-support', permission: 'chat:create', onNavigate: onNavigateReportIssue ?? (() => {}) },
     { label: 'Interview', view: 'backlog', permission: 'interviews:view', onNavigate: onNavigateBacklog },
     { label: 'ADR', view: 'adr', permission: 'adr:view', onNavigate: onNavigateAdr },
     { label: 'My Work', view: 'my-work', permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
     { label: 'Builds', view: 'builds', permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
     { label: 'Standup', view: 'standup', permission: 'standup:participate', onNavigate: onNavigateStandup ?? (() => {}) },
     { label: 'UI Lab', view: 'ui-lab', permission: 'ui-lab:view', onNavigate: onNavigateUiLab ?? (() => {}) },
+    { label: 'QA Lab', view: 'qa-lab', permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}) },
     { label: 'Apex Backlog', view: 'feature-requests', permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
     { label: 'Design Module', view: 'design-module', permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
@@ -187,9 +202,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     if (item.view === 'builds') {
       return canAccessBuilds({ can, isSuperAdmin, enabledViews: menuEnabledViews, flagEnabled: buildsEnabled });
     }
+    if (item.view === 'brainstorm') {
+      if (!brainstormEnabled || !menuEnabledViews.includes('brainstorm')) return false;
+      return isSuperAdmin || can('brainstorm:view');
+    }
+    if (item.view === 'prod-support') {
+      if (!reportIssueEnabled || !menuEnabledViews.includes('prod-support')) return false;
+      return isSuperAdmin || can('chat:create');
+    }
     if (item.view === 'playbooks') {
-      if (!isSuperAdmin && !menuEnabledViews.includes('playbooks')) return false;
-      return isSuperAdmin || can('playbooks:view');
+      return menuEnabledViews.includes('playbooks') && can('playbooks:view');
     }
     if (item.view === 'mcp-servers') {
       if (!mcpServersEnabled) return false;
@@ -279,6 +301,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </select>
           </div>
         )}
+        <QuickLinksMenu
+          project={selectedProject}
+          hidden={hideProjectChrome}
+          canManage={can('quick-links:manage')}
+          canOpenSettings={can('quick-links:manage') && can('admin:roles')}
+          canAddPersonal={can('quick-links:personal')}
+          data-testid="app-header-quick-links"
+        />
         {can('notifications:view') && <NotificationBell />}
         {/* data-testid-exempt — pre-existing UserMenu; FEAT-006 Help lives on Apex Fab */}
         <UserMenu

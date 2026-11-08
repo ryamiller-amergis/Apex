@@ -11,6 +11,10 @@ export const BUILD_FLAG_DISABLED_MESSAGE =
 export const BUILD_INTAKE_PAUSED_MESSAGE =
   'Builds are paused for this project. Your conversation is saved. Ask a Project Admin to resume builds.';
 
+/** Shown when save, draft or approve on a build brief is refused because `build-from-prompt` is off. */
+export const BUILD_BRIEF_PAUSED_MESSAGE =
+  'Build from prompt is turned off for this project. Ask a Platform Admin to turn it back on.';
+
 export const BUILD_INTAKE_ATTACHMENTS_MESSAGE = 'Attachments are not supported in a build intake chat.';
 
 /** Returned when the project and repository pair is not on the build allow-list. */

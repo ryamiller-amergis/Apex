@@ -10,9 +10,11 @@ import { z } from 'zod';
 import type { ChatMessage, ChatThread, ChatThreadKickoff } from '../../shared/types/chat';
 import type { InterviewBriefSections } from '../../shared/types/interview';
 import type { InterviewProfileSnapshot } from '../../shared/types/playbook';
+import { BUILD_REQUIREMENT_KINDS, BUILD_RISK_CATEGORIES, BUILD_RISK_RATINGS } from '../../shared/types/build';
 import { db } from '../db/drizzle';
 import { interviewSpecialistReviews, interviews } from '../db/schema';
 import { createThread, getThread, hydrateThread, isThreadIdle, sendMessage } from './chatAgentService';
+import { propagatePipelineGrounding } from './runGroundingService';
 
 const REQUIREMENTS_SKILL_PATH = '.cursor/skills/interview-requirements-review/SKILL.md';
 const PRODUCT_SKILL_PATH = '.cursor/skills/interview-product-analyst/SKILL.md';
@@ -814,4 +816,121 @@ export async function draftInterviewBriefSections(input: {
   const parsed = interviewBriefDraftSchema.safeParse(parseJsonObject(answer));
   if (!parsed.success) throw new SpecialistReviewError('invalid_json');
   return parsed.data;
+}
+
+const BUILD_INTAKE_DRAFT_TIMEOUT_MS = 60_000;
+
+const buildIntakeBriefDraftSchema = interviewBriefDraftSchema.extend({
+  requirements: z.array(z.object({
+    kind: z.enum(BUILD_REQUIREMENT_KINDS),
+    text: z.string(),
+  }).strict()),
+  riskCandidates: z.array(z.object({
+    category: z.enum(BUILD_RISK_CATEGORIES),
+    rating: z.enum(BUILD_RISK_RATINGS),
+    decision: z.string(),
+    rationale: z.string(),
+    destructive: z.boolean(),
+  }).strict()),
+  estimatedTasks: z.number().nullable(),
+  needsMigration: z.boolean(),
+}).strict();
+
+export type BuildIntakeBriefDraft = z.infer<typeof buildIntakeBriefDraftSchema>;
+
+export class BuildIntakeDraftError extends Error {
+  readonly reason: ReviewFailure;
+
+  constructor(reason: ReviewFailure) {
+    super(reason);
+    this.name = 'BuildIntakeDraftError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * Pins the drafter chat to the commit the interview read. A chat with no pinned commit refreshes
+ * the shared repository cache first, and that refresh can wait out the draft timeout.
+ */
+async function inheritInterviewGrounding(
+  interview: { chatThreadId: string; project: string; authorId: string },
+  threadId: string,
+): Promise<void> {
+  try {
+    await propagatePipelineGrounding(
+      { runType: 'chat', runId: interview.chatThreadId, project: interview.project },
+      { runType: 'chat', runId: threadId, project: interview.project },
+      interview.authorId,
+      { deferMaterialization: true },
+    );
+  } catch (error) {
+    console.warn(
+      `[build-brief] grounding propagation unavailable error=${error instanceof Error ? error.name : 'Error'}`,
+    );
+  }
+}
+
+/**
+ * Drafts a build-intake brief with the profile's own skill: the eight sections plus requirement
+ * rows, risk candidates and a task estimate. Times out after 60 seconds by default.
+ */
+export async function draftBuildIntakeBrief(input: {
+  interviewId: string;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}): Promise<BuildIntakeBriefDraft> {
+  const interview = await db.query.interviews.findFirst({
+    where: eq(interviews.id, input.interviewId),
+  });
+  if (!interview) throw new Error(`Interview ${input.interviewId} was not found.`);
+
+  await hydrateThread(interview.chatThreadId);
+  const mainThread = await getThread(interview.chatThreadId);
+  const transcript = (mainThread?.messages ?? [])
+    .filter((message) => !message.hidden && (message.role === 'user' || message.role === 'agent'))
+    .map((message) => `${message.role === 'user' ? 'Requester' : 'Interviewer'}: ${message.text}`)
+    .join('\n\n');
+  if (!transcript.trim()) throw new Error('The interview has no conversation to draft.');
+
+  const snapshot: InterviewProfileSnapshot | null = interview.playbookProfileSnapshot;
+  const mainKickoff = mainThread?.kickoff;
+  const kickoff: ChatThreadKickoff = {
+    project: interview.project,
+    repo: interview.repo,
+    skillPath: snapshot?.skillPath ?? mainKickoff?.skillPath ?? BRIEF_DRAFT_SKILL_PATH,
+    ...(mainKickoff?.skillRepo ? { skillRepo: mainKickoff.skillRepo } : {}),
+    ...(mainKickoff?.skillBranch ? { skillBranch: mainKickoff.skillBranch } : {}),
+    ...(mainKickoff?.branch ? { branch: mainKickoff.branch } : {}),
+    ...(mainKickoff?.skillProvider ? { skillProvider: mainKickoff.skillProvider } : {}),
+    ...(snapshot?.model ? { model: snapshot.model } : {}),
+    ...(snapshot?.effort ? { effort: snapshot.effort } : {}),
+    ...(interview.skillSettingsId ? { skillSettingsId: interview.skillSettingsId } : {}),
+  };
+
+  try {
+    const specialist = await createThread(interview.authorId, kickoff, { skipAutoKickoff: true });
+    await inheritInterviewGrounding(interview, specialist.id);
+    await sendMessage(
+      specialist.id,
+      `Draft the build brief from this confirmed intake transcript:\n\n${transcript}`,
+      undefined,
+      [],
+      { hidden: true },
+    );
+    const answer = await waitForSpecialistAnswer(
+      specialist.id,
+      input.timeoutMs ?? BUILD_INTAKE_DRAFT_TIMEOUT_MS,
+      input.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      input.now ?? Date.now,
+      input.sleep ?? defaultSleep,
+    );
+    const parsed = buildIntakeBriefDraftSchema.safeParse(parseJsonObject(answer));
+    if (!parsed.success) throw new SpecialistReviewError('invalid_json');
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof SpecialistReviewError) throw new BuildIntakeDraftError(error.reason);
+    throw new BuildIntakeDraftError('agent_error');
+  }
 }

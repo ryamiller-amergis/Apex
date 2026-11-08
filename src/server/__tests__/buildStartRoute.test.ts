@@ -87,14 +87,18 @@ describe('POST /api/builds', () => {
 
   it('VT-03 returns 409 with every refusal sentence and no prompt', async () => {
     start.mockRejectedValue(new BuildStartError(409, 'BUILD_PREFLIGHT_REFUSED', 'Three items need attention.', [
-      { code: 'code_map_missing', item: 'code map', message: 'The code map is missing.', fixer: 'platform_admin', fixerLabel: 'A Platform Admin' },
-      { code: 'coding_rules_missing', item: 'rules', message: 'The coding rules are missing.', fixer: 'platform_admin', fixerLabel: 'A Platform Admin' },
-      { code: 'pipeline_unusable', item: 'pipeline', message: 'The pipeline is not set.', fixer: 'project_admin', fixerLabel: 'A project admin' },
+      { code: 'code_map_missing', item: 'code map', message: 'The code map is missing. A Platform Admin can fix this.', fixer: 'platform_admin', fixerLabel: 'a Platform Admin' },
+      { code: 'coding_rules_missing', item: 'rules', message: 'The coding rules are missing. A Platform Admin can fix this.', fixer: 'platform_admin', fixerLabel: 'a Platform Admin' },
+      { code: 'pipeline_unusable', item: 'pipeline', message: 'The pipeline is not set. A Project Admin for Apex can fix this.', fixer: 'project_admin', fixerLabel: 'a Project Admin for Apex' },
     ]));
     const res = await request(app()).post('/api/builds?project=Apex').send(body);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('BUILD_PREFLIGHT_REFUSED');
-    expect(res.body.refusals).toHaveLength(3);
+    expect(res.body.refusals).toEqual([
+      'The code map is missing. A Platform Admin can fix this.',
+      'The coding rules are missing. A Platform Admin can fix this.',
+      'The pipeline is not set. A Project Admin for Apex can fix this.',
+    ]);
     expect(JSON.stringify(res.body)).not.toContain('Add a reports page');
   });
 });

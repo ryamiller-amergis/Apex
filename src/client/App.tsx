@@ -34,7 +34,8 @@ import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
-import { BUILD_FROM_PROMPT_FLAG } from '../shared/types/featureFlags';
+import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
+import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
 import {
@@ -97,6 +98,7 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
+const QaLabView = lazy(() => import('./components/QaLabView').then(m => ({ default: m.QaLabView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
@@ -128,8 +130,20 @@ const BuildsRouteGuard = lazy(() =>
 );
 const BuildsView = lazy(() => import('./components/BuildsView').then((m) => ({ default: m.BuildsView })));
 const NewBuildForm = lazy(() => import('./components/NewBuildForm').then((m) => ({ default: m.NewBuildForm })));
+const BuildRunView = lazy(() =>
+  import('./components/BuildRunView').then((m) => ({ default: m.BuildRunView })),
+);
 const BuildIntakeChatRoute = lazy(() =>
   import('./components/BuildIntakeChatRoute').then((m) => ({ default: m.BuildIntakeChatRoute })),
+);
+const BrainstormSessionsPage = lazy(() =>
+  import('./components/BrainstormSessionsPage').then((m) => ({ default: m.BrainstormSessionsPage })),
+);
+const BrainstormWorkspace = lazy(() =>
+  import('./components/BrainstormWorkspace').then((m) => ({ default: m.BrainstormWorkspace })),
+);
+const ProdSupportPage = lazy(() =>
+  import('./components/GuidedCloudJobs').then((m) => ({ default: m.GuidedCloudJobs })),
 );
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
@@ -167,6 +181,7 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const locationRef = useRef(location);
+  // eslint-disable-next-line react-hooks/refs -- keep latest location in a ref so event callbacks do not re-subscribe on navigation
   locationRef.current = location;
 
   const [chatOpen, setChatOpen] = useState(false);
@@ -202,7 +217,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -238,6 +253,8 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
+                    : location.pathname === '/qa-lab'
+                    ? 'qa-lab'
                     : location.pathname === '/ai-cost'
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
@@ -254,6 +271,10 @@ function App() {
                     ? 'builds'
                     : location.pathname === '/mcp-servers' || location.pathname.startsWith('/mcp-servers/')
                     ? 'mcp-servers'
+                    : location.pathname === '/brainstorm' || location.pathname.startsWith('/brainstorm/')
+                    ? 'brainstorm'
+                    : location.pathname === '/prod-support'
+                    ? 'prod-support'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -389,6 +410,9 @@ function App() {
   const buildsEnabled = !homeFlagsLoading && homeFlags[BUILD_FROM_PROMPT_FLAG] === true;
   const buildIntakeBuildId = /^\/builds\/([^/]+)\/intake\/?$/.exec(location.pathname)?.[1];
   const isBuildIntakePath = buildIntakeBuildId !== undefined;
+  const buildRunMatch = isBuildIntakePath ? null : /^\/builds\/([^/]+)(?:\/([^/]+))?\/?$/.exec(location.pathname);
+  const buildRunId = buildRunMatch && buildRunMatch[1] !== 'new' ? buildRunMatch[1] : undefined;
+  const buildRunTab = buildRunMatch?.[2];
   const mcpServersEnabled =
     !homeFlagsLoading && homeFlags['mcp-servers'] === true;
   // Prefer the WebSocket agent gateway when the durable interactive transport
@@ -418,13 +442,31 @@ function App() {
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
     menuConfigReady &&
-    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+    effectiveEnabledViews.includes('playbooks') &&
+    can('playbooks:view');
   const canAccessMcpServers =
     mcpServersEnabled &&
     menuConfigReady &&
     permissionsLoaded &&
     effectiveEnabledViews.includes('mcp-servers') &&
     (isSuperAdmin || can('mcp-servers:view'));
+  const brainstormFlagOn = !homeFlagsLoading && homeFlags[BRAINSTORM_FLAG] === true;
+  const reportIssueEnabled = !homeFlagsLoading
+    && homeFlags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true
+    && homeFlags[MY_WORK_CLOUD_AGENT_FLAG] === true;
+  const canAccessReportIssue =
+    reportIssueEnabled &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('prod-support') &&
+    (isSuperAdmin || can('chat:create'));
+  const canAccessBrainstorm =
+    brainstormFlagOn &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('brainstorm') &&
+    (isSuperAdmin || can(BRAINSTORM_VIEW));
+  const brainstormSessionId = /^\/brainstorm\/([^/]+)\/?$/.exec(location.pathname)?.[1];
   const restrictedSkipRef = useRef(false);
 
   // UI Lab members read the whole project list; everyone else only reaches
@@ -582,6 +624,7 @@ function App() {
       });
       if (access === 'deny') navigate(fallback);
     }
+    if (currentView === 'qa-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('qa-lab')    || !can('planning:qa')))       navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
@@ -979,7 +1022,15 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers)) {
+  if (currentView === 'brainstorm' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'prod-support' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1016,6 +1067,7 @@ function App() {
             onNavigateMyWork={() => navigateAwayFromHome('/my-work')}
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
             onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
@@ -1026,6 +1078,10 @@ function App() {
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
             onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
+            onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
+            brainstormEnabled={brainstormFlagOn}
+            onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
+            reportIssueEnabled={reportIssueEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
@@ -1075,6 +1131,7 @@ function App() {
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
             onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
@@ -1085,6 +1142,10 @@ function App() {
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
             onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
+            onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
+            brainstormEnabled={brainstormFlagOn}
+            onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
+            reportIssueEnabled={reportIssueEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -1476,6 +1537,12 @@ function App() {
                 </div>
               </Suspense>
             </ErrorBoundary>
+          ) : currentView === 'qa-lab' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <QaLabView project={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
           ) : currentView === 'design-module' ? (
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
@@ -1537,7 +1604,7 @@ function App() {
                   can={can}
                   isSuperAdmin={isSuperAdmin}
                   enabledViews={effectiveEnabledViews}
-                  flagEnabled={buildsEnabled || isBuildIntakePath}
+                  flagEnabled={buildsEnabled || isBuildIntakePath || buildRunId !== undefined}
                   isLoading={homeFlagsLoading || !menuConfigReady || !permissionsLoaded}
                   fallbackPath={resolveAccessibleRoute({
                     canAccessHome,
@@ -1549,7 +1616,10 @@ function App() {
                   })}
                 >
                   {isBuildIntakePath ? (
-                    <BuildIntakeChatRoute buildId={buildIntakeBuildId} />
+                    <BuildIntakeChatRoute project={selectedProject} buildId={buildIntakeBuildId} />
+                  ) : buildRunId !== undefined ? (
+                    // data-testid-exempt — BuildRunView owns its build-run-view root id; no data-testid prop
+                    <BuildRunView project={selectedProject} buildId={buildRunId} tab={buildRunTab} />
                   ) : location.pathname === '/builds/new' ? (
                     // data-testid-exempt — NewBuildForm owns its new-build-form root id; no data-testid prop
                     <NewBuildForm project={selectedProject} />
@@ -1557,6 +1627,26 @@ function App() {
                     <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
                   )}
                 </BuildsRouteGuard>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'prod-support' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ProdSupportPage project={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'brainstorm' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                {brainstormSessionId ? (
+                  <BrainstormWorkspace
+                    key={brainstormSessionId}
+                    project={selectedProject}
+                    sessionId={decodeURIComponent(brainstormSessionId)}
+                  />
+                ) : (
+                  <BrainstormSessionsPage project={selectedProject} />
+                )}
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'load-tests' ? (

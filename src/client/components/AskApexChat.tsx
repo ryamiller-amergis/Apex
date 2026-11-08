@@ -21,6 +21,8 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
     streamingText,
     status,
     preparationMessage,
+    notice,
+    retryFailedRun,
     startSession,
     sendMessage,
     closeSession,
@@ -158,6 +160,25 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
             >
               {preparationMessage}
             </div>
+          )}
+          {notice && (
+            <p
+              className={styles['run-notice']}
+              role="status"
+              {...{ 'data-testid': 'ask-apex-run-notice' }}
+            >
+              {notice}
+            </p>
+          )}
+          {retryFailedRun && (
+            <button
+              type="button"
+              className={styles['retry-btn']}
+              onClick={retryFailedRun}
+              {...{ 'data-testid': 'ask-apex-retry-button' }}
+            >
+              Try again
+            </button>
           )}
           <div ref={messagesEndRef} />
         </div>

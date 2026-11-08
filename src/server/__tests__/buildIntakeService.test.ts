@@ -29,6 +29,7 @@ jest.mock('../services/buildIntakeSensitiveText', () => {
 });
 
 import {
+  BUILD_INTAKE_EXTRA_QUESTION_BUDGET,
   BUILD_INTAKE_QUESTION_BUDGET,
   prepareBuildIntakeTurn,
 } from '../services/buildIntakeService';
@@ -73,22 +74,56 @@ describe('isBuildIntakeThread', () => {
 });
 
 describe('prepareBuildIntakeTurn — question budget (PBI-009 AC-2, TBI-009 DoD-1)', () => {
-  it('VT-02: at 5 questions tells the agent to stop, state defaults and offer the confirm', async () => {
+  it('VT-02: at 5 questions allows only reasoned extra questions, one per reply', async () => {
     mockGetThread.mockResolvedValue(thread([`${Q} a ${Q} b`, `${Q} c ${Q} d ${Q} e`]));
     const result = await prepareBuildIntakeTurn({ threadId: 'thread-1', messageText: 'answers', turnId: 't1' });
     expect(BUILD_INTAKE_QUESTION_BUDGET).toBe(5);
+    expect(BUILD_INTAKE_EXTRA_QUESTION_BUDGET).toBe(5);
     expect(result.questionsAsked).toBe(5);
     expect(result.budgetSpent).toBe(true);
+    expect(result.capReached).toBe(false);
+    expect(result.internalContext).toMatch(/5 extra remain/);
+    expect(result.internalContext).toMatch(/who can see or change data, whether data is deleted, an outside system/);
+    expect(result.internalContext).toMatch(/at most one extra question per reply/i);
+    expect(result.internalContext).toContain('[[build-intake:reason:workflow]]');
+    expect(result.internalContext).not.toMatch(/ask no more questions/i);
+    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.question_budget_reached', { questionsAsked: '5' });
+    expect(mockTrackEvent).not.toHaveBeenCalledWith('build.intake.extra_question_asked', expect.anything());
+  });
+
+  it('VT-02: at 10 questions tells the agent to stop, state defaults and offer the confirm', async () => {
+    mockGetThread.mockResolvedValue(thread([Q.repeat(5), Q.repeat(5)]));
+    const result = await prepareBuildIntakeTurn({ threadId: 'thread-1', messageText: 'answers', turnId: 't1' });
+    expect(result.capReached).toBe(true);
+    expect(result.internalContext).toMatch(/10 of 10; none remain/);
     expect(result.internalContext).toMatch(/ask no more questions/i);
     expect(result.internalContext).toMatch(/state each remaining default as an assumption/i);
     expect(result.internalContext).toMatch(/offer the confirm choice/i);
-    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.question_budget_reached', { questionsAsked: '5' });
+    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.question_cap_reached', { questionsAsked: '10' });
   });
 
-  it('VT-02: tracks a cap breach when the agent asked more than 5', async () => {
-    mockGetThread.mockResolvedValue(thread([`${Q}${Q}${Q}${Q}${Q}${Q}`]));
+  it('VT-02: tracks a cap breach when the agent asked more than 10', async () => {
+    mockGetThread.mockResolvedValue(thread([Q.repeat(11)]));
     await prepareBuildIntakeTurn({ threadId: 'thread-1', messageText: 'x', turnId: 't1' });
-    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.question_cap_exceeded', { questionsAsked: '6' });
+    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.question_cap_exceeded', { questionsAsked: '11' });
+  });
+
+  it('logs the reason when the last reply was an extra question', async () => {
+    mockGetThread.mockResolvedValue(thread([Q.repeat(5), `${Q}[[build-intake:reason:access]] Who may edit?`]));
+    await prepareBuildIntakeTurn({ threadId: 'thread-1', messageText: 'Managers', turnId: 't1' });
+    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.extra_question_asked', {
+      questionsAsked: '6',
+      reasons: 'access',
+    });
+  });
+
+  it('logs "none" when an extra question gave no reason', async () => {
+    mockGetThread.mockResolvedValue(thread([Q.repeat(5), `${Q} Which colour?`]));
+    await prepareBuildIntakeTurn({ threadId: 'thread-1', messageText: 'Blue', turnId: 't1' });
+    expect(mockTrackEvent).toHaveBeenCalledWith('build.intake.extra_question_asked', {
+      questionsAsked: '6',
+      reasons: 'none',
+    });
   });
 
   it('VT-03: at 2 questions says 3 remain and never to ask whether something might break (AC-3)', async () => {

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nfr-manifest.schema.json",
+  "title": "NFR manifest",
+  "description": "Response-time, concurrency, and data-volume targets, each traced to the load-test definition that checks it. The template's values are illustrative examples, not production promises. It defines no execution policy. Each team decides when load tests run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "targets"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this schema, for editor completion."
+    },
+    "schemaVersion": {
+      "const": 1,
+      "description": "Raised when a field is removed or renamed."
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["responseTime", "concurrency", "dataVolume"],
+      "properties": {
+        "responseTime": {
+          "type": "object",
+          "description": "Illustrative example: the value shows the format and is not a promise. Pass when the measured percentile is at most maxMs.",
+          "additionalProperties": false,
+          "required": ["percentile", "maxMs", "illustrative", "verifiedBy"],
+          "properties": {
+            "percentile": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            },
+            "maxMs": { "type": "number", "exclusiveMinimum": 0 },
+            "illustrative": { "$ref": "#/$defs/illustrative" },
+            "verifiedBy": { "$ref": "#/$defs/verifiedBy" }
+          }
+        },
+        "concurrency": {
+          "type": "object",
+          "description": "Illustrative example: the value shows the format and is not a promise. Pass when the run held at least this many virtual users and no request failed.",
+          "additionalProperties": false,
+          "required": ["users", "illustrative", "verifiedBy"],
+          "properties": {
+            "users": { "type": "integer", "minimum": 1 },
+            "illustrative": { "$ref": "#/$defs/illustrative" },
+            "verifiedBy": { "$ref": "#/$defs/verifiedBy" }
+          }
+        },
+        "dataVolume": {
+          "type": "object",
+          "description": "Illustrative example: the value shows the format and is not a promise. Pass when the table holds at least this many rows.",
+          "additionalProperties": false,
+          "required": ["table", "rows", "illustrative", "verifiedBy"],
+          "properties": {
+            "table": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_]*$"
+            },
+            "rows": { "type": "integer", "minimum": 0 },
+            "illustrative": { "$ref": "#/$defs/illustrative" },
+            "verifiedBy": { "$ref": "#/$defs/verifiedBy" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "illustrative": {
+      "type": "boolean",
+      "description": "true while the value is the template's illustrative example. Set false when the project sets a real target."
+    },
+    "verifiedBy": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Path, relative to the template root, of the load-test definition that checks this target."
+    }
+  }
+}

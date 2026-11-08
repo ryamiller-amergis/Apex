@@ -15,6 +15,7 @@ import {
   isThreadIdle,
   isThreadLoaded,
 } from './chatAgentService';
+import { readThreadOutput } from './chatThreadOutputStore';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getWalkthroughAiOptions } from './walkthroughAiOptionsService';
@@ -234,18 +235,8 @@ async function buildKickoffContext(
   ].join('\n');
 }
 
-function resolveOutputPath(workspaceDir: string): string {
-  return path.join(workspaceDir, ...OUTPUT_RELATIVE_PATH);
-}
-
-function readOutput(workspaceDir: string): string | null {
-  const outputPath = resolveOutputPath(workspaceDir);
-  if (!fs.existsSync(outputPath)) return null;
-  try {
-    return fs.readFileSync(outputPath, 'utf-8');
-  } catch {
-    return null;
-  }
+function readOutput(threadId: string, workspaceDir: string): Promise<string | null> {
+  return readThreadOutput({ threadId, workspaceDir, relativePath: OUTPUT_RELATIVE_PATH });
 }
 
 async function loadThreadForUser(
@@ -363,7 +354,7 @@ export async function getAnchorDiscoveryResult(
   // Output wins over run state: agents hold the kickoff sendMessage promise open
   // after writing the file, and waiting for it stalls callers that already have
   // a usable result.
-  const raw = readOutput(row.workspaceDir);
+  const raw = await readOutput(threadId, row.workspaceDir);
   if (!raw) {
     if (discoveryInFlight.has(threadId)) {
       return { status: 'pending', provenance };

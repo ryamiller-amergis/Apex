@@ -5,6 +5,7 @@ export function writeSseEvent(res: Response, event: object): boolean {
   if (res.writableEnded || res.destroyed) return false;
   try {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
+    (res as Response & { flush?: () => void }).flush?.();
     return true;
   } catch {
     return false;
@@ -16,6 +17,7 @@ export function writeSseComment(res: Response, comment: string): boolean {
   if (res.writableEnded || res.destroyed) return false;
   try {
     res.write(`: ${comment}\n\n`);
+    (res as Response & { flush?: () => void }).flush?.();
     return true;
   } catch {
     return false;

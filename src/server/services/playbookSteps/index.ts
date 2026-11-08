@@ -17,7 +17,12 @@ import { executeNotifyStep } from './notifyAdapter';
 import { executeIngestArtifactStep } from './ingestArtifactAdapter';
 import { executeBranchStep } from './branchAdapter';
 import { executeInterviewStep } from './interviewAdapter';
+import { executeApexActionStep } from './apexActionAdapter';
+import { executeCloudAgentStep } from './cloudAgentAdapter';
+import { executeJoinStep } from './joinAdapter';
+import { executeForeachStep, executeUntilStep } from './loopAdapters';
 import { executeBuildStep } from './buildAdapter';
+import { executeConnectorStep } from './connectorAdapter';
 import { getUserPermissions } from '../rbacService';
 import { isSuperAdminUserId } from '../../utils/superAdminUser';
 import { parseStepInput } from './descriptorValidation';
@@ -35,9 +40,15 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   'cursor-agent': executeCursorAgentStep,
   'approval-gate': executeApprovalGateStep,
   notify: executeNotifyStep,
+  connector: executeConnectorStep,
   'ingest-artifact': executeIngestArtifactStep,
   branch: executeBranchStep,
   interview: executeInterviewStep,
+  'apex-action': executeApexActionStep,
+  'cloud-agent': executeCloudAgentStep,
+  join: executeJoinStep,
+  foreach: executeForeachStep,
+  until: executeUntilStep,
   build: executeBuildStep,
 };
 

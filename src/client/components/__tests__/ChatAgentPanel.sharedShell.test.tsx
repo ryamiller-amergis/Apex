@@ -5,6 +5,9 @@ import { ChatAgentPanel } from '../ChatAgentPanel';
 jest.mock('../BuildAgentHomePill', () => ({
   BuildAgentHomePill: () => null,
 }));
+jest.mock('../BrainstormHomeEntry', () => ({
+  BrainstormHomeEntry: () => null,
+}));
 
 const mockRetryLast = jest.fn();
 const mockRetryFailedRun = jest.fn();
@@ -216,6 +219,24 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     fireEvent.click(screen.getByTestId('chat-agent-history-btn'));
     expect(screen.getByTestId('thread-history-sidebar-mock')).toBeInTheDocument();
+  });
+
+  it('does not put Prod Support in the home chat header', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        onSelectThread={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    expect(screen.queryByTestId('home-guided-jobs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-history-btn')).toBeInTheDocument();
   });
 
   it('PBI-007 AC-3 excludes Home-only content outside Home', () => {

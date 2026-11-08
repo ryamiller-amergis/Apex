@@ -293,3 +293,43 @@ describe('VT-13 — build-intake thread read narrowing (PBI-009 security NFR)', 
     await expect(resolveThreadAccess('member-1', 'thread-1')).resolves.toEqual({ access: 'read', thread: baseThread });
   });
 });
+
+describe('VT-08 — build-intake write rule on the interview thread (TBI-010 DoD-0, DoD-1, DoD-3)', () => {
+  const buildInterview = {
+    id: 'iv-1',
+    authorId: 'author-1',
+    project: 'Apex',
+    testCaseOwnerId: 'qa-1',
+    deliveryAssigneeId: 'delivery-1',
+    playbookProfileKey: 'build-intake',
+  };
+
+  beforeEach(() => {
+    mockDb.query.interviews.findFirst.mockResolvedValue(buildInterview);
+  });
+
+  it('VT-08 allows a Project Admin of the interview project', async () => {
+    mockIsProjectAdmin.mockImplementation(async (_user: string, project: string) => project === 'Apex');
+    expect(await canWriteThread('pa-1', 'thread-1')).toBe(true);
+  });
+
+  it('VT-08 allows a Platform Admin', async () => {
+    mockIsPlatformAdmin.mockResolvedValue(true);
+    expect(await canWriteThread('platform-1', 'thread-1')).toBe(true);
+  });
+
+  it('VT-08 refuses a section owner and a phase assignee', async () => {
+    expect(await canWriteThread('qa-1', 'thread-1')).toBe(false);
+    expect(await canWriteThread('delivery-1', 'thread-1')).toBe(false);
+  });
+
+  it('VT-08 refuses a BA, Manager or Product Owner who is not the requester or an admin', async () => {
+    mockGetUserPermissions.mockResolvedValue(new Set(['interviews:manage']));
+    expect(await canWriteThread('ba-1', 'thread-1')).toBe(false);
+  });
+
+  it('VT-08 keeps section owners on a non-build interview', async () => {
+    mockDb.query.interviews.findFirst.mockResolvedValue({ ...buildInterview, playbookProfileKey: 'grill-with-docs' });
+    expect(await canWriteThread('qa-1', 'thread-1')).toBe(true);
+  });
+});

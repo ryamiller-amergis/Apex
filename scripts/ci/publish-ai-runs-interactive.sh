@@ -14,8 +14,10 @@
 #   IMAGE_TAG                        Tag to push (default: GITHUB_SHA or "local")
 #   SKIP_IMAGE_PUBLISH               Reuse an existing immutable image when "true"
 #   SKIP_APP_UPDATE                  Push only when "true"
+#   PARALLEL_ROLLOUT                 Roll all targets at once when "true"
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/image-publish-lib.sh"
 
 if [[ -z "${AI_RUNS_ACR_NAME:-}" ]]; then
   echo "Skipping interactive host publish: AI_RUNS_ACR_NAME is not set."
@@ -52,7 +54,6 @@ fi
 
 LOGIN_SERVER="$(az acr show --name "$AI_RUNS_ACR_NAME" --query loginServer -o tsv)"
 IMAGE="${LOGIN_SERVER}/${REPO}:${TAG}"
-IMAGE_LATEST="${LOGIN_SERVER}/${REPO}:latest"
 
 echo "Logging in to ACR ${AI_RUNS_ACR_NAME}..."
 az acr login --name "$AI_RUNS_ACR_NAME"
@@ -60,12 +61,7 @@ az acr login --name "$AI_RUNS_ACR_NAME"
 if [[ "$SKIP_IMAGE_PUBLISH" == "true" ]]; then
   echo "SKIP_IMAGE_PUBLISH=true — reusing ${IMAGE}."
 else
-  echo "Building ${IMAGE}..."
-  docker build -f "$DOCKERFILE" -t "$IMAGE" -t "$IMAGE_LATEST" .
-
-  echo "Pushing ${IMAGE} and ${IMAGE_LATEST}..."
-  docker push "$IMAGE"
-  docker push "$IMAGE_LATEST"
+  publish_image "$AI_RUNS_ACR_NAME" "$LOGIN_SERVER" "$REPO" "$TAG" "$DOCKERFILE"
 fi
 
 if [[ "$SKIP_APP_UPDATE" == "true" ]]; then
@@ -119,40 +115,78 @@ verify_health() {
   return 1
 }
 
-UPDATED=0
-for APP in "${TARGETS[@]}"; do
-  if ! az containerapp show --name "$APP" --resource-group "$AI_RUNS_RESOURCE_GROUP" &>/dev/null; then
-    echo "Skipping '${APP}': not found in '${AI_RUNS_RESOURCE_GROUP}' (apply Terraform first)."
-    continue
+roll_app() {
+  local app="$1"
+  if ! az containerapp show --name "$app" --resource-group "$AI_RUNS_RESOURCE_GROUP" &>/dev/null; then
+    echo "Skipping '${app}': not found in '${AI_RUNS_RESOURCE_GROUP}' (apply Terraform first)."
+    return 0
   fi
-  PREVIOUS_IMAGE="$(az containerapp show \
-    --name "$APP" \
+  local previous_image
+  previous_image="$(az containerapp show \
+    --name "$app" \
     --resource-group "$AI_RUNS_RESOURCE_GROUP" \
     --query properties.template.containers[0].image \
     -o tsv)"
-  echo "Updating Container App ${APP} → ${IMAGE}..."
-  az containerapp update \
-    --name "$APP" \
-    --resource-group "$AI_RUNS_RESOURCE_GROUP" \
-    --image "$IMAGE" \
-    >/dev/null
-  REVISION="$(az containerapp show \
-    --name "$APP" \
+  previous_image="${previous_image//$'\r'/}"
+  # A failed health wait leaves the image on the template, so a matching image
+  # still has to pass verify_health before the rollout counts as done.
+  local updated=false
+  if [[ "$previous_image" == "$IMAGE" ]]; then
+    echo "${app} already runs ${IMAGE}; skipping update and verifying health."
+  else
+    echo "Updating Container App ${app} → ${IMAGE}..."
+    az containerapp update \
+      --name "$app" \
+      --resource-group "$AI_RUNS_RESOURCE_GROUP" \
+      --image "$IMAGE" \
+      >/dev/null
+    updated=true
+  fi
+  local revision
+  revision="$(az containerapp show \
+    --name "$app" \
     --resource-group "$AI_RUNS_RESOURCE_GROUP" \
     --query properties.latestRevisionName \
     -o tsv)"
-  REQUIRE_PROBE_HEALTH=false
-  if [[ "$APP" == "${AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME:-}" || "$APP" == "${AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME:-}" ]]; then
-    REQUIRE_PROBE_HEALTH=true
+  local require_probe_health=false
+  if [[ "$app" == "${AI_PLATFORM_V2_FAST_INTERACTIVE_CONTAINER_APP_NAME:-}" || "$app" == "${AI_PLATFORM_V2_AGENTIC_CONTAINER_APP_NAME:-}" ]]; then
+    require_probe_health=true
   fi
-  verify_health "$APP" "$REVISION" "$REQUIRE_PROBE_HEALTH"
-  echo "Rollback ${APP}: az containerapp update -g '${AI_RUNS_RESOURCE_GROUP}' -n '${APP}' --image '${PREVIOUS_IMAGE}'"
-  UPDATED=$((UPDATED + 1))
-done
+  verify_health "$app" "$revision" "$require_probe_health"
+  if [[ "$updated" == "true" ]]; then
+    echo "Rollback ${app}: az containerapp update -g '${AI_RUNS_RESOURCE_GROUP}' -n '${app}' --image '${previous_image}'"
+  fi
+}
 
-if [[ "$UPDATED" -eq 0 ]]; then
-  echo "Image pushed. No existing Container Apps were updated."
+# PARALLEL_ROLLOUT=true rolls every target at once; otherwise one at a time,
+# stopping at the first failure.
+if [[ "${PARALLEL_ROLLOUT:-false}" != "true" ]]; then
+  for APP in "${TARGETS[@]}"; do
+    roll_app "$APP"
+  done
+  echo "OK: interactive host image published to ${#TARGETS[@]} Container App target(s)."
   exit 0
 fi
 
-echo "OK: interactive host image published and ${UPDATED} Container App(s) updated."
+LOG_DIR="$(mktemp -d)"
+trap 'rm -rf "$LOG_DIR"' EXIT
+PIDS=()
+for i in "${!TARGETS[@]}"; do
+  roll_app "${TARGETS[$i]}" > "${LOG_DIR}/${i}.log" 2>&1 &
+  PIDS+=("$!")
+done
+
+FAILED=0
+for i in "${!TARGETS[@]}"; do
+  if ! wait "${PIDS[$i]}"; then
+    FAILED=$((FAILED + 1))
+  fi
+  cat "${LOG_DIR}/${i}.log"
+done
+
+if [[ "$FAILED" -gt 0 ]]; then
+  echo "FAIL: ${FAILED} of ${#TARGETS[@]} interactive Container App(s) did not roll out."
+  exit 1
+fi
+
+echo "OK: interactive host image published to ${#TARGETS[@]} Container App target(s)."

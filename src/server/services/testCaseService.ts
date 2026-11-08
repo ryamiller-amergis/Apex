@@ -9,6 +9,7 @@ import type {
   TestCaseSummary,
   TestCaseStatus,
 } from '../../shared/types/interview';
+import type { EffortLevel } from '../../shared/types/effort';
 import { getDefaultModel } from './appSettingsService';
 import {
   createThread,
@@ -17,7 +18,10 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { readThreadOutput, saveThreadOutputs } from './chatThreadOutputStore';
+import { writeThreadFolderFile } from './threadFolder';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   canThisInstanceFailGeneration,
   isThreadRunAlive,
@@ -661,6 +665,43 @@ export async function failGeneratingTestCasesForThread(
   await markTestCaseFailed(row.id, row.prdId, row.chatThreadId);
 }
 
+async function readQaLabScopeFile(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string | null> {
+  const saved = await readThreadOutput({
+    threadId,
+    relativePath: `.ai-pilot/output/${QA_LAB_SCOPE_FILE}`,
+  });
+  if (saved !== null) return saved;
+  // A V2 worker harvest does not carry the scope file back, so fall back to
+  // the thread workspace where triggerTestCaseGeneration wrote it.
+  const candidates = [
+    await resolveOutputDir(threadId, workspaceDirOverride),
+    workspaceDirOverride ? await resolveOutputDir(threadId) : null,
+  ];
+  const file = candidates
+    .filter((dir): dir is string => dir !== null)
+    .map((dir) => path.join(dir, QA_LAB_SCOPE_FILE))
+    .find((candidate) => fs.existsSync(candidate));
+  return file ? fs.readFileSync(file, 'utf-8') : null;
+}
+
+async function readQaLabScopePbiIds(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string[] | null> {
+  const raw = await readQaLabScopeFile(threadId, workspaceDirOverride).catch(() => null);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { pbiIds?: unknown };
+    const pbiIds = normalizePbiIds(Array.isArray(parsed.pbiIds) ? parsed.pbiIds.filter((id): id is string => typeof id === 'string') : []);
+    return pbiIds.length > 0 ? pbiIds : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readOutputTestCases(
   threadId: string,
   workspaceDirOverride?: string,
@@ -715,6 +756,59 @@ export async function readOutputTestCasesMd(
 const TEST_CASE_GENERATION_KICKOFF =
   'Generate QA test cases for the provided PRD and backlog. Use the configured skill instructions and write the required output files.';
 
+const QA_LAB_SCOPE_FILE = 'qa-lab-scope.json';
+const PBI_ID_PATTERN = /^PBI-\d+$/i;
+
+export interface TestCaseGenerationScope {
+  pbiIds: string[];
+  matchLevel?: 'pbi' | 'feature' | 'epic';
+  matchedTitle?: string;
+}
+
+function normalizePbiIds(pbiIds: string[] | undefined): string[] {
+  return (pbiIds ?? []).filter((id) => PBI_ID_PATTERN.test(id));
+}
+
+function buildTestCaseKickoff(scope?: TestCaseGenerationScope): string {
+  const pbiIds = normalizePbiIds(scope?.pbiIds);
+  if (pbiIds.length === 0) return TEST_CASE_GENERATION_KICKOFF;
+
+  if (scope?.matchLevel === 'feature' && scope.matchedTitle?.trim()) {
+    const title = scope.matchedTitle.replace(/"/g, '');
+    return `Generate QA test cases for the feature "${title}" only. Use --feature "${title}". Do not write cases for PBIs outside this feature. Write the required output files.`;
+  }
+  if (pbiIds.length === 1) {
+    return `Generate QA test cases for backlog item ${pbiIds[0]} only. Use --pbi ${pbiIds[0]}. Do not write cases for any other PBI. Write the required output files.`;
+  }
+  return `Generate QA test cases only for these backlog items: ${pbiIds.join(', ')}. Do not write cases for any other PBI. Write the required output files.`;
+}
+
+/** Keep suites for PBIs outside the requested scope when a scoped run finishes. */
+export function mergeScopedTestCaseJson(
+  previous: unknown,
+  incoming: unknown,
+  pbiIds: string[],
+): unknown {
+  const scope = new Set(normalizePbiIds(pbiIds));
+  if (scope.size === 0) return incoming;
+
+  const previousRoot = asRecord(previous);
+  const incomingRoot = asRecord(incoming) ?? {};
+  const previousSuites = Array.isArray(previousRoot?.suites) ? previousRoot.suites : [];
+  const incomingSuites = Array.isArray(incomingRoot.suites) ? incomingRoot.suites : [];
+  const kept = previousSuites.filter((suite) => {
+    const record = asRecord(suite);
+    const pbiId = typeof record?.pbiId === 'string'
+      ? record.pbiId
+      : typeof record?.pbi_id === 'string'
+        ? record.pbi_id
+        : '';
+    return pbiId.length > 0 && !scope.has(pbiId);
+  });
+
+  return { ...incomingRoot, suites: [...kept, ...incomingSuites] };
+}
+
 export async function routeTestCaseGenerationKickoff(opts: {
   testCaseId: string;
   prdId: string;
@@ -760,14 +854,11 @@ export async function routeTestCaseGenerationKickoff(opts: {
             `[run-grounding] Test-case propagation unavailable (testCaseId=${opts.testCaseId})`,
           );
         }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () =>
         sendMessage(
@@ -790,6 +881,10 @@ export async function triggerTestCaseGeneration(
   prdId: string,
   sourceThreadId: string,
   actorUserId?: string,
+  /** Per-run overrides from the QA Lab model picker; fall back to project skill config. */
+  overrides?: { model?: string; effort?: EffortLevel },
+  /** When set, the skill writes cases only for these backlog PBIs. */
+  scope?: TestCaseGenerationScope,
 ): Promise<boolean> {
   const prdRow = await db.query.prds.findFirst({
     where: eq(prds.id, prdId),
@@ -829,7 +924,8 @@ export async function triggerTestCaseGeneration(
   }
 
   const defaultModel = await getDefaultModel();
-  const model = skillConfig.testCaseModel ?? defaultModel;
+  const model = overrides?.model ?? skillConfig.testCaseModel ?? defaultModel;
+  const effort = overrides?.effort ?? skillConfig.testCaseEffort ?? undefined;
   const slug = sanitizeSlug(prdRow.title);
   const backlogJson = prdRow.backlogJson ?? {};
   const context = [
@@ -870,28 +966,39 @@ export async function triggerTestCaseGeneration(
       skillPath: skillConfig.testCaseSkillPath,
       freeformContext: context,
       model,
+      effort,
     },
     { skipAutoKickoff: true }
   );
 
-  const outputDir = path.join(thread.workspaceDir, '.ai-pilot', 'output');
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(outputDir, `${slug}.prd.md`),
-    prdRow.content || '',
-    'utf-8'
-  );
-  fs.writeFileSync(
-    path.join(outputDir, `${slug}.backlog.json`),
-    JSON.stringify(backlogJson, null, 2),
-    'utf-8'
-  );
-  fs.writeFileSync(
-    path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md'),
-    context,
-    'utf-8'
-  );
-  updateThreadKickoffContext(thread.id, context);
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${slug}.prd.md`, content: prdRow.content || '' },
+    { path: `.ai-pilot/output/${slug}.backlog.json`, content: JSON.stringify(backlogJson, null, 2) },
+  ];
+  for (const input of [...sourceInputs, { path: '.ai-pilot/kickoff-context.md', content: context }]) {
+    await writeThreadFolderFile({
+      project: prdRow.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: input.path,
+      content: input.content,
+    });
+  }
+  await saveDocumentInputSnapshot(thread.id, sourceInputs);
+  const scopedPbiIds = normalizePbiIds(scope?.pbiIds);
+  if (scopedPbiIds.length > 0) {
+    const scopeFile = {
+      path: `.ai-pilot/output/${QA_LAB_SCOPE_FILE}`,
+      content: JSON.stringify({ pbiIds: scopedPbiIds }),
+    };
+    await writeThreadFolderFile({
+      project: prdRow.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: scopeFile.path,
+      content: scopeFile.content,
+    });
+    await saveThreadOutputs(thread.id, null, [scopeFile]);
+  }
+  await updateThreadKickoffContext(thread.id, context);
 
   const [testCaseRow] = await db
     .insert(testCases)
@@ -906,22 +1013,45 @@ export async function triggerTestCaseGeneration(
   // materialization can take longer than WATCHER_INTERVAL_MS, and the thread
   // stays idle until the worker begins — an early watcher would delete the
   // scratch workspace mid-prep and force workspace-preparation-failed.
-  const routedSuccessfully = await routeTestCaseGenerationKickoff({
-    testCaseId: testCaseRow.id,
+  // The HTTP caller returns now; preparation continues after the response.
+  const testCaseId = testCaseRow.id;
+  const threadId = thread.id;
+  const routeUserId = actorUserId ?? prdRow.authorId;
+  void routeTestCaseGenerationKickoff({
+    testCaseId,
     prdId,
-    userId: actorUserId ?? prdRow.authorId,
+    userId: routeUserId,
     project: prdRow.project,
-    threadId: thread.id,
+    threadId,
     sourceThreadId,
-    kickoffMessage: TEST_CASE_GENERATION_KICKOFF,
+    kickoffMessage: buildTestCaseKickoff(scope),
+  }).then(async (routedSuccessfully) => {
+    if (!routedSuccessfully) return;
+    const v2Transport = await usesV2DocumentTransport({
+      userId: routeUserId,
+      project: prdRow.project,
+      workflowClass: 'test-cases',
+    });
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (v2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      // Harvest applies the V2 result, including failures and missing output.
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    } else {
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      startTestCaseWatcher(testCaseId, threadId);
+      // @feature-flag:ai-runs-v2-transport disabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
+  }).catch((error: unknown) => {
+    console.error(
+      `[testCase] Routing failed — testCaseId=${testCaseId} prdId=${prdId}`,
+      error,
+    );
   });
 
-  if (routedSuccessfully) {
-    startTestCaseWatcher(testCaseRow.id, thread.id);
-  }
-
   console.log(
-    `[testCase] Started generation — testCaseId=${testCaseRow.id} prdId=${prdId} threadId=${thread.id}`
+    `[testCase] Queued generation — testCaseId=${testCaseId} prdId=${prdId} threadId=${threadId}`
   );
   return true;
 }
@@ -1045,19 +1175,37 @@ export async function syncTestCaseOutput(
     chatThreadId,
     workspaceDirOverride,
   );
+  const scopePbiIds = await readQaLabScopePbiIds(chatThreadId, workspaceDirOverride);
+  let storedTestCasesJson: unknown = testCasesJson;
+  if (scopePbiIds && scopePbiIds.length > 0) {
+    const [previousReady] = await db
+      .select({ testCasesJson: testCases.testCasesJson })
+      .from(testCases)
+      .where(and(eq(testCases.prdId, prdId), eq(testCases.status, 'ready')))
+      .orderBy(desc(testCases.createdAt))
+      .limit(1);
+    const previousJson: unknown = previousReady?.testCasesJson;
+    if (previousJson) {
+      storedTestCasesJson = mergeScopedTestCaseJson(
+        previousJson,
+        testCasesJson,
+        scopePbiIds,
+      );
+    }
+  }
   const patchedBacklog = await readOutputBacklog(
     chatThreadId,
     workspaceDirOverride,
   );
   const backlogWithTestCaseCounts = applyTestCaseCountsToBacklog(
     patchedBacklog ?? prdRow?.backlogJson,
-    testCasesJson
+    storedTestCasesJson
   );
-  const coverageSummary = extractCoverageSummary(testCasesJson);
+  const coverageSummary = extractCoverageSummary(storedTestCasesJson);
   const readyAt = new Date().toISOString();
   const updates: Partial<typeof testCases.$inferInsert> = {
     status: 'ready',
-    testCasesJson: testCasesJson as any,
+    testCasesJson: storedTestCasesJson as any,
     testCasesMd: testCasesMd ?? null,
     coverageSummary: coverageSummary ?? null,
     updatedAt: readyAt,

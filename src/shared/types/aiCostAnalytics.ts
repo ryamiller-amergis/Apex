@@ -17,6 +17,7 @@ export type AiFeature =
   | 'design-plan'
   | 'design-prototype'
   | 'my-work'
+  | 'cloud-agent'
   | 'standup'
   | 'test-case'
   | 'feature-request'
@@ -26,6 +27,7 @@ export type AiFeature =
   | 'ai-cost-insights'
   | 'calendar-work-item-assistant'
   | 'adr'
+  | 'brainstorm'
   | 'other';
 
 export interface RecordUsageInput {

@@ -220,6 +220,61 @@ describe('useAgentChatSession', () => {
     ]);
   });
 
+  it('keeps the pending question above a reply that arrives before its echo', async () => {
+    const earlier: ChatMessage[] = [
+      { id: 'u1', role: 'user', text: 'Same question', ts: '2026-01-01T00:00:00Z' },
+      { id: 'a1', role: 'agent', text: 'First answer', ts: '2026-01-01T00:00:01Z' },
+    ];
+    currentStreamReturn = { ...mockStreamReturn, messages: earlier };
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 })
+    );
+
+    await act(async () => {
+      await result.current.send('Same question');
+    });
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      messages: [
+        ...earlier,
+        { id: 'a2', role: 'agent', text: 'Second answer', ts: '2026-01-01T00:00:03Z' },
+      ],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages.map((message) => message.id)).toEqual([
+      'u1',
+      'a1',
+      TURN_ID_1,
+      'a2',
+    ]);
+  });
+
+  it('treats a persisted message with the turn id as the echo', async () => {
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 })
+    );
+
+    await act(async () => {
+      await result.current.send('User answer');
+    });
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      messages: [
+        { id: TURN_ID_1, role: 'user', text: 'User answer', ts: '2026-01-01T00:00:00Z' },
+        { id: 'a1', role: 'agent', text: 'Answer', ts: '2026-01-01T00:00:01Z' },
+      ],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages.map((message) => message.id)).toEqual([
+      TURN_ID_1,
+      'a1',
+    ]);
+  });
+
   it('send includes model and attachments when provided', async () => {
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
@@ -330,11 +385,27 @@ describe('useAgentChatSession', () => {
 
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
+    let sent = true;
     await act(async () => {
-      await result.current.send('Hello');
+      sent = await result.current.send('Hello');
     });
 
+    expect(sent).toBe(false);
     expect(result.current.sendError).toBe('Rate limited');
+  });
+
+  it('returns false when send hits a transport error', async () => {
+    (global.fetch as jest.Mock).mockRejectedValue(new TypeError('network interrupted'));
+
+    const { result } = renderHook(() => useAgentChatSession('thread-1'));
+
+    let sent = true;
+    await act(async () => {
+      sent = await result.current.send('Hello');
+    });
+
+    expect(sent).toBe(false);
+    expect(result.current.sendError).toBe('network interrupted');
   });
 
   it('clearSendError clears the error', async () => {
@@ -395,6 +466,35 @@ describe('useAgentChatSession', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       '/custom/send',
       expect.anything()
+    );
+  });
+
+  it('sends an opening prompt while the empty thread is still preparing', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'idle', messages: [] };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        createTurnId: () => TURN_ID_1,
+      }),
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+
+    await act(async () => {
+      await result.current.send('Hello');
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.send('Open the ADR', { duringPreparation: true });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('Open the ADR'),
+      }),
     );
   });
 
@@ -619,6 +719,21 @@ describe('useAgentChatSession', () => {
     );
     expect(bodies.every((body) => !body.includes('Hello world'))).toBe(true);
     expect(mockClearRetryableRunId).toHaveBeenCalledTimes(1);
+  });
+
+  it('retryFailedRun uses retryEndpoint and an explicit run id when given', async () => {
+    const retryEndpoint = jest.fn((runId: string) => `/api/brainstorm/sessions/s-1/runs/${runId}/retry?project=Apex`);
+    const { result } = renderHook(() => useAgentChatSession('thread-1', { retryEndpoint }));
+
+    await act(async () => {
+      await result.current.retryFailedRun('60000000-0000-4000-8000-000000000001');
+    });
+
+    expect(retryEndpoint).toHaveBeenCalledWith('60000000-0000-4000-8000-000000000001');
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/brainstorm/sessions/s-1/runs/60000000-0000-4000-8000-000000000001/retry?project=Apex',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+    );
   });
 
   it('keeps retryableRunId when retry POST is non-OK', async () => {

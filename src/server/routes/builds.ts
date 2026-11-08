@@ -3,6 +3,7 @@ import { requirePermission, requireProjectAccess, resolveRequestProject } from '
 import { getUserId } from '../utils/requestUser';
 import { listBuildRepositories, listBuilds, normalizeListQuery } from '../services/buildQueryService';
 import { refusalOf, startBuild } from '../services/buildOrchestrator/startBuild';
+import { getBuildDetail, listBuildRunEvents, normalizeEventsLimit } from '../services/buildRunProjectionService';
 
 const router = express.Router();
 
@@ -35,6 +36,14 @@ router.use((req, res, next) => {
 });
 
 const projectAccess = requireProjectAccess((req) => resolveRequestProject(req));
+
+function requireBuildsProject(req: Request, res: Response, next: NextFunction): void {
+  if (!resolveRequestProject(req)) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  next();
+}
 
 router.post(
   '/',
@@ -114,6 +123,69 @@ router.get(
         ...paging,
       });
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/** Read routes stay open when `build-from-prompt` is off, so past builds remain viewable. */
+router.get(
+  '/:id',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:view'),
+  async (req, res, next) => {
+    try {
+      const result = await getBuildDetail({ project: resolveRequestProject(req) as string, buildId: req.params.id });
+      switch (result.kind) {
+        case 'ok':
+          res.json(result.detail);
+          return;
+        case 'wrong-project':
+          res.status(403).json({ error: 'Forbidden' });
+          return;
+        case 'not-found':
+          res.status(404).json({ error: 'Not found' });
+          return;
+        default: {
+          const unhandled: never = result;
+          throw new Error(`Unhandled detail result: ${JSON.stringify(unhandled)}`);
+        }
+      }
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+router.get(
+  '/:id/events',
+  requireBuildsProject,
+  projectAccess,
+  requirePermission('builds:view'),
+  async (req, res, next) => {
+    try {
+      const result = await listBuildRunEvents({
+        project: resolveRequestProject(req) as string,
+        buildId: req.params.id,
+        limit: normalizeEventsLimit(req.query.limit),
+      });
+      switch (result.kind) {
+        case 'ok':
+          res.json(result.response);
+          return;
+        case 'wrong-project':
+          res.status(403).json({ error: 'Forbidden' });
+          return;
+        case 'not-found':
+          res.status(404).json({ error: 'Not found' });
+          return;
+        default: {
+          const unhandled: never = result;
+          throw new Error(`Unhandled events result: ${JSON.stringify(unhandled)}`);
+        }
+      }
     } catch (error) {
       next(error);
     }

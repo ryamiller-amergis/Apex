@@ -48,13 +48,18 @@ jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn().mockResolvedValue({ id: 'thread-tc', workspaceDir: '' }),
   isThreadIdle: jest.fn().mockReturnValue(false),
   sendMessage: jest.fn().mockResolvedValue(undefined),
-  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+  prepareBackgroundWorkflowTurn: jest.fn().mockImplementation(async (
+    _threadId: string,
+    _prompt: string,
+    options?: { findTargetGrounding?: () => Promise<unknown> },
+  ) => ({
     prompt: 'complete frozen test-case prompt',
     model: 'gpt-5.5-test',
     skillPath: '.cursor/skills/test-cases/SKILL.md',
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/thread-tc',
-  }),
+    targetGrounding: await options?.findTargetGrounding?.(),
+  })),
   updateThreadKickoffContext: jest.fn(),
 }));
 
@@ -68,6 +73,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
     await input.runInProcess();
     return { route: 'in-process', reason: 'flag-disabled' };
   }),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/runGroundingService', () => ({
@@ -127,6 +133,7 @@ import {
   triggerTestCaseGeneration,
   extractUncoveredCoverageItems,
   failGeneratingTestCasesForThread,
+  mergeScopedTestCaseJson,
 } from '../services/testCaseService';
 
 const { db: mockDb, __mockUpdateChains: mockUpdateChains } = jest.requireMock('../db/drizzle') as {
@@ -420,6 +427,7 @@ describe('testCaseService', () => {
 
       try {
         await expect(triggerTestCaseGeneration('prd-1', 'source-thread')).resolves.toBe(true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockCreateThread).toHaveBeenCalledWith(
           'user-1',
@@ -508,6 +516,7 @@ describe('testCaseService', () => {
         await expect(
           triggerTestCaseGeneration('prd-1', 'source-thread'),
         ).resolves.toBe(true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockSendMessage).not.toHaveBeenCalled();
         expect(mockRouteBackgroundWorkflow).toHaveBeenCalledWith(
@@ -524,6 +533,48 @@ describe('testCaseService', () => {
         mockDb.query.testCases.findFirst.mockResolvedValue(null);
         jest.advanceTimersByTime(5_000);
         for (let i = 0; i < 10; i++) await Promise.resolve();
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not start a share watcher when the run goes to the V2 worker', async () => {
+      const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-test-cases-v2-'));
+      mockCreateThread.mockResolvedValue({ id: 'thread-tc', workspaceDir });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        id: 'prd-1',
+        project: 'proj-alpha',
+        authorId: 'user-1',
+        title: 'Feature PRD',
+        content: '# PRD',
+        backlogJson: {},
+      });
+      mockDb.query.testCases.findFirst.mockResolvedValue(null);
+      mockGetSkillConfig.mockResolvedValue({
+        skillRepo: 'org/skills',
+        testCaseSkillPath: '.cursor/skills/test-cases/SKILL.md',
+      });
+      mockRouteBackgroundWorkflow.mockResolvedValueOnce({
+        route: 'worker',
+        workspacePath: '/pinned',
+        runId: 'thread-tc',
+      });
+      const usesV2 = jest.requireMock('../services/backgroundWorkflowRouter')
+        .usesV2DocumentTransport as jest.Mock;
+      usesV2.mockResolvedValueOnce(true);
+
+      try {
+        await expect(
+          triggerTestCaseGeneration('prd-1', 'source-thread'),
+        ).resolves.toBe(true);
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
+
+        expect(usesV2).toHaveBeenCalledWith({
+          userId: 'user-1',
+          project: 'proj-alpha',
+          workflowClass: 'test-cases',
+        });
+        expect(isTestCaseWatcherActive('tc-new')).toBe(false);
       } finally {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
@@ -559,6 +610,7 @@ describe('testCaseService', () => {
 
       try {
         await triggerTestCaseGeneration('prd-1', 'source-thread');
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockUpdateChains.some(
           (chain) => chain.set.mock.calls.some(
@@ -621,6 +673,7 @@ describe('testCaseService', () => {
 
       try {
         await triggerTestCaseGeneration('prd-1', 'source-thread');
+        for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
         expect(mockUpdateChains.some(
           (chain) => chain.set.mock.calls.some(
@@ -795,6 +848,57 @@ describe('testCaseService', () => {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
       }
     });
+
+    it('keeps other PBIs when a worker harvest omits the scope file', async () => {
+      const harvestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-harvest-'));
+      const threadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-pilot-tc-thread-'));
+      fs.mkdirSync(path.join(harvestDir, '.ai-pilot', 'output'), { recursive: true });
+      fs.mkdirSync(path.join(threadDir, '.ai-pilot', 'output'), { recursive: true });
+      fs.writeFileSync(
+        path.join(harvestDir, '.ai-pilot', 'output', 'feature.test-cases.json'),
+        JSON.stringify({ suites: [{ pbiId: 'PBI-2', testCases: [{ id: 'TC-new' }] }] }),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(threadDir, '.ai-pilot', 'output', 'qa-lab-scope.json'),
+        JSON.stringify({ pbiIds: ['PBI-2'] }),
+        'utf8',
+      );
+      mockDb.query.chatThreads.findFirst.mockResolvedValue({ workspaceDir: threadDir });
+      mockDb.query.testCases.findFirst.mockResolvedValue({
+        chatThreadId: 'thread-tc',
+        status: 'generating',
+      });
+      mockDb.query.prds.findFirst.mockResolvedValue({
+        title: 'Feature',
+        chatThreadId: 'source-thread',
+        backlogJson: { items: [] },
+      });
+      (mockDb.select as jest.Mock).mockReturnValue({
+        from: () => ({
+          where: () => ({
+            limit: () => Promise.resolve([]),
+            orderBy: () => ({
+              limit: () => Promise.resolve([{
+                testCasesJson: { suites: [{ pbiId: 'PBI-1', testCases: [{ id: 'TC-old' }] }] },
+              }]),
+            }),
+          }),
+        }),
+      });
+
+      try {
+        await syncTestCaseOutput('tc-1', 'prd-1', 'thread-tc', harvestDir);
+
+        const stored = mockUpdateChains[0].set.mock.calls[0][0].testCasesJson as {
+          suites: Array<{ pbiId: string }>;
+        };
+        expect(stored.suites.map((suite) => suite.pbiId).sort()).toEqual(['PBI-1', 'PBI-2']);
+      } finally {
+        fs.rmSync(harvestDir, { recursive: true, force: true });
+        fs.rmSync(threadDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('readOutputTestCases — fallback workspace search', () => {
@@ -930,6 +1034,22 @@ describe('testCaseService', () => {
 
     it('returns an empty array when there is no coverage matrix', () => {
       expect(extractUncoveredCoverageItems({ suites: [] })).toEqual([]);
+    });
+  });
+
+  describe('mergeScopedTestCaseJson', () => {
+    it('keeps suites for PBIs outside the requested scope', () => {
+      const merged = mergeScopedTestCaseJson(
+        { suites: [{ pbiId: 'PBI-001', testCases: [{ id: 'old' }] }, { pbiId: 'PBI-002', testCases: [{ id: 'keep' }] }] },
+        { suites: [{ pbiId: 'PBI-001', testCases: [{ id: 'new' }] }] },
+        ['PBI-001'],
+      );
+      expect(merged).toEqual({
+        suites: [
+          { pbiId: 'PBI-002', testCases: [{ id: 'keep' }] },
+          { pbiId: 'PBI-001', testCases: [{ id: 'new' }] },
+        ],
+      });
     });
   });
 });

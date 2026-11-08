@@ -8,6 +8,8 @@ import { getUserPermissions } from './rbacService';
 import { isAdminUser, isPlatformAdmin, isProjectAdmin } from '../utils/rbacHelpers';
 import { isAssignedApprover } from './documentApprovalService';
 import { isBuildIntakeThread } from './buildIntakeThread';
+import { canActOnBuildIntakeInterview, isBuildIntakeInterview } from './buildIntakeAccess';
+import { isBrainstormThread, resolveBrainstormThreadAccess } from './brainstormThread';
 
 export type ThreadAccess = 'owner' | 'read';
 
@@ -76,11 +78,6 @@ async function findThreadLink(threadId: string): Promise<ThreadLink | null> {
   return null;
 }
 
-async function userCanReadLinkedThread(userId: string): Promise<boolean> {
-  const perms = await getUserPermissions(userId);
-  return perms.has('interviews:view') || perms.has('chat:view_all');
-}
-
 /**
  * Who may see a build intake: the requester, a Project Admin of the build's
  * project, or a Platform Admin. The build-intake write rule uses the same check.
@@ -90,9 +87,7 @@ export async function isBuildIntakeParticipant(
   requesterUserId: string,
   project: string | null | undefined,
 ): Promise<boolean> {
-  if (userId === requesterUserId) return true;
-  if (await isPlatformAdmin(userId)) return true;
-  return Boolean(project) && isProjectAdmin(userId, project as string);
+  return canActOnBuildIntakeInterview(userId, { authorId: requesterUserId, project: project ?? null });
 }
 
 /**
@@ -107,6 +102,12 @@ export async function resolveThreadAccess(
   // inserts complete), fall back to Postgres for cold / restarted threads.
   const thread = (await getThread(threadId)) ?? (await loadFullThread(threadId));
   if (!thread) return null;
+
+  // Runs before the owner shortcut so the flag, project and policy bind the creator too.
+  if (isBrainstormThread(thread)) {
+    const access = await resolveBrainstormThreadAccess(userId, threadId);
+    return access ? { access, thread } : null;
+  }
 
   if (thread.userId === userId) {
     return { access: 'owner', thread };
@@ -145,6 +146,9 @@ export async function canWriteThread(userId: string, threadId: string): Promise<
   const thread = await loadFullThread(threadId);
   if (!thread) return false;
 
+  // Brainstorm writes go through /api/brainstorm only.
+  if (isBrainstormThread(thread)) return false;
+
   if (thread.userId === userId) return true;
 
   const link = await findThreadLink(threadId);
@@ -177,9 +181,12 @@ async function canAnswerInterview(userId: string, interviewId: string): Promise<
       discoveryAssigneeId: true,
       deliveryAssigneeId: true,
       technicalAssigneeId: true,
+      playbookProfileKey: true,
     },
   });
   if (!row) return false;
+  // Section owners and phase assignees do not reach a build-intake interview.
+  if (isBuildIntakeInterview(row)) return canActOnBuildIntakeInterview(userId, row);
   if (
     row.authorId === userId
     || row.prdOwnerId === userId
