@@ -25,6 +25,7 @@ import {
   publishedCasesFrom,
   qaLabRepository,
   readTestPlanOptions,
+  renderSyntheticPrd,
   renderTestPlanFile,
   renderTestPlanSection,
   replaceAdoSuiteCase,
@@ -150,6 +151,10 @@ export async function regenerateAdoTestCase(input: {
     : narrowGenerationTargets(suite.sourceSnapshot, [match.parentWorkItemId]);
   const slug = sanitizeSlug(`${suite.rootTitle}-${input.localCaseId}`);
   const testPlans = await readTestPlanOptions(input.ado ?? new AzureDevOpsService(suite.project));
+  const backlog = buildSyntheticAdoBacklog(snapshot);
+  const pbiIds = backlog.epics[0].features[0].items
+    .filter((item) => item.type === 'PBI')
+    .map((item) => item.id);
   const freeformContext = renderRegenerationContext({
     project: suite.project,
     rootWorkItemId: suite.rootWorkItemId,
@@ -157,7 +162,7 @@ export async function regenerateAdoTestCase(input: {
     localCaseId: input.localCaseId,
     currentCase: match.testCase,
     comments: comments.map((comment) => ({ body: comment.body, authorName: comment.authorName })),
-    backlog: buildSyntheticAdoBacklog(snapshot),
+    backlog,
     testPlans,
   });
   const model = input.model ?? skillConfig.testCaseModel ?? await getDefaultModel();
@@ -178,8 +183,13 @@ export async function regenerateAdoTestCase(input: {
     { skipAutoKickoff: true },
   );
   if (!thread.workspaceDir) throw new Error('Case regeneration thread has no workspace');
-  const testPlanFiles = renderTestPlanFile(testPlans);
-  for (const file of [{ path: '.ai-pilot/kickoff-context.md', content: freeformContext }, ...testPlanFiles]) {
+  // A V2 test-cases run will not start without a PRD and a backlog file.
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${slug}.prd.md`, content: renderSyntheticPrd(snapshot, pbiIds) },
+    { path: `.ai-pilot/output/${slug}.backlog.json`, content: JSON.stringify(backlog, null, 2) },
+    ...renderTestPlanFile(testPlans),
+  ];
+  for (const file of [{ path: '.ai-pilot/kickoff-context.md', content: freeformContext }, ...sourceInputs]) {
     await writeThreadFolderFile({
       project: suite.project,
       workspaceDir: thread.workspaceDir,
@@ -188,7 +198,7 @@ export async function regenerateAdoTestCase(input: {
     });
   }
   await updateThreadKickoffContext(thread.id, freeformContext);
-  await saveDocumentInputSnapshot(thread.id, testPlanFiles);
+  await saveDocumentInputSnapshot(thread.id, sourceInputs);
 
   let row: RegenerationRow | undefined;
   try {

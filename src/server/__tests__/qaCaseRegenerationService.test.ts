@@ -2,7 +2,9 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { qaAdoTestSuites, qaCaseComments, qaCaseRegenerations } from '../db/schema';
+import { hasRequiredScratchInputs } from '../../shared/types/aiRunV2DocumentSpec';
 import { AdoTestSuiteConflictError } from '../services/adoTestCaseSuiteService';
+import { saveDocumentInputSnapshot } from '../services/aiRunV2/documentInputSnapshot';
 import { createThread } from '../services/chatAgentService';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import {
@@ -77,6 +79,10 @@ jest.mock('../services/chatAgentService', () => ({
   prepareBackgroundWorkflowTurn: jest.fn(),
   sendMessage: jest.fn(),
   updateThreadKickoffContext: jest.fn(),
+}));
+
+jest.mock('../services/aiRunV2/documentInputSnapshot', () => ({
+  saveDocumentInputSnapshot: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
@@ -223,6 +229,28 @@ describe('qaCaseRegenerationService', () => {
     expect(context).not.toContain('00 Module');
     const file = fs.readFileSync(path.join(workspaceDir, '.ai-pilot', 'test-plans.md'), 'utf-8');
     expect(file).toContain('- 299 Module\n  - Approve Timesheet\n  - Reject Timesheet');
+  });
+
+  it('saves a PRD, a backlog, and the Test Plans as V2 inputs, so the run can start', async () => {
+    dbState.comments = [{ id: 'c1', body: 'Add user types', authorName: 'QA', status: 'open' }];
+    ado.listStaticTestPlanSuites.mockResolvedValueOnce([{ id: 1, name: 'Timesheets', suites: [{ id: 2, path: 'Reject' }] }]);
+
+    await regenerateAdoTestCase({ suiteId: 'suite-1', localCaseId: 'TC-2', userId: 'u1', ado });
+
+    const [threadId, inputs] = (saveDocumentInputSnapshot as jest.Mock).mock.calls[0] as [
+      string,
+      Array<{ path: string; content: string }>,
+    ];
+    expect(threadId).toBe('thread-1');
+    expect(inputs.map((input) => input.path)).toEqual([
+      expect.stringMatching(/^\.ai-pilot\/output\/.+\.prd\.md$/),
+      expect.stringMatching(/^\.ai-pilot\/output\/.+\.backlog\.json$/),
+      '.ai-pilot/test-plans.md',
+    ]);
+    expect(hasRequiredScratchInputs('test-cases', [
+      { path: '.ai-pilot/kickoff-context.md', content: 'x' },
+      ...inputs,
+    ])).toBe(true);
   });
 
   it('replaces only that case, keeps its id, and marks the comments addressed', async () => {

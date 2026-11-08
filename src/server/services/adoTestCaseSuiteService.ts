@@ -1690,7 +1690,7 @@ function toAcceptanceCriteria(
   return criteria;
 }
 
-function renderSyntheticPrd(
+export function renderSyntheticPrd(
   context: QaAdoGenerationContext,
   pbiIds: string[],
 ): string {
