@@ -648,6 +648,12 @@ variable "ai_runs_key_vault_id" {
   default     = null
 }
 
+variable "ai_runs_key_vault_secrets_officer_ids" {
+  description = "Entra object IDs (people or pipeline identities that run apply) granted Key Vault Secrets Officer on the dedicated AI-runs vault, so Terraform can write CURSOR_API_KEY."
+  type        = set(string)
+  default     = []
+}
+
 variable "ai_runs_cursor_api_key_secret_id" {
   description = "Existing versioned Key Vault secret ID for CURSOR_API_KEY. Null provisions the secret in the dedicated AI-runs vault from cursor_api_key."
   type        = string

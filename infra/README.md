@@ -77,10 +77,11 @@ Dev and prod share the same `.tf` files but use separate **state keys**, **tfvar
 |---|-------------|------------|
 | **Backend config** | `backend/dev.hcl` | `backend/prd.hcl` |
 | **State blob** | `tfstate/dev.tfstate` in the dev state account | `tfstate/prd.tfstate` in the prod state account |
-| **Variables file** | `terraform.tfvars` (auto-loaded) | `terraform.prd.tfvars` (pass with `-var-file`) |
+| **Variables file** | `env/dev.tfvars` (committed, non-secret) | `terraform.prd.tfvars` (local, pass with `-var-file`) |
+| **Secrets** | `source scripts/dev-tf-secrets.sh` (read from live dev apps) | in `terraform.prd.tfvars` |
 | **Azure subscription** | `MSS-DevTest` | `MSS-Production` |
 
-`variables.tf` only defines variable names and defaults — it does not select an environment. Unset variables in `terraform.tfvars` use defaults (e.g. `B1` plan, no staging slot). Prod-only settings (P1v3, zone redundancy, staging slot, separate app resource group) belong in `terraform.prd.tfvars` only.
+`variables.tf` only defines variable names and defaults — it does not select an environment. Unset variables use defaults (e.g. `B1` plan, no staging slot). Dev runs the same shape as prod at smaller sizes; prod-only settings (P1v3, zone redundancy, staging slot, separate app resource group, alerts) belong in `terraform.prd.tfvars` only.
 
 ### Remote state
 
@@ -107,11 +108,13 @@ az account show --query "{subscription:name}" -o table
 ### Dev (lower environment)
 
 ```bash
-az account set --subscription "MSS-DevTest"
 cd infra
 terraform init -reconfigure -backend-config=backend/dev.hcl
-terraform plan    # loads terraform.tfvars automatically
+source scripts/dev-tf-secrets.sh     # secrets from live dev apps, memory only
+terraform plan -var-file=env/dev.tfvars
 ```
+
+A local `infra/terraform.tfvars` is auto-loaded on top of `env/dev.tfvars`. Delete or rename old copies so they do not override the committed values.
 
 ### Production
 
@@ -137,21 +140,19 @@ The script creates the resource group, the StorageV2 account (public blob access
 
 Do this once per environment, by the person who holds that environment's local state, with nobody else running Terraform. **Back up first.** Prod is currently one apply ahead of dev; that is expected and is not drift.
 
-**Dev** (local `default` workspace, `infra/terraform.tfstate`):
+**Dev**: the original local dev state was lost. In November 2026 it was rebuilt by importing every live resource in `rg-scrum-dev` (no Azure changes), including the V2 runtime that `scripts/dev-aiv2-tf.sh` used to manage from a separate `dev-aiv2` workspace. Push the rebuilt file once the dev state account exists:
 
 ```bash
 cd infra
-terraform workspace show                       # must print: default
-cp terraform.tfstate ~/apex-dev-backup.tfstate
-git pull                                       # brings in the backend block and backend/dev.hcl
-az account set --subscription "MSS-DevTest"
-terraform init -migrate-state -backend-config=backend/dev.hcl   # answer "yes" to copy state
-terraform plan -var-file=terraform.tfvars
+terraform init -reconfigure -backend-config=backend/dev.hcl
+terraform state push <rebuilt-dev.tfstate>
+source scripts/dev-tf-secrets.sh
+terraform plan -var-file=env/dev.tfvars
 ```
 
-`scripts/dev-aiv2-tf.sh` still selects a separate local `dev-aiv2` workspace. This runbook does not move it; leave that workspace's local state in place until it gets its own state key.
+`scripts/dev-aiv2-tf.sh` is superseded by the steps above; do not use its `dev-aiv2` workspace.
 
-The only changes the plan should show are the resources prod received in its most recent apply. Anything else means dev state and the code disagree; stop and investigate before applying.
+Hand-made resources that the code does not describe (for example `ca-apex-cursor-controller-dev` and the `temp-*` Postgres firewall rules) are outside state and are never touched by apply.
 
 **Prod** (local `prd` workspace, `infra/terraform.tfstate.d/prd/terraform.tfstate`):
 
@@ -179,7 +180,7 @@ Prod pushes rather than migrates to leave workspaces behind. `-migrate-state` fr
 
 - Everyone can `plan` against shared state, for either environment they have access to.
 - Once the GitHub Actions pipeline exists, `apply` runs there. Local `apply` is break-glass only, and the person doing it tells the team first.
-- **Never** commit `*.tfvars` (other than `terraform.tfvars.example`) or state files. Both are gitignored.
+- **Never** commit secrets or state files. The only committed tfvars are `terraform.tfvars.example` and the non-secret `env/*.tfvars`; secrets reach Terraform as `TF_VAR_*`.
 - **Never** run `plan` or `apply` with `terraform.prd.tfvars` while initialized against `backend/dev.hcl`, or the reverse — Terraform would plan to destroy one environment and recreate it as the other. Check the backend and subscription first.
 - **Never** reuse a saved plan file after state changes — run `plan` again. Delete stray `*.tfplan` files when you are done with them.
 - **Always** run `terraform plan` before `apply` and confirm the backend, subscription, and destroy count.
@@ -608,6 +609,7 @@ remains inert behind the disabled feature flag.
 |-----------|------|-------|
 | Runner MI | Azure Service Bus Data **Receiver** | `ai-runs-background` queue |
 | Runner MI | Key Vault Secrets **User** | Dedicated `kv-apex-ai-{environment}` vault, or `var.ai_runs_key_vault_id` override |
+| Each ID in `ai_runs_key_vault_secrets_officer_ids` | Key Vault Secrets **Officer** | Dedicated vault only, so apply can write `cursor-api-key` |
 | Runner MI | **AcrPull** | load-test ACR (`acrapexlt*`) |
 | Apex API (system identity) | Azure Service Bus Data **Sender** | `ai-runs-background` queue (no receive) |
 | Runner MI | `AiRun.Runner` app role | Entra app when `enable_ai_runs_entra_app=true` |
@@ -630,6 +632,9 @@ Prod has nothing to import. From the `prd` workspace, `terraform plan -var-file=
 
 By default Terraform provisions the dedicated Key Vault and seeds its
 `cursor-api-key` secret from the existing sensitive `cursor_api_key` variable.
+Whoever runs apply must be listed in `ai_runs_key_vault_secrets_officer_ids`
+(or already hold Secrets Officer on the vault); the grant is not tied to the
+caller, so a different person's apply does not move it.
 To reuse an existing vault, set both `ai_runs_key_vault_id` and the versioned
 `ai_runs_cursor_api_key_secret_id`; setting only one is rejected at plan time.
 
