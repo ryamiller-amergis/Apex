@@ -132,7 +132,7 @@ The old local `terraform.prd.tfvars` is replaced by `env/prd.tfvars` and the scr
 
 ### Pipeline
 
-Each deploy pipeline runs Terraform through `.github/actions/terraform` with that environment's `AZURE_CREDENTIALS` service principal: MaxView in dev, apex-prd-sp in prod. The step is skipped unless `scripts/ci/has-terraform-changes.sh` finds a change under `infra/` (Markdown excluded).
+Each deploy pipeline runs Terraform through `.github/actions/terraform`, signed in as that environment's deploy service principal: `apex-dev-sp` (GitHub `dev` secret `AZURE_DEPLOY_CREDENTIALS`) and `apex-prd-sp` (`AZURE_CREDENTIALS`). Dev's `AZURE_CREDENTIALS` is the MaxView app registration, which dev sign-in uses and another project shares; it is not used to deploy or run Terraform. The step is skipped unless `scripts/ci/has-terraform-changes.sh` finds a change under `infra/` (Markdown excluded).
 
 | Pipeline | Compared against | Terraform |
 |----------|------------------|-----------|
@@ -144,7 +144,7 @@ Each deploy pipeline runs Terraform through `.github/actions/terraform` with tha
 
 The dev comparisons count only the branch's own commits. A dev apply fails if the branch changes `infra/` but does not contain the latest `main`, because applying it would undo infra merged since it branched. Pull requests only plan: open PRs share dev, and applying each one would undo another's changes. A failed prod apply fails the run, so the next deploy compares against the older successful run and tries again.
 
-Each principal needs, on its own environment: `Contributor` and role-assignment rights (`User Access Administrator` or `Role Based Access Control Administrator`) on the Apex resource groups, `Storage Blob Data Contributor` on the state account, and a place in `ai_runs_key_vault_secrets_officer_ids`. Prod also needs Microsoft Graph `Application.Read.All` and `AppRoleAssignment.ReadWrite.All` (tenant admin consent) for `azuread_app_role_assignment.ai_platform_v2_interactive_runner_ingest`. `ARM_SKIP_PROVIDER_REGISTRATION` is set because neither principal can register providers on the subscription.
+Each principal needs, on its own environment: `Contributor` (and, for dev, `AcrPush` on `acrapexltdev`) and role-assignment rights (`User Access Administrator` or `Role Based Access Control Administrator`) on the Apex resource groups, `Storage Blob Data Contributor` on the state account, and a place in `ai_runs_key_vault_secrets_officer_ids`. Prod also needs Microsoft Graph `Application.Read.All` and `AppRoleAssignment.ReadWrite.All` (tenant admin consent) for `azuread_app_role_assignment.ai_platform_v2_interactive_runner_ingest`. `ARM_SKIP_PROVIDER_REGISTRATION` is set because neither principal can register providers on the subscription.
 
 ### One-time bootstrap (per subscription)
 

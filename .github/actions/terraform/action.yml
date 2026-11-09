@@ -2,8 +2,8 @@ name: Terraform plan or apply
 description: >-
   Plans infra/ against one environment's shared state and, when apply is true and
   the plan has changes, applies that saved plan. Signs in with the environment's
-  AZURE_CREDENTIALS service principal. Secret inputs are read from live Azure by
-  infra/scripts/<environment>-tf-secrets.sh, so the az CLI must already be logged in.
+  deploy service principal and logs the az CLI in as it, so the secret inputs read
+  from live Azure by infra/scripts/<environment>-tf-secrets.sh use the same identity.
 
 inputs:
   environment:
@@ -14,7 +14,7 @@ inputs:
     required: false
     default: 'false'
   azure-credentials:
-    description: AZURE_CREDENTIALS JSON (clientId, clientSecret, tenantId)
+    description: Deploy service principal JSON (clientId, clientSecret, tenantId)
     required: true
 
 runs:
@@ -44,6 +44,10 @@ runs:
           *) echo "Unknown environment '$TF_ENV'" >&2; exit 1 ;;
         esac
 
+        if [ -z "$AZURE_CREDENTIALS_JSON" ]; then
+          echo "::error::No deploy credentials for $TF_ENV. Set the AZURE_DEPLOY_CREDENTIALS secret (dev) or AZURE_CREDENTIALS (prd) on the GitHub environment." >&2
+          exit 1
+        fi
         ARM_CLIENT_ID=$(jq -r .clientId <<<"$AZURE_CREDENTIALS_JSON")
         ARM_CLIENT_SECRET=$(jq -r .clientSecret <<<"$AZURE_CREDENTIALS_JSON")
         ARM_TENANT_ID=$(jq -r .tenantId <<<"$AZURE_CREDENTIALS_JSON")
@@ -51,6 +55,8 @@ runs:
         # The backend file names the subscription that environment's resources live in.
         ARM_SUBSCRIPTION_ID=$(sed -n 's/^subscription_id *= *"\(.*\)"/\1/p' "backend/$TF_ENV.hcl")
         export ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_TENANT_ID ARM_SUBSCRIPTION_ID
+        az login --service-principal --username "$ARM_CLIENT_ID" --password="$ARM_CLIENT_SECRET" \
+          --tenant "$ARM_TENANT_ID" --output none
         az account set --subscription "$ARM_SUBSCRIPTION_ID"
         az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
 
