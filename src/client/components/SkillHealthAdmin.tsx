@@ -2,7 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import grid from './DataGrid.module.css';
 import styles from './SkillHealthAdmin.module.css';
-import { DataGridFilterPills } from './DataGridToolbar';
+import { DataGridFilterPills, type DataGridFilterOption } from './DataGridToolbar';
+import { SkillMinedChecksPanel } from './SkillMinedChecksPanel';
+import { SkillSemanticChecksPanel } from './SkillSemanticChecksPanel';
 import { SkillHealthWorkItemModal, destinationLabel } from './SkillHealthWorkItemModal';
 import {
   PROPOSED_CHANGE_PROMPT,
@@ -11,12 +13,15 @@ import {
   skillNameOf,
   type SkillHealthWorkItemDraft,
 } from './SkillHealthEvaluationPanel';
+import { SkillHealthSignalsPanel } from './SkillHealthSignalsPanel';
+import { SkillExperimentsPanel } from './SkillExperimentsPanel';
 import { useSkillHealth } from '../hooks/useSkillHealth';
 import {
   SKILL_HEALTH_PERIOD_OPTIONS,
   defaultWorkItemDestination,
   type SkillHealthArtifactKind,
   type SkillHealthEvaluationSkill,
+  type SkillHealthInterval,
   type SkillHealthPeriodDays,
   type SkillHealthProject,
   type SkillHealthRecurringGap,
@@ -68,6 +73,15 @@ function percent(value: number | null): string {
 
 function number(value: number | null, digits = 1): string {
   return value === null ? '—' : value.toFixed(digits);
+}
+
+/** "3.4 (3.1–3.8)" when a range is known. */
+export function withRange(
+  text: string,
+  interval: SkillHealthInterval | null,
+  format: (value: number) => string,
+): string {
+  return interval ? `${text} (${format(interval.low)}–${format(interval.high)})` : text;
 }
 
 function money(value: number | null): string {
@@ -208,9 +222,12 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, showFeedback, feedback
                 <td>
                   {version.firstSeen.slice(0, 10)} – {version.lastSeen.slice(0, 10)}
                 </td>
-                <td>{version.documents}</td>
-                <td>{number(version.averageScore)}</td>
-                <td>{percent(version.passRate)}</td>
+                <td>
+                  {version.documents}
+                  {!version.sufficientSample && <span className={styles.muted}> (too few)</span>}
+                </td>
+                <td>{withRange(number(version.averageScore), version.scoreInterval, (v) => v.toFixed(1))}</td>
+                <td>{withRange(percent(version.passRate), version.passRateInterval, (v) => percent(v))}</td>
                 <td>{percent(version.acceptanceRate)}</td>
                 {showFeedback && <td>{version.humanEvents}</td>}
                 {showFeedback && <td>{number(version.humanAverageScore)}</td>}
@@ -218,6 +235,58 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, showFeedback, feedback
             ))}
           </tbody>
         </table>
+      </section>
+
+      <section className={styles.card} data-testid="skill-health-efficiency">
+        <h4 className={styles.cardTitle}>Effort per accepted document</h4>
+        <div className={styles.stats}>
+          <div className={styles.stat}>
+            <span className={styles.statLabel}>Accepted</span>
+            <span className={styles.statValue}>{skill.efficiency.accepted}</span>
+          </div>
+          <div className={styles.stat}>
+            <span className={styles.statLabel}>Median hours to approval</span>
+            <span className={styles.statValue}>{number(skill.efficiency.medianHoursToApproval)}</span>
+          </div>
+          <div className={styles.stat}>
+            <span className={styles.statLabel}>Review rounds</span>
+            <span className={styles.statValue}>{number(skill.efficiency.reviewRoundsPerAccepted)}</span>
+          </div>
+          <div className={styles.stat}>
+            <span className={styles.statLabel}>Assistant retries</span>
+            <span className={styles.statValue}>{number(skill.efficiency.assistantRetriesPerAccepted)}</span>
+          </div>
+          <div className={styles.stat}>
+            <span className={styles.statLabel}>AI cost</span>
+            <span className={styles.statValue}>{money(skill.efficiency.costPerAccepted)}</span>
+          </div>
+        </div>
+        {skill.models.length > 0 && (
+          <table className={styles.versionTable} data-testid="skill-health-models">
+            <thead>
+              <tr>
+                <th scope="col">Model</th>
+                <th scope="col">Effort</th>
+                <th scope="col">Docs</th>
+                <th scope="col">Avg score</th>
+                <th scope="col">Accepted</th>
+                <th scope="col">Cost / doc</th>
+              </tr>
+            </thead>
+            <tbody>
+              {skill.models.map((row) => (
+                <tr key={`${row.model ?? ''}|${row.effort ?? ''}`}>
+                  <td>{row.model ?? <span className={styles.muted}>Not recorded</span>}</td>
+                  <td>{row.effort ?? '—'}</td>
+                  <td>{row.documents}</td>
+                  <td>{number(row.averageScore)}</td>
+                  <td>{percent(row.acceptanceRate)}</td>
+                  <td>{money(row.costPerDocument)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
 
       <section className={styles.card}>
@@ -314,7 +383,19 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, showFeedback, feedback
   );
 };
 
+export type SkillHealthTab = 'skills' | 'feedback' | 'outcomes' | 'learning';
+
+// data-testid-exempt — a type argument, not a JSX element
+const TAB_OPTIONS: readonly DataGridFilterOption<SkillHealthTab>[] = [
+  { value: 'skills', label: 'Skills' },
+  { value: 'feedback', label: 'Human feedback' },
+  { value: 'outcomes', label: 'Outcomes' },
+  { value: 'learning', label: 'Learning' },
+];
+
 export const SkillHealthAdmin: React.FC = () => {
+  // data-testid-exempt — a type argument, not a JSX element
+  const [tab, setTab] = useState<SkillHealthTab>('skills');
   const [days, setDays] = useState<SkillHealthPeriodDays>(SKILL_HEALTH_PERIOD_OPTIONS[0]);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -397,7 +478,16 @@ export const SkillHealthAdmin: React.FC = () => {
             {destinationLabel(defaultWorkItemDestination(project.project), project.project)}.
           </p>
 
-          {project.skills.length === 0 ? (
+          <DataGridFilterPills
+            options={TAB_OPTIONS}
+            value={tab}
+            onChange={setTab}
+            testIdPrefix="skill-health-tab"
+            aria-label="Section"
+            data-testid="skill-health-tabs"
+          />
+
+          {tab === 'skills' && (project.skills.length === 0 ? (
             <p className={styles.muted} data-testid="skill-health-no-documents">
               No PRDs or design docs in {project.project} in this period.
             </p>
@@ -457,9 +547,9 @@ export const SkillHealthAdmin: React.FC = () => {
                 </tbody>
               </table>
             </div>
-          )}
+          ))}
 
-          {selected && (
+          {tab === 'skills' && selected && (
             <SkillDetail
               skill={selected}
               showFeedback={project.evaluation !== null && selected.artifactKind === 'prd'}
@@ -472,12 +562,30 @@ export const SkillHealthAdmin: React.FC = () => {
             />
           )}
 
-          {/* data-testid-exempt — the panel root carries skill-health-evaluation(-off) */}
-          <SkillHealthEvaluationPanel
-            project={project.project}
-            evaluation={project.evaluation}
-            onCreateWorkItem={setWorkItemDraft}
-          />
+          {tab === 'feedback' && (
+            // data-testid-exempt — the panel root carries skill-health-evaluation(-off)
+            <SkillHealthEvaluationPanel
+              project={project.project}
+              evaluation={project.evaluation}
+              onCreateWorkItem={setWorkItemDraft}
+            />
+          )}
+
+          {tab === 'outcomes' && (
+            // data-testid-exempt — the panel root carries skill-health-signals
+            <SkillHealthSignalsPanel project={project.project} signals={project.signals} />
+          )}
+
+          {tab === 'learning' && (
+            <>
+              {/* data-testid-exempt — the panel root carries skill-experiments */}
+              <SkillExperimentsPanel project={project.project} />
+              {/* data-testid-exempt — the panel root carries skill-mined-checks */}
+              <SkillMinedChecksPanel project={project.project} />
+              {/* data-testid-exempt — the panel root carries skill-semantic-checks */}
+              <SkillSemanticChecksPanel project={project.project} />
+            </>
+          )}
 
           <ul className={styles.caveats} data-testid="skill-health-caveats">
             {data.caveats.map((caveat) => (

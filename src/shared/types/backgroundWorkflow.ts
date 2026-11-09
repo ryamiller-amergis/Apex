@@ -22,7 +22,8 @@ export type BackgroundWorkflowClass =
   | 'walkthrough-smart-tagging'
   | 'playbook-step'
   | 'evaluation-judge'
-  | 'evaluation-promptfoo';
+  | 'evaluation-promptfoo'
+  | 'skill-learning';
 
 export type WorkflowRouteDecision =
   | { route: 'worker'; workspacePath: string; runId: string }

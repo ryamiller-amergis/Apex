@@ -1668,6 +1668,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         <QaLabAssistantPanel
           key={assistantTarget.kind === 'suite' ? assistantTarget.suiteId : assistantTarget.prdId}
           target={assistantTarget}
+          project={project}
           contextLabel={selectedWorkItem?.title ?? `Work item #${selectedWorkItemId}`}
           open={assistantOpen}
           onClose={() => setAssistantOpen(false)}

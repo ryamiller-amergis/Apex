@@ -15,11 +15,14 @@ import {
 import {
   AI_RUN_V2_EVALUATION_SPEC_VERSION,
   isAiRunV2PromptfooSpecification,
+  promptfooSuiteNeedsGrader,
   WORKFLOW_EVALUATION_PACKAGE_MAX_BYTES,
   WORKFLOW_EVALUATION_SCRATCH_PATHS,
   workflowEvaluationRunThreadId,
   type AiRunV2PromptfooSpecification,
   type WorkflowEvaluationArtifactPackage,
+  type WorkflowEvaluationPromptfooGrader,
+  type WorkflowEvaluationPromptfooTest,
   type WorkflowEvaluationRunIdentity,
   type WorkflowEvaluationTranscriptMessage,
 } from '../../shared/types/aiRunV2EvaluationSpec';
@@ -50,6 +53,9 @@ import {
   WORKFLOW_EVALUATION_JUDGE_SKILL_PATH,
 } from './workflowEvaluationJudgeInstructions';
 import { getWorkflowEvaluationSuite } from './workflowEvaluationSuites';
+import { loadAcceptedMinedTests } from './skillMinedChecks';
+import { loadAcceptedSemanticTests } from './skillSemanticChecks';
+import { defaultBedrockTextModel } from './bedrockService';
 
 export const WORKFLOW_EVALUATION_JUDGE_DEADLINE_MS = 15 * 60_000;
 export const WORKFLOW_EVALUATION_PROMPTFOO_DEADLINE_MS = 5 * 60_000;
@@ -106,7 +112,25 @@ export type WorkflowEvaluationSpecificationDependencies = Readonly<{
   loadTestCaseInputs?: (testCaseId: string) => Promise<TestCaseEvaluationInputs | null>;
   loadSkillConfig?: (project: string) => Promise<ProjectSkillConfig | null>;
   loadDefaultModel?: () => Promise<string>;
+  /** Accepted checks mined from reviewer corrections, appended to the stage's suite. */
+  loadMinedTests?: (project: string, stageKey: string) => Promise<WorkflowEvaluationPromptfooTest[]>;
+  /** Accepted meaning checks (llm-rubric), appended after the mined ones. */
+  loadSemanticTests?: (project: string, stageKey: string) => Promise<WorkflowEvaluationPromptfooTest[]>;
+  /** The model that grades llm-rubric tests; used only when the suite has one. */
+  resolveGrader?: () => WorkflowEvaluationPromptfooGrader;
 }>;
+
+const PROMPTFOO_GRADER_MAX_TOKENS = 1024;
+const PROMPTFOO_GRADER_TIMEOUT_MS = 60_000;
+
+export function resolvePromptfooGrader(): WorkflowEvaluationPromptfooGrader {
+  return {
+    provider: 'bedrock',
+    ...defaultBedrockTextModel(),
+    maxTokens: PROMPTFOO_GRADER_MAX_TOKENS,
+    timeoutMs: PROMPTFOO_GRADER_TIMEOUT_MS,
+  };
+}
 
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -168,7 +192,7 @@ function fitSections(
   return { kept, used, omitted };
 }
 
-function packagePrd(
+export function packagePrd(
   markdown: string,
   backlog: unknown,
   transcript: readonly WorkflowEvaluationTranscriptMessage[] | null,
@@ -233,7 +257,7 @@ export function renderDesignDocMarkdown(parts: DesignDocArtifactParts): string {
 }
 
 /** The design doc comes first; the source PRD gets whatever budget is left. */
-function packageDesignDoc(
+export function packageDesignDoc(
   parts: DesignDocArtifactParts,
   prdMarkdown: string | null,
 ): WorkflowEvaluationArtifactPackage {
@@ -422,14 +446,17 @@ function failed<T>(error: unknown): BuiltWorkflowEvaluationSpecification<T> {
 function buildPromptfooSpecification(
   request: WorkflowEvaluationSpecificationRequest,
   artifactPackage: WorkflowEvaluationArtifactPackage,
+  minedTests: readonly WorkflowEvaluationPromptfooTest[] = [],
+  resolveGrader: () => WorkflowEvaluationPromptfooGrader = resolvePromptfooGrader,
 ): AiRunV2PromptfooSpecification {
-  const suite = getWorkflowEvaluationSuite(request.definition.promptfooSuiteRef);
-  if (!suite) {
+  const registered = getWorkflowEvaluationSuite(request.definition.promptfooSuiteRef);
+  if (!registered) {
     throw new WorkflowEvaluationSpecificationError(
       'suite_missing',
       `No Promptfoo suite is registered for ${request.definition.promptfooSuiteRef}.`,
     );
   }
+  const suite = minedTests.length > 0 ? { ...registered, tests: [...registered.tests, ...minedTests] } : registered;
   const candidate: Record<string, unknown> = {
     specVersion: AI_RUN_V2_EVALUATION_SPEC_VERSION,
     workloadLane: 'document',
@@ -441,6 +468,7 @@ function buildPromptfooSpecification(
     suite,
     suiteSha256: sha256Hex(JSON.stringify(suite)),
     artifactPackage,
+    ...(promptfooSuiteNeedsGrader(suite) ? { grader: resolveGrader() } : {}),
   };
   if (!isAiRunV2PromptfooSpecification(candidate)) {
     throw new WorkflowEvaluationSpecificationError(
@@ -457,7 +485,30 @@ async function buildJudgeSpecification(
   loadSkillConfig: NonNullable<WorkflowEvaluationSpecificationDependencies['loadSkillConfig']>,
   loadDefaultModel: NonNullable<WorkflowEvaluationSpecificationDependencies['loadDefaultModel']>,
 ): Promise<AiRunV2DocumentSpecification> {
-  const project = request.event.projectId;
+  return buildJudgeDocumentSpecification({
+    project: request.event.projectId,
+    threadId: workflowEvaluationRunThreadId(request.event.id, 'llm_judge'),
+    identity: identity(request, 'llm_judge'),
+    definition: request.definition,
+    artifactPackage,
+  }, { loadSkillConfig, loadDefaultModel });
+}
+
+/** Judge specification for any artifact package; Skill experiments use it with their own identity. */
+export async function buildJudgeDocumentSpecification(
+  input: Readonly<{
+    project: string;
+    threadId: string;
+    identity: WorkflowEvaluationRunIdentity;
+    definition: Pick<WorkflowEvaluationDefinition, 'version' | 'rubric' | 'judgeOutputSchema'>;
+    artifactPackage: WorkflowEvaluationArtifactPackage;
+  }>,
+  dependencies: Pick<WorkflowEvaluationSpecificationDependencies, 'loadSkillConfig' | 'loadDefaultModel'> = {},
+): Promise<AiRunV2DocumentSpecification> {
+  const loadSkillConfig = dependencies.loadSkillConfig ?? ((project: string) => resolveSkillConfig({ project }));
+  const loadDefaultModel = dependencies.loadDefaultModel ?? getDefaultModel;
+  const { project, artifactPackage } = input;
+  const request = { definition: input.definition };
   const skillConfig = await loadSkillConfig(project);
   if (!skillConfig) {
     throw new WorkflowEvaluationSpecificationError(
@@ -477,16 +528,12 @@ async function buildJudgeSpecification(
     skillSha256: sha256Hex(WORKFLOW_EVALUATION_JUDGE_INSTRUCTIONS),
     workflowClass: 'evaluation-judge',
     projectId: project,
-    threadId: workflowEvaluationRunThreadId(request.event.id, 'llm_judge'),
+    threadId: input.threadId,
     deadlineMs: WORKFLOW_EVALUATION_JUDGE_DEADLINE_MS,
     scratchInputs: [
       {
         path: WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage,
-        content: JSON.stringify(
-          { ...artifactPackage, humanScoreHints: request.event.criteria },
-          null,
-          2,
-        ),
+        content: JSON.stringify(artifactPackage, null, 2),
       },
       {
         path: WORKFLOW_EVALUATION_SCRATCH_PATHS.rubric,
@@ -502,7 +549,7 @@ async function buildJudgeSpecification(
       },
     ],
     outputSchema: request.definition.judgeOutputSchema,
-    evaluation: identity(request, 'llm_judge'),
+    evaluation: input.identity,
   };
   if (!isAiRunV2DocumentSpecification(candidate)) {
     throw new WorkflowEvaluationSpecificationError(
@@ -544,7 +591,20 @@ export async function buildWorkflowEvaluationSpecifications(
 
   let promptfoo: WorkflowEvaluationSpecifications['promptfoo'];
   try {
-    promptfoo = built(buildPromptfooSpecification(request, artifactPackage));
+    const minedTests = await (dependencies.loadMinedTests ?? loadAcceptedMinedTests)(
+      request.event.projectId,
+      request.event.stageKey,
+    ).catch(() => []);
+    const semanticTests = await (dependencies.loadSemanticTests ?? loadAcceptedSemanticTests)(
+      request.event.projectId,
+      request.event.stageKey,
+    ).catch(() => []);
+    promptfoo = built(buildPromptfooSpecification(
+      request,
+      artifactPackage,
+      [...minedTests, ...semanticTests],
+      dependencies.resolveGrader,
+    ));
   } catch (error) {
     promptfoo = failed(error);
   }

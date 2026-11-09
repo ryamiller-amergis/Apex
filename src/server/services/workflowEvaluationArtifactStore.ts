@@ -46,6 +46,41 @@ export async function writeRegressionSnapshot(
   return { container, key };
 }
 
+/** Matches the 1 MB cap on what a reviewer can submit. */
+const READ_MAX_BYTES = 1024 * 1024;
+
+async function readBlobText(ref: AiRunBlobRef): Promise<string> {
+  const body = await resolveArtifactContainerClient(ref.container).getBlockBlobClient(ref.key).downloadToBuffer();
+  return body.subarray(0, READ_MAX_BYTES).toString('utf8');
+}
+
+export function readCorrectedArtifact(ref: AiRunBlobRef): Promise<string> {
+  return readBlobText(ref);
+}
+
+export async function readRegressionSnapshot(ref: AiRunBlobRef): Promise<SkillRegressionSnapshotDocument> {
+  return JSON.parse(await readBlobText(ref)) as SkillRegressionSnapshotDocument;
+}
+
+/** The document text a reviewer could have corrected, from a regression snapshot. */
+export function snapshotText(snapshot: SkillRegressionSnapshotDocument): string | null {
+  const { artifact } = snapshot;
+  switch (artifact.subjectType) {
+    case 'prd':
+      return artifact.markdown;
+    case 'design_doc':
+      return [artifact.designContent, artifact.techSpecContent, artifact.assumptionsContent].join('\n\n');
+    case 'test_cases':
+      return artifact.testCasesMd;
+    case 'interview_phase':
+      return null;
+    default: {
+      const unhandled: never = artifact;
+      return unhandled;
+    }
+  }
+}
+
 export async function deleteCorrectedArtifact(ref: AiRunBlobRef): Promise<void> {
   const client = resolveArtifactContainerClient(ref.container);
   await client.getBlockBlobClient(ref.key).deleteIfExists();

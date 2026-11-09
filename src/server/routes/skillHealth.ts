@@ -4,10 +4,13 @@ import { createSkillHealthWorkItem, parseSkillHealthWorkItemRequest } from '../s
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { isAdoUserAuthError } from '../services/adoFactory';
 import { getUserId } from '../utils/requestUser';
+import skillExperimentsRouter from './skillExperiments';
 import { SKILL_HEALTH_PERIOD_OPTIONS, type SkillHealthPeriodDays } from '../../shared/types/skillHealth';
 
 /** Mounted under the Platform Admin router, which already requires a super admin. */
 const router = Router();
+
+router.use('/experiments', skillExperimentsRouter);
 
 function parsePeriod(raw: unknown): SkillHealthPeriodDays | null {
   const value = Number(raw ?? SKILL_HEALTH_PERIOD_OPTIONS[0]);

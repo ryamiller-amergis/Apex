@@ -15,6 +15,7 @@ import {
   getApprovalModeForProject,
 } from './projectSettingsService';
 import { createNotification } from './notificationService';
+import { emitReviewDecisionSignal } from './reviewDecisionSignals';
 import type {
   DocumentApproverAssignment,
   ApprovalMode,
@@ -204,12 +205,13 @@ export async function recordApproverResponse(
   status: 'approved' | 'revision_requested',
   comment?: string,
 ): Promise<void> {
+  const respondedAt = new Date().toISOString();
   const result = await db
     .update(documentApproverAssignments)
     .set({
       status,
       comment: comment ?? null,
-      respondedAt: new Date().toISOString(),
+      respondedAt,
     })
     .where(
       and(
@@ -225,6 +227,7 @@ export async function recordApproverResponse(
       `No assignment found for approver "${approverUserId}" on ${documentType} "${documentId}"`,
     );
   }
+  emitReviewDecisionSignal({ documentId, documentType, actorId: approverUserId, role: 'approver', status, respondedAt, comment });
 }
 
 export async function isApprovalComplete(

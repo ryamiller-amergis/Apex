@@ -15,6 +15,7 @@ import {
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resumeStepRun } from './playbookSteps/stepRuns';
 import { getAssignmentsForProject } from './userProjectAssignmentService';
+import { emitSkillSignal } from './skillSignalService';
 import type { ApprovalMode, ReviewerDocumentType } from '../../shared/types/approvals';
 import type {
   ApprovalGateStepConfig,
@@ -231,6 +232,16 @@ export async function decideGate(input: {
     isNull(playbookGateApprovers.decision),
   )).returning({ id: playbookGateApprovers.id });
   if (updated.length === 0) return { outcome: 'already-decided', advanced: false };
+  emitSkillSignal({
+    project: input.project,
+    surface: 'playbook',
+    subjectType: 'playbook_gate',
+    subjectId: gate.stepRunId,
+    kind: input.decision === 'approved' ? 'gate_approved' : 'gate_rejected',
+    actorId: input.userId,
+    comment: input.comment ?? null,
+    metadata: { runId: input.runId, stepId: gate.stepId, gatePoolKey: gate.gatePoolKey },
+  });
 
   const current = await currentPoolUserIds(input.project, gate.gatePoolKey);
   if (current.size === 0) throw new PlaybookGateEmptyPoolError(gate.gatePoolKey);

@@ -12,6 +12,7 @@ import type {
   WorkflowEvaluationOutcome,
   WorkflowEvaluationSubjectType,
 } from './workflowEvaluation';
+import type { SkillLearningSurface, SkillSignalKind } from '../constants/skillLearningSurfaces';
 
 export type SkillHealthArtifactKind = 'prd' | 'design_doc';
 
@@ -84,6 +85,35 @@ export interface SkillHealthVersion {
   humanEvents: number;
   /** Mean of the five 1–5 criteria across those events. */
   humanAverageScore: number | null;
+  /** 95% range of the mean validation score (Student t). */
+  scoreInterval: SkillHealthInterval | null;
+  /** 95% Wilson range of the pass rate. */
+  passRateInterval: SkillHealthInterval | null;
+  /** True once the version has enough scored documents to compare with another version. */
+  sufficientSample: boolean;
+}
+
+/** Documents generated with one model and effort setting. */
+export interface SkillHealthModelBreakdown {
+  model: string | null;
+  effort: string | null;
+  documents: number;
+  averageScore: number | null;
+  acceptanceRate: number | null;
+  costPerDocument: number | null;
+}
+
+/** How much work each accepted document took. Review rounds count only decisions recorded since signals began. */
+export interface SkillHealthEfficiency {
+  accepted: number;
+  /** Median hours from creation to the review that approved it. */
+  medianHoursToApproval: number | null;
+  /** 1 + revision requests, averaged over accepted documents with recorded review decisions. */
+  reviewRoundsPerAccepted: number | null;
+  /** All AI cost on the Skill's documents divided by accepted documents. */
+  costPerAccepted: number | null;
+  /** Assistant regenerations and rejections per accepted document. */
+  assistantRetriesPerAccepted: number | null;
 }
 
 /** Human feedback count per outcome. */
@@ -125,6 +155,54 @@ export interface SkillHealthJudgeRecommendation {
   createdAt: string;
 }
 
+/**
+ * How far the blind judge can be trusted, from its agreement with people:
+ * `gate` (weighted kappa >= 0.6), `advisory` (0.4–0.6), `untrusted` (< 0.4),
+ * or `insufficient_data` before enough paired reviews exist.
+ */
+export type SkillLearningTrustBand = 'gate' | 'advisory' | 'untrusted' | 'insufficient_data';
+
+export interface SkillHealthCriterionAgreement {
+  pairs: number;
+  kappa: number | null;
+}
+
+/** Judge–human agreement on reviews where the judge scored without seeing the person's scores. */
+export interface SkillHealthJudgeAgreement {
+  /** Reviews with both a human score and a blind judge score. */
+  reviews: number;
+  /** Quadratic weighted kappa over every criterion pair. */
+  kappa: number | null;
+  band: SkillLearningTrustBand;
+  criteria: Record<WorkflowEvaluationCriteriaKey, SkillHealthCriterionAgreement>;
+  drift: SkillHealthJudgeDrift;
+  /** Reviews where the judge was unsure or far from the person, newest first; worth a second human look. */
+  recheck: SkillHealthJudgeRecheck[];
+}
+
+/** Agreement in the last JUDGE_DRIFT_WINDOW_DAYS against the time before. */
+export interface SkillHealthJudgeDrift {
+  recentReviews: number;
+  recentKappa: number | null;
+  earlierReviews: number;
+  earlierKappa: number | null;
+  /** True when both windows have enough reviews and recent agreement fell clearly. */
+  drifting: boolean;
+}
+
+export type SkillHealthJudgeRecheckReason = 'low_confidence' | 'disagreement';
+
+export interface SkillHealthJudgeRecheck {
+  eventId: string;
+  stageKey: string;
+  subjectType: WorkflowEvaluationSubjectType;
+  subjectId: string;
+  reason: SkillHealthJudgeRecheckReason;
+  /** Largest gap between the person's and the judge's score on one criterion. */
+  largestGap: number;
+  createdAt: string;
+}
+
 /** Human feedback and diagnostics for one Skill path within a project. */
 export interface SkillHealthEvaluationSkill {
   /** Stable key: `${project}:${subjectType}:${skillPath}`. */
@@ -138,6 +216,7 @@ export interface SkillHealthEvaluationSkill {
   outcomes: SkillHealthOutcomeCounts;
   promptfoo: SkillHealthJobCounts;
   judge: SkillHealthJobCounts;
+  judgeAgreement: SkillHealthJudgeAgreement;
   /** Newest first, at most five. */
   recommendations: SkillHealthJudgeRecommendation[];
 }
@@ -180,6 +259,59 @@ export interface SkillHealthSkill {
   recurringGaps: SkillHealthRecurringGap[];
   /** Newest version first; unversioned documents last. */
   versions: SkillHealthVersion[];
+  /** Most documents first. */
+  models: SkillHealthModelBreakdown[];
+  efficiency: SkillHealthEfficiency;
+}
+
+export interface SkillHealthInterval {
+  low: number;
+  high: number;
+}
+
+/** Signals for one Skill version on one surface. `skillSha256` is null when the run recorded none. */
+export interface SkillHealthSignalVersion {
+  skillSha256: string | null;
+  decisions: number;
+  acceptanceRate: number | null;
+  acceptanceInterval: SkillHealthInterval | null;
+  /** False until the version has `MIN_VERSION_SAMPLE` decisions; compare versions only when both are true. */
+  sufficientSample: boolean;
+}
+
+/** What people did with one surface's AI output during the period. */
+export interface SkillHealthSignalSurface {
+  surface: SkillLearningSurface;
+  label: string;
+  /** True when the surface is also scored against a rubric. */
+  rubricEvaluated: boolean;
+  signals: number;
+  counts: Partial<Record<SkillSignalKind, number>>;
+  /** accepted + rejected. */
+  decisions: number;
+  acceptanceRate: number | null;
+  acceptanceInterval: SkillHealthInterval | null;
+  /** Share of accepted output a person edited first. */
+  editedBeforeAcceptRate: number | null;
+  ratings: number;
+  /** Mean rating on a −1 to 1 scale. */
+  ratingScore: number | null;
+  regenerationsPerAccepted: number | null;
+  /** Failed runs and handoffs over all finished ones. */
+  failureRate: number | null;
+  sufficientSample: boolean;
+  /** Sampled artifact judge scores this period. */
+  judged: number;
+  /** Mean sampled-judge score, 1–5. */
+  judgedScore: number | null;
+  /** Most decisions first. */
+  versions: SkillHealthSignalVersion[];
+}
+
+export interface SkillHealthProjectSignals {
+  surfaces: SkillHealthSignalSurface[];
+  /** Surfaces with at least one signal this period, out of every surface Apex can learn from. */
+  coverage: { active: number; total: number };
 }
 
 /** One project's Skills. The same path in two projects is two Skills: each lives in its own repo. */
@@ -189,8 +321,10 @@ export interface SkillHealthProject {
   skillRepo: string | null;
   isFoundation: boolean;
   skills: SkillHealthSkill[];
-  /** Null when the `workflow-human-evaluation` flag is off for this project. */
+  /** Null when the `skill-learning` flag is off for this project. */
   evaluation: SkillHealthProjectEvaluation | null;
+  /** Null when the `skill-learning` flag is off for this project. */
+  signals: SkillHealthProjectSignals | null;
 }
 
 export interface SkillHealthOverview {

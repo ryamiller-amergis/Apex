@@ -11,12 +11,13 @@ import {
   prds,
   projectSkillSettings,
   reviewComments,
+  skillSignals,
   workflowEvaluationEvents,
   workflowEvaluationJobs,
 } from '../db/schema';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import type { SkillHealthArtifactKind, SkillHealthOverview } from '../../shared/types/skillHealth';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../../shared/types/featureFlags';
 import { isFeatureEnabled, isFeatureOperational } from './featureFlagService';
 import { buildSkillHealthProjects, type SkillHealthInputs } from './skillHealthMetrics';
 import { withWorkflowSettings, workflowSettingsSubquery } from './projectSkillWorkflowSettings';
@@ -39,6 +40,8 @@ export const SKILL_HEALTH_CAVEATS: readonly string[] = [
   'Acceptance rate uses each document’s current status, so a document approved after a revision counts as approved.',
   'Cost covers AI usage events linked to the document, including validation and assistant runs.',
   'Human feedback appears only for projects with Workflow evaluations turned on. Promptfoo and judge results are diagnostic; human scores are authoritative.',
+  'Review rounds and assistant retries count only decisions recorded since Skill Learning signals began; older documents show a dash. Time to approval uses the last review time.',
+  'Score and pass-rate ranges are 95% intervals. Versions with fewer scored documents than the minimum are not compared.',
 ];
 
 async function loadEvaluationJobs(eventIds: string[]) {
@@ -55,16 +58,16 @@ async function loadEvaluationJobs(eventIds: string[]) {
 }
 
 async function evaluationEnabledProjects(userId: string, projects: Iterable<string>): Promise<string[]> {
-  if (!(await isFeatureOperational(WORKFLOW_HUMAN_EVALUATION_FLAG))) return [];
+  if (!(await isFeatureOperational(SKILL_LEARNING_FLAG))) return [];
   const unique = [...new Set(projects)];
   const enabled = await Promise.all(
-    unique.map((project) => isFeatureEnabled(WORKFLOW_HUMAN_EVALUATION_FLAG, { userId, project })),
+    unique.map((project) => isFeatureEnabled(SKILL_LEARNING_FLAG, { userId, project })),
   );
   return unique.filter((_, i) => enabled[i]);
 }
 
 async function loadInputs(periodFrom: string, userId: string): Promise<SkillHealthInputs> {
-  const [prdRows, designDocRows, settingsRows, commentRows, costRows, eventRows] = await Promise.all([
+  const [prdRows, designDocRows, settingsRows, commentRows, costRows, eventRows, signalRows] = await Promise.all([
     db
       .select({
         id: prds.id,
@@ -76,6 +79,9 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
         skillSettingsId: prds.skillSettingsId,
         skillSha256: prds.skillSha256,
         override: prds.readinessOverride,
+        model: prds.model,
+        effort: prds.effort,
+        reviewedAt: prds.reviewedAt,
       })
       .from(prds)
       .where(gte(prds.createdAt, periodFrom)),
@@ -90,6 +96,9 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
         skillSettingsId: designDocs.skillSettingsId,
         skillSha256: designDocs.skillSha256,
         override: designDocs.validationOverride,
+        model: designDocs.model,
+        effort: designDocs.effort,
+        reviewedAt: designDocs.reviewedAt,
       })
       .from(designDocs)
       .where(gte(designDocs.createdAt, periodFrom)),
@@ -146,6 +155,19 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
       })
       .from(workflowEvaluationEvents)
       .where(gte(workflowEvaluationEvents.createdAt, periodFrom)),
+    db
+      .select({
+        project: skillSignals.project,
+        surface: skillSignals.surface,
+        kind: skillSignals.kind,
+        value: skillSignals.value,
+        skillSha256: skillSignals.skillSha256,
+        metadata: skillSignals.metadata,
+        subjectType: skillSignals.subjectType,
+        subjectId: skillSignals.subjectId,
+      })
+      .from(skillSignals)
+      .where(gte(skillSignals.createdAt, periodFrom)),
   ]);
 
   const [jobRows, evaluationProjects] = await Promise.all([
@@ -154,6 +176,7 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
       ...prdRows.map((row) => row.project),
       ...designDocRows.map((row) => row.project),
       ...eventRows.map((row) => row.project),
+      ...signalRows.map((row) => row.project),
     ]),
   ]);
 
@@ -161,6 +184,10 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
     evaluationProjects,
     evaluationEvents: eventRows,
     evaluationJobs: jobRows,
+    signals: signalRows.map((row) => ({
+      ...row,
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+    })),
     documents: [
       ...prdRows.map((row) => ({ ...row, kind: 'prd' as const, hasOverride: row.override !== null })),
       ...designDocRows.map((row) => ({ ...row, kind: 'design_doc' as const, hasOverride: row.override !== null })),

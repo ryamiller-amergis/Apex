@@ -50,6 +50,7 @@ import {
 } from './runGroundingService';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
+import { emitSkillSignal } from './skillSignalService';
 
 const VALID_PRD_STATUSES: PrdStatus[] = ['generating', 'draft', 'validating', 'pending_review', 'reviewer_approved', 'approved', 'revision_requested'];
 
@@ -1732,6 +1733,8 @@ export async function applyProposedPrdChanges(
       proposedContent: true,
       proposedBacklogJson: true,
       fixCommentId: true,
+      project: true,
+      prdAssistantThreadId: true,
     },
   });
   if (!prdRow) throw notFound('PRD not found');
@@ -1745,6 +1748,19 @@ export async function applyProposedPrdChanges(
 
   const useMerged =
     options.mergedContent !== undefined || options.mergedBacklogJson !== undefined;
+
+  const decidedAt = new Date().toISOString();
+  emitSkillSignal({
+    project: prdRow.project,
+    surface: 'prd_assistant',
+    subjectType: 'prd_proposed_edit',
+    subjectId: prdId,
+    threadId: prdRow.prdAssistantThreadId,
+    kind: 'accepted',
+    actorId: options.resolvedBy,
+    metadata: { editedBeforeApply: useMerged, fromReviewComment: Boolean(fixCommentId) },
+    idempotencyKey: `prd_assistant:accepted:${prdId}:${decidedAt}`,
+  });
 
   const backlogWillUpdate = useMerged
     ? options.mergedBacklogJson !== undefined

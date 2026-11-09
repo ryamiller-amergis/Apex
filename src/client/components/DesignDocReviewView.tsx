@@ -2390,9 +2390,9 @@ export const DesignDocReviewView: React.FC = () => {
                 >
                   Approve as Owner
                 </button>
-                {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                {/* @feature-flag:skill-learning start winner=enabled */}
                 {ownerApproveBlockedByFeedback ? (
-                  /* @feature-flag:workflow-human-evaluation enabled-start */
+                  /* @feature-flag:skill-learning enabled-start */
                   <span
                     id="dd-owner-approve-feedback-reason"
                     role="status"
@@ -2409,13 +2409,13 @@ export const DesignDocReviewView: React.FC = () => {
                       Open Quality feedback
                     </button>
                   </span>
-                  /* @feature-flag:workflow-human-evaluation enabled-end */
+                  /* @feature-flag:skill-learning enabled-end */
                 ) : (
-                  /* @feature-flag:workflow-human-evaluation disabled-start */
+                  /* @feature-flag:skill-learning disabled-start */
                   null
-                  /* @feature-flag:workflow-human-evaluation disabled-end */
+                  /* @feature-flag:skill-learning disabled-end */
                 )}
-                {/* @feature-flag:workflow-human-evaluation end */}
+                {/* @feature-flag:skill-learning end */}
                 {ownerOnly && !isOwnerActor && (
                   <span
                     id="owner-approve-disabled-reason"
@@ -2820,9 +2820,9 @@ export const DesignDocReviewView: React.FC = () => {
                 </div>
 
                 <div className={styles.workspaceCenter}>
-                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {/* @feature-flag:skill-learning start winner=enabled */}
                   {canSubmitFeedback && userId ? (
-                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    /* @feature-flag:skill-learning enabled-start */
                     <ErrorBoundary fallback={null}>
                       <Suspense fallback={null}>
                         <DesignDocQualityFeedbackPrompt
@@ -2835,13 +2835,13 @@ export const DesignDocReviewView: React.FC = () => {
                         />
                       </Suspense>
                     </ErrorBoundary>
-                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                    /* @feature-flag:skill-learning enabled-end */
                   ) : (
-                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    /* @feature-flag:skill-learning disabled-start */
                     null
-                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                    /* @feature-flag:skill-learning disabled-end */
                   )}
-                  {/* @feature-flag:workflow-human-evaluation end */}
+                  {/* @feature-flag:skill-learning end */}
                   <div className={styles.tabs}>
                     {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
                       <div key={t} className={styles.tabWrap}>
@@ -2878,9 +2878,9 @@ export const DesignDocReviewView: React.FC = () => {
                         </button>
                       </div>
                     ))}
-                    {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                    {/* @feature-flag:skill-learning start winner=enabled */}
                     {showQualityFeedback ? (
-                      /* @feature-flag:workflow-human-evaluation enabled-start */
+                      /* @feature-flag:skill-learning enabled-start */
                       <div className={styles.tabWrap}>
                         <button
                           className={`${styles.tab} ${feedbackOpen ? styles.active : ''}`}
@@ -2892,13 +2892,13 @@ export const DesignDocReviewView: React.FC = () => {
                           Quality feedback
                         </button>
                       </div>
-                      /* @feature-flag:workflow-human-evaluation enabled-end */
+                      /* @feature-flag:skill-learning enabled-end */
                     ) : (
-                      /* @feature-flag:workflow-human-evaluation disabled-start */
+                      /* @feature-flag:skill-learning disabled-start */
                       null
-                      /* @feature-flag:workflow-human-evaluation disabled-end */
+                      /* @feature-flag:skill-learning disabled-end */
                     )}
-                    {/* @feature-flag:workflow-human-evaluation end */}
+                    {/* @feature-flag:skill-learning end */}
                     {canEdit && activeTab !== 'validation' && !feedbackOpen && (
                       <button
                         className={styles.tabEditBtn}
@@ -2910,9 +2910,9 @@ export const DesignDocReviewView: React.FC = () => {
                     )}
                   </div>
 
-                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {/* @feature-flag:skill-learning start winner=enabled */}
                   {feedbackOpen && showQualityFeedback ? (
-                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    /* @feature-flag:skill-learning enabled-start */
                     <div className={styles.feedbackPane}>
                       <ErrorBoundary
                         fallback={(
@@ -2931,13 +2931,13 @@ export const DesignDocReviewView: React.FC = () => {
                         </Suspense>
                       </ErrorBoundary>
                     </div>
-                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                    /* @feature-flag:skill-learning enabled-end */
                   ) : (
-                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    /* @feature-flag:skill-learning disabled-start */
                     null
-                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                    /* @feature-flag:skill-learning disabled-end */
                   )}
-                  {/* @feature-flag:workflow-human-evaluation end */}
+                  {/* @feature-flag:skill-learning end */}
                   <div
                     ref={tabContentSplitRef}
                     className={`${styles.tabContent} ${splitTab ? styles.tabContentSplit : ''} ${feedbackOpen && showQualityFeedback ? styles.tabContentHidden : ''}`}

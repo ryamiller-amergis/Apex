@@ -11,6 +11,10 @@ import {
 import type {
   SkillHealthEvaluationSkill,
   SkillHealthJobCounts,
+  SkillHealthJudgeAgreement,
+  SkillHealthJudgeDrift,
+  SkillHealthJudgeRecheck,
+  SkillLearningTrustBand,
   SkillHealthJudgeRecommendation,
   SkillHealthProjectEvaluation,
   SkillHealthWorkItemTarget,
@@ -52,6 +56,40 @@ function subjectLabel(subjectType: WorkflowEvaluationSubjectType): string {
     default: {
       const unreachable: never = subjectType;
       return unreachable;
+    }
+  }
+}
+
+const TRUST_BAND_LABEL: Record<SkillLearningTrustBand, string> = {
+  gate: 'trusted to gate',
+  advisory: 'advisory only',
+  untrusted: 'not trusted',
+  insufficient_data: 'not enough reviews yet',
+};
+
+export function judgeAgreementSummary(agreement: SkillHealthJudgeAgreement): string {
+  if (agreement.reviews === 0) {
+    return 'Judge agreement with people: no blind judge reviews yet.';
+  }
+  const kappa = agreement.kappa === null ? 'n/a' : agreement.kappa.toFixed(2);
+  return `Judge agreement with people: weighted kappa ${kappa} over ${agreement.reviews} reviews (${TRUST_BAND_LABEL[agreement.band]}).`;
+}
+
+export function judgeDriftSummary(drift: SkillHealthJudgeDrift): string {
+  const fmt = (k: number | null) => (k === null ? 'n/a' : k.toFixed(2));
+  return `Judge agreement fell from ${fmt(drift.earlierKappa)} to ${fmt(drift.recentKappa)} in the last 30 days `
+    + `(${drift.recentReviews} recent reviews). Recheck the judge before trusting it to gate.`;
+}
+
+export function recheckReasonLabel(item: SkillHealthJudgeRecheck): string {
+  switch (item.reason) {
+    case 'disagreement':
+      return `judge and person differ by ${item.largestGap} points`;
+    case 'low_confidence':
+      return 'judge was unsure';
+    default: {
+      const unhandled: never = item.reason;
+      return unhandled;
     }
   }
 }
@@ -136,7 +174,7 @@ export const SkillHealthEvaluationPanel: React.FC<SkillHealthEvaluationPanelProp
   if (!evaluation) {
     return (
       <p className={grid.hint} data-testid="skill-health-evaluation-off">
-        Human feedback (Workflow evaluations) is off for {project}. Turn on the workflow-human-evaluation flag for
+        Human feedback (Workflow evaluations) is off for {project}. Turn on the skill-learning flag for
         this project to collect it.
       </p>
     );
@@ -225,6 +263,33 @@ export const SkillHealthEvaluationPanel: React.FC<SkillHealthEvaluationPanelProp
               <p className={grid.hint}>
                 Promptfoo: {jobSummary(skill.promptfoo, 'passed')} · Judge: {jobSummary(skill.judge, 'ready')}
               </p>
+              <p className={grid.hint} data-testid={`skill-health-judge-agreement-${skill.key}`}>
+                {judgeAgreementSummary(skill.judgeAgreement)}
+              </p>
+              {skill.judgeAgreement.drift.drifting && (
+                <p className={styles.warning} data-testid={`skill-health-judge-drift-${skill.key}`}>
+                  {judgeDriftSummary(skill.judgeAgreement.drift)}
+                </p>
+              )}
+              {skill.judgeAgreement.recheck.length > 0 && (
+                <details data-testid={`skill-health-judge-recheck-${skill.key}`}>
+                  <summary className={grid.hint}>
+                    {skill.judgeAgreement.recheck.length} reviews to recheck first — the judge was unsure or far from the person
+                  </summary>
+                  <ul className={styles.gapList}>
+                    {skill.judgeAgreement.recheck.map((item) => (
+                      <li key={item.eventId}>
+                        <span>
+                          {subjectLabel(item.subjectType)} {item.subjectId} · {stageLabel(item.stageKey)}
+                        </span>
+                        <span className={styles.gapMeta}>
+                          {' '}· {recheckReasonLabel(item)} · {item.createdAt.slice(0, 10)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
               {skill.recommendations.length === 0 ? (
                 <p className={styles.muted}>No judge recommendations yet.</p>
               ) : (

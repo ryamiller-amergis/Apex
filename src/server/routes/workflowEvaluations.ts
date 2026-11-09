@@ -33,6 +33,13 @@ import * as workflowEvaluationService from '../services/workflowEvaluationServic
 import * as workflowMessageFeedbackService from '../services/workflowMessageFeedbackService';
 import { WorkflowMessageFeedbackError } from '../services/workflowMessageFeedbackService';
 import workflowEvaluationsAdminRouter from './workflowEvaluationsAdmin';
+import {
+  SkillRatingError,
+  isSkillRatingSurface,
+  listMySkillRatings,
+  parsePutSkillRating,
+  putSkillRating,
+} from '../services/skillRatingService';
 
 const router = Router({ mergeParams: true });
 
@@ -220,6 +227,43 @@ router.put(
       ));
     } catch (err) {
       handleMessageFeedbackError(err, res, next);
+    }
+  },
+);
+
+router.get(
+  '/skill-ratings',
+  requirePermission(WORKFLOW_EVALUATION_SUBMIT),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const { surface, subjectIds } = req.query;
+      if (!isSkillRatingSurface(surface)) {
+        res.status(400).json({ error: 'surface is not a rated surface' });
+        return;
+      }
+      const ids = typeof subjectIds === 'string' ? subjectIds.split(',') : [];
+      res.json(await listMySkillRatings(pathProject(req), getUserId(req), surface, ids));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.put(
+  '/skill-ratings',
+  requirePermission(WORKFLOW_EVALUATION_SUBMIT),
+  requireWorkflowEvaluationFlag,
+  async (req, res, next) => {
+    try {
+      const request = parsePutSkillRating(req.body);
+      res.json({ entry: await putSkillRating(pathProject(req), getUserId(req), request) });
+    } catch (err) {
+      if (err instanceof SkillRatingError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      next(err);
     }
   },
 );

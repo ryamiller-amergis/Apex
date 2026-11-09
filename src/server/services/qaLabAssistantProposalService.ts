@@ -23,6 +23,7 @@ import {
   QaLabAssistantThreadError,
 } from './qaLabAssistantService';
 import { normalizeTestCase } from './testCaseLookupService';
+import { emitSkillSignalLater, type SkillSignalInput } from './skillSignalService';
 
 const MAX_COMMENT_LENGTH = 4000;
 const MAX_REASON_LENGTH = 500;
@@ -357,7 +358,28 @@ async function decide(
     .where(eq(qaLabAssistantProposals.id, id))
     .returning();
   if (!row) throw new QaCaseNotFoundError('Proposal not found');
+  if (row.status === 'applied' || row.status === 'discarded') {
+    emitSkillSignalLater(`qa_lab proposal ${row.id}`, () => proposalSignal(row));
+  }
   return row;
+}
+
+async function proposalSignal(row: ProposalRow): Promise<SkillSignalInput | null> {
+  const suite = await db.query.qaAdoTestSuites.findFirst({
+    where: eq(qaAdoTestSuites.id, row.suiteId),
+    columns: { project: true },
+  });
+  if (!suite) return null;
+  return {
+    project: suite.project,
+    surface: 'qa_lab',
+    subjectType: 'qa_lab_proposal',
+    subjectId: row.id,
+    threadId: row.threadId,
+    kind: row.status === 'applied' ? 'accepted' : 'rejected',
+    actorId: row.decidedBy,
+    metadata: { proposalKind: row.kind },
+  };
 }
 
 async function toProposals(rows: ProposalRow[]): Promise<QaLabAssistantProposal[]> {

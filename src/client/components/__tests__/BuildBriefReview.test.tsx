@@ -14,6 +14,8 @@ const mockSave = { mutate: jest.fn(), mutateAsync: jest.fn(), reset: jest.fn(), 
 const mockDraft = { mutate: jest.fn(), mutateAsync: jest.fn(), reset: jest.fn(), isPending: false, error: null as Error | null };
 const mockApprove = { mutate: jest.fn(), mutateAsync: jest.fn(), reset: jest.fn(), isPending: false, error: null as Error | null };
 
+jest.mock('../SkillRating', () => ({ SkillRating: () => null }));
+
 jest.mock('../../hooks/useBuildBrief', () => ({
   useBuildBriefRecord: () => mockBriefQuery(),
   useBuildBriefAnalysis: () => mockAnalysisQuery(),

@@ -4,6 +4,7 @@ import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import { QaLabAssistantProposals } from './QaLabAssistantProposals';
+import { SkillRating } from './SkillRating';
 import styles from './QaLabAssistantPanel.module.css';
 
 /** What owns the cases in view; the assistant thread is scoped to it. */
@@ -13,6 +14,8 @@ export type QaLabAssistantTarget =
 
 export interface QaLabAssistantPanelProps {
   target: QaLabAssistantTarget;
+  /** Enables the optional rating of the latest reply. */
+  project?: string;
   /** Shown in the panel header so QA knows which requirement is in context. */
   contextLabel?: string;
   open: boolean;
@@ -99,6 +102,7 @@ function storeThread(key: string | null, threadId: string): void {
 
 export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   target,
+  project,
   contextLabel,
   open,
   onClose,
@@ -228,6 +232,7 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
       && message.toolName !== '_reasoning'
       && message.toolName !== '_thinking',
   );
+  const latestReplyId = [...visibleMessages].reverse().find((message) => message.role === 'agent')?.id ?? null;
 
   if (!open) return null;
 
@@ -253,6 +258,16 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
           <>
             {target.kind === 'suite' && threadId && (
               <QaLabAssistantProposals threadId={threadId} isRunning={isRunning} />
+            )}
+            {latestReplyId && !isRunning && (
+              // data-testid-exempt — SkillRating renders chat-message-rating-qa_lab-<message>
+              <SkillRating
+                project={project}
+                surface="qa_lab"
+                subjectType="assistant_reply"
+                subjectId={latestReplyId}
+                threadId={threadId}
+              />
             )}
             <AgentComposer
               className={styles.composerEmbed}

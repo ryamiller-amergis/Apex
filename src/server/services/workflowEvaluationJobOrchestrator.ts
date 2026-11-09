@@ -11,7 +11,7 @@ import {
   workflowEvaluationRunThreadId,
   type AiRunV2PromptfooSpecification,
 } from '../../shared/types/aiRunV2EvaluationSpec';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../../shared/types/featureFlags';
 import type {
   WorkflowEvaluationDefinition,
   WorkflowEvaluationEvent,
@@ -176,13 +176,13 @@ export function createWorkflowEvaluationJobOrchestrator(
   ): Promise<{ code: WorkflowEvaluationJobFailureCode; message: string } | null> {
     const context = { userId, project: projectId, caller: 'workflow-evaluation' };
     // The flag can change between submit and enqueue.
-    // @feature-flag:workflow-human-evaluation start winner=enabled
-    if (!await isFlagEnabled(WORKFLOW_HUMAN_EVALUATION_FLAG, context)) {
-      // @feature-flag:workflow-human-evaluation disabled-start
+    // @feature-flag:skill-learning start winner=enabled
+    if (!await isFlagEnabled(SKILL_LEARNING_FLAG, context)) {
+      // @feature-flag:skill-learning disabled-start
       return { code: 'flag_disabled', message: 'Workflow human evaluation is turned off for this project.' };
-      // @feature-flag:workflow-human-evaluation disabled-end
+      // @feature-flag:skill-learning disabled-end
     }
-    // @feature-flag:workflow-human-evaluation end
+    // @feature-flag:skill-learning end
     // Diagnostic jobs have no V1 path.
     // @feature-flag:ai-runs-v2-transport start winner=enabled
     if (!await isFlagEnabled(V2_TRANSPORT_FLAG, context)) {

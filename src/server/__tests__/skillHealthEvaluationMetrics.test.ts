@@ -1,4 +1,5 @@
 import {
+  buildJudgeAgreement,
   buildProjectEvaluation,
   eventScore,
   humanStats,
@@ -129,5 +130,71 @@ describe('buildProjectEvaluation', () => {
     const [skill] = result.skills;
     expect(skill.recommendations.map((r) => r.text)).toEqual(['n1', 'n2', 'n3', 'o1', 'o2']);
     expect(skill.recommendations[0]).toMatchObject({ eventId: 'new', criterion: 'readiness' });
+  });
+});
+
+describe('judge agreement', () => {
+  const blind = (scores: Record<string, number>) => ({ ...judgeSummary([]), criteriaScores: scores });
+  const human = {
+    intent_alignment: 4,
+    requirements_coverage: 3,
+    scope_alignment: 4,
+    acceptance_criteria: 2,
+    readiness: 2,
+  };
+
+  it('pairs human scores with blind judge scores and reports kappa per criterion', () => {
+    const events = Array.from({ length: 4 }, (_, i) => event({ id: `e${i}`, criteriaScores: human }));
+    const jobs = events.map((e) => judgeJob(e.id, blind(human)));
+    const [skill] = buildProjectEvaluation('Apex', events, jobs).skills;
+    expect(skill.judgeAgreement.reviews).toBe(4);
+    expect(skill.judgeAgreement.kappa).toBeCloseTo(1);
+    expect(skill.judgeAgreement.criteria.readiness.pairs).toBe(4);
+    expect(skill.judgeAgreement.band).toBe('insufficient_data');
+  });
+
+  it('ignores version 1 judge results that carry no criteria scores', () => {
+    const events = [event({ id: 'e1' })];
+    const [skill] = buildProjectEvaluation('Apex', events, [judgeJob('e1', judgeSummary(['x']))]).skills;
+    expect(skill.judgeAgreement).toMatchObject({ reviews: 0, kappa: null, band: 'insufficient_data' });
+  });
+
+  it('ignores judge jobs that are not ready', () => {
+    const events = [event({ id: 'e1' })];
+    const [skill] = buildProjectEvaluation('Apex', events, [judgeJob('e1', blind(human), 'failed')]).skills;
+    expect(skill.judgeAgreement.reviews).toBe(0);
+  });
+
+  it('lists far-apart and low-confidence reviews to recheck, largest gap first', () => {
+    const events = [
+      event({ id: 'far', criteriaScores: human }),
+      event({ id: 'unsure', criteriaScores: human }),
+      event({ id: 'close', criteriaScores: human }),
+    ];
+    const jobs = [
+      judgeJob('far', blind({ ...human, readiness: 5 })),
+      judgeJob('unsure', { ...blind(human), confidence: 'low' }),
+      judgeJob('close', blind({ ...human, readiness: 3 })),
+    ];
+    const [skill] = buildProjectEvaluation('Apex', events, jobs).skills;
+    expect(skill.judgeAgreement.recheck.map((r) => [r.eventId, r.reason, r.largestGap])).toEqual([
+      ['far', 'disagreement', 3],
+      ['unsure', 'low_confidence', 0],
+    ]);
+  });
+
+  it('flags drift when recent agreement falls well below earlier agreement', () => {
+    const now = Date.parse('2026-11-09T00:00:00Z');
+    const scale = [1, 2, 3, 4, 5];
+    const make = (prefix: string, createdAt: string, offset: number) => scale.flatMap((s, i) => [0, 1].map((n) => {
+      const id = `${prefix}${i}${n}`;
+      const scores = Object.fromEntries(Object.keys(human).map((k) => [k, s]));
+      const judged = Object.fromEntries(Object.keys(human).map((k) => [k, ((s - 1 + offset) % 5) + 1]));
+      return { e: event({ id, createdAt, criteriaScores: scores }), j: judgeJob(id, blind(judged)) };
+    }));
+    const rows = [...make('old', '2026-09-01T00:00:00Z', 0), ...make('new', '2026-11-01T00:00:00Z', 2)];
+    const agreement = buildJudgeAgreement(rows.map((r) => r.e), new Map(rows.map((r) => [r.e.id, [r.j]])), now);
+    expect(agreement.drift).toMatchObject({ recentReviews: 10, earlierReviews: 10, drifting: true });
+    expect(agreement.drift.earlierKappa).toBeCloseTo(1);
   });
 });

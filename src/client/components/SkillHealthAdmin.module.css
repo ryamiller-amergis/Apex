@@ -31,6 +31,11 @@
   color: var(--text-muted);
 }
 
+.warning {
+  color: var(--danger-color, #dc2626);
+  margin: 4px 0;
+}
+
 .selectedRow {
   background: var(--bg-tertiary);
 }

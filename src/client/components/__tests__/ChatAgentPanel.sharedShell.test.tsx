@@ -94,6 +94,11 @@ jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
 
 const mockPutReplyRating = jest.fn(async (_vars: unknown) => ({ entry: null }));
 let mockReplyRatings: { messageId: string; rating: string; comment: string | null }[] = [];
+jest.mock('../../hooks/useSkillRatings', () => ({
+  useSkillRatings: () => new Map(),
+  usePutSkillRating: () => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null, variables: undefined }),
+}));
+
 jest.mock('../../hooks/useWorkflowMessageFeedback', () => ({
   useWorkflowMessageFeedback: () => ({ data: { entries: mockReplyRatings } }),
   usePutWorkflowMessageFeedback: () => ({

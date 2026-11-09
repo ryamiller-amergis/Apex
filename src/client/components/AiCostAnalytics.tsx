@@ -62,6 +62,7 @@ const FEATURE_LABELS: Record<string, string> = {
   'home-chat': 'Home Chat (Ask Apex)',
   'ai-cost-insights': 'AI Cost Insights',
   'workflow-evaluation': 'Workflow Evaluation',
+  'skill-learning': 'Skill Learning',
   other: 'Other',
 };
 
@@ -93,6 +94,7 @@ const FEATURE_COLORS: Record<string, string> = {
   'home-chat': '#3b82f6',
   'ai-cost-insights': '#64748b',
   'workflow-evaluation': '#d946ef',
+  'skill-learning': '#a855f7',
   other: '#94a3b8',
 };
 

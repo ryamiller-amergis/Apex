@@ -8,7 +8,9 @@ import {
   WORKFLOW_EVALUATION_OUTCOMES,
   WORKFLOW_EVALUATION_STAGE_KEYS,
   workflowEvaluationJudgeOutputSchema,
+  workflowEvaluationJudgeOutputSchemaV2,
   type WorkflowEvaluationCriteriaKey,
+  type WorkflowEvaluationJudgeOutputV2,
   type WorkflowEvaluationJobEvaluator,
   type WorkflowEvaluationJobStatus,
   type WorkflowEvaluationOutcome,
@@ -19,10 +21,14 @@ import type {
   SkillHealthEvaluationStage,
   SkillHealthFlaggedEvent,
   SkillHealthJobCounts,
+  SkillHealthJudgeAgreement,
+  SkillHealthJudgeDrift,
+  SkillHealthJudgeRecheck,
   SkillHealthJudgeRecommendation,
   SkillHealthOutcomeCounts,
   SkillHealthProjectEvaluation,
 } from '../../shared/types/skillHealth';
+import { quadraticWeightedKappa, trustBand } from './skillLearningStats';
 
 export interface SkillHealthEvaluationEventInput {
   id: string;
@@ -150,6 +156,106 @@ function recommendationsFrom(
   }));
 }
 
+export const JUDGE_DRIFT_WINDOW_DAYS = 30;
+/** Reviews each window needs before a drop counts as drift. */
+export const JUDGE_DRIFT_MIN_REVIEWS = 10;
+/** Kappa drop between windows that counts as drift. */
+export const JUDGE_DRIFT_KAPPA_DROP = 0.15;
+/** A gap this large on one criterion puts the review on the recheck list. */
+const RECHECK_GAP = 2;
+const RECHECK_LIMIT = 10;
+
+/** Blind judge output, or null when the job predates definition version 2. */
+function blindJudge(jobs: SkillHealthEvaluationJobInput[] | undefined): WorkflowEvaluationJudgeOutputV2 | null {
+  const judgeJob = jobs?.find((job) => job.evaluatorKey === 'llm_judge' && job.status === 'ready');
+  if (!judgeJob) return null;
+  const parsed = workflowEvaluationJudgeOutputSchemaV2.safeParse(judgeJob.summary);
+  return parsed.success ? parsed.data : null;
+}
+
+interface PairedReview {
+  event: SkillHealthEvaluationEventInput;
+  pairs: Array<[WorkflowEvaluationCriteriaKey, number, number]>;
+  confidence: WorkflowEvaluationJudgeOutputV2['confidence'];
+}
+
+function pairedReviews(
+  events: SkillHealthEvaluationEventInput[],
+  jobsByEvent: Map<string, SkillHealthEvaluationJobInput[]>,
+): PairedReview[] {
+  return events.flatMap((event): PairedReview[] => {
+    const judge = blindJudge(jobsByEvent.get(event.id));
+    if (!judge) return [];
+    const pairs = WORKFLOW_EVALUATION_CRITERIA_KEYS.flatMap((criterion): PairedReview['pairs'] => {
+      const human = event.criteriaScores[criterion];
+      return typeof human === 'number' ? [[criterion, human, judge.criteriaScores[criterion]]] : [];
+    });
+    return pairs.length ? [{ event, pairs, confidence: judge.confidence }] : [];
+  });
+}
+
+function kappaOf(reviews: readonly PairedReview[]): number | null {
+  return quadraticWeightedKappa(reviews.flatMap((r) => r.pairs.map(([, h, j]) => [h, j] as [number, number])));
+}
+
+export function buildJudgeDrift(reviews: readonly PairedReview[], now: number): SkillHealthJudgeDrift {
+  const cutoff = new Date(now - JUDGE_DRIFT_WINDOW_DAYS * 24 * 60 * 60_000).toISOString();
+  const recent = reviews.filter((r) => r.event.createdAt >= cutoff);
+  const earlier = reviews.filter((r) => r.event.createdAt < cutoff);
+  const recentKappa = kappaOf(recent);
+  const earlierKappa = kappaOf(earlier);
+  const drifting = recent.length >= JUDGE_DRIFT_MIN_REVIEWS
+    && earlier.length >= JUDGE_DRIFT_MIN_REVIEWS
+    && recentKappa !== null
+    && earlierKappa !== null
+    && earlierKappa - recentKappa >= JUDGE_DRIFT_KAPPA_DROP;
+  return { recentReviews: recent.length, recentKappa, earlierReviews: earlier.length, earlierKappa, drifting };
+}
+
+function buildRecheck(reviews: readonly PairedReview[]): SkillHealthJudgeRecheck[] {
+  return reviews
+    .flatMap((review): SkillHealthJudgeRecheck[] => {
+      const largestGap = Math.max(...review.pairs.map(([, h, j]) => Math.abs(h - j)));
+      const reason = largestGap >= RECHECK_GAP ? 'disagreement' : review.confidence === 'low' ? 'low_confidence' : null;
+      if (!reason) return [];
+      const { event } = review;
+      return [{
+        eventId: event.id,
+        stageKey: event.stageKey,
+        subjectType: event.subjectType,
+        subjectId: event.subjectId,
+        reason,
+        largestGap,
+        createdAt: event.createdAt,
+      }];
+    })
+    .sort((a, b) => b.largestGap - a.largestGap || b.createdAt.localeCompare(a.createdAt))
+    .slice(0, RECHECK_LIMIT);
+}
+
+export function buildJudgeAgreement(
+  events: SkillHealthEvaluationEventInput[],
+  jobsByEvent: Map<string, SkillHealthEvaluationJobInput[]>,
+  now = Date.now(),
+): SkillHealthJudgeAgreement {
+  const reviews = pairedReviews(events, jobsByEvent);
+  const kappa = kappaOf(reviews);
+  const criteria = Object.fromEntries(
+    WORKFLOW_EVALUATION_CRITERIA_KEYS.map((criterion) => {
+      const pairs = reviews.flatMap((r) => r.pairs.filter(([c]) => c === criterion).map(([, h, j]) => [h, j] as [number, number]));
+      return [criterion, { pairs: pairs.length, kappa: quadraticWeightedKappa(pairs) }];
+    }),
+  ) as SkillHealthJudgeAgreement['criteria'];
+  return {
+    reviews: reviews.length,
+    kappa,
+    band: trustBand(kappa, reviews.length),
+    criteria,
+    drift: buildJudgeDrift(reviews, now),
+    recheck: buildRecheck(reviews),
+  };
+}
+
 function buildSkills(
   project: string,
   events: SkillHealthEvaluationEventInput[],
@@ -178,6 +284,7 @@ function buildSkills(
         }
         recommendations.push(...recommendationsFrom(event, jobs.find((j) => j.evaluatorKey === 'llm_judge')));
       }
+      const judgeAgreement = buildJudgeAgreement(bucket.events, jobsByEvent);
       const criteriaAverages = Object.fromEntries(
         WORKFLOW_EVALUATION_CRITERIA_KEYS.map((criterion) => [
           criterion,
@@ -198,6 +305,7 @@ function buildSkills(
         outcomes,
         promptfoo,
         judge,
+        judgeAgreement,
         recommendations: recommendations
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, RECOMMENDATION_LIMIT),

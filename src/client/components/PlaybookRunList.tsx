@@ -18,6 +18,7 @@ import { PlaybookGateReviewPanel } from './PlaybookGateReviewPanel';
 import { usePlaybookRun } from '../hooks/usePlaybookRuns';
 import { absoluteTime, runStatusLabel } from './playbookStatusFormat';
 import type { PlaybookRunSummary } from '../../shared/types/playbook';
+import { SkillRating } from './SkillRating';
 import styles from './PlaybookStatusView.module.css';
 
 interface PlaybookRunListProps {
@@ -103,6 +104,10 @@ const PlaybookRunRow: React.FC<PlaybookRunRowProps> = ({ run, project }) => {
                 data-testid="playbook-gate-review-panel"
               />
               <PlaybookRunActions run={detail.data} />
+              {(run.status === 'completed' || run.status === 'failed') && (
+                // data-testid-exempt — SkillRating renders chat-message-rating-playbook-<run>
+                <SkillRating project={project} surface="playbook" subjectType="playbook_run" subjectId={run.runId} />
+              )}
             </>
           ) : null}
         </div>

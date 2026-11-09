@@ -211,6 +211,43 @@ describe('Promptfoo execution', () => {
     expect(runRunner).not.toHaveBeenCalled();
   });
 
+  it('passes the grader from the specification and grades with its model and region', async () => {
+    const rubricSuite: WorkflowEvaluationPromptfooSuite = {
+      ...suite,
+      tests: [...suite.tests, { description: 'Risks name an owner', target: 'artifact', assert: [{ type: 'llm-rubric', value: 'Risks name an owner.' }] }],
+    };
+    const grader = { provider: 'bedrock' as const, modelId: 'us.anthropic.test', region: 'us-east-2', maxTokens: 512, timeoutMs: 30_000 };
+    const gradePrompt = jest.fn(async () => '{"pass":true}');
+    const runRunner = jest.fn<Promise<PromptfooRunnerReply>, Parameters<RunPromptfooRunner>>(async (input) => {
+      await input.grade?.('grading prompt');
+      return { ok: true, rows: rubricSuite.tests.map((_, testIdx) => ({ testIdx, success: true, failures: [] })) };
+    });
+    const execute = createPromptfooExecute({ runnerPath: '/opt/promptfoo/run.cjs', runRunner, gradePrompt, tempRoot, parentEnv: {}, now: () => 1_000 });
+    const outcome = await execute({
+      specification: specification({ suite: rubricSuite, grader }),
+      command: command(),
+      checkpoints: checkpoints(),
+      signal: new AbortController().signal,
+    });
+
+    expect(runRunner.mock.calls[0][0].request.gradingEnabled).toBe(true);
+    expect(gradePrompt).toHaveBeenCalledWith('grading prompt', grader, expect.any(AbortSignal));
+    expect(outcome.detail).toBe('4/4 Promptfoo tests passed');
+  });
+
+  it('refuses a suite with an llm-rubric test and no grader, and a grader with no such test', async () => {
+    const runRunner = jest.fn();
+    const rubricSuite: WorkflowEvaluationPromptfooSuite = {
+      ...suite,
+      tests: [{ description: 'Risks name an owner', target: 'artifact', assert: [{ type: 'llm-rubric', value: 'Risks name an owner.' }] }],
+    };
+    await expect(run(runRunner, specification({ suite: rubricSuite }))).rejects.toThrow('invalid Promptfoo specification');
+    await expect(run(runRunner, specification({
+      grader: { provider: 'bedrock', modelId: 'm', region: 'r', maxTokens: 1, timeoutMs: 1 },
+    }))).rejects.toThrow('invalid Promptfoo specification');
+    expect(runRunner).not.toHaveBeenCalled();
+  });
+
   it('fails the run when Promptfoo reports an error, and still removes its working folder', async () => {
     await expect(run(async () => ({ ok: false, error: 'bad config' }))).rejects.toThrow(
       'Promptfoo could not run the suite: bad config',
@@ -251,6 +288,54 @@ describe('forkPromptfooRunner', () => {
   const request = (description: string) => ({
     targets: { artifact: '## Problem', backlog: '' },
     tests: [{ description, target: 'artifact' as const, assert: [{ type: 'contains' as const, value: '## Problem' }] }],
+    gradingEnabled: false,
+  });
+
+  it('answers the child grading prompts in the parent and sends the verdict back', async () => {
+    const grade = jest.fn(async (prompt: string) => JSON.stringify(
+      prompt.includes('owner') ? { pass: true, reason: 'ok' } : { pass: false, reason: 'no dates' },
+    ));
+    const reply = await forkPromptfooRunner({
+      runnerPath: FAKE_RUNNER,
+      request: {
+        targets: { artifact: '## Risks\nOwner: Ana', backlog: '' },
+        tests: [
+          { description: 'owner', target: 'artifact', assert: [{ type: 'llm-rubric', value: 'Risks name an owner.' }] },
+          { description: 'dates', target: 'artifact', assert: [{ type: 'llm-rubric', value: 'Risks have dates.' }] },
+        ],
+        gradingEnabled: true,
+      },
+      cwd: os.tmpdir(),
+      env,
+      signal: new AbortController().signal,
+      grade,
+    });
+
+    expect(grade).toHaveBeenCalledTimes(2);
+    expect(grade.mock.calls[0][0]).toContain('Risks name an owner.');
+    expect(reply).toMatchObject({
+      ok: true,
+      rows: [
+        { testIdx: 0, success: true },
+        { testIdx: 1, success: false, failures: [{ type: 'llm-rubric', reason: 'no dates' }] },
+      ],
+      env: { secret: null },
+    });
+  });
+
+  it('tells the child grading failed when the parent has no grader', async () => {
+    const reply = await forkPromptfooRunner({
+      runnerPath: FAKE_RUNNER,
+      request: {
+        targets: { artifact: 'x', backlog: '' },
+        tests: [{ description: 'rubric', target: 'artifact', assert: [{ type: 'llm-rubric', value: 'Is good.' }] }],
+        gradingEnabled: false,
+      },
+      cwd: os.tmpdir(),
+      env,
+      signal: new AbortController().signal,
+    });
+    expect(reply).toMatchObject({ rows: [{ success: false, failures: [{ reason: 'This suite has no grader' }] }] });
   });
 
   it('returns the runner reply from a child that cannot see the worker environment', async () => {

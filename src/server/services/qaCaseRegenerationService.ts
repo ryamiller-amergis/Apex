@@ -44,6 +44,7 @@ import {
 import { resolveSkillConfig } from './projectSettingsService';
 import { normalizeTestCase } from './testCaseLookupService';
 import { writeThreadFolderFile } from './threadFolder';
+import { emitSkillSignal } from './skillSignalService';
 
 const WATCHER_MAX_ATTEMPTS = 180;
 const CASE_OUTPUT_PATTERN = /\.case\.json$/i;
@@ -254,6 +255,16 @@ export async function regenerateAdoTestCase(input: {
   console.log(
     `[qaCaseRegeneration] Queued — regenerationId=${regeneration.id} suiteId=${input.suiteId} case=${input.localCaseId} threadId=${thread.id}`,
   );
+  emitSkillSignal({
+    project: suite.project,
+    surface: 'qa_lab',
+    subjectType: 'qa_case_regeneration',
+    subjectId: regeneration.id,
+    threadId: thread.id,
+    kind: 'regenerated',
+    actorId: input.userId,
+    metadata: { suiteId: input.suiteId, localCaseId: input.localCaseId, openComments: comments.length },
+  });
   return toRegeneration(regeneration, new Set());
 }
 
@@ -361,6 +372,15 @@ export async function restoreCaseRegeneration(
     return updated;
   });
   if (!restored) throw new AdoTestSuiteConflictError('The regeneration changed; reload and try again');
+  emitSkillSignal({
+    project: suite.project,
+    surface: 'qa_lab',
+    subjectType: 'qa_case_regeneration',
+    subjectId: restored.id,
+    threadId: restored.chatThreadId,
+    kind: 'rolled_back',
+    metadata: { suiteId, localCaseId: restored.localCaseId, source: restored.source },
+  });
   return toRegeneration(restored, new Set());
 }
 

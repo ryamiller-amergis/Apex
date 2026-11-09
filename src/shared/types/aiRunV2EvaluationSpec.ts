@@ -136,9 +136,31 @@ export const PROMPTFOO_DETERMINISTIC_ASSERTION_TYPES = [
 export type PromptfooDeterministicAssertionType =
   (typeof PROMPTFOO_DETERMINISTIC_ASSERTION_TYPES)[number];
 
+/**
+ * Assertion types a model grades. A suite that uses one must carry a `grader`;
+ * the worker answers the grading prompts itself, so the Promptfoo child never
+ * holds credentials or reaches the network.
+ */
+export const PROMPTFOO_MODEL_GRADED_ASSERTION_TYPES = ['llm-rubric'] as const;
+
+export type PromptfooModelGradedAssertionType =
+  (typeof PROMPTFOO_MODEL_GRADED_ASSERTION_TYPES)[number];
+
+export type PromptfooAssertionType = PromptfooDeterministicAssertionType | PromptfooModelGradedAssertionType;
+
 export type WorkflowEvaluationPromptfooAssertion = Readonly<{
-  type: PromptfooDeterministicAssertionType;
+  type: PromptfooAssertionType;
   value?: string | readonly string[];
+}>;
+
+/** The Bedrock model that grades model-graded assertions, resolved by App Service. */
+export type WorkflowEvaluationPromptfooGrader = Readonly<{
+  provider: 'bedrock';
+  modelId: string;
+  region: string;
+  maxTokens: number;
+  /** Per grading call. */
+  timeoutMs: number;
 }>;
 
 /** `backlog` reads the PRD backlog JSON; every other test reads the artifact text. */
@@ -168,12 +190,14 @@ export type AiRunV2PromptfooSpecification = Readonly<{
   /** SHA-256 of the suite's canonical JSON, checked by the worker before it runs. */
   suiteSha256: string;
   artifactPackage: WorkflowEvaluationArtifactPackage;
+  /** Present exactly when the suite has a model-graded assertion. */
+  grader?: WorkflowEvaluationPromptfooGrader;
 }>;
 
 /** One failed assertion, as the worker records it in the Promptfoo summary. */
 export type WorkflowEvaluationPromptfooFailure = Readonly<{
   test: string;
-  assertion: PromptfooDeterministicAssertionType;
+  assertion: PromptfooAssertionType;
   reason: string;
 }>;
 
@@ -190,7 +214,8 @@ export type WorkflowEvaluationPromptfooSummary = Readonly<{
 }>;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
-const STRING_VALUE_TYPES = new Set<PromptfooDeterministicAssertionType>([
+const STRING_VALUE_TYPES = new Set<PromptfooAssertionType>([
+  'llm-rubric',
   'contains',
   'icontains',
   'not-contains',
@@ -199,13 +224,13 @@ const STRING_VALUE_TYPES = new Set<PromptfooDeterministicAssertionType>([
   'not-regex',
   'starts-with',
 ]);
-const LIST_VALUE_TYPES = new Set<PromptfooDeterministicAssertionType>([
+const LIST_VALUE_TYPES = new Set<PromptfooAssertionType>([
   'contains-all',
   'contains-any',
   'icontains-all',
   'icontains-any',
 ]);
-const REGEX_TYPES = new Set<PromptfooDeterministicAssertionType>(['regex', 'not-regex']);
+const REGEX_TYPES = new Set<PromptfooAssertionType>(['regex', 'not-regex']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -254,8 +279,28 @@ function isSubjectType(value: unknown): value is WorkflowEvaluationSubjectType {
   return (WORKFLOW_EVALUATION_SUBJECT_TYPES as readonly unknown[]).includes(value);
 }
 
-function isAssertionType(value: unknown): value is PromptfooDeterministicAssertionType {
-  return (PROMPTFOO_DETERMINISTIC_ASSERTION_TYPES as readonly unknown[]).includes(value);
+export function isPromptfooAssertionType(value: unknown): value is PromptfooAssertionType {
+  return (PROMPTFOO_DETERMINISTIC_ASSERTION_TYPES as readonly unknown[]).includes(value)
+    || (PROMPTFOO_MODEL_GRADED_ASSERTION_TYPES as readonly unknown[]).includes(value);
+}
+
+export function isModelGradedAssertionType(value: unknown): value is PromptfooModelGradedAssertionType {
+  return (PROMPTFOO_MODEL_GRADED_ASSERTION_TYPES as readonly unknown[]).includes(value);
+}
+
+export function promptfooSuiteNeedsGrader(suite: WorkflowEvaluationPromptfooSuite): boolean {
+  return suite.tests.some((test) => test.assert.some((assertion) => isModelGradedAssertionType(assertion.type)));
+}
+
+export function isWorkflowEvaluationPromptfooGrader(value: unknown): value is WorkflowEvaluationPromptfooGrader {
+  return (
+    isRecord(value)
+    && value.provider === 'bedrock'
+    && isNonEmptyString(value.modelId)
+    && isNonEmptyString(value.region)
+    && isPositiveSafeInteger(value.maxTokens)
+    && isPositiveSafeInteger(value.timeoutMs)
+  );
 }
 
 function isCompilableRegex(pattern: string): boolean {
@@ -268,7 +313,7 @@ function isCompilableRegex(pattern: string): boolean {
 }
 
 function isPromptfooAssertion(value: unknown): value is WorkflowEvaluationPromptfooAssertion {
-  if (!isRecord(value) || !isAssertionType(value.type)) return false;
+  if (!isRecord(value) || !isPromptfooAssertionType(value.type)) return false;
   if (STRING_VALUE_TYPES.has(value.type)) {
     if (!isNonEmptyString(value.value)) return false;
     return !REGEX_TYPES.has(value.type) || isCompilableRegex(value.value);
@@ -401,6 +446,11 @@ export function isAiRunV2PromptfooSpecification(
   if (!isSha256Hex(value.suiteSha256)) return false;
   if (!isWorkflowEvaluationArtifactPackage(value.artifactPackage)) return false;
   if (value.suite.subjectType !== value.artifactPackage.kind) return false;
+  if (promptfooSuiteNeedsGrader(value.suite)) {
+    if (!isWorkflowEvaluationPromptfooGrader(value.grader)) return false;
+  } else if (value.grader !== undefined) {
+    return false;
+  }
   for (const hostPathField of ['workspaceRef', 'checkoutRef', 'mirrorRef'] as const) {
     if (value[hostPathField] !== undefined) return false;
   }

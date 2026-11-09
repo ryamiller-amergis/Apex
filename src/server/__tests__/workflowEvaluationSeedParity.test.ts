@@ -20,7 +20,9 @@ import {
   WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
   WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
   WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
+  WORKFLOW_EVALUATION_BLIND_JUDGE_DEFINITION_VERSION,
   workflowEvaluationJudgeOutputSchema,
+  workflowEvaluationJudgeOutputSchemaV2,
   workflowEvaluationPromptfooSuiteRef,
   type WorkflowEvaluationRubric,
 } from '../../shared/types/workflowEvaluation';
@@ -180,5 +182,30 @@ describe('test cases evaluation definition seed', () => {
     expect(stripComments(up)).not.toMatch(/\bUPDATE\b/i);
     expect(down).toMatch(/subject_type IN \('interview_phase', 'prd', 'design_doc'\)/);
     expect(down).toMatch(/subject_type = 'design_doc'/);
+  });
+});
+
+describe('blind judge definition version 2', () => {
+  const dir = path.resolve(process.cwd(), 'migrations');
+  const file = fs.readdirSync(dir).filter((name) => name.endsWith('_workflow-evaluation-blind-judge-criteria-scores.sql'));
+  const [up = '', down = ''] = fs.readFileSync(path.join(dir, file[0] ?? ''), 'utf8').split(/-- Down Migration/i);
+
+  it('seeds the version 2 judge schema from the shared blind-judge schema', () => {
+    expect(file).toHaveLength(1);
+    const schemas = dollarBlocks(up, 'judge').map((block) => JSON.parse(block) as Record<string, unknown>);
+    expect(schemas).toEqual([toJSONSchema(workflowEvaluationJudgeOutputSchemaV2)]);
+    expect(schemas[0]).toMatchObject({ required: expect.arrayContaining(['criteriaScores']) });
+  });
+
+  it('copies every version 1 stage, retires version 1 first, and is safe to re-run', () => {
+    const selectedColumns = up.slice(up.indexOf('SELECT\n'), up.indexOf('FROM workflow_evaluation_definitions v1\n'));
+    expect(selectedColumns.split(',').map((column) => column.trim())).toContain(
+      String(WORKFLOW_EVALUATION_BLIND_JUDGE_DEFINITION_VERSION),
+    );
+    expect(selectedColumns).toContain('v1.rubric');
+    expect(up.indexOf('SET active = false')).toBeLessThan(up.indexOf('INSERT INTO'));
+    expect(up).toMatch(/ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+NOTHING/i);
+    expect(down).toMatch(/version = 1;/);
+    expect(down).toMatch(/NOT EXISTS \(SELECT 1 FROM workflow_evaluation_events/);
   });
 });

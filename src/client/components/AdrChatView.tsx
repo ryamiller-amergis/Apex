@@ -56,6 +56,7 @@ import type { ReviewSectionKey, TextSelector } from '../../shared/types/reviewCo
 import styles from './InterviewChatView.module.css';
 import { ApexLoader } from './ApexLoader';
 import { ArtifactUsageStrip } from './ArtifactUsageStrip';
+import { SkillRating } from './SkillRating';
 
 function formatElapsed(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -801,6 +802,10 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               endpoint={`/api/adr/${adr.id}/usage`}
               visible={adr.status !== 'in_progress'}
             />
+            {adr.status !== 'in_progress' && (
+              // data-testid-exempt — SkillRating renders chat-message-rating-adr-<id>
+              <SkillRating project={adr.project} surface="adr" subjectType="adr" subjectId={adr.id} />
+            )}
           </div>
         </div>
         <div className={styles.actions}>

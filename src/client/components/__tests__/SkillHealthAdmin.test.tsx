@@ -3,15 +3,29 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { SkillHealthAdmin } from '../SkillHealthAdmin';
 import { useCreateSkillHealthWorkItem, useSkillHealth } from '../../hooks/useSkillHealth';
 import type {
+  SkillHealthJudgeAgreement,
   SkillHealthOverview,
   SkillHealthProject,
   SkillHealthProjectEvaluation,
   SkillHealthSkill,
 } from '../../../shared/types/skillHealth';
+import { WORKFLOW_EVALUATION_CRITERIA_KEYS } from '../../../shared/types/workflowEvaluation';
 
 jest.mock('../../hooks/useSkillHealth', () => ({
   useSkillHealth: jest.fn(),
   useCreateSkillHealthWorkItem: jest.fn(),
+}));
+
+jest.mock('../SkillExperimentsPanel', () => ({
+  SkillExperimentsPanel: () => null,
+}));
+
+jest.mock('../SkillMinedChecksPanel', () => ({
+  SkillMinedChecksPanel: () => null,
+}));
+
+jest.mock('../SkillSemanticChecksPanel', () => ({
+  SkillSemanticChecksPanel: () => null,
 }));
 
 jest.mock('recharts', () => {
@@ -76,6 +90,9 @@ const skill = (overrides: Partial<SkillHealthSkill> = {}): SkillHealthSkill => (
       lastSeen: '2026-10-15T00:00:00.000Z',
       humanEvents: 2,
       humanAverageScore: 3.4,
+      scoreInterval: { low: 74.2, high: 87.8 },
+      passRateInterval: null,
+      sufficientSample: false,
     },
     {
       skillSha256: null,
@@ -88,8 +105,19 @@ const skill = (overrides: Partial<SkillHealthSkill> = {}): SkillHealthSkill => (
       lastSeen: '2026-10-10T00:00:00.000Z',
       humanEvents: 0,
       humanAverageScore: null,
+      scoreInterval: null,
+      passRateInterval: null,
+      sufficientSample: true,
     },
   ],
+  models: [{ model: 'claude-4', effort: 'high', documents: 12, averageScore: 72.5, acceptanceRate: 0.75, costPerDocument: 0.84 }],
+  efficiency: {
+    accepted: 6,
+    medianHoursToApproval: 30.5,
+    reviewRoundsPerAccepted: 1.5,
+    costPerAccepted: 1.68,
+    assistantRetriesPerAccepted: 0.5,
+  },
   ...overrides,
 });
 
@@ -108,6 +136,7 @@ const project = (overrides: Partial<SkillHealthProject> = {}): SkillHealthProjec
   isFoundation: false,
   skills: [skill()],
   evaluation: null,
+  signals: null,
   ...overrides,
 });
 
@@ -146,6 +175,19 @@ const evaluation: SkillHealthProjectEvaluation = {
       outcomes,
       promptfoo: { pending: 0, running: 0, ready: 2, failed: 1 },
       judge: { pending: 1, running: 0, ready: 2, failed: 0 },
+      judgeAgreement: {
+        reviews: 2,
+        kappa: null,
+        band: 'insufficient_data',
+        criteria: Object.fromEntries(
+          WORKFLOW_EVALUATION_CRITERIA_KEYS.map((key) => [key, { pairs: 2, kappa: null }]),
+        ) as SkillHealthJudgeAgreement['criteria'],
+        drift: { recentReviews: 12, recentKappa: 0.4, earlierReviews: 15, earlierKappa: 0.8, drifting: true },
+        recheck: [{
+          eventId: 'event-9', stageKey: 'prd_human_review', subjectType: 'prd', subjectId: 'prd-9',
+          reason: 'disagreement', largestGap: 3, createdAt: '2026-11-01T00:00:00Z',
+        }],
+      },
       recommendations: [
         {
           eventId: 'event-1',
@@ -237,6 +279,18 @@ describe('SkillHealthAdmin', () => {
     expect(screen.getByTestId('skill-health-version-unversioned')).toHaveTextContent('Unversioned');
   });
 
+  it('shows score ranges, small samples, models and effort per accepted document', () => {
+    mockResult({ data: overview([project()]) });
+    render(<SkillHealthAdmin />);
+
+    expect(screen.getByTestId('skill-health-version-abcdef12')).toHaveTextContent('81.0 (74.2–87.8)');
+    expect(screen.getByTestId('skill-health-version-abcdef12')).toHaveTextContent('too few');
+    expect(screen.getByTestId('skill-health-version-unversioned')).not.toHaveTextContent('too few');
+    expect(screen.getByTestId('skill-health-efficiency')).toHaveTextContent('30.5');
+    expect(screen.getByTestId('skill-health-efficiency')).toHaveTextContent('$1.68');
+    expect(screen.getByTestId('skill-health-models')).toHaveTextContent('claude-4');
+  });
+
   it('switches the detail view to the chosen skill', () => {
     const second = skill({
       key: 'MaxView:design_doc:',
@@ -298,18 +352,22 @@ describe('SkillHealthAdmin', () => {
     mockResult({ data: overview([project()]) });
     render(<SkillHealthAdmin />);
 
-    expect(screen.getByTestId('skill-health-evaluation-off')).toHaveTextContent('is off for MaxView');
     expect(screen.queryByTestId('skill-health-feedback-summary')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-health-tab-feedback'));
+    expect(screen.getByTestId('skill-health-evaluation-off')).toHaveTextContent('is off for MaxView');
   });
 
   it('shows stages, flagged events and per-Skill feedback, and files a judge recommendation', async () => {
     mockResult({ data: overview([project({ evaluation })]) });
     render(<SkillHealthAdmin />);
 
-    expect(screen.getByTestId('skill-health-evaluation-stage-prd_human_review')).toHaveTextContent('PRD review');
-    expect(screen.getByTestId('skill-health-evaluation-flagged')).toHaveTextContent('Missed the export flow');
     expect(screen.getByTestId('skill-health-feedback-summary')).toHaveTextContent('3.2');
     expect(screen.getByTestId('skill-health-version-abcdef12')).toHaveTextContent('3.4');
+    fireEvent.click(screen.getByTestId('skill-health-tab-feedback'));
+    expect(screen.getByTestId('skill-health-evaluation-stage-prd_human_review')).toHaveTextContent('PRD review');
+    expect(screen.getByTestId('skill-health-evaluation-flagged')).toHaveTextContent('Missed the export flow');
+    expect(screen.getByTestId('skill-health-judge-drift-MaxView:prd:.cursor/skills/to-prd/skill.md')).toHaveTextContent('fell from 0.80 to 0.40');
+    expect(screen.getByTestId('skill-health-judge-recheck-MaxView:prd:.cursor/skills/to-prd/skill.md')).toHaveTextContent('differ by 3 points');
 
     fireEvent.click(screen.getByTestId('skill-health-recommendation-work-item-event-1-0'));
 
@@ -340,6 +398,7 @@ describe('SkillHealthAdmin', () => {
     render(<SkillHealthAdmin />);
 
     expect(screen.getByTestId('skill-health-no-documents')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-health-tab-feedback'));
     fireEvent.click(screen.getByTestId('skill-health-recommendation-work-item-event-9-0'));
     fireEvent.click(screen.getByTestId('skill-health-work-item-submit'));
 
@@ -396,5 +455,45 @@ describe('SkillHealthAdmin', () => {
     fireEvent.click(screen.getByTestId('skill-health-create-work-item'));
 
     expect(screen.getByRole('alert')).toHaveTextContent('You do not have Azure DevOps access');
+  });
+
+  it('shows outcomes per surface with coverage and the acceptance range', () => {
+    mockResult({
+      data: overview([
+        project({
+          signals: {
+            coverage: { active: 1, total: 13 },
+            surfaces: [{
+              surface: 'adr_assistant',
+              label: 'ADR assistant',
+              rubricEvaluated: false,
+              signals: 5,
+              counts: { accepted: 3, rejected: 1, regenerated: 1 },
+              decisions: 4,
+              acceptanceRate: 0.75,
+              acceptanceInterval: { low: 0.3, high: 0.95 },
+              editedBeforeAcceptRate: 1 / 3,
+              ratings: 0,
+              ratingScore: null,
+              regenerationsPerAccepted: 1 / 3,
+              failureRate: null,
+              sufficientSample: false,
+              judged: 2,
+              judgedScore: 3.5,
+              versions: [],
+            }],
+          },
+        }),
+      ]),
+    });
+    render(<SkillHealthAdmin />);
+
+    fireEvent.click(screen.getByTestId('skill-health-tab-outcomes'));
+    expect(screen.getByTestId('skill-health-signals-coverage')).toHaveTextContent('1 of 13 surfaces reporting');
+    expect(screen.getByTestId('skill-health-signals-row-adr_assistant')).toHaveTextContent('3.5 (2)');
+    const row = screen.getByTestId('skill-health-signals-row-adr_assistant');
+    expect(row).toHaveTextContent('75% (30%–95%)');
+    expect(row).toHaveTextContent('small sample');
+    expect(row).toHaveTextContent('33%');
   });
 });

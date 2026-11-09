@@ -33,6 +33,7 @@ import {
 } from '../../shared/types/brainstormArtifact';
 import { sanitizeBrainstormMarkdown } from '../../shared/utils/sanitizeBrainstormMarkdown';
 import { trackEvent } from './telemetry';
+import { emitSkillSignal } from './skillSignalService';
 
 export class BrainstormArtifactError extends Error {
   constructor(
@@ -377,6 +378,16 @@ export function createArtifactVersionStore(deps: ArtifactStoreDeps) {
           sessionId: ctx.sessionId,
           fromSequence: String(current.version),
           toSequence: String(ctx.toSequence),
+        });
+        emitSkillSignal({
+          project: ctx.project,
+          surface: 'brainstorm',
+          subjectType: 'brainstorm_artifact',
+          subjectId: ctx.sessionId,
+          kind: 'rolled_back',
+          actorId: ctx.authorId,
+          metadata: { fromSequence: current.version, toSequence: ctx.toSequence },
+          idempotencyKey: `brainstorm:rolled_back:${ctx.sessionId}:${current.version}`,
         });
         return toSummary(written);
       });

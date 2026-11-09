@@ -164,6 +164,8 @@ function dependencies(
       prdValidationEffort: 'high',
     }) as unknown as ProjectSkillConfig,
     loadDefaultModel: async () => 'default-model',
+    loadMinedTests: async () => [],
+    loadSemanticTests: async () => [],
     ...overrides,
   };
 }
@@ -226,12 +228,13 @@ describe('buildWorkflowEvaluationSpecifications', () => {
     );
   });
 
-  it('gives the person\'s scores to the judge as hints but never to Promptfoo', async () => {
+  it('never gives the person\'s scores to the judge or to Promptfoo', async () => {
     const result = await buildWorkflowEvaluationSpecifications(prdRequest(), dependencies());
 
     if (!result.promptfoo.ok || !result.llm_judge.ok) throw new Error('expected both to build');
     const artifact = scratchJson(result.llm_judge.specification, WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage);
-    expect(artifact.humanScoreHints).toEqual(CRITERIA);
+    expect(artifact).not.toHaveProperty('humanScoreHints');
+    expect(JSON.stringify(result.llm_judge.specification)).not.toContain('humanScoreHints');
     expect(JSON.stringify(result.promptfoo.specification)).not.toContain('humanScoreHints');
   });
 
@@ -321,6 +324,34 @@ describe('buildWorkflowEvaluationSpecifications', () => {
 
     expect(result.promptfoo).toMatchObject({ ok: false, code: 'artifact_unavailable' });
     expect(result.llm_judge).toMatchObject({ ok: false, code: 'artifact_unavailable' });
+  });
+
+  it('appends accepted mined checks to the suite and hashes the result', async () => {
+    const mined = { description: 'Has the "Rollout" section', target: 'artifact' as const, assert: [{ type: 'icontains' as const, value: '## Rollout' }] };
+    const result = await buildWorkflowEvaluationSpecifications(
+      prdRequest(),
+      dependencies({ loadMinedTests: async () => [mined] }),
+    );
+
+    if (!result.promptfoo.ok) throw new Error('expected Promptfoo to build');
+    const { suite, suiteSha256 } = result.promptfoo.specification;
+    expect(suite.tests[suite.tests.length - 1]).toEqual(mined);
+    expect(suiteSha256).toBe(createHash('sha256').update(JSON.stringify(suite)).digest('hex'));
+    expect(result.promptfoo.specification.grader).toBeUndefined();
+  });
+
+  it('appends accepted meaning checks and carries the grader App Service resolved', async () => {
+    const rubric = { description: 'Meets: "Risks name an owner."', target: 'artifact' as const, assert: [{ type: 'llm-rubric' as const, value: 'Risks name an owner.' }] };
+    const grader = { provider: 'bedrock' as const, modelId: 'us.anthropic.test', region: 'us-east-2', maxTokens: 1024, timeoutMs: 60_000 };
+    const result = await buildWorkflowEvaluationSpecifications(
+      prdRequest(),
+      dependencies({ loadSemanticTests: async () => [rubric], resolveGrader: () => grader }),
+    );
+
+    if (!result.promptfoo.ok) throw new Error('expected Promptfoo to build');
+    const { suite } = result.promptfoo.specification;
+    expect(suite.tests[suite.tests.length - 1]).toEqual(rubric);
+    expect(result.promptfoo.specification.grader).toEqual(grader);
   });
 
   it('fails only Promptfoo with suite_missing when the ref is not registered', async () => {
@@ -471,7 +502,7 @@ describe('buildWorkflowEvaluationSpecifications', () => {
         omittedMessages: 0,
       });
       const artifact = scratchJson(result.llm_judge.specification, WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage);
-      expect(artifact).toMatchObject({ kind: 'design_doc', sourcePrd: PRD_MARKDOWN, humanScoreHints: CRITERIA });
+      expect(artifact).toMatchObject({ kind: 'design_doc', sourcePrd: PRD_MARKDOWN });
     });
 
     it('fails both jobs when the design doc changed after submission', async () => {
@@ -554,7 +585,7 @@ describe('buildWorkflowEvaluationSpecifications', () => {
         omittedMessages: 0,
       });
       const artifact = scratchJson(result.llm_judge.specification, WORKFLOW_EVALUATION_SCRATCH_PATHS.artifactPackage);
-      expect(artifact).toMatchObject({ kind: 'test_cases', sourcePrd: PRD_MARKDOWN, humanScoreHints: CRITERIA });
+      expect(artifact).toMatchObject({ kind: 'test_cases', sourcePrd: PRD_MARKDOWN });
     });
 
     it('fails both jobs when the test cases changed after submission', async () => {

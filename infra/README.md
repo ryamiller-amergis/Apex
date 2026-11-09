@@ -900,6 +900,16 @@ cooldown (`ai_platform_v2_documents_scale_cooldown_seconds`), which azurerm 3.x 
 set. After apply, check that the Container App system logs have no `KEDAScalerFailed` and
 that `az containerapp show` reports both values.
 
+**Document worker Bedrock grading:** Skill Learning meaning checks run as Promptfoo
+`llm-rubric` tests that a Bedrock model grades. Set
+`ai_platform_v2_documents_aws_access_key_id` and
+`ai_platform_v2_documents_aws_secret_access_key` (the same Bedrock key App Service uses)
+to add the `aws-access-key-id` / `aws-secret-access-key` secrets and the
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env. Leave them null and no grading
+credentials are set; a run that carries an `llm-rubric` test then fails its Promptfoo
+step. The model id and region come on each run's specification, resolved by App Service.
+`infra/scripts/dev-aiv2-tf.sh` reuses the visual worker's key for DEV.
+
 **Split interactive cutover (DEV/PROD):**
 
 1. Drain `ai-runs-v2-fast` and `ai-runs-v2-agentic` queues (must be empty active + DLQ).

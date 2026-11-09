@@ -7,6 +7,7 @@ import type { SkillProvider } from './projectSettings';
 import {
   isJudgeOutputSchema,
   isWorkflowEvaluationRunIdentity,
+  JUDGE_RESULT_FILE,
   WORKFLOW_EVALUATION_SCRATCH_PATHS,
   type WorkflowEvaluationRunIdentity,
 } from './aiRunV2EvaluationSpec';
@@ -25,9 +26,41 @@ export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'playbook-step',
   'evaluation-judge',
   'evaluation-promptfoo',
+  'skill-learning',
 ] as const satisfies readonly BackgroundWorkflowClass[];
 
 const JUDGE_SCRATCH_PATHS: readonly string[] = Object.values(WORKFLOW_EVALUATION_SCRATCH_PATHS);
+
+/** Inputs and the one result file of a `skill-learning` run (candidate drafts, sampled judging, check mining). */
+export const SKILL_LEARNING_SCRATCH_PATHS = {
+  input: '.ai-pilot/skill-learning/input.json',
+  outputSchema: '.ai-pilot/skill-learning/output-schema.json',
+} as const;
+export const SKILL_LEARNING_RESULT_FILE = 'skill-learning-result.json';
+const SKILL_LEARNING_SCRATCH_PATH_LIST: readonly string[] = Object.values(SKILL_LEARNING_SCRATCH_PATHS);
+
+/** Workflows whose single JSON result the worker checks against `outputSchema` before upload. */
+export function documentWorkflowResultFile(workflowClass: BackgroundWorkflowClass): string | null {
+  switch (workflowClass) {
+    case 'evaluation-judge':
+      return JUDGE_RESULT_FILE;
+    case 'skill-learning':
+      return SKILL_LEARNING_RESULT_FILE;
+    case 'prd':
+    case 'adr':
+    case 'design-doc':
+    case 'validation':
+    case 'test-cases':
+    case 'walkthrough-smart-tagging':
+    case 'playbook-step':
+    case 'evaluation-promptfoo':
+      return null;
+    default: {
+      const unhandled: never = workflowClass;
+      throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
+    }
+  }
+}
 
 export type AiRunV2DocumentScratchInput = Readonly<{
   path: string;
@@ -58,7 +91,7 @@ export type AiRunV2DocumentSpecification = Readonly<{
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
-  /** Required for `evaluation-judge` and refused for every other workflow. */
+  /** Required for `evaluation-judge` and `skill-learning`, refused for every other workflow. */
   outputSchema?: Record<string, unknown>;
   /** Required for `evaluation-judge` and refused for every other workflow. */
   evaluation?: WorkflowEvaluationRunIdentity;
@@ -93,6 +126,7 @@ export function documentWorkflowRequiresRepository(
     case 'playbook-step':
     case 'evaluation-judge':
     case 'evaluation-promptfoo':
+    case 'skill-learning':
       return false;
     default: {
       const unhandled: never = workflowClass;
@@ -135,6 +169,8 @@ export function isAllowedDocumentScratchInputPath(
       );
     case 'evaluation-judge':
       return JUDGE_SCRATCH_PATHS.includes(value);
+    case 'skill-learning':
+      return SKILL_LEARNING_SCRATCH_PATH_LIST.includes(value);
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
@@ -170,6 +206,8 @@ export function hasRequiredScratchInputs(
       );
     case 'evaluation-judge':
       return JUDGE_SCRATCH_PATHS.every((value) => paths.includes(value));
+    case 'skill-learning':
+      return SKILL_LEARNING_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
     case 'evaluation-promptfoo':
       // Promptfoo has its own specification; the document guard never accepts it.
       return false;
@@ -298,6 +336,12 @@ export function isAiRunV2DocumentSpecification(
     if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
     if (!isWorkflowEvaluationRunIdentity(candidate.evaluation)) return false;
     // The judge reads only its package, so it never opens a repository.
+    for (const field of ['groundedSha', 'repository', 'provider'] as const) {
+      if (candidate[field] !== undefined) return false;
+    }
+  } else if (candidate.workflowClass === 'skill-learning') {
+    if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
+    if (candidate.evaluation !== undefined) return false;
     for (const field of ['groundedSha', 'repository', 'provider'] as const) {
       if (candidate[field] !== undefined) return false;
     }

@@ -44,6 +44,7 @@ const inputs = (overrides: Partial<SkillHealthInputs> = {}): SkillHealthInputs =
   evaluationProjects: [],
   evaluationEvents: [],
   evaluationJobs: [],
+  signals: [],
   ...overrides,
 });
 
@@ -232,6 +233,68 @@ describe('buildSkillHealthSkills', () => {
       }),
       expect.objectContaining({ skillSha256: null, documents: 1, passRate: 0 }),
     ]);
+  });
+
+  it('adds a score range and marks versions below the minimum sample', () => {
+    const documents = [70, 80, 90, 75, 85].map((score, i) => doc({ id: `d${i}`, skillSha256: 'aaa', validationScore: score }));
+    const [skill] = buildSkillHealthSkills(inputs({ documents: [...documents, doc({ id: 'x', skillSha256: 'bbb' })] }));
+    const big = skill.versions.find((v) => v.skillSha256 === 'aaa');
+    const small = skill.versions.find((v) => v.skillSha256 === 'bbb');
+
+    expect(big?.sufficientSample).toBe(true);
+    expect(big?.scoreInterval?.low).toBeLessThan(80);
+    expect(big?.scoreInterval?.high).toBeGreaterThan(80);
+    expect(big?.passRateInterval).not.toBeNull();
+    expect(small).toEqual(expect.objectContaining({ sufficientSample: false, scoreInterval: null }));
+  });
+
+  it('breaks documents down by model and effort', () => {
+    const [skill] = buildSkillHealthSkills(
+      inputs({
+        documents: [
+          doc({ id: 'a', model: 'claude-4', effort: 'high' }),
+          doc({ id: 'b', model: 'claude-4', effort: 'high', status: 'approved' }),
+          doc({ id: 'c', model: 'gpt-5', effort: null }),
+        ],
+        costs: [{ documentId: 'a', documentType: 'prd', costUsd: 1 }, { documentId: 'b', documentType: 'prd', costUsd: 2 }],
+      }),
+    );
+    expect(skill.models).toEqual([
+      { model: 'claude-4', effort: 'high', documents: 2, averageScore: 80, acceptanceRate: 1, costPerDocument: 1.5 },
+      { model: 'gpt-5', effort: null, documents: 1, averageScore: 80, acceptanceRate: null, costPerDocument: 0 },
+    ]);
+  });
+
+  it('measures time to approval, review rounds, retries and cost per accepted document', () => {
+    const review = (subjectId: string, kind: 'accepted' | 'rejected') => ({
+      project: 'MaxView', surface: 'prd' as const, kind, value: null, skillSha256: null,
+      metadata: { source: 'review' }, subjectType: 'prd', subjectId,
+    });
+    const [skill] = buildSkillHealthSkills(
+      inputs({
+        evaluationProjects: ['MaxView'],
+        documents: [
+          doc({ id: 'a', status: 'approved', createdAt: '2026-10-01T00:00:00.000Z', reviewedAt: '2026-10-02T00:00:00.000Z' }),
+          doc({ id: 'b', status: 'approved', createdAt: '2026-10-01T00:00:00.000Z', reviewedAt: '2026-10-01T12:00:00.000Z' }),
+          doc({ id: 'c', status: 'draft' }),
+        ],
+        costs: [{ documentId: 'a', documentType: 'prd', costUsd: 3 }, { documentId: 'c', documentType: 'prd', costUsd: 1 }],
+        signals: [
+          review('a', 'rejected'),
+          review('a', 'rejected'),
+          review('a', 'accepted'),
+          { ...review('a', 'rejected'), surface: 'prd_assistant', metadata: null },
+          { ...review('a', 'rejected'), project: 'Other' },
+        ],
+      }),
+    );
+    expect(skill.efficiency).toEqual({
+      accepted: 2,
+      medianHoursToApproval: 18,
+      reviewRoundsPerAccepted: 3,
+      costPerAccepted: 2,
+      assistantRetriesPerAccepted: 0.5,
+    });
   });
 });
 

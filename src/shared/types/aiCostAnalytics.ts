@@ -28,6 +28,7 @@ export type AiFeature =
   | 'calendar-work-item-assistant'
   | 'adr'
   | 'workflow-evaluation'
+  | 'skill-learning'
   | 'brainstorm'
   | 'other';
 

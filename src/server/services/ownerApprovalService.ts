@@ -2,6 +2,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { adrs, documentOwnerApprovals, interviews, prds, designDocs, designPrototypes, testCases } from '../db/schema';
 import type { DocumentOwnerApproval, OwnerApprovalDocumentType, OwnerApprovalStatus } from '../../shared/types/approvals';
+import { emitReviewDecisionSignal } from './reviewDecisionSignals';
 
 export async function getOwnerApproval(
   documentId: string,
@@ -54,6 +55,10 @@ export async function recordOwnerApproval(
       },
     })
     .returning();
+
+  if (status === 'approved' || status === 'revision_requested') {
+    emitReviewDecisionSignal({ documentId, documentType, actorId: ownerUserId, role: 'owner', status, respondedAt: now, comment });
+  }
 
   return {
     id: row.id,

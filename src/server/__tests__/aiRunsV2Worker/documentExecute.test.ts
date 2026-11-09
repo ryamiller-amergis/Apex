@@ -771,7 +771,7 @@ describe('V2 document execution', () => {
         checkpoints: checkpoints(),
         signal: new AbortController().signal,
       }),
-    ).rejects.toThrow('Judge output does not match the output schema: / must NOT have additional properties');
+    ).rejects.toThrow('judge-result.json does not match the output schema: / must NOT have additional properties');
   });
 
   it('runs the evaluation judge on scratch inputs and collects its result and appendix', async () => {
@@ -806,6 +806,89 @@ describe('V2 document execution', () => {
     await expect(
       execute({
         specification: judgeSpecification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+  });
+
+  function skillLearningSpecification(): AiRunV2DocumentSpecification {
+    return specification({
+      workflowClass: 'skill-learning',
+      skillPath: 'apex/skill-learning-candidate@1',
+      groundedSha: undefined,
+      repository: undefined,
+      provider: undefined,
+      scratchInputs: [
+        { path: '.ai-pilot/skill-learning/input.json', content: '{"currentSkill":"# Skill"}' },
+        { path: '.ai-pilot/skill-learning/output-schema.json', content: '{"type":"object"}' },
+      ],
+      outputSchema: {
+        type: 'object',
+        required: ['skillContent'],
+        properties: { skillContent: { type: 'string' } },
+        additionalProperties: false,
+      },
+    });
+  }
+
+  function skillLearningExecution(resultContent: string | null) {
+    return jest.fn(async (snapshot) => ({
+      run: {
+        supports: () => false,
+        async *stream() {
+          yield undefined as never;
+        },
+        async wait() {
+          await expect(
+            fs.readFile(path.join(snapshot.workspaceRef, '.ai-pilot', 'skill-learning', 'input.json'), 'utf8'),
+          ).resolves.toBe('{"currentSkill":"# Skill"}');
+          if (resultContent !== null) {
+            await fs.writeFile(
+              path.join(snapshot.workspaceRef, '.ai-pilot', 'output', 'skill-learning-result.json'),
+              resultContent,
+            );
+          }
+          return { status: 'finished' };
+        },
+      },
+      dispose: jest.fn().mockResolvedValue(undefined),
+    }));
+  }
+
+  it('runs a Skill Learning task on scratch inputs and collects its checked result', async () => {
+    const openRepository = jest.fn();
+    const execute = createDocumentExecute({
+      openRepository,
+      createExecution: skillLearningExecution('{"skillContent":"# Better Skill"}'),
+    });
+
+    await expect(
+      execute({
+        specification: skillLearningSpecification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({
+      files: [expect.objectContaining({ path: 'output/skill-learning-result.json' })],
+    });
+    expect(openRepository).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a result that does not match the schema', '{"skillContent":"x","extra":1}'],
+    ['no result file', null],
+  ])('rejects a Skill Learning run with %s', async (_label, resultContent) => {
+    const execute = createDocumentExecute({
+      openRepository: jest.fn(),
+      createExecution: skillLearningExecution(resultContent),
+    });
+
+    await expect(
+      execute({
+        specification: skillLearningSpecification(),
         command: command(),
         checkpoints: checkpoints(),
         signal: new AbortController().signal,

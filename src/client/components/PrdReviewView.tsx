@@ -2295,9 +2295,9 @@ export const PrdReviewView: React.FC = () => {
                   >
                     Approve QA
                   </button>
-                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {/* @feature-flag:skill-learning start winner=enabled */}
                   {qaFeedbackMissing ? (
-                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    /* @feature-flag:skill-learning enabled-start */
                     <span
                       id="qa-approve-feedback-reason"
                       role="status"
@@ -2314,13 +2314,13 @@ export const PrdReviewView: React.FC = () => {
                         Open Quality feedback
                       </button>
                     </span>
-                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                    /* @feature-flag:skill-learning enabled-end */
                   ) : (
-                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    /* @feature-flag:skill-learning disabled-start */
                     null
-                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                    /* @feature-flag:skill-learning disabled-end */
                   )}
-                  {/* @feature-flag:workflow-human-evaluation end */}
+                  {/* @feature-flag:skill-learning end */}
                 </div>
               </>
             )}
@@ -2345,9 +2345,9 @@ export const PrdReviewView: React.FC = () => {
                   >
                     Approve QA as Owner
                   </button>
-                  {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                  {/* @feature-flag:skill-learning start winner=enabled */}
                   {qaFeedbackMissing ? (
-                    /* @feature-flag:workflow-human-evaluation enabled-start */
+                    /* @feature-flag:skill-learning enabled-start */
                     <span
                       id="qa-owner-approve-feedback-reason"
                       role="status"
@@ -2364,13 +2364,13 @@ export const PrdReviewView: React.FC = () => {
                         Open Quality feedback
                       </button>
                     </span>
-                    /* @feature-flag:workflow-human-evaluation enabled-end */
+                    /* @feature-flag:skill-learning enabled-end */
                   ) : (
-                    /* @feature-flag:workflow-human-evaluation disabled-start */
+                    /* @feature-flag:skill-learning disabled-start */
                     null
-                    /* @feature-flag:workflow-human-evaluation disabled-end */
+                    /* @feature-flag:skill-learning disabled-end */
                   )}
-                  {/* @feature-flag:workflow-human-evaluation end */}
+                  {/* @feature-flag:skill-learning end */}
                 </div>
               </>
             )}
@@ -2397,9 +2397,9 @@ export const PrdReviewView: React.FC = () => {
                 >
                   Approve as Owner
                 </button>
-                {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                {/* @feature-flag:skill-learning start winner=enabled */}
                 {isOwnerActor && ownerFeedbackMissing ? (
-                  /* @feature-flag:workflow-human-evaluation enabled-start */
+                  /* @feature-flag:skill-learning enabled-start */
                   <span
                     id="owner-approve-feedback-reason"
                     role="status"
@@ -2416,13 +2416,13 @@ export const PrdReviewView: React.FC = () => {
                       Open Quality feedback
                     </button>
                   </span>
-                  /* @feature-flag:workflow-human-evaluation enabled-end */
+                  /* @feature-flag:skill-learning enabled-end */
                 ) : (
-                  /* @feature-flag:workflow-human-evaluation disabled-start */
+                  /* @feature-flag:skill-learning disabled-start */
                   null
-                  /* @feature-flag:workflow-human-evaluation disabled-end */
+                  /* @feature-flag:skill-learning disabled-end */
                 )}
-                {/* @feature-flag:workflow-human-evaluation end */}
+                {/* @feature-flag:skill-learning end */}
                 {ownerOnly && !isOwnerActor && (
                   <span
                     id="owner-approve-disabled-reason"
@@ -3123,9 +3123,9 @@ export const PrdReviewView: React.FC = () => {
       ) : (
         /* ── Normal tabs ─────────────────────────────────────────────────────── */
         <div className={[styles.tabArea, isFullscreen && styles.tabAreaFullscreen].filter(Boolean).join(' ')}>
-          {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+          {/* @feature-flag:skill-learning start winner=enabled */}
           {canSubmitFeedback && userId ? (
-            /* @feature-flag:workflow-human-evaluation enabled-start */
+            /* @feature-flag:skill-learning enabled-start */
             <ErrorBoundary fallback={null}>
               <Suspense fallback={null}>
                 <PrdQualityFeedbackPrompt
@@ -3138,13 +3138,13 @@ export const PrdReviewView: React.FC = () => {
                 />
               </Suspense>
             </ErrorBoundary>
-            /* @feature-flag:workflow-human-evaluation enabled-end */
+            /* @feature-flag:skill-learning enabled-end */
           ) : (
-            /* @feature-flag:workflow-human-evaluation disabled-start */
+            /* @feature-flag:skill-learning disabled-start */
             null
-            /* @feature-flag:workflow-human-evaluation disabled-end */
+            /* @feature-flag:skill-learning disabled-end */
           )}
-          {/* @feature-flag:workflow-human-evaluation end */}
+          {/* @feature-flag:skill-learning end */}
           <div className={styles.tabs}>
             <button
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
@@ -3172,9 +3172,9 @@ export const PrdReviewView: React.FC = () => {
                 Validation
               </button>
             )}
-            {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+            {/* @feature-flag:skill-learning start winner=enabled */}
             {showQualityFeedback ? (
-              /* @feature-flag:workflow-human-evaluation enabled-start */
+              /* @feature-flag:skill-learning enabled-start */
               <button
                 className={`${styles.tab} ${activeTab === 'quality-feedback' ? styles.active : ''}`}
                 onClick={() => setActiveTab('quality-feedback')}
@@ -3184,13 +3184,13 @@ export const PrdReviewView: React.FC = () => {
               >
                 Quality feedback
               </button>
-              /* @feature-flag:workflow-human-evaluation enabled-end */
+              /* @feature-flag:skill-learning enabled-end */
             ) : (
-              /* @feature-flag:workflow-human-evaluation disabled-start */
+              /* @feature-flag:skill-learning disabled-start */
               null
-              /* @feature-flag:workflow-human-evaluation disabled-end */
+              /* @feature-flag:skill-learning disabled-end */
             )}
-            {/* @feature-flag:workflow-human-evaluation end */}
+            {/* @feature-flag:skill-learning end */}
             <button
               className={[styles.tabFullscreenBtn, isFullscreen && styles.tabFullscreenBtnActive].filter(Boolean).join(' ')}
               onClick={() => setIsFullscreen((v) => !v)}
@@ -3616,9 +3616,9 @@ export const PrdReviewView: React.FC = () => {
               </div>
             )}
 
-            {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+            {/* @feature-flag:skill-learning start winner=enabled */}
             {activeTab === 'quality-feedback' && showQualityFeedback ? (
-              /* @feature-flag:workflow-human-evaluation enabled-start */
+              /* @feature-flag:skill-learning enabled-start */
               <ErrorBoundary
                 fallback={(
                   <div className={styles.emptyPreview} role="alert">
@@ -3642,13 +3642,13 @@ export const PrdReviewView: React.FC = () => {
                   </div>
                 </Suspense>
               </ErrorBoundary>
-              /* @feature-flag:workflow-human-evaluation enabled-end */
+              /* @feature-flag:skill-learning enabled-end */
             ) : (
-              /* @feature-flag:workflow-human-evaluation disabled-start */
+              /* @feature-flag:skill-learning disabled-start */
               null
-              /* @feature-flag:workflow-human-evaluation disabled-end */
+              /* @feature-flag:skill-learning disabled-end */
             )}
-            {/* @feature-flag:workflow-human-evaluation end */}
+            {/* @feature-flag:skill-learning end */}
           </div>
         </div>
       )}

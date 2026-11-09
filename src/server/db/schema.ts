@@ -176,6 +176,21 @@ import type {
 } from '../../shared/types/walkthroughAnchorRegistry';
 import type { WalkthroughRegistryPlacement } from '../../shared/walkthroughAnchors';
 import { WALKTHROUGH_AI_OPTIONS_SINGLETON_ID } from '../../shared/types/walkthroughAiOptions';
+import type { SkillLearningSurface, SkillSignalKind } from '../../shared/constants/skillLearningSurfaces';
+import type {
+  ReplayOutput,
+  SkillExperimentArm,
+  SkillExperimentCandidateSource,
+  SkillExperimentCaseKind,
+  SkillExperimentCriteriaScores,
+  SkillExperimentResult,
+  SkillExperimentRunStatus,
+  SkillExperimentSplit,
+  SkillExperimentStatus,
+  SkillExperimentSubjectType,
+  SkillCheckMiningStatus,
+  SkillSemanticCheckStatus,
+} from '../../shared/types/skillExperiment';
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
@@ -4015,6 +4030,197 @@ export const workflowMessageFeedback = pgTable('workflow_message_feedback', {
       (${t.surface} = 'interview' AND ${t.rating} IN ('up', 'down') AND ${t.comment} IS NULL)
       OR (${t.surface} = 'chat' AND ${t.rating} IN ('good', 'needs_improvement', 'bad'))
     )`,
+  ),
+}));
+
+/** Append-only Skill Learning signals from every covered surface. Surfaces come from SKILL_LEARNING_SURFACES. */
+export const skillSignals = pgTable('skill_signals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  surface: text('surface').$type<SkillLearningSurface>().notNull(),
+  subjectType: text('subject_type').notNull(),
+  subjectId: text('subject_id').notNull(),
+  threadId: uuid('thread_id'),
+  skillPath: text('skill_path'),
+  skillSha256: text('skill_sha256'),
+  model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
+  kind: text('kind').$type<SkillSignalKind>().notNull(),
+  value: smallint('value'),
+  actorId: text('actor_id'),
+  comment: text('comment'),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+  idempotencyKey: text('idempotency_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUq: unique('uq_skill_signals_idempotency').on(t.idempotencyKey),
+  projectSurfaceIdx: index('idx_skill_signals_project_surface_created').on(t.project, t.surface, t.createdAt),
+  skillVersionIdx: index('idx_skill_signals_skill_version').on(t.project, t.skillPath, t.skillSha256),
+  kindCheck: check(
+    'skill_signals_kind_check',
+    sql`${t.kind} IN ('rating', 'accepted', 'rejected', 'regenerated', 'rolled_back', 'handoff_completed', 'handoff_failed', 'gate_approved', 'gate_rejected', 'run_failed', 'completed', 'abandoned')`,
+  ),
+  ratingValueCheck: check(
+    'skill_signals_rating_value_check',
+    sql`(${t.kind} = 'rating' AND ${t.value} BETWEEN -1 AND 1) OR (${t.kind} <> 'rating' AND ${t.value} IS NULL)`,
+  ),
+  shaCheck: check(
+    'skill_signals_sha_check',
+    sql`${t.skillSha256} IS NULL OR ${t.skillSha256} ~ '^[0-9a-f]{64}$'`,
+  ),
+}));
+
+export const skillLearningSettings = pgTable('skill_learning_settings', {
+  project: text('project').primaryKey(),
+  monthlyBudgetUsd: numeric('monthly_budget_usd', { precision: 10, scale: 2 }),
+  updatedBy: text('updated_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+/** A person's decision on a Promptfoo check mined from corrected text. Accepted checks join the stage's suite. */
+export const skillMinedChecks = pgTable('skill_mined_checks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  stageKey: text('stage_key').notNull(),
+  heading: text('heading').notNull(),
+  status: text('status').$type<'accepted' | 'dismissed'>().notNull(),
+  support: integer('support').notNull(),
+  decidedBy: text('decided_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  headingUq: uniqueIndex('uq_skill_mined_checks_heading').on(t.project, t.stageKey, t.heading),
+  statusCheck: check('skill_mined_checks_status_check', sql`${t.status} IN ('accepted', 'dismissed')`),
+}));
+
+export const skillCheckMiningRuns = pgTable('skill_check_mining_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  stageKey: text('stage_key').notNull(),
+  status: text('status').$type<SkillCheckMiningStatus>().notNull().default('running'),
+  agentRunId: text('agent_run_id'),
+  corrections: integer('corrections').notNull(),
+  proposals: integer('proposals'),
+  error: text('error'),
+  estimatedCostUsd: numeric('estimated_cost_usd', { precision: 10, scale: 2 }).notNull(),
+  requestedBy: text('requested_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectIdx: index('idx_skill_check_mining_runs_project').on(t.project, t.createdAt),
+  runningUq: uniqueIndex('uq_skill_check_mining_runs_running').on(t.project, t.stageKey).where(sql`${t.status} = 'running'`),
+  statusCheck: check('skill_check_mining_runs_status_check', sql`${t.status} IN ('running', 'completed', 'failed')`),
+  countsCheck: check(
+    'skill_check_mining_runs_counts_check',
+    sql`${t.corrections} >= 0 AND (${t.proposals} IS NULL OR ${t.proposals} >= 0)`,
+  ),
+}));
+
+export const skillSemanticChecks = pgTable('skill_semantic_checks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  stageKey: text('stage_key').notNull(),
+  statement: text('statement').notNull(),
+  rationale: text('rationale'),
+  support: integer('support').notNull(),
+  evidenceEventIds: jsonb('evidence_event_ids').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  status: text('status').$type<SkillSemanticCheckStatus>().notNull().default('proposed'),
+  miningRunId: uuid('mining_run_id').references(() => skillCheckMiningRuns.id, { onDelete: 'set null' }),
+  decidedBy: text('decided_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statementUq: uniqueIndex('uq_skill_semantic_checks_statement').on(t.project, t.stageKey, sql`md5(lower(${t.statement}))`),
+  acceptedIdx: index('idx_skill_semantic_checks_accepted').on(t.project, t.stageKey).where(sql`${t.status} = 'accepted'`),
+  statusCheck: check('skill_semantic_checks_status_check', sql`${t.status} IN ('proposed', 'accepted', 'dismissed')`),
+  statementCheck: check('skill_semantic_checks_statement_check', sql`length(${t.statement}) BETWEEN 1 AND 300`),
+  supportCheck: check('skill_semantic_checks_support_check', sql`${t.support} >= 0`),
+}));
+
+export const skillExperiments = pgTable('skill_experiments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  subjectType: text('subject_type').$type<SkillExperimentSubjectType>().notNull(),
+  skillPath: text('skill_path').notNull(),
+  baselineContent: text('baseline_content').notNull(),
+  baselineSha256: text('baseline_sha256').notNull(),
+  /** Null only while a worker run drafts the candidate. */
+  candidateContent: text('candidate_content'),
+  candidateSha256: text('candidate_sha256'),
+  candidateSource: text('candidate_source').$type<SkillExperimentCandidateSource>().notNull(),
+  changeNotes: text('change_notes'),
+  draftRunId: uuid('draft_run_id'),
+  error: text('error'),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => workflowEvaluationDefinitions.id, { onDelete: 'restrict' }),
+  status: text('status').$type<SkillExperimentStatus>().notNull().default('running'),
+  estimatedCostUsd: numeric('estimated_cost_usd', { precision: 10, scale: 2 }).notNull().default('0'),
+  spentUsd: numeric('spent_usd', { precision: 10, scale: 2 }).notNull().default('0'),
+  result: jsonb('result').$type<SkillExperimentResult>(),
+  approvalPlaybookRunId: uuid('approval_playbook_run_id'),
+  decidedBy: text('decided_by').references(() => appUsers.oid, { onDelete: 'set null' }),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+  pullRequestUrl: text('pull_request_url'),
+  branchName: text('branch_name'),
+  promotionError: text('promotion_error'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectCreatedIdx: index('idx_skill_experiments_project_created').on(t.project, t.createdAt),
+  runningIdx: index('idx_skill_experiments_running').on(t.status).where(sql`${t.status} = 'running'`),
+  subjectTypeCheck: check('skill_experiments_subject_type_check', sql`${t.subjectType} IN ('prd', 'design_doc')`),
+  statusCheck: check(
+    'skill_experiments_status_check',
+    sql`${t.status} IN ('drafting', 'running', 'completed', 'awaiting_approval', 'approved', 'rejected', 'promoted', 'failed', 'cancelled')`,
+  ),
+  candidateSourceCheck: check(
+    'skill_experiments_candidate_source_check',
+    sql`${t.candidateSource} IN ('manual', 'reflective')`,
+  ),
+  shaCheck: check(
+    'skill_experiments_sha_check',
+    sql`${t.baselineSha256} ~ '^[0-9a-f]{64}$' AND (${t.candidateSha256} IS NULL OR ${t.candidateSha256} ~ '^[0-9a-f]{64}$')`,
+  ),
+  candidateCheck: check(
+    'skill_experiments_candidate_check',
+    sql`${t.status} IN ('drafting', 'failed', 'cancelled') OR (${t.candidateContent} IS NOT NULL AND ${t.candidateSha256} IS NOT NULL)`,
+  ),
+  distinctCheck: check('skill_experiments_distinct_check', sql`${t.baselineSha256} <> ${t.candidateSha256}`),
+  costCheck: check('skill_experiments_cost_check', sql`${t.estimatedCostUsd} >= 0 AND ${t.spentUsd} >= 0`),
+}));
+
+export const skillExperimentRuns = pgTable('skill_experiment_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  experimentId: uuid('experiment_id').notNull().references(() => skillExperiments.id, { onDelete: 'cascade' }),
+  caseKey: text('case_key').notNull(),
+  caseKind: text('case_kind').$type<SkillExperimentCaseKind>().notNull(),
+  split: text('split').$type<SkillExperimentSplit>().notNull(),
+  arm: text('arm').$type<SkillExperimentArm>().notNull(),
+  subjectId: uuid('subject_id').notNull(),
+  sourceRunId: text('source_run_id').notNull(),
+  status: text('status').$type<SkillExperimentRunStatus>().notNull().default('pending'),
+  generationRunId: text('generation_run_id'),
+  judgeRunId: text('judge_run_id'),
+  output: jsonb('output').$type<ReplayOutput>(),
+  criteriaScores: jsonb('criteria_scores').$type<SkillExperimentCriteriaScores>(),
+  overallScore: numeric('overall_score', { precision: 4, scale: 2 }),
+  judgeSummary: text('judge_summary'),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  caseArmUq: unique('uq_skill_experiment_runs_case_arm').on(t.experimentId, t.caseKey, t.arm),
+  experimentIdx: index('idx_skill_experiment_runs_experiment').on(t.experimentId, t.status),
+  caseKindCheck: check('skill_experiment_runs_case_kind_check', sql`${t.caseKind} IN ('failure', 'control')`),
+  splitCheck: check('skill_experiment_runs_split_check', sql`${t.split} IN ('dev', 'holdout')`),
+  armCheck: check('skill_experiment_runs_arm_check', sql`${t.arm} IN ('baseline', 'candidate')`),
+  statusCheck: check(
+    'skill_experiment_runs_status_check',
+    sql`${t.status} IN ('pending', 'generating', 'judging', 'scored', 'failed', 'skipped')`,
+  ),
+  scoreCheck: check(
+    'skill_experiment_runs_score_check',
+    sql`${t.overallScore} IS NULL OR ${t.overallScore} BETWEEN 1 AND 5`,
   ),
 }));
 

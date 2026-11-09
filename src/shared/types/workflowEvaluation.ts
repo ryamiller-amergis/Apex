@@ -301,6 +301,27 @@ export const workflowEvaluationJudgeOutputSchema = z.object({
 
 export type WorkflowEvaluationJudgeOutput = z.infer<typeof workflowEvaluationJudgeOutputSchema>;
 
+const judgeCriterionScoreSchema = z.number().int().min(1).max(5);
+
+/** The judge's own 1–5 score per criterion, given without seeing the person's scores. */
+export const workflowEvaluationJudgeCriteriaScoresSchema = z.object({
+  intent_alignment: judgeCriterionScoreSchema,
+  requirements_coverage: judgeCriterionScoreSchema,
+  scope_alignment: judgeCriterionScoreSchema,
+  acceptance_criteria: judgeCriterionScoreSchema,
+  readiness: judgeCriterionScoreSchema,
+} satisfies Record<WorkflowEvaluationCriteriaKey, typeof judgeCriterionScoreSchema>);
+
+/** Definition version 2 onward: the blind judge also scores every criterion. */
+export const workflowEvaluationJudgeOutputSchemaV2 = workflowEvaluationJudgeOutputSchema.extend({
+  criteriaScores: workflowEvaluationJudgeCriteriaScoresSchema,
+});
+
+export type WorkflowEvaluationJudgeOutputV2 = z.infer<typeof workflowEvaluationJudgeOutputSchemaV2>;
+
+/** Definition version that first carries the blind judge's criteria scores. */
+export const WORKFLOW_EVALUATION_BLIND_JUDGE_DEFINITION_VERSION = 2;
+
 export type WorkflowEvaluationJobResultBlobRefs = {
   output?: AiRunBlobRef;
   appendix?: AiRunBlobRef;

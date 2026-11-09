@@ -1059,6 +1059,20 @@ variable "ai_platform_v2_documents_container_app_name" {
   default     = null
 }
 
+variable "ai_platform_v2_documents_aws_access_key_id" {
+  description = "AWS access key id the document worker uses for Bedrock to grade Promptfoo llm-rubric checks. Null leaves grading off."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ai_platform_v2_documents_aws_secret_access_key" {
+  description = "AWS secret access key the document worker uses for Bedrock to grade Promptfoo llm-rubric checks."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 variable "ai_platform_v2_orchestrator_image" {
   description = "Full ACR image reference for the orchestrator (e.g. acrapexltdev.azurecr.io/apex-ai-orchestrator:latest)."
   type        = string

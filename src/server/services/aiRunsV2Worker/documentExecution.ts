@@ -5,7 +5,9 @@ import path from 'node:path';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import {
   documentWorkflowRequiresRepository,
+  documentWorkflowResultFile,
   isAiRunV2DocumentSpecification,
+  SKILL_LEARNING_RESULT_FILE,
   type AiRunV2DocumentSpecification,
 } from '../../../shared/types/aiRunV2DocumentSpec';
 import {
@@ -112,6 +114,8 @@ function isExpectedOutputPath(
     case 'evaluation-promptfoo':
       // The Promptfoo executor writes its own files; no agent output is collected.
       return false;
+    case 'skill-learning':
+      return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -222,6 +226,11 @@ function assertExpectedOutputSet(
       return;
     case 'evaluation-promptfoo':
       throw new Error('The document executor does not run Promptfoo suites');
+    case 'skill-learning':
+      if (names.length !== 1 || names[0] !== SKILL_LEARNING_RESULT_FILE) {
+        throw new Error(`Document workflow did not produce ${SKILL_LEARNING_RESULT_FILE}`);
+      }
+      return;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -325,20 +334,21 @@ export async function collectDocumentArtifacts(
   return artifacts;
 }
 
-function assertJudgeResultMatchesSchema(
+function assertResultMatchesSchema(
   files: readonly ArtifactFile[],
+  resultFile: string,
   outputSchema: Record<string, unknown> | undefined,
 ): void {
   if (!outputSchema) {
-    throw new Error('Judge specification has no output schema');
+    throw new Error('Specification has no output schema');
   }
-  const result = files.find((file) => file.path === `${ARTIFACT_OUTPUT_PREFIX}${JUDGE_RESULT_FILE}`);
+  const result = files.find((file) => file.path === `${ARTIFACT_OUTPUT_PREFIX}${resultFile}`);
   if (!result) {
-    throw new Error(`Judge did not write ${JUDGE_RESULT_FILE}`);
+    throw new Error(`The agent did not write ${resultFile}`);
   }
   const check = checkJudgeOutput(result.content.toString(), outputSchema);
   if (!check.ok) {
-    throw new Error(`Judge output does not match the output schema: ${check.errors.join('; ')}`);
+    throw new Error(`${resultFile} does not match the output schema: ${check.errors.join('; ')}`);
   }
 }
 
@@ -726,8 +736,9 @@ export function createDocumentExecute(
         ),
         signal,
       );
-      if (specification.workflowClass === 'evaluation-judge') {
-        assertJudgeResultMatchesSchema(files, specification.outputSchema);
+      const resultFile = documentWorkflowResultFile(specification.workflowClass);
+      if (resultFile) {
+        assertResultMatchesSchema(files, resultFile, specification.outputSchema);
       }
       const reply = result.text.trim();
       if (reply) {

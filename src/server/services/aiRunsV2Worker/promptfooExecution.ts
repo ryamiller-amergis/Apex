@@ -4,7 +4,8 @@
  * Promptfoo runs in a child process. Its package posts one event home even
  * with telemetry off, so the child gets a proxy that points at a closed port
  * and none of the worker's credentials. The child is killed when the attempt
- * is aborted.
+ * is aborted. Model-graded assertions are graded here, in the worker, with the
+ * model the specification names; the child only sends the grading prompts up.
  */
 import { fork } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -13,17 +14,18 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   isAiRunV2PromptfooSpecification,
-  PROMPTFOO_DETERMINISTIC_ASSERTION_TYPES,
+  isPromptfooAssertionType,
   PROMPTFOO_RESULTS_FILE,
   PROMPTFOO_SUMMARY_FILE,
   PROMPTFOO_SUMMARY_MAX_FAILURES,
   renderPromptfooTarget,
   type AiRunV2PromptfooSpecification,
-  type PromptfooDeterministicAssertionType,
+  type PromptfooAssertionType,
   type WorkflowEvaluationPromptfooFailure,
   type WorkflowEvaluationPromptfooSummary,
   type WorkflowEvaluationPromptfooTarget,
 } from '../../../shared/types/aiRunV2EvaluationSpec';
+import { createBedrockPromptfooGrader, type GradePrompt } from './promptfooBedrockGrader';
 import type { ExecuteWorkload, ExecutionOutcome } from './worker';
 
 /** A closed local port: any request Promptfoo makes fails instead of leaving the container. */
@@ -35,7 +37,15 @@ const STDERR_TAIL_CHARS = 2_000;
 export type PromptfooRunnerRequest = Readonly<{
   targets: Readonly<Record<WorkflowEvaluationPromptfooTarget, string>>;
   tests: ReadonlyArray<AiRunV2PromptfooSpecification['suite']['tests'][number]>;
+  /** When true the runner sends model-graded prompts back to the worker to answer. */
+  gradingEnabled: boolean;
 }>;
+
+/** A grading prompt the runner sends up, and the worker's answer. */
+export type PromptfooGradeRequest = Readonly<{ type: 'grade'; id: string; prompt: string }>;
+export type PromptfooGradeResult = Readonly<
+  { type: 'grade-result'; id: string; output: string } | { type: 'grade-result'; id: string; error: string }
+>;
 
 export type PromptfooRunnerRow = Readonly<{
   testIdx?: number;
@@ -55,12 +65,15 @@ export type RunPromptfooRunner = (input: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
+  /** Answers the runner's grading prompts; absent when the suite has no model-graded assertion. */
+  grade?: (prompt: string) => Promise<string>;
 }) => Promise<PromptfooRunnerReply>;
 
 export type PromptfooExecutionDependencies = Readonly<{
   /** Path of the runner script installed with the worker's pinned Promptfoo package. */
   runnerPath?: string;
   runRunner?: RunPromptfooRunner;
+  gradePrompt?: GradePrompt;
   tempRoot?: string;
   parentEnv?: NodeJS.ProcessEnv;
   now?: () => number;
@@ -109,7 +122,13 @@ export function promptfooRunnerEnvironment(
   };
 }
 
-export const forkPromptfooRunner: RunPromptfooRunner = ({ runnerPath, request, cwd, env, signal }) =>
+function isGradeRequest(value: unknown): value is PromptfooGradeRequest {
+  if (!value || typeof value !== 'object') return false;
+  const message = value as Record<string, unknown>;
+  return message.type === 'grade' && typeof message.id === 'string' && typeof message.prompt === 'string';
+}
+
+export const forkPromptfooRunner: RunPromptfooRunner = ({ runnerPath, request, cwd, env, signal, grade }) =>
   new Promise<PromptfooRunnerReply>((resolve, reject) => {
     if (signal.aborted) {
       reject(abortError(signal));
@@ -148,7 +167,25 @@ export const forkPromptfooRunner: RunPromptfooRunner = ({ runnerPath, request, c
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_TAIL_CHARS);
     });
-    child.once('message', (message) => finish(() => resolve(message as PromptfooRunnerReply)));
+    child.on('message', (message) => {
+      if (!isGradeRequest(message)) {
+        finish(() => resolve(message as PromptfooRunnerReply));
+        return;
+      }
+      const answer: Promise<string> = grade
+        ? grade(message.prompt)
+        : Promise.reject(new Error('This suite has no grader'));
+      void answer.then(
+        (output): PromptfooGradeResult => ({ type: 'grade-result', id: message.id, output }),
+        (error: unknown): PromptfooGradeResult => ({
+          type: 'grade-result',
+          id: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ).then((result) => {
+        if (!outcome && child.connected) child.send(result);
+      });
+    });
     child.once('error', (error) => finish(() => reject(error)));
     child.once('exit', (code, exitSignal) => {
       exited = true;
@@ -173,10 +210,8 @@ function isRunnerReply(value: unknown): value is PromptfooRunnerReply {
 function assertionType(
   type: string | undefined,
   test: AiRunV2PromptfooSpecification['suite']['tests'][number],
-): PromptfooDeterministicAssertionType {
-  return (PROMPTFOO_DETERMINISTIC_ASSERTION_TYPES as readonly string[]).includes(type ?? '')
-    ? type as PromptfooDeterministicAssertionType
-    : test.assert[0].type;
+): PromptfooAssertionType {
+  return isPromptfooAssertionType(type) ? type : test.assert[0].type;
 }
 
 function toTestResults(
@@ -226,6 +261,7 @@ export function createPromptfooExecute(
   dependencies: PromptfooExecutionDependencies = {},
 ): ExecuteWorkload {
   const runRunner = dependencies.runRunner ?? forkPromptfooRunner;
+  const gradePrompt = dependencies.gradePrompt ?? createBedrockPromptfooGrader();
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
   const parentEnv = dependencies.parentEnv ?? process.env;
   const now = dependencies.now ?? Date.now;
@@ -249,6 +285,7 @@ export function createPromptfooExecute(
     const startedAt = now();
     await checkpoints.publishProgress('execution', 'running');
     const workDir = await fs.mkdtemp(path.join(tempRoot, 'apex-promptfoo-'));
+    const grader = specification.grader;
     let reply: PromptfooRunnerReply;
     try {
       const configDir = path.join(workDir, 'config');
@@ -261,10 +298,12 @@ export function createPromptfooExecute(
             backlog: renderPromptfooTarget(specification.artifactPackage, 'backlog'),
           },
           tests: specification.suite.tests,
+          gradingEnabled: grader !== undefined,
         },
         cwd: workDir,
         env: promptfooRunnerEnvironment(configDir, parentEnv),
         signal,
+        ...(grader ? { grade: (prompt: string) => gradePrompt(prompt, grader, signal) } : {}),
       });
     } finally {
       await fs.rm(workDir, { recursive: true, force: true });

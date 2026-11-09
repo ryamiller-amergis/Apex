@@ -1179,7 +1179,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
   );
 
-  // @feature-flag:workflow-human-evaluation
+  // @feature-flag:skill-learning
   const feedbackAccess = useWorkflowEvaluationAccess(interview?.project);
   const usesPhaseFeedback = feedbackAccess.canView
     && interview?.status === 'in_progress'
@@ -1502,7 +1502,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   // @feature-flag:build-from-prompt end
   const isChatLocked = isReadOnlyViewer || isStatusLocked || buildIntakePaused;
 
-  // @feature-flag:workflow-human-evaluation
+  // @feature-flag:skill-learning
   const baUserId = interview.discoveryAssigneeId ?? interview.authorId;
   const technicalUserId = interview.technicalAssigneeId ?? interview.authorId;
   const reviewerName = (reviewerId: string, assignedName: string | undefined, fallback: string) => {
@@ -1743,7 +1743,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   Complete
                 </button>
               )}
-              {/* @feature-flag:workflow-human-evaluation */}
+              {/* @feature-flag:skill-learning */}
               {canCompleteInterview && completeBlockedReason && (
                 <span className={styles.completeBlockedReason} {...{ 'data-testid': 'complete-interview-feedback-reason' }}>
                   {completeBlockedReason}
@@ -1885,7 +1885,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         />
       )}
 
-      {isPlaybookInterview && isBuildIntake && <BuildBriefReview interviewId={id} />}
+      {isPlaybookInterview && isBuildIntake && <BuildBriefReview interviewId={id} project={interview.project} />}
       {isPlaybookInterview && !isBuildIntake && (
         <InterviewBriefReview
           brief={interviewBrief}
@@ -2114,7 +2114,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
           )}
         </div>
       ) : isBaFeedbackLocked ? (
-        // @feature-flag:workflow-human-evaluation
+        // @feature-flag:skill-learning
         userId === baUserId && feedbackAccess.canSubmit ? (
           <InterviewPhaseFeedbackPanel
             project={interview.project}
@@ -2136,7 +2136,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         )
       ) : (
         <div className={styles.inputArea}>
-          {/* @feature-flag:workflow-human-evaluation */}
+          {/* @feature-flag:skill-learning */}
           {showTechnicalFeedbackPrompt && (
             <div className={styles.technicalFeedbackPrompt} {...{ 'data-testid': 'interview-technical-feedback-prompt' }}>
               <span>Rate the Technical phase before this interview can be completed.</span>

@@ -210,7 +210,8 @@ export function createFinishedAttemptReader(deps?: {
               'walkthrough-smart-tagging',
               'playbook-step',
               'evaluation-promptfoo',
-              'evaluation-judge'
+              'evaluation-judge',
+              'skill-learning'
             )
             AND NOT EXISTS (
               SELECT 1
@@ -286,7 +287,8 @@ export function createFinishedAttemptReader(deps?: {
             'walkthrough-smart-tagging',
             'playbook-step',
             'evaluation-promptfoo',
-            'evaluation-judge'
+            'evaluation-judge',
+            'skill-learning'
           )
           AND NOT EXISTS (
             SELECT 1

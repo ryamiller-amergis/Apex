@@ -486,6 +486,93 @@ describe('V2 document artifact harvest', () => {
     expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
   });
 
+  it('hands a Skill replay to the experiment instead of a document', async () => {
+    const currentAttempt = attempt({ threadId: 'skill-replay:run-7:generate' });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt);
+    const applyWorkspace = jest.fn();
+    const skillReplays = {
+      owns: (threadId: string) => threadId.startsWith('skill-replay:'),
+      applyCompleted: jest.fn(async (input: { outputDir: string }) => {
+        await expect(fs.readFile(path.join(input.outputDir, 'feature.prd.md'), 'utf8')).resolves.toBe('# PRD');
+      }),
+      applyFailed: jest.fn(),
+    };
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace,
+      applySmartTagging: jest.fn(),
+      skillReplays,
+    });
+
+    expect(skillReplays.applyCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'skill-replay:run-7:generate' }),
+    );
+    expect(applyWorkspace).not.toHaveBeenCalled();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('hands a Skill Learning result to Skill Learning with its run id', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'skill-learning',
+      threadId: 'skill-learning:candidate:exp-1',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/skill-learning-result.json': '{"skillContent":"# Skill"}',
+    });
+    const skillReplays = {
+      owns: (threadId: string) => threadId.startsWith('skill-learning:'),
+      applyCompleted: jest.fn(async (input: { outputDir: string }) => {
+        await expect(fs.readFile(path.join(input.outputDir, 'skill-learning-result.json'), 'utf8'))
+          .resolves.toBe('{"skillContent":"# Skill"}');
+      }),
+      applyFailed: jest.fn(),
+    };
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace: jest.fn(),
+      applySmartTagging: jest.fn(),
+      skillReplays,
+    });
+
+    expect(skillReplays.applyCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-1', threadId: 'skill-learning:candidate:exp-1' }),
+    );
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('records a failed Skill replay on the experiment', async () => {
+    const currentAttempt = attempt({
+      threadId: 'skill-replay:run-7:generate',
+      status: 'failed',
+      manifestRef: null,
+      failureDetail: 'Agent timed out',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt);
+    const skillReplays = {
+      owns: () => true,
+      applyCompleted: jest.fn(),
+      applyFailed: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace: jest.fn(),
+      applySmartTagging: jest.fn(),
+      skillReplays,
+    });
+
+    expect(skillReplays.applyFailed).toHaveBeenCalledWith({
+      runId: currentAttempt.runId,
+      threadId: 'skill-replay:run-7:generate',
+      reason: expect.stringContaining('Agent timed out'),
+    });
+  });
+
   it('rejects an evaluation manifest that carries document outputs', async () => {
     const currentAttempt = attempt({
       workflowClass: 'evaluation-judge',

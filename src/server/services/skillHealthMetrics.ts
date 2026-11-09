@@ -10,6 +10,9 @@ import {
   SKILL_HEALTH_MIN_SCORED_DOCUMENTS,
   type SkillAttributionSource,
   type SkillHealthArtifactKind,
+  type SkillHealthEfficiency,
+  type SkillHealthInterval,
+  type SkillHealthModelBreakdown,
   type SkillHealthProject,
   type SkillHealthRecurringGap,
   type SkillHealthSectionCell,
@@ -26,6 +29,9 @@ import {
   type SkillHealthEvaluationEventInput,
   type SkillHealthEvaluationJobInput,
 } from './skillHealthEvaluationMetrics';
+import { buildProjectSignals, type SkillSignalRowInput } from './skillSignalMetrics';
+import { meanInterval, wilsonInterval } from './skillLearningStats';
+import type { SkillLearningSurface } from '../../shared/constants/skillLearningSurfaces';
 
 export interface SkillHealthDocumentInput {
   id: string;
@@ -38,6 +44,10 @@ export interface SkillHealthDocumentInput {
   skillSettingsId: string | null;
   skillSha256: string | null;
   hasOverride: boolean;
+  model?: string | null;
+  effort?: string | null;
+  /** When the document was last reviewed; used as its approval time once accepted. */
+  reviewedAt?: string | null;
 }
 
 export interface SkillHealthSettingsInput {
@@ -68,10 +78,12 @@ export interface SkillHealthInputs {
   settings: SkillHealthSettingsInput[];
   comments: SkillHealthCommentInput[];
   costs: SkillHealthCostInput[];
-  /** Projects with the `workflow-human-evaluation` flag on; only their events are used. */
+  /** Projects with the `skill-learning` flag on; only their events are used. */
   evaluationProjects: string[];
   evaluationEvents: SkillHealthEvaluationEventInput[];
   evaluationJobs: SkillHealthEvaluationJobInput[];
+  /** Same flag filter as `evaluationEvents`. */
+  signals: SkillSignalRowInput[];
 }
 
 function enabledEvaluationEvents(inputs: SkillHealthInputs): SkillHealthEvaluationEventInput[] {
@@ -237,6 +249,94 @@ function passRateOf(entries: SkillAccumulator['docs']): number | null {
   return ratio(judged.filter((e) => e.passed).length, judged.length);
 }
 
+function roundInterval(interval: { low: number; high: number } | null, digits: number): SkillHealthInterval | null {
+  if (!interval) return null;
+  const factor = 10 ** digits;
+  return { low: Math.round(interval.low * factor) / factor, high: Math.round(interval.high * factor) / factor };
+}
+
+function versionIntervals(list: SkillAccumulator['docs']): Pick<SkillHealthVersion, 'scoreInterval' | 'passRateInterval' | 'sufficientSample'> {
+  const scores = list.flatMap((e) => (e.score === null ? [] : [e.score]));
+  const judged = list.filter((e) => e.passed !== null);
+  return {
+    scoreInterval: roundInterval(meanInterval(scores), 1),
+    passRateInterval: roundInterval(wilsonInterval(judged.filter((e) => e.passed).length, judged.length), 3),
+    sufficientSample: scores.length >= SKILL_HEALTH_MIN_SCORED_DOCUMENTS,
+  };
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function round(value: number | null, digits: number): number | null {
+  if (value === null) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function buildModels(entries: SkillAccumulator['docs'], costByDoc: Map<string, number>): SkillHealthModelBreakdown[] {
+  const byModel = new Map<string, SkillAccumulator['docs']>();
+  for (const entry of entries) {
+    const key = `${entry.doc.model ?? ''}|${entry.doc.effort ?? ''}`;
+    const list = byModel.get(key);
+    if (list) list.push(entry);
+    else byModel.set(key, [entry]);
+  }
+  return [...byModel.values()]
+    .map((list) => {
+      const scored = list.flatMap((e) => (e.score === null ? [] : [e.score]));
+      const cost = list.reduce((sum, e) => sum + (costByDoc.get(docKey(e.doc.kind, e.doc.id)) ?? 0), 0);
+      return {
+        model: list[0].doc.model ?? null,
+        effort: list[0].doc.effort ?? null,
+        documents: list.length,
+        averageScore: average(scored),
+        acceptanceRate: acceptanceRateOf(list),
+        costPerDocument: round(cost / list.length, 2),
+      };
+    })
+    .sort((a, b) => b.documents - a.documents);
+}
+
+const ASSISTANT_SURFACE: Record<SkillHealthArtifactKind, SkillLearningSurface> = {
+  prd: 'prd_assistant',
+  design_doc: 'design_doc_assistant',
+};
+
+function buildEfficiency(
+  entries: SkillAccumulator['docs'],
+  costUsd: number,
+  signalsByDoc: Map<string, SkillSignalRowInput[]>,
+): SkillHealthEfficiency {
+  const accepted = entries.filter((e) => ACCEPTED_STATUSES.has(e.doc.status));
+  const hours = accepted.flatMap(({ doc }) => {
+    if (!doc.reviewedAt) return [];
+    const elapsed = (Date.parse(doc.reviewedAt) - Date.parse(doc.createdAt)) / 3_600_000;
+    return Number.isFinite(elapsed) && elapsed >= 0 ? [elapsed] : [];
+  });
+  const rounds: number[] = [];
+  let retries = 0;
+  for (const { doc } of accepted) {
+    const signals = signalsByDoc.get(doc.id) ?? [];
+    const reviews = signals.filter((s) => s.surface === doc.kind && s.metadata?.source === 'review');
+    if (reviews.length > 0) rounds.push(1 + reviews.filter((s) => s.kind === 'rejected').length);
+    retries += signals.filter(
+      (s) => s.surface === ASSISTANT_SURFACE[doc.kind] && (s.kind === 'regenerated' || s.kind === 'rejected'),
+    ).length;
+  }
+  return {
+    accepted: accepted.length,
+    medianHoursToApproval: round(median(hours), 1),
+    reviewRoundsPerAccepted: rounds.length === 0 ? null : round(rounds.reduce((a, b) => a + b, 0) / rounds.length, 2),
+    costPerAccepted: accepted.length === 0 ? null : round(costUsd / accepted.length, 2),
+    assistantRetriesPerAccepted: accepted.length === 0 ? null : round(retries / accepted.length, 2),
+  };
+}
+
 function buildVersions(
   entries: SkillAccumulator['docs'],
   humanEvents: SkillHealthEvaluationEventInput[],
@@ -261,6 +361,7 @@ function buildVersions(
         firstSeen: created[0],
         lastSeen: created[created.length - 1],
         ...humanStats(humanEvents.filter((e) => (e.skillVersion ?? null) === skillSha256)),
+        ...versionIntervals(list),
       };
     })
     .sort((a, b) =>
@@ -299,6 +400,15 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
     const list = documentEventsBySkill.get(key);
     if (list) list.push(event);
     else documentEventsBySkill.set(key, [event]);
+  }
+
+  const signalProjects = new Set(inputs.evaluationProjects);
+  const signalsByDoc = new Map<string, SkillSignalRowInput[]>();
+  for (const signal of inputs.signals) {
+    if (!signal.subjectId || !signalProjects.has(signal.project)) continue;
+    const list = signalsByDoc.get(signal.subjectId);
+    if (list) list.push(signal);
+    else signalsByDoc.set(signal.subjectId, [signal]);
   }
 
   const skills = new Map<string, SkillAccumulator>();
@@ -352,6 +462,8 @@ export function buildSkillHealthSkills(inputs: SkillHealthInputs): SkillHealthSk
         sections: buildSections(acc.docs, commentsByDoc),
         recurringGaps: buildRecurringGaps(acc.docs),
         versions: buildVersions(acc.docs, documentEventsBySkill.get(key) ?? []),
+        models: buildModels(acc.docs, costByDoc),
+        efficiency: buildEfficiency(acc.docs, costUsd, signalsByDoc),
       };
     })
     .sort((a, b) => b.documents - a.documents);
@@ -366,10 +478,11 @@ export function buildSkillHealthProjects(inputs: SkillHealthInputs): SkillHealth
     else byProject.set(skill.project, [skill]);
   }
   const enabledEvents = enabledEvaluationEvents(inputs);
-  for (const event of enabledEvents) {
-    if (!byProject.has(event.project)) byProject.set(event.project, []);
-  }
   const evaluationEnabled = new Set(inputs.evaluationProjects);
+  const enabledSignals = inputs.signals.filter((s) => evaluationEnabled.has(s.project));
+  for (const row of [...enabledEvents, ...enabledSignals]) {
+    if (!byProject.has(row.project)) byProject.set(row.project, []);
+  }
   const eventIds = new Set(enabledEvents.map((e) => e.id));
   const jobs = inputs.evaluationJobs.filter((j) => eventIds.has(j.eventId));
 
@@ -381,6 +494,9 @@ export function buildSkillHealthProjects(inputs: SkillHealthInputs): SkillHealth
       skills,
       evaluation: evaluationEnabled.has(project)
         ? buildProjectEvaluation(project, enabledEvents.filter((e) => e.project === project), jobs)
+        : null,
+      signals: evaluationEnabled.has(project)
+        ? buildProjectSignals(enabledSignals.filter((s) => s.project === project))
         : null,
     }))
     .sort((a, b) => Number(b.isFoundation) - Number(a.isFoundation) || a.project.localeCompare(b.project));

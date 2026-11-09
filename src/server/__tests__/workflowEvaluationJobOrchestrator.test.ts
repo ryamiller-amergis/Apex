@@ -273,7 +273,7 @@ describe('workflow evaluation job orchestrator', () => {
   });
 
   it.each([
-    ['workflow-human-evaluation', 'flag_disabled'],
+    ['skill-learning', 'flag_disabled'],
     ['ai-runs-v2-transport', 'transport_disabled'],
   ])('fails both jobs without admitting when %s is off', async (flag, code) => {
     const { orchestrator, repo, admit, buildSpecifications } = setup({
@@ -348,7 +348,7 @@ describe('workflow evaluation job orchestrator', () => {
       });
       expect(admit).toHaveBeenCalledTimes(1);
       expect(isFlagEnabled).toHaveBeenCalledWith(
-        'workflow-human-evaluation',
+        'skill-learning',
         expect.objectContaining({ userId: 'admin-1', project: 'Apex' }),
       );
     });

@@ -33,7 +33,7 @@ import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../shared/types/featureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
 import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
@@ -360,7 +360,7 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
-  const workflowEvaluationsEnabled = homeFlags[WORKFLOW_HUMAN_EVALUATION_FLAG] === true;
+  const workflowEvaluationsEnabled = homeFlags[SKILL_LEARNING_FLAG] === true;
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
   const {
     data: selectableProjectList = [],
@@ -1444,9 +1444,9 @@ function App() {
                         API Keys
                       </button>
                     )}
-                    {/* @feature-flag:workflow-human-evaluation start winner=enabled */}
+                    {/* @feature-flag:skill-learning start winner=enabled */}
                     {workflowEvaluationsEnabled ? (
-                      /* @feature-flag:workflow-human-evaluation enabled-start */
+                      /* @feature-flag:skill-learning enabled-start */
                       <button
                         className={`admin-tab${location.pathname === '/admin/workflow-evaluations' ? ' admin-tab-active' : ''}`}
                         onClick={() => navigate('/admin/workflow-evaluations')}
@@ -1455,13 +1455,13 @@ function App() {
                       >
                         Workflow evaluations
                       </button>
-                      /* @feature-flag:workflow-human-evaluation enabled-end */
+                      /* @feature-flag:skill-learning enabled-end */
                     ) : (
-                      /* @feature-flag:workflow-human-evaluation disabled-start */
+                      /* @feature-flag:skill-learning disabled-start */
                       null
-                      /* @feature-flag:workflow-human-evaluation disabled-end */
+                      /* @feature-flag:skill-learning disabled-end */
                     )}
-                    {/* @feature-flag:workflow-human-evaluation end */}
+                    {/* @feature-flag:skill-learning end */}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -1475,14 +1475,14 @@ function App() {
                     <LoadTestAllowlistSettings selectedProject={selectedProject} />
                   ) : location.pathname === '/admin/api-keys' ? (
                     <ApiKeysAdminView selectedProject={selectedProject} />
-                  // @feature-flag:workflow-human-evaluation start winner=enabled
+                  // @feature-flag:skill-learning start winner=enabled
                   ) : location.pathname === '/admin/workflow-evaluations' && homeFlagsLoading ? (
                     <ViewSkeleton />
                   ) : location.pathname === '/admin/workflow-evaluations' && workflowEvaluationsEnabled ? (
-                    // @feature-flag:workflow-human-evaluation enabled-start
+                    // @feature-flag:skill-learning enabled-start
                     <WorkflowEvaluationsPage selectedProject={selectedProject} />
-                    // @feature-flag:workflow-human-evaluation enabled-end
-                  // @feature-flag:workflow-human-evaluation end
+                    // @feature-flag:skill-learning enabled-end
+                  // @feature-flag:skill-learning end
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}
