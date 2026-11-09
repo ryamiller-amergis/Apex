@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -32,7 +31,6 @@ export const PlaybookDefinitionPanel: React.FC<PlaybookDefinitionPanelProps> = (
 }) => {
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const definitions = usePlaybookDefinitions(project);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -188,16 +186,14 @@ export const PlaybookDefinitionPanel: React.FC<PlaybookDefinitionPanelProps> = (
             </div>
           ) : detail.data ? (
             <>
-              {canvasEnabled ? (
-                <p>
-                  <Link
-                    to={`/playbooks/definitions/${detail.data.definition.id}`}
-                    {...{ 'data-testid': 'playbook-open-canvas' }}
-                  >
-                    Open authoring canvas
-                  </Link>
-                </p>
-              ) : null}
+              <p>
+                <Link
+                  to={`/playbooks/definitions/${detail.data.definition.id}`}
+                  {...{ 'data-testid': 'playbook-open-canvas' }}
+                >
+                  Open authoring canvas
+                </Link>
+              </p>
               <PlaybookDraftEditor
                 project={project}
                 detail={detail.data}

@@ -56,6 +56,7 @@ import {
   useApplyProposedPrd,
   useRejectProposedPrd,
 } from '../hooks/useInterviews';
+import { isApiNotFoundError } from '../utils/apiFetch';
 import {
   useReviewComments,
   useUnresolvedCommentCount,
@@ -607,7 +608,7 @@ export const PrdReviewView: React.FC = () => {
   const feedbackAccess = useWorkflowEvaluationAccess(selectedProject);
 
   const queryClient = useQueryClient();
-  const { data: prd, isLoading, isError } = usePrd(id);
+  const { data: prd, isLoading, isError, error: prdError, isFetching, refetch } = usePrd(id);
   const subjectFeedbackQuery = useWorkflowEvaluationEvents({
     project: selectedProject,
     subjectType: 'prd',
@@ -1672,8 +1673,25 @@ export const PrdReviewView: React.FC = () => {
       </div>
     );
   }
-  if (isError || !prd)
+  const prdNotFound = isError && isApiNotFoundError(prdError);
+  if (prdNotFound || (!prd && !isError))
     return <div className={styles.errorState}>PRD not found.</div>;
+  if (!prd) {
+    return (
+      <div className={styles.errorState} role="alert">
+        <span>Couldn&apos;t load this PRD.</span>
+        <button
+          type="button"
+          className={styles.genRetryBtn}
+          onClick={() => void refetch()}
+          disabled={isFetching}
+          {...{ 'data-testid': 'prd-load-retry-btn' }}
+        >
+          {isFetching ? 'Retrying…' : 'Retry'}
+        </button>
+      </div>
+    );
+  }
   if (!readiness)
     return <div className={styles.errorState}>PRD readiness unavailable.</div>;
 
@@ -1962,6 +1980,15 @@ export const PrdReviewView: React.FC = () => {
               >
                 {statusLabel(prd.status)}
               </span>
+              {isError && (
+                <span
+                  className={styles.reviewOnlyBadge}
+                  role="status"
+                  {...{ 'data-testid': 'prd-reconnecting-hint' }}
+                >
+                  Reconnecting…
+                </span>
+              )}
               {prd.prdValidationEnabled && (() => {
                 const hasAllArtifacts =
                   !!prd.content &&

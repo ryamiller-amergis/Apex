@@ -12,9 +12,20 @@
 import request from 'supertest';
 import express from 'express';
 import fs from 'fs';
+import path from 'path';
 import interviewRouter from '../routes/interviews';
 import * as designDocService from '../services/designDocService';
 import * as prdService from '../services/prdService';
+
+const mockWriteThreadFolderFile = jest.fn(
+  async (input: { workspaceDir: string; relativePath: string; content: string }) => {
+    fs.writeFileSync(path.join(input.workspaceDir, input.relativePath), input.content, 'utf-8');
+  },
+);
+jest.mock('../services/threadFolder', () => ({
+  writeThreadFolderFile: (input: { workspaceDir: string; relativePath: string; content: string }) =>
+    mockWriteThreadFolderFile(input),
+}));
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -294,7 +305,7 @@ describe('POST /api/interviews/design-docs/:id/assistant-thread — new thread c
     const res = await request(buildApp()).post('/api/interviews/design-docs/doc-1/assistant-thread');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ threadId: 'thread-new' });
+    expect(res.body).toEqual({ threadId: 'thread-new', created: true });
     expect(mockCreateThread).toHaveBeenCalledTimes(1);
   });
 

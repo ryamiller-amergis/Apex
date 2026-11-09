@@ -57,15 +57,21 @@ jest.mock('../services/chatAgentService', () => ({
   isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   createThread: jest.fn(),
   sendMessage: jest.fn().mockResolvedValue(undefined),
-  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+  prepareBackgroundWorkflowTurn: jest.fn().mockImplementation(async (
+    _threadId: string,
+    _prompt: string,
+    options?: { findTargetGrounding?: () => Promise<unknown> },
+  ) => ({
     prompt: 'complete frozen design prompt',
     model: 'design-model',
     skillPath: '/skills/design.md',
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/ws',
-  }),
+    targetGrounding: await options?.findTargetGrounding?.(),
+  })),
   cancelRun: jest.fn().mockResolvedValue(undefined),
   hydrateThread: jest.fn().mockResolvedValue(true),
+  updateThreadKickoffContext: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('../services/backgroundWorkflowRouter', () => ({
@@ -73,6 +79,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
     await input.runInProcess();
     return { route: 'in-process', reason: 'flag-disabled' };
   }),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/runGroundingService', () => ({
@@ -178,6 +185,7 @@ import {
   startSingleFeatureDocWatcher,
   tryStartSingleFeatureDocWatcher,
   startSingleFeatureDesignDocWatcher,
+  startDesignDocGenerationWatcher,
   startValidationWatcher,
   finalizeSingleFeatureDoc,
   isSingleFeatureDesignDocRow,
@@ -2938,5 +2946,45 @@ describe('isSingleFeatureDesignDocRow', () => {
   it('is false for legacy multi-feature seeds (neither set)', () => {
     expect(isSingleFeatureDesignDocRow({ designPrototypeId: null, featureIndex: null })).toBe(false);
     expect(isSingleFeatureDesignDocRow({})).toBe(false);
+  });
+});
+
+describe('startDesignDocGenerationWatcher', () => {
+  const usesV2 = jest.requireMock('../services/backgroundWorkflowRouter')
+    .usesV2DocumentTransport as jest.Mock;
+  const input = {
+    designDocId: 'doc-v2',
+    chatThreadId: 'thread-v2',
+    prdId: 'prd-1',
+    project: 'Apex',
+    userId: 'user-1',
+  };
+
+  beforeEach(() => {
+    mockTryAcquireRepoCacheLease.mockReset();
+    mockTryAcquireRepoCacheLease.mockResolvedValue(null);
+  });
+
+  it('starts no share watcher when the run goes to the V2 worker', async () => {
+    usesV2.mockResolvedValueOnce(true);
+
+    await startDesignDocGenerationWatcher(input);
+    await Promise.resolve();
+
+    expect(usesV2).toHaveBeenCalledWith({
+      userId: 'user-1',
+      project: 'Apex',
+      workflowClass: 'design-doc',
+    });
+    expect(mockTryAcquireRepoCacheLease).not.toHaveBeenCalled();
+  });
+
+  it('starts the share watcher when the run stays on App Service', async () => {
+    usesV2.mockResolvedValueOnce(false);
+
+    await startDesignDocGenerationWatcher(input);
+    await Promise.resolve();
+
+    expect(mockTryAcquireRepoCacheLease).toHaveBeenCalledTimes(1);
   });
 });

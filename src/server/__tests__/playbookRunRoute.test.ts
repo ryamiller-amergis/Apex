@@ -87,7 +87,7 @@ beforeEach(() => {
 });
 
 describe('FEAT-015 spend admission routes', () => {
-  it('preserves start behavior while the production-adapters flag is off', async () => {
+  it('starts a run for a caller who can run playbooks', async () => {
     grantIn('Apex', 'playbooks:run');
 
     const res = await request(buildApp())
@@ -95,8 +95,9 @@ describe('FEAT-015 spend admission routes', () => {
       .send({ project: 'Apex', definitionId: 'def-1' });
 
     expect(res.status).toBe(201);
-    expect(startRun).toHaveBeenCalledWith(expect.not.objectContaining({
-      spendAdmissionEnabled: expect.anything(),
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({
+      project: 'Apex',
+      definitionId: 'def-1',
     }));
   });
 
@@ -116,7 +117,7 @@ describe('FEAT-015 spend admission routes', () => {
       capUsd: '30.000000',
       requiredPermission: 'playbooks:admin',
     }));
-    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ spendAdmissionEnabled: true }));
+    expect(startRun).toHaveBeenCalled();
   });
 
   it('requires playbooks:admin before applying a project policy patch', async () => {

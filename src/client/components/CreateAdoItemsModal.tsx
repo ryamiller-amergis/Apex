@@ -87,7 +87,9 @@ function pbiKey(ei: number, fi: number, pi: number) {
 
 /* ── Design doc ↔ feature title matching ──────────────────────────────────── */
 
-function normalizeTitle(t: string): string {
+// Backlog and scorecard JSON is AI-authored, so titles can be missing.
+function normalizeTitle(t: unknown): string {
+  if (typeof t !== 'string') return '';
   return t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
@@ -107,6 +109,7 @@ function findMatchingDoc(
   approvedDocs: DesignDocSummary[],
 ): DesignDocSummary | undefined {
   const featNorm = normalizeTitle(featureTitle);
+  if (!featNorm) return undefined;
   for (const doc of approvedDocs) {
     const docNorm = normalizeTitle(doc.title);
     if (docNorm === featNorm) return doc;
@@ -385,6 +388,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-ado-items-title"
+      {...{ 'data-testid': 'create-ado-items-modal' }}
     >
       <div className={styles.panel} ref={panelRef}>
         {/* Header */}
@@ -397,6 +401,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
             onClick={onCancel}
             type="button"
             aria-label="Close"
+            {...{ 'data-testid': 'create-ado-items-close-btn' }}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -408,11 +413,11 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
         {/* Body */}
         <div className={styles.body}>
           {submitResult ? (
-            <AdoCreateResultPanel result={submitResult} />
+            <AdoCreateResultPanel result={submitResult} {...{ 'data-testid': 'ado-create-result-panel' }} />
           ) : (
             <>
           {submitError && (
-            <div className={styles['error-banner']} role="alert" data-testid="ado-create-error">
+            <div className={styles['error-banner']} role="alert" {...{ 'data-testid': 'ado-create-error' }}>
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="8" cy="8" r="6.5" />
                 <line x1="8" y1="5" x2="8" y2="8.5" />
@@ -440,6 +445,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
                     value={areaPath}
                     onChange={(e) => setAreaPath(e.target.value)}
                     placeholder={`${prd.project}\\TeamName`}
+                    {...{ 'data-testid': 'create-ado-area-path-input' }}
                   />
                 ) : (
                   <select
@@ -447,6 +453,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
                     value={areaPath}
                     onChange={(e) => setAreaPath(e.target.value)}
                     disabled={areaPathsLoading}
+                    {...{ 'data-testid': 'create-ado-area-path-select' }}
                   >
                     {areaPathsLoading && <option value="">Loading area paths…</option>}
                     {!areaPathsLoading && (!areaPaths || areaPaths.length === 0) && (
@@ -508,7 +515,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
 
         {/* Summary */}
         {!submitResult && (
-        <div className={styles['summary-bar']} data-testid="summary-bar">
+        <div className={styles['summary-bar']} {...{ 'data-testid': 'summary-bar' }}>
           <span>
             <span className={styles['summary-count']}>{summary.epics}</span> Epic{summary.epics !== 1 ? 's' : ''},&nbsp;
             <span className={styles['summary-count']}>{summary.features}</span> Feature{summary.features !== 1 ? 's' : ''},&nbsp;
@@ -528,6 +535,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
               className={styles['btn-submit']}
               onClick={onCancel}
               type="button"
+              {...{ 'data-testid': 'create-ado-done-btn' }}
             >
               Done
             </button>
@@ -538,6 +546,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
                 onClick={onCancel}
                 disabled={submitting}
                 type="button"
+                {...{ 'data-testid': 'create-ado-cancel-btn' }}
               >
                 Cancel
               </button>
@@ -546,6 +555,7 @@ export const CreateAdoItemsModal: React.FC<CreateAdoItemsModalProps> = ({
                 onClick={() => void handleSubmit()}
                 disabled={!canSubmit}
                 type="button"
+                {...{ 'data-testid': 'create-ado-submit-btn' }}
               >
                 {submitting ? 'Creating...' : 'Create in ADO'}
               </button>
@@ -589,6 +599,7 @@ const EpicRow: React.FC<EpicRowProps> = ({
             onClick={() => onToggleCollapse(key)}
             type="button"
             aria-label={isCollapsed ? 'Expand' : 'Collapse'}
+            {...{ 'data-testid': `create-ado-${key}-toggle` }}
           >
             <ChevronIcon collapsed={isCollapsed} />
           </button>
@@ -600,6 +611,7 @@ const EpicRow: React.FC<EpicRowProps> = ({
           indeterminate={indeterminate}
           disabled={inAdo}
           onChange={(val) => onCheck(key, val)}
+          {...{ 'data-testid': `create-ado-${key}-checkbox` }}
         />
         <EpicIcon />
         <span className={`${styles['node-title']} ${inAdo ? styles['node-title-disabled'] : ''}`}>
@@ -617,6 +629,7 @@ const EpicRow: React.FC<EpicRowProps> = ({
                 href={epic.adoWorkItemUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                {...{ 'data-testid': `create-ado-${key}-ado-link` }}
               >
                 View
               </a>
@@ -676,6 +689,7 @@ const FeatureRow: React.FC<FeatureRowProps> = ({
             onClick={() => onToggleCollapse(key)}
             type="button"
             aria-label={isCollapsed ? 'Expand' : 'Collapse'}
+            {...{ 'data-testid': `create-ado-${key}-toggle` }}
           >
             <ChevronIcon collapsed={isCollapsed} />
           </button>
@@ -687,6 +701,7 @@ const FeatureRow: React.FC<FeatureRowProps> = ({
           indeterminate={indeterminate}
           disabled={isDisabled}
           onChange={(val) => onCheck(key, val)}
+          {...{ 'data-testid': `create-ado-${key}-checkbox` }}
         />
         <FeatureIcon />
         <span className={`${styles['node-title']} ${isDisabled ? styles['node-title-disabled'] : ''}`}>
@@ -704,6 +719,7 @@ const FeatureRow: React.FC<FeatureRowProps> = ({
                 href={feature.adoWorkItemUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                {...{ 'data-testid': `create-ado-${key}-ado-link` }}
               >
                 View
               </a>
@@ -717,6 +733,7 @@ const FeatureRow: React.FC<FeatureRowProps> = ({
             target="_blank"
             rel="noopener noreferrer"
             title={`Design Doc: ${designDoc.title}`}
+            {...{ 'data-testid': `create-ado-${key}-design-doc-link` }}
           >
             ✓ Design Doc
           </a>
@@ -773,6 +790,7 @@ const PbiRow: React.FC<PbiRowProps> = ({ item, ei, fi, pi, checked, onCheck, fea
         checked={isChecked}
         disabled={isDisabled}
         onChange={(e) => onCheck(key, e.target.checked)}
+        {...{ 'data-testid': `create-ado-${key}-checkbox` }}
       />
       {item.type === 'TBI' ? <TbiIcon /> : <PbiIcon />}
       <span className={`${styles['node-title']} ${isDisabled ? styles['node-title-disabled'] : ''}`}>
@@ -790,6 +808,7 @@ const PbiRow: React.FC<PbiRowProps> = ({ item, ei, fi, pi, checked, onCheck, fea
               href={item.adoWorkItemUrl}
               target="_blank"
               rel="noopener noreferrer"
+              {...{ 'data-testid': `create-ado-${key}-ado-link` }}
             >
               View
             </a>
@@ -839,6 +858,7 @@ interface IndeterminateCheckboxProps {
   indeterminate: boolean;
   disabled: boolean;
   onChange: (checked: boolean) => void;
+  'data-testid'?: string;
 }
 
 const IndeterminateCheckbox: React.FC<IndeterminateCheckboxProps> = ({
@@ -846,6 +866,7 @@ const IndeterminateCheckbox: React.FC<IndeterminateCheckboxProps> = ({
   indeterminate,
   disabled,
   onChange,
+  'data-testid': testId,
 }) => {
   const ref = useRef<HTMLInputElement>(null);
 
@@ -863,6 +884,7 @@ const IndeterminateCheckbox: React.FC<IndeterminateCheckboxProps> = ({
       checked={checked}
       disabled={disabled}
       onChange={(e) => onChange(e.target.checked)}
+      {...{ 'data-testid': testId }}
     />
   );
 };
@@ -930,6 +952,7 @@ const AdoCreateResultPanel: React.FC<AdoCreateResultPanelProps> = ({ result }) =
                     href={item.adoUrl}
                     target="_blank"
                     rel="noopener noreferrer"
+                    {...{ 'data-testid': `ado-create-result-link-${item.adoId}` }}
                   >
                     #{item.adoId} — {item.title} ↗
                   </a>
@@ -959,7 +982,7 @@ const AdoCreateResultPanel: React.FC<AdoCreateResultPanelProps> = ({ result }) =
                 <ul className={styles['result-list']}>
                   {rootNodes.map(n => (
                     <li key={n.adoId}>
-                      <span className={`${styles.badge} ${styles['badge-type-' + n.type.toLowerCase()]}`}>{n.type}</span>
+                      <span className={`${styles.badge} ${styles['badge-type-' + (n.type ?? '').toLowerCase()]}`}>{n.type}</span>
                       <span>#{n.adoId} — {n.title}</span>
                     </li>
                   ))}
@@ -972,7 +995,7 @@ const AdoCreateResultPanel: React.FC<AdoCreateResultPanelProps> = ({ result }) =
                 <ul className={styles['result-list']}>
                   {depNodes.map(n => (
                     <li key={n.adoId}>
-                      <span className={`${styles.badge} ${styles['badge-type-' + n.type.toLowerCase()]}`}>{n.type}</span>
+                      <span className={`${styles.badge} ${styles['badge-type-' + (n.type ?? '').toLowerCase()]}`}>{n.type}</span>
                       <span>#{n.adoId} — {n.title}</span>
                       <span className={styles['depends-on-tag']}>
                         waits for: {n.predecessorAdoIds.map(id => {
@@ -1013,13 +1036,14 @@ const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   const panelId = `${sectionId}-panel`;
 
   return (
-    <div className={styles['section-block']} data-testid={`section-${sectionId}`}>
+    <div className={styles['section-block']} {...{ 'data-testid': `section-${sectionId}` }}>
       <button
         type="button"
         className={styles['section-header']}
         onClick={() => setCollapsed((v) => !v)}
         aria-expanded={!collapsed}
         aria-controls={panelId}
+        {...{ 'data-testid': `section-${sectionId}-toggle` }}
       >
         <ChevronIcon collapsed={collapsed} />
         <span className={styles['section-header-title']}>{title}</span>

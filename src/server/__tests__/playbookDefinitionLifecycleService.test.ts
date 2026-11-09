@@ -309,7 +309,10 @@ describe('TBI-030 DoD-2 / PBI-006 AC-0 / VT-02 — copy-on-publish', () => {
       values: expect.objectContaining({
         definitionId: DEFINITION_ID,
         versionNumber: 1,
-        graph: GRAPH,
+        graph: {
+          ...GRAPH,
+          nodes: GRAPH.nodes.map((node) => ({ ...node, stepTypeVersion: 1 })),
+        },
         status: 'published',
         publishedBy: 'publisher-1',
       }),

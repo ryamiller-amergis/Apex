@@ -37,7 +37,6 @@ import {
   isAiRunIngestKind,
   isAiRunTerminalIngestStatus,
   type AiRunIngestBody,
-  type AiRunBootstrapResponse,
   type AiRunBootstrapResult,
   type AiRunIngestErrorCode,
   type AiRunProgressIngest,
@@ -61,13 +60,19 @@ import { workerTierTelemetry } from './workerTierTelemetry';
 import { trackEvent } from './telemetry';
 import { recordCursorChatUsage } from './aiUsageService';
 import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
+import type { InteractiveTerminalInput } from './brainstormTurnLedger';
 import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
 import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
 import {
-  applyInteractiveArtifacts,
   createBlobInteractiveArtifactReader,
+  interactiveTranscript,
+  readInteractiveArtifacts,
+  writeInteractiveArtifacts,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
+import { updateThreadKickoffTranscript } from './chatAgentService';
+import { saveThreadOutputs } from './chatThreadOutputStore';
+import { keepsThreadFolder } from './threadFolder';
 import { isCursorModelBlockedMessage } from '../../shared/utils/modelAvailability';
 
 // Ingest persists worker events without emitting them to this instance's
@@ -214,6 +219,13 @@ export interface AiRunIngestDependencies {
   }) => Promise<void>;
   /** Called when a failed run reports that the Cursor team admin blocked its model. */
   onModelBlocked?: () => void;
+  /** Called after an interactive V2 terminal commits. Errors are logged, never thrown. */
+  onInteractiveTerminal?: (input: InteractiveTerminalInput) => Promise<void>;
+}
+
+async function defaultOnInteractiveTerminal(input: InteractiveTerminalInput): Promise<void> {
+  const { finalizeBrainstormTerminal } = await import('./brainstormTurnLedger');
+  await finalizeBrainstormTerminal(input);
 }
 
 function requestModelAvailabilityProbe(): void {
@@ -463,6 +475,7 @@ function mapRow(row: typeof agentRuns.$inferSelect): AgentRunLifecycleRow {
     ownerInstance: row.ownerInstance ?? null,
     updatedAt: row.updatedAt,
     devSessionId: row.devSessionId ?? null,
+    buildTaskId: row.buildTaskId ?? null,
     workflowClass: row.workflowClass ?? null,
     cloudAgentIdentity: row.cloudAgentIdentity ?? null,
     cloudAgentManaged: row.cloudAgentManaged ?? false,
@@ -930,19 +943,14 @@ async function verifyAndApplyActorArtifactManifest(input: {
     );
   }
   const [thread] = await db
-    .select({ workspaceDir: chatThreads.workspaceDir })
+    .select({ workspaceDir: chatThreads.workspaceDir, kickoff: chatThreads.kickoff })
     .from(chatThreads)
     .where(eq(chatThreads.id, input.threadId))
     .limit(1);
-  const workspaceRoot = thread?.workspaceDir?.trim();
-  if (!workspaceRoot) {
-    throw new AiRunIngestError(
-      'Completed terminal ingest requires a workspace reference',
-      'AI_RUN_ILLEGAL_TRANSITION',
-    );
+  if (!thread) {
+    throw new AiRunIngestError('Completed terminal ingest has no thread', 'AI_RUN_ILLEGAL_TRANSITION');
   }
-  await applyInteractiveArtifacts({
-    workspaceRoot,
+  const files = await readInteractiveArtifacts({
     manifest: parsed,
     expected: {
       runId: input.runId,
@@ -955,6 +963,25 @@ async function verifyAndApplyActorArtifactManifest(input: {
         .downloadToBuffer(),
     ),
   });
+  await saveThreadOutputs(
+    input.threadId,
+    input.runId,
+    files.map((file) => ({ path: file.path, content: file.body.toString('utf8') })),
+  );
+  const workspaceRoot = thread.workspaceDir?.trim();
+  if (workspaceRoot && (await keepsThreadFolder(thread.kickoff.project))) {
+    await writeInteractiveArtifacts(workspaceRoot, files);
+  }
+  // Document runs build their inputs from the saved thread, so the transcript
+  // the agent wrote must land there as well.
+  const transcript = interactiveTranscript(files);
+  if (transcript !== null) {
+    await updateThreadKickoffTranscript(input.threadId, transcript).catch((error: unknown) => {
+      console.warn(
+        `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
 }
 
 /**
@@ -1169,6 +1196,29 @@ async function terminalizeDaprActorV2(input: {
 
   if (status === 'failed' || status === 'cancelled') {
     await reflectFailedGeneration(existing.threadId, dependencies);
+  }
+
+  const snapshot = existing.executionSnapshot;
+  const frozenWorkflowClass =
+    snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot.workflowClass : null;
+  if (existing.lane === INTERACTIVE_LANE && frozenWorkflowClass === 'brainstorm') {
+    await (dependencies.onInteractiveTerminal ?? defaultOnInteractiveTerminal)({
+      threadId: existing.threadId,
+      runId,
+      status,
+      failureCategory,
+      message: assistantMessage ? { id: assistantMessage.id, text: assistantMessage.text } : null,
+      inputTokens: body.inputTokens,
+      outputTokens: body.outputTokens,
+      cacheReadTokens: body.cacheReadTokens,
+      cacheWriteTokens: body.cacheWriteTokens,
+      durationMs: body.durationMs,
+    }).catch((err: unknown) => {
+      console.error(
+        '[aiRunIngest] interactive terminal effect failed:',
+        err instanceof Error ? err.message : 'Unexpected error',
+      );
+    });
   }
 
   return { run: mapRow(run), cancelRequested: run.cancelRequested };

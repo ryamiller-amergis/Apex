@@ -9,12 +9,24 @@
  *
  * The database still backstops the part that matters most: a version any run pinned cannot be
  * hard-deleted, because `playbook_runs.definition_version_id` is a restrict-mode foreign key.
+ * Deleting a whole playbook is the exception: finished runs are removed first, and a run that is
+ * still going blocks the delete.
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { playbookDefinitions, playbookDefinitionVersions } from '../db/schema';
+import {
+  buildRuns,
+  interviews,
+  playbookDefinitions,
+  playbookDefinitionVersions,
+  playbookRuns,
+  playbookTriggerSubscriptions,
+} from '../db/schema';
 import { assertGraphWithinGuards } from './playbookGuardService';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
+import { getStepTypeDescriptor } from './playbookSteps/registry';
+import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
+import { getSkillConfig } from './projectSettingsService';
 import { copyLayoutToPublishedVersion } from './playbookVersionLayoutService';
 import type {
   PlaybookDefinition,
@@ -28,6 +40,8 @@ import type {
   PlaybookPublishResponse,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
+import type { PlaybookAgentRunPolicy } from '../../shared/types/playbookExecutionCapability';
+import type { SkillProvider } from '../../shared/types/projectSettings';
 
 /**
  * Legal lifecycle moves.
@@ -85,6 +99,15 @@ export class PlaybookDefinitionNotFoundError extends Error {
   }
 }
 
+export class PlaybookDefinitionBusyError extends Error {
+  constructor(definitionId: string) {
+    super(
+      `Playbook ${definitionId} still has a run in progress. Cancel it before deleting the playbook.`
+    );
+    this.name = 'PlaybookDefinitionBusyError';
+  }
+}
+
 /** A retained draft is a required lifecycle invariant for every definition. */
 export class PlaybookDraftNotFoundError extends Error {
   constructor(definitionId: string) {
@@ -112,6 +135,46 @@ export class PlaybookDraftConflictError extends Error {
     );
     this.name = 'PlaybookDraftConflictError';
   }
+}
+
+/** Adds the shared step-contract version to the immutable graph without changing the draft. */
+export function stampPublishedStepTypeVersions(
+  graph: PlaybookGraph,
+  policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = []
+): PlaybookGraph {
+  const policyByNode = new Map(policies.map(({ nodeId, policy }) => [nodeId, policy]));
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      stepTypeVersion: getStepTypeDescriptor(node.stepType).schemaVersion,
+      ...(policyByNode.has(node.id) ? { agentPolicy: policyByNode.get(node.id) } : {}),
+    })),
+  };
+}
+
+async function assertPlaybookCapabilitiesForPublish(input: {
+  graph: PlaybookGraph;
+  project?: string;
+  userId?: string;
+}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
+  let repository = input.project;
+  let provider: SkillProvider | undefined;
+  if (input.project) {
+    try {
+      const settings = await getSkillConfig(input.project);
+      repository = settings?.skillRepo ?? input.project;
+      provider = settings?.skillProvider;
+    } catch {
+      // A policy can still be frozen without optional repository grounding.
+    }
+  }
+  return resolvePlaybookGraphAgentPolicies({
+    graph: input.graph,
+    enforce: true,
+    repository,
+    provider,
+  });
 }
 
 /** Content may only be edited while a version is still a draft. */
@@ -174,11 +237,20 @@ export async function publishVersion(
   assertLifecycleTransition(version.status, 'published');
   assertGraphWithinGuards(version.graph as PlaybookGraph);
   assertCursorAgentsUseReadOnlyMcp(version.graph as PlaybookGraph);
+  const policies = await assertPlaybookCapabilitiesForPublish({
+    graph: version.graph as PlaybookGraph,
+    userId: publishedByUserId,
+  });
+  const publishedGraph = stampPublishedStepTypeVersions(
+    version.graph as PlaybookGraph,
+    policies
+  );
 
   await db
     .update(playbookDefinitionVersions)
     .set({
       status: 'published',
+      graph: publishedGraph,
       publishedBy: publishedByUserId,
       publishedAt: new Date().toISOString(),
     })
@@ -498,6 +570,11 @@ export async function publishDraft(
     );
     assertGraphWithinGuards(draft.graph);
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
+    const policies = await assertPlaybookCapabilitiesForPublish({
+      graph: draft.graph,
+      project: input.project,
+      userId: input.publishedByUserId,
+    });
     await assertInterviewProfilesForPublish(
       input.project,
       draft.graph,
@@ -505,6 +582,7 @@ export async function publishDraft(
     );
 
     const publishedAt = new Date().toISOString();
+    const publishedGraph = stampPublishedStepTypeVersions(draft.graph, policies);
     const [advancedDraft] = await tx
       .update(playbookDefinitionVersions)
       .set({
@@ -527,7 +605,7 @@ export async function publishDraft(
       .values({
         definitionId: draft.definitionId,
         versionNumber: draft.versionNumber,
-        graph: draft.graph,
+        graph: publishedGraph,
         status: 'published',
         publishedBy: input.publishedByUserId,
         publishedAt,
@@ -716,5 +794,66 @@ export async function deprecateVersion(
       version: toPublishedSummary(deprecatedVersion),
       currentPublishedVersionId: current?.id ?? null,
     };
+  });
+}
+
+const ACTIVE_RUN_STATUSES = new Set(['running', 'suspended']);
+
+/**
+ * Removes one playbook and the history that would otherwise block the foreign keys.
+ * Interviews and builds the playbook started stay; only the link back to the run is cleared.
+ * A run that is still going is left alone and the delete is refused.
+ */
+export async function deleteDefinition(project: string, definitionId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [definition] = await tx
+      .select({ id: playbookDefinitions.id })
+      .from(playbookDefinitions)
+      .where(and(eq(playbookDefinitions.id, definitionId), eq(playbookDefinitions.project, project)))
+      .for('update')
+      .limit(1);
+    if (!definition) throw new PlaybookDefinitionNotFoundError(definitionId);
+
+    const versions = await tx
+      .select({ id: playbookDefinitionVersions.id })
+      .from(playbookDefinitionVersions)
+      .where(eq(playbookDefinitionVersions.definitionId, definitionId));
+    const versionIds = versions.map((version) => version.id);
+    const runs = versionIds.length === 0
+      ? []
+      : await tx
+        .select({ id: playbookRuns.id, status: playbookRuns.status })
+        .from(playbookRuns)
+        .where(inArray(playbookRuns.definitionVersionId, versionIds));
+
+    if (runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status))) {
+      throw new PlaybookDefinitionBusyError(definitionId);
+    }
+
+    const runIds = runs.map((run) => run.id);
+    if (runIds.length > 0) {
+      await tx
+        .update(interviews)
+        .set({
+          playbookRunId: null,
+          playbookStepRunId: null,
+          playbookInterviewMode: null,
+          playbookProfileKey: null,
+          playbookProfileSnapshot: null,
+        })
+        .where(inArray(interviews.playbookRunId, runIds));
+      await tx
+        .update(buildRuns)
+        .set({ playbookRunId: null, playbookStepRunId: null })
+        .where(inArray(buildRuns.playbookRunId, runIds));
+      await tx.delete(playbookRuns).where(inArray(playbookRuns.id, runIds));
+    }
+
+    await tx
+      .delete(playbookTriggerSubscriptions)
+      .where(eq(playbookTriggerSubscriptions.definitionId, definitionId));
+    await tx
+      .delete(playbookDefinitions)
+      .where(and(eq(playbookDefinitions.id, definitionId), eq(playbookDefinitions.project, project)));
   });
 }

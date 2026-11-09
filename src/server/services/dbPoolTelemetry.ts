@@ -1,3 +1,5 @@
+import fs from 'fs';
+import os from 'os';
 import { getDbPoolStats, type DbPoolStats } from '../db';
 import { trackEvent } from './telemetry';
 
@@ -11,6 +13,12 @@ type DbPoolTelemetryDependencies = {
   trackEvent?: TrackEventFn;
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
+  /**
+   * One libuv-pool operation. Its latency is the pool's queue wait, which is
+   * also what DNS lookups for new Postgres connections wait behind.
+   */
+  probeThreadpool?: () => Promise<unknown>;
+  now?: () => number;
 };
 
 export type DbPoolTelemetryScheduler = {
@@ -29,6 +37,10 @@ function toMeasurements(stats: DbPoolStats): Record<string, number> {
   };
 }
 
+export function probeThreadpoolWithLocalStat(): Promise<unknown> {
+  return fs.promises.stat(os.tmpdir());
+}
+
 export function createDbPoolTelemetryScheduler(
   dependencies: DbPoolTelemetryDependencies = {},
 ): DbPoolTelemetryScheduler {
@@ -36,9 +48,12 @@ export function createDbPoolTelemetryScheduler(
   const emit = dependencies.trackEvent ?? trackEvent;
   const setIntervalFn = dependencies.setIntervalFn ?? setInterval;
   const clearIntervalFn = dependencies.clearIntervalFn ?? clearInterval;
+  const probeThreadpool = dependencies.probeThreadpool;
+  const now = dependencies.now ?? Date.now;
 
   let timer: TimerHandle | null = null;
   let started = false;
+  let probeStartedAt: number | null = null;
 
   const emitSnapshot = (): void => {
     try {
@@ -53,19 +68,55 @@ export function createDbPoolTelemetryScheduler(
     }
   };
 
+  const emitThreadpoolProbe = (): void => {
+    if (!probeThreadpool) return;
+    if (probeStartedAt !== null) {
+      try {
+        emit('runtime.threadpool.probe', undefined, {
+          waitMs: now() - probeStartedAt,
+          pending: 1,
+        });
+      } catch {
+        console.error('[db-pool-telemetry] Failed to emit thread pool telemetry');
+      }
+      return;
+    }
+    const startedAt = now();
+    probeStartedAt = startedAt;
+    probeThreadpool()
+      .then(() => {
+        emit('runtime.threadpool.probe', undefined, {
+          waitMs: now() - startedAt,
+          pending: 0,
+        });
+      })
+      .catch(() => {
+        console.error('[db-pool-telemetry] Thread pool probe failed');
+      })
+      .finally(() => {
+        if (probeStartedAt === startedAt) probeStartedAt = null;
+      });
+  };
+
+  const tick = (): void => {
+    emitSnapshot();
+    emitThreadpoolProbe();
+  };
+
   return {
     start(): void {
       if (started) return;
       started = true;
-      emitSnapshot();
+      tick();
       timer = setIntervalFn(() => {
-        emitSnapshot();
+        tick();
       }, SNAPSHOT_INTERVAL_MS);
       timer.unref?.();
     },
 
     stop(): void {
       started = false;
+      probeStartedAt = null;
       if (timer) {
         clearIntervalFn(timer);
         timer = null;
@@ -74,7 +125,9 @@ export function createDbPoolTelemetryScheduler(
   };
 }
 
-const defaultDbPoolTelemetryScheduler = createDbPoolTelemetryScheduler();
+const defaultDbPoolTelemetryScheduler = createDbPoolTelemetryScheduler({
+  probeThreadpool: probeThreadpoolWithLocalStat,
+});
 
 export function startDbPoolTelemetryScheduler(): void {
   defaultDbPoolTelemetryScheduler.start();

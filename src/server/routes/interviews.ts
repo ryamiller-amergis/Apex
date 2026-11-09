@@ -1,10 +1,8 @@
-import { Router, type NextFunction, type Request, type Response } from 'express';
-import fs from 'fs';
-import path from 'path';
-import { requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
+import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
+import { requireAnyPermission, requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
-import { isAdoUserAuthError } from '../services/adoFactory';
+import { adoWriteForRequest, isAdoUserAuthError } from '../services/adoFactory';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { db } from '../db/drizzle';
@@ -49,6 +47,8 @@ import type {
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
 import { getActiveUsers, getUserPermissions } from '../services/rbacService';
+import { BUILDS_VIEW } from '../../shared/types/buildAccess';
+import { BUILD_INTAKE_OPTION_KEY } from '../../shared/types/buildPreflight';
 import { getUserGroupNames } from '../services/groupService';
 import { recordArtifactDoneEvent } from '../services/artifactDoneEventService';
 import {
@@ -61,7 +61,7 @@ import {
   reviewPrd,
   reopenForReview,
   routePrdGenerationKickoff,
-  startPrdWatcher,
+  startPrdGenerationWatcher,
   submitForReview,
   syncPrdContent,
   updatePrdBacklog,
@@ -95,7 +95,7 @@ import {
   listDesignDocs,
   reviewDesignDoc,
   routeDesignDocGenerationKickoff,
-  startSingleFeatureDocWatcher,
+  startDesignDocGenerationWatcher,
   submitForReview as submitDesignDocForReview,
   syncDesignDocContent,
   triggerFixValidation,
@@ -105,20 +105,34 @@ import {
   markValidationReady,
   overrideDesignDocValidation,
 } from '../services/designDocService';
-import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript, sendMessage } from '../services/chatAgentService';
+import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript } from '../services/chatAgentService';
 import {
   approveInterviewBrief,
   formatInterviewBriefForPrd,
   getApprovedInterviewBriefForPrd,
   getInterviewBrief,
+  InterviewBriefError,
   saveInterviewBrief,
 } from '../services/interviewBriefService';
 import { draftInterviewBriefSections } from '../services/interviewOrchestratorService';
+import {
+  approveBuildBrief,
+  BuildBriefError,
+  draftBuildBrief,
+  getBuildBriefAnalysis,
+  getRedactedBuildBrief,
+  saveBuildBrief,
+} from '../services/buildBriefService';
+import { isBuildIntakeInterview } from '../services/buildIntakeAccess';
+import { buildIntakeInterviewOf, requireBriefEditor, requireBriefReader } from '../middleware/buildIntakeBrief';
+
+const BUILD_REQUEST_NO_PRD_MESSAGE = 'Build requests do not create a PRD.';
 import { propagatePipelineGrounding } from '../services/runGroundingService';
+import { AzureDevOpsService } from '../services/azureDevOps';
 import { getApproverPoolForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
 import { assignApprovers, getAssignments, getAvailableApprovers, isApprovalComplete, isAssignedApprover, reassignApprovers, recordApproverResponse } from '../services/documentApprovalService';
-import { canCreateDesignDocAssistantThread } from '../services/threadAccessService';
+import { canCreateDesignDocAssistantThread, isBuildIntakeParticipant } from '../services/threadAccessService';
 import { generateDesignPlan } from '../services/designPlanService';
 import {
   getTestCases,
@@ -126,10 +140,48 @@ import {
   triggerTestCaseGeneration,
 } from '../services/testCaseService';
 import {
+  extractAdoNativeSuites,
+  getTestCasesForWorkItem,
+} from '../services/testCaseLookupService';
+import {
+  AdoTestSuiteConflictError,
+  deleteAdoTestCases,
+  getLatestAdoTestSuite,
+  listAdoGenerationCandidates,
+  newPlacementApprovalFrom,
+  newPlacementsFrom,
+  publishAdoTestCases,
+  suiteRequiredByOutput,
+  triggerAdoTestCaseGeneration,
+} from '../services/adoTestCaseSuiteService';
+import {
+  QaCaseNotFoundError,
+  addCaseComment,
+  getCaseReview,
+  regenerateAdoTestCase,
+  restoreCaseRegeneration,
+} from '../services/qaCaseRegenerationService';
+import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
+import qaCaseRunRouter from './qaCaseRuns';
+import qaLabAssistantProposalRouter from './qaLabAssistantProposals';
+import { publishSuiteRuns } from '../services/qaCaseRunService';
+import type {
+  QaAdoSuiteSelection,
+  QaLabAddCaseCommentRequest,
+  QaLabDeleteCasesRequest,
+  QaLabGenerateRequest,
+  QaLabNewPlacementApproval,
+  QaLabPublishRequest,
+  QaLabAssistantThreadRequest,
+  QaLabRegenerateCaseRequest,
+} from '../../shared/types/qaLab';
+import type { EffortLevel } from '../../shared/types/effort';
+import {
   generateFallbackReport as generateFallbackValidationReport,
   ingestValidationScorecard,
 } from '../services/documentValidationService';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import { writeThreadFolderFile } from '../services/threadFolder';
 import {
   DesignDocValidationPlaybookConfigurationError,
   DesignDocValidationPlaybookForbiddenError,
@@ -145,6 +197,9 @@ import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
 const router = Router();
+
+router.use(qaCaseRunRouter);
+router.use(qaLabAssistantProposalRouter);
 
 router.get('/reviewer-availability', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
@@ -367,6 +422,388 @@ router.get('/prds/:prdId/test-cases', requirePermission('interviews:view'), asyn
   }
 });
 
+/**
+ * QA Lab picker: every Epic, Feature, PBI, TBI, and Bug in the selected
+ * Azure DevOps project. Not the calendar list, which is limited to this
+ * month and one exact area path.
+ */
+router.get('/work-items', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+    if (project.toLowerCase() === 'apex') {
+      res.json({ items: [], truncated: false });
+      return;
+    }
+
+    const adoService = new AzureDevOpsService(project);
+    res.json(await adoService.listProjectBacklogWorkItems());
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * QA Lab: generated test cases for an ADO work item, resolved through the
+ * `adoWorkItemId` stamped on the backlog. Selecting a Feature or Epic returns
+ * the suites of every PBI beneath it.
+ */
+router.get('/work-items/:workItemId/test-cases', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+
+    const result = await getTestCasesForWorkItem(project, workItemId);
+    if (result.generation || result.totalCases > 0) {
+      res.json(result);
+      return;
+    }
+
+    const external = await getLatestAdoTestSuite(project, workItemId);
+    if (!external) {
+      res.json(result);
+      return;
+    }
+
+    const suites = external.testCasesJson
+      ? extractAdoNativeSuites(external.testCasesJson, external.sourceSnapshot)
+      : [];
+    res.json({
+      ...result,
+      suites,
+      totalCases: suites.reduce((sum, suite) => sum + suite.testCases.length, 0),
+      externalSuite: {
+        id: external.id,
+        status: external.status,
+        publishedCases: external.publishedCases ?? [],
+        requireSuite: suiteRequiredByOutput(external.testCasesJson),
+        newPlacements: newPlacementsFrom(external.testCasesJson),
+        threadId: external.chatThreadId,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** PBIs and Bugs beneath an ADO work item that can receive generated cases. */
+router.get('/work-items/:workItemId/test-cases/candidates', requirePermission('planning:qa'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+    const project = typeof req.query.project === 'string' ? req.query.project.trim() : '';
+    if (!project) {
+      res.status(400).json({ error: 'A project query parameter is required' });
+      return;
+    }
+    if (project.toLowerCase() === 'apex') {
+      res.json({ rootWorkItemId: workItemId, items: [] });
+      return;
+    }
+
+    const candidates = await listAdoGenerationCandidates(project, workItemId);
+    if (!candidates) {
+      res.status(404).json({ error: 'The Azure DevOps work item was not found' });
+      return;
+    }
+    res.json(candidates);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/work-items/:workItemId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const workItemId = Number(req.params.workItemId);
+    if (!Number.isInteger(workItemId) || workItemId <= 0) {
+      res.status(400).json({ error: 'A positive integer work item ID is required' });
+      return;
+    }
+    const { project, model, effort, targetIds } = (req.body ?? {}) as QaLabGenerateRequest & {
+      project?: string;
+    };
+    if (typeof project !== 'string' || !project.trim()) {
+      res.status(400).json({ error: 'A project is required' });
+      return;
+    }
+    if (
+      targetIds !== undefined
+      && (!Array.isArray(targetIds)
+        || targetIds.length === 0
+        || !targetIds.every((id) => Number.isInteger(id) && id > 0))
+    ) {
+      res.status(400).json({ error: 'targetIds must be a non-empty list of work item IDs' });
+      return;
+    }
+
+    const started = await triggerAdoTestCaseGeneration({
+      project: project.trim(),
+      rootWorkItemId: workItemId,
+      userId: getUserId(req),
+      model,
+      effort: effort as EffortLevel | undefined,
+      ...(targetIds ? { targetIds } : {}),
+    });
+    if (started.started) {
+      res.json(started);
+      return;
+    }
+    if (started.reason === 'already-generating' && started.suiteId) {
+      res.json({ started: true, suiteId: started.suiteId });
+      return;
+    }
+    const status = started.reason === 'root-not-found'
+      ? 404
+      : started.reason === 'routing-failed'
+        ? 503
+        : 422;
+    const messages: Record<typeof started.reason, string> = {
+      'root-not-found': 'The Azure DevOps work item was not found',
+      'no-targets': 'This work item has no PBI or Bug requirements to test',
+      'skill-not-configured': 'The project has no test-case skill configured',
+      'routing-failed': 'Test-case generation could not be started',
+      'already-generating': 'Test-case generation is already running',
+    };
+    res.status(status).json({ error: messages[started.reason], reason: started.reason });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    const {
+      selections,
+      localCaseIds,
+      updateLocalCaseIds,
+      newPlacements: rawNewPlacements,
+      newPlacementSelections,
+    } = (req.body ?? {}) as QaLabPublishRequest;
+    const newPlacements = rawNewPlacements?.map(newPlacementApprovalFrom);
+    if (
+      rawNewPlacements !== undefined
+      && (!Array.isArray(rawNewPlacements) || !newPlacements?.every((entry) => entry !== null))
+    ) {
+      res.status(400).json({ error: 'newPlacements must list { testPlan, createPlan, suiteType } proposals' });
+      return;
+    }
+    if (newPlacementSelections !== undefined && !isStringMap(newPlacementSelections)) {
+      res.status(400).json({ error: 'newPlacementSelections must map case ids to proposal keys' });
+      return;
+    }
+    if (selections !== undefined && !isSuiteSelectionMap(selections)) {
+      res.status(400).json({ error: 'selections must map case ids to { planId, suiteId }' });
+      return;
+    }
+    if (updateLocalCaseIds !== undefined && !isCaseIdList(updateLocalCaseIds)) {
+      res.status(400).json({ error: 'updateLocalCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const onlyUpdates = updateLocalCaseIds !== undefined
+      && Array.isArray(localCaseIds) && localCaseIds.length === 0;
+    if (localCaseIds !== undefined && !onlyUpdates && !isCaseIdList(localCaseIds)) {
+      res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const adoService = await adoWriteForRequest(req, suite.project);
+    const published = await publishAdoTestCases(suite.id, {
+      ado: adoService,
+      ...(selections ? { selections } : {}),
+      ...(localCaseIds ? { localCaseIds } : {}),
+      ...(updateLocalCaseIds ? { updateLocalCaseIds } : {}),
+      ...(newPlacements
+        ? { newPlacements: newPlacements.filter((entry): entry is QaLabNewPlacementApproval => entry !== null) }
+        : {}),
+      ...(newPlacementSelections ? { newPlacementSelections } : {}),
+    });
+    res.json({ ...published, runs: await publishSuiteRuns(suite.id, adoService) });
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+/** Test Plans and static suites the signed-in user can publish this suite into. */
+router.get('/ado-test-suites/:suiteId/test-plans', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    const adoService = await adoWriteForRequest(req, suite.project);
+    res.json({ plans: await adoService.listStaticTestPlanSuites() });
+  } catch (err) {
+    if (isAdoUserAuthError(err)) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    const status = (err as { statusCode?: number; status?: number })?.statusCode
+      ?? (err as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      res.status(403).json({
+        error: 'Azure DevOps denied access to Test Plans. Publishing into suites needs Test Plans access (Basic + Test Plans or Visual Studio Enterprise).',
+      });
+      return;
+    }
+    next(err);
+  }
+});
+
+/** Removes generated cases that QA does not want published. */
+router.post('/ado-test-suites/:suiteId/delete-cases', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { localCaseIds } = (req.body ?? {}) as Partial<QaLabDeleteCasesRequest>;
+    if (!isCaseIdList(localCaseIds)) {
+      res.status(400).json({ error: 'localCaseIds must be a non-empty list of case ids' });
+      return;
+    }
+    const suite = await getLatestAdoTestSuite(undefined, undefined, req.params.suiteId);
+    if (!suite) {
+      res.status(404).json({ error: 'QA suite not found' });
+      return;
+    }
+    res.json(await deleteAdoTestCases(suite.id, localCaseIds));
+  } catch (err) {
+    if (err instanceof AdoTestSuiteConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+});
+
+router.get('/ado-test-suites/:suiteId/case-review', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await getCaseReview(req.params.suiteId));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/cases/:localCaseId/comments', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { body } = (req.body ?? {}) as Partial<QaLabAddCaseCommentRequest>;
+    if (typeof body !== 'string' || body.trim().length === 0 || body.length > MAX_COMMENT_LENGTH) {
+      res.status(400).json({ error: `body must be 1–${MAX_COMMENT_LENGTH} characters` });
+      return;
+    }
+    res.status(201).json(await addCaseComment({
+      suiteId: req.params.suiteId,
+      localCaseId: req.params.localCaseId,
+      body,
+      authorId: getUserId(req),
+      authorName: getDisplayName(req),
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/cases/:localCaseId/regenerate', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { model } = (req.body ?? {}) as QaLabRegenerateCaseRequest;
+    if (model !== undefined && (typeof model !== 'string' || model.trim().length === 0)) {
+      res.status(400).json({ error: 'model must be a non-empty string' });
+      return;
+    }
+    res.status(202).json(await regenerateAdoTestCase({
+      suiteId: req.params.suiteId,
+      localCaseId: req.params.localCaseId,
+      userId: getUserId(req),
+      ...(model ? { model: model.trim() } : {}),
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/regenerations/:regenerationId/restore', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    res.json(await restoreCaseRegeneration(req.params.suiteId, req.params.regenerationId));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+router.post('/ado-test-suites/:suiteId/assistant-thread', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const { threadId } = (req.body ?? {}) as QaLabAssistantThreadRequest;
+    if (threadId !== undefined && threadId !== null && typeof threadId !== 'string') {
+      res.status(400).json({ error: 'threadId must be a string' });
+      return;
+    }
+    res.json(await openQaLabAssistantThread({
+      suiteId: req.params.suiteId,
+      userId: getUserId(req),
+      threadId,
+    }));
+  } catch (err) {
+    sendCaseReviewError(err, res, next);
+  }
+});
+
+const MAX_COMMENT_LENGTH = 4000;
+
+function sendCaseReviewError(err: unknown, res: Response, next: NextFunction): void {
+  if (err instanceof QaCaseNotFoundError) {
+    res.status(404).json({ error: err.message });
+    return;
+  }
+  if (err instanceof AdoTestSuiteConflictError) {
+    res.status(409).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
+
+const MAX_CASE_IDS = 500;
+
+function isCaseIdList(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.length <= MAX_CASE_IDS
+    && value.every((id) => typeof id === 'string' && id.trim().length > 0 && id.length <= 200);
+}
+
+function isSuiteSelectionMap(value: unknown): value is Record<string, QaAdoSuiteSelection> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every((entry) => {
+    const selection = entry as Partial<QaAdoSuiteSelection> | null;
+    return Number.isSafeInteger(selection?.planId) && (selection?.planId ?? 0) > 0
+      && Number.isSafeInteger(selection?.suiteId) && (selection?.suiteId ?? 0) > 0
+      && (selection?.requirement === undefined || typeof selection.requirement === 'boolean');
+  });
+}
+
+function isStringMap(value: unknown): value is Record<string, string> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.values(value).every((entry) => typeof entry === 'string');
+}
+
 router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
     const { prdId } = req.params;
@@ -409,12 +846,30 @@ router.post('/prds/:prdId/test-cases/generate', requirePermission('interviews:ma
     }
     // @feature-flag:project-repository-checkout-readiness end
 
+    const { model, effort, pbiIds, matchLevel, matchedTitle } = (req.body ?? {}) as QaLabGenerateRequest;
     const sourceThreadId = prdRow.chatThreadId ?? '';
-    const started = await triggerTestCaseGeneration(
-      prdId,
-      sourceThreadId,
-      userId,
-    );
+    // Only forward overrides when the caller actually picked one, so the
+    // project skill config stays the single source of truth otherwise.
+    const overrides = model || effort
+      ? { model, effort: effort as EffortLevel | undefined }
+      : undefined;
+    const scope = Array.isArray(pbiIds) && pbiIds.length > 0
+      ? { pbiIds, matchLevel, matchedTitle }
+      : undefined;
+    const started = scope
+      ? await triggerTestCaseGeneration(
+          prdId,
+          sourceThreadId,
+          userId,
+          overrides,
+          scope,
+        )
+      : await triggerTestCaseGeneration(
+          prdId,
+          sourceThreadId,
+          userId,
+          overrides,
+        );
     res.json({ started });
   } catch (err) {
     next(err);
@@ -815,7 +1270,13 @@ async function startDesignDocsForApprovedPrd(
         skillSettingsId: prd.skillSettingsId ?? null,
       });
 
-      startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+      await startDesignDocGenerationWatcher({
+        designDocId,
+        chatThreadId: thread.id,
+        prdId,
+        project: prd.project,
+        userId,
+      });
       // Fire-and-forget — grounding/materialization happens inside kickoff.
       void Promise.resolve(
         routeDesignDocGenerationKickoff({
@@ -1026,14 +1487,18 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, prd.prdAssistantThreadId))
         .limit(1);
-      if (threadRow?.workspaceDir) {
-        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-        try {
-          fs.writeFileSync(contextPath, buildPrdContext(prd.prdAssistantThreadId), 'utf-8');
-        } catch {
-          // Non-fatal: workspace may have been cleaned up
-        }
+      const refreshedContext = buildPrdContext(prd.prdAssistantThreadId);
+      try {
+        await writeThreadFolderFile({
+          project: prd.project,
+          workspaceDir: threadRow?.workspaceDir,
+          relativePath: '.ai-pilot/kickoff-context.md',
+          content: refreshedContext,
+        });
+      } catch {
+        // Non-fatal: workspace may have been cleaned up
       }
+      await updateThreadKickoffContext(prd.prdAssistantThreadId, refreshedContext);
       res.json({ threadId: prd.prdAssistantThreadId });
       return;
     }
@@ -1055,9 +1520,13 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
     // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
     const realContext = buildPrdContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realContext);
+    await writeThreadFolderFile({
+      project: prd.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realContext,
+    });
+    await updateThreadKickoffContext(thread.id, realContext);
 
     await inheritAssistantPin({
       sourceThreadId: prd.chatThreadId,
@@ -1066,27 +1535,12 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       userId,
     });
 
-    void sendMessage(
-      thread.id,
-      'Introduce yourself as Apex, the PRD assistant. ' +
-        'In 3–5 short bullet points, summarize what you can help with in this context: ' +
-        'editing PRD content, adding new requirements/sections, answering questions about the PRD, ' +
-        'resolving review comments, and refining the backlog. ' +
-        'Mention that when you make changes, they appear as a proposed diff for the owner to review and accept. ' +
-        'Keep it concise and friendly — this is the first thing the user sees.',
-    ).catch((err: unknown) => {
-      console.error(
-        `[interviews] PRD assistant kickoff failed (prdId=${req.params.prdId}):`,
-        err,
-      );
-    });
-
     await db
       .update(prdsTable)
       .set({ prdAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(prdsTable.id, req.params.prdId));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }
@@ -1968,7 +2422,13 @@ router.post('/design-docs/:id/retry-generate', requirePermission('interviews:man
       .set({ chatThreadId: thread.id, model, generationError: null, status: 'generating', updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    startSingleFeatureDocWatcher(req.params.id, thread.id, doc.prdId, doc.project);
+    await startDesignDocGenerationWatcher({
+      designDocId: req.params.id,
+      chatThreadId: thread.id,
+      prdId: doc.prdId,
+      project: doc.project,
+      userId,
+    });
 
     const kickoffMessage =
       `Generate the design doc for the single feature "${doc.title}" using the PRD and context provided. This is a non-interactive generation task — do not ask questions. Write all three output files to \`.ai-pilot/output/\`.`;
@@ -2082,14 +2542,18 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, doc.docAssistantThreadId))
         .limit(1);
-      if (threadRow?.workspaceDir) {
-        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-        try {
-          fs.writeFileSync(contextPath, buildDocContext(doc.docAssistantThreadId), 'utf-8');
-        } catch {
-          // Non-fatal: workspace may have been cleaned up; the thread can still run
-        }
+      const refreshedContext = buildDocContext(doc.docAssistantThreadId);
+      try {
+        await writeThreadFolderFile({
+          project: doc.project,
+          workspaceDir: threadRow?.workspaceDir,
+          relativePath: '.ai-pilot/kickoff-context.md',
+          content: refreshedContext,
+        });
+      } catch {
+        // Non-fatal: workspace may have been cleaned up; the thread can still run
       }
+      await updateThreadKickoffContext(doc.docAssistantThreadId, refreshedContext);
       res.json({ threadId: doc.docAssistantThreadId });
       return;
     }
@@ -2119,9 +2583,13 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
     // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
     const realDocContext = buildDocContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realDocContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realDocContext);
+    await writeThreadFolderFile({
+      project: doc.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realDocContext,
+    });
+    await updateThreadKickoffContext(thread.id, realDocContext);
 
     await inheritAssistantPin({
       sourceThreadId: doc.chatThreadId ?? prd?.chatThreadId,
@@ -2135,7 +2603,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       .set({ docAssistantThreadId: thread.id, updatedAt: new Date().toISOString() })
       .where(eq(designDocsTable.id, req.params.id));
 
-    res.json({ threadId: thread.id });
+    res.json({ threadId: thread.id, created: true });
   } catch (err) {
     next(err);
   }
@@ -2549,7 +3017,7 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
 
     const doc = await db.query.designDocs.findFirst({
       where: eq(designDocsTable.id, docId),
-      columns: { id: true, status: true },
+      columns: { id: true, status: true, project: true },
     });
     if (!doc) {
       res.status(404).json({ error: 'Design doc not found' });
@@ -2580,6 +3048,18 @@ router.post('/design-docs/:id/owner-approve', requirePermission('design-docs:rev
         await recordArtifactDoneEvent('design_doc', docId, approvedAt);
       } catch (err) {
         console.error(`[owner-approve] Failed to record design doc done event (docId=${docId})`, err);
+      }
+      try {
+        const { publishPlaybookApexEvent } = await import('../services/playbookApexEventService');
+        await publishPlaybookApexEvent({
+          project: doc.project,
+          type: 'document.approved',
+          entityId: docId,
+          actorUserId: userId,
+          data: { documentType: 'design_doc', documentId: docId },
+        });
+      } catch (err) {
+        console.error(`[owner-approve] Failed to publish document.approved (docId=${docId})`, err);
       }
     } else {
       await db.update(designDocsTable).set({
@@ -3283,7 +3763,42 @@ router.get('/:id/usage', requirePermission('interviews:view'), async (req, res, 
   }
 });
 
-router.get('/:id', requirePermission('interviews:view'), async (req, res, next) => {
+/**
+ * `interviews:view`, or `builds:view` on a build-intake interview for its
+ * requester, a Project Admin or a Platform Admin.
+ */
+async function allowBuildIntakeParticipant(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const row = await db.query.interviews.findFirst({
+      where: eq(interviewsTable.id, req.params.id),
+      columns: { authorId: true, project: true, playbookProfileKey: true },
+    });
+    if (
+      row?.playbookProfileKey === BUILD_INTAKE_OPTION_KEY
+      && await isBuildIntakeParticipant(getUserId(req), row.authorId ?? '', row.project)
+    ) {
+      next();
+      return;
+    }
+    requirePermission('interviews:view')(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+}
+
+const requireInterviewReadOrBuildsView = requireAnyPermission('interviews:view', BUILDS_VIEW);
+
+const requireInterviewRead: RequestHandler = (req, res, next) => {
+  void requireInterviewReadOrBuildsView(req, res, (err?: unknown) => {
+    if (err) {
+      next(err);
+      return;
+    }
+    void allowBuildIntakeParticipant(req, res, next);
+  });
+};
+
+router.get('/:id', requireInterviewRead, async (req, res, next) => {
   try {
     const interview = await getInterview(req.params.id);
     if (!interview) {
@@ -3356,16 +3871,60 @@ router.delete('/:id', requirePermission('interviews:manage'), async (req, res, n
   }
 });
 
-router.get('/:id/brief', requirePermission('interviews:view'), async (req, res, next) => {
+function sendBuildBriefError(res: Response, err: unknown, next: NextFunction): void {
+  if (err instanceof BuildBriefError) {
+    res.status(err.statusCode).json({ error: err.message, ...(err.draftFailed ? { draftFailed: true } : {}) });
+    return;
+  }
+  if (err instanceof InterviewBriefError) {
+    res.status(err.statusCode).json({ error: err.message });
+    return;
+  }
+  next(err);
+}
+
+const notBuildIntake: RequestHandler = (_req, res) => {
+  res.status(404).json({ error: 'Interview not found' });
+};
+
+const requireBriefEditorOrManager = () => requireBriefEditor([
+  requirePermission('interviews:manage'),
+  requireGroupMembership('BA', 'Manager', 'Product-Owner'),
+]);
+
+router.get('/:id/brief', requireInterviewRead, requireBriefReader([]), async (req, res, next) => {
   try {
-    const brief = await getInterviewBrief(req.params.id);
+    const brief = buildIntakeInterviewOf(res)
+      ? await getRedactedBuildBrief(req.params.id)
+      : await getInterviewBrief(req.params.id);
     res.json(brief);
   } catch (err) {
     next(err);
   }
 });
 
-router.put('/:id/brief', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+router.get('/:id/brief/analysis', requireBriefReader([notBuildIntake]), async (req, res, next) => {
+  try {
+    res.json(await getBuildBriefAnalysis({ interviewId: req.params.id, viewerId: getUserId(req) }));
+  } catch (err) {
+    sendBuildBriefError(res, err, next);
+  }
+});
+
+router.put('/:id/brief', requireBriefEditorOrManager(), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) {
+    try {
+      res.json(await saveBuildBrief({
+        interviewId: req.params.id,
+        actorId: getUserId(req),
+        sections: req.body?.sections,
+        requirements: req.body?.requirements,
+      }));
+    } catch (err) {
+      sendBuildBriefError(res, err, next);
+    }
+    return;
+  }
   try {
     const brief = await saveInterviewBrief({
       interviewId: req.params.id,
@@ -3378,7 +3937,15 @@ router.put('/:id/brief', requirePermission('interviews:manage'), requireGroupMem
   }
 });
 
-router.post('/:id/brief/draft', requirePermission('interviews:manage'), requireGroupMembership('BA', 'Manager', 'Product-Owner'), async (req, res, next) => {
+router.post('/:id/brief/draft', requireBriefEditorOrManager(), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) {
+    try {
+      res.json(await draftBuildBrief({ interviewId: req.params.id, actorId: getUserId(req), mode: 'manual' }));
+    } catch (err) {
+      sendBuildBriefError(res, err, next);
+    }
+    return;
+  }
   try {
     const sections = await draftInterviewBriefSections({ interviewId: req.params.id });
     const brief = await saveInterviewBrief({
@@ -3396,7 +3963,16 @@ const BRIEF_APPROVE_FORBIDDEN_MESSAGE =
   'Only the author, an interview section owner, a project admin, a platform admin, or a BA, Manager, or Product Owner with interviews:manage can approve this interview brief';
 const BRIEF_APPROVER_GROUPS = ['BA', 'Manager', 'Product-Owner'];
 
-router.post('/:id/brief/approve', async (req, res, next) => {
+async function approveBuildIntakeBrief(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.json(await approveBuildBrief({ interviewId: req.params.id, actorId: getUserId(req) }));
+  } catch (err) {
+    sendBuildBriefError(res, err, next);
+  }
+}
+
+router.post('/:id/brief/approve', requireBriefEditor([]), async (req, res, next) => {
+  if (buildIntakeInterviewOf(res)) return approveBuildIntakeBrief(req, res, next);
   try {
     const userId = getUserId(req);
     const interview = await getInterview(req.params.id);
@@ -3453,6 +4029,10 @@ router.post('/:interviewId/prds', async (req, res, next) => {
     const interview = await getInterview(req.params.interviewId);
     if (!interview) {
       res.status(404).json({ error: 'Interview not found' });
+      return;
+    }
+    if (isBuildIntakeInterview(interview)) {
+      res.status(409).json({ error: BUILD_REQUEST_NO_PRD_MESSAGE });
       return;
     }
     const canGenerate = await canCompleteInterviewAndGeneratePrd(userId, interview);
@@ -3515,7 +4095,12 @@ router.post('/:interviewId/prds', async (req, res, next) => {
     // Return immediately so the client can navigate to the generating skeleton.
     // Grounding + agent kickoff run after the response (may take minutes on cold
     // checkout) — they must not block the Create PRD HTTP request.
-    startPrdWatcher(result.prdId, chatThreadId);
+    await startPrdGenerationWatcher({
+      prdId: result.prdId,
+      chatThreadId,
+      userId,
+      project: interview.project,
+    });
     if (kickoffGeneration) {
       void Promise.resolve(
         routePrdGenerationKickoff({

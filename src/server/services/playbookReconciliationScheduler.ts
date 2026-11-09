@@ -22,6 +22,10 @@ import {
   startPlaybookTerminalEventListener,
   stopPlaybookTerminalEventListener,
 } from './playbookTerminalEventService';
+import {
+  startPlaybookTriggerScheduler,
+  stopPlaybookTriggerScheduler,
+} from './playbookTriggerScheduler';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 const MAX_SWEEP_DELAY_MS = 60_000;
@@ -115,12 +119,12 @@ const defaultScheduler = createPlaybookReconciliationScheduler();
 /**
  * Starts the sweep and the terminal-event listener.
  *
- * This is not behind `playbooks-production-adapters`. That flag covers Phase 2 adapters, while
- * definition runs remain reachable after `playbooks-spike` was archived. Gating recovery on the
- * Phase 2 flag leaves those runs suspended with no resume and no expiry.
+ * Recovery is not optional. A restart has to resume parked runs and expire the ones
+ * nobody came back for.
  */
 export async function startPlaybookReconciliation(): Promise<void> {
   startPlaybookTerminalEventListener();
+  startPlaybookTriggerScheduler();
   defaultScheduler.start();
   console.log(
     `[playbook-reconciliation] sweep started (${getAppEnvironment()}); terminal-event listener registered`
@@ -130,4 +134,5 @@ export async function startPlaybookReconciliation(): Promise<void> {
 export function stopPlaybookReconciliation(): void {
   defaultScheduler.stop();
   stopPlaybookTerminalEventListener();
+  stopPlaybookTriggerScheduler();
 }

@@ -129,27 +129,35 @@ export async function acquireInteractiveCursorAgent(
   if (!apiKey) throw new Error('CURSOR_API_KEY is required');
 
   const resumeAgentId = options.resumeAgentId?.trim() || undefined;
+  const mcpOnly =
+    Object.keys(options.mcpServers).length === 1
+    && Object.prototype.hasOwnProperty.call(options.mcpServers, 'mcp-server');
   // The workspace can be a real checkout whose committed `.cursor` config
   // (hooks, MCP servers) must not run inside a chat turn.
   const local = {
     cwd: input.workspaceRef,
     settingSources: [],
-    ...(input.interviewPhase
+    ...(mcpOnly
+      ? {}
+      : input.interviewPhase
       ? {
           customTools: guidedInterviewRepositoryTools(input.interviewPhase, checkout),
           sandboxOptions: { enabled: false },
         }
       : { customTools: createNativeReadTools(checkout) }),
   } satisfies LocalAgentOptions;
-  // A run waits for its background subagents, which would hold a chat turn
-  // open after the reply. The SDK does not persist this, so resume passes it too.
-  const disallowedTools: ToolName[] = ['task'];
+  // Disallow subagents (`task`) only when repository tools are closed
+  // (product-phase guided interviews or MCP-only connection chats) so a
+  // subagent's default toolset cannot bypass the parent's tool boundary.
+  const disallowSubagents = mcpOnly || input.interviewPhase === 'product';
   const agentOptions = {
     apiKey,
     model: buildCursorModelSelection(input.model, input.effort ?? undefined),
     local,
     mcpServers: { ...options.mcpServers },
-    disallowedTools,
+    ...(disallowSubagents ? { disallowedTools: ['task' as ToolName] } : {}),
+    // A connection chat gets the connected MCP only: no shell, files, web, or tasks.
+    ...(mcpOnly ? { tools: ['mcp' as ToolName] } : {}),
   };
 
   if (resumeAgentId) {

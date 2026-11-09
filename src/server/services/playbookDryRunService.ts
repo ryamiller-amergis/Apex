@@ -22,6 +22,8 @@ import {
   requiredPermissionsForStep,
 } from './playbookSteps/registry';
 import { getDefinitionDetail } from './playbookDefinitionService';
+import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
+import { getSkillConfig } from './projectSettingsService';
 
 function graphIssuesFromError(error: unknown): PlaybookDryRunIssue[] {
   if (error instanceof PlaybookGuardViolationError) {
@@ -62,12 +64,42 @@ export async function dryRunPlaybookDraft(input: {
   const detail = await getDefinitionDetail(input.project, input.definitionId);
   const graph = detail.draft.graph;
   const issues: PlaybookDryRunIssue[] = [];
+  let capabilityManifest: PlaybookDryRunResult['capabilityManifest'] = [];
 
   try {
     assertGraphWithinGuards(graph);
     assertCursorAgentsUseReadOnlyMcp(graph);
   } catch (error) {
     issues.push(...graphIssuesFromError(error));
+  }
+
+  try {
+    let settings: Awaited<ReturnType<typeof getSkillConfig>> = null;
+    try {
+      settings = await getSkillConfig(input.project);
+    } catch {
+      // Capability declarations and hashes remain testable without optional repository grounding.
+      settings = null;
+    }
+    const policies = await resolvePlaybookGraphAgentPolicies({
+      graph,
+      repository: settings?.skillRepo ?? input.project,
+      provider: settings?.skillProvider,
+      enforce: false,
+    });
+    capabilityManifest = policies.map(({ nodeId, policy }) => ({
+      nodeId,
+      skillPath: policy.skill.path,
+      executionProfile: policy.executionProfile,
+      capabilities: policy.capabilities,
+      skillSha256: policy.skill.sha256,
+    }));
+  } catch (error) {
+    issues.push({
+      nodeId: '',
+      kind: 'capability',
+      message: error instanceof Error ? error.message : 'Capability policy resolution failed.',
+    });
   }
 
   const parsedOutputs: Record<string, Record<string, unknown>> = {};
@@ -123,5 +155,6 @@ export async function dryRunPlaybookDraft(input: {
     manifest,
     authorFootnote: { held, missing },
     issues,
+    capabilityManifest,
   };
 }

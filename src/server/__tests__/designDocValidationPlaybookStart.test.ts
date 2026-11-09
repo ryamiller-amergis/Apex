@@ -47,6 +47,9 @@ jest.mock('../services/playbookDefinitionService', () => ({
   createDefinition: jest.fn(),
   publishDraft: jest.fn(),
 }));
+jest.mock('../services/playbookApexEventService', () => ({
+  publishPlaybookApexEvent: jest.fn(async () => ({ started: [] })),
+}));
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn(),
   resolveSkillConfig: (...args: unknown[]) => resolveSkillConfig(...args),
@@ -132,7 +135,6 @@ describe('FEAT-014 owner start path', () => {
     });
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({
       initiatorUserId: 'owner-1',
-      spendAdmissionEnabled: true,
       runInput: expect.objectContaining({
         documentType: 'design_doc',
         documentId: 'doc-1',

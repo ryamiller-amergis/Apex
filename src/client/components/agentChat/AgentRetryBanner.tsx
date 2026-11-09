@@ -8,16 +8,23 @@ export interface AgentRetryBannerProps {
   retryReason: string | null;
   /** Additional CSS class. */
   className?: string;
+  'data-testid'?: string;
 }
 
 export const AgentRetryBanner: React.FC<AgentRetryBannerProps> = ({
   isRetrying,
   retryReason,
   className,
+  'data-testid': testId,
 }) => {
   if (!isRetrying) return null;
   return (
-    <div className={`${styles.retryBanner} ${className ?? ''}`} role="status" aria-live="polite">
+    <div
+      className={`${styles.retryBanner} ${className ?? ''}`}
+      role="status"
+      aria-live="polite"
+      data-testid={testId}
+    >
       <span className={styles.retrySpinner} />
       <span className={styles.retryText}>{retryReason ?? 'Retrying…'}</span>
     </div>

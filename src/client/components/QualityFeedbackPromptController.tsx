@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId } from 'react';
 import type { WorkflowEvaluationSubjectType } from '../../shared/types/workflowEvaluation';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import { useQualityFeedbackPromptState } from '../hooks/useQualityFeedbackPromptState';
@@ -142,9 +142,8 @@ const QualityFeedbackPromptModal: React.FC<QualityFeedbackPromptModalProps> = ({
   onGiveFeedback,
   onSkip,
 }) => {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useDialogFocus<HTMLDivElement>(true, onSkip);
   const titleId = useId();
-  useDialogFocus(dialogRef, { open: true, onClose: onSkip });
 
   return (
     <div

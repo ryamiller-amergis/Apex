@@ -25,13 +25,18 @@ import {
   routeDesignDocGenerationKickoff,
 } from './designDocService';
 import { startTestCaseWatcher, isTestCaseWatcherActive, routeTestCaseGenerationKickoff } from './testCaseService';
-import { routeDocumentValidationKickoff } from './documentValidationService';
+import { isV2RunThread, routeDocumentValidationKickoff } from './documentValidationService';
 import { failStalePrototypes } from './designPrototypeService';
 import { harvestFinishedV2Prototypes } from './designPrototypeV2Harvest';
 import { harvestFinishedV2UiLabDesigns } from './uiLabV2Harvest';
 import { harvestFinishedV2Documents } from './documentV2Harvest';
 import { createWorkflowEvaluationJobOrchestrator } from './workflowEvaluationJobOrchestrator';
 import { createWorkflowEvaluationJobIngestService } from './workflowEvaluationJobIngestService';
+import {
+  startV2HarvestTrigger,
+  stopV2HarvestTrigger,
+  withV2HarvestLease,
+} from './v2HarvestTrigger';
 import {
   findRunningInterviewThreads,
   clearStaleRun,
@@ -50,6 +55,8 @@ import {
 } from './repoCacheLeaseService';
 
 const RECOVERY_INTERVAL_MS = 60_000;
+/** The event trigger may be mid-harvest; wait for it rather than skip, so stale-row resets see its result. */
+const RECOVERY_HARVEST_LEASE_WAIT_MS = 30_000;
 const SHUTDOWN_GRACE_MS = 10_000;
 const DEFAULT_SETUP_TIMEOUT_MS = 15 * 60_000;
 const GENERATION_RECOVERY_GRACE_MS = DEFAULT_SETUP_TIMEOUT_MS;
@@ -342,7 +349,10 @@ export async function recoverInFlightWork(
   }
 
   await runRecoveryCategory('finished document runs', signal, async () => {
-    const harvestedDocuments = await harvestFinishedV2Documents();
+    const harvestedDocuments = await withV2HarvestLease(
+      () => harvestFinishedV2Documents(),
+      RECOVERY_HARVEST_LEASE_WAIT_MS,
+    );
     if (harvestedDocuments > 0) {
       recovered += harvestedDocuments;
       console.log(
@@ -383,6 +393,7 @@ export async function recoverInFlightWork(
     throwIfAborted(signal);
     if (!prd.chatThreadId) continue;
     if (isPrdWatcherActive(prd.id)) continue;
+    if (await isV2RunThread(prd.chatThreadId)) continue;
     const ok = await hydrateThread(prd.chatThreadId);
     if (ok) {
       throwIfAborted(signal);
@@ -454,6 +465,7 @@ export async function recoverInFlightWork(
     // only adopt docs that are not already being watched here — as the PRD,
     // test-case, and validation loops do.
     if (isDocWatcherActive(doc.id)) continue;
+    if (await isV2RunThread(doc.chatThreadId)) continue;
     throwIfAborted(signal);
     const started = await tryStartSingleFeatureDocWatcher(
       doc.id,
@@ -537,6 +549,7 @@ export async function recoverInFlightWork(
     // watcher that was just started by autoStartValidation or acceptFixValidation.
     if (isValidationWatcherActive(doc.id)) continue;
     throwIfAborted(signal);
+    if (await isV2RunThread(doc.validationThreadId)) continue;
     const ok = await hydrateThread(doc.validationThreadId);
     if (ok) {
       throwIfAborted(signal);
@@ -629,6 +642,7 @@ export async function recoverInFlightWork(
     }
     if (isPrdValidationWatcherActive(prd.id)) continue;
     throwIfAborted(signal);
+    if (await isV2RunThread(prd.validationThreadId)) continue;
     const ok = await hydrateThread(prd.validationThreadId);
     if (ok) {
       throwIfAborted(signal);
@@ -698,6 +712,7 @@ export async function recoverInFlightWork(
     throwIfAborted(signal);
     if (!testCase.chatThreadId) continue;
     if (isTestCaseWatcherActive(testCase.id)) continue;
+    if (await isV2RunThread(testCase.chatThreadId)) continue;
     throwIfAborted(signal);
     const ok = await hydrateThread(testCase.chatThreadId);
     if (ok) {
@@ -779,7 +794,10 @@ export async function recoverInFlightWork(
   // a run that finished just past the threshold is failed before it is read.
   try {
     throwIfAborted(signal);
-    const harvested = await harvestFinishedV2Prototypes();
+    const harvested = await withV2HarvestLease(
+      () => harvestFinishedV2Prototypes(),
+      RECOVERY_HARVEST_LEASE_WAIT_MS,
+    );
     if (harvested > 0) {
       recovered += harvested;
       console.log(
@@ -839,6 +857,7 @@ export function startRecoveryLoop(): void {
     return;
   }
 
+  startV2HarvestTrigger();
   void runRecoveryCycle('[recovery] Initial recovery failed:');
   recoveryTimer = setInterval(() => {
     void runRecoveryCycle('[recovery] Periodic recovery failed:');
@@ -847,6 +866,7 @@ export function startRecoveryLoop(): void {
 }
 
 export function stopRecoveryLoop(): void {
+  stopV2HarvestTrigger();
   if (recoveryTimer) {
     clearInterval(recoveryTimer);
     recoveryTimer = null;

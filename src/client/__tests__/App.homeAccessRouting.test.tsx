@@ -62,7 +62,17 @@ jest.mock('../hooks/useProjects', () => ({
 }));
 
 jest.mock('../components/AppHeader', () => ({
-  AppHeader: () => <div data-testid="app-header" />,
+  AppHeader: (props: {
+    onNavigateHome?: () => void;
+    onNavigatePlaybooks?: () => void;
+    onNavigateMcpServers?: () => void;
+  }) => (
+    <div data-testid="app-header">
+      <button type="button" onClick={props.onNavigateHome}>Open Home</button>
+      <button type="button" onClick={props.onNavigatePlaybooks}>Open Playbooks</button>
+      <button type="button" onClick={props.onNavigateMcpServers}>Open MCP Servers</button>
+    </div>
+  ),
 }));
 
 jest.mock('../components/AgentHome', () => ({
@@ -340,6 +350,53 @@ describe('App — Home access with permission + flag both enabled (default)', ()
     }
   });
 
+  it('does not return to Home when chat creation finishes after navigation', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      isSuperAdmin: true,
+      can: (key: string) => [
+        'home:view',
+        'chat:view',
+        'chat:create',
+        'playbooks:view',
+        'mcp-servers:view',
+      ].includes(key),
+    }));
+    (useProjectMenuConfig as jest.Mock).mockReturnValue({
+      enabledViews: ['playbooks', 'mcp-servers'],
+      isLoading: false,
+    });
+    (useSkillRepos as jest.Mock).mockReturnValue({
+      data: [{ name: 'MaxView', defaultBranch: 'main' }],
+      isLoading: false,
+    });
+    mockedUseFeatureFlags.mockReturnValue({
+      flags: {
+        'agent-home': true,
+        'playbooks-production-adapters': true,
+        'mcp-servers': true,
+      },
+      isLoading: false,
+    } as any);
+    let finishCreating!: (value: { threadId: string }) => void;
+    mockStartChatMutateAsync.mockReturnValue(
+      new Promise((resolve) => {
+        finishCreating = resolve;
+      }),
+    );
+
+    renderApp('/home');
+    fireEvent.click(await screen.findByRole('button', { name: 'Start message' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Playbooks' }));
+    expect(screen.getByTestId('location').textContent).toBe('/playbooks');
+
+    await act(async () => {
+      finishCreating({ threadId: 'late-thread' });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('location').textContent).toBe('/playbooks');
+  });
+
   it('does not show a MaxView thread after switching to Apex', async () => {
     let selectedProject = 'MaxView';
     (useAppShell as jest.Mock).mockImplementation(() => makeAppShell({
@@ -436,6 +493,67 @@ describe('App — Home access with permission + flag both enabled (default)', ()
       });
     } finally {
       sessionStorage.removeItem('agentHomeThreadId:Apex');
+    }
+  });
+
+  it('stays on /mcp-servers when AgentHome attempts a thread restore off-route and resets to the Home landing page when Home is clicked', async () => {
+    (useAppShell as jest.Mock).mockReturnValue(makeAppShell({
+      isSuperAdmin: true,
+      can: (key: string) => [
+        'home:view',
+        'chat:view',
+        'chat:create',
+        'mcp-servers:view',
+      ].includes(key),
+    }));
+    (useProjectMenuConfig as jest.Mock).mockReturnValue({
+      enabledViews: ['mcp-servers'],
+      isLoading: false,
+    });
+    mockedUseFeatureFlags.mockReturnValue({
+      flags: {
+        'agent-home': true,
+        'mcp-servers': true,
+      },
+      isLoading: false,
+    } as any);
+    (useChatThread as jest.Mock).mockImplementation((threadId: string | null) => ({
+      data: threadId === 'active-mcp-thread'
+        ? {
+            id: 'active-mcp-thread',
+            userId: 'user-1',
+            kickoff: { project: 'MaxView', repo: 'MaxView', branch: 'main' },
+            messages: [],
+            status: 'idle',
+            workspaceDir: '',
+            flagged: false,
+            createdAt: '2026-09-03T18:00:00.000Z',
+            lastActivityAt: '2026-09-03T18:00:00.000Z',
+          }
+        : null,
+      isFetching: false,
+    }));
+
+    sessionStorage.setItem('agentHomeThreadId:MaxView', 'active-mcp-thread');
+    try {
+      renderApp('/home?thread=active-mcp-thread');
+      await screen.findByTestId('agent-home');
+      act(() => mockAgentHomeProps.onRestoreThread?.('active-mcp-thread'));
+      expect(mockChatPanelProps.activeThreadId).toBe('active-mcp-thread');
+
+      // Clicking MCP Servers navigates to /mcp-servers and stays there even if restore fires
+      fireEvent.click(screen.getByRole('button', { name: 'Open MCP Servers' }));
+      expect(screen.getByTestId('location').textContent).toBe('/mcp-servers');
+      act(() => mockAgentHomeProps.onRestoreThread?.('active-mcp-thread'));
+      expect(screen.getByTestId('location').textContent).toBe('/mcp-servers');
+
+      // Clicking Home clears the active thread and lands on /home instead of /home?thread=...
+      fireEvent.click(screen.getByRole('button', { name: 'Open Home' }));
+      expect(screen.getByTestId('location').textContent).toBe('/home');
+      expect(mockChatPanelProps.activeThreadId).toBeNull();
+      expect(sessionStorage.getItem('agentHomeThreadId:MaxView')).toBeNull();
+    } finally {
+      sessionStorage.removeItem('agentHomeThreadId:MaxView');
     }
   });
 });

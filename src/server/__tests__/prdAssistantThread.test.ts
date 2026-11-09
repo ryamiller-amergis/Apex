@@ -8,7 +8,18 @@
 import request from 'supertest';
 import express from 'express';
 import fs from 'fs';
+import path from 'path';
 import interviewRouter from '../routes/interviews';
+
+const mockWriteThreadFolderFile = jest.fn(
+  async (input: { workspaceDir: string; relativePath: string; content: string }) => {
+    fs.writeFileSync(path.join(input.workspaceDir, input.relativePath), input.content, 'utf-8');
+  },
+);
+jest.mock('../services/threadFolder', () => ({
+  writeThreadFolderFile: (input: { workspaceDir: string; relativePath: string; content: string }) =>
+    mockWriteThreadFolderFile(input),
+}));
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -126,9 +137,14 @@ const { getPrd: mockGetPrd, applyProposedPrdChanges: mockApplyProposedPrdChanges
 // Capture permission calls from route registration (before any clearAllMocks)
 let permissionsRequestedAtLoad: string[] = [];
 const { getComments: mockGetComments } = jest.requireMock('../services/reviewCommentService') as { getComments: jest.Mock };
-const { createThread: mockCreateThread, sendMessage: mockSendMessage } = jest.requireMock('../services/chatAgentService') as {
+const {
+  createThread: mockCreateThread,
+  sendMessage: mockSendMessage,
+  updateThreadKickoffContext: mockUpdateThreadKickoffContext,
+} = jest.requireMock('../services/chatAgentService') as {
   createThread: jest.Mock;
   sendMessage: jest.Mock;
+  updateThreadKickoffContext: jest.Mock;
 };
 const { db: mockDb } = jest.requireMock('../db/drizzle') as {
   db: {
@@ -218,7 +234,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
       .post('/api/interviews/prds/prd-1/assistant-thread');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ threadId: 'thread-new' });
+    expect(res.body).toEqual({ threadId: 'thread-new', created: true });
     expect(mockCreateThread).toHaveBeenCalledTimes(1);
   });
 
@@ -251,7 +267,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
     );
   });
 
-  it('passes skipAutoKickoff: true to createThread and kicks off via sendMessage', async () => {
+  it('passes skipAutoKickoff: true to createThread and starts no greeting run', async () => {
     mockGetPrd.mockResolvedValue({ ...basePrd, prdAssistantThreadId: null });
     mockGetComments.mockResolvedValue([]);
 
@@ -262,10 +278,7 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
       expect.any(Object),
       { skipAutoKickoff: true },
     );
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      'thread-new',
-      expect.stringContaining('Apex'),
-    );
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it('returns 404 when PRD is not found', async () => {
@@ -330,6 +343,29 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — existing thread'
     expect(filePath).toContain('kickoff-context.md');
     expect(content).toContain('# Updated PRD');
     expect(content).toContain('thread-existing');
+  });
+
+  it('saves the refreshed context on the thread even when its workspace is gone', async () => {
+    mockGetPrd.mockResolvedValue({
+      ...basePrd,
+      prdAssistantThreadId: 'thread-existing',
+      content: '# Updated PRD',
+    });
+    mockGetComments.mockResolvedValue([commentFixture]);
+    mockDb.select.mockImplementation(() => ({
+      from: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue([{ workspaceDir: null }]),
+    }));
+
+    await request(buildApp()).post('/api/interviews/prds/prd-1/assistant-thread');
+
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(mockUpdateThreadKickoffContext).toHaveBeenCalledTimes(1);
+    const [threadId, context] = mockUpdateThreadKickoffContext.mock.calls[0] as [string, string];
+    expect(threadId).toBe('thread-existing');
+    expect(context).toContain('# Updated PRD');
+    expect(context).toContain('Please clarify this section.');
   });
 
   it('includes review comment author and body in kickoff-context.md', async () => {

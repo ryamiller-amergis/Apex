@@ -4,17 +4,15 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, PenLine, Play } from 'lucide-react';
+import { ArrowLeft, PenLine, Play, Trash2 } from 'lucide-react';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
+import { playbookAuthorGraphsMatch } from '../../shared/utils/playbookGraph';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
-import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
+import { useDeletePlaybookDefinition, usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
-import { PlaybookDraftEditor } from './PlaybookDraftEditor';
 import { PlaybookRunList } from './PlaybookRunList';
-import { PlaybookVersionList } from './PlaybookVersionList';
 import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
 import {
   computeRunStats,
@@ -161,13 +159,15 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
   const canRun = can('playbooks:run');
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const detail = usePlaybookDefinition(project, definitionId);
   const runs = usePlaybookRuns(project);
   const start = useStartPlaybookRun(project, definitionId);
+  const remove = useDeletePlaybookDefinition(project);
   const publishedVersionId = detail.data?.currentPublishedVersionId ?? null;
-  const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, canvasEnabled);
+  const publishedGraph = usePlaybookVersionGraph(project, definitionId, publishedVersionId, true);
   const [runError, setRunError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const definitionRuns = useMemo(
     () => (runs.data?.runs ?? []).filter((run) => run.definitionId === definitionId),
@@ -191,15 +191,27 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const data = detail.data;
   const currentVersion = data.versions.find((version) => version.id === publishedVersionId);
   const hasUnpublishedChanges = publishedVersionId
-    ? Boolean(publishedGraph.data) && JSON.stringify(publishedGraph.data!.graph) !== JSON.stringify(data.draft.graph)
+    ? Boolean(publishedGraph.data)
+      && !playbookAuthorGraphsMatch(publishedGraph.data!.graph, data.draft.graph)
     : data.draft.graph.nodes.length > 0;
   const truncated = runs.data ? runs.data.total > runs.data.runs.length : false;
+
+  const removePlaybook = async () => {
+    setDeleteError(null);
+    try {
+      await remove.mutateAsync(definitionId);
+      navigate('/playbooks');
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete the playbook.');
+      setConfirmingDelete(false);
+    }
+  };
 
   const runNow = async () => {
     setRunError(null);
     try {
       const result = await start.mutateAsync();
-      if (canvasEnabled) navigate(`/playbooks/runs/${result.runId}`);
+      navigate(`/playbooks/runs/${result.runId}`);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : 'Could not start the run.');
     }
@@ -245,15 +257,51 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
           </p>
         </div>
         <div className={styles.headerActions}>
-          {canvasEnabled ? (
-            <Link
-              to={`/playbooks/definitions/${definitionId}`}
-              className={styles.secondaryButton}
-              {...{ 'data-testid': 'playbook-open-canvas' }}
-            >
-              <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
-            </Link>
-          ) : null}
+          {canAuthor && confirmingDelete ? (
+            <>
+              <button
+                type="button"
+                className={styles.dangerButton}
+                disabled={remove.isPending}
+                onClick={() => void removePlaybook()}
+                {...{ 'data-testid': 'playbook-dashboard-delete-confirm' }}
+              >
+                <Trash2 size={15} aria-hidden /> {remove.isPending ? 'Deleting…' : 'Delete this playbook'}
+              </button>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={remove.isPending}
+                onClick={() => setConfirmingDelete(false)}
+                {...{ 'data-testid': 'playbook-dashboard-delete-cancel' }}
+              >
+                Keep it
+              </button>
+            </>
+          ) : (
+            <>
+              {canAuthor ? (
+                <button
+                  type="button"
+                  className={styles.dangerButton}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setConfirmingDelete(true);
+                  }}
+                  {...{ 'data-testid': 'playbook-dashboard-delete' }}
+                >
+                  <Trash2 size={15} aria-hidden /> Delete
+                </button>
+              ) : null}
+              <Link
+                to={`/playbooks/definitions/${definitionId}`}
+                className={styles.secondaryButton}
+                {...{ 'data-testid': 'playbook-open-canvas' }}
+              >
+                <PenLine size={15} aria-hidden /> {canAuthor ? 'Edit in builder' : 'View in builder'}
+              </Link>
+            </>
+          )}
           {canRun ? (
             <button
               type="button"
@@ -268,10 +316,13 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
           ) : null}
         </div>
       </header>
-      {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
-      {start.isSuccess && !canvasEnabled ? (
-        <p className={styles.successBanner} role="status">Run started.</p>
+      {confirmingDelete ? (
+        <p className={styles.errorBanner} role="status">
+          Delete {data.definition.name}? Its draft, published versions, and finished runs are removed. This cannot be undone.
+        </p>
       ) : null}
+      {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
+      {deleteError ? <p className={styles.errorBanner} role="alert">{deleteError}</p> : null}
 
       <dl className={styles.tiles} {...{ 'data-testid': 'playbook-dashboard-stats' }}>
         {tiles.map((tile) => (
@@ -340,32 +391,6 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         </section>
       </div>
 
-      {canAuthor ? (
-        <section className={styles.panel} aria-labelledby="playbook-manage-heading">
-          <header className={styles.panelHeader}>
-            <h2 id="playbook-manage-heading" className={styles.panelTitle}>Manage</h2>
-          </header>
-          <details className={styles.disclosure}>
-            <summary {...{ 'data-testid': 'playbook-dashboard-versions-toggle' }}>Versions and deprecation</summary>
-            <PlaybookVersionList
-              project={project}
-              definitionId={definitionId}
-              versions={data.versions}
-              currentPublishedVersionId={data.currentPublishedVersionId}
-              canAuthor={canAuthor}
-            />
-          </details>
-          <details className={styles.disclosure}>
-            <summary {...{ 'data-testid': 'playbook-dashboard-json-toggle' }}>Edit name, description or graph JSON</summary>
-            <PlaybookDraftEditor
-              project={project}
-              detail={data}
-              canAuthor={canAuthor}
-              reload={detail.refetch}
-            />
-          </details>
-        </section>
-      ) : null}
     </div>
   );
 };

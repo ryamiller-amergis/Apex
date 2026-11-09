@@ -2,6 +2,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ChatThread } from '../../../shared/types/chat';
 import { ChatAgentPanel } from '../ChatAgentPanel';
 
+jest.mock('../BuildAgentHomePill', () => ({
+  BuildAgentHomePill: () => null,
+}));
+jest.mock('../BrainstormHomeEntry', () => ({
+  BrainstormHomeEntry: () => null,
+}));
+
 const mockRetryLast = jest.fn();
 const mockRetryFailedRun = jest.fn();
 const mockSend = jest.fn();
@@ -236,6 +243,24 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('thread-history-sidebar-mock')).toBeInTheDocument();
   });
 
+  it('does not put Prod Support in the home chat header', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        onSelectThread={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    expect(screen.queryByTestId('home-guided-jobs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-history-btn')).toBeInTheDocument();
+  });
+
   it('PBI-007 AC-3 excludes Home-only content outside Home', () => {
     render(
       <ChatAgentPanel
@@ -418,6 +443,11 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByTestId('chat-agent-pill-description')).toHaveTextContent(
       'Generate a PRD from interview notes',
     );
+    const skillInfoBtn = screen.getByTestId('chat-agent-skill-info-btn');
+    expect(skillInfoBtn).toHaveTextContent('Write PRD');
+    expect(skillInfoBtn).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(skillInfoBtn);
+    expect(skillInfoBtn).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
   });
 
@@ -470,6 +500,29 @@ describe('ChatAgentPanel shared Home shell', () => {
     // markup that the test environment removes.
     expect(screen.getByText(/\*\*Rendered\*\*/)).toBeInTheDocument();
     expect(screen.getByText('Agent is responding…')).toBeInTheDocument();
+  });
+
+  it('keeps the live step line visible after the answer starts streaming', () => {
+    mockSessionOverrides = {
+      streamingText: 'Searching',
+      isRunning: true,
+      status: 'running',
+      toolProgress: [{ toolName: 'list_users', status: 'running', args: {} }],
+    };
+
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    expect(screen.queryByText('Searching')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-progress-label')).toHaveTextContent('Working…');
   });
 
   it('explains an empty transcript instead of rendering a blank pane', () => {

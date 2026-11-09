@@ -34,12 +34,15 @@ import type {
 import type { ApproverPoolResponse } from '../../shared/types/projectSettings';
 import type { ScreenInventoryRoute } from '../../shared/types/designSystem';
 import type { GroupWithMembers } from '../../shared/types/groups';
+import { ApiFetchError, isApiNotFoundError } from '../utils/apiFetch';
+
+const PRD_MAX_RETRIES = 3;
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error ?? `Request failed: ${res.status}`);
+    throw new ApiFetchError((body as any).error ?? `Request failed: ${res.status}`, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -166,7 +169,12 @@ export function usePrd(id: string | null) {
     queryFn: () => apiFetch(`/api/interviews/prds/${id}`),
     enabled: !!id,
     staleTime: 30_000,
+    retry: (failureCount, error) => !isApiNotFoundError(error) && failureCount < PRD_MAX_RETRIES,
+    retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 4_000),
+    // Polling keys off the cached PRD, which survives a failed refetch, so a
+    // 404 has to stop it explicitly.
     refetchInterval: (query) => {
+      if (isApiNotFoundError(query.state.error)) return false;
       const data = query.state.data;
       if (!data) return false;
       if (data.status === 'generating' && data.content === '') return 5_000;

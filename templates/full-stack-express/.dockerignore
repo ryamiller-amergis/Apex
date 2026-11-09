@@ -1,0 +1,15 @@
+.git
+**/node_modules
+artifacts
+docs
+**/.env
+**/.env.*
+!**/.env.example
+**/*.test.ts
+**/*.test.tsx
+**/*.test.mjs
+**/__tests__
+**/*.fixture.ts
+coverage
+**/*.tsbuildinfo
+.pnpm-store

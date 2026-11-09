@@ -15,6 +15,7 @@ import {
   getRepoCacheDir,
 } from '../repoCacheService';
 import { flushTelemetry, trackEvent } from '../telemetry';
+import { groundingMaintenanceScheduler } from '../groundingMaintenanceScheduler';
 import { BareRepoReader } from './bareRepoReader';
 import { handleRepoReadRequest } from './httpHandler';
 import type { RepoReadOperation } from './httpProtocol';
@@ -23,6 +24,7 @@ import {
   kickBackgroundMirrorRefresh,
 } from './mirrorHydration';
 import { isUsableBareMirror } from './mirrorStore';
+import { handlePublishBundleRequest } from './publishBundleHandler';
 
 const DEFAULT_PORT = 8080;
 const MIRROR_PROBE_TIMEOUT_MS = 10_000;
@@ -145,6 +147,17 @@ export function createRepoReadApp(): express.Express {
         .catch(next);
     });
   }
+  app.post('/v1/publish-bundle', requireAiRunnerAuth, (req, res, next) => {
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    void handlePublishBundleRequest(req.body, controller.signal)
+      .then((result) => {
+        res.status(result.status).json(result.body);
+      })
+      .catch(next);
+  });
   return app;
 }
 
@@ -241,6 +254,13 @@ async function main(): Promise<void> {
       serverPort: port,
     })
   );
+
+  // Repo-read owns upkeep for projects wholly on V2 only when configured to;
+  // App Service keeps every other project.
+  if (groundingMaintenanceScheduler.mode === 'v2-projects') {
+    groundingMaintenanceScheduler.start();
+    console.log('[repo-read] grounding maintenance started (mode=v2-projects)');
+  }
 }
 
 if (require.main === module) {

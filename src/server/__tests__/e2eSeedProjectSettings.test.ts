@@ -12,10 +12,15 @@ jest.mock('../db/drizzle', () => {
     conflictArgs: unknown;
   };
   const inserts: InsertRecord[] = [];
+  const updates: Array<{ table: unknown; set: unknown }> = [];
   const state = {
     existingSettings: [] as unknown[],
     insertedSettingsRow: {} as Record<string, unknown>,
+    /** Results for successive selects; falls back to existingSettings. */
+    selectQueue: [] as unknown[][],
   };
+  const nextSelect = () =>
+    Promise.resolve(state.selectQueue.length ? state.selectQueue.shift() : state.existingSettings);
 
   const makeInsert = (table: unknown) => {
     const record: InsertRecord = {
@@ -46,9 +51,10 @@ jest.mock('../db/drizzle', () => {
     return chain;
   };
 
-  const makeUpdate = () => {
+  const makeUpdate = (table: unknown) => {
     const chain = {
-      set() {
+      set(set: unknown) {
+        updates.push({ table, set });
         return chain;
       },
       where() {
@@ -64,8 +70,13 @@ jest.mock('../db/drizzle', () => {
     const chain = {
       from: () => chain,
       innerJoin: () => chain,
-      where: () => chain,
-      limit: () => Promise.resolve(state.existingSettings),
+      // Thenable so only an awaited where() (no .limit()) takes a queued result.
+      where: () => ({
+        ...chain,
+        then: (resolve: (rows: unknown) => unknown, reject: (err: unknown) => unknown) =>
+          nextSelect().then(resolve, reject),
+      }),
+      limit: () => nextSelect(),
     };
     return chain;
   };
@@ -79,17 +90,34 @@ jest.mock('../db/drizzle', () => {
     },
     __mockState: state,
     __inserts: inserts,
+    __updates: updates,
   };
 });
 
 import express from 'express';
 import request from 'supertest';
 import e2eRouter from '../routes/e2eSetup';
-import { projectApprovalModes } from '../db/schema';
+import {
+  appRolePermissions,
+  appRoles,
+  appUserRoles,
+  projectApprovalModes,
+  projectSkillSettings,
+  projectSkillWorkflowSettings,
+} from '../db/schema';
 
-const { __mockState: mockState, __inserts: inserts } = jest.requireMock('../db/drizzle') as {
-  __mockState: { existingSettings: unknown[]; insertedSettingsRow: Record<string, unknown> };
+const {
+  __mockState: mockState,
+  __inserts: inserts,
+  __updates: updates,
+} = jest.requireMock('../db/drizzle') as {
+  __mockState: {
+    existingSettings: unknown[];
+    insertedSettingsRow: Record<string, unknown>;
+    selectQueue: unknown[][];
+  };
   __inserts: Array<{ table: unknown; values: unknown; conflict: string; conflictArgs: unknown }>;
+  __updates: Array<{ table: unknown; set: unknown }>;
 };
 
 function buildApp() {
@@ -106,6 +134,8 @@ function approvalModeInserts() {
 describe('E2E seed/project-settings per-module approval modes', () => {
   beforeEach(() => {
     inserts.length = 0;
+    updates.length = 0;
+    mockState.selectQueue = [];
     mockState.existingSettings = [];
     mockState.insertedSettingsRow = {
       id: 'settings-1',
@@ -154,5 +184,146 @@ describe('E2E seed/project-settings per-module approval modes', () => {
 
     expect(response.status).toBe(200);
     expect(approvalModeInserts()).toHaveLength(0);
+  });
+});
+
+describe('E2E seed/project-settings legacy workflow columns', () => {
+  const legacyWorkflowValues = {
+    interviewModel: 'legacy-interview-model',
+    interviewEffort: 'high',
+    adrModel: 'legacy-adr-model',
+    adrEffort: 'low',
+    uiLabBedrockTemperature: 0.4,
+    prdReviewBedrockMaxTokens: 32000,
+  };
+
+  beforeEach(() => {
+    inserts.length = 0;
+    updates.length = 0;
+    mockState.selectQueue = [];
+    mockState.existingSettings = [];
+    mockState.insertedSettingsRow = { id: 'settings-1', project: 'E2E Project', isDefault: true };
+  });
+
+  it('writes workflow values into the child table and keeps them off the parent row', async () => {
+    const response = await request(buildApp())
+      .post('/seed/project-settings')
+      .send({
+        project: 'E2E Project',
+        defaultModel: 'project-default-model',
+        defaultEffort: 'medium',
+        legacyWorkflowValues,
+      });
+
+    expect(response.status).toBe(200);
+    const settingsInsert = inserts.find((record) => record.table === projectSkillSettings);
+    expect(settingsInsert?.values).toEqual(
+      expect.objectContaining({
+        defaultModel: 'project-default-model',
+        defaultEffort: 'medium',
+      }),
+    );
+    expect(settingsInsert?.values).not.toEqual(
+      expect.objectContaining({ interviewModel: 'legacy-interview-model' }),
+    );
+    expect(inserts.some((record) => record.table === projectSkillWorkflowSettings)).toBe(true);
+  });
+
+  it('applies the same legacy values when re-seeding an existing row', async () => {
+    mockState.existingSettings = [{ id: 'settings-1', project: 'E2E Project' }];
+
+    await request(buildApp())
+      .post('/seed/project-settings')
+      .send({ project: 'E2E Project', legacyWorkflowValues });
+
+    const settingsUpdate = updates.find((record) => record.table === projectSkillSettings);
+    expect(settingsUpdate?.set).not.toEqual(expect.objectContaining(legacyWorkflowValues));
+    expect(inserts.some((record) => record.table === projectSkillWorkflowSettings)).toBe(true);
+  });
+
+  it('rejects keys that are not registry legacy workflow fields', async () => {
+    const response = await request(buildApp())
+      .post('/seed/project-settings')
+      .send({ project: 'E2E Project', legacyWorkflowValues: { skillRepo: 'evil/repo' } });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/skillRepo/);
+    expect(inserts).toHaveLength(0);
+  });
+});
+
+describe('E2E seed/admin-role', () => {
+  beforeEach(() => {
+    inserts.length = 0;
+    updates.length = 0;
+    mockState.existingSettings = [];
+    mockState.insertedSettingsRow = { id: 'role-e2e' };
+  });
+
+  // Admin > Project Settings loads through fetch calls that send no project, so
+  // only a global role grant reaches requirePermission('admin:roles').
+  it('grants a global copy of the admin role that reset removes by its [E2E] name', async () => {
+    mockState.selectQueue = [
+      [{ id: 'role-admin', name: 'admin' }],
+      [{ permissionId: 'perm-admin-roles' }, { permissionId: 'perm-skills-manage' }],
+    ];
+
+    const response = await request(buildApp())
+      .post('/seed/admin-role')
+      .send({ userId: 'dev-mock-oid-00000000-0000-0000-0000-000000000002' });
+
+    expect(response.status).toBe(200);
+    const roleInsert = inserts.find((record) => record.table === appRoles);
+    expect((roleInsert?.values as { name: string }).name).toBe('[E2E] admin 00000002');
+    expect(inserts.find((record) => record.table === appRolePermissions)?.values).toEqual([
+      { roleId: 'role-e2e', permissionId: 'perm-admin-roles' },
+      { roleId: 'role-e2e', permissionId: 'perm-skills-manage' },
+    ]);
+    expect(inserts.find((record) => record.table === appUserRoles)?.values).toEqual({
+      userId: 'dev-mock-oid-00000000-0000-0000-0000-000000000002',
+      roleId: 'role-e2e',
+      assignedBy: 'e2e',
+    });
+  });
+
+  it('fails when the built-in admin role is missing', async () => {
+    mockState.selectQueue = [[]];
+
+    const response = await request(buildApp()).post('/seed/admin-role').send({ userId: 'u' });
+
+    expect(response.status).toBe(500);
+    expect(inserts).toHaveLength(0);
+  });
+});
+
+describe('E2E inspect/project-skill-workflow-settings', () => {
+  beforeEach(() => {
+    inserts.length = 0;
+    mockState.selectQueue = [];
+  });
+
+  it('returns the child rows for one settings row, sorted by workflow', async () => {
+    mockState.selectQueue = [
+      [
+        { settingsId: 'settings-1', workflow: 'prd', model: 'm-prd' },
+        { settingsId: 'settings-1', workflow: 'adr_finalize', model: 'm-adr' },
+      ],
+    ];
+
+    const response = await request(buildApp())
+      .get('/inspect/project-skill-workflow-settings')
+      .query({ settingsId: 'settings-1' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.rows.map((row: { workflow: string }) => row.workflow)).toEqual([
+      'adr_finalize',
+      'prd',
+    ]);
+  });
+
+  it('requires settingsId', async () => {
+    const response = await request(buildApp()).get('/inspect/project-skill-workflow-settings');
+
+    expect(response.status).toBe(400);
   });
 });

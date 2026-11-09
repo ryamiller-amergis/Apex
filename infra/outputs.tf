@@ -81,6 +81,19 @@ output "grounding_app_setting_names" {
   }
 }
 
+output "playbook_step_output_blob_container_name" {
+  description = "Private Blob container for large Playbook step output"
+  value       = azurerm_storage_container.shared["playbook-step-outputs"].name
+}
+
+output "playbook_step_output_app_setting_names" {
+  description = "Non-secret app setting contract for Playbook step-output storage"
+  value = {
+    blob_account_name   = "PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME"
+    blob_container_name = "PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME"
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Load Test module outputs (FEAT-002)
 # Wire these into Apex app settings and the Container Apps Job environment
@@ -289,6 +302,16 @@ output "ai_runs_runner_identity_principal_id" {
 output "ai_runs_runner_identity_id" {
   description = "Runner user-assigned MI resource ID"
   value       = azurerm_user_assigned_identity.ai_runs_runner.id
+}
+
+output "ai_runs_insights_reader_identity_client_id" {
+  description = "Shared insights-reader client id. Workers set this as AZURE_INSIGHTS_CLIENT_ID. AZURE_CLIENT_ID stays the worker identity."
+  value       = local.ai_runs_insights_reader_client_id
+}
+
+output "ai_runs_insights_reader_identity_id" {
+  description = "Resource id of mi-apex-insights-reader-dev. Prod attaches this identity; it does not create another."
+  value       = local.ai_runs_insights_reader_id
 }
 
 output "ai_runs_api_app_setting_names" {

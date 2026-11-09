@@ -133,6 +133,7 @@ jest.mock('../services/bedrockService', () => ({
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
+      interviews: { findFirst: jest.fn().mockResolvedValue(undefined) },
       prds: { findFirst: jest.fn() },
       designPlans: { findFirst: jest.fn() },
       designDocs: { findFirst: jest.fn() },
@@ -904,6 +905,45 @@ describe('Playbook interview brief routes', () => {
     });
   });
 
+  it('FEAT-005: both read routes use the build-intake read guard', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/server/routes/interviews.ts'), 'utf8');
+    expect(source).toContain("router.get('/:id', requireInterviewRead,");
+    expect(source).toContain("router.get('/:id/brief', requireInterviewRead,");
+    const guard = routeSlice(source, 'async function allowBuildIntakeParticipant', 900);
+    expect(guard).toContain('BUILD_INTAKE_OPTION_KEY');
+    expect(guard).toContain('isBuildIntakeParticipant');
+    expect(guard).toContain("requirePermission('interviews:view')");
+  });
+
+  it('FEAT-005: the build requester reads a build-intake interview and its brief', async () => {
+    const { db } = jest.requireMock('../db/drizzle') as { db: { query: { interviews: { findFirst: jest.Mock } } } };
+    db.query.interviews.findFirst.mockResolvedValue({
+      authorId: 'user-test',
+      project: 'Apex',
+      playbookProfileKey: 'build-intake',
+    });
+    mockInterviewService.getInterview.mockResolvedValue({ ...interview, playbookProfileKey: 'build-intake' });
+    mockGetInterviewBrief.mockResolvedValue(brief);
+
+    const detail = await request(buildApp()).get('/api/interviews/interview-1');
+    const loaded = await request(buildApp()).get('/api/interviews/interview-1/brief');
+
+    expect(detail.status).toBe(200);
+    expect(loaded.status).toBe(200);
+    db.query.interviews.findFirst.mockResolvedValue(undefined);
+  });
+
+  it('VT-12: a build-intake brief with a sensitive-data warning still approves (PBI-010 AC-3)', async () => {
+    mockInterviewService.getInterview.mockResolvedValue({ ...interview, playbookProfileKey: 'build-intake' });
+    mockInterviewService.canCompleteInterviewAndGeneratePrd.mockResolvedValue(true);
+    mockApproveInterviewBrief.mockResolvedValue({ version: 2, resumed: true });
+
+    const res = await request(buildApp()).post('/api/interviews/interview-1/brief/approve');
+
+    expect(res.status).toBe(200);
+    expect(mockApproveInterviewBrief).toHaveBeenCalledWith({ interviewId: 'interview-1', approvedBy: 'user-test' });
+  });
+
   it('approves a brief for a section owner who lacks interviews:manage and approver groups', async () => {
     mockInterviewService.getInterview.mockResolvedValue({
       ...interview,
@@ -1299,7 +1339,7 @@ describe('POST /api/interviews/:interviewId/prds', () => {
   it('returns 201 with prdId and threadId and starts the watcher', async () => {
     mockInterviewService.getInterview.mockResolvedValue(interview);
     mockPrdService.createPrd.mockResolvedValue({ prdId: 'prd-new', threadId: 'thread-new' });
-    mockPrdService.startPrdWatcher.mockReturnValue(undefined);
+    mockPrdService.startPrdGenerationWatcher.mockResolvedValue(undefined);
 
     const res = await request(buildApp())
       .post('/api/interviews/interview-1/prds')
@@ -1316,7 +1356,12 @@ describe('POST /api/interviews/:interviewId/prds', () => {
       skillSettingsId: null,
       model: undefined,
     });
-    expect(mockPrdService.startPrdWatcher).toHaveBeenCalledWith('prd-new', 'thread-new');
+    expect(mockPrdService.startPrdGenerationWatcher).toHaveBeenCalledWith({
+      prdId: 'prd-new',
+      chatThreadId: 'thread-new',
+      userId: 'user-test',
+      project: 'proj-alpha',
+    });
   });
 
   it('BR-012 / AC-0 routes authorized PRD kickoff through the service seam', async () => {
@@ -2568,6 +2613,41 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       'prd-1',
       'thread-2',
       'user-test',
+      undefined,
+    );
+  });
+
+  it('forwards the model override from the QA Lab picker', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate')
+      .send({ model: 'claude-opus-4-6', effort: 'high' });
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      'thread-2',
+      'user-test',
+      { model: 'claude-opus-4-6', effort: 'high' },
+    );
+  });
+
+  it('omits overrides entirely when no model or effort is supplied', async () => {
+    mockDb.query.prds.findFirst.mockResolvedValue(prdRowWithContent);
+    mockTriggerTestCaseGeneration.mockResolvedValue(true);
+
+    const res = await request(buildApp())
+      .post('/api/interviews/prds/prd-1/test-cases/generate')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockTriggerTestCaseGeneration).toHaveBeenCalledWith(
+      'prd-1',
+      'thread-2',
+      'user-test',
+      undefined,
     );
   });
 
@@ -2620,6 +2700,7 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       'prd-1',
       'thread-2',
       'user-test',
+      undefined,
     );
   });
 
@@ -2638,6 +2719,7 @@ describe('POST /api/interviews/prds/:prdId/test-cases/generate', () => {
       'prd-1',
       '',
       'user-test',
+      undefined,
     );
   });
 

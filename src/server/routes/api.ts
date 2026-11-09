@@ -19,7 +19,7 @@ import { db } from '../db/drizzle';
 import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getDefaultModel } from '../services/appSettingsService';
-import { getAgentHealthStats, createThread } from '../services/chatAgentService';
+import { getAgentHealthStats, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
@@ -72,6 +72,8 @@ import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
+import projectQuickLinksRouter from './projectQuickLinks';
+import userQuickLinksRouter from './userQuickLinks';
 const router = express.Router();
 const publicHealthPaths = new Set([
   '/health',
@@ -87,8 +89,30 @@ export function isPublicHealthPath(path: string): boolean {
   return publicHealthPaths.has(path);
 }
 
+const sessionFreeFullPaths = new Set(['/api/telemetry-config', '/api/messages']);
+const sessionFreeFullPrefixes = [
+  '/api/internal/load-test-runs',
+  '/api/internal/ai-runs',
+  '/api/internal/foundation-skills',
+  '/api/public',
+];
+
+/**
+ * True for requests that never read the session: health probes, telemetry
+ * config, the Teams bot endpoint, and the runner/CLI/public-API callbacks.
+ * Takes the full request path (including `/api`), as seen by `app.use(fn)`.
+ * Skipping the session middleware keeps these requests off the session store.
+ */
+export function shouldSkipSessionMiddleware(fullPath: string): boolean {
+  if (sessionFreeFullPaths.has(fullPath)) return true;
+  if (fullPath.startsWith('/api/') && isPublicHealthPath(fullPath.slice('/api'.length))) return true;
+  return sessionFreeFullPrefixes.some((prefix) => fullPath.startsWith(prefix));
+}
+
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/projects/:projectId/quick-links', projectQuickLinksRouter);
+router.use('/projects/:projectId/my-quick-links', userQuickLinksRouter);
 router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
@@ -348,6 +372,25 @@ router.get('/workitems', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/workitems/search - Search for work items by query
+// Must stay above /workitems/:id, which would otherwise match "search" as an ID.
+router.get('/workitems/search', async (req: Request, res: Response) => {
+  try {
+    const { query, type, project, areaPath } = req.query as { query?: string; type?: string; project?: string; areaPath?: string };
+    
+    if (!query) {
+      return res.status(400).json({ error: 'Query parameter is required' });
+    }
+
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const workItems = await adoService.searchWorkItems(query, type);
+    res.json(workItems);
+  } catch (error: any) {
+    console.error('Error searching work items:', error);
+    res.status(500).json({ error: 'Failed to search work items' });
+  }
+});
+
 // GET /api/workitems/:id - Fetch a single work item by ID
 router.get('/workitems/:id', async (req: Request, res: Response) => {
   try {
@@ -390,23 +433,6 @@ router.get('/pr-review-tag-trends', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/workitems/search - Search for work items by query
-router.get('/workitems/search', async (req: Request, res: Response) => {
-  try {
-    const { query, type, project, areaPath } = req.query as { query?: string; type?: string; project?: string; areaPath?: string };
-    
-    if (!query) {
-      return res.status(400).json({ error: 'Query parameter is required' });
-    }
-
-    const adoService = new AzureDevOpsService(project, areaPath);
-    const workItems = await adoService.searchWorkItems(query, type);
-    res.json(workItems);
-  } catch (error: any) {
-    console.error('Error searching work items:', error);
-    res.status(500).json({ error: 'Failed to search work items' });
-  }
-});
 
 // PATCH /api/workitems/:id/due-date - Update due date for a work item
 router.patch('/workitems/:id/due-date', async (req: Request, res: Response) => {
@@ -4721,12 +4747,14 @@ router.post(
           .from(chatThreadsSchema)
           .where(drizzleEq(chatThreadsSchema.id, threadId))
           .limit(1);
+        const refreshedContext = buildContextMarkdown(session.contextSnapshot);
         if (threadRow?.workspaceDir) {
           const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
           try {
-            fs.writeFileSync(contextPath, buildContextMarkdown(session.contextSnapshot), 'utf-8');
+            fs.writeFileSync(contextPath, refreshedContext, 'utf-8');
           } catch { /* non-fatal */ }
         }
+        await updateThreadKickoffContext(threadId, refreshedContext);
       }
 
       res.status(isNew ? 201 : 200).json({

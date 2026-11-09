@@ -152,6 +152,7 @@ it('records a Promptfoo run with one failed assertion as a failed job with its s
     listFinishedByThread: jest.fn(),
     listFinishedDocuments: jest.fn().mockResolvedValue([attempt]),
     isDocumentHarvestPending: jest.fn().mockResolvedValue(false),
+    isThreadDocumentHarvestPending: jest.fn().mockResolvedValue(false),
     recordHarvestFailure: jest.fn().mockResolvedValue(1),
     claimHarvest: jest.fn().mockResolvedValue('claimed'),
     completeHarvest: jest.fn().mockResolvedValue(undefined),

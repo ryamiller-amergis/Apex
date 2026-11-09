@@ -463,3 +463,39 @@ therefore put back to the team once, on 2026-09-20, rather than recorded silentl
 looks complete is otherwise indistinguishable from a rota that is. The team's answer on 2026-09-22
 was Reese for both, and that is what stands. The reasoning is kept here so the next person to read
 this row knows it was a decision and not an oversight.
+
+---
+
+## Dependency upgrade runbook
+
+Mastra and the Playbook canvas packages remain exact pins. Review them when a security advisory,
+required fix, or scheduled maintenance review gives a reason to move. Do not update them as part of
+an unrelated feature.
+
+### Mastra
+
+Upgrade `@mastra/core` and `@mastra/pg` together in a dedicated branch.
+
+1. Record the proposed pins and the review date at the top of this file.
+2. Run `npm run build:server`.
+3. Run `npm run test:integration` so the engine confinement and conformance checks use the real
+   module loader.
+4. Run the Playbook server suites, including start, suspend, resume, reconciliation, and engine
+   boundary tests.
+5. Start one real Playbook through an approval gate and resume it after restarting the server.
+6. Inspect the wrapper boundary. Mastra imports remain inside `src/server/services/playbookEngine/`.
+
+The workflow object is thenable because `.then(step)` builds a chain. A change in that behavior can
+hang a run without an ordinary exception, so a passing typecheck is not an upgrade verdict.
+
+### React Flow and elkjs
+
+Upgrade `@xyflow/react` and `elkjs` together in a separate branch from Mastra.
+
+1. Run the client typecheck and Playbook canvas tests.
+2. In a browser, add a node, connect it, auto-layout, save, reload, and reopen its inspector.
+3. Confirm keyboard selection, accessible labels, edge deletion, and saved coordinates.
+4. Record the new pins and review date in `design-docs/playbook-canvas-spike.md`.
+
+Keep all four versions exact in `package.json`. Dependency automation may open an issue or pull
+request, but it must not auto-merge these packages.

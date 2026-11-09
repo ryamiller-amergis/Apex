@@ -35,6 +35,17 @@ export function withApexProject(url: string): string {
   return `${url}${joiner}project=${encodeURIComponent(selectedProject)}`;
 }
 
+export class ApiFetchError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiFetchError';
+  }
+}
+
+export function isApiNotFoundError(error: unknown): boolean {
+  return error instanceof ApiFetchError && error.status === 404;
+}
+
 /**
  * Central fetch wrapper that attaches credentials and the X-Apex-Project header
  * (read from localStorage at call time) to every request.
@@ -50,7 +61,10 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    throw new ApiFetchError(
+      (body as { error?: string }).error ?? `HTTP ${res.status}`,
+      res.status,
+    );
   }
 
   if (res.status === 204 || res.headers?.get('content-length') === '0') {

@@ -153,6 +153,7 @@ jest.mock('../services/durableInteractiveTurnService', () => ({
 const mockIsFeatureEnabled = jest.fn().mockResolvedValue(false);
 jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+  isFlagEnabledForWholeProject: jest.fn().mockResolvedValue(false),
   isLifecycleBindingEnabledForCaller: jest.fn().mockResolvedValue(false),
 }));
 
@@ -172,6 +173,20 @@ jest.mock('../services/groundingProfileResolver', () => ({
   groundingProfileResolver: {
     resolveConnectionProfile: mockResolveConnectionProfile,
   },
+}));
+
+const mockReadsThroughRepoReadService = jest.fn().mockResolvedValue(false);
+jest.mock('../services/repoRead/wholeProjectRepoRead', () => ({
+  readsThroughRepoReadService: (...args: unknown[]) => mockReadsThroughRepoReadService(...args),
+}));
+
+const mockRepoServiceReaderReadFile = jest.fn();
+jest.mock('../services/repoRead/repoServiceReader', () => ({
+  ...jest.requireActual('../services/repoRead/repoServiceReader'),
+  RepoServiceReader: jest.fn().mockImplementation((options: { identity: unknown }) => ({
+    identity: options.identity,
+    readFile: (...args: unknown[]) => mockRepoServiceReaderReadFile(...args),
+  })),
 }));
 
 const mockIsThreadRunAlive = jest.fn().mockResolvedValue(false);
@@ -219,12 +234,18 @@ import {
   isThreadIdle,
 } from '../services/chatAgentService';
 import { dispatchRunEventForTest } from '../services/pgNotifyService';
+import { RepoServiceReader } from '../services/repoRead/repoServiceReader';
+import type { RunGrounding } from '../../shared/types/runGrounding';
 import type {
   AgentRunEventEnvelope,
   ChatMessage,
   ChatThread,
   ChatThreadKickoff,
 } from '../../shared/types/chat';
+import {
+  mcpServerToolRetryPrompt,
+  mcpServerTurnRequiresToolUse,
+} from '../../shared/types/mcpServers';
 import { getSkillFile } from '../services/skillCatalogFacade';
 import type { CallerGroundingSelection } from '../services/callerGroundingService';
 import type {
@@ -1045,6 +1066,98 @@ describe('FEAT-005 Wave 2 native-read runtime', () => {
     }
   });
 
+  describe('prepareBackgroundWorkflowTurn on whole-V2 projects', () => {
+    const pinned = {
+      repoRole: 'target',
+      isActive: true,
+      provider: 'azure_devops',
+      repository: 'Apex',
+      groundedSha: 'a'.repeat(40),
+    } as unknown as RunGrounding;
+
+    afterEach(() => {
+      mockReadsThroughRepoReadService.mockReset();
+      mockReadsThroughRepoReadService.mockResolvedValue(false);
+      mockRepoServiceReaderReadFile.mockReset();
+      mockCallerGroundingStart.mockReset();
+    });
+
+    it('reads the skill through repo-read at the pinned commit without an App Service checkout', async () => {
+      mockReadsThroughRepoReadService.mockResolvedValue(true);
+      mockRepoServiceReaderReadFile.mockResolvedValue('# PRD skill');
+      const findTargetGrounding = jest.fn().mockResolvedValue(pinned);
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff({
+          skillPath: '.cursor/skills/to-prd/SKILL.md',
+          skillProvider: 'ado',
+          freeformContext: '# Context',
+          transcript: '# Transcript',
+        }),
+        { skipAutoKickoff: true }
+      );
+      mockCallerGroundingStart.mockClear();
+
+      try {
+        const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.', {
+          findTargetGrounding,
+        });
+        expect(mockCallerGroundingStart).not.toHaveBeenCalled();
+        expect(findTargetGrounding).toHaveBeenCalledTimes(1);
+        expect(RepoServiceReader).toHaveBeenCalledWith(expect.objectContaining({
+          identity: expect.objectContaining({ provider: 'ado', repo: 'Apex', sha: 'a'.repeat(40) }),
+        }));
+        expect(prepared.skillContent).toBe('# PRD skill');
+        expect(prepared.targetGrounding).toBe(pinned);
+        expect(prepared.scratchInputs.map((input) => input.path)).toEqual([
+          '.ai-pilot/kickoff-context.md',
+          '.ai-pilot/kickoff-transcript.md',
+          '.ai-pilot/session.json',
+        ]);
+      } finally {
+        await closeThread(thread.id);
+      }
+    });
+
+    it('keeps the checkout-first order when the project is not whole-V2', async () => {
+      const order: string[] = [];
+      mockEvaluateBindingContinuity.mockReturnValue({ decision: 'resume' });
+      mockCallerGroundingSelectionToBinding.mockReturnValue({ mode: 'local', sha: 'sha-gen' });
+      mockResolveConnectionProfile.mockRejectedValue(new Error('no reader'));
+      mockCallerGroundingStart.mockImplementation(async () => {
+        order.push('checkout');
+        return {
+          mode: 'local',
+          cwd: 'C:\\data\\grounding-workspaces\\gen',
+          profileId: 'profile-gen' as GroundingProfileId,
+          resolvedSha: 'sha-gen',
+          nativeReads: true,
+          workingTree: true,
+          release: jest.fn().mockResolvedValue(undefined),
+        } satisfies CallerGroundingSelection;
+      });
+      const findTargetGrounding = jest.fn().mockImplementation(async () => {
+        order.push('lookup');
+        return pinned;
+      });
+      const thread = await createThread(
+        'developer-1',
+        baseKickoff({ skillPath: '.cursor/skills/to-prd/SKILL.md' }),
+        { skipAutoKickoff: true }
+      );
+
+      try {
+        const prepared = await prepareBackgroundWorkflowTurn(thread.id, 'Generate.', {
+          findTargetGrounding,
+        });
+        expect(order).toEqual(['checkout', 'lookup']);
+        expect(prepared.targetGrounding).toBe(pinned);
+      } finally {
+        await closeThread(thread.id);
+      }
+    });
+  });
+
   it('AC-1 / VT-06 fallback prompt remains sandbox and provider-MCP directed', () => {
     // Given a remote or non-native repository-reading turn.
     const kickoff = baseKickoff();
@@ -1554,6 +1667,43 @@ describe('canonical durable send wrapper', () => {
     } finally {
       mockPgLoadFullThread.mockResolvedValue(null);
       await closeThread(closedId);
+    }
+  });
+
+  it('refuses a cab-release turn on the legacy route instead of running it in the web app', async () => {
+    mockCanonicalInteractiveWorkflowRoute.mockImplementation(
+      mockCanonicalLegacyRoute,
+    );
+    const { Agent } = jest.requireMock('@cursor/sdk') as {
+      Agent: { create: jest.Mock; resume: jest.Mock };
+    };
+    Agent.create.mockClear();
+    Agent.resume.mockClear();
+    const thread = await createThread(
+      'developer-1',
+      {
+        ...baseKickoff(),
+        skillPath: '.cursor/skills/cab-release/SKILL.md',
+        pillLabel: 'Create CAB request',
+      },
+      { skipAutoKickoff: true },
+    );
+
+    try {
+      await expect(
+        sendMessage(thread.id, 'Run the confirmed dry-run', undefined, [], {
+          legacyCompletion: 'detach',
+          turnIdPolicy: 'required',
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        message: 'INTERACTIVE_V2_REQUIRED',
+      });
+      expect(mockInteractiveWorkflowRoute).not.toHaveBeenCalled();
+      expect(Agent.create).not.toHaveBeenCalled();
+      expect(Agent.resume).not.toHaveBeenCalled();
+    } finally {
+      await closeThread(thread.id);
     }
   });
 
@@ -2068,6 +2218,7 @@ describe('document assistant MCP wiring', () => {
     [{ assistantType: 'design-doc' as const }, 'assistant'],
     [{ skillPath: '.cursor/skills/adr-finalize/SKILL.md' }, 'adr'],
     [{ isDevSession: true }, 'assistant'],
+    [{ askApex: true, skillPath: '.cursor/skills/app-knowledge/SKILL.md' }, 'ask-apex'],
     [{}, 'home-chat'],
   ])(
     'routes interactive class %j as %s',
@@ -2077,6 +2228,7 @@ describe('document assistant MCP wiring', () => {
         isDevSession?: boolean;
         assistantType?: 'prd' | 'design-doc';
         skillPath?: string;
+        askApex?: boolean;
       },
       expected
     ) => {
@@ -2088,6 +2240,7 @@ describe('document assistant MCP wiring', () => {
             kickoff: baseKickoff({
               assistantType: overrides.assistantType,
               skillPath: overrides.skillPath,
+              askApex: overrides.askApex,
             }),
           },
         } as Parameters<typeof resolveInteractiveWorkflowClass>[0]),
@@ -3139,5 +3292,68 @@ describe('buildDocumentAssistantEditGuidance', () => {
     expect(guidance).toContain(
       'Do NOT write proposed design-doc content to `.ai-pilot/output/`'
     );
+  });
+});
+
+describe('integration connector MCP mount (SC-5)', () => {
+  it('SC-5 mounts only the selected connection tool server', () => {
+    const port = process.env.PORT ?? '3001';
+    const servers = buildMcpServers(
+      baseKickoff({
+        assistantType: 'mcp-server',
+        mcpServerId: 'conn-clerk',
+        skillProvider: 'ado',
+      }),
+      'http://localhost:3001/mcp/ado-skills',
+      { maxviewEnabled: true, userId: 'user-1' },
+    );
+
+    expect(servers).toEqual({
+      'mcp-server': {
+        url: `http://localhost:${port}/mcp/mcp-servers/conn-clerk?userId=user-1`,
+      },
+    });
+  });
+
+  it('tells an MCP chat to use only the connected read-only tools', () => {
+    const prompt = buildInitialPrompt(baseKickoff({
+      assistantType: 'mcp-server',
+      mcpServerId: '20000000-0000-4000-8000-000000000002',
+      pillLabel: 'Clerk',
+    }));
+
+    expect(prompt).toContain('Clerk');
+    expect(prompt).toContain('read-only tools');
+    expect(prompt).toContain('Complete the user’s request');
+    expect(prompt).toContain('call the relevant MCP tools before answering');
+    expect(prompt).toContain('If the user explicitly defines an approximation');
+    expect(prompt).toContain('offset probes or binary search');
+    expect(prompt).toContain('at most eight MCP calls');
+    expect(prompt).toContain('Do not return SQL');
+    expect(prompt).not.toContain('ado-skills');
+  });
+
+  it('requires MCP tools for data questions and follow-up calculations', () => {
+    expect(mcpServerTurnRequiresToolUse('How many people logged in today?')).toBe(true);
+    expect(
+      mcpServerTurnRequiresToolUse(
+        "Count users whose last_sign_in_at falls on today's date",
+      ),
+    ).toBe(true);
+    expect(mcpServerTurnRequiresToolUse('Thanks!')).toBe(false);
+    expect(mcpServerTurnRequiresToolUse('What can you do?')).toBe(false);
+  });
+
+  it('builds an outcome-first retry after an MCP turn skips tool use', () => {
+    const retry = mcpServerToolRetryPrompt(
+      'Clerk',
+      'Count users whose last_sign_in_at is today',
+    );
+
+    expect(retry).toContain('Discard that draft');
+    expect(retry).toContain('Call the relevant MCP tools');
+    expect(retry).toContain('Return the result first');
+    expect(retry).toContain('Count users whose last_sign_in_at is today');
+    expect(retry).not.toContain('write SQL');
   });
 });

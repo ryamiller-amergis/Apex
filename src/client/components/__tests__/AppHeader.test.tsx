@@ -41,6 +41,10 @@ jest.mock('../FeatureRequestFab', () => ({
   FeatureRequestFab: () => null,
 }));
 
+jest.mock('../QuickLinksMenu', () => ({
+  QuickLinksMenu: () => null,
+}));
+
 // ── No menu config, not super admin (default) ─────────────────────────────────
 
 describe('AppHeader — no menuEnabledViews, not super admin', () => {
@@ -253,15 +257,15 @@ describe('AppHeader — Work Board visibility', () => {
     expect(onNavigateWorkBoard).toHaveBeenCalled();
   });
 
-  it('hides Playbooks until the flag is on and the project enables the module', () => {
+  it('shows Playbooks when the project enables the module and the user can view it', () => {
     const can = (key: string) => key === 'playbooks:view';
     const { rerender } = render(
-      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} playbooksEnabled={false} />,
+      <AppHeader {...baseProps} can={can} menuEnabledViews={[]} />,
     );
     expect(screen.queryByRole('button', { name: 'Playbooks' })).not.toBeInTheDocument();
 
     rerender(
-      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} playbooksEnabled />,
+      <AppHeader {...baseProps} can={can} menuEnabledViews={['playbooks']} />,
     );
     expect(screen.getByRole('button', { name: 'Playbooks' })).toBeInTheDocument();
   });
@@ -432,5 +436,40 @@ describe('AppHeader — menu fully enabled but role missing specific permissions
     render(<AppHeader {...baseProps} can={can} menuEnabledViews={allViews} />);
     expect(screen.queryByRole('button', { name: 'Calendar' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Planning' })).toBeInTheDocument();
+  });
+});
+
+// ── Builds (FEAT-002 VT-06) ───────────────────────────────────────────────────
+
+describe('AppHeader — Builds visibility', () => {
+  const canView = (key: string) => key === 'builds:view';
+
+  it('PBI-003 AC-0 renders the mobile Builds entry when flag, menu and builds:view hold, and click navigates', () => {
+    const onNavigateBuilds = jest.fn();
+    render(
+      <AppHeader
+        {...baseProps}
+        can={canView}
+        menuEnabledViews={['builds']}
+        buildsEnabled
+        onNavigateBuilds={onNavigateBuilds}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('app-header-mobile-nav-builds'));
+    expect(onNavigateBuilds).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['flag off', { can: canView, menuEnabledViews: ['builds'], buildsEnabled: false }],
+    ['menu excludes builds', { can: canView, menuEnabledViews: [] as string[], buildsEnabled: true }],
+    ['no builds:view', { can: (_k: string) => false, menuEnabledViews: ['builds'], buildsEnabled: true }],
+  ])('hides the Builds entry when %s', (_label, props) => {
+    render(<AppHeader {...baseProps} {...props} onNavigateBuilds={jest.fn()} />);
+    expect(screen.queryByTestId('app-header-mobile-nav-builds')).not.toBeInTheDocument();
+  });
+
+  it('a super admin needs only the flag', () => {
+    render(<AppHeader {...baseProps} can={(_k) => false} isSuperAdmin buildsEnabled onNavigateBuilds={jest.fn()} />);
+    expect(screen.getByTestId('app-header-mobile-nav-builds')).toBeInTheDocument();
   });
 });

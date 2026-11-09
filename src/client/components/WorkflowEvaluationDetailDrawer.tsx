@@ -1,4 +1,4 @@
-import React, { useId, useRef, useState } from 'react';
+import React, { useId, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { WorkflowEvaluationJobEvaluator } from '../../shared/types/workflowEvaluation';
@@ -35,10 +35,9 @@ export const WorkflowEvaluationDetailDrawer: React.FC<WorkflowEvaluationDetailDr
   onClose,
   'data-testid': testId = 'workflow-evaluation-drawer',
 }) => {
-  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useDialogFocus<HTMLDivElement>(true, onClose);
   const titleId = useId();
   const eventQuery = useAdminWorkflowEvaluationEvent(projectId, eventId);
-  useDialogFocus(drawerRef, { open: true, onClose });
   const event = eventQuery.data;
 
   return (

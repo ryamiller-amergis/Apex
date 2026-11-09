@@ -28,6 +28,7 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   'my-work': 'dev-workbench:view',
   standup: 'standup:participate',
   'ui-lab': 'ui-lab:view',
+  'qa-lab': 'planning:qa',
   'feature-requests': 'feature-requests:view',
   'ai-cost': 'analytics:ai-cost:view',
   'design-module': 'design-module:view',
@@ -35,6 +36,10 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   diagrams: 'diagram:view',
   'work-board': 'work-board:view',
   playbooks: 'playbooks:view',
+  builds: 'builds:view',
+  'mcp-servers': 'mcp-servers:view',
+  brainstorm: 'brainstorm:view',
+  'prod-support': 'chat:create',
 };
 
 export interface RestrictedUserAccess {

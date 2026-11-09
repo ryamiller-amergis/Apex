@@ -9,7 +9,7 @@ import passport from 'passport';
 // Load environment variables BEFORE importing routes
 dotenv.config();
 
-import apiRoutes, { isPublicHealthPath } from './routes/api';
+import apiRoutes, { isPublicHealthPath, shouldSkipSessionMiddleware } from './routes/api';
 import authRoutes from './routes/auth';
 import azureCostRoutes from './routes/azureCost';
 import skillsRoutes from './routes/skills';
@@ -18,6 +18,7 @@ import chatRoutes from './routes/chat';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
 import adrRoutes from './routes/adr';
+import brainstormRoutes from './routes/brainstorm';
 import notificationRoutes from './routes/notifications';
 import reviewCommentRoutes from './routes/reviewComments';
 import deploymentOutcomesRouter from './routes/deploymentOutcomes';
@@ -58,7 +59,7 @@ import {
 import { getFeatureAutoCompleteService } from './services/featureAutoComplete';
 import { getUatAutoReleaseService } from './services/uatAutoReleaseService';
 import { startRecoveryLoop, registerGracefulShutdown } from './services/startupRecovery';
-import { startReaper, stopReaper } from './services/agentRunReaperService';
+import { startReaper } from './services/agentRunReaperService';
 import {
   startAdmissionGovernorScheduler,
   stopAdmissionGovernorScheduler,
@@ -67,7 +68,11 @@ import {
   startPlaybookReconciliation,
   stopPlaybookReconciliation,
 } from './services/playbookReconciliationScheduler';
-import { initPgNotify, shutdownPgNotify } from './services/pgNotifyService';
+import {
+  startPlaybookStepOutputCleanup,
+  stopPlaybookStepOutputCleanup,
+} from './services/playbookStepOutputCleanupScheduler';
+import { initPgNotify } from './services/pgNotifyService';
 import {
   initInteractiveLiveBus,
   shutdownInteractiveLiveBus,
@@ -86,6 +91,10 @@ import { apiKeyExpiryNotificationScheduler } from './services/apiKeyExpiryNotifi
 import { foundationSkillScanScheduler } from './services/foundationSkillScanScheduler';
 import { groundingMaintenanceScheduler } from './services/groundingMaintenanceScheduler';
 import { workBoardScheduler } from './services/workBoardScheduler';
+import { startBrainstormCleanupScheduler, stopBrainstormCleanupScheduler } from './services/brainstorm/cleanupScheduler';
+import buildsRoutes from './routes/builds';
+import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
+import { startBuildReconciliation, stopBuildReconciliation } from './services/buildReconciliationScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
 import {
   isInteractiveGatewayEnabled,
@@ -102,11 +111,17 @@ import apiKeysRoutes from './routes/apiKeys';
 import publicRoutes from './routes/public';
 import loadTestRunsInternalRoutes from './routes/loadTestRunsInternal';
 import aiRunsInternalRoutes from './routes/aiRunsInternal';
+import cabReleaseBrokerRoutes from './routes/cabReleaseBroker';
 import foundationSkillsAuthorizeRoutes from './routes/foundationSkillsAuthorize';
 import profileRoutes from './routes/profile';
 import walkthroughsRoutes from './routes/walkthroughs';
+import mcpServerRoutes from './routes/mcpServers';
 import workflowEvaluationsRoutes from './routes/workflowEvaluations';
 import { startLoadTestRunReaper } from './services/loadTestRunService';
+import {
+  resolveBackgroundJobsMode,
+  runsSharedBackgroundJobs,
+} from './services/backgroundJobsMode';
 
 // ── E2E mode guard ────────────────────────────────────────────────────────────
 // When E2E_MODE=true, background services and schedulers are suppressed so
@@ -140,7 +155,14 @@ app.use(cors({
     : ['http://localhost:3000', 'http://localhost:5173'],
   credentials: true
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    if (req.url?.includes('/api/public/playbooks/triggers/')) {
+      (req as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    }
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Production sessions default to PostgreSQL so OAuth state and authenticated
@@ -152,11 +174,15 @@ const { store: sessionStore } = createSessionStore();
 const sessionMiddleware = session(createSessionOptions(sessionStore));
 const passportInitializeMiddleware = passport.initialize();
 const passportSessionMiddleware = passport.session();
-app.use(sessionMiddleware);
+// Session-free routes (health probes, runner callbacks, public API) skip the
+// session store so a slow Postgres or a hung instance cannot fail a health probe.
+const withSession = (handler: express.RequestHandler): express.RequestHandler =>
+  (req, res, next) => (shouldSkipSessionMiddleware(req.path) ? next() : handler(req, res, next));
+app.use(withSession(sessionMiddleware));
 
 // Initialize Passport
-app.use(passportInitializeMiddleware);
-app.use(passportSessionMiddleware);
+app.use(withSession(passportInitializeMiddleware));
+app.use(withSession(passportSessionMiddleware));
 
 // Auth routes (no authentication required)
 app.use('/auth', authRoutes);
@@ -189,7 +215,7 @@ const internalOnlyPaths = [
 // on loadTestRunsInternalRoutes (LT_RUNNER_CALLBACK_TOKEN or runner MI JWT).
 const loadTestRunnerCallbackPaths = ['/internal/load-test-runs'];
 // AI runner ingest — session-free; requireAiRunnerAuth validates callback identity.
-const aiRunnerCallbackPaths = ['/internal/ai-runs'];
+const aiRunnerCallbackPaths = ['/internal/ai-runs', '/internal/cab-release'];
 
 // @apex/skills CLI entitlement lookup — session-free because the CLI runs on
 // developer machines and in CI with no Apex session. Read-only and returns no
@@ -240,6 +266,7 @@ app.use('/api', (req, res, next) => {
 
   ensureAuthenticated(req, res, next);
 }, apiRoutes);
+app.use('/api/builds', ensureAuthenticated, buildsRoutes);
 app.use('/api/azure', ensureAuthenticated, azureCostRoutes);
 app.use('/api/ai-cost', ensureAuthenticated, aiCostRoutes);
 app.use('/api/skills', ensureAuthenticated, skillsRoutes);
@@ -247,6 +274,7 @@ app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
 app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
 app.use('/api/adr', ensureAuthenticated, adrRoutes);
+app.use('/api/brainstorm', ensureAuthenticated, brainstormRoutes);
 app.use('/api/notifications', ensureAuthenticated, notificationRoutes);
 app.use('/api/design-prototypes', ensureAuthenticated, designPrototypeRoutes);
 app.use('/api/design-plans', ensureAuthenticated, designPlanRoutes);
@@ -270,6 +298,7 @@ app.use('/api/projects/:projectId/load-tests', ensureAuthenticated, loadTestsRou
 app.use('/api/projects/:projectId/load-test-targets', ensureAuthenticated, loadTestTargetsRoutes);
 app.use('/api/projects/:projectId/api-keys', ensureAuthenticated, apiKeysRoutes);
 app.use('/api/projects/:projectId/walkthroughs', ensureAuthenticated, walkthroughsRoutes);
+app.use('/api/projects/:projectId/mcp-servers', ensureAuthenticated, mcpServerRoutes);
 app.use('/api/projects/:projectId/workflow-evaluations', ensureAuthenticated, workflowEvaluationsRoutes);
 // Public API — session-free; auth is Bearer API key (FEAT-002).
 app.use('/api/public', publicRoutes);
@@ -277,6 +306,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/internal/load-test-runs', loadTestRunsInternalRoutes);
 // AI runner ingest — session-free; auth is runner MI + AiRun.Runner (or local test token).
 app.use('/api/internal/ai-runs', aiRunsInternalRoutes);
+app.use('/api/internal/cab-release', cabReleaseBrokerRoutes);
 // @apex/skills CLI entitlement lookup — session-free, read-only, no secrets returned.
 app.use('/api/internal/foundation-skills', foundationSkillsAuthorizeRoutes);
 app.use('/api/admin', adminRouter);
@@ -314,7 +344,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Global error-handling middleware — sends unhandled errors to App Insights
-app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: Error & { status?: number }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   captureServerError(req, err, res);
   if (telemetryClient) {
     telemetryClient.trackException({
@@ -401,10 +431,33 @@ const server = app.listen(PORT, () => {
   startObservabilityCapture().catch((err) =>
     console.error('[startup] observability capture failed to start:', err),
   );
+  server.once('close', () => {
+    void stopObservabilityCapture();
+  });
+
+  // Grounding maintenance reads GROUNDING_MAINTENANCE_MODE, so staging still
+  // evicts and compacts its own disk when shared background jobs are off.
+  groundingMaintenanceScheduler.start();
+  console.log('Grounding maintenance scheduler started');
+
+  startDbPoolTelemetryScheduler();
+  server.once('close', stopDbPoolTelemetryScheduler);
+
+  // Chat SSE streams served by this instance receive run events through LISTEN.
+  initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
+
+  const backgroundJobsMode = resolveBackgroundJobsMode(process.env.BACKGROUND_JOBS_MODE);
+  if (!runsSharedBackgroundJobs(backgroundJobsMode)) {
+    console.log(
+      '[background-jobs] BACKGROUND_JOBS_MODE=off — background jobs that act on shared data are off for this slot.',
+    );
+    registerGracefulShutdown(server);
+    return;
+  }
+
   startObservabilityOperations();
   startJourneyAggregation();
   server.once('close', () => {
-    void stopObservabilityCapture();
     stopObservabilityOperations();
     stopJourneyAggregation();
   });
@@ -434,14 +487,16 @@ const server = app.listen(PORT, () => {
   foundationSkillScanScheduler.start();
   console.log('Foundation skill scan scheduler started');
 
-  groundingMaintenanceScheduler.start();
-  console.log('Grounding maintenance scheduler started');
-
-  startDbPoolTelemetryScheduler();
-  server.once('close', stopDbPoolTelemetryScheduler);
-
   workBoardScheduler.start();
   console.log('Work board due-soon scheduler started');
+
+  startBrainstormCleanupScheduler();
+  server.once('close', stopBrainstormCleanupScheduler);
+  console.log('Brainstorm cleanup scheduler started');
+
+  startBuildQueueScheduler();
+  server.once('close', stopBuildQueueScheduler);
+  console.log('Build queue scheduler started');
 
   bootstrapAdmin();
 
@@ -451,11 +506,14 @@ const server = app.listen(PORT, () => {
   startReaper();
   startAdmissionGovernorScheduler();
   server.once('close', stopAdmissionGovernorScheduler);
-  // Phase 0/1 runs are not behind playbooks-production-adapters, so recovery always starts.
+  // Playbook recovery always starts. A restart has to resume parked runs.
   void startPlaybookReconciliation();
   server.once('close', stopPlaybookReconciliation);
+  startBuildReconciliation();
+  server.once('close', stopBuildReconciliation);
+  startPlaybookStepOutputCleanup();
+  server.once('close', stopPlaybookStepOutputCleanup);
   startLoadTestRunReaper();
-  initPgNotify().catch((err) => console.error('[startup] initPgNotify failed:', err.message));
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.
   registerGracefulShutdown(server);

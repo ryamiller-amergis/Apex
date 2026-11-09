@@ -11,7 +11,7 @@ import type { CreatePrdAdoItemsRequest, CreatePrdAdoItemsResponse, SelectedBackl
 import type { EffortLevel } from '../../shared/types/effort';
 import { readOutputPrd, readOutputBacklog, sendMessage, createThread as createChatThread, cancelRun, prepareBackgroundWorkflowTurn, isThreadIdle, hydrateThread } from './chatAgentService';
 import { isThreadRunAlive } from './agentRunReaperService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isPrdGenerationOutputComplete } from '../../shared/utils/prdGenerationOutput';
 import { normalizeBacklogUserStories, resolveUserStoryIWant } from '../../shared/utils/userStory';
 import { notifyAiCompletion } from './aiCompletionNotifier';
@@ -291,14 +291,11 @@ export async function routePrdGenerationKickoff(opts: {
       destinationRun,
       threadId: opts.threadId,
       prepareWorker: async () => {
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () =>
         sendMessage(
@@ -950,6 +947,31 @@ export function isPrdWatcherActive(prdId: string): boolean {
   return activePrdWatchers.has(prdId);
 }
 
+/** Starts the output watcher unless the run goes to the V2 worker, whose harvest applies the result. */
+export async function startPrdGenerationWatcher(input: {
+  prdId: string;
+  chatThreadId: string;
+  userId: string;
+  project: string;
+}): Promise<void> {
+  const v2Transport = await usesV2DocumentTransport({
+    userId: input.userId,
+    project: input.project,
+    workflowClass: 'prd',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing output.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startPrdWatcher(input.prdId, input.chatThreadId);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
+}
+
 export function startPrdWatcher(prdId: string, chatThreadId: string): void {
   stopPrdWatcher(prdId);
   let attempts = 0;
@@ -1121,7 +1143,9 @@ function rowToPrdSummary(
 
 // ── Title normalization for fuzzy matching ────────────────────────────────────
 
-function normalizeTitle(t: string): string {
+// Backlog JSON is AI-authored, so titles can be missing.
+function normalizeTitle(t: unknown): string {
+  if (typeof t !== 'string') return '';
   return t.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
@@ -1377,6 +1401,7 @@ export async function createPrdAdoWorkItems(
                 }
                 const docNorm = normalizeTitle(doc.title);
                 const featNorm = normalizeTitle(feature.title);
+                if (!docNorm || !featNorm) return false;
                 if (docNorm === featNorm) return true;
                 if (docNorm.length >= 4 && featNorm.length >= 4) {
                   if (docNorm.includes(featNorm) || featNorm.includes(docNorm)) return true;

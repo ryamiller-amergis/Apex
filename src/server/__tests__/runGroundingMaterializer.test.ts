@@ -354,7 +354,12 @@ describe('TBI-004 default independent grounding materializer', () => {
     // Assert
     expect(result).toBe('unavailable');
     expect(repairRepoCache).toHaveBeenCalledTimes(1);
-    expect(runGit).toHaveBeenCalledTimes(3);
+    // checkout, checkout after the exact fetch, the pinned-tree probe, checkout after repair.
+    expect(runGit).toHaveBeenCalledTimes(4);
+    expect(runGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['cat-file', '-e', `${sha}^{tree}`]),
+      expect.anything(),
+    );
     expect(telemetry).toHaveBeenCalledWith(
       'grounding.materialization.fallback',
       expect.objectContaining({
@@ -367,6 +372,44 @@ describe('TBI-004 default independent grounding materializer', () => {
       }),
       expect.objectContaining({ durationMs: expect.any(Number) }),
     );
+  });
+
+  it('does not refetch the mirror when clones fail but the pinned commit is present', async () => {
+    const createBundleStore: GroundingMaterializerDependencies['createBundleStore'] =
+      jest.fn((options) => ({
+        rehydrate: jest.fn(async (identity, destination) => (
+          await options.repairAndMaterialize({ identity, destination })
+            ? { status: 'materialized' as const, source: 'repair' as const }
+            : { status: 'remote-fallback' as const, reason: 'repair-failed' as const }
+        )),
+      }));
+    const repairRepoCache = jest.fn();
+    const materializeWorkspaceFromCache = jest
+      .fn()
+      .mockRejectedValue(new Error('packfile objects/pack/pack-1.pack cannot be accessed'));
+    const runGit = jest.fn().mockResolvedValue('');
+    const materialize = createRunGroundingMaterializer({
+      dataRoot: 'C:\\persistent-data',
+      createBundleStore,
+      ensureRepoCache: jest.fn().mockResolvedValue({
+        cacheDir: 'C:\\cache\\repo.git',
+        remote: { url: 'https://example.invalid/repo.git', env: {}, secret: '' },
+      }),
+      repairRepoCache,
+      materializeWorkspaceFromCache,
+      exactCommitFetch: jest.fn().mockResolvedValue(undefined),
+      runGit,
+      telemetry: jest.fn(),
+    });
+
+    await expect(materialize(grounding, run('race-thread'))).resolves.toBe('unavailable');
+
+    expect(materializeWorkspaceFromCache).toHaveBeenCalledTimes(2);
+    expect(runGit).toHaveBeenCalledWith(
+      expect.arrayContaining(['cat-file', '-e', `${sha}^{tree}`]),
+      expect.objectContaining({ cwd: 'C:\\cache\\repo.git' }),
+    );
+    expect(repairRepoCache).not.toHaveBeenCalled();
   });
 
   it('TBI-002 DoD-0 / VT-10 attempts one 45-second exact-commit fetch after a pinned miss', async () => {

@@ -1,3 +1,4 @@
+import { AI_CODE_TAG } from '../../shared/utils/cloudAgentLaunch';
 import { AzureDevOpsService } from './azureDevOps';
 
 const IN_PROGRESS = 'In Progress';
@@ -14,11 +15,14 @@ export interface CloudAgentKickoffInput {
   workItemId: number;
   workItemType: string;
   state: string;
+  /** When set, the started work item and any children moved to In Progress get the tag. */
+  tagAiCode?: boolean;
 }
 
 export interface CloudAgentKickoffClient {
   getFeatureChildren: (featureId: number) => Promise<CloudAgentKickoffChild[]>;
   setWorkItemState: (workItemId: number, state: string) => Promise<void>;
+  addTag?: (workItemId: number, tag: string) => Promise<void>;
 }
 
 /** Work items that should move to In Progress. Never In Pull Request. */
@@ -65,10 +69,22 @@ export async function applyCloudAgentKickoff(
     }
   }
 
-  for (const workItemId of kickoffInProgressIds({ ...input, children })) {
+  const movedIds = kickoffInProgressIds({ ...input, children });
+  for (const workItemId of movedIds) {
     await tryKickoffStep(
       `setWorkItemState(${workItemId} -> ${IN_PROGRESS})`,
       () => client.setWorkItemState(workItemId, IN_PROGRESS),
+    );
+  }
+
+  if (!input.tagAiCode || !client.addTag) return;
+  const tagIds = movedIds.includes(input.workItemId)
+    ? movedIds
+    : [input.workItemId, ...movedIds];
+  for (const workItemId of tagIds) {
+    await tryKickoffStep(
+      `addTag(${workItemId}, ${AI_CODE_TAG})`,
+      () => client.addTag!(workItemId, AI_CODE_TAG),
     );
   }
 }
@@ -79,5 +95,6 @@ export async function prepareCloudAgentKickoff(input: CloudAgentKickoffInput): P
   await applyCloudAgentKickoff(input, {
     getFeatureChildren: (featureId) => ado.getFeatureChildren(featureId),
     setWorkItemState: (workItemId, state) => ado.setWorkItemState(workItemId, state),
+    addTag: (workItemId, tag) => ado.addTagToWorkItem(workItemId, tag),
   });
 }

@@ -28,6 +28,10 @@ import {
 } from '../hooks/useProjectRepositoryReadiness';
 import styles from './AdminProjectSettings.module.css';
 import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
+import { BuildProfileSection } from './BuildProfileSection';
+import { ProjectQuickLinksSettings } from './ProjectQuickLinksSettings';
+import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
+import type { UserWithRoles } from '../../shared/types/rbac';
 
 // ── BranchCombobox ─────────────────────────────────────────────────────────────
 
@@ -1203,6 +1207,8 @@ interface EditState {
   skillProvider: SkillProvider;
   skillRepo: string;
   skillBranch: string;
+  cloudAgentTargetBranch: string;
+  cloudAgentRequiredReviewers: string;
   interviewSkillPath: string;
   prdSkillPath: string;
   adrInterviewSkillPath: string;
@@ -1295,6 +1301,7 @@ interface EditState {
 const emptyEdit = (): EditState => ({
   id: null, project: '', friendlyName: '', isDefault: false,
   skillProvider: 'ado', skillRepo: '', skillBranch: '',
+  cloudAgentTargetBranch: '', cloudAgentRequiredReviewers: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
@@ -1635,6 +1642,43 @@ const RepoCheckoutControlsEnabled: React.FC<RepoCheckoutControlsProps> = ({ conf
   );
 };
 
+interface BuildProfileAccordionProps {
+  settingsId: string | null;
+  project: string;
+  expanded: boolean;
+  onToggle: () => void;
+  skillList: { id: string; path: string; name: string }[];
+  availableModels: { id: string; displayName: string }[];
+  users: UserWithRoles[];
+  skillsLoading: boolean;
+  modelsLoading: boolean;
+}
+
+const BuildProfileAccordion: React.FC<BuildProfileAccordionProps> = ({ expanded, onToggle, ...sectionProps }) => {
+  const enabled = useFeatureFlag(BUILD_FROM_PROMPT_FLAG, sectionProps.project);
+
+  // @feature-flag:build-from-prompt start winner=enabled
+  if (!enabled) {
+    // @feature-flag:build-from-prompt disabled-start
+    return null;
+    // @feature-flag:build-from-prompt disabled-end
+  }
+
+  // @feature-flag:build-from-prompt enabled-start
+  return (
+    <AccordionSection
+      title="Build Profile"
+      hint="Skill, model and caps for each build role"
+      expanded={expanded}
+      onToggle={onToggle}
+    >
+      <BuildProfileSection {...sectionProps} />
+    </AccordionSection>
+  );
+  // @feature-flag:build-from-prompt enabled-end
+  // @feature-flag:build-from-prompt end
+};
+
 const RepoCheckoutControls: React.FC<RepoCheckoutControlsProps & { project: string }> = ({
   config,
   project,
@@ -1688,6 +1732,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
     approvers: false,
     pills: false,
     mcpPills: false,
+    buildProfile: false,
   });
 
   // Optional pipeline stages start collapsed; core stages start open
@@ -1824,6 +1869,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       skillProvider: config.skillProvider ?? 'ado',
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
+      cloudAgentTargetBranch: config.cloudAgentTargetBranch ?? '',
+      cloudAgentRequiredReviewers: (config.cloudAgentRequiredReviewers ?? []).join('\n'),
       interviewSkillPath: config.interviewSkillPath ?? '',
       prdSkillPath: config.prdSkillPath ?? '',
       adrInterviewSkillPath: config.adrInterviewSkillPath ?? '',
@@ -1949,6 +1996,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         skillProvider: edit.skillProvider,
         skillRepo: edit.skillRepo.trim(),
         skillBranch: edit.skillBranch.trim(),
+        cloudAgentTargetBranch: edit.cloudAgentTargetBranch.trim() || null,
+        cloudAgentRequiredReviewers: edit.cloudAgentRequiredReviewers
+          .split(/[\n,]/)
+          .map((name) => name.trim())
+          .filter(Boolean),
         interviewSkillPath: edit.interviewSkillPath || null,
         prdSkillPath: edit.prdSkillPath || null,
         adrInterviewSkillPath: edit.adrInterviewSkillPath || null,
@@ -2346,6 +2398,32 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     disabled={upsert.isPending || !edit.skillRepo}
                     onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)} {...{ 'data-testid': 'ps-branch-combobox' }} />
                 </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-cloud-agent-target">Cloud agent merge branch</label>
+                  <BranchCombobox
+                    value={edit.cloudAgentTargetBranch}
+                    branches={branches}
+                    isLoading={isLoadingBranches}
+                    disabled={upsert.isPending || !edit.skillRepo}
+                    onChange={(branch) => setEdit((prev) => prev ? { ...prev, cloudAgentTargetBranch: branch } : prev)}
+                    {...{ 'data-testid': 'ps-cloud-agent-target' }}
+                  />
+                  <span className={styles.modelDefault}>The cloud agent cuts its branch from this and opens the pull request into it. Leave blank to use the skill branch.</span>
+                </div>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-cloud-agent-reviewers">Cloud agent required reviewers</label>
+                <textarea
+                  id="ps-cloud-agent-reviewers"
+                  className={styles.select}
+                  rows={3}
+                  value={edit.cloudAgentRequiredReviewers}
+                  placeholder={'Maxview - Dev'}
+                  disabled={upsert.isPending}
+                  onChange={(event) => setEdit((prev) => prev ? { ...prev, cloudAgentRequiredReviewers: event.target.value } : prev)}
+                  {...{ 'data-testid': 'ps-cloud-agent-reviewers' }}
+                />
+                <span className={styles.modelDefault}>One Azure DevOps team or group per line. Each cloud agent pull request in this project adds them as required reviewers.</span>
               </div>
 
               <div className={styles.formGrid}>
@@ -3288,6 +3366,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 onAdd={(pill) => setEdit((prev) => prev ? { ...prev, quickMcpPills: [...prev.quickMcpPills, pill] } : prev)} {...{ 'data-testid': 'ps-mcp-pill-add-form' }} />
             </AccordionSection>
 
+            <BuildProfileAccordion
+              settingsId={edit.id}
+              project={edit.project || selectedProject}
+              expanded={expandedSections.buildProfile}
+              onToggle={() => toggleSection('buildProfile')}
+              skillList={skillList}
+              availableModels={availableModels}
+              users={allUsers}
+              skillsLoading={isLoadingSkills || !edit.skillRepo}
+              modelsLoading={isLoadingModels}
+            />
+
             {formError && <p className={styles.formError}>{formError}</p>}
             <div className={styles.formActions} style={{ marginTop: '12px' }}>
               <button className={styles.btnCancel} onClick={handleCancel} type="button" disabled={upsert.isPending} {...{ 'data-testid': 'ps-form-cancel' }}>
@@ -3376,6 +3466,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         )}
 
         {formError && !edit && <p className={styles.formError}>{formError}</p>}
+
+        {!edit && selectedProject && (
+          <ProjectQuickLinksSettings project={selectedProject} />
+        )}
 
         {/* ── Foundation Skills (read-only) ────────────────────────────── */}
         {!edit && selectedProject && (

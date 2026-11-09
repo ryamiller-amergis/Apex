@@ -53,7 +53,7 @@ describe('VT-03 — startup validation', () => {
       console.log('BOOTED ' + listStepTypeDescriptors().length);
     `);
 
-    expect(output).toContain('BOOTED 6');
+    expect(output).toContain('BOOTED 13');
     expect(status).toBe(0);
   }, 180_000);
 
@@ -66,6 +66,7 @@ describe('VT-03 — startup validation', () => {
       createStepTypeRegistry([
         {
           stepType: 'broken',
+          schemaVersion: 1,
           canSuspend: true,
           isAgentStep: false,
           sideEffect: 'read',
@@ -91,6 +92,7 @@ describe('VT-03 — startup validation', () => {
       const partial = createStepTypeRegistry([
         {
           stepType: 'notify',
+          schemaVersion: 1,
           canSuspend: false,
           isAgentStep: false,
           sideEffect: 'writes-apex',

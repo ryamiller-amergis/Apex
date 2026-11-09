@@ -382,6 +382,41 @@ describe('CreateAdoItemsModal – design doc matching', () => {
     });
   });
 
+  it('renders without crashing when a scorecard feature has no feature_title', () => {
+    const scorecard = {
+      slug: 'auth',
+      generated_at: '2026-01-01T00:00:00Z',
+      review_phase: 'final',
+      overall_score: 90,
+      ready_threshold: 80,
+      is_ready: true,
+      verdict: 'ready',
+      features: [{ feature_slug: 'feature-auth' }],
+      cross_cutting_checks: {},
+      accepted_gaps: [],
+      deferred_gaps: [],
+    } as unknown as DesignDocSummary['validationScorecard'];
+    renderModal({
+      designDocs: [
+        makeDesignDoc({ id: 'doc-1', title: 'Unmatched One', status: 'approved', validationScorecard: scorecard }),
+        makeDesignDoc({ id: 'doc-2', title: 'Unmatched Two', status: 'approved' }),
+      ],
+    });
+    expect(getRowCheckbox('Feature Auth')).toBeDisabled();
+  });
+
+  it('does not match a feature with no title to a doc with no title', () => {
+    const backlog = { epics: [{ title: 'Epic One', features: [{ items: [{ type: 'PBI', id: 'pbi-1', title: 'Login form' }] }] }] };
+    renderModal({
+      backlogJson: backlog,
+      designDocs: [
+        makeDesignDoc({ id: 'doc-1', title: undefined as unknown as string, status: 'approved' }),
+        makeDesignDoc({ id: 'doc-2', title: 'Other Doc', status: 'approved' }),
+      ],
+    });
+    expect(getRowCheckbox('Login form')).toBeDisabled();
+  });
+
   it('does not show the design doc link on locked features (multi-doc scenario)', () => {
     renderModal({
       designDocs: [

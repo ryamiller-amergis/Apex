@@ -55,6 +55,7 @@ import { MODULE_VIEW_PERMISSIONS, isRestrictedAccessEmail } from '../../shared/t
 import type { RoleWithPermissions } from '../../shared/types/rbac';
 import { GroundingRolloutStatus } from './GroundingRolloutStatus';
 import { DevEnvAllowlistPanel } from './DevEnvAllowlistPanel';
+import { BuildAllowlistPanel } from './BuildAllowlistPanel';
 import styles from './PlatformAdmin.module.css';
 
 const ObservabilityWorkspace = lazy(() =>
@@ -80,7 +81,7 @@ const userAccessSchema = z.object({
 
 type UserAccessFormValues = z.infer<typeof userAccessSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'flags' | 'skills' | 'skill-health' | 'walkthroughs' | 'observability';
+type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'builds' | 'flags' | 'skills' | 'skill-health' | 'walkthroughs' | 'observability';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -417,6 +418,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             <button
               type="button"
               role="tab"
+              id="platform-admin-tab-builds"
+              aria-selected={activeTab === 'builds'}
+              aria-controls="platform-admin-panel-builds"
+              className={`${styles.tabButton} ${activeTab === 'builds' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('builds')}
+              {...{ 'data-testid': 'platform-admin-tab-builds' }}
+            >
+              Builds
+            </button>
+            <button
+              type="button"
+              role="tab"
               id="platform-admin-tab-flags"
               aria-selected={activeTab === 'flags'}
               aria-controls="platform-admin-panel-flags"
@@ -569,6 +582,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             >
               {/* data-testid-exempt — DevEnvAllowlistPanel owns its control ids */}
               <DevEnvAllowlistPanel />
+            </div>
+          )}
+          {activeTab === 'builds' && (
+            <div
+              id="platform-admin-panel-builds"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-builds"
+              className={styles.tabPanel}
+              {...{ 'data-testid': 'platform-admin-panel-builds' }}
+            >
+              {/* data-testid-exempt — BuildAllowlistPanel owns its control ids */}
+              <BuildAllowlistPanel />
             </div>
           )}
           {activeTab === 'flags' && (

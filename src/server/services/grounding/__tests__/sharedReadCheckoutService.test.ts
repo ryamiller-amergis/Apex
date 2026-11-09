@@ -9,6 +9,7 @@ import {
   sharedReadCheckoutIdentityFromGrounding,
   SHARED_READ_MARKER,
   SHARED_READ_IDLE_TTL_MS,
+  SHARED_READ_RETAIN_HEARTBEAT_MS,
   type SharedReadCheckoutDependencies,
   type SharedReadCheckoutIdentity,
 } from '../sharedReadCheckoutService';
@@ -243,6 +244,34 @@ describe('sharedReadCheckoutService', () => {
     expect(fs.existsSync(`${idle.workspacePath}.lastused`)).toBe(false);
     expect(fs.existsSync(activeTree.workspacePath)).toBe(true);
     expect(fs.existsSync(held.workspacePath)).toBe(true);
+  });
+
+  it('keeps a held tree fresh so eviction on another host cannot remove it', async () => {
+    const holder = makeService(dataRoot).service;
+    const otherHost = makeService(dataRoot).service;
+    const tree = await holder.materialize(IDENTITY);
+    jest.useFakeTimers({ doNotFake: ['Date', 'nextTick', 'setImmediate', 'queueMicrotask'] });
+    try {
+      holder.retain(IDENTITY);
+      const sidecar = `${tree.workspacePath}.lastused`;
+      const old = Date.now() - SHARED_READ_IDLE_TTL_MS - 60_000;
+      // Let retain's own touch land first, then age the sidecar past the TTL.
+      await new Promise((resolve) => setImmediate(resolve));
+      await fsp.writeFile(sidecar, String(old), 'utf-8');
+
+      jest.advanceTimersByTime(SHARED_READ_RETAIN_HEARTBEAT_MS);
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        if (Number(await fsp.readFile(sidecar, 'utf-8')) > old) break;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      const result = await otherHost.evictIdle();
+      expect(result.evicted).toBe(0);
+      expect(fs.existsSync(tree.workspacePath)).toBe(true);
+    } finally {
+      holder.releaseRef(IDENTITY);
+      jest.useRealTimers();
+    }
   });
 
   it('refreshes last-use on a warm hit so an unreferenced tree survives', async () => {

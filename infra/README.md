@@ -221,8 +221,8 @@ The shared Blob account is created in every Terraform workspace. PDF assembly ha
 
 | Terraform variable | Purpose | Default |
 |--------------------|---------|---------|
-| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` | derived |
-| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts = {}, repo-grounding = {} }` |
+| `shared_storage_account_name` | Globally unique shared artifact account; null derives `stapex<environment>async` (for example, `stapexdevasync`) | derived |
+| `blob_containers` | Map of private containers on the shared account | `{ pdf-artifacts, repo-grounding, cursor-prompts, playbook-step-outputs }` |
 
 App setting contract for the Apex application (wire via deploy pipeline / App Service config — `main.tf` ignores `app_settings` drift):
 
@@ -230,6 +230,10 @@ App setting contract for the Apex application (wire via deploy pipeline / App Se
 |-------------|--------------|----------|
 | `GROUNDING_BLOB_ACCOUNT_NAME` | `grounding_storage_account_name` output | Grounding bundle store |
 | `GROUNDING_BLOB_CONTAINER_NAME` | `grounding_blob_container_name` output | Grounding bundle store |
+| `PLAYBOOK_STEP_OUTPUT_BLOB_ACCOUNT_NAME` | `shared_storage_account_name` output | Playbook step-output store |
+| `PLAYBOOK_STEP_OUTPUT_CONTAINER_NAME` | `playbook_step_output_blob_container_name` output | Playbook step-output store |
+
+`playbook-step-outputs` stores private JSON for Playbook steps whose output exceeds the inline limit. The Apex App Service identity, and a distinct staging-slot identity when enabled, receive `Storage Blob Data Contributor` only on that container. The application falls back to `GROUNDING_BLOB_ACCOUNT_NAME` or `PDF_BLOB_ACCOUNT_NAME` when the explicit account setting has not yet been deployed, because all three name the same shared account. A daily in-process sweep verifies referenced objects and deletes only unreferenced objects older than one hour. Apply this change in each Terraform workspace before Playbook steps spill large output there.
 
 ### Repository grounding bundles
 
@@ -509,6 +513,7 @@ additive and inert while the flag is disabled.
 | Container Apps Environment | `cae-apex-ai-dev` | `cae-apex-ai-prd` |
 | Container Apps Job | `caj-apex-ai-runs-dev` | `caj-apex-ai-runs-prd` |
 | Runner MI | `mi-apex-ai-runs-runner-dev` | `mi-apex-ai-runs-runner-prd` |
+| Insights reader | `mi-apex-insights-reader-dev` | same identity, attached to the prod job and document worker |
 | Azure Files share | `ai-pilot-data` on shared storage | same |
 | Runner image ACR | Reuses `acrapexlt{env}` / repo `apex-ai-runs` | same |
 
@@ -561,6 +566,22 @@ remains inert behind the disabled feature flag.
 | Runner MI | **AcrPull** | load-test ACR (`acrapexlt*`) |
 | Apex API (system identity) | Azure Service Bus Data **Sender** | `ai-runs-background` queue (no receive) |
 | Runner MI | `AiRun.Runner` app role | Entra app when `enable_ai_runs_entra_app=true` |
+| `mi-apex-insights-reader-dev` | Monitoring Reader, Log Analytics Reader, and Reader on MaxView production telemetry | Assigned outside this module. Apply does not create or remove those role assignments. |
+
+Dev state owns `mi-apex-insights-reader-dev`. Prod does not create `mi-apex-insights-reader-prd`. A prod apply reads the dev identity and attaches it to `caj-apex-ai-runs-prd` and `ca-apex-ai-runs-documents-v2-prd`, and sets `AZURE_INSIGHTS_CLIENT_ID`. `AZURE_CLIENT_ID` stays the worker's own identity.
+
+The identity already exists. Import it into the **default** workspace before the first dev apply, or apply tries to create a second identity with the same name:
+
+```bash
+az account set --subscription "MSS-DevTest"
+terraform workspace select default
+terraform import 'azurerm_user_assigned_identity.ai_runs_insights_reader[0]' \
+  "/subscriptions/9d08693d-0c89-4f11-aa43-6cbdb89cf1cb/resourceGroups/rg-scrum-dev/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-apex-insights-reader-dev"
+terraform plan
+terraform apply
+```
+
+Prod has nothing to import. From the `prd` workspace, `terraform plan -var-file="terraform.prd.tfvars"` should show the prod job and document worker gaining that identity. The plan needs permission to read the identity in MSS-DevTest. A plan that destroys the identity or removes `AZURE_INSIGHTS_CLIENT_ID` should not be applied.
 
 By default Terraform provisions the dedicated Key Vault and seeds its
 `cursor-api-key` secret from the existing sensitive `cursor_api_key` variable.
@@ -697,6 +718,12 @@ After apply, mirror `ai_runs_interactive_redis_hostname`,
 `ai_runs_interactive_redis_ssl_port`, and the Redis access key into the App
 Service live-bus settings, and set `AI_RUNS_INTERACTIVE_DISPATCH_URL` to the
 `ai_runs_interactive_app_fqdn` HTTPS endpoint.
+
+The interactive image includes PowerShell for project-owned operational skills.
+CAB scripts call the Apex web app at `/api/internal/cab-release/ado`. `ADO_PAT`
+stays on the web app. The container authenticates with the runner credential
+it already uses for callbacks. `REPO_READ_SERVICE_TOKEN` is the repo-read
+callback and is not an Azure DevOps credential.
 
 ### Clustering policy (live-stream correctness)
 
@@ -852,6 +879,11 @@ Optional Terraform: `enable_ai_platform_v2_runtime = true` **and**
 `ai_platform_v2_database_url`, and the existing Redis/workspace/secret inputs
 — see `ai-platform-v2-runtime.tf`, `ai-platform-v2-interactive-runtime.tf`, and
 `terraform.tfvars.example`.
+
+With `ai_platform_v2_grant_app_service_blob = true`, the App Service identity,
+and a distinct staging-slot identity when enabled, receive `Storage Blob Data
+Contributor` on the V2 artifact container. Staging shares production's database,
+so its recovery sweep can harvest a finished V2 attempt and needs the same read.
 
 **Document worker scaling:** `ca-apex-ai-runs-documents-v2-{env}` scales from
 `min_replicas` to `ai_platform_v2_documents_max_replicas` on the documents queue

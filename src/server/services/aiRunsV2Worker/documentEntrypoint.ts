@@ -62,6 +62,7 @@ export async function startDocumentWorker(): Promise<void> {
     },
     signal: shutdownController.receiveSignal,
     executionSignal: shutdownController.executionSignal,
+    reportShutdownAsWorkerLost: true,
     onProgress: (nextWithinMs) => watchdog.beat('job-loop', nextWithinMs),
   });
 

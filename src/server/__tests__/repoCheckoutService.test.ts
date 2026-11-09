@@ -15,6 +15,7 @@ const mockRemote = {
   },
   secret: 'secret-pat',
 };
+const mockRemoveTree = jest.fn().mockResolvedValue(undefined);
 const mockEnsureRepoCache = jest.fn().mockResolvedValue({
   cacheDir: '/data/repo-cache/maxview.git',
   baseSha: 'abc123',
@@ -34,6 +35,9 @@ jest.mock('../utils/asyncGit', () => ({
   git: (...args: any[]) => mockGit(...args),
   safeArgs: (dir: string, args: string[]) => ['-c', `safe.directory=${dir}`, ...args],
   LONG_TIMEOUT_MS: 120_000,
+}));
+jest.mock('../utils/removeTree', () => ({
+  removeTree: (...args: unknown[]) => mockRemoveTree(...args),
 }));
 jest.mock('../utils/asyncMutex', () => ({
   workspaceMutex: { acquire: jest.fn().mockResolvedValue(() => {}) },
@@ -72,6 +76,15 @@ function workspacePath(sessionId: string): string {
 describe('repoCheckoutService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // jest.mock('fs') automocking leaves `fs.promises` undefined.
+    Object.defineProperty(mockFs, 'promises', {
+      configurable: true,
+      value: {
+        mkdir: jest.fn().mockResolvedValue(undefined),
+        rename: jest.fn().mockResolvedValue(undefined),
+        rm: jest.fn().mockResolvedValue(undefined),
+      },
+    });
     mockGit.mockResolvedValue('');
     mockEnsureRepoCache.mockResolvedValue({
       cacheDir: '/data/repo-cache/maxview.git',
@@ -218,6 +231,36 @@ describe('repoCheckoutService', () => {
       expect(JSON.stringify(mockGit.mock.calls)).not.toContain('secret-pat');
     });
 
+    it('clears an existing workspace in a child process, not through fs', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+
+      await checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'main',
+        sessionId: 'session-async',
+      });
+
+      const promises = mockFs.promises as unknown as {
+        mkdir: jest.Mock;
+        rename: jest.Mock;
+        rm: jest.Mock;
+      };
+      expect(promises.mkdir).toHaveBeenCalledWith(path.join('/data', 'dev-workspaces'), {
+        recursive: true,
+      });
+      expect(promises.rename).toHaveBeenCalledWith(
+        workspacePath('session-async'),
+        expect.stringContaining(`${workspacePath('session-async')}.removing-`),
+      );
+      expect(mockRemoveTree).toHaveBeenCalledWith(
+        expect.stringContaining('.removing-'),
+      );
+      expect(promises.rm).not.toHaveBeenCalled();
+      expect(mockFs.rmSync).not.toHaveBeenCalled();
+    });
+
     it('excludes .ai-pilot from git tracking after cloning', async () => {
       process.env.ADO_ORG = 'https://dev.azure.com/amergis';
       process.env.ADO_PAT = 'secret-pat';
@@ -246,7 +289,8 @@ describe('repoCheckoutService', () => {
       mockGit.mockImplementation(async (args: string[]) => {
         if (args.includes('clone')) {
           cloneAttempts += 1;
-          if (cloneAttempts === 1) throw new Error('fatal: invalid object abc123');
+          // Both attempts inside materializeWorkspaceFromCache fail.
+          if (cloneAttempts <= 2) throw new Error('fatal: invalid object abc123');
         }
         return '';
       });
@@ -264,6 +308,28 @@ describe('repoCheckoutService', () => {
         branch: 'development',
         provider: 'ado',
       });
+      expect(cloneAttempts).toBe(3);
+    });
+
+    it('does not repair the mirror when only one clone attempt fails', async () => {
+      process.env.ADO_ORG = 'https://dev.azure.com/amergis';
+      process.env.ADO_PAT = 'secret-pat';
+      let cloneAttempts = 0;
+      mockGit.mockImplementation(async (args: string[]) => {
+        if (args.includes('clone') && ++cloneAttempts === 1) {
+          throw new Error('fatal: packfile objects/pack/pack-1.pack cannot be accessed');
+        }
+        return '';
+      });
+
+      await expect(checkoutDefaultBranch({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'development',
+        sessionId: 'session-race',
+      })).resolves.toBe(workspacePath('session-race'));
+
+      expect(mockRepairRepoCache).not.toHaveBeenCalled();
       expect(cloneAttempts).toBe(2);
     });
 

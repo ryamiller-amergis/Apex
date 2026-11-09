@@ -29,6 +29,7 @@ import {
   isInteractiveWsEnabled,
   openThreadEventStream,
   type ThreadStreamHandle,
+  type ThreadStreamTransport,
 } from '../utils/threadEventStream';
 
 const CONNECTION_ERROR_GRACE_MS = 2_000;
@@ -115,6 +116,8 @@ interface UseChatStreamOptions {
   initialStatus?: ChatThreadStatus;
   /** Set to true when the thread was loaded and a durable PRD file already exists */
   initialPrdReady?: boolean;
+  /** Force SSE or WebSocket. Brainstorm uses SSE so steps are not held behind a socket the dev proxy does not upgrade. */
+  streamTransport?: ThreadStreamTransport;
 }
 
 const MAX_SEEN_EVENT_IDS = 2048;
@@ -177,6 +180,33 @@ function safeTimestamp(value: unknown, fallback = Date.now()): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function mergeThinkingText(previous: string, incoming: string): string {
+  const trimmed = incoming.trim();
+  if (!trimmed) return previous;
+  if (!previous || previous === 'Analyzing') return trimmed;
+  if (trimmed === 'Analyzing') return previous;
+  if (trimmed.startsWith(previous)) return trimmed;
+  if (/^[.,!?;:)'"\]]/.test(trimmed) || /\s$/.test(previous)) {
+    return `${previous}${trimmed}`;
+  }
+  return `${previous} ${trimmed}`;
+}
+
+/** Joins raw streamed pieces exactly; they carry their own spacing. */
+function appendThinkingPiece(previous: string, piece: string): string {
+  if (!previous || previous === 'Analyzing') return piece.trimStart();
+  return `${previous}${piece}`;
+}
+const RESTARTING_LABEL = 'Restarting your answer…';
+const RESTART_GIVE_UP_MS = 3 * 60_000;
+const RESTART_GAVE_UP_DETAIL = "This answer didn't finish. Please try again.";
+
+type RunEnding = Readonly<{
+  runId: string | null;
+  outcome: 'completed' | 'failed' | 'cancelled';
+  detail?: string;
+}>;
 
 function progressLabelForPhase(phase: AgentRunPhase, detail?: string): string {
   return friendlyChatProgressLabel(detail, phase);
@@ -268,6 +298,8 @@ export function useChatStream(
   const streamRef = useRef<ThreadStreamHandle | null>(null);
   // Buffer tokens into the in-progress message
   const streamBufferRef = useRef('');
+  const streamTrimOffsetRef = useRef(0);
+  const lastThinkingSeqRef = useRef(0);
   const pendingOffsetTokensRef = useRef<
     Map<number, { text: string; key: string }>
   >(new Map());
@@ -282,8 +314,11 @@ export function useChatStream(
   const initialMessagesRef = useRef(options.initialMessages);
   const initialStatusRef = useRef(options.initialStatus);
   const initialPrdReadyRef = useRef(options.initialPrdReady);
+  // eslint-disable-next-line react-hooks/refs -- keep latest seed options in refs without re-triggering stream effects
   initialMessagesRef.current = options.initialMessages;
+  // eslint-disable-next-line react-hooks/refs -- keep latest seed options in refs without re-triggering stream effects
   initialStatusRef.current = options.initialStatus;
+  // eslint-disable-next-line react-hooks/refs -- keep latest seed options in refs without re-triggering stream effects
   initialPrdReadyRef.current = options.initialPrdReady;
 
   useEffect(() => {
@@ -329,11 +364,87 @@ export function useChatStream(
     }
   }, []);
 
+  // A failed run can be reported by its error event, its terminal done, and the
+  // poll; this keeps the error message to one per run until it makes progress
+  // again (a retry reuses the run id).
+  const failedRunIdRef = useRef<string | null>(null);
+  // Set while the server re-runs an attempt lost to a host restart; cleared by
+  // the re-run's first progress or by any ending.
+  const restartTimeoutRef = useRef<number | null>(null);
+  // A reload replays messages but not run events, so a failed last turn is
+  // looked up once per thread from the run status.
+  const lastRunCheckedRef = useRef(false);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  const clearRestart = useCallback(() => {
+    if (restartTimeoutRef.current !== null) {
+      window.clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearTurnProgress = useCallback(() => {
+    clearRestart();
+    streamBufferRef.current = '';
+    streamTrimOffsetRef.current = 0;
+    pendingOffsetTokensRef.current.clear();
+    setStreamingText('');
+    setThinkingText('');
+    setToolProgress([]);
+    lastThinkingSeqRef.current = 0;
+    setIsRetrying(false);
+    setRetryReason(null);
+    setGroundingPreparation(null);
+    setProgressLabel(null);
+    setProgressPhase(null);
+    clearRetryTimeout();
+    clearPollTimer();
+  }, [clearRestart, clearRetryTimeout, clearPollTimer]);
+
+  const endRun = useCallback((ending: RunEnding) => {
+    clearTurnProgress();
+    if (ending.outcome !== 'failed') {
+      setStatus('idle');
+      return;
+    }
+    setStatus('error');
+    setRetryableRunId(ending.runId);
+    if (ending.runId && failedRunIdRef.current === ending.runId) return;
+    failedRunIdRef.current = ending.runId;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: uuidv4(),
+        role: 'system',
+        text: `Error: ${friendlyChatErrorMessage(ending.detail)}`,
+        ts: new Date().toISOString(),
+      },
+    ]);
+  }, [clearTurnProgress]);
+
+  const beginRestart = useCallback((runId: string | null) => {
+    clearTurnProgress();
+    setStatus('running');
+    setIsRetrying(true);
+    setRetryReason(RESTARTING_LABEL);
+    restartTimeoutRef.current = window.setTimeout(() => {
+      restartTimeoutRef.current = null;
+      endRun({ runId, outcome: 'failed', detail: RESTART_GAVE_UP_DETAIL });
+    }, RESTART_GIVE_UP_MS);
+  }, [clearTurnProgress, endRun]);
+
+  const clearRetryableRunId = useCallback(() => {
+    failedRunIdRef.current = null;
+    setRetryableRunId(null);
+  }, []);
+
   const reset = useCallback(() => {
     setMessages(initialMessagesRef.current ?? []);
     setStreamingText('');
     setThinkingText('');
     setToolProgress([]);
+    lastThinkingSeqRef.current = 0;
     setStatus(initialStatusRef.current ?? 'idle');
     setIsConnected(false);
     setHasConnectionError(false);
@@ -351,13 +462,17 @@ export function useChatStream(
     setEventDrivenTermination(false);
     eventDrivenTerminationRef.current = false;
     streamBufferRef.current = '';
+    streamTrimOffsetRef.current = 0;
     pendingOffsetTokensRef.current.clear();
     seenEventIdsRef.current.clear();
     seenEventIdOrderRef.current = [];
+    failedRunIdRef.current = null;
+    lastRunCheckedRef.current = false;
+    clearRestart();
     clearConnectionErrorTimeout();
     clearRetryTimeout();
     clearPollTimer();
-  }, [clearConnectionErrorTimeout, clearRetryTimeout, clearPollTimer]);
+  }, [clearConnectionErrorTimeout, clearRetryTimeout, clearPollTimer, clearRestart]);
 
   // Merge REST thread snapshots into live state without reconnecting SSE.
   // Covers the common case where useChatThread loads after EventSource opens,
@@ -396,6 +511,25 @@ export function useChatStream(
     // Defaults to SSE (EventSource) so behavior is unchanged until the
     // WebSocket gateway is enabled; both backends deliver the same
     // (data, lastEventId) pair this handler expects.
+    const showFailedLastRun = async () => {
+      try {
+        const res = await fetch(`/api/chat/threads/${threadId}/run-status`, {
+          credentials: 'include',
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as AgentRunStatusResponse;
+        if (data.status !== 'failed' || !data.runId) return;
+        if (statusRef.current !== 'idle' || restartTimeoutRef.current !== null) return;
+        endRun({
+          runId: data.runId.slice(0, 200),
+          outcome: 'failed',
+          detail: data.lastError ?? undefined,
+        });
+      } catch {
+        // The next live ending reports the failure instead.
+      }
+    };
+
     const handleMessage = (data: string, lastEventId: string) => {
       let event: SseEvent;
       try {
@@ -445,6 +579,20 @@ export function useChatStream(
         }
       }
 
+      if (
+        event.type === 'token' ||
+        event.type === 'thinking' ||
+        event.type === 'tool_call' ||
+        event.type === 'tool_status'
+      ) {
+        failedRunIdRef.current = null;
+        if (restartTimeoutRef.current !== null) {
+          clearRestart();
+          setIsRetrying(false);
+          setRetryReason(null);
+        }
+      }
+
       switch (event.type) {
         case 'token': {
           setLastProgressAt(Date.now());
@@ -462,7 +610,9 @@ export function useChatStream(
           ) {
             // Legacy tokens without offsets continue append-only.
             streamBufferRef.current += tokenEvent.text;
-            setStreamingText(streamBufferRef.current);
+            setStreamingText(
+              streamBufferRef.current.slice(streamTrimOffsetRef.current)
+            );
           } else {
             const current = streamBufferRef.current;
             const currentLen = current.length;
@@ -512,8 +662,11 @@ export function useChatStream(
                 drained = true;
               }
             }
-            setStreamingText(streamBufferRef.current);
+            setStreamingText(
+              streamBufferRef.current.slice(streamTrimOffsetRef.current)
+            );
           }
+          setThinkingText('');
           setIsRetrying(false);
           setRetryReason(null);
           clearRetryTimeout();
@@ -524,14 +677,17 @@ export function useChatStream(
           const messageEvent = event as SseMessageEvent;
           setLastProgressAt(Date.now());
           streamBufferRef.current = '';
+          streamTrimOffsetRef.current = 0;
           pendingOffsetTokensRef.current.clear();
           setStreamingText('');
           setThinkingText('');
           setToolProgress([]);
+          lastThinkingSeqRef.current = 0;
           setIsRetrying(false);
           setRetryReason(null);
           setRetryableRunId(null);
           clearRetryTimeout();
+          clearRestart();
           setMessages((prev) => {
             const exists = prev.some((m) => m.id === messageEvent.message.id);
             return exists
@@ -542,13 +698,31 @@ export function useChatStream(
         }
         case 'tool_call': {
           setLastProgressAt(Date.now());
+          streamTrimOffsetRef.current = streamBufferRef.current.length;
+          setStreamingText('');
           setThinkingText('');
           setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
         case 'thinking': {
           const thinkingEvent = event as SseThinkingEvent;
-          setThinkingText(thinkingEvent.text);
+          if (typeof thinkingEvent.seq === 'number') {
+            if (thinkingEvent.seq <= lastThinkingSeqRef.current) break;
+            lastThinkingSeqRef.current = thinkingEvent.seq;
+            setThinkingText((prev) => appendThinkingPiece(prev, thinkingEvent.text));
+          } else {
+            setThinkingText((prev) => mergeThinkingText(prev, thinkingEvent.text));
+          }
+          setProgressPhase((prev) =>
+            prev === null || prev === 'queued' || prev === 'dispatched'
+              ? 'analysis'
+              : prev
+          );
+          setProgressLabel((prev) =>
+            !prev || prev === 'Queued' || prev === 'Dispatched'
+              ? progressLabelForPhase('analysis', thinkingEvent.text)
+              : prev
+          );
           setStatus((prev) => (prev === 'idle' ? 'running' : prev));
           break;
         }
@@ -582,6 +756,11 @@ export function useChatStream(
         case 'tool_status': {
           const toolStatusEvent = event as SseToolStatusEvent;
           setLastProgressAt(Date.now());
+          if (toolStatusEvent.status === 'running') {
+            streamTrimOffsetRef.current = streamBufferRef.current.length;
+            setStreamingText('');
+            setThinkingText('');
+          }
           setToolProgress((prev) => {
             const existing = prev.findIndex(
               (t) => t.callId === toolStatusEvent.callId
@@ -612,7 +791,19 @@ export function useChatStream(
               clearPollTimer();
             }
           }
+          // A terminal status carries no run id or detail; the run's done or
+          // the poll reports the failure, so only the turn progress clears here.
+          // During a restart the thread is idle between the lost attempt and the
+          // re-run, which is not an ending.
+          if (event.status === 'idle' || event.status === 'error') {
+            if (restartTimeoutRef.current !== null) break;
+            clearTurnProgress();
+          }
           setStatus(event.status);
+          if (event.status === 'idle' && !lastRunCheckedRef.current) {
+            lastRunCheckedRef.current = true;
+            void showFailedLastRun();
+          }
           break;
         }
         case 'grounding': {
@@ -665,17 +856,8 @@ export function useChatStream(
             clearRetryTimeout();
             const errorText = errorEvent.error;
             retryTimeoutRef.current = window.setTimeout(() => {
-              setIsRetrying(false);
-              setRetryReason(null);
-              if (durableRunId) setRetryableRunId(durableRunId);
-              const fallbackMsg: ChatMessage = {
-                id: uuidv4(),
-                role: 'system',
-                text: `Error: ${friendlyChatErrorMessage(errorText)}`,
-                ts: new Date().toISOString(),
-              };
-              setMessages((prev) => [...prev, fallbackMsg]);
-              setStatus('error');
+              retryTimeoutRef.current = null;
+              endRun({ runId: durableRunId, outcome: 'failed', detail: errorText });
             }, 5000);
             break;
           }
@@ -693,52 +875,33 @@ export function useChatStream(
             break;
           }
 
-          if (durableRunId) {
-            setRetryableRunId(durableRunId);
-          } else {
-            setRetryableRunId(null);
-          }
-          const errMsg: ChatMessage = {
-            id: uuidv4(),
-            role: 'system',
-            text: `Error: ${friendlyChatErrorMessage(event.error)}`,
-            ts: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, errMsg]);
-          setStatus('error');
+          endRun({ runId: durableRunId, outcome: 'failed', detail: event.error });
           break;
         }
         case 'done': {
+          const doneEvent = event as SseDoneEvent;
           setLastProgressAt(Date.now());
-          streamBufferRef.current = '';
-          pendingOffsetTokensRef.current.clear();
-          setStreamingText('');
-          setThinkingText('');
-          setToolProgress([]);
-          setIsRetrying(false);
-          setRetryReason(null);
-          setGroundingPreparation(null);
-          setProgressLabel(null);
-          setProgressPhase(null);
-          // Keep retryableRunId across clean done after a prior failure so
-          // Retry remains available. Clear only on accepted turn, successful
-          // message, cancel, or thread change.
-          clearRetryTimeout();
-          clearPollTimer();
-          setStatus('idle');
-          if ((event as { error?: string }).error) {
-            const doneEvent = event as SseDoneEvent & { error?: string };
-            if (typeof doneEvent.runId === 'string' && doneEvent.runId.trim()) {
-              setRetryableRunId(doneEvent.runId.slice(0, 200));
-            }
-            const errMsg: ChatMessage = {
-              id: uuidv4(),
-              role: 'system',
-              text: `Error: ${doneEvent.error}`,
-              ts: new Date().toISOString(),
-            };
-            setMessages((prev) => [...prev, errMsg]);
+          const doneRunId =
+            typeof doneEvent.runId === 'string' && doneEvent.runId.trim()
+              ? doneEvent.runId.slice(0, 200)
+              : null;
+          if (doneEvent.autoRetry) {
+            beginRestart(doneRunId);
+            break;
           }
+          // A clean done keeps retryableRunId from a prior failure so Retry
+          // stays available; it clears on an accepted turn, a successful
+          // message, cancel, or a thread change.
+          endRun({
+            runId: doneRunId,
+            outcome:
+              event.semanticStatus === 'failed'
+                ? 'failed'
+                : event.semanticStatus === 'cancelled'
+                  ? 'cancelled'
+                  : 'completed',
+            detail: event.semanticDetail,
+          });
           if (event.prdReady) setPrdReady(true);
           if (event.backlogReady) setBacklogReady(true);
           break;
@@ -762,6 +925,9 @@ export function useChatStream(
         }, CONNECTION_ERROR_GRACE_MS);
       },
       onMessage: handleMessage,
+    }, {
+      ...(options.streamTransport ? { transport: options.streamTransport } : {}),
+      ...(options.streamTransport === 'ws' ? { wsFailuresBeforeSseFallback: 0 } : {}),
     });
 
     streamRef.current = stream;
@@ -774,7 +940,7 @@ export function useChatStream(
       clearRetryTimeout();
       clearPollTimer();
     };
-  }, [threadId, reset, rememberEventId, interactiveWsEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [threadId, reset, rememberEventId, interactiveWsEnabled, options.streamTransport]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Polling fallback: when status is 'running' and SSE is disconnected, poll
   // the server every 5 seconds to detect terminal status from Postgres.
@@ -870,33 +1036,19 @@ export function useChatStream(
           'failed',
           'cancelled',
         ].includes(data.status);
-        if (isTerminal) {
-          const mappedStatus: ChatThreadStatus =
-            data.status === 'completed' || data.status === 'cancelled'
-              ? 'idle'
-              : data.status === 'failed'
-                ? 'error'
-                : (data.status as ChatThreadStatus);
-          setStatus(mappedStatus);
-          clearPollTimer();
-          streamBufferRef.current = '';
-          setStreamingText('');
-          setThinkingText('');
-          setToolProgress([]);
-          setIsRetrying(false);
-          setRetryReason(null);
-          if (
-            (data.status === 'error' || data.status === 'failed') &&
-            data.lastError
-          ) {
-            const errMsg: ChatMessage = {
-              id: uuidv4(),
-              role: 'system',
-              text: `Error: ${data.lastError}`,
-              ts: new Date().toISOString(),
-            };
-            setMessages((prev) => [...prev, errMsg]);
-          }
+        // A restart leaves the run failed for a moment before the re-run.
+        if (isTerminal && restartTimeoutRef.current === null) {
+          endRun({
+            runId: data.runId ? data.runId.slice(0, 200) : null,
+            outcome:
+              data.status === 'error' || data.status === 'failed'
+                ? 'failed'
+                : data.status === 'cancelled'
+                  ? 'cancelled'
+                  : 'completed',
+            detail: data.lastError ?? undefined,
+          });
+          if (data.status === 'closed') setStatus('closed');
         }
       } catch {
         // Network error during poll — retry next interval
@@ -916,7 +1068,7 @@ export function useChatStream(
     };
     // @feature-flag:event-driven-run-termination disabled-end
     // @feature-flag:event-driven-run-termination end
-  }, [threadId, status, isConnected, eventDrivenTermination, clearPollTimer]);
+  }, [threadId, status, isConnected, eventDrivenTermination, clearPollTimer, endRun]);
 
   return {
     messages,
@@ -936,7 +1088,7 @@ export function useChatStream(
     isRetrying,
     retryReason,
     retryableRunId,
-    clearRetryableRunId: () => setRetryableRunId(null),
+    clearRetryableRunId,
     groundingPreparation,
   };
 }

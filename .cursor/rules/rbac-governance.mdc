@@ -39,11 +39,17 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `adr:review` | adr | admin, member |
 | `analytics:ai-cost:view` | analytics | admin |
 | `backlog:view` | backlog | admin, member |
+| `brainstorm:view` | brainstorm | admin, member, viewer |
+| `brainstorm:create` | brainstorm | admin, member, viewer |
+| `builds:view` | builds | admin, member, viewer |
+| `builds:run` | builds | admin, member |
 | `calendar:view` | calendar | admin, member |
 | `chat:create` | chat | admin, member |
 | `chat:view` | chat | admin, member |
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |
+| `mcp-servers:view` | mcp-servers | *(no default roles — assign explicitly)* |
+| `mcp-servers:manage` | mcp-servers | *(no default roles — assign explicitly)* |
 | `cost:view` | cost | admin, viewer |
 | `diagram:view` | diagram | admin, member, viewer |
 | `diagram:create` | diagram | admin, member |
@@ -65,11 +71,14 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
-| `playbooks:view` | playbooks | admin, member, viewer |
-| `playbooks:run` | playbooks | admin, member |
-| `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |
-| `playbooks:admin` | playbooks | admin |
+| `playbooks:view` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:run` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:author` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:admin` | playbooks | platform admin, and Playbooks is enabled for the project |
+| `playbooks:triggers:manage` | playbooks | platform admin, and Playbooks is enabled for the project |
 | `prds:review` | prds | admin, member |
+| `quick-links:manage` | quick-links | admin |
+| `quick-links:personal` | quick-links | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |
 | `work-board:view` | work-board | admin, member, viewer |

@@ -158,6 +158,42 @@ export async function createAdr(opts: {
   return { adrId: row.id, threadId: opts.chatThreadId };
 }
 
+/**
+ * Creates a finished ADR from Markdown supplied by another module (Brainstorm handoff).
+ * Always inserts as `proposed`, whatever the frontmatter says, so the review flow still applies.
+ */
+export async function createAdrFromContent(opts: {
+  userId: string;
+  project: string;
+  repo: string;
+  title: string;
+  chatThreadId: string;
+  content: string;
+  skillSettingsId?: string | null;
+}): Promise<{ adrId: string; threadId: string }> {
+  const content = forceProposedStatus(opts.content);
+  const { slug } = parseFrontmatter(content);
+  const [row] = await db.insert(adrs).values({
+    chatThreadId: opts.chatThreadId,
+    authorId: opts.userId,
+    reviewerIds: [],
+    title: opts.title,
+    project: opts.project,
+    repo: opts.repo,
+    content,
+    slug,
+    skillSettingsId: opts.skillSettingsId ?? null,
+    status: 'proposed',
+  }).returning({ id: adrs.id });
+  return { adrId: row.id, threadId: opts.chatThreadId };
+}
+
+/** The ADR attached to a chat thread, if any. */
+export async function findAdrIdByThread(chatThreadId: string): Promise<string | null> {
+  const [row] = await db.select({ id: adrs.id }).from(adrs).where(eq(adrs.chatThreadId, chatThreadId)).limit(1);
+  return row?.id ?? null;
+}
+
 export async function listAdrs(filters?: {
   status?: AdrStatus;
   project?: string;

@@ -7,6 +7,7 @@ description: >-
   when a design doc transitions to 'validating' status. The scorecard determines
   whether the doc moves to 'pending_review' (score >= 90) or stays in 'draft'.
   Do not invoke this skill manually — use /design-spec-review for interactive reviews.
+playbook-capabilities: [repository-read, network-read]
 ---
 
 # design-doc-validation

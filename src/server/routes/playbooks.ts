@@ -28,12 +28,20 @@ import {
   assertCanvasConnection,
 } from '../services/playbookGuardService';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
+import {
+  PlaybookRecommendationError,
+  acceptPlaybookRecommendation,
+  recommendPlaybookSteps,
+} from '../services/playbookRecommenderService';
 import {
   getVersionLayout,
   replaceDraftVersionLayout,
 } from '../services/playbookVersionLayoutService';
 import {
   PlaybookDefinitionNotFoundError as PlaybookLifecycleDefinitionNotFoundError,
+  PlaybookDefinitionBusyError,
   PlaybookDraftConflictError,
   PlaybookDraftNotFoundError,
   PlaybookVersionImmutableError,
@@ -41,6 +49,7 @@ import {
   PlaybookVersionNotFoundError,
   PlaybookVersionTransitionError,
   createDefinition,
+  deleteDefinition,
   deprecateVersion,
   getDefinitionDetail,
   getVersionGraph,
@@ -57,7 +66,6 @@ import { PlaybookStepSchemaError } from '../services/playbookSteps/descriptorVal
 import {
   PlaybookStepTypeError,
   UnknownPlaybookStepTypeError,
-  isProductionAdapterStep,
 } from '../services/playbookSteps/registry';
 import { advanceRun } from '../services/playbookAdvanceService';
 import {
@@ -92,17 +100,30 @@ import {
 import { getUserPermissions } from '../services/rbacService';
 import {
   PlaybookTemplateAlreadyPublishedError,
+  PlaybookTemplateConfirmationRequiredError,
   PlaybookTemplateInvalidError,
   PlaybookTemplateNotFoundError,
+  PlaybookTemplatePrerequisiteError,
+  PlaybookTemplateVersionError,
+  applyPlaybookTemplate,
+  assertTemplatePrerequisites,
+  getPlaybookTemplateDetail,
   installPlaybookTemplate,
+  listPlaybookTemplates,
 } from '../services/playbookTemplateService';
+import {
+  getPlaybookStepOutput,
+  PlaybookStepOutputNotFoundError,
+  type PlaybookOutputPart,
+} from '../services/playbookStepOutputService';
+import playbookTriggersRouter from './playbookTriggers';
 
 const router = express.Router();
 
+router.use('/triggers', playbookTriggersRouter);
+
 /** The display cap. A larger `limit` is clamped rather than refused; `total` reports the truth. */
 const MAX_RUN_PAGE = 50;
-const PRODUCTION_ADAPTERS_FLAG = 'playbooks-production-adapters';
-const AUTHORING_CANVAS_FLAG = 'playbooks-authoring-canvas';
 
 type RequestBody = Record<string, unknown>;
 
@@ -170,8 +191,18 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     return true;
   }
 
-  if (error instanceof PlaybookInterviewProfilePublishError || error instanceof PlaybookTemplateInvalidError) {
+  if (
+    error instanceof PlaybookInterviewProfilePublishError
+    || error instanceof PlaybookTemplateInvalidError
+    || error instanceof PlaybookTemplateVersionError
+    || error instanceof PlaybookTemplateConfirmationRequiredError
+  ) {
     res.status(400).json({ error: error.message });
+    return true;
+  }
+
+  if (error instanceof PlaybookTemplatePrerequisiteError) {
+    res.status(403).json({ error: error.message, missingFlags: error.missingFlags });
     return true;
   }
 
@@ -190,6 +221,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
     error instanceof PlaybookTemplateAlreadyPublishedError ||
+    error instanceof PlaybookDefinitionBusyError ||
     isUniqueViolation(error)
   ) {
     res.status(409).json({
@@ -232,38 +264,12 @@ const requirePlaybooksProject: express.RequestHandler = async (req, res, next) =
 
 router.use(requirePlaybooksProject);
 
-async function productionAdaptersFlagEnabled(req: Request, project: string): Promise<boolean> {
-  return isFeatureEnabled(PRODUCTION_ADAPTERS_FLAG, {
-    userId: getUserId(req),
-    project,
-  });
-}
-
-async function authoringCanvasFlagEnabled(req: Request, project: string): Promise<boolean> {
-  return isFeatureEnabled(AUTHORING_CANVAS_FLAG, {
-    userId: getUserId(req),
-    project,
-  });
-}
-
 router.get(
   '/spend-policy',
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await productionAdaptersFlagEnabled(req, project);
-
-    // @feature-flag:playbooks-production-adapters start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-production-adapters disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-production-adapters disabled-end
-    }
-    // @feature-flag:playbooks-production-adapters enabled-start
     res.json(await playbookSpendPolicyService.getPolicy(project));
-    // @feature-flag:playbooks-production-adapters enabled-end
-    // @feature-flag:playbooks-production-adapters end
   },
 );
 
@@ -272,16 +278,6 @@ router.patch(
   requirePermission('playbooks:admin'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await productionAdaptersFlagEnabled(req, project);
-
-    // @feature-flag:playbooks-production-adapters start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-production-adapters disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-production-adapters disabled-end
-    }
-    // @feature-flag:playbooks-production-adapters enabled-start
     const { reason, capUsd, enabled: policyEnabled } = (req.body ?? {}) as RequestBody;
     if (!isNonBlankString(reason)) {
       res.status(400).json({ error: 'reason is required' });
@@ -318,8 +314,28 @@ router.patch(
       }
       throw error;
     }
-    // @feature-flag:playbooks-production-adapters enabled-end
-    // @feature-flag:playbooks-production-adapters end
+  },
+);
+
+router.get(
+  '/templates',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    res.json({ templates: await listPlaybookTemplates(project) });
+  },
+);
+
+router.get(
+  '/templates/:templateKey',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    try {
+      res.json(await getPlaybookTemplateDetail(project, req.params.templateKey));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
   },
 );
 
@@ -328,32 +344,121 @@ router.post(
   requirePermission('playbooks:author'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await isFeatureEnabled('playbook-interview-step', {
-      userId: getUserId(req),
-      project,
-    });
-
-    // @feature-flag:playbook-interview-step start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbook-interview-step disabled-start
-      res.status(404).json({ error: 'Not found' });
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
       return;
-      // @feature-flag:playbook-interview-step disabled-end
     }
-
-    // @feature-flag:playbook-interview-step enabled-start
     try {
+      await assertTemplatePrerequisites({
+        templateKey: req.params.templateKey,
+        userId: actorUserId,
+        project,
+      });
       const installed = await installPlaybookTemplate({
         project,
         templateKey: req.params.templateKey,
-        createdByUserId: getUserId(req),
+        createdByUserId: actorUserId,
       });
       res.status(installed.created ? 201 : 200).json(installed.detail);
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbook-interview-step enabled-end
-    // @feature-flag:playbook-interview-step end
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/apply-template',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const actorUserId = getUserId(req);
+    const body = (req.body ?? {}) as RequestBody;
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (!isNonBlankString(body.templateKey) || typeof body.templateVersion !== 'number') {
+      res.status(400).json({ error: 'templateKey and templateVersion are required' });
+      return;
+    }
+    if (!isNonBlankString(body.expectedDraftUpdatedAt)) {
+      res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+    try {
+      await assertTemplatePrerequisites({
+        templateKey: body.templateKey,
+        userId: actorUserId,
+        project,
+      });
+      res.json(await applyPlaybookTemplate({
+        project,
+        definitionId: req.params.definitionId,
+        templateKey: body.templateKey,
+        templateVersion: body.templateVersion,
+        expectedDraftUpdatedAt: body.expectedDraftUpdatedAt,
+        confirmed: body.confirmed === true,
+        actorUserId,
+      }));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/recommend',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const goal = (req.body ?? {}).goal;
+    if (typeof goal !== 'string' || !goal.trim()) {
+      res.status(400).json({ error: 'goal is required' });
+      return;
+    }
+    const plan = recommendPlaybookSteps(goal);
+    console.info('[playbook-recommender]', JSON.stringify({
+      event: plan.kind === 'suggestions' ? 'suggest' : 'gap',
+      definitionId: req.params.definitionId,
+      stepTypes: plan.kind === 'suggestions' ? plan.suggestions.map((item) => item.stepType) : [],
+    }));
+    res.json(plan);
+  },
+);
+
+router.post(
+  '/definitions/:definitionId/recommend/accept',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const body = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(body.expectedDraftUpdatedAt)) {
+      res.status(400).json({ error: 'expectedDraftUpdatedAt is required' });
+      return;
+    }
+    try {
+      const detail = await getDefinitionDetail(project, req.params.definitionId);
+      const graph = acceptPlaybookRecommendation(detail.draft.graph, body.suggestion);
+      const saved = await updateDraft({
+        project,
+        definitionId: req.params.definitionId,
+        name: detail.definition.name,
+        description: detail.definition.description,
+        graph,
+        expectedDraftUpdatedAt: body.expectedDraftUpdatedAt,
+      });
+      console.info('[playbook-recommender]', JSON.stringify({
+        event: 'accept',
+        definitionId: req.params.definitionId,
+      }));
+      res.json(saved);
+    } catch (error) {
+      if (error instanceof PlaybookRecommendationError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      if (!sendDefinitionError(error, res)) throw error;
+    }
   },
 );
 
@@ -416,6 +521,20 @@ router.get(
     const project = resolveRequestProject(req)!;
     try {
       res.json(await getDefinitionDetail(project, req.params.definitionId));
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  }
+);
+
+router.delete(
+  '/definitions/:definitionId',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    try {
+      await deleteDefinition(project, req.params.definitionId);
+      res.status(204).end();
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
@@ -491,20 +610,6 @@ router.post(
     }
 
     try {
-      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(req, project);
-      if (!productionAdaptersEnabled) {
-        const detail = await getDefinitionDetail(project, req.params.definitionId);
-        const usesProductionAdapters = detail.draft.graph.nodes.some(
-          (node) => isProductionAdapterStep(node.stepType, node.config),
-        );
-        if (usesProductionAdapters) {
-          res.status(409).json({
-            error: 'Production Playbook adapters are disabled.',
-            code: 'PLAYBOOK_PRODUCTION_ADAPTERS_DISABLED',
-          });
-          return;
-        }
-      }
       const result = await publishDraft({
         project,
         definitionId: req.params.definitionId,
@@ -546,21 +651,16 @@ router.post(
 router.get(
   '/step-types',
   requirePermission('playbooks:view'),
-  async (req: Request, res: Response): Promise<void> => {
-    const project = resolveRequestProject(req)!;
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
+  async (_req: Request, res: Response): Promise<void> => {
     res.json({ items: listPlaybookStepPaletteItems() });
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
+  },
+);
+
+router.get(
+  '/skills',
+  requirePermission('playbooks:author'),
+  async (_req: Request, res: Response): Promise<void> => {
+    res.json({ skills: await listPlaybookSkillOptions() });
   },
 );
 
@@ -578,23 +678,12 @@ router.post(
       return;
     }
 
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       assertCanvasConnection(graph);
       res.json({ ok: true });
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
   },
 );
 
@@ -603,16 +692,6 @@ router.get(
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       res.json(
         await getVersionLayout(project, req.params.definitionId, req.params.versionId)
@@ -620,8 +699,6 @@ router.get(
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
   },
 );
 
@@ -630,15 +707,6 @@ router.get(
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       res.json({
         graph: await getVersionGraph(project, req.params.definitionId, req.params.versionId),
@@ -646,8 +714,6 @@ router.get(
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
   },
 );
 
@@ -665,20 +731,11 @@ router.post(
       stubs && typeof stubs === 'object' && !Array.isArray(stubs)
         ? (stubs as Record<string, unknown>)
         : {};
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
     const userId = getUserId(req);
     if (!userId) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       res.json(
         await dryRunPlaybookDraft({
@@ -691,8 +748,6 @@ router.post(
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
   },
 );
 
@@ -701,20 +756,11 @@ router.get(
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
     const run = await getRun(project, req.params.runId);
     if (!run) {
       res.status(404).json({ error: 'Not found' });
       return;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
     await ensurePlaybookRunNotifyListener();
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -728,8 +774,6 @@ router.get(
     req.on('close', () => {
       unsubscribe();
     });
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
   },
 );
 
@@ -752,15 +796,6 @@ router.put(
       return;
     }
 
-    const enabled = await authoringCanvasFlagEnabled(req, project);
-    // @feature-flag:playbooks-authoring-canvas start winner=enabled
-    if (!enabled) {
-      // @feature-flag:playbooks-authoring-canvas disabled-start
-      res.status(404).json({ error: 'Not found' });
-      return;
-      // @feature-flag:playbooks-authoring-canvas disabled-end
-    }
-    // @feature-flag:playbooks-authoring-canvas enabled-start
     try {
       res.json(
         await replaceDraftVersionLayout({
@@ -773,8 +808,6 @@ router.put(
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
-    // @feature-flag:playbooks-authoring-canvas enabled-end
-    // @feature-flag:playbooks-authoring-canvas end
   },
 );
 
@@ -805,10 +838,6 @@ router.get(
       return;
     }
     if (filter === 'assigned-to-me') {
-      if (!(await productionAdaptersFlagEnabled(req, project))) {
-        res.status(404).json({ error: 'Not found' });
-        return;
-      }
       const userId = getUserId(req);
       if (!userId) {
         res.status(401).json({ error: 'Unauthorized' });
@@ -845,14 +874,66 @@ router.get(
 );
 
 router.get(
+  '/runs/:runId/steps/:stepRunId/output',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const part = (typeof req.query.part === 'string' ? req.query.part : 'full') as
+      PlaybookOutputPart;
+    if (!['full', 'reportMd', 'scorecard'].includes(part)) {
+      res.status(400).json({ error: 'part must be full, reportMd, or scorecard' });
+      return;
+    }
+    try {
+      const result = await getPlaybookStepOutput({
+        project,
+        runId: req.params.runId,
+        stepRunId: req.params.stepRunId,
+        part,
+      });
+      if (part === 'full') {
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="playbook-step-${req.params.stepRunId}.json"`
+        );
+      }
+      if (part === 'reportMd' && typeof result.value === 'string') {
+        res.type('text/markdown').send(result.value);
+        return;
+      }
+      res.json(result.value);
+    } catch (error) {
+      if (error instanceof PlaybookStepOutputNotFoundError) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+  }
+);
+
+router.get(
+  '/runs/:runId/steps/:stepRunId/activity',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const activity = await getPlaybookStepActivity({
+      project: resolveRequestProject(req)!,
+      runId: req.params.runId,
+      stepRunId: req.params.stepRunId,
+    });
+    if (!activity) {
+      res.status(404).json({ error: 'No such Playbook step in this project.' });
+      return;
+    }
+    res.json(activity);
+  }
+);
+
+router.get(
   '/runs/:runId/steps/:stepRunId/gate',
   requirePermission('playbooks:view'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req)!;
-    if (!(await productionAdaptersFlagEnabled(req, project))) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
     const userId = getUserId(req);
     if (!userId) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -929,7 +1010,6 @@ router.post(
     }
 
     try {
-      const spendAdmissionEnabled = await productionAdaptersFlagEnabled(req, project);
       const result = await startRun({
         project,
         definitionId,
@@ -938,7 +1018,6 @@ router.post(
           : {}),
         ...(isPlainRecord(runInput) ? { runInput } : {}),
         initiatorUserId,
-        ...(spendAdmissionEnabled ? { spendAdmissionEnabled: true } : {}),
       });
       res.status(201).json(result);
     } catch (error) {
@@ -1102,9 +1181,7 @@ router.post(
 
     try {
       const project = resolveRequestProject(req)!;
-      const productionAdaptersEnabled = await productionAdaptersFlagEnabled(req, project);
-      const useProductionGate = productionAdaptersEnabled
-        && await isProductionGateStepRun(stepRunId);
+      const useProductionGate = await isProductionGateStepRun(stepRunId);
       if (!useProductionGate) {
         const permissions = await getUserPermissions(deciderUserId, project);
         if (!permissions.has('playbooks:run')) {

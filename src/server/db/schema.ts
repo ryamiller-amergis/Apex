@@ -1,7 +1,31 @@
-import { bigint, bigserial, boolean, check, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, smallint, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgTable, primaryKey, real, smallint, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import type { RepoProvider, RepoRole, RunType } from '../../shared/types/runGrounding';
+import type {
+  QaAdoGenerationContext,
+  QaLabAssistantProposalKind,
+  QaLabAssistantProposalStatus,
+  QaLabRecordedStepResult,
+  QaLabRunBug,
+  QaLabRunOutcome,
+} from '../../shared/types/qaLab';
+import type { BuildAllowlistAuditAction } from '../../shared/types/buildAccess';
+import type {
+  BrainstormFailureCode,
+  BrainstormMessageRole,
+  BrainstormMessageStatus,
+  BrainstormSessionState,
+} from '../../shared/types/brainstorm';
+import type { BrainstormCatalogStatus, BrainstormSourceKind, BrainstormSourceState } from '../../shared/types/brainstormSources';
+import type {
+  BrainstormActionKind,
+  BrainstormArtifactFailureCode,
+  BrainstormArtifactOrigin,
+  BrainstormArtifactType,
+  BrainstormHandoffState,
+  BrainstormTargetModule,
+} from '../../shared/types/brainstormArtifact';
 import type {
   OverlayTextBox,
   PageManifestEntry,
@@ -27,6 +51,7 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
+import type { McpServerOperation } from '../../shared/types/mcpServers';
 import type {
   AgentRunCancelState,
   AgentRunExecutionSnapshot,
@@ -92,6 +117,30 @@ import type {
   ArtifactRef,
 } from '../../shared/types/loadTest';
 import type {
+  BuildClassification,
+  BuildCorrelationKind,
+  BuildDeploymentStatus,
+  BuildEventSeverity,
+  BuildProfile,
+  BuildQualityManifestSnapshot,
+  BuildRequirement,
+  BuildReuseEntry,
+  BuildRiskDecision,
+  BuildRunStatus,
+  BuildSkillSnapshot,
+  BuildSupportContact,
+  BuildSuspendReason,
+  BuildTaskRole,
+  BuildTaskRunMode,
+  BuildTaskStatus,
+  BuildTestEvidence,
+  BuildTestRef,
+  BuildTestTier,
+  BuildVerificationKind,
+  BuildVerificationStatus,
+} from '../../shared/types/build';
+import type { BuildLaunchSnapshot } from '../../shared/types/buildLaunchSnapshot';
+import type {
   DiagramShareAccess,
   ExcalidrawScene,
 } from '../../shared/types/diagram';
@@ -101,6 +150,7 @@ import type {
   PlaybookGraph,
   PlaybookLayoutPositions,
   PlaybookRunStatus,
+  PlaybookStepBlobRef,
   PlaybookStepRunStatus,
   PlaybookVersionStatus,
 } from '../../shared/types/playbook';
@@ -148,6 +198,17 @@ export const chatThreads = pgTable('chat_threads', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+/** Files a V2 chat turn wrote under `.ai-pilot/`, so App Service reads them without the share. */
+export const chatThreadOutputs = pgTable('chat_thread_outputs', {
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  path: text('path').notNull(),
+  content: text('content').notNull(),
+  runId: uuid('run_id'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.threadId, t.path] }),
+}));
 
 export const chatMessages = pgTable('chat_messages', {
   id: uuid('id').primaryKey(),
@@ -487,6 +548,29 @@ export const devEnvAllowlist = pgTable('dev_env_allowlist', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+export const buildAllowlist = pgTable('build_allowlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectRepositoryKey: unique('build_allowlist_project_repository_key').on(t.project, t.repository),
+}));
+
+export const buildAllowlistAudit = pgTable('build_allowlist_audit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  action: text('action').$type<BuildAllowlistAuditAction>().notNull(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  actorId: text('actor_id').notNull(),
+  actorLabel: text('actor_label'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  actionCheck: check('build_allowlist_audit_action_check', sql`${t.action} IN ('added', 'removed')`),
+  createdAtIdx: index('build_allowlist_audit_created_at_idx').on(t.createdAt),
+}));
+
 export const projectAccessRequests = pgTable('project_access_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
@@ -805,6 +889,142 @@ export const testCases = pgTable('test_cases', {
   prdIdx: index('test_cases_prd_id_idx').on(t.prdId),
 }));
 
+/**
+ * QA suites generated from Azure DevOps work items that do not belong to an
+ * Apex PRD. Each generation is retained so QA can review history and publish
+ * selected cases back to ADO without creating duplicate Test Case work items.
+ */
+export const qaAdoTestSuites = pgTable('qa_ado_test_suites', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  rootWorkItemId: integer('root_work_item_id').notNull(),
+  rootWorkItemType: text('root_work_item_type').notNull(),
+  rootTitle: text('root_title').notNull(),
+  status: text('status').notNull().default('generating'),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  sourceSnapshot: jsonb('source_snapshot').$type<QaAdoGenerationContext>().notNull(),
+  testCasesJson: jsonb('test_cases_json'),
+  testCasesMd: text('test_cases_md'),
+  coverageSummary: jsonb('coverage_summary').$type<TestCaseCoverageSummary>(),
+  publishedCases: jsonb('published_cases').$type<Array<{
+    localCaseId: string;
+    adoTestCaseId: number;
+    adoTestCaseUrl: string;
+    parentWorkItemId: number;
+    publishedAt: string;
+  }>>().notNull().default(sql`'[]'::jsonb`),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectRootIdx: index('qa_ado_test_suites_project_root_idx').on(
+    t.project,
+    t.rootWorkItemId,
+    t.createdAt,
+  ),
+  statusIdx: index('qa_ado_test_suites_status_idx').on(t.status),
+}));
+
+export const qaCaseRegenerations = pgTable('qa_case_regenerations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  status: text('status').$type<'generating' | 'ready' | 'failed' | 'restored'>().notNull().default('generating'),
+  chatThreadId: uuid('chat_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
+  previousCase: jsonb('previous_case').notNull(),
+  source: text('source').$type<'comments' | 'assistant'>().notNull().default('comments'),
+  error: text('error'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  suiteCaseIdx: index('qa_case_regenerations_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+  oneGenerating: uniqueIndex('qa_case_regenerations_one_generating_idx')
+    .on(t.suiteId, t.localCaseId)
+    .where(sql`${t.status} = 'generating'`),
+  threadIdx: index('qa_case_regenerations_thread_idx').on(t.chatThreadId),
+}));
+
+export const qaCaseComments = pgTable('qa_case_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  body: text('body').notNull(),
+  status: text('status').$type<'open' | 'addressed'>().notNull().default('open'),
+  regenerationId: uuid('regeneration_id').references(() => qaCaseRegenerations.id, { onDelete: 'set null' }),
+  authorId: text('author_id').notNull(),
+  authorName: text('author_name'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  suiteCaseIdx: index('qa_case_comments_suite_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
+export const qaCaseRuns = pgTable('qa_case_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id').notNull(),
+  project: text('project').notNull(),
+  adoTestCaseId: integer('ado_test_case_id'),
+  adoPlanId: integer('ado_plan_id'),
+  adoSuiteId: integer('ado_suite_id'),
+  parentWorkItemId: integer('parent_work_item_id'),
+  status: text('status').$type<'draft' | 'published'>().notNull().default('draft'),
+  outcome: text('outcome').$type<QaLabRunOutcome>(),
+  comment: text('comment').notNull().default(''),
+  stepResults: jsonb('step_results').$type<QaLabRecordedStepResult[]>().notNull().default(sql`'[]'::jsonb`),
+  bugs: jsonb('bugs').$type<QaLabRunBug[]>().notNull().default(sql`'[]'::jsonb`),
+  adoRunId: integer('ado_run_id'),
+  adoResultId: integer('ado_result_id'),
+  adoRunUrl: text('ado_run_url'),
+  publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  createdBy: text('created_by'),
+  createdByName: text('created_by_name'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  oneDraft: uniqueIndex('qa_case_runs_one_draft_idx')
+    .on(t.suiteId, t.localCaseId)
+    .where(sql`${t.status} = 'draft'`),
+  caseIdx: index('qa_case_runs_case_idx').on(t.suiteId, t.localCaseId, t.createdAt),
+}));
+
+export const qaLabAssistantProposals = pgTable('qa_lab_assistant_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  suiteId: uuid('suite_id').notNull().references(() => qaAdoTestSuites.id, { onDelete: 'cascade' }),
+  localCaseId: text('local_case_id'),
+  kind: text('kind').$type<QaLabAssistantProposalKind>().notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  beforeCase: jsonb('before_case').$type<Record<string, unknown>>(),
+  afterCase: jsonb('after_case').$type<Record<string, unknown>>(),
+  reason: text('reason').notNull().default(''),
+  status: text('status').$type<QaLabAssistantProposalStatus>().notNull().default('pending'),
+  error: text('error'),
+  createdBy: text('created_by'),
+  decidedBy: text('decided_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  threadIdx: index('qa_lab_assistant_proposals_thread_idx').on(t.threadId, t.createdAt),
+}));
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
+
+export const qaCaseRunFiles = pgTable('qa_case_run_files', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: uuid('run_id').notNull().references(() => qaCaseRuns.id, { onDelete: 'cascade' }),
+  stepOrder: integer('step_order'),
+  fileName: text('file_name').notNull(),
+  contentType: text('content_type'),
+  size: integer('size').notNull(),
+  content: bytea('content').notNull(),
+  adoUrl: text('ado_url'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  runIdx: index('qa_case_run_files_run_idx').on(t.runId, t.createdAt),
+}));
+
 export const designDocs = pgTable('design_docs', {
   id: uuid('id').primaryKey().defaultRandom(),
   prdId: uuid('prd_id').notNull().references(() => prds.id, { onDelete: 'cascade' }),
@@ -1036,75 +1256,8 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   friendlyName: text('friendly_name').notNull(),
   isDefault: boolean('is_default').notNull().default(false),
   updatedBy: text('updated_by'),
-  interviewSkillPath: text('interview_skill_path'),
-  prdSkillPath: text('prd_skill_path'),
-  adrInterviewSkillPath: text('adr_interview_skill_path'),
-  adrFinalizeSkillPath: text('adr_finalize_skill_path'),
-  adrAssistantSkillPath: text('adr_assistant_skill_path'),
-  designDocSkillPath: text('design_doc_skill_path'),
-  designDocAssistantSkillPath: text('design_doc_assistant_skill_path'),
-  designPrototypeSkillPath: text('design_prototype_skill_path'),
-  testCaseSkillPath: text('test_case_skill_path'),
-  interviewModel: text('interview_model'),
-  interviewEffort: text('interview_effort').$type<EffortLevel>(),
-  prdModel: text('prd_model'),
-  prdEffort: text('prd_effort').$type<EffortLevel>(),
-  adrModel: text('adr_model'),
-  adrEffort: text('adr_effort').$type<EffortLevel>(),
-  designDocModel: text('design_doc_model'),
-  designDocEffort: text('design_doc_effort').$type<EffortLevel>(),
-  designDocAssistantModel: text('design_doc_assistant_model'),
-  designDocAssistantEffort: text('design_doc_assistant_effort').$type<EffortLevel>(),
-  designPrototypeModel: text('design_prototype_model'),
-  designPrototypeEffort: text('design_prototype_effort').$type<EffortLevel>(),
-  testCaseModel: text('test_case_model'),
-  testCaseEffort: text('test_case_effort').$type<EffortLevel>(),
-  designDocValidationSkillPath: text('design_doc_validation_skill_path'),
-  designDocValidationModel: text('design_doc_validation_model'),
-  designDocValidationEffort: text('design_doc_validation_effort').$type<EffortLevel>(),
-  prdAssistantSkillPath: text('prd_assistant_skill_path'),
-  prdAssistantModel: text('prd_assistant_model'),
-  prdAssistantEffort: text('prd_assistant_effort').$type<EffortLevel>(),
-  prdValidationSkillPath: text('prd_validation_skill_path'),
-  prdValidationModel: text('prd_validation_model'),
-  prdValidationEffort: text('prd_validation_effort').$type<EffortLevel>(),
-  evaluationJudgeModel: text('evaluation_judge_model'),
-  evaluationJudgeEffort: text('evaluation_judge_effort').$type<EffortLevel>(),
   defaultModel: text('default_model'),
   defaultEffort: text('default_effort').$type<EffortLevel>(),
-  prdReviewBedrockModelId: text('prd_review_bedrock_model_id'),
-  prdReviewBedrockMaxTokens: integer('prd_review_bedrock_max_tokens'),
-  designPrototypeBedrockModelId: text('design_prototype_bedrock_model_id'),
-  designPrototypeBedrockMaxTokens: integer('design_prototype_bedrock_max_tokens'),
-  designPrototypeBedrockTimeoutMs: integer('design_prototype_bedrock_timeout_ms'),
-  designPrototypeRegenBedrockModelId: text('design_prototype_regen_bedrock_model_id'),
-  designPrototypeRegenBedrockMaxTokens: integer('design_prototype_regen_bedrock_max_tokens'),
-  designPlanBedrockModelId: text('design_plan_bedrock_model_id'),
-  designPlanBedrockMaxTokens: integer('design_plan_bedrock_max_tokens'),
-  prdValidationScoreThreshold: integer('prd_validation_score_threshold'),
-  designDocValidationScoreThreshold: integer('design_doc_validation_score_threshold'),
-  uiLabBedrockModelId: text('ui_lab_bedrock_model_id'),
-  uiLabBedrockMaxTokens: integer('ui_lab_bedrock_max_tokens'),
-  uiLabBedrockTimeoutMs: integer('ui_lab_bedrock_timeout_ms'),
-  uiLabRegenBedrockModelId: text('ui_lab_regen_bedrock_model_id'),
-  uiLabRegenBedrockMaxTokens: integer('ui_lab_regen_bedrock_max_tokens'),
-  uiLabBedrockTemperature: real('ui_lab_bedrock_temperature'),
-  uiLabSkillPath: text('ui_lab_skill_path'),
-  developmentSkillPath: text('development_skill_path'),
-  developmentModel: text('development_model'),
-  developmentEffort: text('development_effort').$type<EffortLevel>(),
-  standupSkillPath: text('standup_skill_path'),
-  standupModel: text('standup_model'),
-  standupEffort: text('standup_effort').$type<EffortLevel>(),
-  featureRequestSkillPath: text('feature_request_skill_path'),
-  featureRequestModel: text('feature_request_model'),
-  featureRequestEffort: text('feature_request_effort').$type<EffortLevel>(),
-  technicalSkillPath: text('technical_skill_path'),
-  technicalModel: text('technical_model'),
-  technicalEffort: text('technical_effort').$type<EffortLevel>(),
-  issueSkillPath: text('issue_skill_path'),
-  issueModel: text('issue_model'),
-  issueEffort: text('issue_effort').$type<EffortLevel>(),
   skillProvider: text('skill_provider').notNull().default('ado'),
   interviewSkillOptions: jsonb('interview_skill_options').$type<InterviewSkillOption[]>(),
   prototypeStageEnabled: boolean('prototype_stage_enabled').notNull().default(true),
@@ -1119,18 +1272,6 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
   approvalMode: text('approval_mode').$type<ApprovalMode>().notNull().default('any_one'),
   cursorApiKeyEnvRef: text('cursor_api_key_env_ref'),
   cursorServiceAccountId: text('cursor_service_account_id'),
-  calendarAssistantSkillPath: text('calendar_assistant_skill_path'),
-  calendarAssistantModel: text('calendar_assistant_model'),
-  calendarAssistantEffort: text('calendar_assistant_effort').$type<EffortLevel>(),
-  loadTestGenerationSkillPath: text('load_test_generation_skill_path'),
-  loadTestGenerationModel: text('load_test_generation_model'),
-  loadTestGenerationEffort: text('load_test_generation_effort').$type<EffortLevel>(),
-  designModuleSkillPath: text('design_module_skill_path'),
-  designModuleModel: text('design_module_model'),
-  designModuleEffort: text('design_module_effort').$type<EffortLevel>(),
-  designModuleScopingSkillPath: text('design_module_scoping_skill_path'),
-  designModuleScopingModel: text('design_module_scoping_model'),
-  designModuleScopingEffort: text('design_module_scoping_effort').$type<EffortLevel>(),
   /** Admin-managed checkout readiness for this skill-settings repository identity. */
   repositoryCheckoutStatus: text('repository_checkout_status').notNull().default('not_cloned'),
   repositoryCheckoutSha: text('repository_checkout_sha'),
@@ -1143,14 +1284,65 @@ export const projectSkillSettings = pgTable('project_skill_settings', {
     withTimezone: true,
     mode: 'string',
   }),
+  /** Null means no Build profile yet. Saved through its own route, never by upsertSkillConfig. */
+  buildProfile: jsonb('build_profile').$type<BuildProfile>(),
+  buildProfileUpdatedAt: timestamp('build_profile_updated_at', { withTimezone: true, mode: 'string' }),
+  buildProfileUpdatedBy: text('build_profile_updated_by'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (t) => ({
+  buildProfileObjectCheck: check(
+    'project_skill_settings_build_profile_object_check',
+    sql`${t.buildProfile} IS NULL OR jsonb_typeof(${t.buildProfile}) = 'object'`,
+  ),
   // Exactly one default repo config per project.
   oneDefaultPerProject: uniqueIndex('project_skill_settings_one_default_per_project')
     .on(t.project)
     .where(sql`is_default`),
   projectFriendlyName: unique('project_skill_settings_project_friendly_name_key').on(t.project, t.friendlyName),
+}));
+
+/**
+ * One row per (settings row, workflow). Keys come from PROJECT_SKILL_WORKFLOWS in
+ * src/shared/constants/projectSkillWorkflows.ts. A new workflow is a new key here,
+ * not a new column on project_skill_settings.
+ */
+export const projectSkillWorkflowSettings = pgTable('project_skill_workflow_settings', {
+  settingsId: uuid('settings_id').notNull().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  workflow: text('workflow').notNull(),
+  skillPath: text('skill_path'),
+  model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
+  bedrockModelId: text('bedrock_model_id'),
+  bedrockMaxTokens: integer('bedrock_max_tokens'),
+  bedrockTimeoutMs: integer('bedrock_timeout_ms'),
+  bedrockTemperature: real('bedrock_temperature'),
+  regenBedrockModelId: text('regen_bedrock_model_id'),
+  regenBedrockMaxTokens: integer('regen_bedrock_max_tokens'),
+  scoreThreshold: integer('score_threshold'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.settingsId, t.workflow] }),
+}));
+
+export const projectSkillSettingsRelations = relations(projectSkillSettings, ({ many }) => ({
+  workflowSettings: many(projectSkillWorkflowSettings),
+}));
+
+/** Cloud Agent branch target and required reviewers for one repository config. */
+export const projectCloudAgentDelivery = pgTable('project_cloud_agent_delivery', {
+  settingsId: uuid('settings_id').primaryKey().references(() => projectSkillSettings.id, { onDelete: 'cascade' }),
+  targetBranch: text('target_branch'),
+  requiredReviewers: jsonb('required_reviewers').$type<string[]>().notNull().default([]),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const projectSkillWorkflowSettingsRelations = relations(projectSkillWorkflowSettings, ({ one }) => ({
+  settings: one(projectSkillSettings, {
+    fields: [projectSkillWorkflowSettings.settingsId],
+    references: [projectSkillSettings.id],
+  }),
 }));
 
 export const projectApprovers = pgTable('project_approvers', {
@@ -1965,6 +2157,9 @@ export const agentRuns = pgTable('agent_runs', {
   clientTurnId: uuid('client_turn_id'),
   clientTurnHash: text('client_turn_hash'),
   devSessionId: uuid('dev_session_id').references(() => devSessions.id, { onDelete: 'set null' }),
+  buildTaskId: uuid('build_task_id').references((): AnyPgColumn => buildTasks.id, { onDelete: 'set null' }),
+  /** Frozen launch input for one build task attempt. Write-once (trigger). */
+  buildLaunchSnapshot: jsonb('build_launch_snapshot').$type<BuildLaunchSnapshot>(),
   workflowClass: text('workflow_class').$type<AgentRunWorkflowClass>(),
   cloudAgentIdentity: text('cloud_agent_identity'),
   cloudAgentManaged: boolean('cloud_agent_managed').notNull().default(false),
@@ -2049,8 +2244,22 @@ export const agentRuns = pgTable('agent_runs', {
   ),
   workflowClassCheck: check(
     'agent_runs_workflow_class_check',
-    sql`${t.workflowClass} IS NULL OR ${t.workflowClass} IN ('generation', 'implementation')`,
+    sql`${t.workflowClass} IS NULL OR ${t.workflowClass} IN ('generation', 'implementation', 'build-task')`,
   ),
+  buildTaskClassCheck: check(
+    'agent_runs_build_task_class_check',
+    sql`${t.buildTaskId} IS NULL OR ${t.workflowClass} = 'build-task'`,
+  ),
+  buildLaunchSnapshotTaskCheck: check(
+    'agent_runs_build_launch_snapshot_task_check',
+    sql`${t.buildLaunchSnapshot} IS NULL OR ${t.buildTaskId} IS NOT NULL`,
+  ),
+  oneLivePerBuildTask: uniqueIndex('uq_agent_runs_one_live_per_build_task')
+    .on(t.buildTaskId)
+    .where(sql`${t.workflowClass} = 'build-task' AND ${t.status} IN ('queued', 'dispatched', 'running') AND ${t.buildTaskId} IS NOT NULL`),
+  buildTaskIdx: index('idx_agent_runs_build_task')
+    .on(t.buildTaskId)
+    .where(sql`${t.buildTaskId} IS NOT NULL`),
   cloudAgentManagedIdentityCheck: check(
     'agent_runs_cloud_agent_managed_identity_check',
     sql`${t.cloudAgentManaged} = false OR ${t.cloudAgentIdentity} IS NOT NULL`,
@@ -2256,6 +2465,9 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   projectCreatedIdx: index('idx_ai_usage_events_project_created').on(t.project, t.createdAt),
   entityIdx: index('idx_ai_usage_events_entity').on(t.entityType, t.entityId),
   threadIdx: index('idx_ai_usage_events_thread_id').on(t.threadId),
+  cloudAgentRunUq: uniqueIndex('uq_ai_usage_events_cloud_agent_run')
+    .on(t.runId)
+    .where(sql`${t.feature} = 'cloud-agent' AND ${t.runId} IS NOT NULL`),
 }));
 
 export const cursorUsageEvents = pgTable('cursor_usage_events', {
@@ -3370,6 +3582,8 @@ export const playbookRuns = pgTable('playbook_runs', {
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  triggerSubscriptionId: uuid('trigger_subscription_id'),
+  triggerReceiptId: uuid('trigger_receipt_id'),
 }, (t) => ({
   projectStartedIdx: index('idx_playbook_runs_project_started').on(t.project, t.startedAt),
   projectStatusIdx: index('idx_playbook_runs_project_status').on(t.project, t.status),
@@ -3380,6 +3594,56 @@ export const playbookRuns = pgTable('playbook_runs', {
   ),
   stepCountCheck: check('playbook_runs_step_count_check', sql`${t.stepCount} >= 0`),
   agentStepCountCheck: check('playbook_runs_agent_step_count_check', sql`${t.agentStepCount} >= 0`),
+}));
+
+export const playbookTriggerSubscriptions = pgTable('playbook_trigger_subscriptions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  definitionId: uuid('definition_id').notNull()
+    .references(() => playbookDefinitions.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  kind: text('kind').notNull(),
+  scheduleHour: integer('schedule_hour'),
+  scheduleMinute: integer('schedule_minute'),
+  eventType: text('event_type'),
+  eventFilter: jsonb('event_filter').$type<Record<string, unknown> | null>(),
+  versionPolicy: text('version_policy').notNull().default('current_published'),
+  pinnedVersionId: uuid('pinned_version_id')
+    .references(() => playbookDefinitionVersions.id, { onDelete: 'restrict' }),
+  initiatorUserId: text('initiator_user_id').notNull()
+    .references(() => appUsers.oid, { onDelete: 'restrict' }),
+  runInputTemplate: jsonb('run_input_template').$type<Record<string, unknown>>().notNull().default({}),
+  inputMapping: jsonb('input_mapping').$type<unknown[]>().notNull().default([]),
+  concurrencyPolicy: text('concurrency_policy').notNull().default('skip_if_active'),
+  dedupeKeyTemplate: text('dedupe_key_template').notNull(),
+  publicId: text('public_id'),
+  webhookSecret: text('webhook_secret'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  definitionIdx: index('idx_playbook_trigger_subscriptions_definition').on(t.definitionId, t.enabled),
+}));
+
+export const playbookTriggerReceipts = pgTable('playbook_trigger_receipts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  subscriptionId: uuid('subscription_id').notNull()
+    .references(() => playbookTriggerSubscriptions.id, { onDelete: 'cascade' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  source: text('source').notNull(),
+  payloadHash: text('payload_hash').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  status: text('status').notNull(),
+  runId: uuid('run_id').references(() => playbookRuns.id, { onDelete: 'set null' }),
+  attempts: integer('attempts').notNull().default(0),
+  nextRetryAt: timestamp('next_retry_at', { withTimezone: true, mode: 'string' }),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUq: unique('uq_playbook_trigger_receipts_idempotency').on(t.subscriptionId, t.idempotencyKey),
+  retryIdx: index('idx_playbook_trigger_receipts_retry').on(t.nextRetryAt),
 }));
 
 export const playbookStepRuns = pgTable('playbook_step_runs', {
@@ -3396,7 +3660,7 @@ export const playbookStepRuns = pgTable('playbook_step_runs', {
   gatePoolKey: text('gate_pool_key').$type<ReviewerDocumentType>(),
   gateApprovalMode: text('gate_approval_mode').$type<ApprovalMode>(),
   outputInline: jsonb('output_inline').$type<Record<string, unknown>>(),
-  outputBlobRef: jsonb('output_blob_ref').$type<ArtifactRef>(),
+  outputBlobRef: jsonb('output_blob_ref').$type<PlaybookStepBlobRef>(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
   startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
@@ -3489,6 +3753,65 @@ export const playbookGateApproversRelations = relations(playbookGateApprovers, (
     fields: [playbookGateApprovers.stepRunId],
     references: [playbookStepRuns.id],
   }),
+}));
+
+export const mcpServers = pgTable('mcp_servers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  provider: text('provider').notNull(),
+  status: text('status').notNull().default('untested'),
+  credentialCiphertext: text('credential_ciphertext').notNull(),
+  credentialIv: text('credential_iv').notNull(),
+  credentialAuthTag: text('credential_auth_tag').notNull(),
+  credentialHint: text('credential_hint').notNull(),
+  baseUrl: text('base_url'),
+  operations: jsonb('operations').$type<McpServerOperation[]>().notNull().default([]),
+  allowedUserIds: jsonb('allowed_user_ids').$type<string[]>().notNull().default([]),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  lastTestedAt: timestamp('last_tested_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  projectIdx: index('idx_mcp_servers_project').on(t.project),
+}));
+
+export const projectQuickLinks = pgTable('project_quick_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  label: text('label').notNull(),
+  url: text('url').notNull(),
+  category: text('category'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdBy: text('created_by'),
+  updatedBy: text('updated_by'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectIdx: index('idx_project_quick_links_project').on(t.project),
+  labelNotBlankCheck: check('project_quick_links_label_not_blank', sql`length(btrim(${t.label})) > 0`),
+  urlHttpCheck: check('project_quick_links_url_http', sql`${t.url} ~* '^https?://'`),
+}));
+
+export const userQuickLinks = pgTable('user_quick_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  label: text('label').notNull(),
+  url: text('url').notNull(),
+  category: text('category'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  userProjectIdx: index('idx_user_quick_links_user_project').on(t.userId, t.project),
+  userProjectUrlKey: unique('user_quick_links_user_project_url_key').on(t.userId, t.project, t.url),
+  labelNotBlankCheck: check('user_quick_links_label_not_blank', sql`length(btrim(${t.label})) > 0`),
+  urlHttpCheck: check('user_quick_links_url_http', sql`${t.url} ~* '^https?://'`),
+}));
+
+export const userQuickLinksRelations = relations(userQuickLinks, ({ one }) => ({
+  user: one(appUsers, { fields: [userQuickLinks.userId], references: [appUsers.oid] }),
 }));
 
 export const workflowEvaluationDefinitions = pgTable('workflow_evaluation_definitions', {
@@ -3749,4 +4072,544 @@ export const skillRegressionCases = pgTable('skill_regression_cases', {
     'skill_regression_cases_retire_reason_check',
     sql`${t.status} = 'active' OR length(btrim(coalesce(${t.statusReason}, ''))) > 0`,
   ),
+}));
+
+const buildTimestamp = (name: string) => timestamp(name, { withTimezone: true, mode: 'string' as const });
+
+export const buildRuns = pgTable('build_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  requestedByUserId: text('requested_by_user_id').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  clientRequestId: text('client_request_id').notNull(),
+  modelOverride: text('model_override'),
+  prompt: text('prompt').notNull(),
+  playbookRunId: uuid('playbook_run_id').references(() => playbookRuns.id, { onDelete: 'restrict' }),
+  playbookStepRunId: uuid('playbook_step_run_id').references(() => playbookStepRuns.id, { onDelete: 'restrict' }),
+  skillSettingsId: uuid('skill_settings_id').references(() => projectSkillSettings.id, { onDelete: 'set null' }),
+  queuedAt: buildTimestamp('queued_at'),
+  interviewId: uuid('interview_id').references(() => interviews.id, { onDelete: 'restrict' }),
+  briefId: uuid('brief_id').references(() => interviewBriefs.id, { onDelete: 'restrict' }),
+  status: text('status').$type<BuildRunStatus>().notNull().default('queued'),
+  suspendReason: text('suspend_reason').$type<BuildSuspendReason>(),
+  suspendedFromStatus: text('suspended_from_status').$type<BuildRunStatus>(),
+  currentRevisionNumber: integer('current_revision_number').notNull().default(1),
+  revisionsUsed: integer('revisions_used').notNull().default(0),
+  revisionCap: integer('revision_cap').notNull().default(5),
+  integrationBranch: text('integration_branch'),
+  baseCommit: text('base_commit'),
+  skillSnapshot: jsonb('skill_snapshot').$type<BuildSkillSnapshot>().notNull(),
+  supportContacts: jsonb('support_contacts').$type<BuildSupportContact[]>().notNull(),
+  qualityManifestSnapshot: jsonb('quality_manifest_snapshot').$type<BuildQualityManifestSnapshot>().notNull(),
+  costCapUsd: numeric('cost_cap_usd', { precision: 12, scale: 4 }).notNull(),
+  costUsedUsd: numeric('cost_used_usd', { precision: 12, scale: 4 }).notNull().default('0'),
+  elapsedCapSeconds: integer('elapsed_cap_seconds').notNull(),
+  parallelismCap: smallint('parallelism_cap').notNull(),
+  parallelismUsed: smallint('parallelism_used').notNull().default(0),
+  pullRequestUrl: text('pull_request_url'),
+  pullRequestId: integer('pull_request_id'),
+  acceptedRevisionNumber: integer('accepted_revision_number'),
+  integrationBranchDeletedAt: buildTimestamp('integration_branch_deleted_at'),
+  startedAt: buildTimestamp('started_at'),
+  endedAt: buildTimestamp('ended_at'),
+  createdAt: buildTimestamp('created_at').notNull().defaultNow(),
+  updatedAt: buildTimestamp('updated_at').notNull().defaultNow(),
+}, (t) => ({
+  projectCheck: check('build_runs_project_check', sql`char_length(${t.project}) >= 1 AND ${t.project} = btrim(${t.project})`),
+  repositoryCheck: check('build_runs_repository_check', sql`char_length(${t.repository}) >= 1 AND ${t.repository} = btrim(${t.repository})`),
+  clientRequestIdCheck: check('build_runs_client_request_id_check', sql`char_length(${t.clientRequestId}) BETWEEN 1 AND 128 AND ${t.clientRequestId} = btrim(${t.clientRequestId})`),
+  promptCheck: check('build_runs_prompt_check', sql`char_length(btrim(${t.prompt})) >= 1`),
+  statusCheck: check('build_runs_status_check', sql`${t.status} IN ('queued', 'intake', 'planning', 'building', 'checking', 'deploying', 'preview_ready', 'suspended', 'deployment_failed', 'needs_developer', 'accepted', 'cancelled', 'failed')`),
+  suspendReasonCheck: check('build_runs_suspend_reason_check', sql`${t.suspendReason} IS NULL OR ${t.suspendReason} IN ('cost_cap', 'elapsed_cap', 'repair_cap', 'flag_disabled', 'permission_revoked', 'configuration', 'plan_invalid')`),
+  suspendedFromStatusCheck: check('build_runs_suspended_from_status_check', sql`${t.suspendedFromStatus} IS NULL OR ${t.suspendedFromStatus} IN ('queued', 'intake', 'planning', 'building', 'checking', 'deploying')`),
+  suspendedCoherenceCheck: check('build_runs_suspended_coherence_check', sql`(${t.status} = 'suspended') = (${t.suspendReason} IS NOT NULL AND ${t.suspendedFromStatus} IS NOT NULL)`),
+  revisionCounterCheck: check('build_runs_revision_counter_check', sql`${t.revisionCap} >= 1 AND ${t.currentRevisionNumber} >= 1 AND ${t.revisionsUsed} >= 0 AND ${t.revisionsUsed} <= ${t.revisionCap} AND ${t.currentRevisionNumber} = ${t.revisionsUsed} + 1`),
+  integrationBranchCheck: check('build_runs_integration_branch_check', sql`${t.integrationBranch} IS NULL OR ${t.integrationBranch} = 'apex/build/' || ${t.id}::text`),
+  baseCommitCheck: check('build_runs_base_commit_check', sql`${t.baseCommit} IS NULL OR ${t.baseCommit} ~ '^[0-9a-f]{40}$'`),
+  skillSnapshotCheck: check('build_runs_skill_snapshot_check', sql`jsonb_typeof(${t.skillSnapshot}) = 'object'`),
+  supportContactsCheck: check('build_runs_support_contacts_check', sql`jsonb_typeof(${t.supportContacts}) = 'array' AND jsonb_array_length(${t.supportContacts}) >= 1`),
+  qualityManifestCheck: check('build_runs_quality_manifest_snapshot_check', sql`jsonb_typeof(${t.qualityManifestSnapshot}) = 'object'`),
+  costCapCheck: check('build_runs_cost_cap_check', sql`${t.costCapUsd} > 0`),
+  costUsedCheck: check('build_runs_cost_used_check', sql`${t.costUsedUsd} >= 0`),
+  elapsedCapCheck: check('build_runs_elapsed_cap_check', sql`${t.elapsedCapSeconds} > 0`),
+  parallelismCapCheck: check('build_runs_parallelism_cap_check', sql`${t.parallelismCap} BETWEEN 1 AND 6`),
+  parallelismUsedCheck: check('build_runs_parallelism_used_check', sql`${t.parallelismUsed} BETWEEN 0 AND ${t.parallelismCap}`),
+  acceptedPrCheck: check('build_runs_accepted_pr_check', sql`${t.status} <> 'accepted' OR (${t.pullRequestUrl} IS NOT NULL AND ${t.acceptedRevisionNumber} IS NOT NULL)`),
+  terminalEndedAtCheck: check('build_runs_terminal_ended_at_check', sql`(${t.status} IN ('accepted', 'cancelled', 'failed')) = (${t.endedAt} IS NOT NULL)`),
+  playbookRunUq: uniqueIndex('uq_build_runs_playbook_run').on(t.playbookRunId),
+  clientRequestUq: uniqueIndex('uq_build_runs_client_request').on(t.project, t.requestedByUserId, t.clientRequestId),
+  projectCreatedIdx: index('idx_build_runs_project_created').on(t.project, t.createdAt),
+  slotIdx: index('idx_build_runs_slot').on(t.project, t.status).where(sql`${t.status} IN ('intake', 'planning', 'building', 'checking', 'deploying')`),
+  queueIdx: index('idx_build_runs_queue').on(t.createdAt).where(sql`${t.status} = 'queued'`),
+  queuedAtIdx: index('idx_build_runs_queued_at').on(t.project, t.queuedAt).where(sql`${t.status} = 'queued'`),
+  cancelCleanupIdx: index('idx_build_runs_cancel_cleanup').on(t.endedAt).where(sql`${t.status} = 'cancelled' AND ${t.integrationBranchDeletedAt} IS NULL`),
+  retentionIdx: index('idx_build_runs_retention').on(t.endedAt).where(sql`${t.endedAt} IS NOT NULL`),
+  interviewIdx: index('idx_build_runs_interview').on(t.interviewId).where(sql`${t.interviewId} IS NOT NULL`),
+}));
+
+export const buildRevisions = pgTable('build_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  buildRunId: uuid('build_run_id').notNull().references(() => buildRuns.id, { onDelete: 'restrict' }),
+  revisionNumber: integer('revision_number').notNull(),
+  feedback: text('feedback'),
+  briefVersion: integer('brief_version'),
+  requirements: jsonb('requirements').$type<BuildRequirement[]>().notNull().default([]),
+  assumptions: jsonb('assumptions').$type<string[]>().notNull().default([]),
+  exclusions: jsonb('exclusions').$type<string[]>().notNull().default([]),
+  riskDecisions: jsonb('risk_decisions').$type<BuildRiskDecision[]>().notNull().default([]),
+  classification: text('classification').$type<BuildClassification>(),
+  plan: jsonb('plan').$type<Record<string, unknown>>(),
+  planValidation: jsonb('plan_validation').$type<{ status: 'pass' | 'fail'; violations: unknown[] }>(),
+  contextNotesPath: text('context_notes_path'),
+  repairAttempts: integer('repair_attempts').notNull().default(0),
+  elapsedSecondsUsed: integer('elapsed_seconds_used').notNull().default(0),
+  validatedCommit: text('validated_commit'),
+  pipelineRunId: text('pipeline_run_id'),
+  deploymentStatus: text('deployment_status').$type<BuildDeploymentStatus>().notNull().default('not_started'),
+  deploymentQueuedAt: buildTimestamp('deployment_queued_at'),
+  deployedAt: buildTimestamp('deployed_at'),
+  deploymentFailedStage: text('deployment_failed_stage'),
+  deploymentPipelineUrl: text('deployment_pipeline_url'),
+  previewUrl: text('preview_url'),
+  createdAt: buildTimestamp('created_at').notNull().defaultNow(),
+  updatedAt: buildTimestamp('updated_at').notNull().defaultNow(),
+}, (t) => ({
+  revisionNumberCheck: check('build_revisions_revision_number_check', sql`${t.revisionNumber} >= 1`),
+  requirementsCheck: check('build_revisions_requirements_check', sql`jsonb_typeof(${t.requirements}) = 'array'`),
+  assumptionsCheck: check('build_revisions_assumptions_check', sql`jsonb_typeof(${t.assumptions}) = 'array'`),
+  exclusionsCheck: check('build_revisions_exclusions_check', sql`jsonb_typeof(${t.exclusions}) = 'array'`),
+  riskDecisionsCheck: check('build_revisions_risk_decisions_check', sql`jsonb_typeof(${t.riskDecisions}) = 'array'`),
+  classificationCheck: check('build_revisions_classification_check', sql`${t.classification} IS NULL OR ${t.classification} IN ('small', 'full')`),
+  planCheck: check('build_revisions_plan_check', sql`${t.plan} IS NULL OR jsonb_typeof(${t.plan}) = 'object'`),
+  planValidationCheck: check('build_revisions_plan_validation_check', sql`${t.planValidation} IS NULL OR jsonb_typeof(${t.planValidation}) = 'object'`),
+  planBriefCheck: check('build_revisions_plan_brief_check', sql`${t.plan} IS NULL OR ${t.briefVersion} IS NOT NULL`),
+  repairAttemptsCheck: check('build_revisions_repair_attempts_check', sql`${t.repairAttempts} BETWEEN 0 AND 2`),
+  elapsedSecondsCheck: check('build_revisions_elapsed_seconds_check', sql`${t.elapsedSecondsUsed} >= 0`),
+  validatedCommitCheck: check('build_revisions_validated_commit_check', sql`${t.validatedCommit} IS NULL OR ${t.validatedCommit} ~ '^[0-9a-f]{40}$'`),
+  deploymentStatusCheck: check('build_revisions_deployment_status_check', sql`${t.deploymentStatus} IN ('not_started', 'queued', 'deploying', 'succeeded', 'failed')`),
+  deploymentCoherenceCheck: check('build_revisions_deployment_coherence_check', sql`(${t.deploymentStatus} NOT IN ('queued', 'deploying', 'succeeded') OR ${t.validatedCommit} IS NOT NULL) AND (${t.deploymentStatus} <> 'succeeded' OR ${t.previewUrl} IS NOT NULL)`),
+  runNumberUq: uniqueIndex('uq_build_revisions_run_number').on(t.buildRunId, t.revisionNumber),
+  pipelineRunUq: uniqueIndex('uq_build_revisions_pipeline_run').on(t.pipelineRunId).where(sql`${t.pipelineRunId} IS NOT NULL`),
+  waitingDeployIdx: index('idx_build_revisions_waiting_deploy').on(t.deploymentQueuedAt, t.id).where(sql`${t.deploymentStatus} = 'queued'`),
+  deployingIdx: index('idx_build_revisions_deploying').on(t.updatedAt).where(sql`${t.deploymentStatus} = 'deploying'`),
+}));
+
+export const buildTasks = pgTable('build_tasks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  buildRevisionId: uuid('build_revision_id').notNull().references(() => buildRevisions.id, { onDelete: 'restrict' }),
+  taskKey: text('task_key').notNull(),
+  role: text('role').$type<BuildTaskRole>().notNull(),
+  dependsOn: jsonb('depends_on').$type<string[]>().notNull().default([]),
+  ownedFiles: jsonb('owned_files').$type<string[]>().notNull().default([]),
+  covers: jsonb('covers').$type<string[]>().notNull().default([]),
+  reuse: jsonb('reuse').$type<BuildReuseEntry[]>().notNull().default([]),
+  runMode: text('run_mode').$type<BuildTaskRunMode>().notNull(),
+  chainHeadKey: text('chain_head_key'),
+  branchName: text('branch_name'),
+  status: text('status').$type<BuildTaskStatus>().notNull().default('pending'),
+  attempt: integer('attempt').notNull().default(1),
+  omittedReason: text('omitted_reason'),
+  mergePullRequestId: integer('merge_pull_request_id'),
+  mergeCommit: text('merge_commit'),
+  startedAt: buildTimestamp('started_at'),
+  completedAt: buildTimestamp('completed_at'),
+  createdAt: buildTimestamp('created_at').notNull().defaultNow(),
+  updatedAt: buildTimestamp('updated_at').notNull().defaultNow(),
+}, (t) => ({
+  taskKeyCheck: check('build_tasks_task_key_check', sql`${t.taskKey} ~ '^[a-z][a-z0-9-]{0,39}$'`),
+  roleCheck: check('build_tasks_role_check', sql`${t.role} IN ('planner', 'implementer', 'qa', 'check', 'sync')`),
+  dependsOnCheck: check('build_tasks_depends_on_check', sql`jsonb_typeof(${t.dependsOn}) = 'array'`),
+  ownedFilesCheck: check('build_tasks_owned_files_check', sql`jsonb_typeof(${t.ownedFiles}) = 'array'`),
+  coversCheck: check('build_tasks_covers_check', sql`jsonb_typeof(${t.covers}) = 'array'`),
+  reuseCheck: check('build_tasks_reuse_check', sql`jsonb_typeof(${t.reuse}) = 'array'`),
+  runModeCheck: check('build_tasks_run_mode_check', sql`${t.runMode} IN ('own_agent', 'chain')`),
+  chainHeadKeyCheck: check('build_tasks_chain_head_key_check', sql`${t.chainHeadKey} IS NULL OR ${t.chainHeadKey} ~ '^[a-z][a-z0-9-]{0,39}$'`),
+  chainHeadCoherenceCheck: check('build_tasks_chain_head_coherence_check', sql`(${t.runMode} = 'own_agent' AND ${t.chainHeadKey} IS NULL) OR (${t.runMode} = 'chain' AND ${t.chainHeadKey} IS NOT NULL)`),
+  statusCheck: check('build_tasks_status_check', sql`${t.status} IN ('pending', 'ready', 'running', 'merged', 'failed', 'omitted')`),
+  attemptCheck: check('build_tasks_attempt_check', sql`${t.attempt} >= 1`),
+  omittedReasonCheck: check('build_tasks_omitted_reason_check', sql`(${t.status} = 'omitted') = (${t.omittedReason} IS NOT NULL)`),
+  revisionKeyUq: uniqueIndex('uq_build_tasks_revision_key').on(t.buildRevisionId, t.taskKey),
+  revisionStatusIdx: index('idx_build_tasks_revision_status').on(t.buildRevisionId, t.status),
+  branchNameUq: uniqueIndex('uq_build_tasks_branch_name').on(t.branchName).where(sql`${t.branchName} IS NOT NULL`),
+  chainHeadIdx: index('idx_build_tasks_chain_head').on(t.buildRevisionId, t.chainHeadKey).where(sql`${t.chainHeadKey} IS NOT NULL`),
+}));
+
+export const buildVerificationRows = pgTable('build_verification_rows', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  buildRevisionId: uuid('build_revision_id').notNull().references(() => buildRevisions.id, { onDelete: 'restrict' }),
+  requirementId: text('requirement_id').notNull(),
+  kind: text('kind').$type<BuildVerificationKind>().notNull(),
+  testTier: text('test_tier').$type<BuildTestTier>(),
+  testRefs: jsonb('test_refs').$type<BuildTestRef[]>().notNull().default([]),
+  redEvidence: jsonb('red_evidence').$type<BuildTestEvidence>(),
+  greenEvidence: jsonb('green_evidence').$type<BuildTestEvidence>(),
+  evidenceBlobRef: jsonb('evidence_blob_ref').$type<ArtifactRef>(),
+  status: text('status').$type<BuildVerificationStatus>().notNull().default('pending'),
+  deferralReason: text('deferral_reason'),
+  carriedFromRevisionNumber: integer('carried_from_revision_number'),
+  createdAt: buildTimestamp('created_at').notNull().defaultNow(),
+  updatedAt: buildTimestamp('updated_at').notNull().defaultNow(),
+}, (t) => ({
+  kindCheck: check('build_verification_rows_kind_check', sql`${t.kind} IN ('ac', 'dod', 'br', 'nfr', 'risk_decision')`),
+  requirementPrefixCheck: check('build_verification_rows_requirement_prefix_check', sql`(${t.kind} = 'ac' AND ${t.requirementId} ~ '^AC-[1-9][0-9]*$') OR (${t.kind} = 'dod' AND ${t.requirementId} ~ '^DOD-[1-9][0-9]*$') OR (${t.kind} = 'br' AND ${t.requirementId} ~ '^BR-[1-9][0-9]*$') OR (${t.kind} = 'nfr' AND ${t.requirementId} ~ '^NFR-[1-9][0-9]*$') OR (${t.kind} = 'risk_decision' AND ${t.requirementId} ~ '^RD-[1-9][0-9]*$')`),
+  testTierCheck: check('build_verification_rows_test_tier_check', sql`${t.testTier} IS NULL OR ${t.testTier} IN ('unit', 'integration', 'e2e')`),
+  testRefsCheck: check('build_verification_rows_test_refs_check', sql`jsonb_typeof(${t.testRefs}) = 'array'`),
+  redEvidenceCheck: check('build_verification_rows_red_evidence_check', sql`${t.redEvidence} IS NULL OR jsonb_typeof(${t.redEvidence}) = 'object'`),
+  greenEvidenceCheck: check('build_verification_rows_green_evidence_check', sql`${t.greenEvidence} IS NULL OR jsonb_typeof(${t.greenEvidence}) = 'object'`),
+  evidenceBlobRefCheck: check('build_verification_rows_evidence_blob_ref_check', sql`${t.evidenceBlobRef} IS NULL OR jsonb_typeof(${t.evidenceBlobRef}) = 'object'`),
+  statusCheck: check('build_verification_rows_status_check', sql`${t.status} IN ('pending', 'pass', 'fail', 'deferred', 'retired')`),
+  deferralCheck: check('build_verification_rows_deferral_check', sql`(${t.status} = 'deferred') = (${t.deferralReason} IS NOT NULL)`),
+  passEvidenceCheck: check('build_verification_rows_pass_evidence_check', sql`${t.status} <> 'pass' OR (${t.redEvidence} IS NOT NULL AND ${t.greenEvidence} IS NOT NULL AND jsonb_typeof(${t.testRefs}) = 'array' AND jsonb_array_length(${t.testRefs}) >= 1)`),
+  revisionRequirementUq: uniqueIndex('uq_build_verification_rows_revision_requirement').on(t.buildRevisionId, t.requirementId),
+  revisionStatusIdx: index('idx_build_verification_rows_revision_status').on(t.buildRevisionId, t.status),
+}));
+
+export const buildPreviewLeases = pgTable('build_preview_leases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  repository: text('repository').notNull(),
+  buildRunId: uuid('build_run_id').notNull().references(() => buildRuns.id, { onDelete: 'cascade' }),
+  buildRevisionId: uuid('build_revision_id').notNull().references(() => buildRevisions.id, { onDelete: 'restrict' }),
+  grantedAt: buildTimestamp('granted_at').notNull().defaultNow(),
+  expiresAt: buildTimestamp('expires_at').notNull(),
+}, (t) => ({
+  projectCheck: check('build_preview_leases_project_check', sql`char_length(${t.project}) >= 1 AND ${t.project} = btrim(${t.project})`),
+  repositoryCheck: check('build_preview_leases_repository_check', sql`char_length(${t.repository}) >= 1 AND ${t.repository} = btrim(${t.repository})`),
+  expiresCheck: check('build_preview_leases_expires_check', sql`${t.expiresAt} > ${t.grantedAt}`),
+  projectRepositoryUq: uniqueIndex('uq_build_preview_leases_project_repository').on(t.project, t.repository),
+  runUq: uniqueIndex('uq_build_preview_leases_run').on(t.buildRunId),
+  expiresIdx: index('idx_build_preview_leases_expires').on(t.expiresAt),
+}));
+
+export const buildEvents = pgTable('build_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ordinal: bigserial('ordinal', { mode: 'number' }).notNull(),
+  buildRunId: uuid('build_run_id').notNull().references(() => buildRuns.id, { onDelete: 'restrict' }),
+  buildRevisionId: uuid('build_revision_id').references(() => buildRevisions.id, { onDelete: 'restrict' }),
+  eventType: text('event_type').notNull(),
+  severity: text('severity').$type<BuildEventSeverity>().notNull().default('info'),
+  message: text('message').notNull(),
+  detail: jsonb('detail').$type<Record<string, unknown>>(),
+  correlationKind: text('correlation_kind').$type<BuildCorrelationKind>(),
+  correlationId: text('correlation_id'),
+  actorUserId: text('actor_user_id').references(() => appUsers.oid, { onDelete: 'restrict' }),
+  dedupeKey: text('dedupe_key'),
+  createdAt: buildTimestamp('created_at').notNull().defaultNow(),
+}, (t) => ({
+  eventTypeCheck: check('build_events_event_type_check', sql`${t.eventType} ~ '^[a-z][a-z0-9_.]{0,63}$'`),
+  severityCheck: check('build_events_severity_check', sql`${t.severity} IN ('info', 'warn', 'error')`),
+  messageCheck: check('build_events_message_check', sql`char_length(${t.message}) BETWEEN 1 AND 8000`),
+  detailCheck: check('build_events_detail_check', sql`${t.detail} IS NULL OR jsonb_typeof(${t.detail}) = 'object'`),
+  correlationKindCheck: check('build_events_correlation_kind_check', sql`${t.correlationKind} IS NULL OR ${t.correlationKind} IN ('agent_run', 'pipeline_run', 'pull_request', 'commit')`),
+  correlationPairCheck: check('build_events_correlation_pair_check', sql`(${t.correlationKind} IS NULL) = (${t.correlationId} IS NULL)`),
+  ordinalUq: uniqueIndex('uq_build_events_ordinal').on(t.ordinal),
+  runOrdinalIdx: index('idx_build_events_run_ordinal').on(t.buildRunId, t.ordinal),
+  dedupeUq: uniqueIndex('uq_build_events_dedupe').on(t.buildRunId, t.dedupeKey).where(sql`${t.dedupeKey} IS NOT NULL`),
+}));
+
+export const buildRunsRelations = relations(buildRuns, ({ one, many }) => ({
+  requester: one(appUsers, { fields: [buildRuns.requestedByUserId], references: [appUsers.oid] }),
+  playbookRun: one(playbookRuns, { fields: [buildRuns.playbookRunId], references: [playbookRuns.id] }),
+  playbookStepRun: one(playbookStepRuns, { fields: [buildRuns.playbookStepRunId], references: [playbookStepRuns.id] }),
+  interview: one(interviews, { fields: [buildRuns.interviewId], references: [interviews.id] }),
+  brief: one(interviewBriefs, { fields: [buildRuns.briefId], references: [interviewBriefs.id] }),
+  revisions: many(buildRevisions),
+  events: many(buildEvents),
+}));
+
+export const buildRevisionsRelations = relations(buildRevisions, ({ one, many }) => ({
+  run: one(buildRuns, { fields: [buildRevisions.buildRunId], references: [buildRuns.id] }),
+  tasks: many(buildTasks),
+  verificationRows: many(buildVerificationRows),
+  events: many(buildEvents),
+}));
+
+export const buildTasksRelations = relations(buildTasks, ({ one }) => ({
+  revision: one(buildRevisions, { fields: [buildTasks.buildRevisionId], references: [buildRevisions.id] }),
+}));
+
+export const buildVerificationRowsRelations = relations(buildVerificationRows, ({ one }) => ({
+  revision: one(buildRevisions, { fields: [buildVerificationRows.buildRevisionId], references: [buildRevisions.id] }),
+}));
+
+export const buildPreviewLeasesRelations = relations(buildPreviewLeases, ({ one }) => ({
+  run: one(buildRuns, { fields: [buildPreviewLeases.buildRunId], references: [buildRuns.id] }),
+  revision: one(buildRevisions, { fields: [buildPreviewLeases.buildRevisionId], references: [buildRevisions.id] }),
+}));
+
+export const buildEventsRelations = relations(buildEvents, ({ one }) => ({
+  run: one(buildRuns, { fields: [buildEvents.buildRunId], references: [buildRuns.id] }),
+  revision: one(buildRevisions, { fields: [buildEvents.buildRevisionId], references: [buildRevisions.id] }),
+  actor: one(appUsers, { fields: [buildEvents.actorUserId], references: [appUsers.oid] }),
+}));
+
+// ── Brainstorm (FEAT-001) ─────────────────────────────────────────────────────
+
+export const brainstormSessions = pgTable('brainstorm_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  creatorId: text('creator_id').notNull(),
+  state: text('state').$type<BrainstormSessionState>().notNull().default('active'),
+  model: text('model').notNull(),
+  title: text('title'),
+  artifactType: text('artifact_type'),
+  chatThreadId: uuid('chat_thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  endedAt: timestamp('ended_at', { withTimezone: true, mode: 'string' }),
+  failureReason: text('failure_reason'),
+  version: integer('version').notNull().default(1),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  stateCheck: check('brainstorm_sessions_state_check', sql`${t.state} IN ('active', 'ended', 'failed')`),
+  versionCheck: check('brainstorm_sessions_version_check', sql`${t.version} >= 1`),
+  chatThreadUq: uniqueIndex('uq_brainstorm_sessions_chat_thread').on(t.chatThreadId),
+  projectActivityIdx: index('idx_brainstorm_sessions_project_activity').on(t.project, t.lastActivityAt.desc()),
+  projectCreatorIdx: index('idx_brainstorm_sessions_project_creator').on(t.project, t.creatorId),
+  activeActivityIdx: index('idx_brainstorm_sessions_active_activity')
+    .on(t.lastActivityAt)
+    .where(sql`${t.state} = 'active'`),
+}));
+
+export const brainstormMessages = pgTable('brainstorm_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  role: text('role').$type<BrainstormMessageRole>().notNull(),
+  content: text('content').notNull().default(''),
+  status: text('status').$type<BrainstormMessageStatus>().notNull(),
+  turnId: uuid('turn_id').notNull(),
+  runId: uuid('run_id'),
+  failureCode: text('failure_code').$type<BrainstormFailureCode>(),
+  failureSummary: text('failure_summary'),
+  retryOfMessageId: uuid('retry_of_message_id').references((): AnyPgColumn => brainstormMessages.id, { onDelete: 'set null' }),
+  supersededByMessageId: uuid('superseded_by_message_id').references((): AnyPgColumn => brainstormMessages.id, { onDelete: 'set null' }),
+  artifactFailureCode: text('artifact_failure_code').$type<BrainstormArtifactFailureCode>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  roleCheck: check('brainstorm_messages_role_check', sql`${t.role} IN ('user', 'assistant')`),
+  statusCheck: check(
+    'brainstorm_messages_status_check',
+    sql`${t.status} IN ('streaming', 'completed', 'failed', 'cancelled')`,
+  ),
+  failureCodeCheck: check(
+    'brainstorm_messages_failure_code_check',
+    sql`${t.failureCode} IS NULL OR ${t.failureCode} IN ('run_not_started', 'model_error', 'deadline_exceeded', 'worker_refused_spec', 'cancelled', 'unknown')`,
+  ),
+  sessionCreatedIdx: index('idx_brainstorm_messages_session_created').on(t.sessionId, t.createdAt),
+  sessionTurnRoleUq: uniqueIndex('uq_brainstorm_messages_session_turn_role')
+    .on(t.sessionId, t.turnId, t.role)
+    .where(sql`${t.retryOfMessageId} IS NULL`),
+  oneStreamingUq: uniqueIndex('uq_brainstorm_messages_one_streaming')
+    .on(t.sessionId)
+    .where(sql`${t.role} = 'assistant' AND ${t.status} = 'streaming'`),
+  runIdx: index('idx_brainstorm_messages_run').on(t.runId).where(sql`${t.runId} IS NOT NULL`),
+}));
+
+/** Per-project clone limits. A missing row uses the App Service default. */
+export const brainstormProjectLimits = pgTable('brainstorm_project_limits', {
+  project: text('project').primaryKey(),
+  workspaceByteCap: bigint('max_workspace_bytes', { mode: 'number' }).notNull(),
+  concurrentCloneCap: integer('max_concurrent_clones').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  bytesCheck: check('brainstorm_project_limits_bytes_check', sql`${t.workspaceByteCap} > 0`),
+  clonesCheck: check('brainstorm_project_limits_clones_check', sql`${t.concurrentCloneCap} > 0`),
+}));
+
+/** Repositories an administrator added for Brainstorm. The clone URL has no credentials. */
+export const brainstormRepositories = pgTable('brainstorm_repositories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  displayName: text('display_name').notNull(),
+  cloneUrl: text('clone_url').notNull(),
+  branch: text('branch').notNull(),
+  status: text('status').$type<BrainstormCatalogStatus>().notNull().default('not_cloned'),
+  commitSha: text('commit_sha'),
+  error: text('error'),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  statusCheck: check(
+    'brainstorm_repositories_status_check',
+    sql`${t.status} IN ('not_cloned', 'cloning', 'ready', 'failed')`,
+  ),
+  urlBranchUq: uniqueIndex('uq_brainstorm_repositories_url_branch').on(t.project, t.cloneUrl, t.branch),
+  projectIdx: index('idx_brainstorm_repositories_project').on(t.project),
+}));
+
+/** Source metadata only. File content and credentials are never stored here. */
+export const brainstormSources = pgTable('brainstorm_sources', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  kind: text('kind').$type<BrainstormSourceKind>().notNull(),
+  displayName: text('display_name').notNull(),
+  cloneUrl: text('clone_url'),
+  requestedRevision: text('requested_revision'),
+  resolvedSha: text('resolved_sha'),
+  workspaceState: text('workspace_state').$type<BrainstormSourceState>().notNull().default('preparing'),
+  refId: text('ref_id'),
+  reasonCode: text('reason_code'),
+  reasonText: text('reason_text'),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }),
+  workspaceRemovedAt: timestamp('workspace_removed_at', { withTimezone: true, mode: 'string' }),
+  groundingProvider: text('grounding_provider').$type<'github' | 'ado'>(),
+  groundingProject: text('grounding_project'),
+  groundingRepository: text('grounding_repository'),
+  mcpReadOnlyToolCount: integer('mcp_read_only_tool_count'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  stateCheck: check(
+    'brainstorm_sources_state_check',
+    sql`${t.workspaceState} IN ('preparing', 'ready', 'failed', 'cleaned', 'restoring', 'unavailable', 'removing', 'removed')`,
+  ),
+  sessionIdx: index('idx_brainstorm_sources_session').on(t.sessionId),
+  projectSessionIdx: index('idx_brainstorm_sources_project_session').on(t.project, t.sessionId),
+  stateUpdatedIdx: index('idx_brainstorm_sources_state_updated').on(t.workspaceState, t.updatedAt),
+}));
+
+export const brainstormArtifacts = pgTable('brainstorm_artifacts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  artifactType: text('artifact_type').$type<BrainstormArtifactType>(),
+  markdown: text('markdown').notNull().default(''),
+  version: integer('version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  versionCheck: check('brainstorm_artifacts_version_check', sql`${t.version} >= 1`),
+  typeCheck: check(
+    'brainstorm_artifacts_type_check',
+    sql`${t.artifactType} IS NULL OR ${t.artifactType} IN ('adr', 'technical_design', 'implementation_plan', 'discovery_brief')`,
+  ),
+  sessionUq: uniqueIndex('uq_brainstorm_artifacts_session').on(t.sessionId),
+}));
+
+/** Append-only. Only `checkpoint_name` changes after insert, once, from null. */
+export const brainstormArtifactVersions = pgTable('brainstorm_artifact_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  artifactId: uuid('artifact_id').notNull().references(() => brainstormArtifacts.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  sequence: integer('sequence').notNull(),
+  markdown: text('markdown').notNull(),
+  changeOrigin: text('change_origin').$type<BrainstormArtifactOrigin>().notNull(),
+  checkpointName: text('checkpoint_name'),
+  authorId: text('author_id'),
+  artifactType: text('artifact_type').$type<BrainstormArtifactType>(),
+  runId: uuid('run_id'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sequenceUq: uniqueIndex('uq_brainstorm_artifact_versions_sequence').on(t.artifactId, t.sequence),
+  originCheck: check(
+    'brainstorm_artifact_versions_origin_check',
+    sql`${t.changeOrigin} IN ('ai_change', 'type_switch', 'rollback')`,
+  ),
+  checkpointLengthCheck: check(
+    'brainstorm_artifact_versions_checkpoint_length_check',
+    sql`${t.checkpointName} IS NULL OR char_length(${t.checkpointName}) BETWEEN 1 AND 80`,
+  ),
+  checkpointUq: uniqueIndex('uq_brainstorm_artifact_versions_checkpoint')
+    .on(t.artifactId, sql`lower(${t.checkpointName})`)
+    .where(sql`${t.checkpointName} IS NOT NULL`),
+  runIdx: index('idx_brainstorm_artifact_versions_run')
+    .on(t.artifactId, t.runId)
+    .where(sql`${t.runId} IS NOT NULL`),
+}));
+
+export const brainstormCitations = pgTable('brainstorm_citations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  messageId: uuid('message_id').references(() => brainstormMessages.id, { onDelete: 'cascade' }),
+  sourceId: uuid('source_id').references(() => brainstormSources.id, { onDelete: 'set null' }),
+  pathOrTool: text('path_or_tool').notNull(),
+  pinnedRevision: text('pinned_revision'),
+  claimText: text('claim_text').notNull(),
+  sourceKind: text('source_kind').$type<BrainstormSourceKind>(),
+  sourceName: text('source_name'),
+  path: text('path'),
+  mcpServerName: text('mcp_server_name'),
+  mcpToolId: text('mcp_tool_id'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionIdx: index('idx_brainstorm_citations_session').on(t.sessionId),
+  messageIdx: index('idx_brainstorm_citations_message').on(t.messageId),
+}));
+
+export const brainstormActions = pgTable('brainstorm_actions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  project: text('project').notNull(),
+  actionKind: text('action_kind').$type<BrainstormActionKind>().notNull(),
+  targetModule: text('target_module').$type<BrainstormTargetModule>().notNull(),
+  state: text('state').$type<BrainstormHandoffState>().notNull().default('previewed'),
+  previewSnapshot: jsonb('preview_snapshot').$type<Record<string, unknown>>().notNull().default({}),
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true, mode: 'string' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  resultRef: text('result_ref'),
+  artifactVersion: integer('artifact_version'),
+  targetThreadId: uuid('target_thread_id'),
+  claimToken: uuid('claim_token'),
+  failureCode: text('failure_code'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  idempotencyUq: uniqueIndex('uq_brainstorm_actions_idempotency').on(t.idempotencyKey),
+  sessionIdx: index('idx_brainstorm_actions_session').on(t.sessionId),
+  stateCheck: check(
+    'brainstorm_actions_state_check',
+    sql`${t.state} IN ('previewed', 'executing', 'completed', 'failed')`,
+  ),
+  kindCheck: check(
+    'brainstorm_actions_kind_check',
+    sql`${t.actionKind} IN ('keep_standalone', 'start_workflow', 'create_direct')`,
+  ),
+  livePerVersionUq: uniqueIndex('uq_brainstorm_actions_live_per_version')
+    .on(t.sessionId, t.actionKind, t.artifactVersion)
+    .where(sql`${t.state} <> 'failed'`),
+}));
+
+export const brainstormSessionsRelations = relations(brainstormSessions, ({ one, many }) => ({
+  chatThread: one(chatThreads, { fields: [brainstormSessions.chatThreadId], references: [chatThreads.id] }),
+  messages: many(brainstormMessages),
+  sources: many(brainstormSources),
+  artifacts: many(brainstormArtifacts),
+  citations: many(brainstormCitations),
+  actions: many(brainstormActions),
+}));
+
+export const brainstormMessagesRelations = relations(brainstormMessages, ({ one, many }) => ({
+  session: one(brainstormSessions, { fields: [brainstormMessages.sessionId], references: [brainstormSessions.id] }),
+  citations: many(brainstormCitations),
+}));
+
+export const brainstormSourcesRelations = relations(brainstormSources, ({ one }) => ({
+  session: one(brainstormSessions, { fields: [brainstormSources.sessionId], references: [brainstormSessions.id] }),
+}));
+
+export const brainstormArtifactsRelations = relations(brainstormArtifacts, ({ one, many }) => ({
+  session: one(brainstormSessions, { fields: [brainstormArtifacts.sessionId], references: [brainstormSessions.id] }),
+  versions: many(brainstormArtifactVersions),
+}));
+
+export const brainstormArtifactVersionsRelations = relations(brainstormArtifactVersions, ({ one }) => ({
+  artifact: one(brainstormArtifacts, { fields: [brainstormArtifactVersions.artifactId], references: [brainstormArtifacts.id] }),
+}));
+
+export const brainstormCitationsRelations = relations(brainstormCitations, ({ one }) => ({
+  session: one(brainstormSessions, { fields: [brainstormCitations.sessionId], references: [brainstormSessions.id] }),
+  message: one(brainstormMessages, { fields: [brainstormCitations.messageId], references: [brainstormMessages.id] }),
+  source: one(brainstormSources, { fields: [brainstormCitations.sourceId], references: [brainstormSources.id] }),
+}));
+
+export const brainstormActionsRelations = relations(brainstormActions, ({ one }) => ({
+  session: one(brainstormSessions, { fields: [brainstormActions.sessionId], references: [brainstormSessions.id] }),
 }));

@@ -90,15 +90,18 @@ export function validatePackage(pkgRoot) {
       );
     }
 
-    for (const rel of listFilesRel(fDir)) {
-      const abs = path.join(fDir, rel);
-      const text = fs.readFileSync(abs, 'utf8');
-      for (const tok of FOREIGN_TOKENS) {
-        if (tok.test(text)) {
-          errors.push(
-            `foundation/${skill.name}/${rel} contains foreign-project reference matching ${tok}`
-          );
-          break;
+    // apex-only skills run inside Apex and may name one product. Shippable skills stay generic.
+    if (skill.tier !== 'apex-only') {
+      for (const rel of listFilesRel(fDir)) {
+        const abs = path.join(fDir, rel);
+        const text = fs.readFileSync(abs, 'utf8');
+        for (const tok of FOREIGN_TOKENS) {
+          if (tok.test(text)) {
+            errors.push(
+              `foundation/${skill.name}/${rel} contains foreign-project reference matching ${tok}`
+            );
+            break;
+          }
         }
       }
     }

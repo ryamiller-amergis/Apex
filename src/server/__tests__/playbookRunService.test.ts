@@ -483,7 +483,6 @@ describe('FEAT-015 — spend admission precedes every run write', () => {
       project: PROJECT,
       definitionId: 'def-1',
       initiatorUserId: INITIATOR,
-      spendAdmissionEnabled: true,
     })).rejects.toThrow('cap exceeded');
 
     expect(assertActiveRunCapacity).not.toHaveBeenCalled();
@@ -491,9 +490,9 @@ describe('FEAT-015 — spend admission precedes every run write', () => {
     expect(beginRun).not.toHaveBeenCalled();
   });
 
-  it('does not evaluate policy while the flag is disabled', async () => {
+  it('evaluates spend policy before every run', async () => {
     await startRun({ project: PROJECT, definitionId: 'def-1', initiatorUserId: INITIATOR });
-    expect(assertSpendAdmission).not.toHaveBeenCalled();
+    expect(assertSpendAdmission).toHaveBeenCalledWith(PROJECT);
   });
 });
 

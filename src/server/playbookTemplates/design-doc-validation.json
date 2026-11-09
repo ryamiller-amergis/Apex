@@ -1,0 +1,71 @@
+{
+  "templateKey": "design-doc-validation",
+  "templateVersion": 1,
+  "name": "Design doc validation",
+  "description": "Score a design doc, ingest the scorecard, and either ask for approval or notify the owner.",
+  "graph": {
+    "nodes": [
+      {
+        "id": "score",
+        "stepType": "cursor-agent",
+        "config": {
+          "skillPath": ".cursor/skills/design-doc-validation/SKILL.md",
+          "prompt": "Score the bound design doc with the design-doc validation skill. Write review-scorecard.json and review-scorecard.md to .ai-pilot/output/.",
+          "mcpProfile": "repository-read-only",
+          "deadlineMs": 1800000,
+          "threadId": "${input.validationThreadId}"
+        }
+      },
+      {
+        "id": "ingest",
+        "stepType": "ingest-artifact",
+        "config": {
+          "documentType": "design_doc",
+          "documentId": "${input.documentId}",
+          "validationThreadId": "${steps.score.threadId}",
+          "scorecard": "${steps.score.scorecard}",
+          "reportMd": "${steps.score.reportMd}"
+        }
+      },
+      {
+        "id": "route",
+        "stepType": "branch",
+        "config": {
+          "condition": {
+            "sourceStepId": "ingest",
+            "field": "isReady",
+            "operator": "eq",
+            "value": true
+          },
+          "whenTrue": "ready",
+          "whenFalse": "revision"
+        }
+      },
+      {
+        "id": "approve-ready",
+        "stepType": "approval-gate",
+        "config": {
+          "subject": "Review ready design-doc validation result",
+          "approverPool": "design_doc",
+          "gatedStepId": "ingest"
+        }
+      },
+      {
+        "id": "notify-revision",
+        "stepType": "notify",
+        "config": {
+          "title": "Design doc needs revision",
+          "body": "Validation did not reach the ready threshold. Review the scorecard and revise.",
+          "link": "/backlog/design-doc/${input.documentId}",
+          "recipientUserId": "${input.ownerUserId}"
+        }
+      }
+    ],
+    "edges": [
+      { "from": "score", "to": "ingest" },
+      { "from": "ingest", "to": "route" },
+      { "from": "route", "to": "approve-ready", "condition": "ready" },
+      { "from": "route", "to": "notify-revision", "condition": "revision" }
+    ]
+  }
+}

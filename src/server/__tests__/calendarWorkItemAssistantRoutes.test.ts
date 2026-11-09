@@ -29,6 +29,7 @@ jest.mock('../services/calendarWorkItemAssistantService', () => ({
 
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
+  updateThreadKickoffContext: jest.fn(async () => true),
   getAgentHealthStats: jest.fn(() => ({ status: 'ok', threads: { total: 0, byStatus: {}, withActiveAgent: 0 }, uptime: 0 })),
 }));
 

@@ -32,14 +32,20 @@ jest.mock('../db/drizzle', () => ({
 jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn(),
   sendMessage: jest.fn().mockResolvedValue(undefined),
-  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+  prepareBackgroundWorkflowTurn: jest.fn(async (
+    _threadId: string,
+    _prompt: string,
+    options?: { findTargetGrounding?: () => Promise<unknown> },
+  ) => ({
     prompt: 'complete frozen validation prompt',
     model: 'validation-model',
     skillPath: '/skills/validate.md',
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/ws',
-  }),
+    ...(options?.findTargetGrounding ? { targetGrounding: (await options.findTargetGrounding()) ?? null } : {}),
+  })),
   cancelRun: jest.fn().mockResolvedValue(undefined),
+  updateThreadKickoffContext: jest.fn().mockResolvedValue(undefined),
   isThreadIdle: jest.fn().mockReturnValue(false),
   isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),
@@ -56,6 +62,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
     await input.runInProcess();
     return { route: 'in-process', reason: 'flag-disabled' };
   }),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/runGroundingService', () => ({

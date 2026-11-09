@@ -43,7 +43,7 @@ The default landing experience for AI-assisted work within a project.
 - **Skill pills** — project-configured shortcuts that start a chat with a specific skill and model
 - **Thread history** — resume prior agent conversations from a sidebar
 - **Streaming chat** — SSE-powered agent responses with attachment support
-- **MCP integrations** — optional quick-launch pills for configured MCP servers
+- **MCP servers** — optional quick-launch pills for configured MCP servers
 - **Gated by** — `home:view` permission and the `agent-home` feature flag (both granted to all roles by default)
 
 ### 1. AI-Guided Design Interviews
@@ -121,7 +121,7 @@ A suite of planning tools for delivery teams:
 - **QA Metrics** — QA team performance and testing throughput
 - **AI Analysis** — AI-powered analysis of work item patterns and delivery health
 - **Roadmap** — visual timeline with sticky work item columns and horizontal scrolling for 12+ months
-- **Releases** — release epic management with progress tracking, delete functionality, and child item counts
+- **Releases** — release epic management with progress tracking, delete functionality, child item counts, and a flagged Create CAB request action that confirms dry-run vs prod snow then streams the project `cab-release` skill on the same page
 - **Cycle Time** — analytics for measuring how long work items take through the pipeline
 
 ### 8. Cloud Cost Tracking

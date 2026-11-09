@@ -1,65 +1,77 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef } from 'react';
 
 const FOCUSABLE = [
   'a[href]',
   'button:not([disabled])',
+  'textarea:not([disabled])',
   'input:not([disabled])',
   'select:not([disabled])',
-  'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
-].join(',');
+].join(', ');
 
 /**
- * Modal focus handling: move focus inside on open, keep Tab inside, close on
- * Escape, lock body scroll, and give focus back to the opener on close.
+ * Moves focus into a dialog, keeps Tab inside it, and restores the previous
+ * focus when the dialog closes. Escape calls `onEscape`.
+ * Pass `suspended` while a dialog in front should take the keys. This trap
+ * stays mounted, so it does not pull focus back.
  */
-export function useDialogFocus(
-  containerRef: RefObject<HTMLElement | null>,
-  options: { open: boolean; onClose: () => void },
-): void {
-  const { open, onClose } = options;
-  const onCloseRef = useRef(onClose);
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  });
+export function useDialogFocus<T extends HTMLElement>(
+  active: boolean,
+  onEscape: () => void,
+  suspended = false,
+) {
+  const nodeRef = useRef<T>(null);
+  const onEscapeRef = useRef(onEscape);
+  const suspendedRef = useRef(suspended);
 
   useEffect(() => {
-    if (!open) return undefined;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    onEscapeRef.current = onEscape;
+    suspendedRef.current = suspended;
+  }, [onEscape, suspended]);
 
-    const focusables = (): HTMLElement[] =>
-      Array.from(containerRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
-    (focusables()[0] ?? containerRef.current)?.focus();
+  useEffect(() => {
+    if (!active) return undefined;
+    const node = nodeRef.current;
+    if (!node) return undefined;
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusable = () => Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
+    focusable()[0]?.focus({ preventScroll: true });
 
-    const onKeyDown = (event: KeyboardEvent) => {
+    const onKey = (event: KeyboardEvent) => {
+      if (suspendedRef.current) return;
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onCloseRef.current();
+        onEscapeRef.current();
         return;
       }
       if (event.key !== 'Tab') return;
-      const items = focusables();
-      if (items.length === 0) {
+      const current = focusable();
+      if (current.length === 0) {
         event.preventDefault();
         return;
       }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      const first = current[0];
+      const last = current[current.length - 1];
+      if (!node.contains(document.activeElement)) {
         event.preventDefault();
-        last.focus();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
-    document.addEventListener('keydown', onKeyDown);
+
+    document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      previous?.focus();
+      document.removeEventListener('keydown', onKey);
+      previouslyFocused?.focus({ preventScroll: true });
     };
-  }, [open, containerRef]);
+  }, [active]);
+
+  return nodeRef;
 }

@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { ListChecks, Plus, Workflow, X } from 'lucide-react';
 import type { PlaybookDefinitionSummary, PlaybookRunSummary } from '../../shared/types/playbook';
 import { useAppShell } from '../hooks/useAppShell';
-import { useFeatureFlag } from '../hooks/useFeatureFlags';
+import { PlaybookTemplateGallery } from './PlaybookTemplateGallery';
 import {
   useCreatePlaybookDefinition,
   usePlaybookDefinition,
@@ -272,12 +272,12 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
   const navigate = useNavigate();
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
-  const canvasEnabled = useFeatureFlag('playbooks-authoring-canvas', project);
   const definitions = usePlaybookDefinitions(project);
   const runs = usePlaybookRuns(project);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<StateFilter>('all');
   const [creating, setCreating] = useState(false);
+  const [browsingTemplates, setBrowsingTemplates] = useState(false);
 
   const allRuns = useMemo(() => runs.data?.runs ?? [], [runs.data]);
   const runsByDefinition = useMemo(() => groupRunsByDefinition(allRuns), [allRuns]);
@@ -303,7 +303,7 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
       onClick={() => setCreating(true)}
       {...{ 'data-testid': 'playbook-create-open' }}
     >
-      <Plus size={15} aria-hidden /> New playbook
+      <Plus size={15} aria-hidden /> New blank Playbook
     </button>
   ) : null;
 
@@ -318,6 +318,14 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
           </p>
         </div>
         <div className={styles.heroActions}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => setBrowsingTemplates(true)}
+              data-testid="playbook-template-browse"
+            >
+              Browse templates
+            </button>
           <Link
             to="/playbooks?view=runs"
             className={styles.secondaryButton}
@@ -328,6 +336,15 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
           {newButton}
         </div>
       </header>
+
+      {browsingTemplates ? (
+        <PlaybookTemplateGallery
+          project={project}
+          canAuthor={canAuthor}
+          onClose={() => setBrowsingTemplates(false)}
+          onInstalled={(definitionId) => navigate(`/playbooks/${definitionId}`)}
+        />
+      ) : null}
 
       <dl className={styles.pulse} {...{ 'data-testid': 'playbooks-pulse' }}>
         <div>
@@ -425,7 +442,7 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
           project={project}
           onClose={() => setCreating(false)}
           onCreated={(definitionId) =>
-            navigate(canvasEnabled ? `/playbooks/definitions/${definitionId}` : `/playbooks/${definitionId}`)
+            navigate(`/playbooks/definitions/${definitionId}`)
           }
           data-testid="playbook-create-dialog"
         />

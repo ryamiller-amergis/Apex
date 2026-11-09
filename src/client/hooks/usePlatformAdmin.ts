@@ -32,6 +32,12 @@ import type {
   DevEnvAllowlistEntry,
   DevEnvAllowlistResponse,
 } from '../../shared/types/devEnvAllowlist';
+import type {
+  AddBuildAllowlistEntryRequest,
+  BuildAllowlistEntry,
+  BuildAllowlistRepositoriesResponse,
+  BuildAllowlistResponse,
+} from '../../shared/types/buildAccess';
 
 export const platformAdminQueryKeys = {
   projects: ['platform-admin', 'projects'] as const,
@@ -46,6 +52,9 @@ export const platformAdminQueryKeys = {
   userAccess: ['platform-admin', 'user-access'] as const,
   userAccessRoles: ['platform-admin', 'user-access', 'roles'] as const,
   devAccess: ['platform-admin', 'dev-access'] as const,
+  buildAllowlist: ['platform-admin', 'build-allowlist'] as const,
+  buildAllowlistRepositories: (project: string | null) =>
+    ['platform-admin', 'build-allowlist', 'repositories', project] as const,
 };
 
 export const projectAccessRequestQueryKeys = {
@@ -390,6 +399,57 @@ export function useRemoveDevEnvAllowlistEntry() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.devAccess });
+    },
+  });
+}
+
+export function useBuildAllowlist() {
+  return useQuery<BuildAllowlistEntry[]>({
+    queryKey: platformAdminQueryKeys.buildAllowlist,
+    queryFn: async () => {
+      const data = await platformAdminFetch<BuildAllowlistResponse>('/api/platform-admin/build-allowlist');
+      return data.entries;
+    },
+  });
+}
+
+export function useBuildAllowlistRepositories(project: string | null) {
+  return useQuery<string[]>({
+    queryKey: platformAdminQueryKeys.buildAllowlistRepositories(project),
+    queryFn: async () => {
+      const data = await platformAdminFetch<BuildAllowlistRepositoriesResponse>(
+        `/api/platform-admin/build-allowlist/repositories?project=${encodeURIComponent(project ?? '')}`,
+      );
+      return data.repositories;
+    },
+    enabled: Boolean(project),
+  });
+}
+
+export function useAddBuildAllowlistEntry() {
+  const queryClient = useQueryClient();
+  return useMutation<BuildAllowlistEntry, Error, AddBuildAllowlistEntryRequest>({
+    mutationFn: (input) =>
+      platformAdminFetch<BuildAllowlistEntry>('/api/platform-admin/build-allowlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.buildAllowlist });
+    },
+  });
+}
+
+export function useRemoveBuildAllowlistEntry() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { id: string }>({
+    mutationFn: ({ id }) =>
+      platformAdminFetch<void>(`/api/platform-admin/build-allowlist/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: platformAdminQueryKeys.buildAllowlist });
     },
   });
 }

@@ -24,11 +24,8 @@ import {
   DESIGN_DOC_VALIDATION_PLAYBOOK_NAME,
   buildDesignDocValidationPlaybookGraph,
 } from '../src/server/services/designDocValidationPlaybookService';
-import { isFeatureEnabled } from '../src/server/services/featureFlagService';
 import { getSkillConfig } from '../src/server/services/projectSettingsService';
 import { seedDefinition } from './seed-playbook-demos';
-
-const FLAG_KEY = 'playbooks-production-adapters';
 
 /** Any real user. The definition needs a `created_by` that satisfies the foreign key. */
 async function resolveSeedUser(explicit?: string): Promise<string> {
@@ -52,16 +49,6 @@ function argValue(flag: string): string | undefined {
 async function main(): Promise<void> {
   const project = argValue('--project') ?? 'Apex';
   const publishedByUserId = await resolveSeedUser(argValue('--user'));
-
-  // Both checks mirror the service's own preconditions, so the script fails with the same reason
-  // the runtime would rather than publishing a definition nothing can start.
-  const enabled = await isFeatureEnabled(FLAG_KEY, { userId: publishedByUserId, project });
-  if (!enabled) {
-    throw new Error(
-      `${FLAG_KEY} is disabled for project "${project}". Enable it in Platform Admin -> Feature ` +
-        'Flags first, or the published Playbook cannot be started.'
-    );
-  }
 
   const settings = await getSkillConfig(project);
   const skillPath = settings?.designDocValidationSkillPath?.trim();

@@ -1,6 +1,6 @@
 import request from 'supertest';
 import express from 'express';
-import apiRouter, { isPublicHealthPath } from '../routes/api';
+import apiRouter, { isPublicHealthPath, shouldSkipSessionMiddleware } from '../routes/api';
 import { AzureDevOpsService } from '../services/azureDevOps';
 import { getDbPoolStats } from '../db';
 import { db } from '../db/drizzle';
@@ -120,6 +120,7 @@ describe('API Routes', () => {
     mockAdoService = {
       getProjects: jest.fn(),
       getWorkItems: jest.fn(),
+      searchWorkItems: jest.fn(),
       updateDueDate: jest.fn(),
       updateWorkItemField: jest.fn(),
       calculateCycleTimeForItems: jest.fn(),
@@ -602,6 +603,22 @@ describe('API Routes', () => {
     });
   });
 
+  describe('GET /api/workitems/search', () => {
+    it('reaches the search handler instead of the get-by-ID route', async () => {
+      const results = [{ id: 59642, title: 'Rate Group Integration and Aliases' }];
+      mockAdoService.searchWorkItems.mockResolvedValue(results as any);
+
+      const response = await request(app)
+        .get('/api/workitems/search')
+        .query({ query: '59642', type: 'All', project: 'MaxView', areaPath: 'MaxView' })
+        .expect(200);
+
+      expect(response.body).toEqual(results);
+      expect(AzureDevOpsService).toHaveBeenCalledWith('MaxView', 'MaxView');
+      expect(mockAdoService.searchWorkItems).toHaveBeenCalledWith('59642', 'All');
+    });
+  });
+
   describe('PATCH /api/workitems/:id/due-date', () => {
     it('should update due date successfully', async () => {
       mockAdoService.updateDueDate.mockResolvedValue();
@@ -852,6 +869,28 @@ describe('API Routes', () => {
       expect(isPublicHealthPath('/health/dependencies/private')).toBe(false);
       expect(isPublicHealthPath('/health/agent')).toBe(false);
       expect(isPublicHealthPath('/status')).toBe(false);
+    });
+  });
+
+  describe('session-free path predicate', () => {
+    it('skips sessions for health probes and session-free callbacks', () => {
+      expect(shouldSkipSessionMiddleware('/api/health')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/health/live')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/telemetry-config')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/messages')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/internal/ai-runs/abc/events')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/internal/load-test-runs/1')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/internal/foundation-skills/x')).toBe(true);
+      expect(shouldSkipSessionMiddleware('/api/public/anything')).toBe(true);
+    });
+
+    it('keeps sessions for auth and authenticated routes', () => {
+      expect(shouldSkipSessionMiddleware('/auth/login')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/auth/me')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/projects')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/health/live/extra')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/api/backlog/mock-html')).toBe(false);
+      expect(shouldSkipSessionMiddleware('/')).toBe(false);
     });
   });
 

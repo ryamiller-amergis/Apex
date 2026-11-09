@@ -126,6 +126,28 @@ resource "azurerm_storage_management_policy" "lt_artifacts_lifecycle" {
     }
   }
 
+  # V2 run hand-off files. workflow-evaluations/ in the same container holds
+  # corrected artifacts the database points to, so it is left out.
+  rule {
+    name    = "ai-run-artifacts-90day"
+    enabled = true
+
+    filters {
+      prefix_match = [
+        "${local.ai_platform_v2_artifact_container}/runs/",
+        "${local.ai_platform_v2_artifact_container}/document-inputs/",
+        "${local.ai_platform_v2_artifact_container}/interactive/",
+      ]
+      blob_types = ["blockBlob"]
+    }
+
+    actions {
+      base_blob {
+        delete_after_days_since_modification_greater_than = 90
+      }
+    }
+  }
+
   rule {
     name    = "lt-artifacts-90day"
     enabled = true

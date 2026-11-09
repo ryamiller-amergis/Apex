@@ -1,6 +1,12 @@
 import { AzureDevOpsService } from './azureDevOps';
 import { parseAutoCheckTeams } from './adoTeamConfig';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
+import {
+  NonblockingRepoCacheLeaseUnavailableError,
+  withRepoCacheLease,
+} from './repoCacheLeaseService';
+
+const LEASE_KEY = 'uat-auto-release:sweep';
 
 /**
  * Background service that automatically updates work items from "UAT - Test Done" 
@@ -28,12 +34,33 @@ export class UatAutoReleaseService {
     console.log('[UatAutoRelease] Starting service - checking every 5 minutes');
     
     // Run immediately on start
-    this.checkAndUpdateWorkItems();
+    void this.runScheduledCheck();
     
     // Then run every 5 minutes
     this.intervalId = setInterval(() => {
-      this.checkAndUpdateWorkItems();
+      void this.runScheduledCheck();
     }, this.CHECK_INTERVAL);
+  }
+
+  /**
+   * Periodic sweep. Every App Service instance runs this timer, so a Postgres
+   * lease lets only one instance poll Azure DevOps per interval. The lease is
+   * not released on completion; it expires just before the next interval.
+   */
+  private async runScheduledCheck(): Promise<void> {
+    try {
+      await withRepoCacheLease(
+        LEASE_KEY,
+        async () => this.checkAndUpdateWorkItems(),
+        { leaseMs: this.CHECK_INTERVAL - 5000, waitMs: 0, releaseOnComplete: false },
+      );
+    } catch (error) {
+      if (error instanceof NonblockingRepoCacheLeaseUnavailableError) {
+        console.log('[UatAutoRelease] Another instance holds the sweep lease, skipping...');
+        return;
+      }
+      console.error('[UatAutoRelease] Could not run the scheduled check:', error);
+    }
   }
 
   /**

@@ -6,6 +6,7 @@ interface ConfirmDeleteModalProps {
   itemName: string;
   description?: string;
   isPending?: boolean;
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
   'data-testid'?: string;
@@ -16,6 +17,7 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
   itemName,
   description,
   isPending = false,
+  error,
   onConfirm,
   onCancel,
   'data-testid': testId,
@@ -59,6 +61,12 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
         </p>
 
         <p className={styles.warning}>This action cannot be undone.</p>
+
+        {error && (
+          <p className={styles.error} role="alert" data-testid="confirm-delete-error">
+            {error}
+          </p>
+        )}
 
         <div className={styles.actions}>
           <button

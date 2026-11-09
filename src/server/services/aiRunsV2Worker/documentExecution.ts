@@ -29,10 +29,14 @@ import {
 } from '../repoRead/repoServiceReader';
 import { checkJudgeOutput } from '../workflowEvaluationJudgeOutput';
 import type { ArtifactFile } from './artifactUploader';
+import { isTransientCursorConnectionError } from './transientCursorError';
 import type { ExecuteWorkload, ExecutionOutcome } from './worker';
 
 const OUTPUT_DIRECTORY_PARTS = ['.ai-pilot', 'output'] as const;
 const ARTIFACT_OUTPUT_PREFIX = 'output/';
+/** One retry for a dropped Cursor connection; any other failure ends the run. */
+const MAX_CURSOR_ATTEMPTS = 2;
+const CURSOR_RETRY_DETAIL = 'Retrying after the Cursor connection dropped';
 
 type CreateExecution = (
   snapshot: Readonly<ExecutionSnapshot>,
@@ -97,6 +101,7 @@ function isExpectedOutputPath(
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
+        || /\.case\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
@@ -186,8 +191,11 @@ function assertExpectedOutputSet(
       }
       return;
     case 'test-cases':
+      if (names.length === 1 && /\.case\.json$/i.test(names[0])) return;
       assertSingleMatch(names, /\.test-cases\.json$/i, 'test-case JSON');
-      assertSingleMatch(names, /\.test-cases\.md$/i, 'test-case markdown');
+      if (names.filter((name) => /\.test-cases\.md$/i.test(name)).length > 1) {
+        throw new Error('Document workflow produced more than one test-case markdown');
+      }
       assertSingleMatch(names, /\.backlog\.json$/i, 'patched backlog JSON');
       return;
     case 'walkthrough-smart-tagging':
@@ -269,6 +277,20 @@ async function listDocumentOutputPaths(
 }
 
 /**
+ * A case rewrite writes one `.case.json` next to its PRD and backlog inputs,
+ * which share the output folder, so only the case is returned.
+ */
+function caseRewriteOutputs(
+  workflowClass: BackgroundWorkflowClass,
+  names: string[],
+): string[] {
+  if (workflowClass !== 'test-cases') return names;
+  const cases = names.filter((name) => /\.case\.json$/i.test(name));
+  const fullSets = names.filter((name) => /\.test-cases\.json$/i.test(name));
+  return cases.length === 1 && fullSets.length === 0 ? cases : names;
+}
+
+/**
  * Read only the named output contract. Inputs, repository data, `.git`, and
  * every unrelated workspace file remain local and are deleted with the attempt.
  */
@@ -277,9 +299,9 @@ export async function collectDocumentArtifacts(
   workflowClass: BackgroundWorkflowClass,
 ): Promise<ArtifactFile[]> {
   const outputDirectory = path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS);
-  const outputPaths = await listDocumentOutputPaths(
-    outputDirectory,
+  const outputPaths = caseRewriteOutputs(
     workflowClass,
+    await listDocumentOutputPaths(outputDirectory, workflowClass),
   );
   assertExpectedOutputSet(workflowClass, outputPaths);
 
@@ -347,31 +369,69 @@ async function prepareDocumentWorkspace(
       flag: 'wx',
       mode: 0o600,
     });
-    if (signal.aborted) throw abortError();
-    for (const input of specification.scratchInputs) {
-      if (signal.aborted) throw abortError();
-      const target = path.resolve(workspacePath, ...input.path.split('/'));
-      const relative = path.relative(workspacePath, target);
-      if (
-        relative === '..'
-        || relative.startsWith(`..${path.sep}`)
-        || path.isAbsolute(relative)
-      ) {
-        throw new Error(`Scratch input escaped the attempt workspace: ${input.path}`);
-      }
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, input.content, {
-        encoding: 'utf8',
-        flag: 'wx',
-        mode: 0o600,
-      });
+    for (const companion of specification.skillCompanions ?? []) {
+      await fs.writeFile(
+        path.join(path.dirname(frozenSkillPath), companion.path),
+        companion.content,
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+      );
     }
+    if (signal.aborted) throw abortError();
+    await writeScratchInputs(specification, workspacePath, signal);
     if (signal.aborted) throw abortError();
     return workspacePath;
   } catch (error) {
     await fs.rm(workspacePath, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function writeScratchInputs(
+  specification: AiRunV2DocumentSpecification,
+  workspacePath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  for (const input of specification.scratchInputs) {
+    if (signal.aborted) throw abortError();
+    const target = path.resolve(workspacePath, ...input.path.split('/'));
+    const relative = path.relative(workspacePath, target);
+    if (
+      relative === '..'
+      || relative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relative)
+    ) {
+      throw new Error(`Scratch input escaped the attempt workspace: ${input.path}`);
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, input.content, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  }
+}
+
+/**
+ * Return the workspace to its pre-run state before a retry. Some workflows
+ * place scratch inputs under the output directory (test cases read and patch
+ * the PRD and backlog there), so the inputs are rewritten from the
+ * specification, not just the output cleared.
+ */
+async function resetDocumentWorkspace(
+  specification: AiRunV2DocumentSpecification,
+  workspacePath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const outputDirectory = path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS);
+  await fs.rm(outputDirectory, { recursive: true, force: true });
+  for (const input of specification.scratchInputs) {
+    await fs.rm(path.resolve(workspacePath, ...input.path.split('/')), {
+      recursive: true,
+      force: true,
+    });
+  }
+  await fs.mkdir(outputDirectory, { recursive: true });
+  await writeScratchInputs(specification, workspacePath, signal);
 }
 
 async function openDocumentRepository(
@@ -415,6 +475,12 @@ function executionSnapshot(
     specification.skillContent,
     '',
     'The skill above is the immutable version selected for this run. Follow it exactly and do not load another version.',
+    ...(specification.skillCompanions ?? []).flatMap((companion) => [
+      '',
+      `# Companion file: ${companion.path}`,
+      'This file is also written next to the frozen SKILL.md.',
+      companion.content,
+    ]),
   ].join('\n');
   return {
     prompt,
@@ -432,8 +498,13 @@ function executionSnapshot(
     ...(specification.provider ? { provider: specification.provider } : {}),
     workflowClass: specification.workflowClass,
     skillPath: specification.skillPath,
+    skillContent: specification.skillContent,
+    skillSha256: specification.skillSha256,
     projectId: specification.projectId,
     threadId: specification.threadId,
+    ...(specification.playbookAgentPolicy
+      ? { playbookAgentPolicy: specification.playbookAgentPolicy }
+      : {}),
   };
 }
 
@@ -535,6 +606,12 @@ export function createDocumentExecute(
     if (actualSkillSha !== unknownSpecification.skillSha256.toLowerCase()) {
       throw new Error('Command referenced document skill content with a mismatched hash');
     }
+    if (
+      unknownSpecification.playbookAgentPolicy
+      && actualSkillSha !== unknownSpecification.playbookAgentPolicy.skill.sha256.toLowerCase()
+    ) {
+      throw new Error('Command referenced a Playbook policy for different skill content');
+    }
     if (command.workloadLane !== 'document') {
       throw new Error('Document worker received a non-document command');
     }
@@ -565,55 +642,76 @@ export function createDocumentExecute(
         checkpoints.publishProgress('workspace', 'ready'),
         signal,
       );
-      execution = await raceOperation(
-        createExecution(snapshot, repository, signal),
-        signal,
-      );
-      await raceOperation(
-        checkpoints.publishProgress('execution', 'running'),
-        signal,
-      );
-
       let sequence = 0;
-      const result = await executeWithAbort(
-        execution,
-        () =>
-          executeCursorExecutionCore({
-            snapshot,
-            run: execution!.run,
-            context: {
-              runId: command.runId,
-              sourceInstance: 'ai-runs-v2-document-worker',
-            },
-            sink: {
-              publish: (event, envelope) => {
-                if (
-                  event.type !== 'phase'
-                  && event.type !== 'tool_call'
-                  && event.type !== 'tool_status'
-                  && event.type !== 'error'
-                ) {
-                  return;
-                }
-                return checkpoints.publishProgress(
-                  envelope.phase,
-                  envelope.status,
-                  envelope.detail,
-                );
+      const runCursor = (active: WorkerCursorExecution) =>
+        executeWithAbort(
+          active,
+          () =>
+            executeCursorExecutionCore({
+              snapshot,
+              run: active.run,
+              context: {
+                runId: command.runId,
+                sourceInstance: 'ai-runs-v2-document-worker',
               },
-            },
-            hooks: {
-              beforeStreamEvent: () => {
-                if (signal.aborted) throw abortError();
+              sink: {
+                publish: (_event, envelope) => checkpoints.publishActivity?.(envelope)
+                  ?? checkpoints.publishProgress(
+                    envelope.phase,
+                    envelope.status,
+                    envelope.detail,
+                  ),
               },
-            },
-            nextSequence: () => ++sequence,
-          }),
-        signal,
-      );
-      if (!isSuccessfulWait(result)) {
+              hooks: {
+                beforeStreamEvent: () => {
+                  if (signal.aborted) throw abortError();
+                },
+              },
+              nextSequence: () => ++sequence,
+            }),
+          signal,
+        );
+
+      let result: CursorExecutionResult;
+      for (let attempt = 1; ; attempt += 1) {
+        if (attempt > 1) {
+          console.warn(
+            `[aiRunsV2Worker/document] Cursor connection dropped on attempt ${attempt - 1}/${MAX_CURSOR_ATTEMPTS} (runId=${command.runId}); retrying`,
+          );
+          await execution?.dispose().catch(() => undefined);
+          execution = undefined;
+          await resetDocumentWorkspace(specification, workspacePath, signal);
+        }
+        execution = await raceOperation(
+          createExecution(snapshot, repository, signal),
+          signal,
+        );
+        await raceOperation(
+          attempt === 1
+            ? checkpoints.publishProgress('execution', 'running')
+            : checkpoints.publishProgress('execution', 'running', CURSOR_RETRY_DETAIL),
+          signal,
+        );
+
+        const canRetry = (failure: unknown): boolean =>
+          attempt < MAX_CURSOR_ATTEMPTS
+          && !signal.aborted
+          && isTransientCursorConnectionError(failure);
+
+        let attemptResult: CursorExecutionResult;
+        try {
+          attemptResult = await runCursor(execution);
+        } catch (error) {
+          if (canRetry(error)) continue;
+          throw error;
+        }
+        if (isSuccessfulWait(attemptResult)) {
+          result = attemptResult;
+          break;
+        }
+        if (canRetry(attemptResult.waitResult.error)) continue;
         throw new Error(
-          `Cursor document execution did not finish successfully: ${describeWaitFailure(result)}`,
+          `Cursor document execution did not finish successfully: ${describeWaitFailure(attemptResult)}`,
         );
       }
 
@@ -630,6 +728,14 @@ export function createDocumentExecute(
       );
       if (specification.workflowClass === 'evaluation-judge') {
         assertJudgeResultMatchesSchema(files, specification.outputSchema);
+      }
+      const reply = result.text.trim();
+      if (reply) {
+        files.push({
+          path: `${ARTIFACT_OUTPUT_PREFIX}agent-reply.md`,
+          content: Buffer.from(reply, 'utf8'),
+          contentType: 'text/markdown; charset=utf-8',
+        });
       }
       return {
         files,

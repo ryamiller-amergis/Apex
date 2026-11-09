@@ -93,7 +93,24 @@ describe('friendlyToolActivityLabel', () => {
       friendlyToolActivityLabel('mcp', { toolName: 'search_repo_code', keys: ['query'] }),
     ).toBe('Searching the codebase');
     expect(friendlyToolActivityLabel('mcp', { toolName: 'create_work_item' })).toBe(
-      'Using a connected tool',
+      'Create work item',
+    );
+    expect(friendlyToolActivityLabel('mcp:list_applications')).toBe('Listing applications');
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'listAllApplications' })).toBe(
+      'Listing applications',
+    );
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'aggregateEntityUsage' })).toBe(
+      'Aggregating entity usage',
+    );
+    expect(friendlyToolActivityLabel('mcp', { toolName: 'entityUsage' })).toBe(
+      'Querying entity usage',
+    );
+    expect(friendlyToolActivityLabel('mcp:whoami')).toBe('Checking account');
+    expect(friendlyChatProgressLabel('mcp:list_applications completed')).toBe(
+      'Listing applications',
+    );
+    expect(friendlyChatProgressLabel('mcp:listAllApplications running')).toBe(
+      'Listing applications',
     );
   });
 
@@ -133,9 +150,18 @@ describe('friendlyChatErrorMessage', () => {
     ).toBe('Something went wrong while answering. Please retry.');
   });
 
-  it('passes readable messages through', () => {
-    expect(friendlyChatErrorMessage('Interactive agent did not start. Please retry.')).toBe(
+  it('shows one plain message when a lost turn could not be restarted', () => {
+    for (const raw of [
       'Interactive agent did not start. Please retry.',
+      'Interactive agent stopped responding. Please retry.',
+    ]) {
+      expect(friendlyChatErrorMessage(raw)).toBe("This answer didn't finish. Please try again.");
+    }
+  });
+
+  it('passes readable messages through', () => {
+    expect(friendlyChatErrorMessage('The selected repository is not available.')).toBe(
+      'The selected repository is not available.',
     );
     expect(friendlyChatErrorMessage('')).toBe('Something went wrong. Please retry.');
   });

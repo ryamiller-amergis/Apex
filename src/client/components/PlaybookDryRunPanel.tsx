@@ -21,6 +21,7 @@ const ISSUE_KIND_LABELS: Record<string, string> = {
   graph: 'Structure',
   stub: 'Stub output',
   branch: 'Branch',
+  capability: 'Capability',
 };
 
 export const PlaybookDryRunPanel: React.FC<PlaybookDryRunPanelProps> = ({
@@ -132,6 +133,29 @@ export const PlaybookDryRunPanel: React.FC<PlaybookDryRunPanelProps> = ({
             <p className={styles.inlineError}>
               You are missing: {result.authorFootnote.missing.join(', ')}
             </p>
+          ) : null}
+          {result.capabilityManifest?.length ? (
+            <details className={styles.disclosure}>
+              <summary>Agent capabilities</summary>
+              <ul className={styles.issueList}>
+                {result.capabilityManifest.map((entry) => (
+                  <li key={entry.nodeId} className={styles.issue}>
+                    <button
+                      type="button"
+                      className={styles.issueNode}
+                      onClick={() => onSelectNode(entry.nodeId)}
+                      data-testid={`playbook-dry-run-capability-${entry.nodeId}`}
+                    >
+                      {entry.nodeId}
+                    </button>
+                    <span className={styles.issueMessage}>
+                      {entry.executionProfile}: {entry.capabilities.join(', ')}
+                      {' · '}Skill {entry.skillSha256.slice(0, 12)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
           ) : null}
         </div>
       ) : null}

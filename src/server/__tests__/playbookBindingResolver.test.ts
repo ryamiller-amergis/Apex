@@ -1,5 +1,6 @@
 import {
   PlaybookBindingError,
+  collectStepBindingReferences,
   configHasBindings,
   resolvePlaybookBindings,
 } from '../services/playbookBindingResolver';
@@ -30,6 +31,15 @@ describe('FEAT-014 Playbook binding resolver', () => {
       scorecard: { is_ready: true },
       link: '/backlog/design-doc/doc-1',
     });
+  });
+
+  it('says which step field was missing instead of substituting undefined', () => {
+    expect(() => resolvePlaybookBindings('${steps.score.reportMd}', context)).toThrow(
+      /did not produce reportMd/,
+    );
+    expect(() => resolvePlaybookBindings('${steps.missing.title}', context)).toThrow(
+      /has no output/,
+    );
   });
 
   it('refuses nested traversal and unknown namespaces', () => {
@@ -67,5 +77,23 @@ describe('FEAT-014 Playbook binding resolver', () => {
       input: { documentId: 'WRONG' },
       steps: { score: { reportMd: 'Keep ${input.documentId} from the agent' } },
     })).toEqual({ reportMd: 'Keep WRONG from the agent' });
+  });
+
+  it('collects only explicit cross-step bindings from nested config', () => {
+    expect(collectStepBindingReferences({
+      prompt: 'Use ${steps.draft.reportMd} and ${input.documentId}',
+      nested: [{ score: '${steps.review.scorecard}' }, '${HOME}'],
+    })).toEqual([
+      {
+        placeholder: '${steps.draft.reportMd}',
+        stepId: 'draft',
+        field: 'reportMd',
+      },
+      {
+        placeholder: '${steps.review.scorecard}',
+        stepId: 'review',
+        field: 'scorecard',
+      },
+    ]);
   });
 });

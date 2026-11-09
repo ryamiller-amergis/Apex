@@ -1,10 +1,20 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
+
+const PRD_ASSISTANT_SUGGESTIONS = [
+  'Summarize the open review comments',
+  "What's missing before this PRD is ready for review?",
+  'Tighten the acceptance criteria for the weakest PBI',
+  'Add a test case for a PBI',
+] as const;
+
+interface AssistantThreadResponse {
+  threadId: string;
+  created?: boolean;
+}
 
 export interface PrdAssistantPanelProps {
   prdId: string;
@@ -24,6 +34,9 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   existingThreadId,
 }) => {
   const [threadId, setThreadId] = useState<string | null>(existingThreadId ?? null);
+  // Only a thread this panel just created is known to be empty; an existing
+  // thread's history arrives over SSE after the panel renders.
+  const [createdThreadId, setCreatedThreadId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -31,14 +44,22 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const skipAutoCreateRef = useRef(false);
 
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId);
-  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
+  const {
+    messages,
+    streamingText,
+    isRunning,
+    isSending,
+    showTypingIndicator,
+    progressLabel,
+    progressPhase,
+    toolProgress,
+  } = session;
   const wasRunningRef = useRef(false);
 
   // When the assistant finishes a run, invalidate the PRD, generated test
@@ -75,9 +96,12 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
           try { const body = await r.json() as { error?: string }; if (body.error) msg = body.error; } catch { /* non-JSON body */ }
           throw new Error(msg);
         }
-        return r.json() as Promise<{ threadId: string }>;
+        return r.json() as Promise<AssistantThreadResponse>;
       })
-      .then((data) => setThreadId(data.threadId))
+      .then((data) => {
+        setThreadId(data.threadId);
+        if (data.created) setCreatedThreadId(data.threadId);
+      })
       .catch((err: unknown) => setCreateError(err instanceof Error ? err.message : 'Failed to start assistant. Please try again.'))
       .finally(() => setIsCreating(false));
   }, [open, prdId, threadId]);
@@ -109,10 +133,10 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     };
   }, [isDragging]);
 
-  // Auto-scroll to the latest message.
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, streamingText]);
+  const fillComposer = useCallback((prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -173,8 +197,9 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
                       try { const body = await r.json() as { error?: string }; if (body.error) msg = body.error; } catch { /* non-JSON */ }
                       throw new Error(msg);
                     }
-                    const data = await r.json() as { threadId: string };
+                    const data = await r.json() as AssistantThreadResponse;
                     setThreadId(data.threadId);
+                    if (data.created) setCreatedThreadId(data.threadId);
                   } catch (err) {
                     setCreateError(err instanceof Error ? err.message : 'Failed to start new conversation. Please try again.');
                   } finally {
@@ -235,53 +260,23 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
             />
           )}
         >
-          <div className={styles.messages}>
-          <div className={styles.messageList}>
-            {isCreating && (
-              <div className={styles.initializing}>
-                <div className={styles.typingIndicator}>
-                  <span className={styles.typingDot} />
-                  <span className={styles.typingDot} />
-                  <span className={styles.typingDot} />
-                </div>
-                <span>Starting assistant…</span>
-              </div>
-            )}
-            {createError && (
-              <div className={styles.messageBubbleSystem}>{createError}</div>
-            )}
-            {visibleMessages.map((msg) => {
-              if (msg.role === 'system') {
-                return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
-              }
-              if (msg.role === 'user') {
-                return (
-                  <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>
-                    {msg.text}
-                  </div>
-                );
-              }
-              return (
-                <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                </div>
-              );
-            })}
-            {showTypingIndicator && (
-              <div className={styles.typingIndicator}>
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-              </div>
-            )}
-            {streamingText && (
-              <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-          </div>
+          <AssistantConversation
+            messages={visibleMessages}
+            streamingText={streamingText}
+            isWorking={showTypingIndicator}
+            isStarting={isCreating}
+            startError={createError}
+            progressLabel={progressLabel}
+            progressPhase={progressPhase}
+            toolProgress={toolProgress}
+            welcome={threadId && threadId === createdThreadId ? {
+              title: 'Ask about this PRD',
+              description: 'Apex can answer questions, edit the PRD or backlog, add test cases, and resolve review comments. Edits come back as a proposed change for the owner to accept.',
+              suggestions: PRD_ASSISTANT_SUGGESTIONS,
+              onSuggestion: fillComposer,
+            } : undefined}
+            testIdPrefix="prd-assistant"
+          />
         </AgentPanelShell>
       </div>
     </>

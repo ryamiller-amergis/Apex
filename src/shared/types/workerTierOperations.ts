@@ -40,6 +40,7 @@ export const WORKER_TIER_TELEMETRY_EVENT_NAMES = {
   interactiveActorHealth: 'interactive.actor.health',
   interactiveReplay: 'interactive.replay',
   interactiveStage: 'interactive.stage',
+  interactiveHeartbeats: 'interactive.heartbeats',
 } as const;
 
 export type WorkerTierTelemetryEventName =
@@ -135,4 +136,11 @@ export interface InteractiveActorHealthMeasurements
 
 export interface InteractiveReplayMeasurements extends Record<string, number> {
   replayedEvents: number;
+}
+
+/** Per durable turn: the longest wait between accepted heartbeats. */
+export interface InteractiveHeartbeatMeasurements extends Record<string, number> {
+  maxGapMs: number;
+  sent: number;
+  failed: number;
 }

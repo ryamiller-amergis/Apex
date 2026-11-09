@@ -1,19 +1,8 @@
 -- Up Migration
-
-INSERT INTO app_settings (key, value, updated_by, updated_at)
-VALUES ('current_changelog_version', '1.40.0', 'system-migration', NOW())
-ON CONFLICT (key) DO UPDATE
-SET
-  value = EXCLUDED.value,
-  updated_by = EXCLUDED.updated_by,
-  updated_at = EXCLUDED.updated_at;
+-- Intentionally empty. Main ships its own 1.40.0 sync, and this file runs out of
+-- order on databases that are already past it, so writing a version here would
+-- move current_changelog_version backwards.
+SELECT 1;
 
 -- Down Migration
-
-UPDATE app_settings
-SET
-  value = '1.39.1',
-  updated_by = 'system-migration',
-  updated_at = NOW()
-WHERE key = 'current_changelog_version'
-  AND value = '1.40.0';
+SELECT 1;

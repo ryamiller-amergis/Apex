@@ -3,6 +3,7 @@ import type {
   ModuleApprovalModes,
   ReviewerDocumentType,
 } from './approvals';
+import type { BuildProfile } from './build';
 import type { EffortLevel } from './effort';
 import type { GroupWithMembers } from './groups';
 
@@ -181,6 +182,13 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   /** ADO: repo or project/repo. GitHub: organization/repo (required). */
   skillRepo: string;
   skillBranch: string;
+  /**
+   * Cloud Agent creates its branch from this and opens the pull request into it.
+   * Null uses skillBranch.
+   */
+  cloudAgentTargetBranch?: string | null;
+  /** Azure DevOps team or group names added as required reviewers on Cloud Agent pull requests. */
+  cloudAgentRequiredReviewers?: string[] | null;
   updatedBy?: string | null;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
@@ -246,6 +254,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
    * catalog migration.
    */
   prototypeDesignSystemPath?: string | null;
+  /** Saved through `PUT /api/admin/project-settings/:id/build-profile` only. */
+  buildProfile?: BuildProfile | null;
+  buildProfileUpdatedAt?: string | null;
+  buildProfileUpdatedBy?: string | null;
   /**
    * Optional path within the project's repo to a screen-inventory markdown file used in
    * EXTEND mode. When null, EXTEND falls back gracefully.
@@ -303,6 +315,8 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   /** ADO: repo or project/repo. GitHub: organization/repo (required). */
   skillRepo: string;
   skillBranch: string;
+  cloudAgentTargetBranch?: string | null;
+  cloudAgentRequiredReviewers?: string[] | null;
   interviewSkillPath?: string | null;
   prdSkillPath?: string | null;
   adrInterviewSkillPath?: string | null;

@@ -38,6 +38,7 @@ interface PlaybookDraftEditorProps {
   detail: PlaybookDefinitionDetail;
   canAuthor: boolean;
   reload: () => Promise<unknown>;
+  advancedGraph?: boolean;
 }
 
 function valuesFromDetail(detail: PlaybookDefinitionDetail): DraftFormValues {
@@ -53,6 +54,7 @@ export const PlaybookDraftEditor: React.FC<PlaybookDraftEditorProps> = ({
   detail,
   canAuthor,
   reload,
+  advancedGraph = false,
 }) => {
   const save = useSavePlaybookDraft(project, detail.definition.id);
   const publish = usePublishPlaybookDraft(project, detail.definition.id);
@@ -158,20 +160,39 @@ export const PlaybookDraftEditor: React.FC<PlaybookDraftEditorProps> = ({
         />
       </label>
 
-      <label className={styles.label} htmlFor="playbook-draft-graph">
-        Draft graph JSON
-      </label>
-      <textarea
-        id="playbook-draft-graph"
-        className={styles.editor}
-        readOnly={!canAuthor}
-        aria-describedby={graphErrorId}
-        {...register('graphJson')}
-        {...{ 'data-testid': 'playbook-draft-editor' }}
-      />
-      <p id={graphErrorId} className={styles.error}>
-        {errors.graphJson?.message}
-      </p>
+      {advancedGraph ? (
+        <details>
+          <summary>Advanced graph JSON</summary>
+          <p>Use the builder for normal authoring. This is an escape hatch for draft repair.</p>
+          <label className={styles.label} htmlFor="playbook-draft-graph">
+            Draft graph JSON
+          </label>
+          <textarea
+            id="playbook-draft-graph"
+            className={styles.editor}
+            readOnly={!canAuthor}
+            aria-describedby={graphErrorId}
+            {...register('graphJson')}
+            {...{ 'data-testid': 'playbook-draft-editor' }}
+          />
+          <p id={graphErrorId} className={styles.error}>{errors.graphJson?.message}</p>
+        </details>
+      ) : (
+        <>
+          <label className={styles.label} htmlFor="playbook-draft-graph">
+            Draft graph JSON
+          </label>
+          <textarea
+            id="playbook-draft-graph"
+            className={styles.editor}
+            readOnly={!canAuthor}
+            aria-describedby={graphErrorId}
+            {...register('graphJson')}
+            {...{ 'data-testid': 'playbook-draft-editor' }}
+          />
+          <p id={graphErrorId} className={styles.error}>{errors.graphJson?.message}</p>
+        </>
+      )}
 
       {conflict ? (
         <div

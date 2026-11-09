@@ -3,10 +3,19 @@ import { requirePermission } from '../middleware/rbac';
 import * as rbacService from '../services/rbacService';
 import * as projectSettingsService from '../services/projectSettingsService';
 import {
+  listCloudAgentDelivery,
+  saveCloudAgentDelivery,
+} from '../services/cloudAgentDeliverySettings';
+import {
   normalizeConfiguredRepository,
   validateConfiguredRepository,
 } from '../services/foundationSkillAuthorizeService';
 import * as groupService from '../services/groupService';
+import * as buildProfileService from '../services/buildProfileService';
+import { isBuildFromPromptEnabled } from '../services/buildAccessService';
+import { isSuperAdminRequest } from '../utils/superAdmin';
+import { parseBuildProfile } from '../../shared/buildProfileSchema';
+import { BUILD_FROM_PROMPT_DISABLED_ERROR } from '../../shared/types/buildPreflight';
 import { getDefaultModel, getAppSetting, setAppSetting } from '../services/appSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { listAvailableBedrockModels } from '../services/bedrockService';
@@ -361,21 +370,25 @@ router.put('/groups/:id/members', async (req: Request, res: Response): Promise<v
 
 router.get('/project-settings', async (_req: Request, res: Response): Promise<void> => {
   try {
-    const [configs, approversBySettingsId, approverGroupsBySettingsId] = await Promise.all([
+    const [configs, approversBySettingsId, approverGroupsBySettingsId, cloudAgentDelivery] = await Promise.all([
       projectSettingsService.listSkillConfigs(),
       projectSettingsService.listApproversForAllProjects(),
       projectSettingsService.listApproverGroupsForAllProjects(),
+      listCloudAgentDelivery(),
     ]);
     const enriched = await Promise.all(configs.map(async (cfg) => {
       const approvers = approversBySettingsId[cfg.id] ?? [];
       const approverGroups = approverGroupsBySettingsId[cfg.id] ?? [];
       const approvalModes = await projectSettingsService.getApprovalModes(cfg.id);
+      const delivery = cloudAgentDelivery.get(cfg.id);
       const countByType = (documentType: string) =>
         approvers.filter((a) => a.documentType === documentType).length +
         approverGroups.filter((g) => g.documentType === documentType).length;
       return {
         ...cfg,
         approvalModes,
+        cloudAgentTargetBranch: delivery?.targetBranch ?? null,
+        cloudAgentRequiredReviewers: delivery?.requiredReviewers ?? [],
         designDocApproverCount: countByType('design_doc'),
         prdApproverCount: countByType('prd'),
         designPrototypeApproverCount: countByType('design_prototype'),
@@ -421,8 +434,21 @@ router.post('/project-settings', async (req: Request, res: Response): Promise<vo
       skillRepo,
       updatedBy,
     });
+    const delivery = body.cloudAgentTargetBranch !== undefined || body.cloudAgentRequiredReviewers !== undefined
+      ? await saveCloudAgentDelivery(config.id, {
+        targetBranch: body.cloudAgentTargetBranch,
+        requiredReviewers: body.cloudAgentRequiredReviewers,
+      })
+      : null;
     const approvalModes = await projectSettingsService.getApprovalModes(config.id);
-    res.status(201).json({ ...config, approvalModes });
+    res.status(201).json({
+      ...config,
+      approvalModes,
+      ...(delivery ? {
+        cloudAgentTargetBranch: delivery.targetBranch,
+        cloudAgentRequiredReviewers: delivery.requiredReviewers,
+      } : {}),
+    });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -465,8 +491,21 @@ router.put('/project-settings/:id', async (req: Request, res: Response): Promise
       skillRepo,
       updatedBy,
     });
+    const delivery = body.cloudAgentTargetBranch !== undefined || body.cloudAgentRequiredReviewers !== undefined
+      ? await saveCloudAgentDelivery(id, {
+        targetBranch: body.cloudAgentTargetBranch,
+        requiredReviewers: body.cloudAgentRequiredReviewers,
+      })
+      : null;
     const approvalModes = await projectSettingsService.getApprovalModes(id);
-    res.json({ ...config, approvalModes });
+    res.json({
+      ...config,
+      approvalModes,
+      ...(delivery ? {
+        cloudAgentTargetBranch: delivery.targetBranch,
+        cloudAgentRequiredReviewers: delivery.requiredReviewers,
+      } : {}),
+    });
   } catch (err) {
     const cause = (err as any)?.cause;
     console.error('[admin] PUT /project-settings error:', (err as Error).message, '| cause:', cause?.message ?? cause ?? '(none)');
@@ -572,6 +611,87 @@ router.put('/project-settings/:id/approvers', async (req: Request, res: Response
       ...(hasAdrUpdate ? { adr } : {}),
     });
   } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Build Profile ────────────────────────────────────────────────────────────
+
+/**
+ * The router-level permission check resolves the project from the request, not
+ * from the row named by :id, so re-check admin:roles against the row's project.
+ */
+async function canAdministerRowProject(req: Request, project: string): Promise<boolean> {
+  if (isSuperAdminRequest(req)) return true;
+  const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid;
+  if (!oid) return false;
+  const permissions = await rbacService.getUserPermissions(oid, project);
+  return permissions.has('admin:roles');
+}
+
+router.get('/project-settings/:id/build-profile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await projectSettingsService.getSkillConfigById(req.params.id);
+    if (!row) {
+      res.status(404).json({ error: 'Repository configuration not found' });
+      return;
+    }
+    if (!(await canAdministerRowProject(req, row.project))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const profile = await buildProfileService.getBuildProfile(row.id);
+    res.json(profile);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/project-settings/:id/build-profile', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await projectSettingsService.getSkillConfigById(req.params.id);
+    if (!row) {
+      res.status(404).json({ error: 'Repository configuration not found' });
+      return;
+    }
+    if (!(await canAdministerRowProject(req, row.project))) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const oid = (req.user as { profile?: { oid?: string } } | undefined)?.profile?.oid ?? null;
+    // @feature-flag:build-from-prompt start winner=enabled
+    if (!(await isBuildFromPromptEnabled({ userId: oid ?? '', project: row.project }))) {
+      // @feature-flag:build-from-prompt disabled-start
+      res.status(403).json({
+        error: BUILD_FROM_PROMPT_DISABLED_ERROR,
+        message: 'Build from prompt is turned off for this project. A Platform Admin can turn it on.',
+      });
+      return;
+      // @feature-flag:build-from-prompt disabled-end
+    }
+    // @feature-flag:build-from-prompt enabled-start
+    // @feature-flag:build-from-prompt enabled-end
+    // @feature-flag:build-from-prompt end
+    const parsed = parseBuildProfile(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: 'validation_failed', fieldErrors: parsed.fieldErrors });
+      return;
+    }
+    const saved = await buildProfileService.saveBuildProfile({
+      settingsId: row.id,
+      profile: parsed.profile,
+      actorOid: oid,
+    });
+    res.json(saved);
+  } catch (err) {
+    if (err instanceof buildProfileService.BuildProfileError) {
+      if (err.kind === 'not_found') {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      res.status(400).json({ error: 'validation_failed', fieldErrors: err.fieldErrors });
+      return;
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });

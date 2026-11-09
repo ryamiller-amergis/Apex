@@ -1,7 +1,7 @@
 [
   {
-    "version": "1.40.0",
-    "date": "2026-10-20",
+    "version": "1.42.0",
+    "date": "2026-11-09",
     "title": "Skill Health",
     "changes": [
       {
@@ -19,6 +19,71 @@
       {
         "type": "feature",
         "description": "In projects with human workflow evaluation turned on, Skill Health shows reviewer feedback by stage, recent regenerate and reject decisions, and the judge's suggested fixes, each of which you can file as a work item"
+      }
+    ]
+  },
+  {
+    "version": "1.41.0",
+    "date": "2026-11-07",
+    "title": "Quick Links",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Open your project's go-to sites from the new Quick Links icon in the header; Project links are shared with everyone in the project"
+      },
+      {
+        "type": "feature",
+        "description": "Keep your own My links, visible only to you, and add them one at a time or import your browser bookmarks"
+      },
+      {
+        "type": "feature",
+        "description": "Drag My links categories and links into any order, or drop a link onto another category to move it there; keyboard users can press Alt+↑ or Alt+↓"
+      },
+      {
+        "type": "feature",
+        "description": "Search your links, collapse categories, and see each category in its own color"
+      },
+      {
+        "type": "feature",
+        "description": "Project admins manage shared links, including bulk import, in Project Settings → Quick Links"
+      }
+    ]
+  },
+  {
+    "version": "1.40.0",
+    "date": "2026-10-29",
+    "title": "Brainstorm Sessions",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Start a Brainstorm session from Agent Home and explore an idea in open chat with a collaborator that adapts to your role and goal"
+      },
+      {
+        "type": "feature",
+        "description": "Browse every Brainstorm session in your project at /brainstorm and read a teammate's session; only its creator can reply"
+      },
+      {
+        "type": "feature",
+        "description": "A collaborator reply that fails is marked with a short reason, and the session's creator can retry it"
+      }
+    ]
+  },
+  {
+    "version": "1.39.2",
+    "date": "2026-10-26",
+    "title": "Repository Cache Disk Usage",
+    "changes": [
+      {
+        "type": "bugfix",
+        "description": "Repairing a cached repository no longer leaves a full duplicate copy on disk each time, which had filled App Service storage and taken production offline"
+      },
+      {
+        "type": "bugfix",
+        "description": "Background maintenance now shrinks cached repositories that have grown far past their real size, including ones in active use"
+      },
+      {
+        "type": "improvement",
+        "description": "The staging slot only cleans up its repository cache and no longer clones production's repositories onto its own disk"
       }
     ]
   },

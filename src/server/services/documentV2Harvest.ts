@@ -40,6 +40,8 @@ import {
 
 const HARVEST_BATCH_SIZE = 100;
 const MAX_HARVEST_FAILURES = 3;
+/** The worker attaches the agent's chat reply to every attempt; no document workflow reads it. */
+const AGENT_REPLY_ARTIFACT_PATH = 'output/agent-reply.md';
 
 export type DocumentWorkspaceApplyInput = Readonly<{
   attempt: FinishedV2DocumentAttempt;
@@ -117,6 +119,7 @@ function isExpectedArtifactPath(
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
+        || /\.case\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
@@ -192,6 +195,7 @@ async function materializeManifest(
 ): Promise<void> {
   assertManifestIdentity(attempt, manifest);
   for (const entry of manifest.files) {
+    if (entry.path === AGENT_REPLY_ARTIFACT_PATH) continue;
     if (!isExpectedArtifactPath(attempt.workflowClass, entry.path)) {
       throw new ArtifactVerificationError(
         `Artifact manifest contains unexpected document output ${entry.path}`,
@@ -399,6 +403,9 @@ export async function harvestFinishedV2Documents(
             detail,
           );
       if (failureCount >= MAX_HARVEST_FAILURES) {
+        console.error(
+          `[documentV2Harvest] Giving up on run ${attempt.runId} (${attempt.workflowClass}): ${detail}`,
+        );
         try {
           await failWorkflow(
             attempt,

@@ -124,6 +124,13 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
           cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
+          # Agent task Skills. The picker reads foundation-skills/foundation from the server.
+          cp -r foundation-skills/foundation deploy/foundation-skills/foundation
+          cp -r foundation-skills/foundation deploy/dist/foundation-skills/foundation
+          # Brainstorm falls back to this bundled skill when the Project Settings
+          # repository has no copy of it.
+          mkdir -p deploy/.cursor/skills
+          cp -r .cursor/skills/brainstorm deploy/.cursor/skills/brainstorm
           cd deploy
           # Native production dependencies (including sqlite3) require lifecycle
           # scripts to install their Linux bindings. prepare tolerates omitted Husky.
@@ -289,7 +296,8 @@ jobs:
               AZURE_ARTIFACTS_PAT="${{ secrets.AZURE_ARTIFACTS_PAT }}" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               WEBSITE_SWAP_WARMUP_PING_PATH="/api/health/db" \
-              WEBSITE_SWAP_WARMUP_PING_STATUSES="200"
+              WEBSITE_SWAP_WARMUP_PING_STATUSES="200" \
+              WEBSITE_HEALTHCHECK_MAXPINGFAILURES="2"
 
           # Mark sticky slot settings (these stay with their slot during swap)
           # LT_APEX_CALLBACK_BASE_URL must be sticky so staging dispatches callback
@@ -298,6 +306,14 @@ jobs:
           # sticky so a swap cannot move it onto production.
           # ALLOW_TEST_ACCOUNT_SIGN_IN lets the MFA-exempt test accounts sign in on
           # staging only; production holds a sticky "false".
+          # GROUNDING_MAINTENANCE_MODE: staging shares production's database, so it
+          # only evicts and compacts its own disk; it never clones production's repos.
+          # Once repo-read runs GROUNDING_MAINTENANCE_MODE=v2-projects, set the repo
+          # variables GROUNDING_MAINTENANCE_MODE_PRODUCTION=legacy-projects and
+          # GROUNDING_MAINTENANCE_MODE_STAGING=disk-only so App Service leaves V2
+          # projects and the workspace share to repo-read.
+          # BACKGROUND_JOBS_MODE: staging shares production's database, so it skips
+          # the sweeps, reapers, recovery, and schedulers that claim production's work.
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
@@ -309,7 +325,9 @@ jobs:
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}-${{ env.SLOT_NAME }}.azurewebsites.net" \
-              ALLOW_TEST_ACCOUNT_SIGN_IN="true"
+              ALLOW_TEST_ACCOUNT_SIGN_IN="true" \
+              GROUNDING_MAINTENANCE_MODE="${{ vars.GROUNDING_MAINTENANCE_MODE_STAGING || 'cleanup-only' }}" \
+              BACKGROUND_JOBS_MODE="off"
 
           # Production slot sticky callback + shared MI runner auth (not swapped away).
           # Re-mark the *existing* production DATABASE_URL as sticky — do not write
@@ -331,7 +349,10 @@ jobs:
               AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS="${{ vars.AI_RUN_WORKER_HEARTBEAT_TIMEOUT_MS || '600000' }}" \
               LT_APEX_CALLBACK_BASE_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
               APEX_URL="https://${{ env.APP_SERVICE_NAME }}.azurewebsites.net" \
-              ALLOW_TEST_ACCOUNT_SIGN_IN="false"
+              ALLOW_TEST_ACCOUNT_SIGN_IN="false" \
+              GROUNDING_MAINTENANCE_MODE="${{ vars.GROUNDING_MAINTENANCE_MODE_PRODUCTION || 'full' }}" \
+              BACKGROUND_JOBS_MODE="full" \
+              UV_THREADPOOL_SIZE="${{ vars.UV_THREADPOOL_SIZE || '32' }}"
 
           az webapp config appsettings set \
             --name ${{ env.APP_SERVICE_NAME }} \
@@ -353,6 +374,7 @@ jobs:
               AI_RUNS_INTERACTIVE_BURST_MAX="${{ vars.AI_RUNS_INTERACTIVE_BURST_MAX }}" \
               AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS="${{ vars.AI_RUNS_INTERACTIVE_FIRST_TOKEN_SLO_MS }}" \
               AI_RUNS_INTERACTIVE_DISPATCH_URL="${{ vars.AI_RUNS_INTERACTIVE_DISPATCH_URL }}" \
+              WEBSITE_HEALTHCHECK_MAXPINGFAILURES="2" \
               "${REDIS_SETTINGS[@]}"
 
           # The Azure Node/Linux image ships without git, and Dev Workbench
@@ -397,14 +419,16 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
             --slot ${{ env.SLOT_NAME }} \
             --query clientAffinityEnabled -o tsv)
-          if [ "$CURRENT_AFFINITY" = "true" ]; then
-            echo "clientAffinityEnabled already true — skipping."
+          # Sessions live in Postgres, so any instance can serve any user. ARR
+          # affinity would keep a browser pinned to an instance that has hung.
+          if [ "$CURRENT_AFFINITY" = "false" ]; then
+            echo "clientAffinityEnabled already false — skipping."
           else
             az webapp update \
               --name ${{ env.APP_SERVICE_NAME }} \
               --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
               --slot ${{ env.SLOT_NAME }} \
-              --set clientAffinityEnabled=true
+              --set clientAffinityEnabled=false
           fi
 
       - name: Wait for SCM to settle before deploying

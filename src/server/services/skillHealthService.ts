@@ -14,12 +14,19 @@ import {
   workflowEvaluationEvents,
   workflowEvaluationJobs,
 } from '../db/schema';
+import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import type { SkillHealthArtifactKind, SkillHealthOverview } from '../../shared/types/skillHealth';
 import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
 import { isFeatureEnabled, isFeatureOperational } from './featureFlagService';
 import { buildSkillHealthProjects, type SkillHealthInputs } from './skillHealthMetrics';
+import { withWorkflowSettings, workflowSettingsSubquery } from './projectSkillWorkflowSettings';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+type SkillHealthWorkflowFields = Pick<
+  ProjectSkillConfig,
+  'prdSkillPath' | 'designDocSkillPath' | 'prdValidationScoreThreshold' | 'designDocValidationScoreThreshold'
+>;
 
 const USAGE_ENTITY_TO_KIND: Record<string, SkillHealthArtifactKind> = {
   prd: 'prd',
@@ -92,10 +99,7 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
         project: projectSkillSettings.project,
         skillRepo: projectSkillSettings.skillRepo,
         isDefault: projectSkillSettings.isDefault,
-        prdSkillPath: projectSkillSettings.prdSkillPath,
-        designDocSkillPath: projectSkillSettings.designDocSkillPath,
-        prdThreshold: projectSkillSettings.prdValidationScoreThreshold,
-        designDocThreshold: projectSkillSettings.designDocValidationScoreThreshold,
+        workflowSettings: workflowSettingsSubquery(),
       })
       .from(projectSkillSettings),
     db
@@ -161,7 +165,16 @@ async function loadInputs(periodFrom: string, userId: string): Promise<SkillHeal
       ...prdRows.map((row) => ({ ...row, kind: 'prd' as const, hasOverride: row.override !== null })),
       ...designDocRows.map((row) => ({ ...row, kind: 'design_doc' as const, hasOverride: row.override !== null })),
     ],
-    settings: settingsRows,
+    settings: settingsRows.map(({ workflowSettings, ...row }) => {
+      const flat = withWorkflowSettings({} as SkillHealthWorkflowFields, workflowSettings);
+      return {
+        ...row,
+        prdSkillPath: flat.prdSkillPath ?? null,
+        designDocSkillPath: flat.designDocSkillPath ?? null,
+        prdThreshold: flat.prdValidationScoreThreshold ?? null,
+        designDocThreshold: flat.designDocValidationScoreThreshold ?? null,
+      };
+    }),
     comments: commentRows.map((row) => ({
       documentId: row.documentId,
       documentType: row.documentType as SkillHealthArtifactKind,
