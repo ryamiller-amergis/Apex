@@ -163,12 +163,14 @@ resource "azurerm_key_vault" "ai_runs" {
 
 # Terraform needs data-plane permission to seed CURSOR_API_KEY. This role is
 # scoped to the dedicated vault and is not created when existing vault IDs are used.
+# Principals are listed explicitly: keying on the caller would move the grant to
+# whoever ran apply last.
 resource "azurerm_role_assignment" "ai_runs_deployer_kv_secrets_officer" {
-  count = var.ai_runs_key_vault_id == null ? 1 : 0
+  for_each = var.ai_runs_key_vault_id == null ? var.ai_runs_key_vault_secrets_officer_ids : toset([])
 
   scope                = azurerm_key_vault.ai_runs[0].id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = each.value
 }
 
 resource "azurerm_key_vault_secret" "ai_runs_cursor_api_key" {
