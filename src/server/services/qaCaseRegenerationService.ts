@@ -1,5 +1,4 @@
 import fs from 'fs';
-import path from 'path';
 import { and, asc, desc, eq, lte } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { qaAdoTestSuites, qaCaseComments, qaCaseRegenerations } from '../db/schema';
@@ -26,14 +25,17 @@ import {
   publishedCasesFrom,
   qaLabRepository,
   readTestPlanOptions,
+  renderSyntheticPrd,
+  renderTestPlanFile,
   renderTestPlanSection,
-  writeTestPlanFile,
   replaceAdoSuiteCase,
   sanitizeSlug,
   summarizeCoverage,
   type AdoQaContextReader,
 } from './adoTestCaseSuiteService';
+import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
 import { AzureDevOpsService } from './azureDevOps';
+import { usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   createThread,
   isThreadIdle,
@@ -41,6 +43,7 @@ import {
 } from './chatAgentService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { normalizeTestCase } from './testCaseLookupService';
+import { writeThreadFolderFile } from './threadFolder';
 
 const WATCHER_MAX_ATTEMPTS = 180;
 const CASE_OUTPUT_PATTERN = /\.case\.json$/i;
@@ -148,6 +151,10 @@ export async function regenerateAdoTestCase(input: {
     : narrowGenerationTargets(suite.sourceSnapshot, [match.parentWorkItemId]);
   const slug = sanitizeSlug(`${suite.rootTitle}-${input.localCaseId}`);
   const testPlans = await readTestPlanOptions(input.ado ?? new AzureDevOpsService(suite.project));
+  const backlog = buildSyntheticAdoBacklog(snapshot);
+  const pbiIds = backlog.epics[0].features[0].items
+    .filter((item) => item.type === 'PBI')
+    .map((item) => item.id);
   const freeformContext = renderRegenerationContext({
     project: suite.project,
     rootWorkItemId: suite.rootWorkItemId,
@@ -155,7 +162,7 @@ export async function regenerateAdoTestCase(input: {
     localCaseId: input.localCaseId,
     currentCase: match.testCase,
     comments: comments.map((comment) => ({ body: comment.body, authorName: comment.authorName })),
-    backlog: buildSyntheticAdoBacklog(snapshot),
+    backlog,
     testPlans,
   });
   const model = input.model ?? skillConfig.testCaseModel ?? await getDefaultModel();
@@ -176,9 +183,22 @@ export async function regenerateAdoTestCase(input: {
     { skipAutoKickoff: true },
   );
   if (!thread.workspaceDir) throw new Error('Case regeneration thread has no workspace');
-  writeWorkspace(thread.workspaceDir, freeformContext);
-  writeTestPlanFile(thread.workspaceDir, testPlans);
-  updateThreadKickoffContext(thread.id, freeformContext);
+  // A V2 test-cases run will not start without a PRD and a backlog file.
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${slug}.prd.md`, content: renderSyntheticPrd(snapshot, pbiIds) },
+    { path: `.ai-pilot/output/${slug}.backlog.json`, content: JSON.stringify(backlog, null, 2) },
+    ...renderTestPlanFile(testPlans),
+  ];
+  for (const file of [{ path: '.ai-pilot/kickoff-context.md', content: freeformContext }, ...sourceInputs]) {
+    await writeThreadFolderFile({
+      project: suite.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: file.path,
+      content: file.content,
+    });
+  }
+  await updateThreadKickoffContext(thread.id, freeformContext);
+  await saveDocumentInputSnapshot(thread.id, sourceInputs);
 
   let row: RegenerationRow | undefined;
   try {
@@ -210,8 +230,26 @@ export async function regenerateAdoTestCase(input: {
     kickoffMessage: `Rewrite test case ${input.localCaseId} only, applying every reviewer comment in the kickoff context. Write .ai-pilot/output/${slug}.case.json and nothing else.`,
     logLabel: `regenerationId=${regeneration.id}`,
     onPreparationFailure: () => markFailed(regeneration.id, thread.id, 'Could not start the agent'),
-  }).then((dispatched) => {
-    if (dispatched) startWatcher(regeneration.id, thread.id);
+  }).then(async (dispatched) => {
+    if (!dispatched) return;
+    const v2Transport = await usesV2DocumentTransport({
+      userId: input.userId,
+      project: suite.project,
+      workflowClass: 'test-cases',
+    });
+    // @feature-flag:ai-runs-v2-transport start winner=enabled
+    if (v2Transport) {
+      // @feature-flag:ai-runs-v2-transport enabled-start
+      // Harvest applies the V2 result through syncCaseRegenerationRunOutput.
+      // @feature-flag:ai-runs-v2-transport enabled-end
+    } else {
+      // @feature-flag:ai-runs-v2-transport disabled-start
+      startWatcher(regeneration.id, thread.id);
+      // @feature-flag:ai-runs-v2-transport disabled-end
+    }
+    // @feature-flag:ai-runs-v2-transport end
+  }).catch((error: unknown) => {
+    console.error(`[qaCaseRegeneration] Routing check failed — regenerationId=${regeneration.id}`, error);
   });
   console.log(
     `[qaCaseRegeneration] Queued — regenerationId=${regeneration.id} suiteId=${input.suiteId} case=${input.localCaseId} threadId=${thread.id}`,
@@ -480,11 +518,6 @@ function renderRegenerationContext(input: {
     JSON.stringify(input.backlog, null, 2),
     '```',
   ].join('\n');
-}
-
-function writeWorkspace(workspaceDir: string, freeformContext: string): void {
-  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot', 'output'), { recursive: true });
-  fs.writeFileSync(path.join(workspaceDir, '.ai-pilot', 'kickoff-context.md'), freeformContext, 'utf-8');
 }
 
 function startWatcher(regenerationId: string, chatThreadId: string): void {

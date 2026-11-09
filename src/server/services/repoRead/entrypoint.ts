@@ -24,6 +24,7 @@ import {
   kickBackgroundMirrorRefresh,
 } from './mirrorHydration';
 import { isUsableBareMirror } from './mirrorStore';
+import { handlePublishBundleRequest } from './publishBundleHandler';
 
 const DEFAULT_PORT = 8080;
 const MIRROR_PROBE_TIMEOUT_MS = 10_000;
@@ -146,6 +147,17 @@ export function createRepoReadApp(): express.Express {
         .catch(next);
     });
   }
+  app.post('/v1/publish-bundle', requireAiRunnerAuth, (req, res, next) => {
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    void handlePublishBundleRequest(req.body, controller.signal)
+      .then((result) => {
+        res.status(result.status).json(result.body);
+      })
+      .catch(next);
+  });
   return app;
 }
 

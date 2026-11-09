@@ -77,6 +77,8 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `playbooks:admin` | playbooks | platform admin, and Playbooks is enabled for the project |
 | `playbooks:triggers:manage` | playbooks | platform admin, and Playbooks is enabled for the project |
 | `prds:review` | prds | admin, member |
+| `quick-links:manage` | quick-links | admin |
+| `quick-links:personal` | quick-links | admin, member |
 | `skills:manage` | skills | admin |
 | `wiki:write` | wiki | admin, member |
 | `work-board:view` | work-board | admin, member, viewer |

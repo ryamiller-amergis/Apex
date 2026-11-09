@@ -94,6 +94,60 @@ Follow-ups 9–12 and the rest of the pending work: see "Tomorrow (2026-11-03)" 
   - Unmount: c38372a8 adds `ai_platform_v2_interactive_mount_workspace_share` (default true) and makes the volume and mount dynamic on the agentic/fast hosts. fmt + validate pass. No plan or apply. Dev tfvars are with Ryan, prod tfvars with the user. Rollout: Ryan sets `false` in dev tfvars and plans (expect only the volume/mount removal and new revisions on the two hosts; anything touching the old host or Redis = stop), then dev test (Ask Apex on a design doc, chat with attachment, Brainstorm with a catalog repo and a temp repo), then the user does prod.
   - User 2026-11-04: `ai-runs-interactive` is ON in dev and prod. Do not scale the old host to 0: chats for non-V2 projects (flag-off/error path of `ai-runs-v2-transport`) can still go to it through `AI_RUNS_INTERACTIVE_DISPATCH_URL`. Next: find who the flag targets and how many legacy actor turns run (`interactive.route.decision` route `actor`), then either move those projects to V2 or lower the floor to 1–2.
 
+## Status 2026-11-05
+- Dev and prod: share unmounted from the agentic and fast-interactive hosts (dev by `az rest` PATCH 2026-11-05; prod by targeted `terraform apply`, state `infra/terraform.tfstate.d/prd/terraform.tfstate` in the main checkout, backup `terraform.tfstate.pre-unmount-20261105T1935Z.backup`; `terraform.prd.tfvars` has `ai_platform_v2_interactive_mount_workspace_share = false`). Ryan still has to add the same line to the dev tfvars.
+- A full prod plan from an agent shell is unsafe: without the user's `TF_VAR_*` secrets it errors on `github_token` (main.tf:130) and plans to rewrite the repo-read secrets. Use `-target` for narrow changes, or have the user run it.
+- `ai-runs-interactive` flag: off in dev (verified, all turns durable); user to turn off in prod. Every project it targeted (Apex, MaxView, MatterWorx, Amego) is on `ai-runs-v2-transport`, and the legacy router only runs when V2 is off.
+- #273 merged and in prod: `defaultResolveGrounding` skips App Service's checkout for whole-V2 projects with `repo-read-service` on and `REPO_READ_SERVICE_URL` set (lightweight pin). Dev Ask Apex: handover ~1 s, total ~12 s.
+- Prod `resource_exhausted` from the Cursor SDK 18:50–18:59Z on one Brainstorm thread and App Service: Cursor account/API limit, not our change. Cleared by 19:31Z.
+- Blob: `stapexprdasync` ~40 GiB flat, 1,505 blobs (from 240 in a month). Lifecycle rules cover `repo-grounding/` (14 d last access), `cursor-prompts/` (1 d), load tests (90 d); the V2 artifact container has none. Follow-up: add a rule to `lt_artifacts_lifecycle` after checking nothing reads old V2 artifacts.
+
+## Workstream F: V2 document scratch inputs from the DB (branch `feat/v2-scratch-inputs-from-db`)
+Goal: V2 document runs stop reading `.ai-pilot/*` from the share. Only `backgroundWorkflowRouter.readDocumentScratchInputs` reads them (V2 chats already use `thread.kickoff` from the DB).
+- What the files hold today:
+  - `kickoff-context.md` = `kickoff.freeformContext` (DB) when written by `injectKickoffFiles` or by routes that also call `updateThreadKickoffContext`. Some writers update the file only (check each): `testCaseService.ts` ~974, `adoTestCaseSuiteService.ts` ~1891, `designDocService.ts` ~2404/2420, `qaCaseRegenerationService.ts` ~487, `qaLabAssistantService.ts` ~289, and the assistant-thread refreshes in `routes/interviews.ts` ~1485/2532, `routes/api.ts` ~4747, `routes/adr.ts` ~529.
+  - `kickoff-transcript.md` = `kickoff.transcript`; `session.json` is built in `injectKickoffFiles` from threadId + kickoff.
+  - test-cases: `.ai-pilot/output/<slug>.prd.md` + `.backlog.json` written by `testCaseService` from the PRD row.
+  - QA Lab: `test-plans.md`, `existing-test-cases.json`, `test-case-index.md` written by `adoTestCaseSuiteService` from ADO at thread start (only copy).
+- Design:
+  1. `PreparedBackgroundWorkflowTurn` gains optional `scratchInputs`. When V2 and it is set, the router uses it and skips the disk read; legacy keeps the files.
+  2. `prepareBackgroundWorkflowTurn` builds the base set from the thread: context, session (shared `buildSessionMarker` with `injectKickoffFiles`), transcript for prd/adr. Filtered by `isAllowedDocumentScratchInputPath`.
+  3. Writers that change `kickoff-context.md` for document runs also call `updateThreadKickoffContext` so DB and file agree.
+  4. test-cases prepare adds PRD/backlog from the PRD row; QA Lab uploads its three files to Blob at write time and reads them back in prepare (user choice: Blob).
+  5. Assistant-thread context refreshes (file only today) also update the DB; V2 chats read the DB, so they currently see the context from thread creation. Verify before fixing.
+  6. Later, separate: stop writing these files to the share for V2 projects.
+- Also found: V2 document prepare still waits on App Service grounding (`waitForReadyThreadGrounding` in `prepareBackgroundWorkflowTurn`), same cost #273 removed for chats. Follow-up.
+
+### Status 2026-11-06 (PR #277, all on one branch)
+- Done (uncommitted until pushed): scratch inputs from DB + Blob snapshot `document-inputs/<threadId>.json` (`aiRunV2/documentInputSnapshot.ts`), router `resolveDocumentScratchInputs` (records → snapshot → share only if required inputs missing; event `background.scratch-inputs.source`); ingest saves the interview transcript to the DB; whole-V2 document prepare skips the checkout via `findTargetGrounding` + `RepoServiceReader` (`repoRead/wholeProjectRepoRead.ts`, shared with durable chats); Brainstorm readiness from the row (`isSourceServedRemotely`), no `.apex-brainstorm-ready` markers; Terraform rule `ai-run-artifacts-30day` in `infra/load-test.tf`.
+- Verified: 34 affected suites pass (documentValidationService times out only under full parallel load; passes alone), server + client tsc, lint 0 errors.
+- After prod deploy (user must ask): set `ai_runs_interactive_reserved = 0` in main checkout `infra/terraform.prd.tfvars`, targeted plan/apply on `azurerm_container_app.ai_runs_interactive` and `azurerm_storage_management_policy.lt_artifacts_lifecycle`. Keep the module (it owns Redis/Dapr components the V2 hosts use).
+- Ryan (dev tfvars): `ai_platform_v2_interactive_mount_workspace_share = false`, later `ai_runs_interactive_reserved = 0`.
+- Follow-up PR: stop App Service writing V2 thread files to the share.
+- 2026-11-07: #277 also has 899b5f54 (reuse an active chat pin, no 23505; snapshot read only for test-cases) and 13974986 (lifecycle rule removed; #277 now has no Terraform).
+- Next PR (user-approved scope), branch off main after #277 merges:
+  1. Stop App Service writing V2 thread files to the share.
+  2. Brainstorm temporary repos: App Service still fetches depth-1 into os.tmpdir, bundles, uploads, deletes (`gitSourceClone.ts` `cloneTemporaryAtSha`, called from `sourceWorkspaceManager.completeTemporaryClone`). Move to the worker or repo-read. Catalog repos already skip the clone when `REPO_READ_SERVICE_URL` is set.
+  3. Lifecycle rule `ai-run-artifacts-30day` in `infra/load-test.tf`, prefixes `runs/`, `document-inputs/`, `interactive/` only. Never `workflow-evaluations/` (corrected artifacts, DB keeps only the blob ref). Azure prefix_match is include-only.
+  4. Old interactive host to 0 warm replicas (user-approved 2026-11-07, ships with this PR): set `ai_runs_interactive_reserved = 0` in the main checkout's `infra/terraform.prd.tfvars` (untracked, never committed), then targeted plan, show the user, apply only on approval: `-target=azurerm_container_app.ai_runs_interactive` plus `-target=azurerm_storage_management_policy.lt_artifacts_lifecycle` for item 3. Keep the module (Redis/Dapr components the V2 hosts use). App Service `AI_RUNS_INTERACTIVE_RESERVED` only feeds `interactiveActorAdmissionService` on the old path (flag `ai-runs-interactive` off), so it can stay. Dev: Ryan sets the same in dev tfvars.
+  - Branch `feat/v2-share-writes-off` (off main 74aee109). Item 3 edited in `infra/load-test.tf` (uncommitted, fmt ok; policy account = V2 container account, stapexprdasync).
+  - Item 1 map (2026-11-07, all under src/server/):
+    - Blocker: durable chat completion writes outputs to the share: `aiRunIngestService.ts` ~946 → `interactiveArtifactApplier.ts` `applyInteractiveArtifacts`. Readers: walkthroughGenerationService ~681, walkthroughAnchorDiscoveryService ~359, designModuleScopingService ~200/400, loadTestAiGenerationService ~168, featureRequestAnalysisService ~255/377, designModuleService ~380, chatAgentService `readOutputPrd`/`readOutputBacklog` (`resolveOutputDir` ~7177) via routes/chat.ts ~1025 and routes/interviews.ts ~1083/2247/2704.
+    - Unconditional writers: createThread ~3078 + loadThread recreate ~2935 (`injectKickoffFiles`); `clearBackgroundGenerationOutput` in the V2 router path (~745, ~814); linked-context doc (runGroundingService ~449 → linkedContextMaterializerService ~414, not in V2 allow-list); assistant context rewrites (routes/interviews.ts 1495/1522/2544/2579, routes/adr.ts 528/565, routes/api.ts 4754, designDocService 2398/2436); testCaseService 959; adoTestCaseSuiteService 473/1780/1892; qaCaseRegenerationService 179/485 (no snapshot, always share fallback); qaLabAssistantService 77/95/461.
+    - No try/catch (ENOENT → 500 if folder missing): interviews.ts 1523, 2580; adr.ts 565; designDocService 2399.
+    - ADO suite watcher not V2-gated (adoTestCaseSuiteService 534, 1911-1962).
+    - Gap: QA Lab assistant `test-plans.md` never reaches the V2 chat host.
+    - In-process agents on App Service (not share): model probe, walkthroughAiDraftService ~136, groundingImpactEvaluatorService ~238.
+  - Item 2 constraint: worker only checks out Blob bundles / repo-read; repo-read has only read/list/search for known identities (`repoRead/entrypoint.ts`).
+  - Optional: dev deploy copies `.cursor/skills/brainstorm` (`deploy-dev-quick.yml`), needs user OK (CI file).
+  - Status 2026-11-07 (uncommitted on `feat/v2-share-writes-off`): items 1–3 and the three small fixes are coded; tsc, lint, codemap pass; targeted tests pass.
+    - Item 1: migration `20261107210000_v2to01_chat-thread-outputs.sql`, `chatThreadOutputStore.ts` (read DB first, then folder), `threadFolder.ts` (`keepsThreadFolder` = not whole-V2; lookup error keeps the folder). Ingest saves to DB, writes the share only when the folder is kept. All readers above use the store. Writers go through `writeThreadFolderFile`. Try-wrapped refreshes (adr reuse, designDocService ~2436, api.ts 4754) left alone.
+    - Item 2: `POST /v1/publish-bundle` on repo-read (`repoRead/publishBundleHandler.ts`, re-checks URL + DNS); `cloneTemporaryAtSha` calls it when `REPO_READ_SERVICE_URL` is set, else `publishTemporaryCloneBundle` locally. No infra change: repo-read already has GITHUB_TOKEN, ADO_ORG/ADO_PAT and Blob Contributor on `repo-grounding`. Container Apps ingress timeout is 240 s; a very large repo could hit it.
+    - Small fixes: ADO suite and case-regeneration share watchers skip V2 (harvest applies results); regeneration saves `test-plans.md` to the Blob snapshot; QA Lab assistant inlines the Test Plan list in its kickoff context (no `test-plans.md` file).
+    - Full suite: only `featureRequestAnalysisService` "persists analysis result" (also fails on main, 5 s timeout on a cold dynamic import) and `repoCacheGitIntegration` compaction (untouched code) fail.
+    - Next: commit, push, open PR; after prod deploy item 4 + targeted plan (approval needed).
+- Findings to report: QA case regeneration on V2 has no prd/backlog inputs (predates this); PRD context lacks comment IDs.
+
 ## Tomorrow (2026-11-03)
 Start a new branch off main after tonight's merge. Each workstream ships on its own PR, flag-gated per project, old path kept for non-V2 projects. Dev soak each one before prod. Order is by risk removed per unit of work.
 

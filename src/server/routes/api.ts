@@ -19,7 +19,7 @@ import { db } from '../db/drizzle';
 import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getDefaultModel } from '../services/appSettingsService';
-import { getAgentHealthStats, createThread } from '../services/chatAgentService';
+import { getAgentHealthStats, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
@@ -72,6 +72,8 @@ import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
+import projectQuickLinksRouter from './projectQuickLinks';
+import userQuickLinksRouter from './userQuickLinks';
 const router = express.Router();
 const publicHealthPaths = new Set([
   '/health',
@@ -109,6 +111,8 @@ export function shouldSkipSessionMiddleware(fullPath: string): boolean {
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/projects/:projectId/quick-links', projectQuickLinksRouter);
+router.use('/projects/:projectId/my-quick-links', userQuickLinksRouter);
 router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
@@ -4743,12 +4747,14 @@ router.post(
           .from(chatThreadsSchema)
           .where(drizzleEq(chatThreadsSchema.id, threadId))
           .limit(1);
+        const refreshedContext = buildContextMarkdown(session.contextSnapshot);
         if (threadRow?.workspaceDir) {
           const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
           try {
-            fs.writeFileSync(contextPath, buildContextMarkdown(session.contextSnapshot), 'utf-8');
+            fs.writeFileSync(contextPath, refreshedContext, 'utf-8');
           } catch { /* non-fatal */ }
         }
+        await updateThreadKickoffContext(threadId, refreshedContext);
       }
 
       res.status(isNew ? 201 : 200).json({

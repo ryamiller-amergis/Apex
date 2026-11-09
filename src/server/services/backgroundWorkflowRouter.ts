@@ -7,11 +7,14 @@ import type {
   WorkflowRouteDecision,
 } from '../../shared/types/backgroundWorkflow';
 import {
+  hasRequiredScratchInputs,
   isAllowedDocumentScratchInputPath,
   isAiRunV2DocumentSpecification,
   type AiRunV2DocumentScratchInput,
   type AiRunV2DocumentSpecification,
 } from '../../shared/types/aiRunV2DocumentSpec';
+import { readDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { keepsThreadFolder } from './threadFolder';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { EffortLevel } from '../../shared/types/effort';
 import type { RunGrounding, RunRef } from '../../shared/types/runGrounding';
@@ -134,6 +137,8 @@ export interface PreparedBackgroundWorkflowWorker {
   projectId: string;
   /** Pinned commit of the project repository, when the thread has one. */
   groundedSha?: string;
+  /** Kickoff files from the saved thread. When absent, V2 reads the workspace copies. */
+  scratchInputs?: AiRunV2DocumentScratchInput[];
 }
 
 export interface BackgroundWorkflowRouteInput {
@@ -191,6 +196,8 @@ export interface BackgroundWorkflowRouterDependencies {
   >;
   clearGenerationOutput?: (threadWorkspacePath: string) => Promise<void>;
   readDocumentScratchInputs?: typeof readDocumentScratchInputs;
+  readDocumentInputSnapshot?: typeof readDocumentInputSnapshot;
+  keepsThreadFolder?: typeof keepsThreadFolder;
   getRepoCacheDir?: (options: RepoCacheOptions) => string;
   isUsableBareMirror?: (path: string | undefined) => boolean;
   /**
@@ -314,6 +321,54 @@ export async function readDocumentScratchInputs(
   return inputs.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+export type DocumentScratchInputSource = 'records' | 'workspace-fallback' | 'workspace';
+
+/**
+ * Builds a V2 document run's scratch files from the saved thread and the Blob
+ * snapshot. The workspace share is read only when a required file is in
+ * neither, which happens for threads set up before the snapshot existed.
+ */
+export async function resolveDocumentScratchInputs(input: {
+  threadId: string;
+  workflowClass: BackgroundWorkflowClass;
+  threadWorkspacePath: string;
+  recorded?: AiRunV2DocumentScratchInput[];
+  readSnapshot: (threadId: string) => Promise<AiRunV2DocumentScratchInput[] | null>;
+  readWorkspace: typeof readDocumentScratchInputs;
+}): Promise<{ inputs: AiRunV2DocumentScratchInput[]; source: DocumentScratchInputSource }> {
+  if (!input.recorded) {
+    return {
+      inputs: await input.readWorkspace(input.threadWorkspacePath, input.workflowClass),
+      source: 'workspace',
+    };
+  }
+  const byPath = new Map<string, AiRunV2DocumentScratchInput>();
+  const add = (entries: AiRunV2DocumentScratchInput[]) => {
+    for (const entry of entries) {
+      if (
+        isAllowedDocumentScratchInputPath(input.workflowClass, entry.path)
+        && !byPath.has(entry.path)
+      ) {
+        byPath.set(entry.path, entry);
+      }
+    }
+  };
+  add(input.recorded);
+  if (input.workflowClass === 'test-cases') {
+    add((await input.readSnapshot(input.threadId).catch(() => null)) ?? []);
+  }
+
+  let source: DocumentScratchInputSource = 'records';
+  if (!hasRequiredScratchInputs(input.workflowClass, [...byPath.values()])) {
+    add(await input.readWorkspace(input.threadWorkspacePath, input.workflowClass));
+    source = 'workspace-fallback';
+  }
+  return {
+    inputs: [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path)),
+    source,
+  };
+}
+
 async function copyDirectoryContentsSafely(
   sourceDirectory: string,
   destinationDirectory: string,
@@ -413,6 +468,9 @@ export function createBackgroundWorkflowRouter(
     dependencies.clearGenerationOutput ?? clearBackgroundGenerationOutput;
   const readScratchInputs =
     dependencies.readDocumentScratchInputs ?? readDocumentScratchInputs;
+  const readInputSnapshot =
+    dependencies.readDocumentInputSnapshot ?? readDocumentInputSnapshot;
+  const threadFolderKept = dependencies.keepsThreadFolder ?? keepsThreadFolder;
   const enqueueRun = dependencies.enqueue ?? enqueue;
   const admitV2Run =
     dependencies.admitV2Run ?? ((input) => createV2AdmissionService().admit(input));
@@ -613,10 +671,20 @@ export function createBackgroundWorkflowRouter(
     let documentScratchInputs: AiRunV2DocumentScratchInput[] = [];
     if (useV2Transport) {
       try {
-        documentScratchInputs = await readScratchInputs(
-          prepared.threadWorkspacePath,
-          input.workflowClass,
-        );
+        const resolved = await resolveDocumentScratchInputs({
+          threadId: input.threadId,
+          workflowClass: input.workflowClass,
+          threadWorkspacePath: prepared.threadWorkspacePath,
+          recorded: prepared.scratchInputs,
+          readSnapshot: readInputSnapshot,
+          readWorkspace: readScratchInputs,
+        });
+        documentScratchInputs = resolved.inputs;
+        safeTrack('background.scratch-inputs.source', {
+          workflowClass: input.workflowClass,
+          project: input.destinationRun.project,
+          source: resolved.source,
+        });
       } catch {
         return recover(
           input,
@@ -713,7 +781,9 @@ export function createBackgroundWorkflowRouter(
     // No grounding, shared checkout, or MaxView clone.
     if (SCRATCH_ONLY_WORKFLOW_CLASSES.has(input.workflowClass)) {
       try {
-        await clearGenerationOutput(prepared.threadWorkspacePath);
+        if (!useV2Transport || (await threadFolderKept(input.destinationRun.project))) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+        }
       } catch {
         return recover(
           input,
@@ -785,7 +855,9 @@ export function createBackgroundWorkflowRouter(
     if (useV2Transport) {
       // @feature-flag:ai-runs-v2-transport enabled-start
       try {
-        await clearGenerationOutput(prepared.threadWorkspacePath);
+        if (await threadFolderKept(input.destinationRun.project)) {
+          await clearGenerationOutput(prepared.threadWorkspacePath);
+        }
       } catch {
         return recover(
           input,

@@ -259,6 +259,20 @@ async function listDocumentOutputPaths(
 }
 
 /**
+ * A case rewrite writes one `.case.json` next to its PRD and backlog inputs,
+ * which share the output folder, so only the case is returned.
+ */
+function caseRewriteOutputs(
+  workflowClass: BackgroundWorkflowClass,
+  names: string[],
+): string[] {
+  if (workflowClass !== 'test-cases') return names;
+  const cases = names.filter((name) => /\.case\.json$/i.test(name));
+  const fullSets = names.filter((name) => /\.test-cases\.json$/i.test(name));
+  return cases.length === 1 && fullSets.length === 0 ? cases : names;
+}
+
+/**
  * Read only the named output contract. Inputs, repository data, `.git`, and
  * every unrelated workspace file remain local and are deleted with the attempt.
  */
@@ -267,9 +281,9 @@ export async function collectDocumentArtifacts(
   workflowClass: BackgroundWorkflowClass,
 ): Promise<ArtifactFile[]> {
   const outputDirectory = path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS);
-  const outputPaths = await listDocumentOutputPaths(
-    outputDirectory,
+  const outputPaths = caseRewriteOutputs(
     workflowClass,
+    await listDocumentOutputPaths(outputDirectory, workflowClass),
   );
   assertExpectedOutputSet(workflowClass, outputPaths);
 

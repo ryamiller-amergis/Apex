@@ -23,6 +23,7 @@ import {
 } from '../services/repoCacheLeaseService';
 import {
   cloneTemporaryAtSha,
+  isSourceServedRemotely,
   lockDownClone,
   measureDirectory,
   resolveTemporarySha,
@@ -455,6 +456,7 @@ export function brainstormSourceRuntime(): BrainstormSourceRuntime {
   const manager = createSourceWorkspaceManager({
     store,
     dataRoot,
+    isServedRemotely: isSourceServedRemotely,
     files: {
       measure: (dir) => measureDirectory(dir),
       remove: async (dir) => { await fs.rm(dir, { recursive: true, force: true }); },
@@ -504,6 +506,7 @@ export function brainstormSourceRuntime(): BrainstormSourceRuntime {
     citations: createCitationService({
       store,
       dataRoot,
+      isServedRemotely: isSourceServedRemotely,
       files: {
         async lstat(filePath) {
           try {

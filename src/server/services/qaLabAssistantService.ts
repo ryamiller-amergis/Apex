@@ -1,9 +1,12 @@
-import fs from 'fs';
-import path from 'path';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { qaAdoTestSuites, qaCaseComments, qaCaseRuns, qaLabAssistantProposals } from '../db/schema';
-import type { QaLabCaseComment, QaLabCaseRegeneration, QaLabPublishedCase } from '../../shared/types/qaLab';
+import type {
+  QaAdoTestPlanOption,
+  QaLabCaseComment,
+  QaLabCaseRegeneration,
+  QaLabPublishedCase,
+} from '../../shared/types/qaLab';
 import { getDefaultModel } from './appSettingsService';
 import {
   AdoTestSuiteConflictError,
@@ -12,9 +15,9 @@ import {
   listAdoSuiteCases,
   publishedCasesFrom,
   readTestPlanOptions,
+  renderTestPlanFile,
   renderTestPlanSection,
   summarizeCoverage,
-  writeTestPlanFile,
   type AdoQaContextReader,
 } from './adoTestCaseSuiteService';
 import { AzureDevOpsService } from './azureDevOps';
@@ -27,6 +30,7 @@ import {
   QaCaseNotFoundError,
   regenerateAdoTestCase,
 } from './qaCaseRegenerationService';
+import { writeThreadFolderFile } from './threadFolder';
 
 const ASSISTANT_AUTHOR_NAME = 'Ask Apex';
 const THREAD_ID_PLACEHOLDER = '__THREAD_ID__';
@@ -64,7 +68,7 @@ export async function openQaLabAssistantThread(input: {
     cases,
     otherSuites,
     skillPath: skillConfig?.testCaseSkillPath ?? null,
-    testPlanSection: renderTestPlanSection(testPlans),
+    testPlanSection: renderInlineTestPlans(testPlans),
   });
 
   const existing = input.threadId ? await getThread(input.threadId) : null;
@@ -74,7 +78,7 @@ export async function openQaLabAssistantThread(input: {
     && existing.kickoff.qaLabSuiteId === suite.id
     && existing.workspaceDir
   ) {
-    writeContext(existing.workspaceDir, existing.id, render(existing.id), testPlans);
+    await writeContext(suite.project, existing.workspaceDir, existing.id, render(existing.id));
     return { threadId: existing.id };
   }
 
@@ -92,7 +96,7 @@ export async function openQaLabAssistantThread(input: {
     { skipAutoKickoff: true },
   );
   if (!thread.workspaceDir) throw new Error('Ask Apex thread has no workspace');
-  writeContext(thread.workspaceDir, thread.id, render(thread.id), testPlans);
+  await writeContext(suite.project, thread.workspaceDir, thread.id, render(thread.id));
   return { threadId: thread.id };
 }
 
@@ -457,14 +461,30 @@ function renderAssistantContext(input: {
   ].join('\n');
 }
 
-function writeContext(
+/**
+ * The V2 chat host gets the kickoff context but no other `.ai-pilot` files, so
+ * the Test Plan list goes in the context too.
+ */
+function renderInlineTestPlans(testPlans: QaAdoTestPlanOption[]): string[] {
+  const [file] = renderTestPlanFile(testPlans);
+  if (!file) return [];
+  return [
+    ...renderTestPlanSection(testPlans),
+    `\`${file.path}\` is not on disk for this session; its content is:`,
+    '',
+    '```markdown',
+    file.content.trimEnd(),
+    '```',
+    '',
+  ];
+}
+
+async function writeContext(
+  project: string,
   workspaceDir: string,
   threadId: string,
   context: string,
-  testPlans: Parameters<typeof writeTestPlanFile>[1],
-): void {
-  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
-  fs.writeFileSync(path.join(workspaceDir, '.ai-pilot', 'kickoff-context.md'), context, 'utf-8');
-  writeTestPlanFile(workspaceDir, testPlans);
-  updateThreadKickoffContext(threadId, context);
+): Promise<void> {
+  await writeThreadFolderFile({ project, workspaceDir, relativePath: '.ai-pilot/kickoff-context.md', content: context });
+  await updateThreadKickoffContext(threadId, context);
 }

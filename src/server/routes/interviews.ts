@@ -1,6 +1,4 @@
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import fs from 'fs';
-import path from 'path';
 import { requireAnyPermission, requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
@@ -183,6 +181,7 @@ import {
   ingestValidationScorecard,
 } from '../services/documentValidationService';
 import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import { writeThreadFolderFile } from '../services/threadFolder';
 import {
   DesignDocValidationPlaybookConfigurationError,
   DesignDocValidationPlaybookForbiddenError,
@@ -1488,14 +1487,18 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, prd.prdAssistantThreadId))
         .limit(1);
-      if (threadRow?.workspaceDir) {
-        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-        try {
-          fs.writeFileSync(contextPath, buildPrdContext(prd.prdAssistantThreadId), 'utf-8');
-        } catch {
-          // Non-fatal: workspace may have been cleaned up
-        }
+      const refreshedContext = buildPrdContext(prd.prdAssistantThreadId);
+      try {
+        await writeThreadFolderFile({
+          project: prd.project,
+          workspaceDir: threadRow?.workspaceDir,
+          relativePath: '.ai-pilot/kickoff-context.md',
+          content: refreshedContext,
+        });
+      } catch {
+        // Non-fatal: workspace may have been cleaned up
       }
+      await updateThreadKickoffContext(prd.prdAssistantThreadId, refreshedContext);
       res.json({ threadId: prd.prdAssistantThreadId });
       return;
     }
@@ -1517,9 +1520,13 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
     // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
     const realContext = buildPrdContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realContext);
+    await writeThreadFolderFile({
+      project: prd.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realContext,
+    });
+    await updateThreadKickoffContext(thread.id, realContext);
 
     await inheritAssistantPin({
       sourceThreadId: prd.chatThreadId,
@@ -2535,14 +2542,18 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, doc.docAssistantThreadId))
         .limit(1);
-      if (threadRow?.workspaceDir) {
-        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-        try {
-          fs.writeFileSync(contextPath, buildDocContext(doc.docAssistantThreadId), 'utf-8');
-        } catch {
-          // Non-fatal: workspace may have been cleaned up; the thread can still run
-        }
+      const refreshedContext = buildDocContext(doc.docAssistantThreadId);
+      try {
+        await writeThreadFolderFile({
+          project: doc.project,
+          workspaceDir: threadRow?.workspaceDir,
+          relativePath: '.ai-pilot/kickoff-context.md',
+          content: refreshedContext,
+        });
+      } catch {
+        // Non-fatal: workspace may have been cleaned up; the thread can still run
       }
+      await updateThreadKickoffContext(doc.docAssistantThreadId, refreshedContext);
       res.json({ threadId: doc.docAssistantThreadId });
       return;
     }
@@ -2572,9 +2583,13 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
     // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
     const realDocContext = buildDocContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realDocContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realDocContext);
+    await writeThreadFolderFile({
+      project: doc.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realDocContext,
+    });
+    await updateThreadKickoffContext(thread.id, realDocContext);
 
     await inheritAssistantPin({
       sourceThreadId: doc.chatThreadId ?? prd?.chatThreadId,

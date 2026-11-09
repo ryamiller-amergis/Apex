@@ -1126,4 +1126,20 @@ describe('document artifact allowlists', () => {
       }
     },
   );
+
+  it('returns only the case from a case rewrite, leaving its backlog input behind', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'document-output-test-'));
+    const output = path.join(root, '.ai-pilot', 'output');
+    await fs.mkdir(output, { recursive: true });
+    await fs.writeFile(path.join(output, 'feature-tc-2.prd.md'), '# input');
+    await fs.writeFile(path.join(output, 'feature-tc-2.backlog.json'), '{}');
+    await fs.writeFile(path.join(output, 'feature-tc-2.case.json'), '{}');
+
+    try {
+      const files = await collectDocumentArtifacts(root, 'test-cases');
+      expect(files.map((file) => file.path)).toEqual(['output/feature-tc-2.case.json']);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -48,13 +48,18 @@ jest.mock('../services/chatAgentService', () => ({
   createThread: jest.fn().mockResolvedValue({ id: 'thread-tc', workspaceDir: '' }),
   isThreadIdle: jest.fn().mockReturnValue(false),
   sendMessage: jest.fn().mockResolvedValue(undefined),
-  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({
+  prepareBackgroundWorkflowTurn: jest.fn().mockImplementation(async (
+    _threadId: string,
+    _prompt: string,
+    options?: { findTargetGrounding?: () => Promise<unknown> },
+  ) => ({
     prompt: 'complete frozen test-case prompt',
     model: 'gpt-5.5-test',
     skillPath: '.cursor/skills/test-cases/SKILL.md',
     projectId: 'proj-alpha',
     threadWorkspacePath: '/tmp/thread-tc',
-  }),
+    targetGrounding: await options?.findTargetGrounding?.(),
+  })),
   updateThreadKickoffContext: jest.fn(),
 }));
 
@@ -872,6 +877,7 @@ describe('testCaseService', () => {
       (mockDb.select as jest.Mock).mockReturnValue({
         from: () => ({
           where: () => ({
+            limit: () => Promise.resolve([]),
             orderBy: () => ({
               limit: () => Promise.resolve([{
                 testCasesJson: { suites: [{ pbiId: 'PBI-1', testCases: [{ id: 'TC-old' }] }] },

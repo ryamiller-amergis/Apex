@@ -257,14 +257,30 @@ export function useAgentChatSession(
     optimisticUserMessage &&
     messages.some(
       (message) =>
-        message.role === 'user' &&
-        message.text === optimisticUserMessage.text &&
-        !optimisticBaselineIdsRef.current.has(message.id)
+        message.id === optimisticUserMessage.id ||
+        (message.role === 'user' &&
+          message.text === optimisticUserMessage.text &&
+          !optimisticBaselineIdsRef.current.has(message.id))
     )
   );
+  // The reply can stream in before the persisted user echo (V2 turns publish
+  // it on another channel), so keep the pending question ahead of anything
+  // that arrived after it was sent.
+  const firstMessageAfterSend =
+    optimisticUserMessage && !hasPersistedOptimisticEcho
+      ? messages.findIndex(
+          (message) => !optimisticBaselineIdsRef.current.has(message.id)
+        )
+      : -1;
   const displayedMessages =
     optimisticUserMessage && !hasPersistedOptimisticEcho
-      ? [...messages, optimisticUserMessage]
+      ? firstMessageAfterSend === -1
+        ? [...messages, optimisticUserMessage]
+        : [
+            ...messages.slice(0, firstMessageAfterSend),
+            optimisticUserMessage,
+            ...messages.slice(firstMessageAfterSend),
+          ]
       : messages;
   const visibleMessages = displayedMessages.filter(visibleMessageFilter);
   const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
