@@ -61,7 +61,24 @@ apply ahead of dev; that is expected, not drift.
   state key or retire). Remove leftover workspace references in
   `docs/superpowers/plans/*` if they are still used as runbooks.
 
-## Current status
+## Current status (2026-11-09, branch `infra/terraform-pipeline`)
+
+- Phases 1–2 merged in PR #249; dev and prod applied and in sync from shared state.
+- Phase 3 decision: reuse each environment's `AZURE_CREDENTIALS` service principal
+  (dev MaxView, object `994a7098-…`; prod apex-prd-sp, object `eeec9951-…`) instead of new OIDC identities.
+- Phase 4 written, not pushed: `.github/actions/terraform/action.yml`,
+  `scripts/ci/has-terraform-changes.sh`, `infra/scripts/prd-tf-secrets.sh`, `infra/env/prd.tfvars`,
+  steps in `deploy.yml` (plan in staging job, apply in gated swap job before swap), `pr-tests.yml`
+  (plan on PR, apply on manual run), `deploy-dev-quick.yml` (apply). README "Pipeline" section.
+- Verified locally: prod plan with `env/prd.tfvars` + script = only the apex-prd-sp Key Vault grant;
+  dev plan = only the MaxView Key Vault grant + the perpetual AllMetrics diagnostic-setting diff.
+- Still needed before the pipeline can apply:
+  - Storage Blob Data Contributor for MaxView on `stapextfstatedev` and apex-prd-sp on `stapextfstateprd` (Aneesh can grant; Owner on state RGs).
+  - Key Vault officer grants: one local apply per environment (the plans above), or let the pipeline create them where it can.
+  - Admin: MaxView role-assignment rights on `rg-scrum-dev` (Aneesh's RBAC Admin there is conditional).
+  - Tenant admin: Graph `Application.Read.All` + `AppRoleAssignment.ReadWrite.All` for apex-prd-sp (prod `azuread_app_role_assignment`).
+
+## Earlier status
 
 - Phase 1 implemented on `infra/terraform-remote-state`, draft PR open.
   `terraform fmt -check -recursive`, `terraform init -backend=false`,

@@ -1,0 +1,92 @@
+name: Terraform plan or apply
+description: >-
+  Plans infra/ against one environment's shared state and, when apply is true and
+  the plan has changes, applies that saved plan. Signs in with the environment's
+  AZURE_CREDENTIALS service principal. Secret inputs are read from live Azure by
+  infra/scripts/<environment>-tf-secrets.sh, so the az CLI must already be logged in.
+
+inputs:
+  environment:
+    description: dev or prd (selects backend/<env>.hcl, env/<env>.tfvars, scripts/<env>-tf-secrets.sh)
+    required: true
+  apply:
+    description: "'true' to apply the plan; anything else only plans"
+    required: false
+    default: 'false'
+  azure-credentials:
+    description: AZURE_CREDENTIALS JSON (clientId, clientSecret, tenantId)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.15.8
+        terraform_wrapper: false
+
+    - name: Terraform ${{ inputs.apply == 'true' && 'plan and apply' || 'plan' }} (${{ inputs.environment }})
+      shell: bash
+      working-directory: infra
+      env:
+        TF_ENV: ${{ inputs.environment }}
+        TF_APPLY: ${{ inputs.apply }}
+        AZURE_CREDENTIALS_JSON: ${{ inputs.azure-credentials }}
+        TF_IN_AUTOMATION: 'true'
+        # The principals are scoped to the Apex resource groups and cannot
+        # register providers at subscription level.
+        ARM_SKIP_PROVIDER_REGISTRATION: 'true'
+      run: |
+        set -euo pipefail
+        case "$TF_ENV" in
+          dev|prd) ;;
+          *) echo "Unknown environment '$TF_ENV'" >&2; exit 1 ;;
+        esac
+
+        ARM_CLIENT_ID=$(jq -r .clientId <<<"$AZURE_CREDENTIALS_JSON")
+        ARM_CLIENT_SECRET=$(jq -r .clientSecret <<<"$AZURE_CREDENTIALS_JSON")
+        ARM_TENANT_ID=$(jq -r .tenantId <<<"$AZURE_CREDENTIALS_JSON")
+        echo "::add-mask::$ARM_CLIENT_SECRET"
+        # The backend file names the subscription that environment's resources live in.
+        ARM_SUBSCRIPTION_ID=$(sed -n 's/^subscription_id *= *"\(.*\)"/\1/p' "backend/$TF_ENV.hcl")
+        export ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_TENANT_ID ARM_SUBSCRIPTION_ID
+        az account set --subscription "$ARM_SUBSCRIPTION_ID"
+        az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+
+        terraform init -input=false -no-color -backend-config="backend/$TF_ENV.hcl"
+
+        source "scripts/$TF_ENV-tf-secrets.sh"
+        for name in $(env | grep -o '^TF_VAR_[a-z0-9_]*'); do
+          value="${!name}"
+          if [ "${#value}" -ge 8 ]; then
+            echo "::add-mask::$value"
+          fi
+        done
+        unset value
+
+        set +e
+        terraform plan -input=false -no-color -lock-timeout=10m -detailed-exitcode \
+          -var-file="env/$TF_ENV.tfvars" -out=tfplan > plan.txt
+        status=$?
+        set -e
+        cat plan.txt
+        {
+          echo "### Terraform plan ($TF_ENV)"
+          echo '```'
+          grep -E '^  # |^Plan:|^No changes' plan.txt || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        case "$status" in
+          0) echo "No changes for $TF_ENV." ;;
+          2)
+            if [ "$TF_APPLY" = "true" ]; then
+              terraform apply -input=false -no-color -lock-timeout=10m tfplan
+            else
+              echo "Plan only; not applying."
+            fi
+            ;;
+          *) rm -f tfplan; exit "$status" ;;
+        esac
+        rm -f tfplan

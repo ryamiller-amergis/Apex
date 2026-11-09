@@ -83,4 +83,5 @@ ai_platform_v2_visual_image       = "acrapexltdev.azurecr.io/apex-ai-runs-visual
 ai_runs_key_vault_secrets_officer_ids = [
   "110b196f-3f0d-4890-969f-5571085039de", # Ryan Miller
   "1ceaafde-4871-4411-9ef7-5432c7b4e080", # Aneesh Nedunuri
+  "994a7098-aa68-4c16-825c-fe7ca05584fc", # MaxView (dev AZURE_CREDENTIALS)
 ]

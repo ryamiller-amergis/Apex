@@ -143,6 +143,7 @@ jobs:
       ai_runs_visual_tag: ${{ steps.detect.outputs.ai_runs_visual_tag }}
       ai_orchestrator_tag: ${{ steps.detect.outputs.ai_orchestrator_tag }}
       repo_read_service_tag: ${{ steps.detect.outputs.repo_read_service_tag }}
+      terraform: ${{ steps.terraform_changes.outputs.terraform }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -159,6 +160,15 @@ jobs:
         run: |
           git fetch origin main --depth=1
           bash scripts/ci/detect-image-publish-changes.sh
+
+      - name: Detect Terraform changes vs origin/main
+        id: terraform_changes
+        env:
+          BASE_SHA: origin/main
+          HEAD_SHA: HEAD
+          DIFF_MODE: branch
+          REQUIRE_UP_TO_DATE: 'true'
+        run: bash scripts/ci/has-terraform-changes.sh
 
   deploy-dev:
     needs: [resolve, build, detect-runner-changes]
@@ -260,6 +270,14 @@ jobs:
           echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+
+      - name: Terraform apply (dev)
+        if: needs.detect-runner-changes.outputs.terraform == 'true'
+        uses: ./.github/actions/terraform
+        with:
+          environment: dev
+          apply: 'true'
+          azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Set App Service Configuration
         env:
