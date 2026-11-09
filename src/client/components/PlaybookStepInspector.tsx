@@ -8,11 +8,15 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Link2, Maximize2, Minimize2, Trash2, TriangleAlert, X } from 'lucide-react';
-import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
+import {
+  playbookStepNeedsTitle,
+  type PlaybookGraphNode,
+  type PlaybookStepTypePaletteItem,
+} from '../../shared/types/playbook';
 import { availableBindings, tokenReferences } from '../utils/playbookBindings';
 import { PlaybookBindingText } from './PlaybookBindingText';
 import { DeadlineField, STEP_FIELD_RENDERERS } from './PlaybookStepFields';
-import { stepMeta } from './playbookStepCatalog';
+import { STEP_TITLE_EXAMPLES, stepMeta } from './playbookStepCatalog';
 import styles from './PlaybookBuilder.module.css';
 
 const WIDTH_STORAGE_KEY = 'apex.playbooks.inspectorWidth';
@@ -55,6 +59,7 @@ interface PlaybookStepInspectorProps {
   issues?: readonly string[];
   canAuthor: boolean;
   onChange: (config: Config) => void;
+  onTitleChange?: (title: string) => void;
   onDelete: () => void;
   onClose: () => void;
   'data-testid'?: string;
@@ -75,7 +80,7 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const FIELD_HINTS: Record<string, string> = {
-  deadlineMs: 'Leave blank to use the stepâ€™s default.',
+  deadlineMs: 'Leave blank to use the step’s default.',
   recipientUserId: 'Leave blank to notify whoever started the run.',
   gatedStepId: 'The step this approval protects.',
 };
@@ -182,7 +187,7 @@ const SchemaField: React.FC<FieldProps> = (props) => {
         onChange={(event) => onChange(event.target.value || undefined)}
         {...{ 'data-testid': testId }}
       >
-        <option value="">Choose a stepâ€¦</option>
+        <option value="">Choose a step</option>
         {otherNodeIds.map((nodeId) => (
           <option key={nodeId} value={nodeId}>{nodeId}</option>
         ))}
@@ -364,10 +369,13 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
   issues = [],
   canAuthor,
   onChange,
+  onTitleChange,
   onDelete,
   onClose,
   'data-testid': testId = 'playbook-step-inspector',
 }) => {
+  const needsTitle = playbookStepNeedsTitle(node.stepType);
+  const title = node.title ?? '';
   const meta = stepMeta(node.stepType);
   const Icon = meta.icon;
   const config = node.config ?? {};
@@ -446,8 +454,10 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
           <Icon size={16} />
         </span>
         <div className={styles.inspectorTitleBlock}>
-          <h2 className={styles.inspectorTitle}>{meta.title}</h2>
-          <code className={styles.inspectorId} title="Step id">{node.id}</code>
+          <h2 className={styles.inspectorTitle}>{title.trim() || meta.title}</h2>
+          <code className={styles.inspectorId} title="Step type and id">
+            {title.trim() ? `${meta.title} · ${node.id}` : node.id}
+          </code>
         </div>
         <button
           type="button"
@@ -501,6 +511,25 @@ export const PlaybookStepInspector: React.FC<PlaybookStepInspectorProps> = ({
           </div>
 
           <div className={styles.inspectorBody}>
+            {needsTitle ? (
+              <div className={styles.field}>
+                <label htmlFor={`playbook-title-${node.id}`} className={styles.fieldLabel}>
+                  Title
+                  <span className={styles.fieldRequired} aria-label="required">*</span>
+                </label>
+                <input
+                  id={`playbook-title-${node.id}`}
+                  className={styles.fieldInput}
+                  value={title}
+                  placeholder={`For example: ${STEP_TITLE_EXAMPLES[node.stepType] ?? 'Describe what this step does'}`}
+                  maxLength={80}
+                  disabled={!canAuthor || !onTitleChange}
+                  onChange={(event) => onTitleChange?.(event.target.value)}
+                  {...{ 'data-testid': 'playbook-inspector-title' }}
+                />
+                <span className={styles.fieldHint}>Shown on the canvas and in the run view.</span>
+              </div>
+            ) : null}
             {issues.length > 0 ? (
               <section className={styles.problemCard} role="alert" {...{ 'data-testid': 'playbook-inspector-issues' }}>
                 <span className={styles.problemTitle}>

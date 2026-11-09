@@ -59,6 +59,20 @@ export const PLAYBOOK_STEP_GROUP_LABELS: Record<PlaybookStepGroup, string> = {
 /** Shown as "Most used" before the author has added anything. */
 export const DEFAULT_POPULAR_STEP_TYPES: readonly string[] = ['cursor-agent', 'approval-gate', 'notify'];
 
+/** Placeholder text for a step's Title field. */
+export const STEP_TITLE_EXAMPLES: Record<string, string> = {
+  'cursor-agent': 'Investigate the production error',
+  'cloud-agent': 'Fix the bug and open a pull request',
+  'approval-gate': 'Approve the proposed fix',
+  'apex-action': 'Comment on the work item',
+  notify: 'Tell the on-call engineer',
+};
+
+/** Fields older graphs read that `output` now carries. Still valid, no longer offered. */
+export const SUPERSEDED_OUTPUT_FIELDS: Record<string, readonly string[]> = {
+  'cursor-agent': ['reportMd'],
+};
+
 const KNOWN_STEPS: Record<string, Omit<PlaybookStepMeta, 'stepType'>> = {
   'cursor-agent': {
     title: 'Agent task',
@@ -164,8 +178,10 @@ const INTERVIEW_MODE_LABELS: Record<string, string> = {
 /** Ids the canvas used to generate (`step-<uuid>`) mean nothing to a reader. */
 const GENERATED_ID = /^step-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A step's title plus its id when the id says something the title does not. */
-export function stepDisplayName(node: Pick<PlaybookGraphNode, 'id' | 'stepType'>): string {
+/** The author's title, else the step type's name plus its id when the id says something. */
+export function stepDisplayName(node: Pick<PlaybookGraphNode, 'id' | 'stepType' | 'title'>): string {
+  const authored = node.title?.trim();
+  if (authored) return authored;
   const title = stepMeta(node.stepType).title;
   return GENERATED_ID.test(node.id) ? title : `${title} · ${node.id}`;
 }

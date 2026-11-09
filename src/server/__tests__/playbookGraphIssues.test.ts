@@ -18,9 +18,10 @@ const VALID: PlaybookGraph = {
     {
       id: 'a',
       stepType: 'cursor-agent',
+      title: 'Do the work',
       config: { skillPath: SKILL_PATH, prompt: 'Do the work.', mcpProfile: 'repository-read-only' },
     },
-    { id: 'b', stepType: 'notify', config: { title: 'Done' } },
+    { id: 'b', stepType: 'notify', title: 'Say it is done', config: { title: 'Done' } },
   ],
   edges: [{ from: 'a', to: 'b' }],
 };
@@ -28,6 +29,18 @@ const VALID: PlaybookGraph = {
 describe('collectGraphIssues', () => {
   it('reports nothing for a graph publish would accept', () => {
     expect(collectGraphIssues(VALID)).toEqual([]);
+  });
+
+  it('asks for a title on a work step but not on a flow step', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { ...VALID.nodes[0], title: '  ' },
+        { id: 'b', stepType: 'join', config: {} },
+      ],
+      edges: [{ from: 'a', to: 'b' }],
+    };
+    const titleIssues = collectGraphIssues(graph).filter((issue) => issue.message.includes('title'));
+    expect(titleIssues).toEqual([{ kind: 'graph', nodeId: 'a', message: 'Give step "a" a title.' }]);
   });
 
   it('keeps going after the first problem and names the step each one is on', () => {

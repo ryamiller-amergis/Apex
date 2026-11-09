@@ -40,6 +40,7 @@ import {
 } from './playbookMcpCapabilityService';
 import {
   PLAYBOOK_GUARD_LIMITS,
+  playbookStepNeedsTitle,
   type PlaybookDryRunIssue,
   type PlaybookGraph,
   type PlaybookGraphNode,
@@ -557,6 +558,21 @@ export function assertGraphStepsResolvable(
 }
 
 /**
+ * Every step an author adds, except flow steps, needs a title so a reader can tell steps apart.
+ * Checked when an author publishes and on the canvas. Graphs Apex builds itself are not checked.
+ */
+export function assertStepTitles(
+  graph: PlaybookGraph,
+  nodes: readonly PlaybookGraphNode[] = graph.nodes
+): void {
+  for (const node of nodes) {
+    if (!playbookStepNeedsTitle(node.stepType)) continue;
+    if (typeof node.title === 'string' && node.title.trim()) continue;
+    throw new PlaybookGraphNodeRuleError(node.id, `Give step "${node.id}" a title.`);
+  }
+}
+
+/**
  * Topology checks shared by publish and the authoring canvas.
  *
  * Step budgets and gate/MCP rules stay on the publish path only. The canvas must allow a
@@ -758,6 +774,7 @@ export function collectGraphIssues(
     attempt(() => assertGraphStepsResolvable(graph, lookup, [node]), node.id);
     attempt(() => assertBindingsResolvable(graph, lookup, [node]), node.id);
     attempt(() => assertCursorAgentsUseReadOnlyMcp({ nodes: [node], edges: [] }), node.id);
+    attempt(() => assertStepTitles(graph, [node]), node.id);
   }
 
   for (const nodeId of findUngatedLeavesApexSteps(graph, lookup)) {

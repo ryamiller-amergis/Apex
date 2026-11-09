@@ -186,6 +186,7 @@ describe('FEAT-007 S5 happy-path forwarding', () => {
       definitionId: 'def-1',
       publishedByUserId: USER_OID,
       expectedDraftUpdatedAt: '2026-09-22T11:00:00.000Z',
+      authoredInBuilder: true,
     });
   });
 

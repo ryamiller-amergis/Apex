@@ -85,8 +85,8 @@ const FlowOutline: React.FC<{ detail: PlaybookDefinitionDetail }> = ({ detail })
               <Icon size={14} />
             </span>
             <span className={styles.outlineText}>
-              <span className={styles.outlineTitle}>{meta.title}</span>
-              <span className={styles.outlineMeta}>{nodeSubtitle(node)}</span>
+              <span className={styles.outlineTitle}>{node.title?.trim() || meta.title}</span>
+              <span className={styles.outlineMeta}>{node.title?.trim() ? meta.title : nodeSubtitle(node)}</span>
             </span>
           </li>
         );

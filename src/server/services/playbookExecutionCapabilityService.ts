@@ -51,6 +51,33 @@ const MOVED_SKILL_PATHS: Record<string, string> = {
     'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
 };
 
+/**
+ * An Agent task with no Skill still runs under a pinned Skill, so the policy hash and the worker's
+ * hash check work unchanged. This path names built-in text, not a file.
+ */
+export const PLAYBOOK_DEFAULT_SKILL_PATH = 'apex/playbook-agent-task/SKILL.md';
+const PLAYBOOK_DEFAULT_SKILL_CONTENT = [
+  '---',
+  'name: playbook-agent-task',
+  'description: Carry out the task in the Playbook step prompt.',
+  '---',
+  '',
+  '# Playbook agent task',
+  '',
+  'Do the task described in the prompt. Read the repository when it helps.',
+  'End with a clear reply that answers the prompt. Later steps read that reply as this step\'s output.',
+  '',
+].join('\n');
+
+/** The Skill a step runs: the one it names, or the built-in default. */
+export function playbookSkillPath(skillPath: string | undefined | null): string {
+  return skillPath?.trim() || PLAYBOOK_DEFAULT_SKILL_PATH;
+}
+
+function isDefaultSkill(skillPath: string): boolean {
+  return skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/') === PLAYBOOK_DEFAULT_SKILL_PATH;
+}
+
 function playbookContentRoots(): string[] {
   return [
     path.resolve(process.cwd()),
@@ -60,6 +87,7 @@ function playbookContentRoots(): string[] {
 }
 
 export async function loadPlaybookSkillContent(skillPath: string): Promise<string> {
+  if (isDefaultSkill(skillPath)) return PLAYBOOK_DEFAULT_SKILL_CONTENT;
   const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
   const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
   const tried = new Set<string>();
@@ -88,6 +116,7 @@ const SKILL_COMPANION_MAX_BYTES = 200_000;
 export async function loadPlaybookSkillCompanions(
   skillPath: string,
 ): Promise<Array<{ path: string; content: string }>> {
+  if (isDefaultSkill(skillPath)) return [];
   const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
   const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
   const directory = path.posix.dirname(relativePath);
@@ -191,7 +220,9 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
   for (const node of input.graph.nodes) {
     // Cloud-agent steps count toward the agent cap, but they do not load a repository Skill.
     if (node.stepType !== 'cursor-agent') continue;
-    const skillPath = typeof node.config?.skillPath === 'string' ? node.config.skillPath : '';
+    const skillPath = playbookSkillPath(
+      typeof node.config?.skillPath === 'string' ? node.config.skillPath : undefined,
+    );
     const skillContent = await loadPlaybookSkillContent(skillPath);
     policies.push({
       nodeId: node.id,

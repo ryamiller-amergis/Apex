@@ -399,6 +399,15 @@ export const StepLog: React.FC<{
   );
 };
 
+/** A Skill's report, else what the agent replied. */
+function stepOutputText(output: Record<string, unknown> | null | undefined): string | null {
+  for (const key of ['reportMd', 'output']) {
+    const value = output?.[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
 export const StepDetails: React.FC<{
   project: string;
   runId: string;
@@ -410,8 +419,17 @@ export const StepDetails: React.FC<{
   const outputUrl = `/api/playbooks/runs/${encodeURIComponent(runId)}`
     + `/steps/${encodeURIComponent(step.id)}`
     + `/output?project=${encodeURIComponent(project)}&part=full`;
+  const inlineOutputText = stepOutputText(step.outputInline);
+  const fullOutputText = stepOutputText(output.data);
+  const outcome = typeof step.outputInline?.outcome === 'string' ? step.outputInline.outcome : null;
   return (
     <>
+      {outcome ? (
+        <section className={styles.section}>
+          <h3>Outcome</h3>
+          <p {...{ 'data-testid': 'playbook-step-outcome' }}>{outcome}</p>
+        </section>
+      ) : null}
       <section className={styles.section}>
         <h3>Timing</h3>
         <p>
@@ -432,11 +450,11 @@ export const StepDetails: React.FC<{
         <pre className={styles.code}>{JSON.stringify(step.inputInline ?? {}, null, 2)}</pre>
       </section>
 
-      {typeof step.outputInline?.reportMd === 'string' && step.outputInline.reportMd.trim() ? (
+      {inlineOutputText ? (
         <section className={styles.section}>
-          <h3>Report</h3>
+          <h3>Output</h3>
           <div className={styles.report} {...{ 'data-testid': 'playbook-step-report' }}>
-            <MarkdownWithMermaid content={step.outputInline.reportMd} />
+            <MarkdownWithMermaid content={inlineOutputText} />
           </div>
         </section>
       ) : null}
@@ -475,12 +493,11 @@ export const StepDetails: React.FC<{
         {output.isError ? (
           <p className={styles.error}>Full output is unavailable or the output feature is disabled.</p>
         ) : null}
-        {output.data && typeof output.data.reportMd === 'string' && output.data.reportMd.trim()
-          && output.data.reportMd !== step.outputInline?.reportMd ? (
+        {fullOutputText && fullOutputText !== inlineOutputText ? (
           <>
-            <h3>Report</h3>
+            <h3>Output</h3>
             <div className={styles.report} {...{ 'data-testid': 'playbook-step-report-full' }}>
-              <MarkdownWithMermaid content={output.data.reportMd} />
+              <MarkdownWithMermaid content={fullOutputText} />
             </div>
           </>
         ) : null}
@@ -561,7 +578,7 @@ export const PlaybookStepDetailDrawer: React.FC<PlaybookStepDetailDrawerProps> =
                   >
                     <StatusIcon status={candidate.status} />
                     <span className={styles.stageText}>
-                      <span className={styles.stageName}>{stepMeta(candidate.stepType).title}</span>
+                      <span className={styles.stageName}>{candidate.title ?? stepMeta(candidate.stepType).title}</span>
                       <span className={styles.stageId}>{candidate.stepId}</span>
                     </span>
                     <span className={styles.stageTime}>
@@ -578,7 +595,8 @@ export const PlaybookStepDetailDrawer: React.FC<PlaybookStepDetailDrawerProps> =
           <header className={styles.header}>
             <div className={styles.headerText}>
               <h2 id="playbook-step-detail-title" className={styles.title}>
-                {meta.title} <span className={styles.titleId}>{step.stepId}</span>
+                {step.title ?? meta.title}{' '}
+                <span className={styles.titleId}>{step.title ? `${meta.title} · ${step.stepId}` : step.stepId}</span>
               </h2>
               <p className={styles.meta}>
                 <span className={styles.statusPill} data-status={step.status}>

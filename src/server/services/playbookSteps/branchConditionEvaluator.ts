@@ -55,6 +55,40 @@ function canReach(graph: PlaybookGraph, from: string, to: string): boolean {
   return false;
 }
 
+/** A branch on an agent's outcome must compare against outcomes that step lets the agent pick. */
+function assertDeclaredOutcomes(
+  nodeId: string,
+  source: PlaybookGraphNode,
+  operator: PlaybookBranchCondition['operator'],
+  value: unknown,
+): void {
+  const declared = Array.isArray(source.config?.outcomes) ? source.config.outcomes.map(String) : [];
+  if (declared.length === 0) {
+    throw new PlaybookBranchConditionError(
+      nodeId,
+      source.id,
+      'outcome',
+      'that Agent task lists no outcomes. Add outcomes to it first',
+    );
+  }
+  if (operator === 'exists' || operator === 'missing' || operator === 'contains') return;
+  const compared = Array.isArray(value) ? value : [value];
+  const unknown = compared.find((candidate) => !declared.includes(String(candidate)));
+  if (unknown !== undefined) {
+    throw new PlaybookBranchConditionError(
+      nodeId,
+      source.id,
+      'outcome',
+      `"${String(unknown)}" is not one of that step's outcomes (${declared.join(', ')})`,
+    );
+  }
+}
+
+function hasValue(actual: unknown): boolean {
+  if (actual === undefined || actual === null) return false;
+  return typeof actual !== 'string' || actual.trim().length > 0;
+}
+
 export function validateBranchCondition(graph: PlaybookGraph, node: PlaybookGraphNode): void {
   const parsed = getStepTypeDescriptor('branch').inputSchema.parse(node.config ?? {}) as {
     condition: PlaybookBranchCondition;
@@ -90,11 +124,15 @@ export function validateBranchCondition(graph: PlaybookGraph, node: PlaybookGrap
   }
   const { operator, value } = parsed.condition;
   const orderedComparison = ['gt', 'gte', 'lt', 'lte'].includes(operator);
-  const compatible = operator === 'in'
-    ? Array.isArray(value) && value.every((candidate) => fieldSchema.safeParse(candidate).success)
-    : orderedComparison
-      ? fieldSchema instanceof z.ZodNumber && typeof value === 'number'
-      : fieldSchema.safeParse(value).success;
+  const compatible = operator === 'exists' || operator === 'missing'
+    ? true
+    : operator === 'contains'
+      ? fieldSchema instanceof z.ZodString && typeof value === 'string' && value.trim().length > 0
+      : operator === 'in'
+        ? Array.isArray(value) && value.every((candidate) => fieldSchema.safeParse(candidate).success)
+        : orderedComparison
+          ? fieldSchema instanceof z.ZodNumber && typeof value === 'number'
+          : fieldSchema.safeParse(value).success;
   if (!compatible) {
     throw new PlaybookBranchConditionError(
       node.id,
@@ -102,6 +140,9 @@ export function validateBranchCondition(graph: PlaybookGraph, node: PlaybookGrap
       field,
       `operator "${operator}" and its comparison value are incompatible with the declared field`,
     );
+  }
+  if (source.stepType === 'cursor-agent' && field === 'outcome') {
+    assertDeclaredOutcomes(node.id, source, operator, value);
   }
 
   const continuations = graph.edges
@@ -151,5 +192,11 @@ export function evaluateBranchCondition(
     case 'gte': return typeof actual === 'number' && typeof condition.value === 'number' && actual >= condition.value;
     case 'lt': return typeof actual === 'number' && typeof condition.value === 'number' && actual < condition.value;
     case 'lte': return typeof actual === 'number' && typeof condition.value === 'number' && actual <= condition.value;
+    case 'contains':
+      return typeof actual === 'string'
+        && typeof condition.value === 'string'
+        && actual.toLowerCase().includes(condition.value.toLowerCase());
+    case 'exists': return hasValue(actual);
+    case 'missing': return !hasValue(actual);
   }
 }

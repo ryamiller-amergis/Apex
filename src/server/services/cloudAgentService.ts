@@ -97,7 +97,10 @@ import {
   type OpenCloudAgentPullRequestInput,
 } from './cloudAgentPullRequest';
 import { prepareCloudAgentKickoff, type CloudAgentKickoffInput } from './cloudAgentKickoff';
+import { getStoredAdoTokenForUser } from './adoStoredUserToken';
+import { createNotification } from './notificationService';
 import {
+  buildApexOpensPullRequestInstructions,
   buildPullRequestDescriptionInstructions,
   buildPullRequestTitle,
   cloudAgentBranchName,
@@ -356,6 +359,62 @@ async function pullRequestForRun(
   }
 }
 
+/**
+ * Playbook runs turn Cursor's autoCreatePR off. Once the agent has pushed its
+ * branch, Apex opens the pull request with the Playbook author's saved Azure
+ * DevOps token so the author is its creator. When that token no longer redeems,
+ * the service account opens it and the author is told to sign in again.
+ */
+async function openPullRequestAsPlaybookAuthor(
+  run: { id: string; projectId: string; executionSnapshot: AgentRunExecutionSnapshot | null | undefined },
+  observed: { resultText?: string | null; summary?: string | null; branchName?: string | null; noChanges?: boolean },
+  deps: CloudAgentServiceDeps,
+): Promise<string | null> {
+  const snapshot = backgroundSnapshot(run.executionSnapshot);
+  const cloud = snapshot?.cloudAgent;
+  const authorId = cloud?.pullRequestAuthorId;
+  const sourceBranch = observed.branchName ?? cloud?.branchName ?? null;
+  if (!authorId || observed.noChanges || !sourceBranch) return null;
+  if (!cloud?.workItemId || !snapshot?.repository || snapshot.provider === 'github') return null;
+
+  const delivery = await deliveryForProject(run.projectId);
+  const adoUserToken = await (deps.getStoredAdoTokenForUser ?? getStoredAdoTokenForUser)(authorId);
+  if (!adoUserToken) {
+    console.warn('[cloud-agent] Playbook author token did not redeem; the service account opens the pull request', JSON.stringify({
+      runId: run.id,
+      authorId,
+    }));
+    await createNotification(authorId, {
+      type: 'system',
+      title: 'Sign in to Apex to own your Playbook pull requests',
+      body: 'A Playbook pull request was opened by the Apex service account because your Azure DevOps sign-in has expired. Open Apex to renew it.',
+      link: '/playbooks',
+    }, { dedupeKey: `playbook-pr-author-fallback:${run.id}` }).catch(() => undefined);
+  }
+  try {
+    return await deps.openCloudAgentPullRequest({
+      project: run.projectId,
+      repo: snapshot.repository,
+      targetBranch: delivery.targetBranch || cloud.baseBranch,
+      sourceBranch,
+      titleBranch: cloud.branchName ?? sourceBranch,
+      workItemId: cloud.workItemId,
+      workItemTitle: cloud.workItemTitle ?? null,
+      workItemType: cloud.workItemType ?? null,
+      summary: observed.resultText ?? observed.summary ?? null,
+      adoUserToken,
+      allowServiceAccount: true,
+    });
+  } catch (err) {
+    // Returning null lets the pull-request wait run out instead of retrying forever.
+    console.warn('[cloud-agent] could not open the Playbook pull request', JSON.stringify({
+      runId: run.id,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+    return null;
+  }
+}
+
 async function deliveryForProject(project: string): Promise<{
   targetBranch: string | null;
   requiredReviewers: string[];
@@ -433,6 +492,8 @@ export interface CloudAgentServiceDeps {
     workItemId: number;
     sourceBranch?: string | null;
   }) => Promise<string | null>;
+  /** Playbook pull requests: the author's Azure DevOps token from their saved refresh token. */
+  getStoredAdoTokenForUser?: (userId: string) => Promise<string | null>;
 }
 
 const defaultDeps: CloudAgentServiceDeps = {
@@ -460,6 +521,7 @@ const defaultDeps: CloudAgentServiceDeps = {
   writeLeftoverWorkToAdo,
   openCloudAgentPullRequest,
   findWorkItemPullRequest: async (input) => new AzureDevOpsService(input.project).findPullRequestUrlForWorkItem(input),
+  getStoredAdoTokenForUser,
 };
 
 export async function buildCloudAgentPrompt(input: {
@@ -474,6 +536,8 @@ export async function buildCloudAgentPrompt(input: {
   targetBranch?: string | null;
   createdByName?: string | null;
   createdByEmail?: string | null;
+  /** The agent pushes the branch and Apex opens the pull request. */
+  apexOpensPullRequest?: boolean;
 }): Promise<string> {
   const [pack, skillConfig] = await Promise.all([
     buildLocalDevContext({
@@ -509,18 +573,22 @@ export async function buildCloudAgentPrompt(input: {
   const files = pack.files
     .map((file) => `### ${file.name}\n\n${file.content}`)
     .join('\n\n');
-  const descriptionInstructions = buildPullRequestDescriptionInstructions({
-    workItemId: input.workItemId,
-    pullRequestTitle,
-    pullRequestLabel: CLOUD_AGENT_PULL_REQUEST_LABEL,
-  });
+  const descriptionInstructions = input.apexOpensPullRequest
+    ? buildApexOpensPullRequestInstructions({ workItemId: input.workItemId })
+    : buildPullRequestDescriptionInstructions({
+        workItemId: input.workItemId,
+        pullRequestTitle,
+        pullRequestLabel: CLOUD_AGENT_PULL_REQUEST_LABEL,
+      });
   const body = [
     `Implement this Azure DevOps work item in the project's configured repository.`,
     `Work item id: ${input.workItemId}.`,
     buildCloudDevelopmentKickoffSection(development),
-    targetBranch
+    targetBranch && !input.apexOpensPullRequest
       ? `Create branch \`${branchName}\` from \`${targetBranch}\`. Open the pull request into \`${targetBranch}\` and no other branch.`
-      : `Work on branch \`${branchName}\` and no other branch.`,
+      : targetBranch
+        ? `Create branch \`${branchName}\` from \`${targetBranch}\`.`
+        : `Work on branch \`${branchName}\` and no other branch.`,
     creator
       ? `Make the git author and committer ${creator}${input.createdByEmail?.trim() ? ` <${input.createdByEmail.trim()}>` : ''}, the person who created this work item.`
       : '',
@@ -612,6 +680,8 @@ export interface StartCloudAgentRunInput {
   adoUserToken?: string | null;
   /** Passed by the Playbook step. Cloud Agent start does not use the Start Development type gate. */
   isSuperAdmin?: boolean;
+  /** Passed by the Playbook step. Apex opens the pull request as this user instead of Cursor. */
+  pullRequestAuthorId?: string;
   item: Pick<AssignedWorkItem, 'workItemType' | 'state' | 'tags'>;
   /** Set by the route when cloud-agent-guided-launch is on. */
   launchChooser?: boolean;
@@ -1409,6 +1479,7 @@ async function persistQueuedRun(
     targetBranch,
     createdByName: facts.name,
     createdByEmail: facts.email,
+    ...(input.pullRequestAuthorId ? { apexOpensPullRequest: true } : {}),
   });
   const configuredDevelopment = resolveDevelopmentSettings(skillConfig);
   const development = launchSettings
@@ -1501,6 +1572,7 @@ async function persistQueuedRun(
             ...(skillName ? { skillName } : {}),
             ...(customPrompt ? { customPrompt } : {}),
             ...(input.adoUserToken ? { userTokenInstance: cloudAgentInstanceId() } : {}),
+            ...(input.pullRequestAuthorId ? { pullRequestAuthorId: input.pullRequestAuthorId } : {}),
           },
         },
       });
@@ -1659,7 +1731,7 @@ async function launchClaimedCloudAgentRun(
       initiatorEmail: cloud.initiatorEmail,
       skillName: cloud.skillName,
       adoUserToken,
-      autoCreatePr: !unattended || cloud.opensPullRequest === true,
+      autoCreatePr: !cloud.pullRequestAuthorId && (!unattended || cloud.opensPullRequest === true),
       images: (cloud.images ?? []).flatMap((image) => (
         image.data && image.mimeType
           ? [{ data: image.data, mimeType: image.mimeType }]
@@ -1882,12 +1954,19 @@ export async function reconcileRunningCloudAgentRuns(
           cursorRunId: row.dispatchMessageId,
         });
         const snapshot = backgroundSnapshot(row.executionSnapshot);
-        const prUrl = await pullRequestForRun(observed, {
+        let prUrl = await pullRequestForRun(observed, {
           project: row.projectId,
           repo: snapshot?.repository ?? null,
           workItemId: snapshot?.cloudAgent?.workItemId ?? null,
           sourceBranch: metaBranchName(row.executionSnapshot) ?? observed.branchName ?? null,
         }, deps);
+        if (!prUrl && mapObservedStatus(observed.status) === 'completed') {
+          prUrl = await openPullRequestAsPlaybookAuthor({
+            id: row.id,
+            projectId: row.projectId,
+            executionSnapshot: row.executionSnapshot,
+          }, observed, deps);
+        }
         const mapped = prUrl ? 'completed' : mapObservedStatus(observed.status);
         if (!mapped || !isAgentRunTerminalStatus(mapped)) continue;
         const skipPullRequest = guidedSkipsPullRequest(row.executionSnapshot);
@@ -2386,12 +2465,19 @@ export async function getCloudAgentRunStatus(
         cursorRunId: run.dispatchMessageId,
       });
       const statusSnapshot = backgroundSnapshot(run.executionSnapshot);
-      const prUrl = await pullRequestForRun(observed, {
+      let prUrl = await pullRequestForRun(observed, {
         project: session.project,
         repo: statusSnapshot?.repository ?? null,
         workItemId: statusSnapshot?.cloudAgent?.workItemId ?? session.workItemId ?? null,
         sourceBranch: metaBranchName(run.executionSnapshot) ?? observed.branchName ?? null,
       }, deps);
+      if (!prUrl && mapObservedStatus(observed.status) === 'completed') {
+        prUrl = await openPullRequestAsPlaybookAuthor({
+          id: run.id,
+          projectId: session.project,
+          executionSnapshot: run.executionSnapshot,
+        }, observed, deps);
+      }
       const mapped = prUrl ? 'completed' : mapObservedStatus(observed.status);
       const canonicalBranch = metaBranchName(run.executionSnapshot);
       const pushedBranch = observed.noChanges ? null : observed.branchName ?? run.cloudBranchName;

@@ -33,7 +33,12 @@ import {
 import { PlaybookMcpCapabilityError } from '../services/playbookMcpCapabilityService';
 import { PlaybookExecutionCapabilityError } from '../services/playbookExecutionCapabilityService';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import {
+  CLOUD_AGENT_SETUP_REASON,
+  cloudAgentPlaybookSetupGap,
+} from '../services/cloudAgentDeliverySettings';
 import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { saveRequestAdoRefreshToken } from '../services/adoStoredUserToken';
 import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
 import {
   PlaybookRecommendationError,
@@ -583,6 +588,7 @@ router.put(
       return;
     }
 
+    await saveRequestAdoRefreshToken(req);
     try {
       res.json(
         await updateDraft({
@@ -624,12 +630,14 @@ router.post(
       return;
     }
 
+    await saveRequestAdoRefreshToken(req);
     try {
       const result = await publishDraft({
         project,
         definitionId: req.params.definitionId,
         publishedByUserId,
         expectedDraftUpdatedAt,
+        authoredInBuilder: true,
         ...(isPlainRecord(sampleRunInput) ? { sampleRunInput } : {}),
       });
       res.status(201).json(result);
@@ -666,8 +674,16 @@ router.post(
 router.get(
   '/step-types',
   requirePermission('playbooks:view'),
-  async (_req: Request, res: Response): Promise<void> => {
-    res.json({ items: listPlaybookStepPaletteItems() });
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const cloudAgentGap = project
+      ? await cloudAgentPlaybookSetupGap(project).catch(() => CLOUD_AGENT_SETUP_REASON)
+      : null;
+    res.json({
+      items: listPlaybookStepPaletteItems().map((item) =>
+        item.stepType === 'cloud-agent' && cloudAgentGap ? { ...item, unavailableReason: cloudAgentGap } : item,
+      ),
+    });
   },
 );
 
@@ -1045,6 +1061,7 @@ router.post(
       return;
     }
 
+    await saveRequestAdoRefreshToken(req);
     try {
       const result = await startRun({
         project,

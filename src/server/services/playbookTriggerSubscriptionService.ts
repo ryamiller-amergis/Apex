@@ -17,6 +17,15 @@ const adoWorkItemFilterSchema = z.object({
   workItemType: z.string().trim().min(1).max(128),
 });
 
+/**
+ * A work item, webhook, or Apex event is its own piece of work, so each delivery starts its own run
+ * and two can run at once. A schedule is the same job on every tick, so it skips a tick while the
+ * last run is still live. A caller can set either value.
+ */
+export function defaultConcurrencyPolicy(kind: string): 'allow' | 'skip_if_active' {
+  return kind === 'schedule' ? 'skip_if_active' : 'allow';
+}
+
 const subscriptionSchema = z.object({
   name: z.string().trim().min(1),
   enabled: z.boolean().default(true),
@@ -27,7 +36,7 @@ const subscriptionSchema = z.object({
   eventFilter: adoWorkItemFilterSchema.nullable().optional(),
   versionPolicy: z.enum(['current_published', 'pinned']).default('current_published'),
   pinnedVersionId: z.string().uuid().nullable().optional(),
-  concurrencyPolicy: z.enum(['allow', 'skip_if_active']).default('skip_if_active'),
+  concurrencyPolicy: z.enum(['allow', 'skip_if_active']).optional(),
   dedupeKeyTemplate: z.string().trim().min(1),
   runInputTemplate: z.record(z.string(), z.unknown()).default({}),
   inputMapping: z.array(playbookTriggerMappingSchema).default([]),
@@ -59,7 +68,10 @@ const subscriptionSchema = z.object({
       message: error instanceof Error ? error.message : 'Invalid trigger input.',
     });
   }
-});
+}).transform((value) => ({
+  ...value,
+  concurrencyPolicy: value.concurrencyPolicy ?? defaultConcurrencyPolicy(value.kind),
+}));
 
 export type PlaybookTriggerSubscriptionInput = z.infer<typeof subscriptionSchema>;
 

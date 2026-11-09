@@ -155,8 +155,12 @@ function PlaybookStepNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeDat
         <Icon size={16} strokeWidth={2} />
       </span>
       <span className={styles.nodeText}>
-        <span className={styles.nodeLabel}>{meta.title}</span>
-        <span className={summary || subtitle !== data.label ? styles.nodeMeta : styles.nodeId}>{subtitle}</span>
+        <span className={styles.nodeLabel}>{data.title?.trim() || meta.title}</span>
+        {data.title?.trim() ? (
+          <span className={styles.nodeMeta}>{meta.title}</span>
+        ) : (
+          <span className={summary || subtitle !== data.label ? styles.nodeMeta : styles.nodeId}>{subtitle}</span>
+        )}
       </span>
       <NodeRunStatus status={data.runStatus} />
       <Handle className={styles.handle} type="source" position={Position.Right} isConnectable={!data.readOnly} />

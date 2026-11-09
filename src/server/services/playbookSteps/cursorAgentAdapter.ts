@@ -31,9 +31,11 @@ import {
   loadPlaybookSkillCompanions,
   loadPlaybookSkillContent,
   PlaybookExecutionCapabilityError,
+  playbookSkillPath,
   resolvePlaybookAgentRunPolicy,
 } from '../playbookExecutionCapabilityService';
 import { parseStepInput } from './descriptorValidation';
+import { promptWithOutcomes } from './agentOutcome';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
 import {
   deadlineFromNow,
@@ -150,7 +152,9 @@ export async function executeCursorAgentStep(
    * would mean a refusal that has already cost a run, and TBI-017 is explicit that the check comes
    * first. See the registry for what this does and does not guarantee.
    */
-  assertSkillAllowed(STEP_TYPE, config.skillPath);
+  if (config.skillPath) assertSkillAllowed(STEP_TYPE, config.skillPath);
+  const skillPath = playbookSkillPath(config.skillPath);
+  const prompt = promptWithOutcomes(config.prompt, config.outcomes);
   const mcpCapability = resolvePlaybookMcpCapability(config.mcpProfile);
   // Undefined is tolerated only for immutable versions published before FEAT-014. New publication
   // requires a profile; any explicitly named non-read profile is also refused again at execution.
@@ -165,11 +169,11 @@ export async function executeCursorAgentStep(
   const stepExpiresAt = deadlineFromNow(deadlineMs);
 
   const skillConfig = await getSkillConfig(context.project);
-  const skillContent = await loadPlaybookSkillContent(config.skillPath);
-  const skillCompanions = await loadPlaybookSkillCompanions(config.skillPath);
+  const skillContent = await loadPlaybookSkillContent(skillPath);
+  const skillCompanions = await loadPlaybookSkillCompanions(skillPath);
   const resolvedPolicy = resolvePlaybookAgentRunPolicy({
     nodeId: context.stepId,
-    skillPath: config.skillPath,
+    skillPath,
     skillContent,
     mcpProfile: config.mcpProfile,
     repository: skillConfig?.skillRepo ?? context.project,
@@ -215,7 +219,7 @@ export async function executeCursorAgentStep(
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
       skillPath: config.skillPath,
-      freeformContext: config.prompt,
+      freeformContext: prompt,
       model,
       playbookMcpProfile: config.mcpProfile,
     },
@@ -224,11 +228,11 @@ export async function executeCursorAgentStep(
   );
 
   const snapshot: ExecutionSnapshot = {
-    prompt: config.prompt,
+    prompt,
     model,
     workspaceRef: thread.workspaceDir,
     workflowClass: 'playbook-step',
-    skillPath: config.skillPath,
+    skillPath,
     skillContent,
     skillSha256: policy.skill.sha256,
     projectId: context.project,
@@ -243,7 +247,7 @@ export async function executeCursorAgentStep(
         userId: context.initiatorUserId,
         project: context.project,
         threadId: thread.id,
-        prompt: config.prompt,
+        prompt,
         model,
         skillContent,
         skillCompanions,

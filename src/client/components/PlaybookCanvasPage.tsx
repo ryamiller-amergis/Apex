@@ -327,6 +327,18 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
     }));
   };
 
+  const updateNodeTitle = (title: string) => {
+    if (!selectedNodeId) return;
+    setGraph((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => {
+        if (node.id !== selectedNodeId) return node;
+        const { title: _previous, ...rest } = node;
+        return title ? { ...rest, title } : rest;
+      }),
+    }));
+  };
+
   /** Saves whatever is pending. Returns the draft revision to publish against, or null on error. */
   const save = useCallback(async (): Promise<string | null> => {
     if (!detail.data) return null;
@@ -641,6 +653,7 @@ export const PlaybookCanvasPage: React.FC<PlaybookCanvasPageProps> = ({
               issues={nodeIssues[selectedNode.id]}
               canAuthor={canAuthor}
               onChange={updateNodeConfig}
+              onTitleChange={updateNodeTitle}
               onDelete={() => deleteStep(selectedNode.id)}
               onClose={() => setSelectedNodeId(null)}
               {...{ 'data-testid': "playbook-step-inspector" }}

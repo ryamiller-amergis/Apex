@@ -56,6 +56,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'score',
         stepType: 'cursor-agent',
+        title: 'Score the design doc',
         config: {
           skillPath: options.skillPath,
           prompt:
@@ -70,6 +71,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'ingest',
         stepType: 'ingest-artifact',
+        title: 'Save the scorecard',
         config: {
           documentType: 'design_doc',
           documentId: '${input.documentId}',
@@ -95,6 +97,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'approve-ready',
         stepType: 'approval-gate',
+        title: 'Approve the ready design doc',
         config: {
           subject: 'Review ready design-doc validation result',
           approverPool: 'design_doc',
@@ -104,6 +107,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'notify-revision',
         stepType: 'notify',
+        title: 'Ask the owner to revise',
         config: {
           title: 'Design doc needs revision',
           body: 'Validation did not reach the ready threshold. Review the scorecard and revise.',

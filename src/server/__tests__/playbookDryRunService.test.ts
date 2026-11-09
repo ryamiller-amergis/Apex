@@ -43,13 +43,14 @@ describe('dryRunPlaybookDraft', () => {
             {
               id: 'a',
               stepType: 'cursor-agent',
+              title: 'Do the work',
               config: {
                 skillPath: DEMO_SKILL_PATH,
                 prompt: 'Do the work.',
                 mcpProfile: 'repository-read-only',
               },
             },
-            { id: 'b', stepType: 'notify', config: { title: 'Done' } },
+            { id: 'b', stepType: 'notify', title: 'Say it is done', config: { title: 'Done' } },
           ],
           edges: [{ from: 'a', to: 'b' }],
         },
