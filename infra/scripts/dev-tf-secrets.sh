@@ -15,8 +15,11 @@ _dev_secrets() {
   local rg=rg-scrum-dev
   local s="--subscription $subscription"
 
-  if [ "$(az account show $s --query name -o tsv 2>/dev/null | tr -d '\r')" != "$subscription" ]; then
-    echo "Azure CLI cannot read subscription $subscription; run az login" >&2
+  # Terraform plans against the CLI's current subscription unless ARM_SUBSCRIPTION_ID is set.
+  local current
+  current=$(az account show --query name -o tsv 2>/dev/null | tr -d '\r')
+  if [ "$current" != "$subscription" ] && [ "${ARM_SUBSCRIPTION_ID:-}" != "9d08693d-0c89-4f11-aa43-6cbdb89cf1cb" ]; then
+    echo "Azure CLI is on '$current'; run: az account set --subscription $subscription" >&2
     return 1
   fi
 

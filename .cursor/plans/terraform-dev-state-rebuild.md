@@ -113,7 +113,37 @@ Anything else (especially repo-read losing its GitHub token) → stop and review
     on the subscription; do not bootstrap into `rg-apex-prd-data` — the script's
     `az group create` would overwrite that group's tags).
 
-## Next steps
+## Update 2026-11-09 15:00 — remote state live for both environments
+
+- Access granted (RBAC Admin on `rg-scrum-dev`, KV Secrets Officer on
+  `kv-apex-ai-dev`, Owner on `rg-apex-tfstate-dev` / `rg-apex-tfstate-prd`).
+- Bootstrapped `stapextfstatedev` and `stapextfstateprd`; `backend/*.hcl` filled in.
+- Dev: KV secret imported (vault value == web app `CURSOR_API_KEY`), state pushed
+  to `stapextfstatedev/tfstate/dev.tfstate` (101 entries). Remote plan:
+  14 add / 24 change / 2 replace — the reviewed list. NOT applied.
+- Prod: state pushed to `stapextfstateprd/tfstate/prd.tfstate` (156 entries),
+  officer grant moved `[0]` → `["1ceaafde…"]`, local `terraform.prd.tfvars`
+  gained `ai_runs_key_vault_secrets_officer_ids`. Remote plan: no infrastructure
+  changes (only the stale `ai_runs_interactive_capacity` output, 16/4 → 12/0).
+- `infra/terraform.tfstate.d/` and `infra/.terraform/` moved to
+  `~/tfstate-backups/infra-*-20261109-145735/`. `infra/` is now initialized
+  against `backend/prd.hcl`.
+- README fix: dev steps set `az account set --subscription "MSS-DevTest"`
+  (Terraform uses the CLI's subscription); `dev-tf-secrets.sh` refuses to run
+  when the CLI is not on dev.
+
+## Remaining
+
+1. Dev apply (when Aneesh says): drain `ai-runs-background`, then
+   `az account set --subscription MSS-DevTest`, `init -reconfigure -backend-config=backend/dev.hcl`,
+   `source scripts/dev-tf-secrets.sh`, `plan -var-file=env/dev.tfvars`, confirm
+   14/24/2, apply. Expect ~1 min web app restart and a short queue gap.
+2. Grant `Storage Blob Data Contributor` on each state account to everyone who plans (Ryan).
+3. Ryan: delete his local `infra/terraform.tfstate*` and old `terraform.tfvars`.
+4. Phase 3–5 of `terraform-shared-pipeline.md` (pipeline identity, workflow, cleanup).
+   Add the pipeline identity to `ai_runs_key_vault_secrets_officer_ids`.
+
+## Next steps (original)
 
 1. Pass 1: generate import blocks for non-role-assignment resources, verify IDs
    exist, plan, apply only import-only (no-op) items via `-target`;

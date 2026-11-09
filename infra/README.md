@@ -108,6 +108,7 @@ az account show --query "{subscription:name}" -o table
 ### Dev (lower environment)
 
 ```bash
+az account set --subscription "MSS-DevTest"   # Terraform plans against the CLI's current subscription
 cd infra
 terraform init -reconfigure -backend-config=backend/dev.hcl
 source scripts/dev-tf-secrets.sh     # secrets from live dev apps, memory only
@@ -143,6 +144,7 @@ Do this once per environment, by the person who holds that environment's local s
 **Dev**: the original local dev state was lost. In November 2026 it was rebuilt by importing every live resource in `rg-scrum-dev` (no Azure changes), including the V2 runtime that `scripts/dev-aiv2-tf.sh` used to manage from a separate `dev-aiv2` workspace. Push the rebuilt file once the dev state account exists:
 
 ```bash
+az account set --subscription "MSS-DevTest"
 cd infra
 terraform init -reconfigure -backend-config=backend/dev.hcl
 terraform state push <rebuilt-dev.tfstate>
