@@ -71,7 +71,7 @@ apply ahead of dev; that is expected, not drift.
   GitHub `dev` secret `AZURE_DEPLOY_CREDENTIALS`; app-setting sign-in values still come from
   `AZURE_CREDENTIALS`. Login falls back to `AZURE_CREDENTIALS` until the new secret exists; the
   Terraform step does not.
-- Users cannot register apps in this tenant; an admin must create `apex-dev-sp`.
+- apex-dev-sp created 2026-11-10 (appId `0aadc3e2-…`, SP object `bf8bc145-…`, Aneesh owner). Roles: Contributor + conditional RBAC Admin on `rg-scrum-dev`, AcrPush `acrapexltdev`, Blob Data Contributor `stapextfstatedev`, Key Vault officer (applied). Secret `github-dev-deploy` (1 year, expires 2027-11-10) stored as `dev` env secret `AZURE_DEPLOY_CREDENTIALS`. MaxView RBAC Admin removed by admin.
 - MaxView clean-up: state grant and Key Vault officer grant removed 2026-11-09. Its RBAC Admin on
   `rg-scrum-dev` (granted today) needs an admin to remove. Its pre-existing Contributor/AcrPush stay
   until apex-dev-sp is live, since dev deploys still fall back to it.
