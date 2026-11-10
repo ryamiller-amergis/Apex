@@ -178,18 +178,14 @@ export function buildTaskExecutionPrompt(
 
   return [
     `Read and follow the skill at \`${input.skillPath}\`.`,
+    'Load the repository skills (`.cursor/skills/product-quality/SKILL.md`, `.cursor/skills/ui-standards/SKILL.md`, and `.cursor/skills/api-contract/SKILL.md`) for craft, layout, and contract rules.',
     '',
     '## Repository Build',
     isRevision
       ? 'Implement only the requested revision delta in this run. Start from the validated application on the integration branch and preserve all behavior outside the affected requirements.'
       : 'Plan the change internally, then implement the COMPLETE feature end-to-end in this single run (including database migrations/schema, Zod contracts, OpenAPI regeneration, backend API routes, frontend screens, and tests).',
-    isRevision
-      ? 'Do not restart intake, recreate the application, or reimplement unchanged requirements. Run focused checks for the delta plus regression tests for existing behavior.'
-      : 'NEVER stop after writing red tests, NEVER write a `plan.json` escalation file, and NEVER escalate or defer implementation to another path — you are the full-stack builder for this entire feature.',
-    'Push your task branch to `origin` (`git push -u origin <targetBranch>`) immediately after the red test commit, immediately after the green implementation commit, and after any fix commit so your work is preserved on the remote before final checks run.',
-    'Do NOT start a live Vite dev server or run `playwright test` in the cloud container (there is no live backend/database for browser e2e in the container, and waiting on Playwright exhausts the container timeout). Verify UI and API behavior with fast Vitest tests (`corepack pnpm test:unit`), and for any Playwright visual snapshot requirement (`DOD-*`), commit the spec file (`apps/web/e2e/*.spec.ts`) and defer e2e execution in `apex-evidence` (`"tier": "e2e"`, `"deferral": { "reason": "Playwright browser snapshots deferred to CI; verified via Vitest component tests." }`, `"red": null`, `"green": null`).',
-    'Inspect existing repository patterns and shared components before creating new code.',
-    'Add or update automated tests, run the quality commands below, and repair failures before finishing.',
+    'Push your task branch to `origin` (`git push -u origin <targetBranch>`) after the red test commit, after the green implementation commit, and after any fix commit.',
+    'Do NOT start a live Vite dev server or run `playwright test` in the cloud container; verify with fast Vitest tests and defer Playwright browser snapshots (`DOD-*`) in `apex-evidence` (`"tier": "e2e"`).',
     'Apex will open the pull request after verification; do not open or complete one yourself.',
     '',
     '## Runtime',

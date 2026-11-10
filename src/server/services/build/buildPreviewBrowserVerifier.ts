@@ -28,6 +28,17 @@ export interface BrowserA11yViolation {
   nodeCount: number;
 }
 
+export interface BrowserViewportVerification {
+  viewport: 'desktop' | 'mobile';
+  width: number;
+  height: number;
+  centeredMain: boolean;
+  maxWidthPx: number | null;
+  hasRenderedChart?: boolean;
+  hasNotifications?: boolean;
+  hasAiInsights?: boolean;
+}
+
 export interface BrowserJourneyResult {
   passed: boolean;
   screenshot: Buffer | null;
@@ -36,6 +47,7 @@ export interface BrowserJourneyResult {
   pageErrors: string[];
   networkFailures: BrowserNetworkFailure[];
   a11yViolations: BrowserA11yViolation[];
+  viewports?: BrowserViewportVerification[];
   failure?: string;
 }
 
@@ -91,6 +103,7 @@ export interface BrowserVerificationOutcome {
   checkId: string;
   status: Exclude<BuildPreviewEvidenceStatus, 'pending'>;
   evidenceRefs: ArtifactRef[];
+  viewports?: BrowserViewportVerification[];
 }
 
 export type BrowserTargetPolicy = (target: URL) => boolean;
@@ -170,6 +183,7 @@ export function createBuildPreviewBrowserVerifier(dependencies: {
             ? { detail: safeEvidenceText(step.detail, 500) }
             : {}),
         })),
+        ...(journey.viewports ? { viewports: journey.viewports } : {}),
         consoleErrors: bounded(journey.consoleErrors),
         pageErrors: bounded(journey.pageErrors),
         networkFailures: boundedNetworkFailures(journey.networkFailures),
@@ -227,6 +241,7 @@ export function createBuildPreviewBrowserVerifier(dependencies: {
         checkId: pending.id,
         status,
         evidenceRefs,
+        ...(journey.viewports ? { viewports: journey.viewports } : {}),
       };
     },
   };

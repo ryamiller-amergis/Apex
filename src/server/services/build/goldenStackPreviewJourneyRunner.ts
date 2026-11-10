@@ -7,6 +7,7 @@ import type {
   BrowserJourneyRunner,
   BrowserJourneyStep,
   BrowserNetworkFailure,
+  BrowserViewportVerification,
 } from './buildPreviewBrowserVerifier';
 
 const MAX_FINDINGS = 50;
@@ -25,6 +26,48 @@ interface OriginalProfile {
   email: string | null;
 }
 
+export async function inspectPageViewportGeometry(
+  page: Page,
+  viewport: 'desktop' | 'mobile',
+  dimensions: { width: number; height: number }
+): Promise<BrowserViewportVerification> {
+  await page.setViewportSize(dimensions);
+  const measured = await page.evaluate(() => {
+    const main = document.querySelector('[data-testid="app-shell-main"]');
+    const style = main ? window.getComputedStyle(main) : null;
+    const maxWidthRaw = style?.maxWidth ?? '';
+    const maxWidthPx = maxWidthRaw.endsWith('px')
+      ? Number.parseFloat(maxWidthRaw)
+      : null;
+    const alignSelf = style?.alignSelf ?? '';
+    const centeredMain =
+      alignSelf === 'center' && (maxWidthPx === null || maxWidthPx <= 960);
+    const hasRenderedChart = Boolean(
+      document.querySelector('[data-testid^="data-chart-card-"]')
+    );
+    const hasNotifications = Boolean(
+      document.querySelector('[data-testid="notification-center"]')
+    );
+    const hasAiInsights = Boolean(
+      document.querySelector('[data-testid="insights-page"]')
+    );
+    return {
+      centeredMain,
+      maxWidthPx,
+      hasRenderedChart,
+      hasNotifications,
+      hasAiInsights,
+    };
+  });
+
+  return {
+    viewport,
+    width: dimensions.width,
+    height: dimensions.height,
+    ...measured,
+  };
+}
+
 export function createGoldenStackPreviewJourneyRunner(options?: {
   timeoutMs?: number;
 }): BrowserJourneyRunner {
@@ -37,6 +80,7 @@ export function createGoldenStackPreviewJourneyRunner(options?: {
       const networkFailures: BrowserNetworkFailure[] = [];
       const a11yViolations: BrowserA11yViolation[] = [];
       const steps: BrowserJourneyStep[] = [];
+      const viewports: BrowserViewportVerification[] = [];
       let screenshot: Buffer | null = null;
       let failure: string | undefined;
       let original: OriginalProfile | null = null;
@@ -45,6 +89,7 @@ export function createGoldenStackPreviewJourneyRunner(options?: {
         .newContext({
           baseURL: input.targetUrl,
           reducedMotion: 'reduce',
+          viewport: { width: 1280, height: 800 },
         })
         .catch(async (error: unknown) => {
           await browser.close();
@@ -102,6 +147,19 @@ export function createGoldenStackPreviewJourneyRunner(options?: {
             original.email ? TEST_IDS.email : TEST_IDS.emailEmpty,
             original.email ?? 'No email on file'
           );
+          viewports.push(
+            await inspectPageViewportGeometry(page, 'desktop', {
+              width: 1280,
+              height: 800,
+            })
+          );
+          viewports.push(
+            await inspectPageViewportGeometry(page, 'mobile', {
+              width: 375,
+              height: 667,
+            })
+          );
+          await page.setViewportSize({ width: 1280, height: 800 });
         });
 
         const suffix = input.checkId.replace(/[^a-zA-Z0-9]/g, '').slice(-12);
@@ -238,6 +296,7 @@ export function createGoldenStackPreviewJourneyRunner(options?: {
         pageErrors,
         networkFailures,
         a11yViolations,
+        viewports,
         ...(failure ? { failure } : {}),
       };
     },

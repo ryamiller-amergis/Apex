@@ -97,6 +97,21 @@ export interface GroupedChatTurn {
   activity: BuildActivityItem[];
 }
 
+export function formatFriendlyActionError(
+  error: unknown,
+  fallback: string
+): string {
+  const raw = error instanceof Error ? error.message.trim() : '';
+  if (
+    /failed to fetch|networkerror|econnrefused|load failed|bad gateway|502|503|504/i.test(
+      raw
+    )
+  ) {
+    return `${raw || fallback} The API server may be restarting or temporarily unreachable — wait a moment and try again.`;
+  }
+  return raw || fallback;
+}
+
 function newClientRequestId(): string {
   if (
     typeof crypto !== 'undefined' &&
@@ -333,6 +348,53 @@ export function BuildRevisionSections({
                   {isCurrent ? currentHeadline : pastRevisionHeadline(revision)}
                 </span>
               </p>
+              {revision.browserVerification && (
+                <div
+                  className={styles.stepRow}
+                  {...{
+                    'data-testid': `build-workspace-revision-${revision.number}-browser-verification`,
+                  }}
+                >
+                  <span
+                    {...{
+                      'data-testid': `build-workspace-revision-${revision.number}-browser-status`,
+                    }}
+                  >
+                    {`Browser check: ${revision.browserVerification.status}`}
+                  </span>
+                  {revision.browserVerification.desktopViewport && (
+                    <span
+                      {...{
+                        'data-testid': `build-workspace-revision-${revision.number}-viewport-desktop`,
+                      }}
+                    >
+                      {` · Desktop ${revision.browserVerification.desktopViewport.width}×${revision.browserVerification.desktopViewport.height} (${revision.browserVerification.desktopViewport.centered ? 'centered' : 'uncentered'})`}
+                    </span>
+                  )}
+                  {revision.browserVerification.mobileViewport && (
+                    <span
+                      {...{
+                        'data-testid': `build-workspace-revision-${revision.number}-viewport-mobile`,
+                      }}
+                    >
+                      {` · Mobile ${revision.browserVerification.mobileViewport.width}×${revision.browserVerification.mobileViewport.height}`}
+                    </span>
+                  )}
+                  {revision.browserVerification.screenshotUrl && (
+                    <a
+                      className={styles.agentRunLink}
+                      href={revision.browserVerification.screenshotUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      {...{
+                        'data-testid': `build-workspace-revision-${revision.number}-screenshot-link`,
+                      }}
+                    >
+                      View screenshot
+                    </a>
+                  )}
+                </div>
+              )}
               {revisionEvents.length > 0 && (
                 <details className={styles.traceDrawer}>
                   <summary className={styles.traceSummary}>
@@ -675,6 +737,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const [rememberForProject, setRememberForProject] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
   const [localPreviewStarted, setLocalPreviewStarted] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<string | null>(null);
   const [optimisticStartingBuild, setOptimisticStartingBuild] = useState(false);
@@ -1379,7 +1442,18 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               className={styles.secondaryButton}
               disabled={resumeMutation.isPending}
               onClick={() => {
-                void resumeMutation.mutateAsync({});
+                setActionError(null);
+                void resumeMutation
+                  .mutateAsync({})
+                  .then(() => buildQuery.refetch())
+                  .catch((error: unknown) => {
+                    setActionError(
+                      formatFriendlyActionError(
+                        error,
+                        'Could not resume the build.'
+                      )
+                    );
+                  });
               }}
               {...{ 'data-testid': 'build-workspace-resume' }}
             >
@@ -1392,7 +1466,18 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               className={styles.secondaryButton}
               disabled={cancelMutation.isPending}
               onClick={() => {
-                void cancelMutation.mutateAsync({});
+                setActionError(null);
+                void cancelMutation
+                  .mutateAsync({})
+                  .then(() => buildQuery.refetch())
+                  .catch((error: unknown) => {
+                    setActionError(
+                      formatFriendlyActionError(
+                        error,
+                        'Could not stop the build.'
+                      )
+                    );
+                  });
               }}
               {...{ 'data-testid': 'build-workspace-cancel' }}
             >
@@ -1513,6 +1598,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               )}
 
               {detail?.logoReview && (
+                // data-testid-exempt — BuildLogoReviewCard renders data-testid="build-logo-review"
                 <BuildLogoReviewCard
                   review={detail.logoReview}
                   buildId={buildId ?? ''}
@@ -1521,33 +1607,82 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     generateLogoMutation.isPending ||
                     decideLogoMutation.isPending
                   }
+                  errorMessage={logoError}
                   onApprove={(candidateId) => {
-                    void decideLogoMutation.mutateAsync({
-                      candidateId,
-                      decision: 'approve',
-                    });
+                    setLogoError(null);
+                    void Promise.resolve(
+                      decideLogoMutation.mutateAsync({
+                        candidateId,
+                        decision: 'approve',
+                      })
+                    )
+                      .then(() => buildQuery.refetch())
+                      .catch((error: unknown) => {
+                        const friendly = formatFriendlyActionError(
+                          error,
+                          'Could not approve the logo option.'
+                        );
+                        setLogoError(friendly);
+                        setActionError(friendly);
+                      });
                   }}
                   onReject={(candidateId) => {
-                    void decideLogoMutation.mutateAsync({
-                      candidateId,
-                      decision: 'reject',
-                    });
+                    setLogoError(null);
+                    void Promise.resolve(
+                      decideLogoMutation.mutateAsync({
+                        candidateId,
+                        decision: 'reject',
+                      })
+                    )
+                      .then(() => buildQuery.refetch())
+                      .catch((error: unknown) => {
+                        const friendly = formatFriendlyActionError(
+                          error,
+                          'Could not reject the logo option.'
+                        );
+                        setLogoError(friendly);
+                        setActionError(friendly);
+                      });
                   }}
                   onRegenerate={() => {
-                    void generateLogoMutation.mutateAsync({
-                      prompt: detail.logoReview?.prompt ?? '',
-                    });
+                    setLogoError(null);
+                    void Promise.resolve(
+                      generateLogoMutation.mutateAsync({
+                        prompt: detail.logoReview?.prompt ?? '',
+                      })
+                    )
+                      .then(() => buildQuery.refetch())
+                      .catch((error: unknown) => {
+                        const friendly = formatFriendlyActionError(
+                          error,
+                          'Could not generate logo options.'
+                        );
+                        setLogoError(friendly);
+                        setActionError(friendly);
+                      });
                   }}
                   onUseInBuild={
                     detail.logoReview.approvedCandidateId &&
                     buildStatus === 'preview_ready'
                       ? () => {
-                          void revisionMutation.mutateAsync({
-                            feedback: approvedLogoImplementationPrompt(),
-                            approvedLogoCandidateId:
-                              detail.logoReview?.approvedCandidateId ??
-                              undefined,
-                          });
+                          setLogoError(null);
+                          void Promise.resolve(
+                            revisionMutation.mutateAsync({
+                              feedback: approvedLogoImplementationPrompt(),
+                              approvedLogoCandidateId:
+                                detail.logoReview?.approvedCandidateId ??
+                                undefined,
+                            })
+                          )
+                            .then(() => buildQuery.refetch())
+                            .catch((error: unknown) => {
+                              const friendly = formatFriendlyActionError(
+                                error,
+                                'Could not apply the approved logo to the build.'
+                              );
+                              setLogoError(friendly);
+                              setActionError(friendly);
+                            });
                         }
                       : undefined
                   }
@@ -2188,7 +2323,18 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       className={styles.secondaryButton}
                       disabled={retryDeploymentMutation.isPending}
                       onClick={() => {
-                        void retryDeploymentMutation.mutateAsync({});
+                        setActionError(null);
+                        void retryDeploymentMutation
+                          .mutateAsync({})
+                          .then(() => buildQuery.refetch())
+                          .catch((error: unknown) => {
+                            setActionError(
+                              formatFriendlyActionError(
+                                error,
+                                'Could not retry preview deployment.'
+                              )
+                            );
+                          });
                       }}
                       {...{ 'data-testid': 'build-workspace-retry-deployment' }}
                     >

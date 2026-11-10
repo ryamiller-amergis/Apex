@@ -106,6 +106,14 @@ export interface BuildTaskView {
   omittedReason: string | null;
 }
 
+export interface BuildRevisionBrowserCheckView {
+  status: 'passed' | 'failed' | 'pending';
+  desktopViewport?: { width: number; height: number; centered: boolean } | null;
+  mobileViewport?: { width: number; height: number; centered: boolean } | null;
+  screenshotUrl?: string | null;
+  summary?: string | null;
+}
+
 export interface BuildRevisionSummary {
   number: number;
   createdAt: string;
@@ -114,6 +122,7 @@ export interface BuildRevisionSummary {
   previewUrl: string | null;
   /** What the requester asked to change; null for the original build. */
   feedback?: string | null;
+  browserVerification?: BuildRevisionBrowserCheckView | null;
 }
 
 export interface BuildVerificationSummary {

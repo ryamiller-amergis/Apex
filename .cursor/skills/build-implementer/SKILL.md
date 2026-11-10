@@ -52,7 +52,7 @@ Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type
 
 ## Procedure
 
-1. **Search before creating**: Read the code map, coding rules, design-system file, and reuse list, and search the repository before creating any new component, hook, service, or helper.
+1. **Search before creating**: Read the code map, coding rules, design-system file, `.cursor/skills/product-quality/SKILL.md` (when present in the target repository), and reuse list, and search the repository before creating any new component, hook, service, or helper.
 2. **Create one focused red test set**:
    - Write named tests for every owned requirement and risk decision. Test names begin with their IDs.
    - Run the focused tests and confirm the relevant assertions fail for the missing behavior.

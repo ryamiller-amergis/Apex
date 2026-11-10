@@ -93,9 +93,10 @@ Score:
 1. Every active `AC-*`, `DOD-*`, `BR-*`, `NFR-*`, and `RD-*` has valid traceability or an allowed deferral.
 2. Red/green commits and named tests are genuine, commands match evidence, and required checks pass.
 3. UI work includes useful visual and accessibility evidence; non-UI work is not burdened with irrelevant visual work.
-4. The final diff is coherent, preserves existing behavior, and reaches the expected final-check, deployment, preview, or acceptance state.
+4. End-user visual polish, tailored domain data (never `Item 1` / `Todo 1` / `project-name`), centered layout geometry (`AppShell` `maxWidth <= 960` and `alignSelf: 'center'`), and working interactive journeys (charts, notifications, grounded AI insights) are verified.
+5. The final diff is coherent, preserves existing behavior, and reaches the expected final-check, deployment, preview, or acceptance state.
 
-Deduct for implementation-detail-only tests, evidence assembled after the fact, identical red/green commits, skipped gates, weak deferrals, unrelated changes, or a passing evidence block that conflicts with actual records.
+Deduct for implementation-detail-only tests, evidence assembled after the fact, identical red/green commits, skipped gates, weak deferrals, generic placeholder sample data, uncentered layout geometry, broken interactive journeys, unrelated changes, or a passing evidence block that conflicts with actual records.
 
 ### 6. Template fit and managed full-stack defaults — 10%
 

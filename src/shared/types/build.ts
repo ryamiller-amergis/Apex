@@ -469,6 +469,21 @@ export interface RiskCandidate {
   destructive: boolean;
 }
 
+export const BUILD_SUPPORT_STATUSES = [
+  'supported_now',
+  'requires_access_or_credentials',
+  'unsupported_infrastructure',
+] as const;
+
+export type BuildSupportStatus = (typeof BUILD_SUPPORT_STATUSES)[number];
+
+export interface BuildSupportCheckResult {
+  status: BuildSupportStatus;
+  reasons: string[];
+  requiredInputs: string[];
+  approvalGates: string[];
+}
+
 export interface BuildClassificationResult {
   value: BuildClassification;
   reasons: string[];
@@ -479,6 +494,7 @@ export interface BuildBriefAnalysis {
   riskDecisions: BuildRiskDecision[];
   classification: BuildClassificationResult;
   counters: BuildIdCounters;
+  supportCheck?: BuildSupportCheckResult;
 }
 
 export interface BuildBriefAnalysisResponse {
@@ -490,6 +506,7 @@ export interface BuildBriefAnalysisResponse {
   requirements: BuildRequirement[];
   riskDecisions: BuildRiskDecision[];
   classification: BuildClassificationResult;
+  supportCheck?: BuildSupportCheckResult;
   requester: { id: string; displayName: string };
   approval: {
     approvedBy: { id: string; displayName: string };

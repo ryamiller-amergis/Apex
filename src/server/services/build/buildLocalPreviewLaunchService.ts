@@ -828,14 +828,30 @@ async function runPreview(input: {
     }),
     // The Studio URL is the one users see. Join it to the verified runtime's
     // API before it is published, so its /api calls reach real data.
-    onPreviewVerified: ({ instanceId }) =>
-      linkStudioToRuntimeApi({
+    onPreviewVerified: async ({ instanceId }) => {
+      await linkStudioToRuntimeApi({
         docker,
         studioNetworkName: studioNetworkNameFor(
           editablePreviewSessionIdForBuild(input.target.buildRunId)
         ),
         runtimeContainerName: dockerResourceName('app', instanceId),
-      }),
+        onApiUnreachable: async (diagnostic) => {
+          await appendBuildEvent({
+            buildRunId: input.target.buildRunId,
+            buildRevisionId: input.target.revisionId,
+            eventType: 'studio.api_unreachable',
+            severity: 'warn',
+            message:
+              'The Studio preview could not reach the runtime API. Try rebuilding the preview if data requests fail.',
+            detail: {
+              studioNetworkName: diagnostic.studioNetworkName,
+              runtimeContainerName: diagnostic.runtimeContainerName,
+              reason: diagnostic.reason.slice(0, 500),
+            },
+          });
+        },
+      });
+    },
     settlePreview: async (request) => {
       if (input.target.runStatus === 'accepted') {
         const gate = await defaultBuildPreviewCompletionPort.loadGate({

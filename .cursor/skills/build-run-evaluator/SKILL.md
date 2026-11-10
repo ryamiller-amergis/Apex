@@ -195,13 +195,17 @@ For the target template, inspect:
 - `templates/full-stack-express/AGENTS.md`
 - `templates/full-stack-express/.cursor/CODEMAP.md`
 - `templates/full-stack-express/.cursor/skills/build-implementer/SKILL.md`
+- `templates/full-stack-express/.cursor/skills/product-quality/SKILL.md`
 - `templates/full-stack-express/.cursor/skills/orchestrator/SKILL.md`
-- template skills referenced by the implementer, especially API, UI, design-system, testing, migration, QA, and integration guidance
+- template skills referenced by the implementer, especially API, UI, product-quality, design-system, testing, migration, QA, and integration guidance
 - the quality manifest, environment file, package scripts, module map, component catalog, and reference feature slices
 
 Check:
 
 - request → brief → requirements → prompt → tests → output traceability;
+- whether end-user visual polish meets the product-quality bar: centered layout geometry (`AppShell` main container capped at `<= 960px` with `alignSelf: 'center'`), brand overrides in `overrides.ts`, and clear hierarchy (`PageHeader`, `StatGrid`, `DataChartCard`, `NotificationCenter`, `ContentSurface`);
+- whether seeded data is tailored to the requested domain (never shipping `Item 1`, `Todo 1`, `project-name`, or `My App`);
+- whether interactive journeys (charts with timeframe filters, notifications with unread counts and mark-as-read, and AI skill insights grounded in database + third-party connector feeds) work end-to-end;
 - whether the requester could remain in plain product language from request through refinement;
 - whether Apex chose sensible full-stack defaults instead of asking for technical implementation choices;
 - whether the UI distinguished “build now” from “discuss first” intent without adding ceremony;

@@ -141,7 +141,7 @@ describe('local Cursor revision edit agent', () => {
     await expect(editing).rejects.toThrow('cancelled');
   });
 
-  it('allows only file inspection and editing tools and loads no project settings or MCP servers', async () => {
+  it('allows only file inspection and editing tools, loads project settingSources, and disables MCP servers', async () => {
     const calls: Array<Record<string, unknown>> = [];
     const runtime: RevisionEditAgentRuntime = {
       run: jest.fn(async (input) => {
@@ -173,12 +173,47 @@ describe('local Cursor revision edit agent', () => {
     expect(calls[0]).toMatchObject({
       modelId: 'composer-2.5',
       tools: ['read', 'edit', 'grep', 'glob', 'ls'],
-      settingSources: [],
+      settingSources: ['project'],
       mcpServers: {},
     });
     expect(calls[0]).not.toHaveProperty('shell');
     expect(calls[0].tools).not.toContain('task');
     expect(calls[0].tools).not.toContain('web');
+  });
+
+  it('automatically falls back to composer-2.5 when a requested modelOverride like grok-4.7 is blocked or unavailable', async () => {
+    const modelsTried: string[] = [];
+    const runtime: RevisionEditAgentRuntime = {
+      run: jest.fn(async (input) => {
+        modelsTried.push(input.modelId ?? '');
+        if (input.modelId === 'grok-4.7') {
+          throw new Error('Model grok-4.7 is blocked by team policy.');
+        }
+        return {
+          agentCorrelationRef: 'agent:cursor-local:fallback',
+          output: JSON.stringify({ outcome: 'edited' }),
+        };
+      }),
+    };
+    const provider = createLocalCursorRevisionEditAgentProvider({
+      runtime,
+      readHeadCommit: async () => BASE_COMMIT,
+      hasWorkspaceChanges: async () => false,
+    });
+
+    await expect(
+      provider.edit({
+        workspacePath: 'C:\\scratch\\revision-2',
+        baseCommit: BASE_COMMIT,
+        feedback: 'Center the dashboard layout.',
+        revisionNumber: 2,
+        modelId: 'grok-4.7',
+      })
+    ).resolves.toEqual({
+      kind: 'edited',
+      agentCorrelationRef: 'agent:cursor-local:fallback',
+    });
+    expect(modelsTried).toEqual(['grok-4.7', 'composer-2.5']);
   });
 
   it('rejects a scratch checkout that is not at the exact base commit', async () => {

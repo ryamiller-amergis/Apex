@@ -2,6 +2,21 @@ import type { BuildRequirement } from './types/build';
 import type { DesignPreferenceProfile } from './types/designPreferenceProfile';
 import type { BuildTaskDomain } from './buildUiClassifier';
 
+export type BuildRecommendedPagePattern =
+  | 'chart'
+  | 'notifications'
+  | 'ai-skill-insights'
+  | 'filtered-list'
+  | 'detail'
+  | 'form';
+
+export interface BuildBrandTokensBrief {
+  appName: string;
+  primaryColor: string;
+  secondaryColor: string;
+  logoCandidateId?: string | null;
+}
+
 export interface BuildVisualBrief {
   version: 1;
   buildRunId: string;
@@ -15,6 +30,9 @@ export interface BuildVisualBrief {
   preferredPatterns: string[];
   avoidedPatterns: string[];
   reuseSearches: string[];
+  brandTokens?: BuildBrandTokensBrief;
+  recommendedPagePatterns?: BuildRecommendedPagePattern[];
+  sampleDataGuidance?: string;
   experienceConcept?: BuildExperienceConcept;
 }
 
@@ -30,7 +48,7 @@ export interface BuildExperienceConcept {
 
 const ANTI_GENERIC = [
   'No bare stacked forms or a single unstyled table as the main screen.',
-  'No lorem ipsum, "Item 1", or empty first-run screens; seed realistic sample data for the domain.',
+  'No lorem ipsum, "Item 1", "Todo 1", or empty first-run screens; seed realistic sample data for the domain.',
   'No default MUI blue-on-white with zero hierarchy; establish a clear primary action, a summary band, and supporting detail.',
   'No placeholder product names such as project-name or My App.',
 ];
@@ -41,17 +59,99 @@ const SCHEDULING_HINT =
 function detectRoles(prompt: string): string[] {
   const roles: string[] = [];
   if (/\bmanagers?\b/i.test(prompt)) roles.push('manager');
-  if (/\b(workers?|employees?|staff|crew)\b/i.test(prompt)) roles.push('worker');
+  if (/\b(workers?|employees?|staff|crew)\b/i.test(prompt))
+    roles.push('worker');
   if (/\badmins?\b/i.test(prompt)) roles.push('admin');
   return roles.length > 0 ? roles : ['primary user'];
 }
 
-export function synthesizeExperienceConcept(prompt: string): BuildExperienceConcept {
+export function detectRecommendedPagePatterns(
+  prompt: string,
+  requirements: readonly BuildRequirement[] = []
+): BuildRecommendedPagePattern[] {
+  const corpus = [prompt, ...requirements.map((row) => row.text)].join('\n');
+  const patterns: BuildRecommendedPagePattern[] = [];
+
+  if (
+    /\b(charts?|graphs?|metrics?|kpis?|analytics|dashboards?|trends?|timeframes?)\b/i.test(
+      corpus
+    )
+  ) {
+    patterns.push('chart');
+  }
+  if (/\b(notifications?|alerts?|unread|inbox|badges?)\b/i.test(corpus)) {
+    patterns.push('notifications');
+  }
+  if (
+    /\b(insights?|ai\s+skill|recommend\w*|citations?|ground(?:ed|ing)|analy(?:ze|sis)|connector\s+feed)\b/i.test(
+      corpus
+    )
+  ) {
+    patterns.push('ai-skill-insights');
+  }
+  if (
+    /\b(lists?|tables?|boards?|filters?|search|schedules?|shifts?|catalog|items?)\b/i.test(
+      corpus
+    )
+  ) {
+    patterns.push('filtered-list');
+  }
+  if (/\b(details?|drawers?|panels?|inspect|view|summary)\b/i.test(corpus)) {
+    patterns.push('detail');
+  }
+  if (
+    /\b(forms?|create|edit|update|save|submit|inputs?|settings?)\b/i.test(
+      corpus
+    )
+  ) {
+    patterns.push('form');
+  }
+
+  if (patterns.length === 0) {
+    return ['chart', 'filtered-list', 'detail', 'form'];
+  }
+  return patterns;
+}
+
+export function inferBrandTokens(input: {
+  prompt: string;
+  appName: string;
+  logoCandidateId?: string | null;
+}): BuildBrandTokensBrief {
+  const lower = input.prompt.toLowerCase();
+  let primaryColor = '#1D4ED8';
+  let secondaryColor = '#334155';
+
+  if (/\b(emerald|green|sustainability|health|clinic)\b/.test(lower)) {
+    primaryColor = '#1B6E35';
+    secondaryColor = '#334155';
+  } else if (/\b(purple|violet|creative|studio)\b/.test(lower)) {
+    primaryColor = '#6D28D9';
+    secondaryColor = '#475569';
+  } else if (/\b(amber|warm|restaurant|kitchen|hospitality|diner)\b/.test(lower)) {
+    primaryColor = '#0B5CAD';
+    secondaryColor = '#4A5058';
+  }
+
+  return {
+    appName: input.appName,
+    primaryColor,
+    secondaryColor,
+    logoCandidateId: input.logoCandidateId ?? null,
+  };
+}
+
+export function synthesizeExperienceConcept(
+  prompt: string
+): BuildExperienceConcept {
   const roles = detectRoles(prompt);
   if (SCHEDULING_HINT.test(prompt)) {
-    const venue = /\b(restaurant|resturaunt|restaraunt|kitchen|bar|cafe|diner)s?\b/i.test(prompt)
-      ? 'restaurant'
-      : 'workplace';
+    const venue =
+      /\b(restaurant|resturaunt|restaraunt|kitchen|bar|cafe|diner)s?\b/i.test(
+        prompt
+      )
+        ? 'restaurant'
+        : 'workplace';
     return {
       domain: `${venue} shift scheduling`,
       roles,
@@ -70,7 +170,7 @@ export function synthesizeExperienceConcept(prompt: string): BuildExperienceConc
       ],
       signatureInteraction:
         'One-tap "Pick up" on an open shift with an optimistic update, a confirmation snackbar, and the shift moving into "My shifts" without a page reload.',
-      contentGuidance: `Seed believable ${venue} data: stations such as Line cook, Server, Host, Bartender, Dishwasher; named people; lunch and dinner services across the current week.`,
+      contentGuidance: `Seed believable ${venue} data: stations such as Line cook, Server, Host, Bartender, Dishwasher; named people; lunch and dinner services across the current week. Never use "Item 1" or "Todo 1".`,
       antiGeneric: ANTI_GENERIC,
     };
   }
@@ -89,7 +189,8 @@ export function synthesizeExperienceConcept(prompt: string): BuildExperienceConc
     ],
     signatureInteraction:
       'The primary action completes inline with an optimistic update and clear confirmation feedback.',
-    contentGuidance: 'Seed realistic sample data so the first screen looks like a product in use.',
+    contentGuidance:
+      'Seed realistic domain sample data so the first screen looks like a product in use (never "Item 1" or "Todo 1").',
     antiGeneric: ANTI_GENERIC,
   };
 }
@@ -98,8 +199,18 @@ export function visualBriefPath(buildRunId: string): string {
   return `.apex/build/${buildRunId}/visual-brief.json`;
 }
 
-function nextId(requirements: BuildRequirement[], kind: BuildRequirement['kind']): string {
-  const prefix = kind === 'nfr' ? 'NFR' : kind === 'dod' ? 'DOD' : kind === 'br' ? 'BR' : 'AC';
+function nextId(
+  requirements: BuildRequirement[],
+  kind: BuildRequirement['kind']
+): string {
+  const prefix =
+    kind === 'nfr'
+      ? 'NFR'
+      : kind === 'dod'
+        ? 'DOD'
+        : kind === 'br'
+          ? 'BR'
+          : 'AC';
   let max = 0;
   for (const row of requirements) {
     if (!row.id.startsWith(`${prefix}-`)) continue;
@@ -110,16 +221,16 @@ function nextId(requirements: BuildRequirement[], kind: BuildRequirement['kind']
 }
 
 export function injectVisualRequirements(
-  requirements: BuildRequirement[],
+  requirements: BuildRequirement[]
 ): BuildRequirement[] {
   const hasVisualNfr = requirements.some((row) =>
-    /design-system tokens|visual polish|enterprise presentation/i.test(row.text),
+    /design-system tokens|visual polish|enterprise presentation/i.test(row.text)
   );
   const hasScreenshotDod = requirements.some((row) =>
-    /screenshot|playwright|visual snapshot/i.test(row.text),
+    /screenshot|playwright|visual snapshot/i.test(row.text)
   );
   const hasIdentityBr = requirements.some((row) =>
-    /project-name|placeholder|app name|logo/i.test(row.text),
+    /project-name|placeholder|app name|logo/i.test(row.text)
   );
 
   const out = [...requirements];
@@ -155,8 +266,25 @@ export function buildVisualBrief(input: {
   taskDomain: BuildTaskDomain;
   prompt: string;
   profile: DesignPreferenceProfile;
+  requirements?: readonly BuildRequirement[];
+  logoCandidateId?: string | null;
 }): BuildVisualBrief {
-  const appName = input.profile.appName ?? input.profile.productName ?? 'Application';
+  const rawName = input.profile.appName ?? input.profile.productName ?? '';
+  const appName =
+    rawName && rawName !== 'project-name' && rawName !== 'My App'
+      ? rawName
+      : 'Northstar Ops';
+  const concept = synthesizeExperienceConcept(input.prompt);
+  const recommendedPagePatterns = detectRecommendedPagePatterns(
+    input.prompt,
+    input.requirements
+  );
+  const brandTokens = inferBrandTokens({
+    prompt: input.prompt,
+    appName,
+    logoCandidateId: input.logoCandidateId,
+  });
+
   return {
     version: 1,
     buildRunId: input.buildRunId,
@@ -165,7 +293,7 @@ export function buildVisualBrief(input: {
     visualTone: input.profile.visualTone ?? 'professional',
     density: input.profile.density ?? 'comfortable',
     componentStrategy:
-      'Prefer documented @project-scope/ui catalog components and theme-styled MUI primitives. Use @mui/x-date-pickers for calendar or date surfaces when the dependency is present. Record reuse rationale before custom UI.',
+      'Prefer documented @project-scope/ui catalog components (AppShell, PageHeader, ContentSurface, StatGrid, MetricCard, DataChartCard, NotificationCenter, FilteredListSurface, DetailPanel, DetailDrawer) and theme-styled MUI primitives. Record reuse rationale before custom UI.',
     responsiveTargets: ['375px phone', '1280px desktop'],
     screenshotExpectations: [
       'Capture the primary changed route at 375px and 1280px in light mode.',
@@ -176,10 +304,18 @@ export function buildVisualBrief(input: {
     reuseSearches: [
       'docs/component-catalog.md',
       'packages/ui/src/index.ts',
+      'apps/web/src/features/home',
+      'apps/web/src/features/notifications',
+      'apps/web/src/features/insights',
       'apps/web/src/features/profile',
-      input.prompt.toLowerCase().includes('calendar') ? '@mui/x-date-pickers' : 'AppShell',
+      input.prompt.toLowerCase().includes('calendar')
+        ? '@mui/x-date-pickers'
+        : 'AppShell',
     ],
-    experienceConcept: synthesizeExperienceConcept(input.prompt),
+    brandTokens,
+    recommendedPagePatterns,
+    sampleDataGuidance: concept.contentGuidance,
+    experienceConcept: concept,
   };
 }
 
@@ -206,6 +342,20 @@ export function formatVisualBriefForPrompt(brief: BuildVisualBrief): string {
     `- App identity: ${brief.appName}`,
     `- Visual tone: ${brief.visualTone}`,
     `- Density: ${brief.density}`,
+    ...(brief.brandTokens
+      ? [
+          `- Brand tokens: primary ${brief.brandTokens.primaryColor}, secondary ${brief.brandTokens.secondaryColor}${brief.brandTokens.logoCandidateId ? `, logo candidate ${brief.brandTokens.logoCandidateId}` : ''}`,
+        ]
+      : []),
+    ...(brief.recommendedPagePatterns &&
+    brief.recommendedPagePatterns.length > 0
+      ? [
+          `- Recommended page patterns: ${brief.recommendedPagePatterns.join(', ')}`,
+        ]
+      : []),
+    ...(brief.sampleDataGuidance
+      ? [`- Domain sample data: ${brief.sampleDataGuidance}`]
+      : []),
     `- Component strategy: ${brief.componentStrategy}`,
     `- Responsive targets: ${brief.responsiveTargets.join(', ')}`,
     `- Screenshot expectations:`,
@@ -218,7 +368,9 @@ export function formatVisualBriefForPrompt(brief: BuildVisualBrief): string {
       : '- Avoid: Template placeholders and one-off styled components.',
     `- Reuse searches: ${brief.reuseSearches.join(', ')}`,
     `- If the request describes a product for a specific audience, give it a short, credible product name and use it in the header and page title instead of "${brief.appName}" or a template placeholder.`,
-    ...(brief.experienceConcept ? formatExperienceConcept(brief.experienceConcept) : []),
+    ...(brief.experienceConcept
+      ? formatExperienceConcept(brief.experienceConcept)
+      : []),
     '',
     '## Visual Self-Review (one repair pass, required)',
     'After the feature works and before emitting evidence, re-read every changed screen component as a reviewer and score it against the Experience Concept:',

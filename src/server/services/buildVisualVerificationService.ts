@@ -1,4 +1,5 @@
 import type { BuildVisualBrief } from '../../shared/buildVisualBrief';
+import type { BrowserViewportVerification } from './build/buildPreviewBrowserVerifier';
 import type { EvidenceBlock } from './builds/evidenceBlockParser';
 
 export interface VisualQualityResult {
@@ -9,6 +10,7 @@ export interface VisualQualityResult {
 export function evaluateVisualQualityFromEvidence(input: {
   visualBrief: BuildVisualBrief | null;
   block: EvidenceBlock | null;
+  viewports?: readonly BrowserViewportVerification[];
 }): VisualQualityResult {
   if (!input.visualBrief) {
     return { passed: true, findings: [] };
@@ -16,14 +18,18 @@ export function evaluateVisualQualityFromEvidence(input: {
   if (!input.block) {
     return {
       passed: false,
-      findings: ['The build finished without structured evidence for visual review.'],
+      findings: [
+        'The build finished without structured evidence for visual review.',
+      ],
     };
   }
 
   const findings: string[] = [];
   const review = input.block.visualReview;
   if (!review?.completed) {
-    findings.push('The agent did not complete a visual self-review before finishing.');
+    findings.push(
+      'The agent did not complete a visual self-review before finishing.'
+    );
   }
   if (review?.findings?.length) {
     findings.push(...review.findings);
@@ -32,25 +38,37 @@ export function evaluateVisualQualityFromEvidence(input: {
   const snapshotRefs = input.block.entries.flatMap((entry) =>
     entry.testReferences.filter((ref) =>
       /snapshot|screenshot|visual|playwright|(?:^|\/)e2e\/|\.spec\.[cm]?[jt]sx?$/i.test(
-        `${ref.file} ${ref.name}`,
-      ),
-    ),
+        `${ref.file} ${ref.name}`
+      )
+    )
   );
   if (snapshotRefs.length === 0) {
     findings.push(
-      'No Playwright visual snapshot tests were recorded for the changed screen.',
+      'No Playwright visual snapshot tests were recorded for the changed screen.'
     );
   }
 
   const rationale = review?.componentReuseRationale?.trim() ?? '';
   if (!rationale) {
     findings.push(
-      'Evidence must explain which catalog components were reused or why custom UI was chosen.',
+      'Evidence must explain which catalog components were reused or why custom UI was chosen.'
     );
   }
 
-  if (input.block.standardsReview && input.block.standardsReview.findings.length > 0) {
+  if (
+    input.block.standardsReview &&
+    input.block.standardsReview.findings.length > 0
+  ) {
     findings.push(...input.block.standardsReview.findings);
+  }
+
+  if (input.viewports && input.viewports.length > 0) {
+    const desktop = input.viewports.find((v) => v.viewport === 'desktop');
+    if (desktop && !desktop.centeredMain) {
+      findings.push(
+        'Desktop AppShell main container is not centered (expected alignSelf: center and maxWidth <= 960px).'
+      );
+    }
   }
 
   return { passed: findings.length === 0, findings };

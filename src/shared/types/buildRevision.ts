@@ -79,10 +79,17 @@ export type BuildRevisionFastEditCheckStatus = 'pending' | 'passed' | 'failed';
 export interface BuildRevisionFastEditCheckSummary {
   status: BuildRevisionFastEditCheckStatus;
   tasks: Array<{
-    name: 'typecheck' | 'unit_test';
+    name: 'typecheck' | 'unit_test' | 'browser_verify';
     status: BuildRevisionFastEditCheckStatus;
     message?: string;
   }>;
+  browserVerification?: {
+    status: 'passed' | 'failed';
+    desktopViewport?: { width: number; height: number; centered: boolean };
+    mobileViewport?: { width: number; height: number; centered: boolean };
+    screenshotUrl?: string | null;
+    findings?: string[];
+  };
 }
 
 export interface BuildRevisionFastEditProgress {

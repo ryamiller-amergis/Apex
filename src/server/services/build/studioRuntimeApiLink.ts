@@ -69,6 +69,12 @@ export async function detachRuntimeApis(
   }
 }
 
+export interface StudioRuntimeApiLinkResult {
+  linked: boolean;
+  runtimeContainerName: string | null;
+  diagnosticMessage?: string;
+}
+
 /**
  * Makes `studio-api` resolve to one runtime application. A runtime from an
  * earlier revision is detached first so the alias never names two containers.
@@ -77,24 +83,77 @@ export async function linkStudioToRuntimeApi(input: {
   docker: DockerCommandRunner;
   studioNetworkName: string;
   runtimeContainerName: string;
-}): Promise<void> {
-  const attached =
-    (await attachedRuntimeApplications(
-      input.docker,
-      input.studioNetworkName
-    )) ?? [];
+  probeApiHealth?: () => Promise<boolean>;
+  onApiUnreachable?: (diagnostic: {
+    studioNetworkName: string;
+    runtimeContainerName: string;
+    reason: string;
+  }) => Promise<void> | void;
+}): Promise<StudioRuntimeApiLinkResult> {
+  const attached = await attachedRuntimeApplications(
+    input.docker,
+    input.studioNetworkName
+  );
+  if (attached === null) {
+    const reason = `Studio network ${input.studioNetworkName} was not found when linking runtime API ${input.runtimeContainerName}.`;
+    await input.onApiUnreachable?.({
+      studioNetworkName: input.studioNetworkName,
+      runtimeContainerName: input.runtimeContainerName,
+      reason,
+    });
+    return {
+      linked: false,
+      runtimeContainerName: null,
+      diagnosticMessage: reason,
+    };
+  }
   for (const name of attached) {
     if (name !== input.runtimeContainerName) {
       await disconnect(input.docker, input.studioNetworkName, name);
     }
   }
-  if (attached.includes(input.runtimeContainerName)) return;
-  await input.docker.run([
-    'network',
-    'connect',
-    '--alias',
-    STUDIO_API_ALIAS,
-    input.studioNetworkName,
-    input.runtimeContainerName,
-  ]);
+  if (!attached.includes(input.runtimeContainerName)) {
+    try {
+      await input.docker.run([
+        'network',
+        'connect',
+        '--alias',
+        STUDIO_API_ALIAS,
+        input.studioNetworkName,
+        input.runtimeContainerName,
+      ]);
+    } catch (error) {
+      const reason =
+        error instanceof Error
+          ? error.message
+          : 'Could not connect runtime API container to Studio network.';
+      await input.onApiUnreachable?.({
+        studioNetworkName: input.studioNetworkName,
+        runtimeContainerName: input.runtimeContainerName,
+        reason,
+      });
+      throw error;
+    }
+  }
+  if (input.probeApiHealth) {
+    const reachable = await input.probeApiHealth().catch(() => false);
+    if (!reachable) {
+      const reason =
+        'The Studio preview could not reach /api on the runtime container.';
+      await input.onApiUnreachable?.({
+        studioNetworkName: input.studioNetworkName,
+        runtimeContainerName: input.runtimeContainerName,
+        reason,
+      });
+      return {
+        linked: true,
+        runtimeContainerName: input.runtimeContainerName,
+        diagnosticMessage: reason,
+      };
+    }
+  }
+  return {
+    linked: true,
+    runtimeContainerName: input.runtimeContainerName,
+  };
 }

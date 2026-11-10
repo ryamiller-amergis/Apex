@@ -162,6 +162,14 @@ function describeCheckFailures(
   const failures = (summary?.tasks ?? [])
     .filter((task) => task.status === 'failed')
     .map((task) => `${task.name}: ${task.message?.trim() || 'failed'}`);
+  if (
+    summary?.browserVerification?.status === 'failed' &&
+    summary.browserVerification.findings?.length
+  ) {
+    failures.push(
+      `browser_verification: ${summary.browserVerification.findings.join('; ')}`
+    );
+  }
   return failures.length > 0
     ? failures.join('\n\n').slice(0, MAX_REPAIR_CONTEXT_CHARS)
     : undefined;

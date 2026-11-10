@@ -10,9 +10,11 @@ import {
   tryApplyDeterministicCopyEdit,
   type DeterministicCopyEditResult,
 } from './buildRevisionDeterministicEdit';
+import { isUnavailableLogoModel } from './cursorSvgLogoProvider';
 
 const REVISION_EDIT_TOOLS = ['read', 'edit', 'grep', 'glob', 'ls'] as const;
-const DEFAULT_REVISION_EDIT_MODEL = 'composer-2.5';
+const REVISION_EDIT_SETTING_SOURCES = ['project'] as const;
+export const DEFAULT_REVISION_EDIT_MODEL = 'composer-2.5';
 // Cursor can spend most of a 45-second window locating the existing UI
 // surface on a cold workspace. Keep the edit bounded, but allow enough time
 // to inspect and update a small set of existing files.
@@ -95,14 +97,13 @@ async function runUntilAborted<T>(
   });
 }
 
-function buildEditPrompt(input: RevisionEditAgentInput): string {
+export function buildEditPrompt(input: RevisionEditAgentInput): string {
   return [
     `You are applying revision ${input.revisionNumber} to an existing web application.`,
+    'Follow the project skills in `.cursor/skills/ui-standards/SKILL.md` and `.cursor/skills/product-quality/SKILL.md`, and inspect `docs/component-catalog.md` and `packages/ui/src/shell/AppShell.tsx` when adjusting layout or UI components.',
     'Apply the requested UI or UX change directly. This includes layout, copy, color, theme, tokens, spacing, and interaction.',
     'Do not ask the requester to confirm a visual change, and do not describe it instead of making it.',
     'Work quickly: use grep and glob to find the files that render the affected UI, make the change, and stop.',
-    'The preview is often under 1000 pixels wide beside a side navigation. A max width of the large breakpoint, or margin auto on an element whose width is 100%, will not look like a change.',
-    'To center a page, cap the content under 960 pixels and set alignSelf to center on that flex child.',
     'Packages already listed in package.json files may be imported; check that every imported module path and export exists before using it.',
     ...(input.recoveredDraft
       ? [
@@ -190,62 +191,81 @@ async function hasWorkspaceChanges(workspacePath: string): Promise<boolean> {
   return status.trim().length > 0;
 }
 
+async function runSingleEditTurn(
+  input: RevisionEditAgentRuntimeInput,
+  apiKey: string,
+  modelId: string
+): Promise<{ agentCorrelationRef: string | null; output: string }> {
+  const local = {
+    cwd: input.cwd,
+    settingSources: [...input.settingSources] as Array<'project'>,
+    enableAgentRetries: false,
+    // The scratch checkout is already isolated, limited to non-shell edit
+    // tools, and removed after the attempt. Cursor's Windows sandbox denies
+    // those tools access to this generated workspace.
+    sandboxOptions: { enabled: false },
+    customTools: {},
+  } satisfies LocalAgentOptions;
+  const agent = await Agent.create({
+    apiKey,
+    model: buildCursorModelSelection(modelId),
+    tools: [...REVISION_EDIT_TOOLS] as ToolName[],
+    mode: 'agent',
+    local,
+    mcpServers: {} as Record<string, McpServerConfig>,
+  });
+  try {
+    const run = await agent.send(input.prompt);
+    const cancelOnAbort = () => {
+      void run.cancel().catch(() => undefined);
+    };
+    input.signal.addEventListener('abort', cancelOnAbort, { once: true });
+    let output = '';
+    try {
+      if (input.signal.aborted) {
+        cancelOnAbort();
+        throw abortReason(input.signal);
+      }
+      if (run.supports('stream')) {
+        for await (const event of run.stream()) {
+          if (event.type !== 'assistant') continue;
+          for (const block of event.message.content) {
+            if (block.type === 'text') output += block.text;
+          }
+        }
+      }
+    } finally {
+      input.signal.removeEventListener('abort', cancelOnAbort);
+    }
+    const agentId = (agent as unknown as { id?: string | null }).id ?? null;
+    return {
+      agentCorrelationRef: agentId ? `agent:cursor-local:${agentId}` : null,
+      output,
+    };
+  } finally {
+    await agent[Symbol.asyncDispose]().catch(() => undefined);
+  }
+}
+
 const cursorRuntime: RevisionEditAgentRuntime = {
   async run(input) {
     if (input.signal.aborted) throw abortReason(input.signal);
     const apiKey = process.env.CURSOR_API_KEY?.trim();
     if (!apiKey) throw new Error('CURSOR_API_KEY is required');
-    const modelId =
+    const requestedModelId =
       input.modelId ??
       (await (await import('../appSettingsService')).getDefaultModel());
-    const local = {
-      cwd: input.cwd,
-      settingSources: [],
-      enableAgentRetries: false,
-      // The scratch checkout is already isolated, limited to non-shell edit
-      // tools, and removed after the attempt. Cursor's Windows sandbox denies
-      // those tools access to this generated workspace.
-      sandboxOptions: { enabled: false },
-      customTools: {},
-    } satisfies LocalAgentOptions;
-    const agent = await Agent.create({
-      apiKey,
-      model: buildCursorModelSelection(modelId),
-      tools: [...REVISION_EDIT_TOOLS] as ToolName[],
-      mode: 'agent',
-      local,
-      mcpServers: {} as Record<string, McpServerConfig>,
-    });
     try {
-      const run = await agent.send(input.prompt);
-      const cancelOnAbort = () => {
-        void run.cancel().catch(() => undefined);
-      };
-      input.signal.addEventListener('abort', cancelOnAbort, { once: true });
-      let output = '';
-      try {
-        if (input.signal.aborted) {
-          cancelOnAbort();
-          throw abortReason(input.signal);
-        }
-        if (run.supports('stream')) {
-          for await (const event of run.stream()) {
-            if (event.type !== 'assistant') continue;
-            for (const block of event.message.content) {
-              if (block.type === 'text') output += block.text;
-            }
-          }
-        }
-      } finally {
-        input.signal.removeEventListener('abort', cancelOnAbort);
+      return await runSingleEditTurn(input, apiKey, requestedModelId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        requestedModelId === DEFAULT_REVISION_EDIT_MODEL ||
+        !isUnavailableLogoModel(message)
+      ) {
+        throw error;
       }
-      const agentId = (agent as unknown as { id?: string | null }).id ?? null;
-      return {
-        agentCorrelationRef: agentId ? `agent:cursor-local:${agentId}` : null,
-        output,
-      };
-    } finally {
-      await agent[Symbol.asyncDispose]().catch(() => undefined);
+      return runSingleEditTurn(input, apiKey, DEFAULT_REVISION_EDIT_MODEL);
     }
   },
 };
@@ -298,20 +318,44 @@ export function createLocalCursorRevisionEditAgentProvider(
         once: true,
       });
       if (input.signal?.aborted) forwardCancellation();
+      const requestedModelId = input.modelId ?? DEFAULT_REVISION_EDIT_MODEL;
       let result: Awaited<ReturnType<RevisionEditAgentRuntime['run']>>;
       try {
-        result = await runUntilAborted(
-          runtime.run({
-            cwd: input.workspacePath,
-            prompt: buildEditPrompt(input),
-            modelId: input.modelId ?? DEFAULT_REVISION_EDIT_MODEL,
-            tools: REVISION_EDIT_TOOLS,
-            settingSources: [],
-            mcpServers: {},
-            signal: timeoutController.signal,
-          }),
-          timeoutController.signal
-        );
+        try {
+          result = await runUntilAborted(
+            runtime.run({
+              cwd: input.workspacePath,
+              prompt: buildEditPrompt(input),
+              modelId: requestedModelId,
+              tools: REVISION_EDIT_TOOLS,
+              settingSources: REVISION_EDIT_SETTING_SOURCES,
+              mcpServers: {},
+              signal: timeoutController.signal,
+            }),
+            timeoutController.signal
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          if (
+            requestedModelId === DEFAULT_REVISION_EDIT_MODEL ||
+            !isUnavailableLogoModel(message)
+          ) {
+            throw error;
+          }
+          result = await runUntilAborted(
+            runtime.run({
+              cwd: input.workspacePath,
+              prompt: buildEditPrompt(input),
+              modelId: DEFAULT_REVISION_EDIT_MODEL,
+              tools: REVISION_EDIT_TOOLS,
+              settingSources: REVISION_EDIT_SETTING_SOURCES,
+              mcpServers: {},
+              signal: timeoutController.signal,
+            }),
+            timeoutController.signal
+          );
+        }
       } finally {
         clearTimeout(timeout);
         input.signal?.removeEventListener('abort', forwardCancellation);

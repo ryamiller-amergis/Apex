@@ -15,7 +15,10 @@ import { appendBuildEvent } from '../buildEventsService';
 import { checkoutDefaultBranch, getWorkspaceDir } from '../repoCheckoutService';
 import { removeDirectoryAsync } from '../repoWorkspaceService';
 import { WORKTREE_GIT_TIMEOUT_MS } from '../repoGitSettings';
-import { classifyBuildRevisionFastEdit } from './buildRevisionFastEditClassifier';
+import {
+  classifyBuildRevisionFastEdit,
+  formatEscalationTimelineMessage,
+} from './buildRevisionFastEditClassifier';
 import { localCursorRevisionEditAgentProvider } from './buildRevisionEditAgent';
 import {
   localBuildRevisionFastEditArtifactStore,
@@ -500,7 +503,7 @@ export const defaultBuildRevisionFastEditService =
         buildRunId: target.buildRunId,
         buildRevisionId: target.buildRevisionId,
         eventType: 'revision.fast_edit_escalated',
-        message: 'This change needs more than a quick preview edit.',
+        message: formatEscalationTimelineMessage(reason),
         detail: {
           revisionNumber: target.revisionNumber,
           reason: reason.slice(0, 500),

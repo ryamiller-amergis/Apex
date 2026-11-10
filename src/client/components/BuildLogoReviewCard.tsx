@@ -7,6 +7,7 @@ interface BuildLogoReviewCardProps {
   buildId: string;
   project: string;
   pending: boolean;
+  errorMessage?: string | null;
   onApprove: (candidateId: string) => void;
   onReject: (candidateId: string) => void;
   onRegenerate: () => void;
@@ -18,6 +19,7 @@ export const BuildLogoReviewCard: React.FC<BuildLogoReviewCardProps> = ({
   buildId,
   project,
   pending,
+  errorMessage,
   onApprove,
   onReject,
   onRegenerate,
@@ -36,6 +38,15 @@ export const BuildLogoReviewCard: React.FC<BuildLogoReviewCardProps> = ({
           ? (review.failureMessage ?? 'The logo generator failed.')
           : 'Choose a logo to keep. Approving one does not change the preview.'}
     </p>
+    {errorMessage ? (
+      <div
+        role="alert"
+        className={styles.errorBanner}
+        {...{ 'data-testid': 'build-logo-error' }}
+      >
+        <strong>{errorMessage}</strong>
+      </div>
+    ) : null}
     {review.status === 'ready' && (
       <div className={styles.logoGrid}>
         {review.candidates
@@ -70,6 +81,9 @@ export const BuildLogoReviewCard: React.FC<BuildLogoReviewCardProps> = ({
                       className={styles.choiceButton}
                       disabled={pending}
                       onClick={() => onReject(candidate.id)}
+                      {...{
+                        'data-testid': `build-logo-reject-${candidate.id}`,
+                      }}
                     >
                       Reject
                     </button>

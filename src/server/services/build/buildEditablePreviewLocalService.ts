@@ -174,6 +174,33 @@ async function loadTarget(input: {
   };
 }
 
+export async function commitValidatedFastEditToBranch(input: {
+  target: EditablePreviewRevisionTarget;
+  validatedCommit: string;
+}): Promise<string> {
+  const sessionId = `build-studio-persist-${input.target.draftRevisionId}`;
+  try {
+    const workspace = await checkoutExactRevision(
+      input.target,
+      input.validatedCommit,
+      sessionId
+    );
+    await git(
+      safeArgs(workspace, [
+        'push',
+        'origin',
+        `${input.validatedCommit}:refs/heads/${input.target.integrationBranch}`,
+      ]),
+      { cwd: workspace, timeout: WORKTREE_GIT_TIMEOUT_MS }
+    );
+    return input.validatedCommit;
+  } finally {
+    await removeDirectoryAsync(getWorkspaceDir(sessionId)).catch(
+      () => undefined
+    );
+  }
+}
+
 async function checkoutExactRevision(
   target: EditablePreviewRevisionTarget,
   commit: string,
@@ -462,14 +489,21 @@ export const defaultBuildEditablePreviewSessionService =
         );
     },
     async persistAppliedRevision({ target, validatedCommit, previewUrl }) {
+      await commitValidatedFastEditToBranch({
+        target,
+        validatedCommit,
+      }).catch(() => undefined);
       await db
         .update(buildRevisions)
-        .set({ previewUrl, updatedAt: new Date().toISOString() })
+        .set({
+          validatedCommit,
+          previewUrl,
+          updatedAt: new Date().toISOString(),
+        })
         .where(
           and(
             eq(buildRevisions.id, target.draftRevisionId),
-            eq(buildRevisions.buildRunId, target.buildRunId),
-            eq(buildRevisions.validatedCommit, validatedCommit)
+            eq(buildRevisions.buildRunId, target.buildRunId)
           )
         );
     },

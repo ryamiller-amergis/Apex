@@ -1,4 +1,7 @@
-import { getApprovedDesignPreferenceProfile, seedProfileFromProject } from './designPreferenceProfileService';
+import {
+  getApprovedDesignPreferenceProfile,
+  seedProfileFromProject,
+} from './designPreferenceProfileService';
 import {
   buildVisualBrief,
   formatVisualBriefForPrompt,
@@ -10,7 +13,10 @@ import {
   isUiHeavyDomain,
   type BuildTaskDomain,
 } from '../../shared/buildUiClassifier';
-import type { BuildRequirement, BuildRiskDecision } from '../../shared/types/build';
+import type {
+  BuildRequirement,
+  BuildRiskDecision,
+} from '../../shared/types/build';
 
 export interface PreparedVisualContract {
   domain: BuildTaskDomain;
@@ -26,6 +32,7 @@ export async function prepareVisualContract(input: {
   requirements: BuildRequirement[];
   riskDecisions: BuildRiskDecision[];
   skillSettingsId: string | null;
+  logoCandidateId?: string | null;
 }): Promise<PreparedVisualContract> {
   const domain = classifyBuildTaskDomain(input.prompt, input.requirements);
   if (!isUiHeavyDomain(domain)) {
@@ -53,6 +60,8 @@ export async function prepareVisualContract(input: {
     taskDomain: domain,
     prompt: input.prompt,
     profile,
+    requirements,
+    logoCandidateId: input.logoCandidateId ?? null,
   });
 
   return {

@@ -1680,13 +1680,13 @@ const BuildProfileAccordion: React.FC<BuildProfileAccordionProps> = ({ expanded,
 };
 
 const DesignPreferenceProfileAccordion: React.FC<{
-  settingsId: string;
+  settingsId: string | null;
   project: string;
   expanded: boolean;
   onToggle: () => void;
 }> = ({ settingsId, project, expanded, onToggle }) => {
   const enabled = useFeatureFlag(BUILD_FROM_PROMPT_FLAG, project);
-  if (!enabled) return null;
+  if (!enabled || !settingsId) return null;
   return (
     <AccordionSection
       title="Design Preferences"

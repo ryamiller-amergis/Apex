@@ -45,6 +45,7 @@ import {
   analyzeBuildBrief,
   BuildBriefAnalysisError,
   classifyBuild,
+  classifyBuildSupport,
 } from './buildRiskClassifier';
 import {
   approveInterviewBrief,
@@ -874,6 +875,10 @@ export async function getBuildBriefAnalysis(input: {
       state.estimatedTasks,
       state.needsMigration
     ),
+    supportCheck: classifyBuildSupport({
+      requirements: redacted.requirements,
+      riskDecisions: redacted.riskDecisions,
+    }),
     requester: { id: interview.authorId, displayName: requesterName },
     approval:
       brief.approvedBy && brief.approvedAt

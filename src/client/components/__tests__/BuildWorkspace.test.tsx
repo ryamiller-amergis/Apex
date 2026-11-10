@@ -1204,4 +1204,92 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
       screen.queryByTestId('build-workspace-plan-panel')
     ).not.toBeInTheDocument();
   });
+
+  it('surfaces logo mutation errors in BuildLogoReviewCard with friendly retry guidance when the API is restarting', async () => {
+    mockDecideLogo.mockReturnValue({
+      mutateAsync: jest
+        .fn()
+        .mockRejectedValue(new Error('Failed to fetch: 503 Service Unavailable')),
+      isPending: false,
+    });
+    mockUseBuild.mockReturnValue({
+      data: baseDetail({
+        build: { ...baseDetail().build, status: 'preview_ready' },
+        logoReview: {
+          batchId: 'batch-1',
+          status: 'ready',
+          prompt: 'review a logo first',
+          failureMessage: null,
+          approvedCandidateId: null,
+          candidates: [{ id: 'logo-1', status: 'pending' }],
+        },
+      }),
+      isLoading: false,
+      refetch: jest.fn(),
+    });
+
+    render(
+      <MemoryRouter
+        initialEntries={['/builds/16dd6dcc-595d-48b8-8da8-1110751a2320']}
+      >
+        <BuildWorkspace
+          project="Amergis Connect - ATS"
+          buildId="16dd6dcc-595d-48b8-8da8-1110751a2320"
+        />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByTestId('build-logo-approve-logo-1'));
+
+    const logoAlert = await screen.findByTestId('build-logo-error');
+    expect(logoAlert).toHaveTextContent(
+      /The API server may be restarting or temporarily unreachable/i
+    );
+    expect(screen.getByTestId('build-workspace-error-banner')).toHaveTextContent(
+      /The API server may be restarting or temporarily unreachable/i
+    );
+  });
+
+  it('renders browser check status, desktop/mobile viewport details, and screenshot links inside BuildRevisionSections', () => {
+    render(
+      <BuildRevisionSections
+        revisions={[
+          {
+            number: 2,
+            createdAt: '2',
+            classification: 'small',
+            deploymentStatus: 'succeeded',
+            previewUrl: 'http://127.0.0.1:4100/',
+            feedback: 'Center the dashboard layout and update the title.',
+            browserVerification: {
+              status: 'passed',
+              desktopViewport: { width: 1280, height: 800, centered: true },
+              mobileViewport: { width: 375, height: 667, centered: true },
+              screenshotUrl: '/api/builds/b1/evidence/check-1/screenshot.png',
+            },
+          },
+        ]}
+        events={[]}
+        currentRevisionNumber={2}
+        currentHeadline="The preview is ready."
+        showSpinner={false}
+      />
+    );
+
+    expect(
+      screen.getByTestId('build-workspace-revision-2-browser-status')
+    ).toHaveTextContent('Browser check: passed');
+    expect(
+      screen.getByTestId('build-workspace-revision-2-viewport-desktop')
+    ).toHaveTextContent('Desktop 1280×800 (centered)');
+    expect(
+      screen.getByTestId('build-workspace-revision-2-viewport-mobile')
+    ).toHaveTextContent('Mobile 375×667');
+    expect(
+      screen.getByTestId('build-workspace-revision-2-screenshot-link')
+    ).toHaveAttribute(
+      'href',
+      '/api/builds/b1/evidence/check-1/screenshot.png'
+    );
+  });
 });
