@@ -65,7 +65,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
           HEAD_SHA: ${{ github.sha }}
           DIFF_MODE: branch
-          REQUIRE_UP_TO_DATE: ${{ github.event_name == 'workflow_dispatch' }}
+          REQUIRE_UP_TO_DATE: 'true'
         run: bash scripts/ci/has-terraform-changes.sh
 
       - name: Detect migration file changes
@@ -415,14 +415,14 @@ jobs:
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
 
-      # Pull requests only plan: open PRs share dev, and applying each one would
-      # undo another's infra changes. Manual runs and Deploy Dev (Quick) apply.
-      - name: Terraform ${{ github.event_name == 'workflow_dispatch' && 'apply' || 'plan' }} (dev)
+      # Open PRs share dev: applying one PR's infra undoes any other open PR's
+      # unmerged infra until that PR runs again.
+      - name: Terraform apply (dev)
         if: needs.detect-changes.outputs.terraform == 'true'
         uses: ./.github/actions/terraform
         with:
           environment: dev
-          apply: ${{ github.event_name == 'workflow_dispatch' }}
+          apply: 'true'
           azure-credentials: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
 
       - name: Set App Service Configuration

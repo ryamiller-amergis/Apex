@@ -136,13 +136,13 @@ Each deploy pipeline runs Terraform through `.github/actions/terraform`, signed 
 
 | Pipeline | Compared against | Terraform |
 |----------|------------------|-----------|
-| `pr-tests.yml` pull request | PR base | plan dev; the result is in the run summary |
+| `pr-tests.yml` pull request | PR base | apply dev (the PR merged onto `main`) |
 | `pr-tests.yml` manual run | `origin/main` | apply dev |
 | `deploy-dev-quick.yml` | `origin/main` | apply dev |
 | `deploy.yml` staging job | last successful `deploy.yml` run | plan prd |
 | `deploy.yml` swap job (`prd-production` approval) | same | apply prd, before the slot swap |
 
-The dev comparisons count only the branch's own commits. A dev apply fails if the branch changes `infra/` but does not contain the latest `main`, because applying it would undo infra merged since it branched. Pull requests only plan: open PRs share dev, and applying each one would undo another's changes. A failed prod apply fails the run, so the next deploy compares against the older successful run and tries again.
+The dev comparisons count only the branch's own commits. A dev apply fails if the branch changes `infra/` but does not contain the latest `main`, because applying it would undo infra merged since it branched. Pull request runs apply the PR merged onto `main`, so they always include `main`'s infra. Open PRs share dev: applying one PR undoes any other open PR's unmerged infra until that PR runs again. A failed dev apply fails the PR's `deploy-dev` check. A failed prod apply fails the run, so the next deploy compares against the older successful run and tries again.
 
 Each principal needs, on its own environment: `Contributor` (and, for dev, `AcrPush` on `acrapexltdev`) and role-assignment rights (`User Access Administrator` or `Role Based Access Control Administrator`) on the Apex resource groups, `Storage Blob Data Contributor` on the state account, and a place in `ai_runs_key_vault_secrets_officer_ids`. Prod also needs Microsoft Graph `Application.Read.All` and `AppRoleAssignment.ReadWrite.All` (tenant admin consent) for `azuread_app_role_assignment.ai_platform_v2_interactive_runner_ingest`. `ARM_SKIP_PROVIDER_REGISTRATION` is set because neither principal can register providers on the subscription.
 
