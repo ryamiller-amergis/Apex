@@ -102,7 +102,7 @@ describe('profile accessibility', () => {
     );
 
     const seen = new Set<string>();
-    for (let step = 0; step < 6; step += 1) {
+    for (let step = 0; step < 10; step += 1) {
       await user.tab();
       seen.add(document.activeElement?.getAttribute('data-testid') ?? '');
     }
@@ -116,7 +116,7 @@ describe('profile accessibility', () => {
       await screen.findByTestId(profileTestIds.unauthenticated)
     ).toHaveTextContent('Sign in to view your profile');
     const signedOut = new Set<string>();
-    for (let step = 0; step < 6; step += 1) {
+    for (let step = 0; step < 10; step += 1) {
       await user.tab();
       signedOut.add(document.activeElement?.getAttribute('data-testid') ?? '');
     }

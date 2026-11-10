@@ -26,4 +26,15 @@ describe('dev server proxy', () => {
     expect(proxy?.['/api']).toBeTruthy();
     expect(String(proxy?.['/api'])).toContain('http://localhost:');
   });
+
+  it('resolves @project-scope/ui to packages/ui/src/index.ts in serve/dev mode for instant live reload', async () => {
+    const resolved =
+      typeof config === 'function'
+        ? await config({ command: 'serve', mode: 'development' })
+        : config;
+    const alias = resolved.resolve?.alias as Record<string, string> | undefined;
+    expect(alias?.['@project-scope/ui']).toMatch(
+      /packages[\\/]ui[\\/]src[\\/]index\.ts$/
+    );
+  });
 });

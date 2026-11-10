@@ -12,8 +12,12 @@ import overrides from '../theme/overrides';
 import { queryClient as defaultQueryClient } from './queryClient';
 import { AppRoutes } from './routes';
 
-const navItems: NavItem[] = [
+export const navItems: NavItem[] = [
+  { id: 'home', label: 'Dashboard', to: '/' },
+  { id: 'notifications', label: 'Notifications', to: '/notifications' },
+  { id: 'insights', label: 'AI Insights', to: '/insights' },
   { id: 'profile', label: 'Profile', to: '/profile' },
+  { id: 'settings', label: 'Settings', to: '/settings' },
 ];
 
 export const AppLayout: React.FC<{ children: ReactNode }> = ({ children }) => {

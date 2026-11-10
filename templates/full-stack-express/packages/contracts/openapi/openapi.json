@@ -6,6 +6,155 @@
     "description": "Generated from the Zod route definitions. Do not edit by hand."
   },
   "paths": {
+    "/api/v1/insights/analyze": {
+      "post": {
+        "operationId": "analyzeInsights",
+        "summary": "Run grounded AI skill analysis over database and connector data",
+        "description": "Invokes the structured AI skill adapter (configured with composer-2.5 by default) over database records and the third-party connector feed.",
+        "security": [
+          {
+            "principal": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyzeInsightsBody"
+              },
+              "example": {
+                "focusArea": "operations",
+                "includeConnectorFeed": true,
+                "connectorSource": "Logistics Telemetry Feed"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grounded insights, citations, and recommended actions",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightsAnalysis"
+                },
+                "example": {
+                  "skillName": "operational-briefing",
+                  "modelId": "composer-2.5",
+                  "focusArea": "operations",
+                  "headline": "Fulfillment throughput rose 14% while connector telemetry flagged two regional carrier delays.",
+                  "findings": [
+                    {
+                      "id": "finding-carrier-delay",
+                      "title": "Rebalance Midwest carrier dispatch window",
+                      "summary": "Database order cycle logs and carrier webhook telemetry show a 35-minute pickup lag on afternoon routes.",
+                      "impact": "high",
+                      "recommendedAction": "Shift priority Midwest dispatches to the 13:30 cutoff and notify warehouse leads.",
+                      "citationIds": ["cit-db-orders", "cit-conn-carrier"]
+                    }
+                  ],
+                  "citations": [
+                    {
+                      "id": "cit-db-orders",
+                      "sourceKind": "database",
+                      "sourceLabel": "Database · Fulfillment Ledger Q1",
+                      "excerpt": "42 priority batches completed with 98.4% on-time verification across primary hubs."
+                    },
+                    {
+                      "id": "cit-conn-carrier",
+                      "sourceKind": "connector",
+                      "sourceLabel": "Connector · Logistics Telemetry Feed",
+                      "excerpt": "Regional hub ORD-2 reported a 35-minute dock queue spike between 14:00 and 16:00."
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request failed validation or the body was malformed",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The analysis service or database is unavailable.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "getMe",
@@ -236,6 +385,367 @@
         }
       }
     },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "getNotifications",
+        "summary": "List notifications for the caller",
+        "description": "Returns the caller notifications ordered newest first along with the unread count.",
+        "security": [
+          {
+            "principal": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notifications for the caller",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsList"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "notif-ops-01",
+                      "title": "Morning fulfillment batch completed",
+                      "message": "All 42 priority orders cleared quality review with zero exceptions.",
+                      "category": "workflow",
+                      "read": false,
+                      "createdAt": "09:00 UTC"
+                    }
+                  ],
+                  "unreadCount": 1
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable. Nothing was changed.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "markNotificationsRead",
+        "summary": "Mark one or all notifications as read",
+        "description": "Marks a specific notification or all notifications as read for the authenticated principal.",
+        "security": [
+          {
+            "principal": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkNotificationReadBody"
+              },
+              "example": {
+                "notificationId": "notif-ops-01",
+                "markAll": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated notifications list",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsList"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "notif-ops-01",
+                      "title": "Morning fulfillment batch completed",
+                      "message": "All 42 priority orders cleared quality review with zero exceptions.",
+                      "category": "workflow",
+                      "read": true,
+                      "createdAt": "09:00 UTC"
+                    }
+                  ],
+                  "unreadCount": 0
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request failed validation or the body was malformed",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable. Nothing was changed.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createNotification",
+        "summary": "Create or trigger a notification for the caller",
+        "description": "Creates an operational notification for the caller and returns the updated list and unread count.",
+        "security": [
+          {
+            "principal": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNotificationBody"
+              },
+              "example": {
+                "title": "Morning fulfillment batch completed",
+                "message": "All 42 priority orders cleared quality review with zero exceptions.",
+                "category": "workflow"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated notifications list after creation",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsList"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "notif-ops-01",
+                      "title": "Morning fulfillment batch completed",
+                      "message": "All 42 priority orders cleared quality review with zero exceptions.",
+                      "category": "workflow",
+                      "read": false,
+                      "createdAt": "09:00 UTC"
+                    }
+                  ],
+                  "unreadCount": 1
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request failed validation or the body was malformed",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable. Nothing was changed.",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/X-Request-Id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health/live": {
       "get": {
         "operationId": "getHealthLive",
@@ -350,6 +860,47 @@
       }
     },
     "schemas": {
+      "AnalyzeInsightsBody": {
+        "type": "object",
+        "properties": {
+          "focusArea": {
+            "type": "string",
+            "enum": ["operations", "retention", "capacity"]
+          },
+          "includeConnectorFeed": {
+            "type": "boolean"
+          },
+          "connectorSource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "additionalProperties": false,
+        "description": "Parameters for invoking the grounded AI skill over database records and connector feeds."
+      },
+      "CreateNotificationBody": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "category": {
+            "type": "string",
+            "enum": ["system", "workflow", "insight", "alert"]
+          }
+        },
+        "required": ["title", "message"],
+        "additionalProperties": false,
+        "description": "Creates a new notification for the authenticated principal."
+      },
       "HealthLive": {
         "type": "object",
         "properties": {
@@ -371,6 +922,195 @@
         },
         "required": ["status"],
         "additionalProperties": false
+      },
+      "InsightCitation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "sourceKind": {
+            "type": "string",
+            "enum": ["database", "connector"]
+          },
+          "sourceLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "excerpt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          }
+        },
+        "required": ["id", "sourceKind", "sourceLabel", "excerpt"],
+        "additionalProperties": false,
+        "description": "Grounding citation referencing a database record or a third-party connector feed item."
+      },
+      "InsightFinding": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "impact": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "recommendedAction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "citationIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "summary",
+          "impact",
+          "recommendedAction",
+          "citationIds"
+        ],
+        "additionalProperties": false,
+        "description": "One structured AI skill finding with recommended action."
+      },
+      "InsightsAnalysis": {
+        "type": "object",
+        "properties": {
+          "skillName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "focusArea": {
+            "type": "string",
+            "enum": ["operations", "retention", "capacity"]
+          },
+          "headline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InsightFinding"
+            }
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InsightCitation"
+            }
+          }
+        },
+        "required": [
+          "skillName",
+          "modelId",
+          "focusArea",
+          "headline",
+          "findings",
+          "citations"
+        ],
+        "additionalProperties": false,
+        "description": "Grounded analysis produced by the AI skill adapter over database and connector sources."
+      },
+      "MarkNotificationReadBody": {
+        "type": "object",
+        "properties": {
+          "notificationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "markAll": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Marks one notification or all notifications as read for the caller."
+      },
+      "NotificationItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "category": {
+            "type": "string",
+            "enum": ["system", "workflow", "insight", "alert"]
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": ["id", "title", "message", "category", "read", "createdAt"],
+        "additionalProperties": false,
+        "description": "One in-app notification for the authenticated principal."
+      },
+      "NotificationsList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationItem"
+            }
+          },
+          "unreadCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": ["items", "unreadCount"],
+        "additionalProperties": false,
+        "description": "Notifications and unread badge count for the caller."
       },
       "ProblemDetails": {
         "type": "object",

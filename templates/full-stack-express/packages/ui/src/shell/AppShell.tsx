@@ -14,10 +14,19 @@ import { SkipLink } from './SkipLink.js';
 export type { NavItem };
 
 const MAIN_ID = 'main-content';
+export const DEFAULT_MAIN_MAX_WIDTH = 960;
 
 export interface AppShellProps {
   /** Shown in the header. */
   appName: string;
+  /** Optional logo or brand mark displayed before the app name. */
+  logo?: ReactNode;
+  /** Optional subtitle or brand badge displayed beside the app name. */
+  subtitle?: string;
+  /** Optional brand badge node displayed beside the app name. */
+  brandBadge?: ReactNode;
+  /** Maximum width of the main content area on desktop (defaults to 960). */
+  maxWidth?: number | string;
   /** Primary navigation. An empty list renders no navigation and no menu button. */
   navItems: NavItem[];
   /** Header slot for host content, placed before the colour mode switch. */
@@ -52,6 +61,10 @@ function assertUniqueIds(items: NavItem[]): void {
  */
 export const AppShell: React.FC<AppShellProps> = ({
   appName,
+  logo,
+  subtitle,
+  brandBadge,
+  maxWidth = DEFAULT_MAIN_MAX_WIDTH,
   navItems,
   headerActions,
   children,
@@ -133,14 +146,49 @@ export const AppShell: React.FC<AppShellProps> = ({
                 <MenuIcon />
               </IconButton>
             )}
-            <Typography
-              variant="h6"
-              component="p"
-              noWrap
-              sx={{ flexGrow: 1, minWidth: 0 }}
+            {logo ? (
+              <Box
+                data-testid="app-shell-logo"
+                sx={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {logo}
+              </Box>
+            ) : null}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 1,
+                flexGrow: 1,
+                minWidth: 0,
+              }}
             >
-              {appName}
-            </Typography>
+              <Typography variant="h6" component="p" noWrap>
+                {appName}
+              </Typography>
+              {subtitle ? (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  noWrap
+                  data-testid="app-shell-subtitle"
+                >
+                  {subtitle}
+                </Typography>
+              ) : null}
+              {brandBadge ? (
+                <Box
+                  data-testid="app-shell-brand-badge"
+                  sx={{ display: 'inline-flex', alignItems: 'center' }}
+                >
+                  {brandBadge}
+                </Box>
+              ) : null}
+            </Box>
             {headerActions}
             <ColorModeToggle />
           </Toolbar>
@@ -154,7 +202,8 @@ export const AppShell: React.FC<AppShellProps> = ({
             flexGrow: 1,
             width: '100%',
             minWidth: 0,
-            maxWidth: isDesktop ? theme.breakpoints.values.lg : 'none',
+            maxWidth: isDesktop ? maxWidth : 'none',
+            alignSelf: 'center',
             px: padding,
             py: padding,
             overflowWrap: 'anywhere',

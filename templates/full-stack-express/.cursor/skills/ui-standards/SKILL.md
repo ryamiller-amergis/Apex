@@ -17,6 +17,7 @@ Read these before editing. Stop if any path is missing.
 
 - Design system: [docs/design-system.md](../../../docs/design-system.md)
 - Component catalog: [docs/component-catalog.md](../../../docs/component-catalog.md)
+- Product quality: [.cursor/skills/product-quality/SKILL.md](../product-quality/SKILL.md)
 - UI package guide, including the selector convention: [packages/ui/README.md](../../../packages/ui/README.md)
 - Tokens: `packages/ui/src/tokens/` and `packages/ui/src/theme/createAppTheme.ts`
 - Test ids: `packages/ui/src/testing/testId.ts`

@@ -74,6 +74,66 @@ export const scenarios = {
       body: { displayName: 'test-name' },
     },
   ],
+  getNotifications: [
+    { id: 'success', arrange: 'ok', subject: personA.subject },
+    { id: 'unauthenticated', arrange: 'ok' },
+  ],
+  createNotification: [
+    {
+      id: 'success',
+      arrange: 'ok',
+      subject: personA.subject,
+      body: {
+        title: 'Dispatch window updated',
+        message: 'Midwest lane cutoff moved to 13:30.',
+        category: 'workflow',
+      },
+    },
+    {
+      id: 'validation',
+      arrange: 'ok',
+      subject: personA.subject,
+      body: { title: '', message: '' },
+    },
+    {
+      id: 'unauthenticated',
+      arrange: 'ok',
+      body: {
+        title: 'Dispatch window updated',
+        message: 'Midwest lane cutoff moved to 13:30.',
+      },
+    },
+  ],
+  markNotificationsRead: [
+    {
+      id: 'success',
+      arrange: 'ok',
+      subject: personA.subject,
+      body: { markAll: true },
+    },
+    {
+      id: 'unauthenticated',
+      arrange: 'ok',
+      body: { markAll: true },
+    },
+  ],
+  analyzeInsights: [
+    {
+      id: 'success',
+      arrange: 'ok',
+      subject: personA.subject,
+      body: {
+        focusArea: 'operations',
+        includeConnectorFeed: true,
+        connectorSource: 'Logistics Telemetry Feed',
+      },
+    },
+    {
+      id: 'unauthenticated',
+      arrange: 'ok',
+      body: { focusArea: 'operations' },
+    },
+  ],
 } as const satisfies Record<keyof typeof routes, readonly Scenario[]>;
 
 export function loadOpenApiDocument(): OpenApiDocument {

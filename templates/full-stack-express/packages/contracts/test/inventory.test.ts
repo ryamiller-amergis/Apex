@@ -6,6 +6,10 @@ describe('route inventory comparison (VT-05, PBI-006 AC-3)', () => {
     const result = compareRouteInventory([
       { method: 'GET', path: '/api/v1/me' },
       { method: 'put', path: '/api/v1/me' },
+      { method: 'get', path: '/api/v1/notifications' },
+      { method: 'post', path: '/api/v1/notifications' },
+      { method: 'put', path: '/api/v1/notifications' },
+      { method: 'post', path: '/api/v1/insights/analyze' },
       { method: 'get', path: '/api/v1/debug' },
     ]);
     expect(result).toEqual({

@@ -137,7 +137,9 @@ describe('unauthenticated routes (TBI-024 VT-17 PBI-022 AC-3)', () => {
           ? request(app).put(route.path).send({
               displayName: personA.displayName,
             })
-          : request(app).get(route.path);
+          : route.method === 'post'
+            ? request(app).post(route.path).send({})
+            : request(app).get(route.path);
       const response = await agent;
       const body = expectProblem(
         response,

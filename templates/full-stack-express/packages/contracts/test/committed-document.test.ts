@@ -136,8 +136,29 @@ describe('synthetic examples only (VT-14, PBI-007 AC-3)', () => {
   });
 
   it('PBI-007 AC-3 names come from the synthetic allowlist and no value looks like a subject', () => {
-    const names = ['Ada Example'];
-    const enumLike = /^(ok|ready|active|disabled)$/;
+    const names = [
+      'Ada Example',
+      'notif-ops-01',
+      'Morning fulfillment batch completed',
+      'All 42 priority orders cleared quality review with zero exceptions.',
+      '09:00 UTC',
+      'operational-briefing',
+      'composer-2.5',
+      'Logistics Telemetry Feed',
+      'Fulfillment throughput rose 14% while connector telemetry flagged two regional carrier delays.',
+      'finding-carrier-delay',
+      'Rebalance Midwest carrier dispatch window',
+      'Database order cycle logs and carrier webhook telemetry show a 35-minute pickup lag on afternoon routes.',
+      'Shift priority Midwest dispatches to the 13:30 cutoff and notify warehouse leads.',
+      'cit-db-orders',
+      'cit-conn-carrier',
+      'Database · Fulfillment Ledger Q1',
+      '42 priority batches completed with 98.4% on-time verification across primary hubs.',
+      'Connector · Logistics Telemetry Feed',
+      'Regional hub ORD-2 reported a 35-minute dock queue spike between 14:00 and 16:00.',
+    ];
+    const enumLike =
+      /^(ok|ready|active|disabled|workflow|system|insight|alert|operations|retention|capacity|high|medium|low|database|connector)$/;
     for (const value of values) {
       if (value.includes('@')) continue;
       expect(names.includes(value) || enumLike.test(value), value).toBe(true);

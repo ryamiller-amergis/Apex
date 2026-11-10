@@ -34,21 +34,21 @@ The per-task envelope supplies these inputs. Read the repository files before th
   - `codeMap`: repository code map path and content hash (`.cursor/CODEMAP.md`).
 - **Domain skills & reference slices** (read before editing):
   - `.cursor/skills/api-contract/SKILL.md` and `packages/contracts/src/routes/me.ts` — **mandatory** when the task adds or changes an HTTP endpoint or contract schema.
-  - `.cursor/skills/ui-standards/SKILL.md`, `docs/component-catalog.md`, and `apps/web/src/features/profile/ProfileForm.tsx` — **mandatory** when the task adds or changes a screen or UI component.
+  - `.cursor/skills/ui-standards/SKILL.md`, `.cursor/skills/product-quality/SKILL.md`, `docs/component-catalog.md`, and `apps/web/src/features/profile/ProfileForm.tsx` — **mandatory** when the task adds or changes a screen or UI component.
   - `docs/feature-slices.md` and `docs/runbooks/migrations.md` — when adding a feature slice or schema migration.
 - **Prior attempt violations** (when `attemptNumber > 1`): coded violations (`code` and `requirementId`) from the refused attempt that must be fixed in this attempt.
 
 ## Rules
 
-| ID      | Rule                                                                                                                                                                                                 | Enforced by                  |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| IMP-R01 | Search the code map, the reuse list, and the repository before creating any new component, hook, service, or helper. Reuse existing modules (`@project-scope/ui`, `@project-scope/contracts`, `apiClient`) whenever they fit. | Standards review |
-| IMP-R02 | Add focused failing tests for the owned requirements, commit them together as `test(build): <summary>`, then commit the passing implementation separately as `feat(build): <summary>`.               | Verification evidence check  |
-| IMP-R03 | Every owned requirement and risk decision must map to a named test and to the red and green commits; related requirements may share the same commit pair.                                               | Verification evidence check  |
-| IMP-R04 | Run the quality manifest commands (`typeCheck`, `lint`, `relatedTests`), fix breaks in-session, and report only the final passing run (`exitCode: 0`) so in-session fixes use zero repair attempts. | Verification evidence check  |
-| IMP-R05 | Review the diff against the frozen standards contract (`design-system`, `coding rules`, `code map`), `.cursor/skills/api-contract/SKILL.md` (for endpoints), and `.cursor/skills/ui-standards/SKILL.md` (for screens). | Standards review |
-| IMP-R06 | Never put a hard-coded secret, bearer token, connection string, or personal identity value in code, tests, commit messages, or evidence output. Use synthetic `example.test` values.                 | Redaction & evidence check   |
-| IMP-R07 | Implement the complete feature end-to-end in this session — including database migrations, Zod contracts, API routes, and UI screens. Never stop after red tests or write a `plan.json` escalation file. | Verification evidence check |
+| ID      | Rule                                                                                                                                                                                                                          | Enforced by                 |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| IMP-R01 | Search the code map, the reuse list, and the repository before creating any new component, hook, service, or helper. Reuse existing modules (`@project-scope/ui`, `@project-scope/contracts`, `apiClient`) whenever they fit. | Standards review            |
+| IMP-R02 | Add focused failing tests for the owned requirements, commit them together as `test(build): <summary>`, then commit the passing implementation separately as `feat(build): <summary>`.                                        | Verification evidence check |
+| IMP-R03 | Every owned requirement and risk decision must map to a named test and to the red and green commits; related requirements may share the same commit pair.                                                                     | Verification evidence check |
+| IMP-R04 | Run the quality manifest commands (`typeCheck`, `lint`, `relatedTests`), fix breaks in-session, and report only the final passing run (`exitCode: 0`) so in-session fixes use zero repair attempts.                           | Verification evidence check |
+| IMP-R05 | Review the diff against the frozen standards contract (`design-system`, `coding rules`, `code map`), `.cursor/skills/api-contract/SKILL.md` (for endpoints), and `.cursor/skills/ui-standards/SKILL.md` (for screens).        | Standards review            |
+| IMP-R06 | Never put a hard-coded secret, bearer token, connection string, or personal identity value in code, tests, commit messages, or evidence output. Use synthetic `example.test` values.                                          | Redaction & evidence check  |
+| IMP-R07 | Implement the complete feature end-to-end in this session — including database migrations, Zod contracts, API routes, and UI screens. Never stop after red tests or write a `plan.json` escalation file.                      | Verification evidence check |
 
 ## Runtime
 

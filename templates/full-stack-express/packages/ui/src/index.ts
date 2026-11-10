@@ -32,11 +32,45 @@ export {
 } from './theme/contrast.js';
 export {
   AppShell,
+  DEFAULT_MAIN_MAX_WIDTH,
   type AppShellProps,
   type NavItem,
 } from './shell/AppShell.js';
 export { PageHeader, type PageHeaderProps } from './layout/PageHeader.js';
-export { ContentSurface, type ContentSurfaceProps } from './layout/ContentSurface.js';
+export {
+  ContentSurface,
+  type ContentSurfaceProps,
+} from './layout/ContentSurface.js';
+export {
+  DetailDrawer,
+  DetailPanel,
+  FilteredListSurface,
+  type DetailDrawerProps,
+  type DetailPanelProps,
+  type FilteredListFilterOption,
+  type FilteredListSurfaceProps,
+} from './layout/FilteredListSurface.js';
+export {
+  MetricCard,
+  StatGrid,
+  type MetricCardProps,
+  type MetricTrendDirection,
+  type StatGridProps,
+} from './data/MetricCard.js';
+export {
+  DataChartCard,
+  type DataChartCardProps,
+  type DataChartFilterOption,
+  type DataChartPoint,
+} from './data/DataChartCard.js';
+export {
+  NotificationCenter,
+  NotificationList,
+  type NotificationCategory,
+  type NotificationCenterProps,
+  type NotificationItemData,
+  type NotificationListProps,
+} from './data/NotificationCenter.js';
 export {
   APP_ERROR_MESSAGE,
   AppErrorBoundary,

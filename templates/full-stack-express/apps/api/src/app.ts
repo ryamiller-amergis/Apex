@@ -1,4 +1,12 @@
 import express, { type Express, type RequestHandler } from 'express';
+import {
+  createInsightsRouter,
+  type InsightsSkillAdapter,
+} from './features/insights/insightsRouter.ts';
+import {
+  createNotificationsRouter,
+  type NotificationsService,
+} from './features/notifications/notificationsRouter.ts';
 import type { IdentityProviderAdapter } from './identity/adapter.ts';
 import { createAuthMiddleware } from './identity/index.ts';
 import { createClientStatic } from './middleware/clientStatic.ts';
@@ -34,6 +42,10 @@ export interface AppDeps {
   clientDistDir?: string | undefined;
   /** Mounted right after request logging, such as the in-flight tracker. */
   requestTracking?: RequestHandler;
+  /** Optional custom notifications service for tests. */
+  notifications?: NotificationsService;
+  /** Optional custom AI insights skill adapter for tests. */
+  insightsAdapter?: InsightsSkillAdapter;
 }
 
 /**
@@ -76,7 +88,9 @@ export function createApp(deps: AppDeps): Express {
     noStore(),
     express.json({ limit: JSON_BODY_LIMIT }),
     createAuthMiddleware({ adapter: deps.identityAdapter, logger }),
-    createMeRouter({ profiles })
+    createMeRouter({ profiles }),
+    createNotificationsRouter({ notifications: deps.notifications }),
+    createInsightsRouter({ adapter: deps.insightsAdapter })
   );
 
   app.use(['/api', '/health'], notFound());

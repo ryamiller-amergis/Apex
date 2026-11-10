@@ -76,7 +76,7 @@ export const webEnvSchema = z.strictObject({
   ),
   VITE_APEX_PREVIEW_MODE: z.preprocess(
     unsetBlank,
-    z.enum(['sample']).optional(),
+    z.enum(['sample']).optional()
   ),
 });
 
@@ -92,7 +92,9 @@ const devServerObject = z.object({
   ),
 });
 
-export const WEB_ENV_KEYS = Object.keys(webEnvSchema.shape).sort();
+export const WEB_ENV_KEYS = Object.keys(webEnvSchema.shape)
+  .filter((key) => key !== 'VITE_APEX_PREVIEW_MODE')
+  .sort();
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
 export type DevServerEnv = z.infer<typeof devServerObject>;

@@ -27,6 +27,7 @@ docs/handoff.md  Platform Engineering adoption: ownership, pipeline contracts, p
 .cursor/skills/orchestrator/SKILL.md  Prompted build: brief, recorded questions, plan approval, then the other role skills.
 .cursor/skills/api-contract/SKILL.md  Rules and steps for adding an endpoint so it matches the API contract.
 .cursor/skills/ui-standards/SKILL.md  Rules, screen steps, and the review checklist for the design system.
+.cursor/skills/product-quality/SKILL.md  Product craft rules: centered AppShell width, realistic domain data, charts, notifications, and AI insights.
 .cursor/skills/planner/SKILL.md  Plan a prompt from the module map, the manifests, and recorded decisions.
 .cursor/skills/ui/SKILL.md  UI role skill. Loads UI standards, then records catalog, token, and state evidence.
 .cursor/skills/developer/SKILL.md  Implement a change with the required skills, a reviewed migration, and the gates.

@@ -917,6 +917,7 @@ describe('committed api-contract and ui-standards skills', () => {
   const skillPaths = [
     '.cursor/skills/api-contract/SKILL.md',
     '.cursor/skills/ui-standards/SKILL.md',
+    '.cursor/skills/product-quality/SKILL.md',
   ];
 
   function readSkill(relative) {
@@ -927,7 +928,7 @@ describe('committed api-contract and ui-standards skills', () => {
     const config = loadConfig(templateRoot);
     const result = checkDocs({ root: templateRoot, config });
     expect(result.findings).toEqual([]);
-    expect(result.documentCount).toBe(30);
+    expect(result.documentCount).toBe(31);
     const agents = readSkill('AGENTS.md');
     const index = readSkill('docs/agent-index.txt');
     for (const skillPath of skillPaths) {

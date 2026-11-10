@@ -4,15 +4,43 @@ Every public export of `@project-scope/ui`, grouped by purpose. The entry file i
 
 ## Layout
 
-| Export          | Kind      | Source                                | Use it to                                                                                                                                                                                      |
-| --------------- | --------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AppShell`      | Component | `packages/ui/src/shell/AppShell.tsx`  | Frame every route: skip link, header with the app name and "Dark mode" switch, primary navigation, and the `main` landmark. Props: `appName`, `navItems`, optional `headerActions`, `children` |
-| `AppShellProps` | Type      | `packages/ui/src/shell/AppShell.tsx`  | Props of `AppShell`                                                                                                                                                                            |
-| `NavItem`       | Type      | `packages/ui/src/shell/NavDrawer.tsx` | One navigation entry: a unique, stable `id`, a `label`, a `to` path, and optional MUI `icon` for the drawer. A duplicate `id` throws                                                           |
-| `PageHeader`    | Component | `packages/ui/src/layout/PageHeader.tsx` | Title, optional subtitle, and right-aligned actions for a route body                                                                                                                         |
-| `PageHeaderProps` | Type    | `packages/ui/src/layout/PageHeader.tsx` | Props of `PageHeader`                                                                                                                                                                        |
-| `ContentSurface` | Component | `packages/ui/src/layout/ContentSurface.tsx` | Padded card-like surface for page content using theme tokens                                                                                                                             |
-| `ContentSurfaceProps` | Type | `packages/ui/src/layout/ContentSurface.tsx` | Props of `ContentSurface`                                                                                                                                                                    |
+| Export                     | Kind      | Source                                           | Use it to                                                                                                                                                                                                                                 |
+| -------------------------- | --------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppShell`                 | Component | `packages/ui/src/shell/AppShell.tsx`             | Frame every route: skip link, header with the app name, optional `logo`, `subtitle`, `brandBadge`, and "Dark mode" switch, primary navigation, and the centered `main` landmark (`maxWidth` defaults to `960` with `alignSelf: 'center'`) |
+| `DEFAULT_MAIN_MAX_WIDTH`   | Constant  | `packages/ui/src/shell/AppShell.tsx`             | Default desktop maximum width (`960`) for `AppShell` main content                                                                                                                                                                         |
+| `AppShellProps`            | Type      | `packages/ui/src/shell/AppShell.tsx`             | Props of `AppShell`                                                                                                                                                                                                                       |
+| `NavItem`                  | Type      | `packages/ui/src/shell/NavDrawer.tsx`            | One navigation entry: a unique, stable `id`, a `label`, a `to` path, and optional MUI `icon` for the drawer. A duplicate `id` throws                                                                                                      |
+| `PageHeader`               | Component | `packages/ui/src/layout/PageHeader.tsx`          | Title, optional subtitle, and right-aligned actions for a route body                                                                                                                                                                      |
+| `PageHeaderProps`          | Type      | `packages/ui/src/layout/PageHeader.tsx`          | Props of `PageHeader`                                                                                                                                                                                                                     |
+| `ContentSurface`           | Component | `packages/ui/src/layout/ContentSurface.tsx`      | Padded card-like surface for page content using theme tokens                                                                                                                                                                              |
+| `ContentSurfaceProps`      | Type      | `packages/ui/src/layout/ContentSurface.tsx`      | Props of `ContentSurface`                                                                                                                                                                                                                 |
+| `FilteredListSurface`      | Component | `packages/ui/src/layout/FilteredListSurface.tsx` | Toolbar with filter buttons on the left and search/actions on the right above a list surface                                                                                                                                              |
+| `FilteredListSurfaceProps` | Type      | `packages/ui/src/layout/FilteredListSurface.tsx` | Props of `FilteredListSurface`                                                                                                                                                                                                            |
+| `FilteredListFilterOption` | Type      | `packages/ui/src/layout/FilteredListSurface.tsx` | One filter option (`id` and `label`) for `FilteredListSurface`                                                                                                                                                                            |
+| `DetailPanel`              | Component | `packages/ui/src/layout/FilteredListSurface.tsx` | Inline card surface for inspecting a selected record with optional close and action buttons                                                                                                                                               |
+| `DetailPanelProps`         | Type      | `packages/ui/src/layout/FilteredListSurface.tsx` | Props of `DetailPanel`                                                                                                                                                                                                                    |
+| `DetailDrawer`             | Component | `packages/ui/src/layout/FilteredListSurface.tsx` | Slide-over right drawer for record details or secondary forms                                                                                                                                                                             |
+| `DetailDrawerProps`        | Type      | `packages/ui/src/layout/FilteredListSurface.tsx` | Props of `DetailDrawer`                                                                                                                                                                                                                   |
+
+## Data display, charts, and notifications
+
+| Export                    | Kind      | Source                                        | Use it to                                                                                                                              |
+| ------------------------- | --------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `MetricCard`              | Component | `packages/ui/src/data/MetricCard.tsx`         | Display a single KPI metric with label, value, optional delta chip, trend direction, and helper text                                   |
+| `MetricCardProps`         | Type      | `packages/ui/src/data/MetricCard.tsx`         | Props of `MetricCard`                                                                                                                  |
+| `MetricTrendDirection`    | Type      | `packages/ui/src/data/MetricCard.tsx`         | `'up'`, `'down'`, or `'neutral'`                                                                                                       |
+| `StatGrid`                | Component | `packages/ui/src/data/MetricCard.tsx`         | Responsive 1/2/3-column grid of `MetricCard` items                                                                                     |
+| `StatGridProps`           | Type      | `packages/ui/src/data/MetricCard.tsx`         | Props of `StatGrid`                                                                                                                    |
+| `DataChartCard`           | Component | `packages/ui/src/data/DataChartCard.tsx`      | Accessible SVG bar or line chart card using theme tokens (`theme.vars.palette.*`), optional timeframe filter buttons, and summary list |
+| `DataChartCardProps`      | Type      | `packages/ui/src/data/DataChartCard.tsx`      | Props of `DataChartCard`                                                                                                               |
+| `DataChartPoint`          | Type      | `packages/ui/src/data/DataChartCard.tsx`      | One chart data point (`id`, `label`, `value`)                                                                                          |
+| `DataChartFilterOption`   | Type      | `packages/ui/src/data/DataChartCard.tsx`      | One chart filter option (`id`, `label`)                                                                                                |
+| `NotificationCenter`      | Component | `packages/ui/src/data/NotificationCenter.tsx` | Filterable notification center with unread count badge, category filters, mark-as-read actions, and loading/empty/error states         |
+| `NotificationCenterProps` | Type      | `packages/ui/src/data/NotificationCenter.tsx` | Props of `NotificationCenter`                                                                                                          |
+| `NotificationList`        | Component | `packages/ui/src/data/NotificationCenter.tsx` | Renders a list of notifications or an `EmptyState` when none match                                                                     |
+| `NotificationListProps`   | Type      | `packages/ui/src/data/NotificationCenter.tsx` | Props of `NotificationList`                                                                                                            |
+| `NotificationItemData`    | Type      | `packages/ui/src/data/NotificationCenter.tsx` | Shape of one notification item (`id`, `title`, `message`, `category`, `read`, `createdAt`)                                             |
+| `NotificationCategory`    | Type      | `packages/ui/src/data/NotificationCenter.tsx` | `'system'`, `'workflow'`, `'insight'`, or `'alert'`                                                                                    |
 
 Optional dependencies for richer UI (install only when a feature needs them): `@mui/icons-material`, `@mui/x-date-pickers`, and `dayjs` in `apps/web`.
 
@@ -91,6 +119,9 @@ Test ids follow `{scope}-{element}[-{qualifier}]`. Build dynamic ids from stable
 | ----------------------------- | ------------------------------------------- |
 | `app-shell`                   | Shell root                                  |
 | `app-shell-header`            | Header (`banner` landmark)                  |
+| `app-shell-logo`              | Optional logo slot in header                |
+| `app-shell-subtitle`          | Optional subtitle in header                 |
+| `app-shell-brand-badge`       | Optional brand badge in header              |
 | `app-shell-skip-link`         | "Skip to main content" link                 |
 | `app-shell-menu-button`       | "Open navigation" button, phone and tablet  |
 | `app-shell-close-button`      | "Close navigation" button inside the drawer |
@@ -98,6 +129,14 @@ Test ids follow `{scope}-{element}[-{qualifier}]`. Build dynamic ids from stable
 | `app-shell-nav-item-{id}`     | One navigation link per item                |
 | `app-shell-color-mode-toggle` | "Dark mode" switch input                    |
 | `app-shell-main`              | `main` landmark                             |
+| `stat-grid`                   | `StatGrid` container                        |
+| `metric-card-{id}`            | `MetricCard` root                           |
+| `data-chart-card-{id}`        | `DataChartCard` root                        |
+| `notification-center`         | `NotificationCenter` root                   |
+| `notification-list`           | `NotificationList` container                |
+| `filtered-list-surface-{id}`  | `FilteredListSurface` root                  |
+| `detail-panel-{id}`           | `DetailPanel` root                          |
+| `detail-drawer-{id}`          | `DetailDrawer` root                         |
 | `loading-state`               | `LoadingState`                              |
 | `empty-state`                 | `EmptyState`                                |
 | `empty-state-action`          | `EmptyState` action button                  |

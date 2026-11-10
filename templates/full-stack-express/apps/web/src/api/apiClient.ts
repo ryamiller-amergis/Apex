@@ -1,17 +1,34 @@
 import {
+  analyzeInsights as analyzeInsightsRoute,
+  createNotification as createNotificationRoute,
   getMe as getMeRoute,
+  getNotifications as getNotificationsRoute,
+  markNotificationsRead as markNotificationsReadRoute,
   problemDetailsSchema,
   putMe as putMeRoute,
+  type AnalyzeInsightsBody,
+  type CreateNotificationBody,
+  type InsightsAnalysis,
+  type MarkNotificationReadBody,
+  type NotificationsList,
   type ProblemDetails,
   type Profile,
   type UpdateProfileBody,
 } from '@project-scope/contracts';
 import type { ZodType } from 'zod';
+import { webEnv } from '../config/env';
 import { ApiError } from './ApiError';
-import { readPreviewProfile, writePreviewProfile } from './previewSampleStore';
+import {
+  createPreviewNotification,
+  markPreviewNotificationsRead,
+  readPreviewNotifications,
+  readPreviewProfile,
+  runPreviewInsightsAnalysis,
+  writePreviewProfile,
+} from './previewSampleStore';
 
 function isPreviewSampleMode(): boolean {
-  return import.meta.env.VITE_APEX_PREVIEW_MODE === 'sample';
+  return webEnv.VITE_APEX_PREVIEW_MODE === 'sample';
 }
 
 async function readProblem(response: Response): Promise<ProblemDetails | null> {
@@ -32,11 +49,11 @@ async function readProblem(response: Response): Promise<ProblemDetails | null> {
   }
 }
 
-async function request(
+async function request<T>(
   path: string,
-  schema: ZodType<Profile>,
+  schema: ZodType<T>,
   init: RequestInit
-): Promise<Profile> {
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, init);
@@ -113,4 +130,78 @@ export function putMe(body: UpdateProfileBody): Promise<Profile> {
     },
     body: JSON.stringify(payload),
   });
+}
+
+export function getNotifications(): Promise<NotificationsList> {
+  if (isPreviewSampleMode()) {
+    return Promise.resolve(readPreviewNotifications());
+  }
+  return request(
+    getNotificationsRoute.path,
+    getNotificationsRoute.responses[200].body,
+    {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    }
+  );
+}
+
+export function postNotification(
+  body: CreateNotificationBody
+): Promise<NotificationsList> {
+  if (isPreviewSampleMode()) {
+    return Promise.resolve(createPreviewNotification(body));
+  }
+  return request(
+    createNotificationRoute.path,
+    createNotificationRoute.responses[200].body,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export function putNotificationsRead(
+  body: MarkNotificationReadBody
+): Promise<NotificationsList> {
+  if (isPreviewSampleMode()) {
+    return Promise.resolve(markPreviewNotificationsRead(body));
+  }
+  return request(
+    markNotificationsReadRoute.path,
+    markNotificationsReadRoute.responses[200].body,
+    {
+      method: 'PUT',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export function postAnalyzeInsights(
+  body: AnalyzeInsightsBody = {}
+): Promise<InsightsAnalysis> {
+  if (isPreviewSampleMode()) {
+    return Promise.resolve(runPreviewInsightsAnalysis(body));
+  }
+  return request(
+    analyzeInsightsRoute.path,
+    analyzeInsightsRoute.responses[200].body,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
 }

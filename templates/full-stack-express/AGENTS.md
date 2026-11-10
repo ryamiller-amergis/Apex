@@ -62,6 +62,7 @@ When you add a skill, link its `SKILL.md` from this section and add its path to 
 - [Orchestrator](.cursor/skills/orchestrator/SKILL.md) — run a prompted build, ask the recorded questions, and show the integration verdict
 - [API contract](.cursor/skills/api-contract/SKILL.md) — adding or changing an HTTP endpoint
 - [UI standards](.cursor/skills/ui-standards/SKILL.md) — adding or changing a screen
+- [Product quality](.cursor/skills/product-quality/SKILL.md) — centered layout geometry, domain sample data, chart/notification ergonomics, and AI-skill grounding
 - [Planner](.cursor/skills/planner/SKILL.md) — turn a prompt into a plan from the module map and the manifests
 - [UI role](.cursor/skills/ui/SKILL.md) — build a screen from the design system and record evidence
 - [Developer](.cursor/skills/developer/SKILL.md) — implement a task with the required standards and gates

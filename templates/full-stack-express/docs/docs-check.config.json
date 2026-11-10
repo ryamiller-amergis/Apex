@@ -12,7 +12,8 @@
     ".cursor/skills/planner/SKILL.md",
     ".cursor/skills/qa/SKILL.md",
     ".cursor/skills/ui/SKILL.md",
-    ".cursor/skills/ui-standards/SKILL.md"
+    ".cursor/skills/ui-standards/SKILL.md",
+    ".cursor/skills/product-quality/SKILL.md"
   ],
   "requiredDocuments": [
     "docs/architecture.md",

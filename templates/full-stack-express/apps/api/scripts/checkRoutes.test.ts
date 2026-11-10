@@ -14,7 +14,7 @@ describe('routes:check (VT-28)', () => {
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      'routes:check: the 4 registered routes match the contracts'
+      'routes:check: the 8 registered routes match the contracts'
     );
   });
 });
