@@ -26,7 +26,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
 - `public/`: static assets; `public/CHANGELOG.json` is the release record.
 - `pr-description.md`: pull request description skeleton. My Work fills the Work items line; the cursor pool worker copies it for the agent.
 - `teams-app/`: Teams manifests (`teams-app/dev/`, `teams-app/prod/`). `.ai-pilot/`: kickoff transcripts and generated PRD output.
-- `.github/workflows/`: `.github/workflows/pr-tests.yml`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dev-quick.yml`, `.github/workflows/e2e-nightly.yml`, `.github/workflows/e2e-triage.yml`.
+- `.github/workflows/`: `.github/workflows/pr-tests.yml`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-dev-quick.yml`, `.github/workflows/e2e-nightly.yml`, `.github/workflows/e2e-triage.yml`. Terraform plan/apply step shared by the deploy workflows: `.github/actions/terraform/action.yml` (gated by `scripts/ci/has-terraform-changes.sh`).
 - Config: `vite.config.ts`, `server.js`, `tsconfig.{client,server,e2e,node,jest.client,jest.server}.json`, `jest.config.js`,
   `jest.config.integration.js`, `playwright.config.ts`. Ask before editing (scope-discipline rule).
 

@@ -28,6 +28,7 @@ jobs:
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
       ai_runs_documents_v2: ${{ steps.image_publish.outputs.ai_runs_documents_v2 }}
       ai_runs_visual: ${{ steps.image_publish.outputs.ai_runs_visual }}
+      terraform: ${{ steps.terraform_changes.outputs.terraform }}
 
     steps:
       - name: Checkout code
@@ -52,7 +53,15 @@ jobs:
             BASE_SHA="$(git hash-object -t tree /dev/null)"
           fi
           export BASE_SHA
+          echo "base_sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
           bash scripts/ci/detect-image-publish-changes.sh
+
+      - name: Detect Terraform changes
+        id: terraform_changes
+        env:
+          BASE_SHA: ${{ steps.image_publish.outputs.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/ci/has-terraform-changes.sh
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -154,6 +163,15 @@ jobs:
           echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
+
+      # Staging and production share one Terraform state. Plan here so the change
+      # is visible before approval; the gated swap job applies it.
+      - name: Terraform plan (prd)
+        if: steps.terraform_changes.outputs.terraform == 'true'
+        uses: ./.github/actions/terraform
+        with:
+          environment: prd
+          azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
 
       # Migrations and staging settings use secrets.DATABASE_URL. Production keeps its
       # own sticky value. Fail before slot configure/swap if those hosts diverge so we
@@ -607,6 +625,20 @@ jobs:
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set up Node.js
+        if: needs.deploy-staging.outputs.terraform == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Terraform apply (prd)
+        if: needs.deploy-staging.outputs.terraform == 'true'
+        uses: ./.github/actions/terraform
+        with:
+          environment: prd
+          apply: 'true'
+          azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Swap staging to production
         run: |

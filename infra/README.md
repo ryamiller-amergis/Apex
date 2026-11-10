@@ -77,11 +77,12 @@ Dev and prod share the same `.tf` files but use separate **state keys**, **tfvar
 |---|-------------|------------|
 | **Backend config** | `backend/dev.hcl` | `backend/prd.hcl` |
 | **State blob** | `tfstate/dev.tfstate` in the dev state account | `tfstate/prd.tfstate` in the prod state account |
-| **Variables file** | `env/dev.tfvars` (committed, non-secret) | `terraform.prd.tfvars` (local, pass with `-var-file`) |
-| **Secrets** | `source scripts/dev-tf-secrets.sh` (read from live dev apps) | in `terraform.prd.tfvars` |
+| **Variables file** | `env/dev.tfvars` (committed, non-secret) | `env/prd.tfvars` (committed, non-secret) |
+| **Secrets** | `source scripts/dev-tf-secrets.sh` (read from live dev apps) | `source scripts/prd-tf-secrets.sh` (read from live prod apps) |
 | **Azure subscription** | `MSS-DevTest` | `MSS-Production` |
+| **Pipeline** | `pr-tests.yml` plans on PRs and applies on manual runs; `deploy-dev-quick.yml` applies | `deploy.yml` plans in the staging job and applies in the gated swap job, before the swap |
 
-`variables.tf` only defines variable names and defaults — it does not select an environment. Unset variables use defaults (e.g. `B1` plan, no staging slot). Dev runs the same shape as prod at smaller sizes; prod-only settings (P1v3, zone redundancy, staging slot, separate app resource group, alerts) belong in `terraform.prd.tfvars` only.
+`variables.tf` only defines variable names and defaults — it does not select an environment. Unset variables use defaults (e.g. `B1` plan, no staging slot). Dev runs the same shape as prod at smaller sizes; prod-only settings (P1v3, zone redundancy, staging slot, separate app resource group, alerts) belong in `env/prd.tfvars` only.
 
 ### Remote state
 
@@ -123,8 +124,27 @@ A local `infra/terraform.tfvars` is auto-loaded on top of `env/dev.tfvars`. Dele
 az account set --subscription "MSS-Production"
 cd infra
 terraform init -reconfigure -backend-config=backend/prd.hcl
-terraform plan -var-file="terraform.prd.tfvars"
+source scripts/prd-tf-secrets.sh     # secrets from live prod apps, memory only
+terraform plan -var-file=env/prd.tfvars
 ```
+
+The old local `terraform.prd.tfvars` is replaced by `env/prd.tfvars` and the script. Keep it only as a backup outside the repo.
+
+### Pipeline
+
+Each deploy pipeline runs Terraform through `.github/actions/terraform`, signed in as that environment's deploy service principal: `apex-dev-sp` (GitHub `dev` secret `AZURE_DEPLOY_CREDENTIALS`) and `apex-prd-sp` (`AZURE_CREDENTIALS`). Dev's `AZURE_CREDENTIALS` is the MaxView app registration, which dev sign-in uses and another project shares; it is not used to deploy or run Terraform. The step is skipped unless `scripts/ci/has-terraform-changes.sh` finds a change under `infra/` (Markdown excluded).
+
+| Pipeline | Compared against | Terraform |
+|----------|------------------|-----------|
+| `pr-tests.yml` pull request | PR base | apply dev (the PR merged onto `main`) |
+| `pr-tests.yml` manual run | `origin/main` | apply dev |
+| `deploy-dev-quick.yml` | `origin/main` | apply dev |
+| `deploy.yml` staging job | last successful `deploy.yml` run | plan prd |
+| `deploy.yml` swap job (`prd-production` approval) | same | apply prd, before the slot swap |
+
+The dev comparisons count only the branch's own commits. A dev apply fails if the branch changes `infra/` but does not contain the latest `main`, because applying it would undo infra merged since it branched. Pull request runs apply the PR merged onto `main`, so they always include `main`'s infra. Open PRs share dev: applying one PR undoes any other open PR's unmerged infra until that PR runs again. Dev applies run in a separate `terraform-dev` job that shares one concurrency group across both dev workflows and never cancels a running apply; a newer push waits instead. The app's `deploy-dev` job runs after it, and a failed apply skips `deploy-dev`, so the PR's checks fail. A failed prod apply fails the run, so the next deploy compares against the older successful run and tries again.
+
+Each principal needs, on its own environment: `Contributor` (and, for dev, `AcrPush` on `acrapexltdev`) and role-assignment rights (`User Access Administrator` or `Role Based Access Control Administrator`) on the Apex resource groups, `Storage Blob Data Contributor` on the state account, and a place in `ai_runs_key_vault_secrets_officer_ids`. Prod also needs Microsoft Graph `Application.Read.All` and `AppRoleAssignment.ReadWrite.All` (tenant admin consent) for `azuread_app_role_assignment.ai_platform_v2_interactive_runner_ingest`. `ARM_SKIP_PROVIDER_REGISTRATION` is set because neither principal can register providers on the subscription.
 
 ### One-time bootstrap (per subscription)
 
@@ -181,9 +201,9 @@ Prod pushes rather than migrates to leave workspaces behind. `-migrate-state` fr
 ### Team rules
 
 - Everyone can `plan` against shared state, for either environment they have access to.
-- Once the GitHub Actions pipeline exists, `apply` runs there. Local `apply` is break-glass only, and the person doing it tells the team first.
+- `apply` runs in the pipelines (see [Pipeline](#pipeline)). Local `apply` is break-glass only, and the person doing it tells the team first.
 - **Never** commit secrets or state files. The only committed tfvars are `terraform.tfvars.example` and the non-secret `env/*.tfvars`; secrets reach Terraform as `TF_VAR_*`.
-- **Never** run `plan` or `apply` with `terraform.prd.tfvars` while initialized against `backend/dev.hcl`, or the reverse — Terraform would plan to destroy one environment and recreate it as the other. Check the backend and subscription first.
+- **Never** run `plan` or `apply` with `env/prd.tfvars` while initialized against `backend/dev.hcl`, or the reverse — Terraform would plan to destroy one environment and recreate it as the other. Check the backend and subscription first.
 - **Never** reuse a saved plan file after state changes — run `plan` again. Delete stray `*.tfplan` files when you are done with them.
 - **Always** run `terraform plan` before `apply` and confirm the backend, subscription, and destroy count.
 

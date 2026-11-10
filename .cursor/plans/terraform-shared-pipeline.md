@@ -61,7 +61,33 @@ apply ahead of dev; that is expected, not drift.
   state key or retire). Remove leftover workspace references in
   `docs/superpowers/plans/*` if they are still used as runbooks.
 
-## Current status
+## Current status (2026-11-09, branch `infra/terraform-pipeline`)
+
+- Phases 1–2 merged in PR #249; dev and prod applied and in sync from shared state.
+- Phase 3 decision: prod reuses apex-prd-sp (`AZURE_CREDENTIALS`, object `eeec9951-…`).
+  Dev's `AZURE_CREDENTIALS` is MaxView (appId `f0bfb68f-…`, object `994a7098-…`): a shared
+  app registration that is also dev's sign-in app (`AZURE_CLIENT_ID`) and is Contributor on
+  MSS-Production for another project. Dev deploy + Terraform move to a new `apex-dev-sp` via the
+  GitHub `dev` secret `AZURE_DEPLOY_CREDENTIALS`; app-setting sign-in values still come from
+  `AZURE_CREDENTIALS`. Login falls back to `AZURE_CREDENTIALS` until the new secret exists; the
+  Terraform step does not.
+- apex-dev-sp created 2026-11-10 (appId `0aadc3e2-…`, SP object `bf8bc145-…`, Aneesh owner). Roles: Contributor + conditional RBAC Admin on `rg-scrum-dev`, AcrPush `acrapexltdev`, Blob Data Contributor `stapextfstatedev`, Key Vault officer (applied). Secret `github-dev-deploy` (1 year, expires 2027-11-10) stored as `dev` env secret `AZURE_DEPLOY_CREDENTIALS`. MaxView RBAC Admin removed by admin.
+- MaxView clean-up: state grant and Key Vault officer grant removed 2026-11-09. Its RBAC Admin on
+  `rg-scrum-dev` (granted today) needs an admin to remove. Its pre-existing Contributor/AcrPush stay
+  until apex-dev-sp is live, since dev deploys still fall back to it.
+- Phase 4 written, not pushed: `.github/actions/terraform/action.yml`,
+  `scripts/ci/has-terraform-changes.sh`, `infra/scripts/prd-tf-secrets.sh`, `infra/env/prd.tfvars`,
+  steps in `deploy.yml` (plan in staging job, apply in gated swap job before swap), `pr-tests.yml`
+  (plan on PR, apply on manual run), `deploy-dev-quick.yml` (apply). README "Pipeline" section.
+- Verified locally: prod plan with `env/prd.tfvars` + script = only the apex-prd-sp Key Vault grant;
+  dev plan = only the MaxView Key Vault grant + the perpetual AllMetrics diagnostic-setting diff.
+- Still needed before the pipeline can apply:
+  - Storage Blob Data Contributor for MaxView on `stapextfstatedev` and apex-prd-sp on `stapextfstateprd` (Aneesh can grant; Owner on state RGs).
+  - Key Vault officer grants: one local apply per environment (the plans above), or let the pipeline create them where it can.
+  - Admin: MaxView role-assignment rights on `rg-scrum-dev` (Aneesh's RBAC Admin there is conditional).
+  - Tenant admin: Graph `Application.Read.All` + `AppRoleAssignment.ReadWrite.All` for apex-prd-sp (prod `azuread_app_role_assignment`).
+
+## Earlier status
 
 - Phase 1 implemented on `infra/terraform-remote-state`, draft PR open.
   `terraform fmt -check -recursive`, `terraform init -backend=false`,
