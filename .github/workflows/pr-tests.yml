@@ -300,6 +300,52 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/aipilot
         run: node scripts/ci/validate-migrations.mjs
 
+  # Open PRs share dev: applying one PR's infra undoes any other open PR's
+  # unmerged infra until that PR runs again. This job has its own concurrency
+  # group so a newer push never cancels an apply part-way; deploy-dev waits for it.
+  terraform-dev:
+    needs:
+      [
+        test,
+        validate,
+        unit-test,
+        build,
+        integration-test,
+        detect-changes,
+        migrate-check,
+      ]
+    if: >-
+      always() && !cancelled() &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.terraform == 'true' &&
+      needs.detect-changes.outputs.markdown_only != 'true' &&
+      needs.test.result == 'success' &&
+      needs.validate.result == 'success' &&
+      needs.unit-test.result == 'success' &&
+      needs.build.result == 'success' &&
+      needs.integration-test.result == 'success' &&
+      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success')
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: terraform-dev
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Terraform apply (dev)
+        uses: ./.github/actions/terraform
+        with:
+          environment: dev
+          apply: 'true'
+          azure-credentials: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
+
   deploy-dev:
     needs:
       [
@@ -310,6 +356,7 @@ jobs:
         integration-test,
         detect-changes,
         migrate-check,
+        terraform-dev,
       ]
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
@@ -326,7 +373,8 @@ jobs:
       needs.unit-test.result == 'success' &&
       needs.build.result == 'success' &&
       needs.integration-test.result == 'success' &&
-      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success')
+      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') &&
+      (needs.terraform-dev.result == 'success' || needs.terraform-dev.result == 'skipped')
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
@@ -414,16 +462,6 @@ jobs:
           echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
-
-      # Open PRs share dev: applying one PR's infra undoes any other open PR's
-      # unmerged infra until that PR runs again.
-      - name: Terraform apply (dev)
-        if: needs.detect-changes.outputs.terraform == 'true'
-        uses: ./.github/actions/terraform
-        with:
-          environment: dev
-          apply: 'true'
-          azure-credentials: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
 
       - name: Set App Service Configuration
         env:

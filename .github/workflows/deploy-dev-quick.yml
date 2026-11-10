@@ -170,8 +170,43 @@ jobs:
           REQUIRE_UP_TO_DATE: 'true'
         run: bash scripts/ci/has-terraform-changes.sh
 
+  # Own concurrency group so a newer push never cancels an apply part-way
+  # (deploy-dev's group cancels); shared with pr-tests.yml's terraform-dev.
+  terraform-dev:
+    needs: [resolve, detect-runner-changes]
+    if: needs.detect-runner-changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: terraform-dev
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ needs.resolve.outputs.deploy_ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Terraform apply (dev)
+        uses: ./.github/actions/terraform
+        with:
+          environment: dev
+          apply: 'true'
+          azure-credentials: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
+
   deploy-dev:
-    needs: [resolve, build, detect-runner-changes]
+    needs: [resolve, build, detect-runner-changes, terraform-dev]
+    if: >-
+      always() && !cancelled() &&
+      needs.resolve.result == 'success' &&
+      needs.build.result == 'success' &&
+      needs.detect-runner-changes.result == 'success' &&
+      (needs.terraform-dev.result == 'success' || needs.terraform-dev.result == 'skipped')
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
@@ -273,14 +308,6 @@ jobs:
           echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientId')" >> $GITHUB_ENV
           echo "AZURE_CLIENT_SECRET=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.clientSecret')" >> $GITHUB_ENV
-
-      - name: Terraform apply (dev)
-        if: needs.detect-runner-changes.outputs.terraform == 'true'
-        uses: ./.github/actions/terraform
-        with:
-          environment: dev
-          apply: 'true'
-          azure-credentials: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
 
       - name: Set App Service Configuration
         env:
