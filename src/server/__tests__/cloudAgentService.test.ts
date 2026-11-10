@@ -2042,8 +2042,35 @@ describe('reconcileRunningCloudAgentRuns', () => {
       expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
         status: 'completed',
       }));
-      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ cloudPrUrl: PR_URL }));
+      const prWrite = mockUpdateSet.mock.invocationCallOrder[
+        mockUpdateSet.mock.calls.findIndex((call) =>
+          (call[0] as { cloudPrUrl?: string }).cloudPrUrl === PR_URL)
+      ];
+      expect(prWrite).toBeLessThan(mockMarkTerminal.mock.invocationCallOrder[0]);
       expect(mockCreateNotification).not.toHaveBeenCalled();
+    });
+
+    it('opens the pull request on the planned branch when Cursor reports none', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
+      }));
+      const openCloudAgentPullRequest = jest.fn().mockResolvedValue(PR_URL);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        sourceBranch: 'feat/42-add-search',
+        adoUserToken: 'author-token',
+      }));
+      expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+        status: 'completed',
+      }));
     });
 
     it('opens it with the service account and tells the author when their token no longer redeems', async () => {
@@ -2076,6 +2103,22 @@ describe('reconcileRunningCloudAgentRuns', () => {
       const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
         status: 'finished',
         branchName: 'feat/42-add-search',
+      }));
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest: jest.fn().mockRejectedValue(new Error('TF401019')),
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+    });
+
+    it('keeps waiting when Cursor reports no branch and the pull request could not be opened', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
       }));
 
       await reconcileRunningCloudAgentRuns(makeDeps({
@@ -2139,7 +2182,9 @@ describe('reconcileRunningCloudAgentRuns', () => {
 
     expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
     expect(mockPersistLeftoverWork).not.toHaveBeenCalled();
-    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ cloudPrUrl: PR_URL }));
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ cloudPrStatus: expect.anything() }));
     expect(setImmediateSpy).not.toHaveBeenCalled();
   });
 

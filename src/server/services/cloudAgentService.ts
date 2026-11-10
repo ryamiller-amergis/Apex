@@ -258,6 +258,23 @@ function awaitingCloudAgentPullRequest(input: {
 }
 
 /**
+ * Branch the pull-request wait uses. Cursor's reported name wins. A Playbook run
+ * also uses the branch it told the agent to push, so a finished run with no
+ * reported name still waits and Apex can open the pull request.
+ */
+function branchAwaitingPullRequest(
+  snapshot: AgentRunExecutionSnapshot | null | undefined,
+  observedBranch: string | null | undefined,
+  storedBranch?: string | null,
+): string | null {
+  const reported = observedBranch?.trim() || storedBranch?.trim();
+  if (reported) return reported;
+  const cloud = backgroundSnapshot(snapshot)?.cloudAgent;
+  if (!cloud?.pullRequestAuthorId) return null;
+  return cloud.branchName?.trim() || null;
+}
+
+/**
  * Starts the wait for Cursor's pull request on the first such observation and
  * reports whether it has run past CLOUD_AGENT_PULL_REQUEST_WAIT_MS. Both
  * callers read the same stored timestamp, so neither can wait forever.
@@ -373,9 +390,19 @@ async function openPullRequestAsPlaybookAuthor(
   const snapshot = backgroundSnapshot(run.executionSnapshot);
   const cloud = snapshot?.cloudAgent;
   const authorId = cloud?.pullRequestAuthorId;
-  const sourceBranch = observed.branchName ?? cloud?.branchName ?? null;
-  if (!authorId || observed.noChanges || !sourceBranch) return null;
-  if (!cloud?.workItemId || !snapshot?.repository || snapshot.provider === 'github') return null;
+  const sourceBranch = observed.branchName?.trim() || cloud?.branchName?.trim() || null;
+  if (!authorId) return null;
+  if (observed.noChanges || !sourceBranch || !cloud?.workItemId || !snapshot?.repository || snapshot.provider === 'github') {
+    console.warn('[cloud-agent] Playbook pull request was not opened', JSON.stringify({
+      runId: run.id,
+      noChanges: Boolean(observed.noChanges),
+      sourceBranch,
+      workItemId: cloud?.workItemId ?? null,
+      repository: snapshot?.repository ?? null,
+      provider: snapshot?.provider ?? null,
+    }));
+    return null;
+  }
 
   const delivery = await deliveryForProject(run.projectId);
   const adoUserToken = await (deps.getStoredAdoTokenForUser ?? getStoredAdoTokenForUser)(authorId);
@@ -1976,7 +2003,7 @@ export async function reconcileRunningCloudAgentRuns(
             status: mapped,
             prUrl,
             noChanges: observed.noChanges,
-            branchName: observed.branchName,
+            branchName: branchAwaitingPullRequest(row.executionSnapshot, observed.branchName),
           })
           && !(await cloudAgentPullRequestWaitExpired(row))
         ) {
@@ -2269,6 +2296,15 @@ export async function applyCloudAgentCompletion(input: {
   incompleteAcceptanceCriteria?: string[];
   analysisOnly?: boolean;
 }, deps: CloudAgentServiceDeps = defaultDeps): Promise<void> {
+  // The Playbook step copies cloudPrUrl when this run is marked terminal.
+  // The column has to be set first, or the step stores a null pull request.
+  const knownPrUrl = input.prUrl?.trim() || null;
+  if (knownPrUrl) {
+    await db
+      .update(agentRuns)
+      .set({ cloudPrUrl: knownPrUrl, updatedAt: new Date().toISOString() })
+      .where(eq(agentRuns.id, input.runId));
+  }
   const terminal = await markTerminal(input.runId, {
     status: input.status,
     terminalReason: input.terminalReason,
@@ -2492,7 +2528,11 @@ export async function getCloudAgentRunStatus(
         status: mapped,
         prUrl,
         noChanges: observed.noChanges,
-        branchName: pushedBranch,
+        branchName: branchAwaitingPullRequest(
+          run.executionSnapshot,
+          observed.branchName,
+          run.cloudBranchName,
+        ),
       }) && !(await cloudAgentPullRequestWaitExpired(run));
       if (mapped && isAgentRunTerminalStatus(mapped) && !waitingForPullRequest) {
         await applyCloudAgentCompletion({

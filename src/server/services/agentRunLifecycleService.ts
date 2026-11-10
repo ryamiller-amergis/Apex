@@ -909,13 +909,11 @@ export async function markTerminal(
         where: eq(agentRuns.id, runId),
         columns: { cloudPrUrl: true, requestedByUserId: true },
       });
-      const findOwner = db.query.playbookStepRuns?.findFirst;
-      const owner = findOwner
-        ? await findOwner({
-          where: eq(playbookStepRuns.agentRunId, runId),
-          columns: { runId: true },
-        })
-        : undefined;
+      const [owner] = await db
+        .select({ runId: playbookStepRuns.runId })
+        .from(playbookStepRuns)
+        .where(eq(playbookStepRuns.agentRunId, runId))
+        .limit(1);
       const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
       await publishPlaybookApexEvent({
         project: latest.projectId,
