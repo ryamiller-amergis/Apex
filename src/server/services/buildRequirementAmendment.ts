@@ -27,19 +27,19 @@ export const requirementAmendmentSchema = z
       z.object({
         id: z.string().min(1),
         text: z.string().min(1),
-      }),
+      })
     ),
     added: z.array(
       z.object({
         kind: z.enum(['ac', 'dod', 'br', 'nfr']),
         text: z.string().min(1),
-      }),
+      })
     ),
     dropped: z.array(
       z.object({
         id: z.string().min(1),
         reason: z.string().min(1),
-      }),
+      })
     ),
     assumptions: z.array(z.string()),
     exclusions: z.array(z.string()),
@@ -52,7 +52,7 @@ export const requirementAmendmentSchema = z
           decision: z.string().min(1),
           rationale: z.string().min(1),
           retired: z.boolean().optional(),
-        }),
+        })
       )
       .default([]),
     classification: z.enum(['small', 'full']).default('small'),
@@ -60,7 +60,9 @@ export const requirementAmendmentSchema = z
   })
   .strict();
 
-export type RequirementAmendmentInput = z.infer<typeof requirementAmendmentSchema>;
+export type RequirementAmendmentInput = z.infer<
+  typeof requirementAmendmentSchema
+>;
 
 export interface ApplyRequirementAmendmentResult {
   requirements: AmendedRequirement[];
@@ -69,6 +71,75 @@ export interface ApplyRequirementAmendmentResult {
   addedIds: string[];
   droppedIds: string[];
   newOrChangedRiskDecisions: AmendedRiskDecision[];
+}
+
+export interface DerivedRevisionDelta {
+  changedIds: string[];
+  addedIds: string[];
+  droppedIds: string[];
+}
+
+export function deriveRevisionDelta(input: {
+  previousRequirements: readonly BuildRequirement[];
+  previousRiskDecisions: readonly BuildRiskDecision[];
+  nextRequirements: readonly BuildRequirement[];
+  nextRiskDecisions: readonly BuildRiskDecision[];
+}): DerivedRevisionDelta {
+  const previousRequirements = new Map(
+    input.previousRequirements.map((requirement) => [
+      requirement.id,
+      requirement,
+    ])
+  );
+  const previousRiskDecisions = new Map(
+    input.previousRiskDecisions.map((decision) => [decision.id, decision])
+  );
+  const changedIds: string[] = [];
+  const addedIds: string[] = [];
+  const droppedIds: string[] = [];
+
+  for (const requirement of input.nextRequirements) {
+    const previous = previousRequirements.get(requirement.id);
+    if (!previous) {
+      if (!requirement.retired) addedIds.push(requirement.id);
+      continue;
+    }
+    if (!previous.retired && requirement.retired) {
+      droppedIds.push(requirement.id);
+    } else if (
+      previous.text !== requirement.text ||
+      previous.kind !== requirement.kind ||
+      previous.retired !== requirement.retired
+    ) {
+      changedIds.push(requirement.id);
+    }
+  }
+
+  for (const previous of input.previousRequirements) {
+    if (!input.nextRequirements.some((item) => item.id === previous.id)) {
+      droppedIds.push(previous.id);
+    }
+  }
+
+  for (const decision of input.nextRiskDecisions) {
+    const previous = previousRiskDecisions.get(decision.id);
+    if (!previous) {
+      addedIds.push(decision.id);
+    } else if (
+      previous.category !== decision.category ||
+      previous.rating !== decision.rating ||
+      previous.decision !== decision.decision ||
+      previous.rationale !== decision.rationale
+    ) {
+      changedIds.push(decision.id);
+    }
+  }
+
+  return {
+    changedIds: [...new Set(changedIds)],
+    addedIds: [...new Set(addedIds)],
+    droppedIds: [...new Set(droppedIds)],
+  };
 }
 
 function parseNumericId(id: string): number {
@@ -80,31 +151,41 @@ export function applyRequirementAmendment(
   previousRequirements: readonly BuildRequirement[],
   previousRiskDecisions: readonly BuildRiskDecision[],
   amendment: RequirementAmendmentInput,
-  revisionNumber: number,
+  revisionNumber: number
 ): ApplyRequirementAmendmentResult {
   const parsed = requirementAmendmentSchema.parse(amendment);
 
   if (
-    parsed.changed.length === 0
-    && parsed.added.length === 0
-    && parsed.dropped.length === 0
-    && parsed.riskDecisionChanges.length === 0
+    parsed.changed.length === 0 &&
+    parsed.added.length === 0 &&
+    parsed.dropped.length === 0 &&
+    parsed.riskDecisionChanges.length === 0
   ) {
-    throw new Error('EMPTY_AMENDMENT: Amendment must change, add, or drop at least one item.');
+    throw new Error(
+      'EMPTY_AMENDMENT: Amendment must change, add, or drop at least one item.'
+    );
   }
 
   // Deep clone so input is never mutated
-  const requirements: AmendedRequirement[] = previousRequirements.map((r) => ({ ...r }));
-  const byId = new Map<string, AmendedRequirement>(requirements.map((r) => [r.id, r]));
+  const requirements: AmendedRequirement[] = previousRequirements.map((r) => ({
+    ...r,
+  }));
+  const byId = new Map<string, AmendedRequirement>(
+    requirements.map((r) => [r.id, r])
+  );
 
   const changedIds: string[] = [];
   for (const ch of parsed.changed) {
     const target = byId.get(ch.id);
     if (!target) {
-      throw new Error(`UNKNOWN_REQUIREMENT_ID: Requirement ${ch.id} does not exist.`);
+      throw new Error(
+        `UNKNOWN_REQUIREMENT_ID: Requirement ${ch.id} does not exist.`
+      );
     }
     if (target.retired) {
-      throw new Error(`RETIRED_REQUIREMENT_EDIT: Cannot edit retired requirement ${ch.id}.`);
+      throw new Error(
+        `RETIRED_REQUIREMENT_EDIT: Cannot edit retired requirement ${ch.id}.`
+      );
     }
     target.text = ch.text.trim();
     changedIds.push(ch.id);
@@ -114,10 +195,14 @@ export function applyRequirementAmendment(
   for (const dr of parsed.dropped) {
     const target = byId.get(dr.id);
     if (!target) {
-      throw new Error(`UNKNOWN_REQUIREMENT_ID: Requirement ${dr.id} does not exist.`);
+      throw new Error(
+        `UNKNOWN_REQUIREMENT_ID: Requirement ${dr.id} does not exist.`
+      );
     }
     if (target.retired) {
-      throw new Error(`RETIRED_REQUIREMENT_EDIT: Requirement ${dr.id} is already retired.`);
+      throw new Error(
+        `RETIRED_REQUIREMENT_EDIT: Requirement ${dr.id} is already retired.`
+      );
     }
     target.retired = true;
     target.retiredInRevision = revisionNumber;
@@ -156,7 +241,9 @@ export function applyRequirementAmendment(
   }
 
   // Risk decisions
-  const riskDecisions: AmendedRiskDecision[] = previousRiskDecisions.map((rd) => ({ ...rd }));
+  const riskDecisions: AmendedRiskDecision[] = previousRiskDecisions.map(
+    (rd) => ({ ...rd })
+  );
   let maxRd = 0;
   for (const rd of riskDecisions) {
     const n = parseNumericId(rd.id);
@@ -168,7 +255,9 @@ export function applyRequirementAmendment(
     if (rdc.id) {
       const existing = riskDecisions.find((r) => r.id === rdc.id);
       if (!existing) {
-        throw new Error(`UNKNOWN_RISK_DECISION_ID: Risk decision ${rdc.id} does not exist.`);
+        throw new Error(
+          `UNKNOWN_RISK_DECISION_ID: Risk decision ${rdc.id} does not exist.`
+        );
       }
       existing.category = rdc.category;
       existing.rating = rdc.rating;
@@ -212,7 +301,7 @@ export function classifyRevisionChange(input: {
     return 'full';
   }
   const hasNewHighRisk = input.newOrChangedRiskDecisions.some(
-    (rd) => !rd.retired && rd.rating === 'high',
+    (rd) => !rd.retired && rd.rating === 'high'
   );
   if (hasNewHighRisk) {
     return 'full';
@@ -252,7 +341,9 @@ export function planVerificationRows(input: {
   const changedSet = new Set(input.changedIds);
   const addedSet = new Set(input.addedIds);
   const droppedSet = new Set(input.droppedIds);
-  const prevByReqId = new Map(input.previousRows.map((r) => [r.requirementId, r]));
+  const prevByReqId = new Map(
+    input.previousRows.map((r) => [r.requirementId, r])
+  );
 
   const copy: VerificationRowInput[] = [];
   const createPending: VerificationRowInput[] = [];

@@ -90,4 +90,18 @@ describe('evaluateVisualQualityFromEvidence', () => {
     expect(result.passed).toBe(false);
     expect(result.findings.some((f) => /catalog components/i.test(f))).toBe(true);
   });
+
+  it('accepts the generated-app e2e spec convention as visual snapshot evidence', () => {
+    const block = minimalBlock();
+    block.entries[0].testReferences = [
+      {
+        file: 'apps/web/e2e/home-todos.spec.ts',
+        name: 'DOD-2 home todos at 375px light',
+      },
+    ];
+
+    expect(
+      evaluateVisualQualityFromEvidence({ visualBrief: brief, block }).passed,
+    ).toBe(true);
+  });
 });

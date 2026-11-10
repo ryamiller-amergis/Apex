@@ -245,6 +245,22 @@
   margin: 0 0 10px;
 }
 
+.revisionTitle {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.revisionRequest {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--accent-color);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
 .activity {
   display: flex;
   align-items: center;
@@ -572,6 +588,18 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+}
+
+.previewPanelBody {
+  overflow: hidden;
+}
+
+.previewFill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .sandboxWindow {
@@ -672,6 +700,27 @@
   font-weight: 600;
 }
 
+.localPreviewPilot {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--accent-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.localPreviewPilot p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.localPreviewPilot button {
+  justify-self: start;
+}
+
 .metricsRow {
   display: flex;
   flex-wrap: wrap;
@@ -716,4 +765,42 @@
   .split {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.logoReview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 16px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.logoGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.logoOption {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.logoOption img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.logoActions {
+  display: flex;
+  gap: 8px;
 }

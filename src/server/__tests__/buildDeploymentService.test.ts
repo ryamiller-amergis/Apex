@@ -9,22 +9,38 @@ import {
   type DeploymentRevisionRecord,
   type DeploymentRunRecord,
 } from '../services/buildDeploymentService';
+import type {
+  BuildPreviewCompletionEvidence,
+  BuildPreviewRolloutMode,
+} from '../services/build/buildPreviewCompletionInvariant';
 
 function createDeploymentHarness() {
   const runs = new Map<string, DeploymentRunRecord>();
   const revisions = new Map<string, DeploymentRevisionRecord>();
-  const leases = new Map<string, { buildRunId: string; buildRevisionId: string; expiresAt: string }>();
-  const events: Array<{ buildRunId: string; eventType: string; detail?: Record<string, unknown> }> = [];
+  const leases = new Map<
+    string,
+    { buildRunId: string; buildRevisionId: string; expiresAt: string }
+  >();
+  const events: Array<{
+    buildRunId: string;
+    eventType: string;
+    detail?: Record<string, unknown>;
+  }> = [];
   const previewNotifications: string[] = [];
   const failedNotifications: string[] = [];
   const queuedBuilds: Array<{ commit: string; revisionId: string }> = [];
+  const settleBrowserChecks: Array<string | null> = [];
   let flagEnabled = true;
+  let completionMode: BuildPreviewRolloutMode = 'legacy_static';
+  let completionEvidence: BuildPreviewCompletionEvidence | null = null;
+  let previewReadyCasEnabled = true;
+  let postCommitSideEffectsThrow = false;
 
   const pairKey = (p: string, r: string) => `${p}::${r}`;
 
   const seedRunAndRevision = (
     overrides?: Partial<DeploymentRunRecord>,
-    revOverrides?: Partial<DeploymentRevisionRecord>,
+    revOverrides?: Partial<DeploymentRevisionRecord>
   ) => {
     const run: DeploymentRunRecord = {
       id: 'run-1',
@@ -35,7 +51,11 @@ function createDeploymentHarness() {
       integrationBranch: 'apex/build/run-1',
       currentRevisionNumber: 1,
       supportContacts: [
-        { userId: 'u-contact-1', displayName: 'Dana', email: 'dana@example.com' },
+        {
+          userId: 'u-contact-1',
+          displayName: 'Dana',
+          email: 'dana@example.com',
+        },
         { userId: 'u-contact-2', displayName: 'Eli', email: 'eli@example.com' },
       ],
       defaultPreviewUrl: 'https://preview.dev.example.com',
@@ -69,6 +89,12 @@ function createDeploymentHarness() {
 
   const deps: BuildDeploymentServiceDeps = {
     now: () => new Date('2026-11-01T12:00:00.000Z'),
+    previewCompletion: {
+      loadGate: async () => ({
+        mode: completionMode,
+        evidence: completionEvidence,
+      }),
+    },
     isFlagEnabled: async () => flagEnabled,
     loadByPipelineRunId: async (pipelineRunId) => {
       for (const rev of revisions.values()) {
@@ -83,20 +109,58 @@ function createDeploymentHarness() {
       const run = runs.get(buildRunId);
       if (!run) return null;
       const rev = [...revisions.values()].find(
-        (r) => r.buildRunId === buildRunId && r.revisionNumber === run.currentRevisionNumber,
+        (r) =>
+          r.buildRunId === buildRunId &&
+          r.revisionNumber === run.currentRevisionNumber
       );
       if (!rev) return null;
       return { run, revision: rev };
     },
-    casSettleRevision: async (pipelineRunId, update) => {
+    casSettleRevision: async (pipelineRunId, update, currentBrowserCheck) => {
+      settleBrowserChecks.push(currentBrowserCheck?.browserCheckId ?? null);
       for (const rev of revisions.values()) {
-        if (rev.pipelineRunId === pipelineRunId && rev.deploymentStatus === 'deploying') {
+        if (
+          rev.pipelineRunId === pipelineRunId &&
+          rev.deploymentStatus === 'deploying'
+        ) {
           rev.deploymentStatus = update.deploymentStatus;
-          if (update.previewUrl !== undefined) rev.previewUrl = update.previewUrl;
-          if (update.deployedAt !== undefined) rev.deployedAt = update.deployedAt;
-          if (update.failedStage !== undefined) rev.deploymentFailedStage = update.failedStage;
-          if (update.errorText !== undefined) rev.deploymentError = update.errorText;
-          if (update.pipelineUrl !== undefined) rev.deploymentPipelineUrl = update.pipelineUrl;
+          if (update.previewUrl !== undefined)
+            rev.previewUrl = update.previewUrl;
+          if (update.deployedAt !== undefined)
+            rev.deployedAt = update.deployedAt;
+          if (update.failedStage !== undefined)
+            rev.deploymentFailedStage = update.failedStage;
+          if (update.errorText !== undefined)
+            rev.deploymentError = update.errorText;
+          if (update.pipelineUrl !== undefined)
+            rev.deploymentPipelineUrl = update.pipelineUrl;
+          return true;
+        }
+      }
+      return false;
+    },
+    casSettlePreviewReady: async (
+      pipelineRunId,
+      runId,
+      update,
+      currentBrowserCheck
+    ) => {
+      settleBrowserChecks.push(currentBrowserCheck?.browserCheckId ?? null);
+      if (!previewReadyCasEnabled) return false;
+      for (const rev of revisions.values()) {
+        if (
+          rev.pipelineRunId === pipelineRunId &&
+          rev.deploymentStatus === 'deploying'
+        ) {
+          const run = runs.get(runId);
+          if (!run || run.status !== 'deploying') return false;
+          rev.deploymentStatus = 'succeeded';
+          rev.previewUrl = update.previewUrl;
+          rev.deployedAt = update.deployedAt;
+          if (update.pipelineUrl !== undefined) {
+            rev.deploymentPipelineUrl = update.pipelineUrl;
+          }
+          run.status = 'preview_ready';
           return true;
         }
       }
@@ -106,10 +170,19 @@ function createDeploymentHarness() {
       const r = runs.get(runId);
       if (r) r.status = status;
     },
+    recordPendingPreviewUrl: async (revisionId, previewUrl) => {
+      const revision = revisions.get(revisionId);
+      if (revision?.deploymentStatus === 'deploying') {
+        revision.previewUrl = previewUrl;
+      }
+    },
     extendLease: async (runId, finishedAt) => {
+      if (postCommitSideEffectsThrow) throw new Error('lease unavailable');
       for (const l of leases.values()) {
         if (l.buildRunId === runId) {
-          l.expiresAt = new Date(new Date(finishedAt).getTime() + 24 * 3600_000).toISOString();
+          l.expiresAt = new Date(
+            new Date(finishedAt).getTime() + 24 * 3600_000
+          ).toISOString();
         }
       }
     },
@@ -123,13 +196,15 @@ function createDeploymentHarness() {
         .filter((r) => {
           const run = runs.get(r.buildRunId);
           return (
-            run?.project === project
-            && run.repository === repository
-            && run.status === 'deploying'
-            && r.deploymentStatus === 'queued'
+            run?.project === project &&
+            run.repository === repository &&
+            run.status === 'deploying' &&
+            r.deploymentStatus === 'queued'
           );
         })
-        .sort((a, b) => (a.deploymentQueuedAt ?? '').localeCompare(b.deploymentQueuedAt ?? ''));
+        .sort((a, b) =>
+          (a.deploymentQueuedAt ?? '').localeCompare(b.deploymentQueuedAt ?? '')
+        );
       const first = waiting[0];
       if (!first) return null;
       const key = pairKey(project, repository);
@@ -167,28 +242,46 @@ function createDeploymentHarness() {
       queuedBuilds.push({ commit: opts.commit, revisionId: opts.revisionId });
       return {
         pipelineRunId: '4411',
-        pipelineUrl: 'https://dev.azure.com/org/Apex/_build/results?buildId=4411',
+        pipelineUrl:
+          'https://dev.azure.com/org/Apex/_build/results?buildId=4411',
       };
     },
     notifyPreviewReady: async (input) => {
+      if (postCommitSideEffectsThrow) {
+        throw new Error('notification unavailable');
+      }
       previewNotifications.push(input.pipelineRunId);
     },
     notifyDeploymentFailed: async (input) => {
       failedNotifications.push(input.pipelineRunId);
     },
     appendEvent: async (ev) => {
+      if (postCommitSideEffectsThrow) throw new Error('event unavailable');
       events.push(ev);
     },
     sleep: async () => undefined,
     casEnqueueRevision: async (revisionId, buildRunId, queuedAtIso) => {
       const rev = revisions.get(revisionId);
-      if (!rev || (rev.deploymentStatus !== 'not_started' && rev.deploymentStatus !== 'failed')) {
+      if (
+        !rev ||
+        (rev.deploymentStatus !== 'not_started' &&
+          rev.deploymentStatus !== 'failed')
+      ) {
         return false;
       }
       rev.deploymentStatus = 'queued';
       rev.deploymentQueuedAt = queuedAtIso;
       const r = runs.get(buildRunId);
-      if (r && ['checking', 'building', 'deploying', 'preview_ready', 'deployment_failed'].includes(r.status)) {
+      if (
+        r &&
+        [
+          'checking',
+          'building',
+          'deploying',
+          'preview_ready',
+          'deployment_failed',
+        ].includes(r.status)
+      ) {
         r.status = 'deploying';
       }
       return true;
@@ -203,8 +296,22 @@ function createDeploymentHarness() {
     previewNotifications,
     failedNotifications,
     queuedBuilds,
+    settleBrowserChecks,
     setFlagEnabled: (v: boolean) => {
       flagEnabled = v;
+    },
+    setCompletion: (
+      mode: BuildPreviewRolloutMode,
+      evidence: BuildPreviewCompletionEvidence | null
+    ) => {
+      completionMode = mode;
+      completionEvidence = evidence;
+    },
+    setPreviewReadyCasEnabled: (enabled: boolean) => {
+      previewReadyCasEnabled = enabled;
+    },
+    setPostCommitSideEffectsThrow: (enabled: boolean) => {
+      postCommitSideEffectsThrow = enabled;
     },
     seedRunAndRevision,
     deps,
@@ -237,9 +344,156 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     });
     expect(h.runs.get('run-1')?.status).toBe('preview_ready');
     expect(h.revisions.get('rev-1')?.deploymentStatus).toBe('succeeded');
-    expect(h.revisions.get('rev-1')?.previewUrl).toBe('https://preview.example.com/rev1');
-    expect(h.leases.get('Apex::apex-repo')?.expiresAt).toBe('2026-11-02T12:00:00.000Z');
+    expect(h.revisions.get('rev-1')?.previewUrl).toBe(
+      'https://preview.example.com/rev1'
+    );
+    expect(h.leases.get('Apex::apex-repo')?.expiresAt).toBe(
+      '2026-11-02T12:00:00.000Z'
+    );
     expect(h.previewNotifications).toEqual(['P1']);
+  });
+
+  it('keeps a committed preview ready when post-commit side effects fail', async () => {
+    const h = createDeploymentHarness();
+    h.seedRunAndRevision();
+    h.setPostCommitSideEffectsThrow(true);
+
+    const result = await h.service.settleFromCallback({
+      pipelineRunId: 'P1',
+      commit: 'a'.repeat(40),
+      status: 'succeeded',
+      previewUrl: 'https://preview.example.com/rev1',
+    });
+
+    expect(result).toEqual({ kind: 'ok', response: { applied: true } });
+    expect(h.runs.get('run-1')?.status).toBe('preview_ready');
+    expect(h.revisions.get('rev-1')?.deploymentStatus).toBe('succeeded');
+    expect(h.revisions.get('rev-1')?.previewUrl).toBe(
+      'https://preview.example.com/rev1'
+    );
+  });
+
+  it('does not enter preview_ready in live mode until matching browser evidence exists', async () => {
+    const h = createDeploymentHarness();
+    h.seedRunAndRevision();
+    h.setCompletion('live', null);
+
+    const result = await h.service.settleFromCallback({
+      pipelineRunId: 'P1',
+      commit: 'a'.repeat(40),
+      status: 'succeeded',
+      previewUrl: 'https://preview.example.com/rev1',
+    });
+
+    expect(result).toEqual({
+      kind: 'ok',
+      response: { applied: false, reason: 'preview_evidence_pending' },
+    });
+    expect(h.revisions.get('rev-1')?.deploymentStatus).toBe('deploying');
+    expect(h.revisions.get('rev-1')?.previewUrl).toBe(
+      'https://preview.example.com/rev1'
+    );
+    expect(h.runs.get('run-1')?.status).toBe('deploying');
+    expect(h.previewNotifications).toHaveLength(0);
+    expect(h.events).toContainEqual(
+      expect.objectContaining({
+        eventType: 'preview_completion_blocked',
+        detail: expect.objectContaining({ reason: 'missing_evidence' }),
+      })
+    );
+  });
+
+  it('enters preview_ready in live mode when all completion evidence matches', async () => {
+    const h = createDeploymentHarness();
+    h.seedRunAndRevision();
+    const commit = 'a'.repeat(40);
+    const digest = `sha256:${'b'.repeat(64)}`;
+    h.setCompletion('live', {
+      revisionId: 'rev-1',
+      validatedCommit: commit,
+      artifact: { revisionId: 'rev-1', commit, digest },
+      instance: {
+        id: 'instance-1',
+        revisionId: 'rev-1',
+        commit,
+        artifactDigest: digest,
+        state: 'ready',
+      },
+      readiness: {
+        status: 'passed',
+        revisionId: 'rev-1',
+        instanceId: 'instance-1',
+        artifactDigest: digest,
+      },
+      browserCheck: {
+        id: 'browser-check-1',
+        status: 'passed',
+        revisionId: 'rev-1',
+        commit,
+        instanceId: 'instance-1',
+        artifactDigest: digest,
+      },
+    });
+
+    await h.service.settleFromCallback({
+      pipelineRunId: 'P1',
+      commit,
+      status: 'succeeded',
+      previewUrl: 'https://preview.example.com/rev1',
+    });
+
+    expect(h.runs.get('run-1')?.status).toBe('preview_ready');
+    expect(h.previewNotifications).toEqual(['P1']);
+    expect(h.settleBrowserChecks).toEqual(['browser-check-1']);
+  });
+
+  it('does not partially succeed a revision when the run cannot enter preview_ready', async () => {
+    const h = createDeploymentHarness();
+    h.seedRunAndRevision();
+    const commit = 'a'.repeat(40);
+    const digest = `sha256:${'b'.repeat(64)}`;
+    h.setCompletion('live', {
+      revisionId: 'rev-1',
+      validatedCommit: commit,
+      artifact: { revisionId: 'rev-1', commit, digest },
+      instance: {
+        id: 'instance-1',
+        revisionId: 'rev-1',
+        commit,
+        artifactDigest: digest,
+        state: 'ready',
+      },
+      readiness: {
+        status: 'passed',
+        revisionId: 'rev-1',
+        instanceId: 'instance-1',
+        artifactDigest: digest,
+      },
+      browserCheck: {
+        id: 'browser-check-1',
+        status: 'passed',
+        revisionId: 'rev-1',
+        commit,
+        instanceId: 'instance-1',
+        artifactDigest: digest,
+      },
+    });
+    h.setPreviewReadyCasEnabled(false);
+
+    const result = await h.service.settleFromCallback({
+      pipelineRunId: 'P1',
+      commit,
+      status: 'succeeded',
+      previewUrl: 'https://preview.example.com/rev1',
+    });
+
+    expect(result).toEqual({
+      kind: 'ok',
+      response: { applied: false, reason: 'duplicate' },
+    });
+    expect(h.revisions.get('rev-1')?.deploymentStatus).toBe('deploying');
+    expect(h.runs.get('run-1')?.status).toBe('deploying');
+    expect(h.previewNotifications).toEqual([]);
   });
 
   it('VT-10 PBI-026 AC-1 / PBI-028 AC-0 / TBI-025 DoD-2 settles failed callback, moves run to deployment_failed, releases lease, redacts error, and notifies contacts', async () => {
@@ -257,14 +511,19 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     expect(result).toEqual({ kind: 'ok', response: { applied: true } });
     expect(h.runs.get('run-1')?.status).toBe('deployment_failed');
     expect(h.revisions.get('rev-1')?.deploymentStatus).toBe('failed');
-    expect(h.revisions.get('rev-1')?.deploymentError).not.toContain('secretBearerToken12345');
+    expect(h.revisions.get('rev-1')?.deploymentError).not.toContain(
+      'secretBearerToken12345'
+    );
     expect(h.leases.has('Apex::apex-repo')).toBe(false);
     expect(h.failedNotifications).toEqual(['P1']);
   });
 
   it('VT-11, VT-12 TBI-025 DoD-0 ignores stale callback after retry and returns run_not_deploying for cancelled run', async () => {
     const h = createDeploymentHarness();
-    h.seedRunAndRevision({}, { pipelineRunId: 'P2', deploymentStatus: 'deploying' });
+    h.seedRunAndRevision(
+      {},
+      { pipelineRunId: 'P2', deploymentStatus: 'deploying' }
+    );
 
     const stale = await h.service.settleFromCallback({
       pipelineRunId: 'P1',
@@ -291,10 +550,75 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     expect(h.previewNotifications).toHaveLength(0);
   });
 
+  it('hands a freshly validated revision to the local preview and skips the pipeline when it starts', async () => {
+    const h = createDeploymentHarness();
+    h.leases.clear();
+    h.seedRunAndRevision(
+      { status: 'checking' },
+      { deploymentStatus: 'not_started', pipelineRunId: null }
+    );
+    const started: string[] = [];
+    h.deps.startLocalPreview = async (input) => {
+      started.push(input.buildRunId);
+      return true;
+    };
+
+    await h.service.enqueueRevisionDeployment('run-1');
+
+    expect(started).toEqual(['run-1']);
+    expect(h.queuedBuilds).toHaveLength(0);
+    expect(h.revisions.get('rev-1')?.deploymentStatus).toBe('queued');
+  });
+
+  it('uses the pipeline when the local preview does not take the revision', async () => {
+    const h = createDeploymentHarness();
+    h.seedRunAndRevision(
+      { status: 'checking' },
+      { deploymentStatus: 'not_started', pipelineRunId: null }
+    );
+    h.leases.clear();
+    h.deps.startLocalPreview = async () => false;
+
+    await h.service.enqueueRevisionDeployment('run-1');
+
+    expect(h.queuedBuilds).toHaveLength(1);
+  });
+
+  it('builds the preview locally when the configured pipeline refuses the run', async () => {
+    const h = createDeploymentHarness();
+    h.seedRunAndRevision(
+      { status: 'checking' },
+      { deploymentStatus: 'not_started', pipelineRunId: null }
+    );
+    h.leases.clear();
+    const calls: Array<boolean | undefined> = [];
+    h.deps.startLocalPreview = async (input) => {
+      calls.push(input.pipelineRefused);
+      return input.pipelineRefused === true;
+    };
+    h.deps.queuePipelineBuild = async () => {
+      const err = new Error(
+        'Could not queue the build because there were validation errors or warnings.'
+      ) as Error & { statusCode?: number };
+      err.statusCode = 400;
+      throw err;
+    };
+
+    await h.service.enqueueRevisionDeployment('run-1');
+
+    expect(calls).toEqual([undefined, true]);
+    expect(h.events.map((event) => event.eventType)).toContain(
+      'deployment.local_fallback'
+    );
+  });
+
   it('VT-15, VT-17 TBI-025 triggers pipeline with retries on 5xx, fails with stage trigger on 400, and skips grantNext when flag is off', async () => {
     const h = createDeploymentHarness();
     h.leases.clear();
-    h.seedRunAndRevision({}, { deploymentStatus: 'queued', pipelineRunId: null });
+    h.seedRunAndRevision(
+      {},
+      { deploymentStatus: 'queued', pipelineRunId: null }
+    );
     h.leases.clear();
 
     // Flag off -> grantNext skips triggering
@@ -308,12 +632,17 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     h.deps.queuePipelineBuild = async (opts) => {
       attempts += 1;
       if (attempts < 3) {
-        const err = new Error('503 Service Unavailable') as Error & { statusCode?: number };
+        const err = new Error('503 Service Unavailable') as Error & {
+          statusCode?: number;
+        };
         err.statusCode = 503;
         throw err;
       }
       h.queuedBuilds.push({ commit: opts.commit, revisionId: opts.revisionId });
-      return { pipelineRunId: '4411', pipelineUrl: 'https://dev.azure.com/build/4411' };
+      return {
+        pipelineRunId: '4411',
+        pipelineUrl: 'https://dev.azure.com/build/4411',
+      };
     };
 
     await h.service.grantNext('Apex', 'apex-repo');
@@ -325,7 +654,9 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     h.revisions.get('rev-1')!.deploymentStatus = 'queued';
     h.revisions.get('rev-1')!.pipelineRunId = null;
     h.deps.queuePipelineBuild = async () => {
-      const err = new Error('400 Bad Request') as Error & { statusCode?: number };
+      const err = new Error('400 Bad Request') as Error & {
+        statusCode?: number;
+      };
       err.statusCode = 400;
       throw err;
     };
@@ -341,7 +672,7 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     const h = createDeploymentHarness();
     const { run } = h.seedRunAndRevision(
       { status: 'deployment_failed' },
-      { deploymentStatus: 'failed', validatedCommit: 'x'.repeat(40) },
+      { deploymentStatus: 'failed', validatedCommit: 'x'.repeat(40) }
     );
     h.leases.clear();
 
@@ -349,33 +680,37 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     expect(
       assertMayRetry(
         { userId: 'u-contact-1', isProjectAdmin: false, isSuperAdmin: false },
-        run,
-      ),
+        run
+      )
     ).toBe(true);
     expect(
       assertMayRetry(
         { userId: 'u-proj-admin', isProjectAdmin: true, isSuperAdmin: false },
-        run,
-      ),
+        run
+      )
     ).toBe(true);
     expect(
       assertMayRetry(
         { userId: 'u-super', isProjectAdmin: false, isSuperAdmin: true },
-        run,
-      ),
+        run
+      )
     ).toBe(true);
     expect(
       assertMayRetry(
         { userId: 'u-member', isProjectAdmin: false, isSuperAdmin: false },
-        run,
-      ),
+        run
+      )
     ).toBe(false);
 
     // VT-21 & VT-23: two concurrent retries -> one changed: true, one changed: false
     const [r1, r2] = await Promise.all([
       h.service.retryDeployment({
         buildRunId: 'run-1',
-        actor: { userId: 'u-contact-1', isProjectAdmin: false, isSuperAdmin: false },
+        actor: {
+          userId: 'u-contact-1',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
       }),
       h.service.retryDeployment({
         buildRunId: 'run-1',
@@ -386,11 +721,16 @@ describe('buildDeploymentService (TBI-025, PBI-026, PBI-029 / VT-08..12, VT-15, 
     expect(r1.kind).toBe('ok');
     expect(r2.kind).toBe('ok');
     if (r1.kind === 'ok' && r2.kind === 'ok') {
-      expect([r1.response.changed, r2.response.changed].sort()).toEqual([false, true]);
+      expect([r1.response.changed, r2.response.changed].sort()).toEqual([
+        false,
+        true,
+      ]);
     }
     expect(h.revisions.get('rev-1')?.validatedCommit).toBe('x'.repeat(40));
     expect(h.runs.get('run-1')?.status).toBe('deploying');
-    expect(h.events.filter((e) => e.eventType === 'deployment_retry_requested')).toHaveLength(1);
+    expect(
+      h.events.filter((e) => e.eventType === 'deployment_retry_requested')
+    ).toHaveLength(1);
   });
 
   it('VT-26 PBI-026 AC-2 builds previews list descending by revision with only the active lease holder marked isLive', () => {

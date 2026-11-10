@@ -35,6 +35,7 @@ export default defineConfig({
           '**/*.test.ts',
           'packages/config/**/*.test.mjs',
           'scripts/check-docs.test.mjs',
+          'scripts/preview/**/*.test.mjs',
         ],
         exclude: [
           '**/node_modules/**',

@@ -31,7 +31,9 @@ export function evaluateVisualQualityFromEvidence(input: {
 
   const snapshotRefs = input.block.entries.flatMap((entry) =>
     entry.testReferences.filter((ref) =>
-      /snapshot|screenshot|visual|playwright/i.test(`${ref.file} ${ref.name}`),
+      /snapshot|screenshot|visual|playwright|(?:^|\/)e2e\/|\.spec\.[cm]?[jt]sx?$/i.test(
+        `${ref.file} ${ref.name}`,
+      ),
     ),
   );
   if (snapshotRefs.length === 0) {

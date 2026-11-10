@@ -2,7 +2,7 @@
  * Draft, edit, approve and read a build-intake brief (FEAT-006).
  *
  * The eight-section brief stays in `interview_briefs`; requirement rows, risk decisions and the
- * classification live on revision 1 of the build run. ID counters, the task estimate and the
+ * classification live on the current revision of the build run. ID counters, the task estimate and the
  * migration flag ride in the `detail` of the latest `intake.brief_drafted` / `intake.brief_edited`
  * event, which carries IDs and numbers only, never brief text.
  */
@@ -17,13 +17,35 @@ import type {
   BuildRiskDecision,
 } from '../../shared/types/build';
 import { BUILD_REQUIREMENT_KINDS } from '../../shared/types/build';
-import type { InterviewBriefRecord, InterviewBriefSections } from '../../shared/types/interview';
+import type {
+  InterviewBriefRecord,
+  InterviewBriefSections,
+} from '../../shared/types/interview';
 import { db } from '../db/drizzle';
-import { appUsers, buildEvents, buildRevisions, buildRuns, interviews } from '../db/schema';
-import { appendBuildEvent, type BuildEventExecutor } from './buildEventsService';
-import { canActOnBuildIntakeInterview, isBuildIntakeInterview } from './buildIntakeAccess';
+import {
+  appUsers,
+  buildEvents,
+  buildRevisions,
+  buildRuns,
+  interviews,
+} from '../db/schema';
+import {
+  appendBuildEvent,
+  type BuildEventExecutor,
+} from './buildEventsService';
+import {
+  canActOnBuildIntakeInterview,
+  isBuildIntakeInterview,
+} from './buildIntakeAccess';
 import { redactJson } from './buildRedactionService';
-import { analyzeBuildBrief, BuildBriefAnalysisError, classifyBuild } from './buildRiskClassifier';
+import { deriveRevisionDelta } from './buildRequirementAmendment';
+import { defaultBuildRevisionService } from './buildRevisionService';
+import { seedRevisionVerificationRows } from './buildRevisionVerificationCarryForward';
+import {
+  analyzeBuildBrief,
+  BuildBriefAnalysisError,
+  classifyBuild,
+} from './buildRiskClassifier';
 import {
   approveInterviewBrief,
   getInterviewBrief,
@@ -32,21 +54,30 @@ import {
   saveInterviewBrief,
 } from './interviewBriefService';
 import type { ApproveInterviewBriefResult } from './interviewBriefService';
-import { BuildIntakeDraftError, draftBuildIntakeBrief } from './interviewOrchestratorService';
+import {
+  BuildIntakeDraftError,
+  draftBuildIntakeBrief,
+} from './interviewOrchestratorService';
 import type { BuildIntakeBriefDraft } from './interviewOrchestratorService';
 
 export const BUILD_BRIEF_FORBIDDEN_MESSAGE =
   'Only the requester, a Project Admin or a Platform Admin can change or approve this brief.';
-export const BUILD_BRIEF_NO_AC_MESSAGE = 'Add at least one acceptance criterion before you approve.';
+export const BUILD_BRIEF_NO_AC_MESSAGE =
+  'Add at least one acceptance criterion before you approve.';
 export const BUILD_BRIEF_DRAFT_FAILED_MESSAGE =
   'The brief could not be drafted. Try again, or keep chatting and draft it later.';
-export const BUILD_BRIEF_APPROVE_FAILED_MESSAGE = 'The brief was not approved. Nothing changed. Try again.';
+export const BUILD_BRIEF_APPROVE_FAILED_MESSAGE =
+  'The brief was not approved. Nothing changed. Try again.';
 export const BUILD_BRIEF_RESUME_FAILED_MESSAGE =
   'The brief was approved, but planning did not start. Approve again to continue.';
 export const BUILD_BRIEF_CHANGED_MESSAGE =
   'The brief changed while this was being saved. The latest brief is shown. Nothing from this attempt was kept.';
-export const BUILD_BRIEF_NO_RUN_MESSAGE = 'This build request is not linked to a build. Nothing changed.';
-export const BUILD_BRIEF_NOT_DRAFTED_MESSAGE = 'The brief has not been drafted yet.';
+export const BUILD_BRIEF_NO_RUN_MESSAGE =
+  'This build request is not linked to a build. Nothing changed.';
+export const BUILD_BRIEF_NOT_DRAFTED_MESSAGE =
+  'The brief has not been drafted yet.';
+export const BUILD_BRIEF_EMPTY_REVISION_MESSAGE =
+  'This revision brief does not include the requested change. Update the brief before approving it.';
 
 const BUILD_DRAFT_TIMEOUT_MS = 60_000;
 const DRAFT_EVENT = 'intake.brief_drafted';
@@ -54,14 +85,23 @@ const DRAFT_FAILED_EVENT = 'intake.brief_draft_failed';
 const EDIT_EVENT = 'intake.brief_edited';
 const APPROVED_EVENT = 'intake.brief_approved';
 const REQUIREMENT_LINE_RE = /^(AC|DOD|BR|NFR)-([1-9]\d*): (.*)$/;
-const PREFIX_KIND: Record<string, BuildRequirement['kind']> = { AC: 'ac', DOD: 'dod', BR: 'br', NFR: 'nfr' };
+const PREFIX_KIND: Record<string, BuildRequirement['kind']> = {
+  AC: 'ac',
+  DOD: 'dod',
+  BR: 'br',
+  NFR: 'nfr',
+};
 const EMPTY_COUNTERS: BuildIdCounters = { AC: 0, DOD: 0, BR: 0, NFR: 0, RD: 0 };
 
 export class BuildBriefError extends Error {
   readonly statusCode: number;
   readonly draftFailed: boolean;
 
-  constructor(message: string, statusCode: number, options?: { draftFailed?: boolean }) {
+  constructor(
+    message: string,
+    statusCode: number,
+    options?: { draftFailed?: boolean }
+  ) {
     super(message);
     this.name = 'BuildBriefError';
     this.statusCode = statusCode;
@@ -90,11 +130,20 @@ interface RevisionRow {
   riskDecisions: BuildRiskDecision[];
 }
 
-export type ApproveBuildBriefResult = ApproveInterviewBriefResult & { classification: BuildClassificationResult };
+interface BuildRunState {
+  id: string;
+  currentRevisionNumber: number;
+}
+
+export type ApproveBuildBriefResult = ApproveInterviewBriefResult & {
+  classification: BuildClassificationResult;
+};
 
 // ── Loading ───────────────────────────────────────────────────────────────────
 
-export async function loadBuildIntakeInterview(interviewId: string): Promise<BuildIntakeInterview | null> {
+export async function loadBuildIntakeInterview(
+  interviewId: string
+): Promise<BuildIntakeInterview | null> {
   const [row] = await db
     .select({
       id: interviews.id,
@@ -108,7 +157,9 @@ export async function loadBuildIntakeInterview(interviewId: string): Promise<Bui
   return row ?? null;
 }
 
-async function requireBuildIntake(interviewId: string): Promise<BuildIntakeInterview> {
+async function requireBuildIntake(
+  interviewId: string
+): Promise<BuildIntakeInterview> {
   const interview = await loadBuildIntakeInterview(interviewId);
   if (!interview || !isBuildIntakeInterview(interview)) {
     throw new BuildBriefError('Interview not found', 404);
@@ -116,23 +167,32 @@ async function requireBuildIntake(interviewId: string): Promise<BuildIntakeInter
   return interview;
 }
 
-async function requireActor(actorId: string, interview: BuildIntakeInterview): Promise<void> {
+async function requireActor(
+  actorId: string,
+  interview: BuildIntakeInterview
+): Promise<void> {
   if (!(await canActOnBuildIntakeInterview(actorId, interview))) {
     throw new BuildBriefError(BUILD_BRIEF_FORBIDDEN_MESSAGE, 403);
   }
 }
 
-async function requireBuildRunId(interviewId: string): Promise<string> {
+async function requireBuildRun(interviewId: string): Promise<BuildRunState> {
   const [row] = await db
-    .select({ id: buildRuns.id })
+    .select({
+      id: buildRuns.id,
+      currentRevisionNumber: buildRuns.currentRevisionNumber,
+    })
     .from(buildRuns)
     .where(eq(buildRuns.interviewId, interviewId))
     .limit(1);
   if (!row) throw new BuildBriefError(BUILD_BRIEF_NO_RUN_MESSAGE, 409);
-  return row.id;
+  return row;
 }
 
-async function loadRevisionOne(buildRunId: string): Promise<RevisionRow | null> {
+async function loadBuildRevision(
+  buildRunId: string,
+  revisionNumber: number
+): Promise<RevisionRow | null> {
   const [row] = await db
     .select({
       id: buildRevisions.id,
@@ -141,30 +201,50 @@ async function loadRevisionOne(buildRunId: string): Promise<RevisionRow | null> 
       riskDecisions: buildRevisions.riskDecisions,
     })
     .from(buildRevisions)
-    .where(and(eq(buildRevisions.buildRunId, buildRunId), eq(buildRevisions.revisionNumber, 1)))
+    .where(
+      and(
+        eq(buildRevisions.buildRunId, buildRunId),
+        eq(buildRevisions.revisionNumber, revisionNumber)
+      )
+    )
     .limit(1);
   return row ?? null;
 }
 
-function readState(detail: Record<string, unknown> | null | undefined): AnalysisState {
-  const counters = { ...EMPTY_COUNTERS, ...((detail?.counters as Partial<BuildIdCounters> | undefined) ?? {}) };
+function readState(
+  detail: Record<string, unknown> | null | undefined
+): AnalysisState {
+  const counters = {
+    ...EMPTY_COUNTERS,
+    ...((detail?.counters as Partial<BuildIdCounters> | undefined) ?? {}),
+  };
   const estimate = detail?.estimatedTasks;
   return {
     counters,
     estimatedTasks: typeof estimate === 'number' ? estimate : null,
     needsMigration: detail?.needsMigration === true,
-    reasons: Array.isArray(detail?.reasons) ? (detail?.reasons as string[]) : [],
+    reasons: Array.isArray(detail?.reasons)
+      ? (detail?.reasons as string[])
+      : [],
   };
 }
 
 async function latestEvent(
   buildRunId: string,
-  eventTypes: string[],
-): Promise<{ eventType: string; detail: Record<string, unknown> | null } | null> {
+  eventTypes: string[]
+): Promise<{
+  eventType: string;
+  detail: Record<string, unknown> | null;
+} | null> {
   const [row] = await db
     .select({ eventType: buildEvents.eventType, detail: buildEvents.detail })
     .from(buildEvents)
-    .where(and(eq(buildEvents.buildRunId, buildRunId), inArray(buildEvents.eventType, eventTypes)))
+    .where(
+      and(
+        eq(buildEvents.buildRunId, buildRunId),
+        inArray(buildEvents.eventType, eventTypes)
+      )
+    )
     .orderBy(desc(buildEvents.ordinal))
     .limit(1);
   return row ?? null;
@@ -190,30 +270,49 @@ async function displayNames(ids: string[]): Promise<Map<string, string>> {
 /** AC, DoD and NFR rows go into `acceptanceCriteria`, BR rows into `businessRules`, one `ID: text` per line. */
 export function renderBriefSections(
   sections: InterviewBriefSections,
-  requirements: readonly BuildRequirement[],
+  requirements: readonly BuildRequirement[]
 ): InterviewBriefSections {
   const line = (row: BuildRequirement) => `${row.id}: ${row.text}`;
   const live = requirements.filter((row) => !row.retired);
   return {
     ...sections,
-    acceptanceCriteria: live.filter((row) => row.kind !== 'br').map(line).join('\n'),
-    businessRules: live.filter((row) => row.kind === 'br').map(line).join('\n'),
+    acceptanceCriteria: live
+      .filter((row) => row.kind !== 'br')
+      .map(line)
+      .join('\n'),
+    businessRules: live
+      .filter((row) => row.kind === 'br')
+      .map(line)
+      .join('\n'),
   };
 }
 
 /** Reads rows back from server-rendered sections. Only used to repair a stale revision. */
-export function requirementsFromSections(sections: InterviewBriefSections): BuildRequirement[] {
+export function requirementsFromSections(
+  sections: InterviewBriefSections
+): BuildRequirement[] {
   const rows: BuildRequirement[] = [];
   for (const text of [sections.acceptanceCriteria, sections.businessRules]) {
     for (const raw of text.split('\n')) {
       const match = REQUIREMENT_LINE_RE.exec(raw.trim());
-      if (match) rows.push({ id: `${match[1]}-${match[2]}`, kind: PREFIX_KIND[match[1]], text: match[3], retired: false });
+      if (match)
+        rows.push({
+          id: `${match[1]}-${match[2]}`,
+          kind: PREFIX_KIND[match[1]],
+          text: match[3],
+          retired: false,
+        });
     }
   }
   return rows;
 }
 
-function stateDetail(analysis: BuildBriefAnalysis, state: Omit<AnalysisState, 'counters' | 'reasons'>, briefId: string, briefVersion: number) {
+function stateDetail(
+  analysis: BuildBriefAnalysis,
+  state: Omit<AnalysisState, 'counters' | 'reasons'>,
+  briefId: string,
+  briefVersion: number
+) {
   return {
     briefId,
     briefVersion,
@@ -224,11 +323,15 @@ function stateDetail(analysis: BuildBriefAnalysis, state: Omit<AnalysisState, 'c
   };
 }
 
-async function upsertRevisionOne(
+async function upsertBuildRevision(
   buildRunId: string,
+  revisionNumber: number,
   briefVersion: number,
-  analysis: Pick<BuildBriefAnalysis, 'requirements' | 'riskDecisions' | 'classification'>,
-  executor: BuildEventExecutor = db,
+  analysis: Pick<
+    BuildBriefAnalysis,
+    'requirements' | 'riskDecisions' | 'classification'
+  >,
+  executor: BuildEventExecutor = db
 ): Promise<string> {
   const now = new Date().toISOString();
   const values = {
@@ -240,8 +343,11 @@ async function upsertRevisionOne(
   };
   const [row] = await executor
     .insert(buildRevisions)
-    .values({ buildRunId, revisionNumber: 1, ...values })
-    .onConflictDoUpdate({ target: [buildRevisions.buildRunId, buildRevisions.revisionNumber], set: values })
+    .values({ buildRunId, revisionNumber, ...values })
+    .onConflictDoUpdate({
+      target: [buildRevisions.buildRunId, buildRevisions.revisionNumber],
+      set: values,
+    })
     .returning({ id: buildRevisions.id });
   return row.id;
 }
@@ -251,31 +357,43 @@ function briefChanged(error: unknown): boolean {
   return error instanceof InterviewBriefError && error.statusCode === 409;
 }
 
-function logDraftFailure(interviewId: string, reason: string, startedAt: number): void {
-  console.info('[build-brief]', JSON.stringify({
-    event: 'build_brief_draft_failed',
-    interviewId,
-    reason,
-    durationMs: Date.now() - startedAt,
-  }));
+function logDraftFailure(
+  interviewId: string,
+  reason: string,
+  startedAt: number
+): void {
+  console.info(
+    '[build-brief]',
+    JSON.stringify({
+      event: 'build_brief_draft_failed',
+      interviewId,
+      reason,
+      durationMs: Date.now() - startedAt,
+    })
+  );
 }
 
 function toInputRows(value: unknown): BuildRequirementInput[] {
-  if (!Array.isArray(value)) throw new BuildBriefError('requirements must be an array.', 400);
+  if (!Array.isArray(value))
+    throw new BuildBriefError('requirements must be an array.', 400);
   return value.map((row, index) => {
     const record = row as Record<string, unknown> | null;
     const id = record?.id;
     const kind = record?.kind;
     const text = record?.text;
     if (
-      !record
-      || (id !== null && typeof id !== 'string')
-      || !BUILD_REQUIREMENT_KINDS.includes(kind as BuildRequirement['kind'])
-      || typeof text !== 'string'
+      !record ||
+      (id !== null && typeof id !== 'string') ||
+      !BUILD_REQUIREMENT_KINDS.includes(kind as BuildRequirement['kind']) ||
+      typeof text !== 'string'
     ) {
       throw new BuildBriefError(`Requirement ${index + 1} is not valid.`, 400);
     }
-    return { id: id as string | null, kind: kind as BuildRequirement['kind'], text };
+    return {
+      id: id as string | null,
+      kind: kind as BuildRequirement['kind'],
+      text,
+    };
   });
 }
 
@@ -289,10 +407,12 @@ export async function draftBuildBrief(input: {
 }): Promise<InterviewBriefRecord | null> {
   const interview = await requireBuildIntake(input.interviewId);
   await requireActor(input.actorId, interview);
-  const buildRunId = await requireBuildRunId(interview.id);
+  const buildRun = await requireBuildRun(interview.id);
+  const buildRunId = buildRun.id;
 
   const existing = await getInterviewBrief(interview.id);
-  if (existing?.status === 'approved') throw new BuildBriefError('An approved brief is frozen.', 409);
+  if (existing?.status === 'approved')
+    throw new BuildBriefError('An approved brief is frozen.', 409);
   if (existing && input.mode === 'auto') return null;
   const expectedVersion = existing?.version ?? null;
 
@@ -307,43 +427,69 @@ export async function draftBuildBrief(input: {
       actorUserId: input.actorId,
       detail: { reason },
     }).catch(() => undefined);
-    throw new BuildBriefError(BUILD_BRIEF_DRAFT_FAILED_MESSAGE, 502, { draftFailed: true });
+    throw new BuildBriefError(BUILD_BRIEF_DRAFT_FAILED_MESSAGE, 502, {
+      draftFailed: true,
+    });
   };
 
   let draft: BuildIntakeBriefDraft;
   try {
-    draft = redactJson(await draftBuildIntakeBrief({ interviewId: interview.id, timeoutMs: BUILD_DRAFT_TIMEOUT_MS }));
+    draft = redactJson(
+      await draftBuildIntakeBrief({
+        interviewId: interview.id,
+        timeoutMs: BUILD_DRAFT_TIMEOUT_MS,
+      })
+    );
   } catch (error) {
-    return fail(error instanceof BuildIntakeDraftError ? error.reason : 'agent_error');
+    return fail(
+      error instanceof BuildIntakeDraftError ? error.reason : 'agent_error'
+    );
   }
 
-  const revision = await loadRevisionOne(buildRunId);
+  const revision = await loadBuildRevision(
+    buildRunId,
+    buildRun.currentRevisionNumber
+  );
   const state = await loadState(buildRunId);
   let analysis: BuildBriefAnalysis;
   try {
     analysis = analyzeBuildBrief({
-      requirements: draft.requirements.map((row) => ({ id: null, kind: row.kind, text: row.text })),
+      requirements: draft.requirements.map((row) => ({
+        id: null,
+        kind: row.kind,
+        text: row.text,
+      })),
       riskCandidates: draft.riskCandidates,
       estimatedTasks: draft.estimatedTasks,
       needsMigration: draft.needsMigration,
-      previous: revision ? { requirements: revision.requirements, riskDecisions: revision.riskDecisions, counters: state.counters } : null,
+      previous: revision
+        ? {
+            requirements: revision.requirements,
+            riskDecisions: revision.riskDecisions,
+            counters: state.counters,
+          }
+        : null,
     });
   } catch (error) {
-    if (error instanceof BuildBriefAnalysisError) return fail('invalid_analysis');
+    if (error instanceof BuildBriefAnalysisError)
+      return fail('invalid_analysis');
     throw error;
   }
 
   const { riskCandidates, estimatedTasks, needsMigration } = draft;
-  const sections = renderBriefSections({
-    problemAndOutcome: draft.problemAndOutcome,
-    users: draft.users,
-    scope: draft.scope,
-    businessRules: draft.businessRules,
-    scenarios: draft.scenarios,
-    acceptanceCriteria: draft.acceptanceCriteria,
-    assumptions: draft.assumptions,
-    unresolvedItems: draft.unresolvedItems,
-  }, analysis.requirements);
+  const sections = renderBriefSections(
+    {
+      problemAndOutcome: draft.problemAndOutcome,
+      users: draft.users,
+      scope: draft.scope,
+      businessRules: draft.businessRules,
+      scenarios: draft.scenarios,
+      acceptanceCriteria: draft.acceptanceCriteria,
+      assumptions: draft.assumptions,
+      unresolvedItems: draft.unresolvedItems,
+    },
+    analysis.requirements
+  );
   let brief: InterviewBriefRecord;
   try {
     brief = await saveInterviewBrief({
@@ -352,16 +498,30 @@ export async function draftBuildBrief(input: {
       savedBy: input.actorId,
       expectedVersion,
       inTransaction: async (tx, saved) => {
-        const revisionId = await upsertRevisionOne(buildRunId, saved.version, analysis, tx);
-        await appendBuildEvent({
+        const revisionId = await upsertBuildRevision(
           buildRunId,
-          buildRevisionId: revisionId,
-          eventType: DRAFT_EVENT,
-          message: 'Brief drafted',
-          actorUserId: input.actorId,
-          dedupeKey: `brief_drafted:${saved.id}:${saved.version}`,
-          detail: stateDetail(analysis, { estimatedTasks, needsMigration }, saved.id, saved.version),
-        }, { executor: tx });
+          buildRun.currentRevisionNumber,
+          saved.version,
+          analysis,
+          tx
+        );
+        await appendBuildEvent(
+          {
+            buildRunId,
+            buildRevisionId: revisionId,
+            eventType: DRAFT_EVENT,
+            message: 'Brief drafted',
+            actorUserId: input.actorId,
+            dedupeKey: `brief_drafted:${saved.id}:${saved.version}`,
+            detail: stateDetail(
+              analysis,
+              { estimatedTasks, needsMigration },
+              saved.id,
+              saved.version
+            ),
+          },
+          { executor: tx }
+        );
       },
     });
   } catch (error) {
@@ -370,15 +530,19 @@ export async function draftBuildBrief(input: {
     throw new BuildBriefError(BUILD_BRIEF_CHANGED_MESSAGE, 409);
   }
 
-  const raised = analysis.riskDecisions.filter((decision, index) => (
-    decision.rating === 'high' && riskCandidates[index]?.rating !== 'high'
-  )).length;
-  console.info('[build-brief]', JSON.stringify({
-    event: 'build_brief_drafted',
-    interviewId: interview.id,
-    durationMs: Date.now() - startedAt,
-    riskRaised: raised,
-  }));
+  const raised = analysis.riskDecisions.filter(
+    (decision, index) =>
+      decision.rating === 'high' && riskCandidates[index]?.rating !== 'high'
+  ).length;
+  console.info(
+    '[build-brief]',
+    JSON.stringify({
+      event: 'build_brief_drafted',
+      interviewId: interview.id,
+      durationMs: Date.now() - startedAt,
+      riskRaised: raised,
+    })
+  );
   return brief;
 }
 
@@ -387,15 +551,24 @@ export async function autoDraftBuildBrief(interviewId: string): Promise<void> {
   try {
     const interview = await loadBuildIntakeInterview(interviewId);
     if (!interview || !isBuildIntakeInterview(interview)) return;
-    await draftBuildBrief({ interviewId, actorId: interview.authorId, mode: 'auto' });
+    await draftBuildBrief({
+      interviewId,
+      actorId: interview.authorId,
+      mode: 'auto',
+    });
   } catch (error) {
     if (error instanceof BuildBriefError) return;
-    console.error('[build-brief] automatic draft failed:', error instanceof Error ? error.name : 'UnknownError');
+    console.error(
+      '[build-brief] automatic draft failed:',
+      error instanceof Error ? error.name : 'UnknownError'
+    );
   }
 }
 
 /** Same as `autoDraftBuildBrief`, for the interview whose main chat thread is `chatThreadId`. Never throws. */
-export async function autoDraftBuildBriefForThread(chatThreadId: string): Promise<void> {
+export async function autoDraftBuildBriefForThread(
+  chatThreadId: string
+): Promise<void> {
   try {
     const [row] = await db
       .select({ id: interviews.id })
@@ -404,7 +577,10 @@ export async function autoDraftBuildBriefForThread(chatThreadId: string): Promis
       .limit(1);
     if (row) await autoDraftBuildBrief(row.id);
   } catch (error) {
-    console.error('[build-brief] automatic draft lookup failed:', error instanceof Error ? error.name : 'UnknownError');
+    console.error(
+      '[build-brief] automatic draft lookup failed:',
+      error instanceof Error ? error.name : 'UnknownError'
+    );
   }
 }
 
@@ -418,13 +594,18 @@ export async function saveBuildBrief(input: {
 }): Promise<InterviewBriefRecord> {
   const interview = await requireBuildIntake(input.interviewId);
   await requireActor(input.actorId, interview);
-  const buildRunId = await requireBuildRunId(interview.id);
+  const buildRun = await requireBuildRun(interview.id);
+  const buildRunId = buildRun.id;
 
   const rows = redactJson(toInputRows(input.requirements));
   const sections = redactJson(parseInterviewBriefSections(input.sections));
   const current = await getInterviewBrief(interview.id);
-  const revision = await loadRevisionOne(buildRunId);
-  if (!revision) throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 409);
+  const revision = await loadBuildRevision(
+    buildRunId,
+    buildRun.currentRevisionNumber
+  );
+  if (!revision)
+    throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 409);
   const state = await loadState(buildRunId);
 
   let analysis: BuildBriefAnalysis;
@@ -433,14 +614,21 @@ export async function saveBuildBrief(input: {
       requirements: rows,
       estimatedTasks: state.estimatedTasks,
       needsMigration: state.needsMigration,
-      previous: { requirements: revision.requirements, riskDecisions: revision.riskDecisions, counters: state.counters },
+      previous: {
+        requirements: revision.requirements,
+        riskDecisions: revision.riskDecisions,
+        counters: state.counters,
+      },
     });
   } catch (error) {
-    if (error instanceof BuildBriefAnalysisError) throw new BuildBriefError(error.problems.join('; '), 400);
+    if (error instanceof BuildBriefAnalysisError)
+      throw new BuildBriefError(error.problems.join('; '), 400);
     throw error;
   }
 
-  const before = new Map(revision.requirements.map((row) => [row.id, row.text]));
+  const before = new Map(
+    revision.requirements.map((row) => [row.id, row.text])
+  );
   const after = new Set(analysis.requirements.map((row) => row.id));
   try {
     return await saveInterviewBrief({
@@ -449,25 +637,41 @@ export async function saveBuildBrief(input: {
       savedBy: input.actorId,
       expectedVersion: current?.version ?? null,
       inTransaction: async (tx, saved) => {
-        const revisionId = await upsertRevisionOne(buildRunId, saved.version, analysis, tx);
-        await appendBuildEvent({
+        const revisionId = await upsertBuildRevision(
           buildRunId,
-          buildRevisionId: revisionId,
-          eventType: EDIT_EVENT,
-          message: 'Brief edited',
-          actorUserId: input.actorId,
-          dedupeKey: `brief_edited:${saved.id}:${saved.version}`,
-          detail: {
-            ...stateDetail(analysis, state, saved.id, saved.version),
-            changedIds: analysis.requirements.filter((row) => before.has(row.id) && before.get(row.id) !== row.text).map((row) => row.id),
-            addedIds: analysis.requirements.filter((row) => !before.has(row.id)).map((row) => row.id),
-            removedIds: [...before.keys()].filter((id) => !after.has(id)),
+          buildRun.currentRevisionNumber,
+          saved.version,
+          analysis,
+          tx
+        );
+        await appendBuildEvent(
+          {
+            buildRunId,
+            buildRevisionId: revisionId,
+            eventType: EDIT_EVENT,
+            message: 'Brief edited',
+            actorUserId: input.actorId,
+            dedupeKey: `brief_edited:${saved.id}:${saved.version}`,
+            detail: {
+              ...stateDetail(analysis, state, saved.id, saved.version),
+              changedIds: analysis.requirements
+                .filter(
+                  (row) => before.has(row.id) && before.get(row.id) !== row.text
+                )
+                .map((row) => row.id),
+              addedIds: analysis.requirements
+                .filter((row) => !before.has(row.id))
+                .map((row) => row.id),
+              removedIds: [...before.keys()].filter((id) => !after.has(id)),
+            },
           },
-        }, { executor: tx });
+          { executor: tx }
+        );
       },
     });
   } catch (error) {
-    if (briefChanged(error)) throw new BuildBriefError(BUILD_BRIEF_CHANGED_MESSAGE, 409);
+    if (briefChanged(error))
+      throw new BuildBriefError(BUILD_BRIEF_CHANGED_MESSAGE, 409);
     throw error;
   }
 }
@@ -480,30 +684,75 @@ export async function approveBuildBrief(input: {
 }): Promise<ApproveBuildBriefResult> {
   const interview = await requireBuildIntake(input.interviewId);
   await requireActor(input.actorId, interview);
-  const buildRunId = await requireBuildRunId(interview.id);
+  const buildRun = await requireBuildRun(interview.id);
+  const buildRunId = buildRun.id;
 
   const brief = await getInterviewBrief(interview.id);
   if (!brief) throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 404);
 
   const state = await loadState(buildRunId);
-  let revision = await loadRevisionOne(buildRunId);
+  let revision = await loadBuildRevision(
+    buildRunId,
+    buildRun.currentRevisionNumber
+  );
+  const previousRevision =
+    buildRun.currentRevisionNumber > 1
+      ? await loadBuildRevision(buildRunId, buildRun.currentRevisionNumber - 1)
+      : null;
   if (brief.status === 'draft') {
     if (!revision || revision.briefVersion !== brief.version) {
       const requirements = requirementsFromSections(brief.sections);
       const riskDecisions = revision?.riskDecisions ?? [];
-      const classification = classifyBuild(riskDecisions, state.estimatedTasks, state.needsMigration);
-      const id = await upsertRevisionOne(buildRunId, brief.version, { requirements, riskDecisions, classification });
-      revision = { id, briefVersion: brief.version, requirements, riskDecisions };
+      const classification = classifyBuild(
+        riskDecisions,
+        state.estimatedTasks,
+        state.needsMigration
+      );
+      const id = await upsertBuildRevision(
+        buildRunId,
+        buildRun.currentRevisionNumber,
+        brief.version,
+        { requirements, riskDecisions, classification }
+      );
+      revision = {
+        id,
+        briefVersion: brief.version,
+        requirements,
+        riskDecisions,
+      };
     }
-    if (!revision.requirements.some((row) => row.kind === 'ac' && !row.retired)) {
+    if (
+      !revision.requirements.some((row) => row.kind === 'ac' && !row.retired)
+    ) {
       throw new BuildBriefError(BUILD_BRIEF_NO_AC_MESSAGE, 400);
     }
   }
-  if (!revision) throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 409);
+  if (!revision)
+    throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 409);
 
+  const currentRevisionId = revision.id;
   const riskDecisions = revision.riskDecisions;
   const requirements = revision.requirements;
-  const classification = classifyBuild(riskDecisions, state.estimatedTasks, state.needsMigration);
+  if (previousRevision && previousRevision.id !== revision.id) {
+    const delta = deriveRevisionDelta({
+      previousRequirements: previousRevision.requirements,
+      previousRiskDecisions: previousRevision.riskDecisions,
+      nextRequirements: requirements,
+      nextRiskDecisions: riskDecisions,
+    });
+    if (
+      delta.changedIds.length === 0 &&
+      delta.addedIds.length === 0 &&
+      delta.droppedIds.length === 0
+    ) {
+      throw new BuildBriefError(BUILD_BRIEF_EMPTY_REVISION_MESSAGE, 409);
+    }
+  }
+  const classification = classifyBuild(
+    riskDecisions,
+    state.estimatedTasks,
+    state.needsMigration
+  );
 
   let result: ApproveInterviewBriefResult;
   try {
@@ -511,30 +760,65 @@ export async function approveBuildBrief(input: {
       interviewId: interview.id,
       approvedBy: input.actorId,
       inTransaction: async (tx, approved) => {
-        const revisionId = await upsertRevisionOne(buildRunId, approved.version, { requirements, riskDecisions, classification }, tx);
-        const approver = approved.approvedBy ?? input.actorId;
-        await appendBuildEvent({
+        const revisionId = await upsertBuildRevision(
           buildRunId,
-          buildRevisionId: revisionId,
-          eventType: APPROVED_EVENT,
-          message: 'Brief approved',
-          actorUserId: approver,
-          dedupeKey: `brief_approved:${approved.id}:${approved.version}`,
-          detail: {
-            briefId: approved.id,
-            briefVersion: approved.version,
-            classification: classification.value,
-            onBehalfOf: approver === interview.authorId ? null : interview.authorId,
+          buildRun.currentRevisionNumber,
+          approved.version,
+          { requirements, riskDecisions, classification },
+          tx
+        );
+        if (previousRevision && previousRevision.id !== currentRevisionId) {
+          await seedRevisionVerificationRows(tx, {
+            previousRevisionId: previousRevision.id,
+            previousRevisionNumber: buildRun.currentRevisionNumber - 1,
+            nextRevisionId: revisionId,
+            previousRequirements: previousRevision.requirements,
+            previousRiskDecisions: previousRevision.riskDecisions,
+            nextRequirements: requirements,
+            nextRiskDecisions: riskDecisions,
+          });
+        }
+        const approver = approved.approvedBy ?? input.actorId;
+        await appendBuildEvent(
+          {
+            buildRunId,
+            buildRevisionId: revisionId,
+            eventType: APPROVED_EVENT,
+            message: 'Brief approved',
+            actorUserId: approver,
+            dedupeKey: `brief_approved:${approved.id}:${approved.version}`,
+            detail: {
+              briefId: approved.id,
+              briefVersion: approved.version,
+              classification: classification.value,
+              onBehalfOf:
+                approver === interview.authorId ? null : interview.authorId,
+            },
           },
-        }, { executor: tx });
+          { executor: tx }
+        );
       },
     });
   } catch (error) {
-    if (error instanceof InterviewBriefError && error.statusCode < 500) throw error;
+    if (error instanceof InterviewBriefError && error.statusCode < 500)
+      throw error;
     // The approval and its build writes commit together, so an approved brief here means the resume failed.
     const after = await getInterviewBrief(interview.id).catch(() => null);
-    if (after?.status === 'approved') throw new BuildBriefError(BUILD_BRIEF_RESUME_FAILED_MESSAGE, 500);
+    if (after?.status === 'approved')
+      throw new BuildBriefError(BUILD_BRIEF_RESUME_FAILED_MESSAGE, 500);
     throw new BuildBriefError(BUILD_BRIEF_APPROVE_FAILED_MESSAGE, 500);
+  }
+  if (buildRun.currentRevisionNumber > 1) {
+    try {
+      await defaultBuildRevisionService.handleRevisionBriefApproved({
+        interviewId: interview.id,
+        approvedBy: input.actorId,
+        briefVersion: result.version,
+        classification: classification.value,
+      });
+    } catch {
+      throw new BuildBriefError(BUILD_BRIEF_RESUME_FAILED_MESSAGE, 500);
+    }
   }
   return { ...result, classification };
 }
@@ -547,50 +831,72 @@ export async function getBuildBriefAnalysis(input: {
 }): Promise<BuildBriefAnalysisResponse> {
   const interview = await requireBuildIntake(input.interviewId);
   const [run] = await db
-    .select({ id: buildRuns.id })
+    .select({
+      id: buildRuns.id,
+      currentRevisionNumber: buildRuns.currentRevisionNumber,
+    })
     .from(buildRuns)
     .where(eq(buildRuns.interviewId, interview.id))
     .limit(1);
   if (!run) throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 404);
 
   const brief = await getInterviewBrief(interview.id);
-  const revision = await loadRevisionOne(run.id);
+  const revision = await loadBuildRevision(run.id, run.currentRevisionNumber);
   if (!brief || !revision) {
     const last = await latestEvent(run.id, [DRAFT_EVENT, DRAFT_FAILED_EVENT]);
-    throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 404, { draftFailed: last?.eventType === DRAFT_FAILED_EVENT });
+    throw new BuildBriefError(BUILD_BRIEF_NOT_DRAFTED_MESSAGE, 404, {
+      draftFailed: last?.eventType === DRAFT_FAILED_EVENT,
+    });
   }
 
   const state = await loadState(run.id);
   const mayEdit = await canActOnBuildIntakeInterview(input.viewerId, interview);
-  const names = await displayNames([interview.authorId, brief.approvedBy ?? '']);
+  const names = await displayNames([
+    interview.authorId,
+    brief.approvedBy ?? '',
+  ]);
   const requesterName = names.get(interview.authorId) ?? interview.authorId;
-  const redacted = redactJson({ requirements: revision.requirements, riskDecisions: revision.riskDecisions });
+  const redacted = redactJson({
+    requirements: revision.requirements,
+    riskDecisions: revision.riskDecisions,
+  });
 
   return {
     interviewId: interview.id,
     buildRunId: run.id,
-    revisionNumber: 1,
+    revisionNumber: run.currentRevisionNumber,
     briefVersion: brief.version,
     briefStatus: brief.status === 'approved' ? 'approved' : 'draft',
     requirements: redacted.requirements,
     riskDecisions: redacted.riskDecisions,
-    classification: classifyBuild(revision.riskDecisions, state.estimatedTasks, state.needsMigration),
+    classification: classifyBuild(
+      revision.riskDecisions,
+      state.estimatedTasks,
+      state.needsMigration
+    ),
     requester: { id: interview.authorId, displayName: requesterName },
-    approval: brief.approvedBy && brief.approvedAt
-      ? {
-        approvedBy: { id: brief.approvedBy, displayName: names.get(brief.approvedBy) ?? brief.approvedBy },
-        approvedAt: brief.approvedAt,
-      }
-      : null,
+    approval:
+      brief.approvedBy && brief.approvedAt
+        ? {
+            approvedBy: {
+              id: brief.approvedBy,
+              displayName: names.get(brief.approvedBy) ?? brief.approvedBy,
+            },
+            approvedAt: brief.approvedAt,
+          }
+        : null,
     viewer: {
       mayEdit,
-      actingFor: mayEdit && input.viewerId !== interview.authorId ? requesterName : null,
+      actingFor:
+        mayEdit && input.viewerId !== interview.authorId ? requesterName : null,
     },
   };
 }
 
 /** Brief record with every text section redacted, for the build-intake GET route. */
-export async function getRedactedBuildBrief(interviewId: string): Promise<InterviewBriefRecord | null> {
+export async function getRedactedBuildBrief(
+  interviewId: string
+): Promise<InterviewBriefRecord | null> {
   const brief = await getInterviewBrief(interviewId);
   return brief ? { ...brief, sections: redactJson(brief.sections) } : null;
 }

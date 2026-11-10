@@ -19,18 +19,28 @@ export const BUILD_RUN_SLOT_STATUSES = [
 /** Same set as the slot list. Named for callers that talk about active builds. */
 export const BUILD_ACTIVE_STATUSES = BUILD_RUN_SLOT_STATUSES;
 
-export const BUILD_CONCURRENCY_LIMITS = { perProject: 3, platform: 10 } as const;
+export const BUILD_CONCURRENCY_LIMITS = {
+  perProject: 3,
+  platform: 10,
+} as const;
 
 export const BUILD_PROMPT_MAX_LENGTH = 8000;
 export const BUILD_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 
 /** Badge and list "in progress" include the queue. The queue does not hold a slot. */
-export const BUILD_IN_PROGRESS_STATUSES = ['queued', ...BUILD_RUN_SLOT_STATUSES] as const;
+export const BUILD_IN_PROGRESS_STATUSES = [
+  'queued',
+  ...BUILD_RUN_SLOT_STATUSES,
+] as const;
 
 /** Stages a suspended run may return to. Same five as the slot list. */
 export const BUILD_RUN_STAGE_STATUSES = BUILD_RUN_SLOT_STATUSES;
 
-export const BUILD_RUN_TERMINAL_STATUSES = ['accepted', 'cancelled', 'failed'] as const;
+export const BUILD_RUN_TERMINAL_STATUSES = [
+  'accepted',
+  'cancelled',
+  'failed',
+] as const;
 
 export const BUILD_RUN_STATUSES = [
   'queued',
@@ -68,14 +78,26 @@ export const BUILD_TASK_STATUSES = [
   'omitted',
 ] as const;
 
-export const BUILD_TASK_ROLES = ['planner', 'implementer', 'qa', 'check', 'sync'] as const;
+export const BUILD_TASK_ROLES = [
+  'planner',
+  'implementer',
+  'qa',
+  'check',
+  'sync',
+] as const;
 
 /** Roles a plan may list. The orchestrator inserts planner, check, and sync. */
 export const BUILD_PLAN_TASK_ROLES = ['implementer', 'qa'] as const;
 
 export const BUILD_TASK_RUN_MODES = ['own_agent', 'chain'] as const;
 
-export const BUILD_VERIFICATION_KINDS = ['ac', 'dod', 'br', 'nfr', 'risk_decision'] as const;
+export const BUILD_VERIFICATION_KINDS = [
+  'ac',
+  'dod',
+  'br',
+  'nfr',
+  'risk_decision',
+] as const;
 
 /** `pending` is the default for a row that exists before evidence is recorded. */
 export const BUILD_VERIFICATION_STATUSES = [
@@ -94,11 +116,37 @@ export const BUILD_DEPLOYMENT_STATUSES = [
   'failed',
 ] as const;
 
+export const BUILD_PREVIEW_ROLLOUT_MODES = ['legacy_static', 'live'] as const;
+
+export const BUILD_PREVIEW_INSTANCE_STATES = [
+  'requested',
+  'provisioning',
+  'starting',
+  'verifying',
+  'ready',
+  'suspended',
+  'terminating',
+  'terminated',
+  'failed',
+  'expired',
+] as const;
+
+export const BUILD_PREVIEW_EVIDENCE_STATUSES = [
+  'pending',
+  'passed',
+  'failed',
+] as const;
+
 export const BUILD_CLASSIFICATIONS = ['small', 'full'] as const;
 
 export const BUILD_RISK_RATINGS = ['low', 'medium', 'high'] as const;
 
-export const BUILD_RISK_CATEGORIES = ['data', 'access', 'integration', 'destructive'] as const;
+export const BUILD_RISK_CATEGORIES = [
+  'data',
+  'access',
+  'integration',
+  'destructive',
+] as const;
 
 export const BUILD_REQUIREMENT_KINDS = ['ac', 'dod', 'br', 'nfr'] as const;
 
@@ -113,7 +161,13 @@ export const BUILD_CORRELATION_KINDS = [
   'commit',
 ] as const;
 
-export const BUILD_PROFILE_ROLES = ['intake', 'planner', 'implementer', 'qa', 'check'] as const;
+export const BUILD_PROFILE_ROLES = [
+  'intake',
+  'planner',
+  'implementer',
+  'qa',
+  'check',
+] as const;
 
 export const BUILD_SCAFFOLD_KINDS = [
   'shared_types',
@@ -168,8 +222,15 @@ export type BuildTaskRole = (typeof BUILD_TASK_ROLES)[number];
 export type BuildPlanTaskRole = (typeof BUILD_PLAN_TASK_ROLES)[number];
 export type BuildTaskRunMode = (typeof BUILD_TASK_RUN_MODES)[number];
 export type BuildVerificationKind = (typeof BUILD_VERIFICATION_KINDS)[number];
-export type BuildVerificationStatus = (typeof BUILD_VERIFICATION_STATUSES)[number];
+export type BuildVerificationStatus =
+  (typeof BUILD_VERIFICATION_STATUSES)[number];
 export type BuildDeploymentStatus = (typeof BUILD_DEPLOYMENT_STATUSES)[number];
+export type BuildPreviewRolloutMode =
+  (typeof BUILD_PREVIEW_ROLLOUT_MODES)[number];
+export type BuildPreviewInstanceState =
+  (typeof BUILD_PREVIEW_INSTANCE_STATES)[number];
+export type BuildPreviewEvidenceStatus =
+  (typeof BUILD_PREVIEW_EVIDENCE_STATUSES)[number];
 export type BuildClassification = (typeof BUILD_CLASSIFICATIONS)[number];
 export type BuildRiskRating = (typeof BUILD_RISK_RATINGS)[number];
 export type BuildRiskCategory = (typeof BUILD_RISK_CATEGORIES)[number];
@@ -187,23 +248,39 @@ export const BUILD_RISK_DECISION_ID_PATTERN = /^RD-[1-9]\d*$/;
 export const BUILD_TASK_KEY_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
 export const BUILD_EVENT_TYPE_PATTERN = /^[a-z][a-z0-9_.]{0,63}$/;
 
-const BUILD_RUN_TRANSITIONS: Record<BuildRunStatus, readonly BuildRunStatus[]> = {
-  queued: ['intake', 'suspended', 'cancelled', 'failed'],
-  intake: ['planning', 'building', 'suspended', 'cancelled', 'failed'],
-  planning: ['building', 'suspended', 'cancelled', 'failed'],
-  building: ['checking', 'deploying', 'suspended', 'cancelled', 'failed'],
-  checking: ['building', 'deploying', 'suspended', 'cancelled', 'failed'],
-  deploying: ['preview_ready', 'deployment_failed', 'suspended', 'cancelled', 'failed'],
-  preview_ready: ['intake', 'accepted', 'needs_developer', 'cancelled', 'failed'],
-  deployment_failed: ['deploying', 'cancelled', 'failed'],
-  needs_developer: ['cancelled'],
-  suspended: ['cancelled', 'failed'],
-  accepted: [],
-  cancelled: [],
-  failed: [],
-};
+const BUILD_RUN_TRANSITIONS: Record<BuildRunStatus, readonly BuildRunStatus[]> =
+  {
+    queued: ['intake', 'suspended', 'cancelled', 'failed'],
+    intake: ['planning', 'building', 'suspended', 'cancelled', 'failed'],
+    planning: ['building', 'suspended', 'cancelled', 'failed'],
+    building: ['checking', 'deploying', 'suspended', 'cancelled', 'failed'],
+    checking: ['building', 'deploying', 'suspended', 'cancelled', 'failed'],
+    deploying: [
+      'preview_ready',
+      'deployment_failed',
+      'suspended',
+      'cancelled',
+      'failed',
+    ],
+    preview_ready: [
+      'intake',
+      'accepted',
+      'needs_developer',
+      'cancelled',
+      'failed',
+    ],
+    deployment_failed: ['deploying', 'cancelled', 'failed'],
+    needs_developer: ['cancelled'],
+    suspended: ['cancelled', 'failed'],
+    accepted: [],
+    cancelled: [],
+    failed: [],
+  };
 
-const BUILD_TASK_TRANSITIONS: Record<BuildTaskStatus, readonly BuildTaskStatus[]> = {
+const BUILD_TASK_TRANSITIONS: Record<
+  BuildTaskStatus,
+  readonly BuildTaskStatus[]
+> = {
   pending: ['ready', 'omitted'],
   ready: ['running', 'omitted'],
   running: ['merged', 'failed', 'ready'],
@@ -212,7 +289,10 @@ const BUILD_TASK_TRANSITIONS: Record<BuildTaskStatus, readonly BuildTaskStatus[]
   omitted: [],
 };
 
-const BUILD_DEPLOYMENT_TRANSITIONS: Record<BuildDeploymentStatus, readonly BuildDeploymentStatus[]> = {
+const BUILD_DEPLOYMENT_TRANSITIONS: Record<
+  BuildDeploymentStatus,
+  readonly BuildDeploymentStatus[]
+> = {
   not_started: ['queued'],
   queued: ['deploying'],
   deploying: ['succeeded', 'failed'],
@@ -265,7 +345,7 @@ export function buildStatusLabel(status: BuildRunStatus): string {
 export function isLegalBuildRunTransition(
   from: BuildRunStatus,
   to: BuildRunStatus,
-  suspendedFromStatus?: BuildSuspendedFromStatus | null,
+  suspendedFromStatus?: BuildSuspendedFromStatus | null
 ): boolean {
   if (from === 'suspended') {
     if (to === 'cancelled' || to === 'failed') return true;
@@ -274,13 +354,16 @@ export function isLegalBuildRunTransition(
   return BUILD_RUN_TRANSITIONS[from].includes(to);
 }
 
-export function isLegalBuildTaskTransition(from: BuildTaskStatus, to: BuildTaskStatus): boolean {
+export function isLegalBuildTaskTransition(
+  from: BuildTaskStatus,
+  to: BuildTaskStatus
+): boolean {
   return BUILD_TASK_TRANSITIONS[from].includes(to);
 }
 
 export function isLegalBuildDeploymentTransition(
   from: BuildDeploymentStatus,
-  to: BuildDeploymentStatus,
+  to: BuildDeploymentStatus
 ): boolean {
   return BUILD_DEPLOYMENT_TRANSITIONS[from].includes(to);
 }
@@ -290,9 +373,13 @@ export function integrationBranchName(runId: string): string {
   return `apex/build/${runId}`;
 }
 
-/** `apex/build-task/<runId>/<taskKey>`. Sits beside the integration branch, not under it. */
-export function taskBranchName(runId: string, taskKey: string): string {
-  return `apex/build-task/${runId}/${taskKey}`;
+/** `apex/build-task/<runId>/r<revisionNumber>/<taskKey>`. */
+export function taskBranchName(
+  runId: string,
+  revisionNumber: number,
+  taskKey: string
+): string {
+  return `apex/build-task/${runId}/r${revisionNumber}/${taskKey}`;
 }
 
 export interface BuildSkillRoleSnapshot {
@@ -350,17 +437,21 @@ export interface BuildRiskDecision {
 export const BUILD_REQUIREMENT_TEXT_MAX = 1000;
 export const BUILD_BRIEF_MAX_REQUIREMENTS = 100;
 
-export const BUILD_REQUIREMENT_PREFIXES: Record<BuildRequirementKind, string> = {
-  ac: 'AC',
-  dod: 'DOD',
-  br: 'BR',
-  nfr: 'NFR',
-};
+export const BUILD_REQUIREMENT_PREFIXES: Record<BuildRequirementKind, string> =
+  {
+    ac: 'AC',
+    dod: 'DOD',
+    br: 'BR',
+    nfr: 'NFR',
+  };
 
 export const BUILD_RISK_DECISION_PREFIX = 'RD';
 
 /** Highest number issued per ID prefix. Counters only grow, so a removed number is never reused. */
-export type BuildIdCounters = Record<'AC' | 'DOD' | 'BR' | 'NFR' | 'RD', number>;
+export type BuildIdCounters = Record<
+  'AC' | 'DOD' | 'BR' | 'NFR' | 'RD',
+  number
+>;
 
 /** A requirement row as a person or the drafting agent submits it. `id` is null for a new row. */
 export interface BuildRequirementInput {
@@ -400,7 +491,10 @@ export interface BuildBriefAnalysisResponse {
   riskDecisions: BuildRiskDecision[];
   classification: BuildClassificationResult;
   requester: { id: string; displayName: string };
-  approval: { approvedBy: { id: string; displayName: string }; approvedAt: string } | null;
+  approval: {
+    approvedBy: { id: string; displayName: string };
+    approvedAt: string;
+  } | null;
   viewer: { mayEdit: boolean; actingFor: string | null };
 }
 
@@ -505,6 +599,7 @@ export interface BuildRevision {
   buildRunId: string;
   revisionNumber: number;
   feedback: string | null;
+  approvedLogoCandidateId: string | null;
   briefVersion: number | null;
   requirements: BuildRequirement[];
   assumptions: string[];
@@ -517,6 +612,7 @@ export interface BuildRevision {
   repairAttempts: number;
   elapsedSecondsUsed: number;
   validatedCommit: string | null;
+  previewRolloutMode: BuildPreviewRolloutMode;
   pipelineRunId: string | null;
   deploymentStatus: BuildDeploymentStatus;
   deploymentQueuedAt: string | null;
@@ -654,7 +750,11 @@ export interface BuildDeploymentCallbackRequest {
 
 export interface BuildDeploymentCallbackResponse {
   applied: boolean;
-  reason?: 'duplicate' | 'stale' | 'run_not_deploying';
+  reason?:
+    | 'duplicate'
+    | 'stale'
+    | 'run_not_deploying'
+    | 'preview_evidence_pending';
 }
 
 export interface BuildDeploymentView {
@@ -684,6 +784,7 @@ export interface RetryDeploymentResponse {
 }
 
 export type BuildAcceptState =
+  | 'deploying_preview'
   | 'opening_pull_request'
   | 'syncing'
   | 'pull_request_open'
@@ -697,7 +798,7 @@ export interface BuildAcceptRequest {
 export interface BuildAcceptResponse {
   buildId: string;
   revisionNumber: number;
-  status: 'accepted' | 'needs_developer';
+  status: 'accepted' | 'needs_developer' | 'deploying';
   acceptState: BuildAcceptState;
   pullRequestUrl: string | null;
 }
@@ -734,4 +835,3 @@ export type {
   BuildVerificationRowView,
   BuildVerificationSummary,
 } from './buildView';
-

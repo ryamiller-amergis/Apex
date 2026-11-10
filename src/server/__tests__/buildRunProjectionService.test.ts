@@ -155,6 +155,33 @@ describe('getBuildDetail', () => {
     expect(detail.lease).toEqual({ state: 'none', queuePosition: null });
   });
 
+  it('projects the current fast-edit attempt into the existing revision field', async () => {
+    const fastEdit = {
+      attemptId: 'attempt-1',
+      revisionNumber: 2,
+      status: 'checking' as const,
+      route: 'fast_edit' as const,
+      requestedAt: '2026-10-28T10:04:00.000Z',
+      previewUpdatedAt: '2026-10-28T10:04:20.000Z',
+      checksCompletedAt: null,
+      checkSummary: null,
+      error: null,
+      workspaceVersion: 1,
+    };
+    const { deps: d } = deps({
+      loadFastEditProgress: async () => fastEdit,
+    });
+
+    const result = await getBuildDetail(
+      { project: 'Apex', buildId: BUILD_ID },
+      d,
+    );
+
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.detail.revision).toEqual(fastEdit);
+  });
+
   it('VT-07 TBI-014 DoD-3 returns wrong-project and loads nothing else', async () => {
     const { deps: d, calls } = deps({ loadRun: async () => run({ project: 'Other' }) });
     const result = await getBuildDetail({ project: 'Apex', buildId: BUILD_ID }, d);
@@ -289,7 +316,7 @@ describe('listBuildRunEvents', () => {
     expect(result.response.total).toBe(600);
     expect(result.response.events.map((event) => event.id)).toEqual(['e0', 'e1', 'e2']);
     for (const event of result.response.events) {
-      expect(Object.keys(event).sort()).toEqual(['cloudAgentUrl', 'id', 'kind', 'message', 'occurredAt', 'taskKey']);
+      expect(Object.keys(event).sort()).toEqual(['cloudAgentUrl', 'id', 'kind', 'message', 'occurredAt', 'revisionNumber', 'taskKey']);
     }
   });
 

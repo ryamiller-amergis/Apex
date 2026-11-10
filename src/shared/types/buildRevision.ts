@@ -14,17 +14,21 @@ export type BuildRevisionErrorCode =
   | 'BUILD_NOT_FOUND'
   | 'BUILD_NOT_REVISABLE'
   | 'REVISION_IN_PROGRESS'
-  | 'REVISION_CAP_REACHED';
+  | 'REVISION_CAP_REACHED'
+  | 'APPROVED_LOGO_REQUIRED';
 
 export interface BuildRevisionRequest {
   project: string;
   feedback: string;
+  hasAttachments?: boolean;
+  approvedLogoCandidateId?: string;
 }
 
 export interface BuildRevisionAccepted {
   buildId: string;
   revisionNumber: number; // 2 to 6 under the working default
-  status: 'intake';
+  /** `queued` waits for the running build's preview, then starts on its own. */
+  status: 'intake' | 'building' | 'queued';
   revisionsUsed: number;
   revisionsLimit: number;
   interviewId: string;
@@ -51,4 +55,45 @@ export interface BuildRevisionProgressView {
   viewerCanRequestChanges: boolean;
   feedback?: string;
   amendmentError: { message: string; occurredAt: string } | null;
+}
+
+export const BUILD_REVISION_FAST_EDIT_STATUSES = [
+  'classify',
+  'edit',
+  'escalate',
+  'apply',
+  'checking',
+  'ready',
+  'failed',
+  'rollback',
+  'superseded',
+] as const;
+
+export type BuildRevisionFastEditStatus =
+  (typeof BUILD_REVISION_FAST_EDIT_STATUSES)[number];
+
+export type BuildRevisionFastEditRoute = 'fast_edit' | 'full_build';
+
+export type BuildRevisionFastEditCheckStatus = 'pending' | 'passed' | 'failed';
+
+export interface BuildRevisionFastEditCheckSummary {
+  status: BuildRevisionFastEditCheckStatus;
+  tasks: Array<{
+    name: 'typecheck' | 'unit_test';
+    status: BuildRevisionFastEditCheckStatus;
+    message?: string;
+  }>;
+}
+
+export interface BuildRevisionFastEditProgress {
+  attemptId: string;
+  revisionNumber: number;
+  status: BuildRevisionFastEditStatus;
+  route: BuildRevisionFastEditRoute | null;
+  requestedAt: string;
+  previewUpdatedAt: string | null;
+  checksCompletedAt: string | null;
+  checkSummary: BuildRevisionFastEditCheckSummary | null;
+  error: { code: string; message: string } | null;
+  workspaceVersion: number | null;
 }

@@ -1,16 +1,25 @@
 /**
  * Build-intake branch of the chat routes (FEAT-005): flag gate, attachment
- * refusal, turn hook, and replay after a dropped stream.
+ * attachments, turn hook, and replay after a dropped stream.
  */
 import http from 'http';
 import type { AddressInfo } from 'net';
 import request from 'supertest';
-import express, { type NextFunction, type Request, type Response } from 'express';
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from 'express';
 
 jest.mock('../middleware/rbac', () => ({
-  requirePermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
-  requireAnyPermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
-  attachPermissions: (_req: Request, _res: Response, next: NextFunction) => next(),
+  requirePermission:
+    () => (_req: Request, _res: Response, next: NextFunction) =>
+      next(),
+  requireAnyPermission:
+    () => (_req: Request, _res: Response, next: NextFunction) =>
+      next(),
+  attachPermissions: (_req: Request, _res: Response, next: NextFunction) =>
+    next(),
 }));
 
 jest.mock('../services/chatAgentService', () => ({
@@ -29,35 +38,63 @@ jest.mock('../services/chatAgentService', () => ({
   isPrdReady: jest.fn().mockReturnValue(false),
 }));
 
-jest.mock('../services/projectSettingsService', () => ({ resolveSkillConfig: jest.fn() }));
+jest.mock('../services/projectSettingsService', () => ({
+  resolveSkillConfig: jest.fn(),
+}));
 jest.mock('../services/chatThreadRepository', () => ({
   toggleFlag: jest.fn(),
   isBackgroundWorkflowThread: jest.fn().mockResolvedValue(false),
 }));
 jest.mock('../services/pgNotifyService', () => ({
   RUN_EVENT_SOURCE_INSTANCE: 'worker-a',
-  replayRunEventPage: jest.fn().mockResolvedValue({ events: [], nextEventId: null, hasMore: false }),
+  replayRunEventPage: jest
+    .fn()
+    .mockResolvedValue({ events: [], nextEventId: null, hasMore: false }),
   subscribeRunEvents: jest.fn().mockReturnValue(() => {}),
 }));
 jest.mock('../services/interactiveLiveBus', () => ({
-  interactiveLiveBus: { subscribe: jest.fn().mockReturnValue(() => {}), publish: jest.fn(), isEnabled: jest.fn().mockReturnValue(false) },
+  interactiveLiveBus: {
+    subscribe: jest.fn().mockReturnValue(() => {}),
+    publish: jest.fn(),
+    isEnabled: jest.fn().mockReturnValue(false),
+  },
 }));
-jest.mock('../services/featureFlagService', () => ({ isFeatureEnabled: jest.fn().mockResolvedValue(false) }));
-jest.mock('../services/menuSettingsService', () => ({ getMenuConfig: jest.fn() }));
-jest.mock('../services/mcpServerReadService', () => ({ assertCallerCanUseMcpServer: jest.fn() }));
-jest.mock('../services/rbacService', () => ({ getUserPermissions: jest.fn().mockResolvedValue(new Set()) }));
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: jest.fn().mockResolvedValue(false),
+}));
+jest.mock('../services/menuSettingsService', () => ({
+  getMenuConfig: jest.fn(),
+}));
+jest.mock('../services/mcpServerReadService', () => ({
+  assertCallerCanUseMcpServer: jest.fn(),
+}));
+jest.mock('../services/rbacService', () => ({
+  getUserPermissions: jest.fn().mockResolvedValue(new Set()),
+}));
 jest.mock('../services/durableInteractiveTurnService', () => ({
   DurableInteractiveTurnError: class extends Error {},
   durableInteractiveTurnService: { retry: jest.fn() },
 }));
-jest.mock('../utils/requestUser', () => ({ getUserId: jest.fn().mockReturnValue('requester-1') }));
-jest.mock('../services/adoUserToken', () => ({ getAdoTokenForUser: jest.fn() }));
-jest.mock('../services/chatAdoWriteAuth', () => ({ registerChatAdoWriteTurn: jest.fn() }));
-jest.mock('../utils/superAdmin', () => ({ isSuperAdminRequest: jest.fn(() => false) }));
-jest.mock('../services/groupService', () => ({ getUserGroupIds: jest.fn().mockResolvedValue([]) }));
+jest.mock('../utils/requestUser', () => ({
+  getUserId: jest.fn().mockReturnValue('requester-1'),
+}));
+jest.mock('../services/adoUserToken', () => ({
+  getAdoTokenForUser: jest.fn(),
+}));
+jest.mock('../services/chatAdoWriteAuth', () => ({
+  registerChatAdoWriteTurn: jest.fn(),
+}));
+jest.mock('../utils/superAdmin', () => ({
+  isSuperAdminRequest: jest.fn(() => false),
+}));
+jest.mock('../services/groupService', () => ({
+  getUserGroupIds: jest.fn().mockResolvedValue([]),
+}));
 jest.mock('../services/interviewOrchestratorService', () => ({
   prepareAssistedInterviewTurn: jest.fn(),
-  prepareAutonomousInterviewTurn: jest.fn().mockResolvedValue({ internalContext: null }),
+  prepareAutonomousInterviewTurn: jest
+    .fn()
+    .mockResolvedValue({ internalContext: null }),
 }));
 
 const mockResolveThreadAccess = jest.fn();
@@ -69,18 +106,21 @@ jest.mock('../services/threadAccessService', () => ({
 
 const mockIsBuildFromPromptEnabled = jest.fn();
 jest.mock('../services/buildAccessService', () => ({
-  isBuildFromPromptEnabled: (...args: unknown[]) => mockIsBuildFromPromptEnabled(...args),
+  isBuildFromPromptEnabled: (...args: unknown[]) =>
+    mockIsBuildFromPromptEnabled(...args),
 }));
 
 const mockPrepareBuildIntakeTurn = jest.fn();
 jest.mock('../services/buildIntakeService', () => ({
   ...jest.requireActual('../services/buildIntakeService'),
-  prepareBuildIntakeTurn: (...args: unknown[]) => mockPrepareBuildIntakeTurn(...args),
+  prepareBuildIntakeTurn: (...args: unknown[]) =>
+    mockPrepareBuildIntakeTurn(...args),
 }));
 
 const mockAutoDraftBuildBriefForThread = jest.fn();
 jest.mock('../services/buildBriefService', () => ({
-  autoDraftBuildBriefForThread: (...args: unknown[]) => mockAutoDraftBuildBriefForThread(...args),
+  autoDraftBuildBriefForThread: (...args: unknown[]) =>
+    mockAutoDraftBuildBriefForThread(...args),
 }));
 
 import chatRouter from '../routes/chat';
@@ -105,7 +145,11 @@ function intakeThread(overrides: Partial<ChatThread> = {}): ChatThread {
     kickoff: {
       project: 'Apex',
       repo: 'org/target',
-      playbookInterview: { runId: 'run-1', stepId: 'intake', snapshot: { key: 'build-intake', mode: 'human_led' } },
+      playbookInterview: {
+        runId: 'run-1',
+        stepId: 'intake',
+        snapshot: { key: 'build-intake', mode: 'human_led' },
+      },
     } as ChatThread['kickoff'],
     workspaceDir: '/tmp',
     flagged: false,
@@ -116,15 +160,25 @@ function intakeThread(overrides: Partial<ChatThread> = {}): ChatThread {
   };
 }
 
-const plainThread = (): ChatThread => ({ ...intakeThread(), kickoff: { project: 'Apex', repo: 'org/apex' } });
-const CONTEXT = '<<<INTERNAL_INTAKE_CONTEXT>>>\nbudget\n<<<END_INTERNAL_INTAKE_CONTEXT>>>';
+const plainThread = (): ChatThread => ({
+  ...intakeThread(),
+  kickoff: { project: 'Apex', repo: 'org/apex' },
+});
+const CONTEXT =
+  '<<<INTERNAL_INTAKE_CONTEXT>>>\nbudget\n<<<END_INTERNAL_INTAKE_CONTEXT>>>';
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockResolveThreadAccess.mockResolvedValue({ thread: intakeThread(), access: 'owner' });
+  mockResolveThreadAccess.mockResolvedValue({
+    thread: intakeThread(),
+    access: 'owner',
+  });
   mockCanWriteThread.mockResolvedValue(true);
   mockIsBuildFromPromptEnabled.mockResolvedValue(true);
-  mockPrepareBuildIntakeTurn.mockResolvedValue({ internalContext: CONTEXT, sensitiveClasses: [] });
+  mockPrepareBuildIntakeTurn.mockResolvedValue({
+    internalContext: CONTEXT,
+    sensitiveClasses: [],
+  });
   mockChat.sendMessage.mockResolvedValue({ route: 'legacy' } as never);
   mockChat.getThread.mockResolvedValue(null);
 });
@@ -132,7 +186,10 @@ beforeEach(() => {
 describe('POST /threads/:id/messages on a build-intake thread', () => {
   it('VT-10: flagged text reaches sendMessage unchanged with the hook context (PBI-010 AC-2)', async () => {
     const text = 'Our product code is A9F3K2X7Q1M8Z5P4';
-    mockPrepareBuildIntakeTurn.mockResolvedValue({ internalContext: CONTEXT, sensitiveClasses: ['secret_key_value'] });
+    mockPrepareBuildIntakeTurn.mockResolvedValue({
+      internalContext: CONTEXT,
+      sensitiveClasses: ['secret_key_value'],
+    });
 
     const res = await request(buildApp())
       .post('/api/chat/threads/thread-1/messages')
@@ -149,12 +206,16 @@ describe('POST /threads/:id/messages on a build-intake thread', () => {
       text,
       undefined,
       [],
-      expect.objectContaining({ internalContext: CONTEXT }),
+      expect.objectContaining({ internalContext: CONTEXT })
     );
   });
 
   it('FEAT-006 U1: confirming the intake summary drafts the brief after the message is sent', async () => {
-    mockPrepareBuildIntakeTurn.mockResolvedValue({ internalContext: CONTEXT, sensitiveClasses: [], confirmed: true });
+    mockPrepareBuildIntakeTurn.mockResolvedValue({
+      internalContext: CONTEXT,
+      sensitiveClasses: [],
+      confirmed: true,
+    });
 
     const res = await request(buildApp())
       .post('/api/chat/threads/thread-1/messages')
@@ -197,7 +258,10 @@ describe('POST /threads/:id/messages on a build-intake thread', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe(BUILD_INTAKE_PAUSED_MESSAGE);
-    expect(mockIsBuildFromPromptEnabled).toHaveBeenCalledWith({ userId: 'requester-1', project: 'Apex' });
+    expect(mockIsBuildFromPromptEnabled).toHaveBeenCalledWith({
+      userId: 'requester-1',
+      project: 'Apex',
+    });
     expect(mockChat.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -210,28 +274,53 @@ describe('POST /threads/:id/messages on a build-intake thread', () => {
     expect(res.body.id).toBe('thread-1');
   });
 
-  it('VT-15: attachments return 400 and nothing is sent', async () => {
+  it('VT-15: screenshot attachments reach the build intake agent', async () => {
+    const attachment = {
+      id: 'a1',
+      name: 'screenshot.png',
+      type: 'image/png',
+      size: 4,
+      content: 'iVBORw==',
+      encoding: 'base64',
+    };
     const res = await request(buildApp())
       .post('/api/chat/threads/thread-1/messages')
       .send({
-        text: 'see file',
+        text: 'Match this layout',
         turnId: 't1',
-        attachments: [{ id: 'a1', name: 'a.txt', type: 'text/plain', size: 5, content: 'hello' }],
+        attachments: [attachment],
       });
 
-    expect(res.status).toBe(400);
-    expect(mockChat.sendMessage).not.toHaveBeenCalled();
+    expect(res.status).toBe(202);
+    expect(mockChat.sendMessage).toHaveBeenCalledWith(
+      'thread-1',
+      'Match this layout',
+      undefined,
+      [attachment],
+      expect.objectContaining({ internalContext: CONTEXT })
+    );
   });
 
   it('VT-15: a non-build thread with an attachment behaves as today', async () => {
-    mockResolveThreadAccess.mockResolvedValue({ thread: plainThread(), access: 'owner' });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: plainThread(),
+      access: 'owner',
+    });
 
     const res = await request(buildApp())
       .post('/api/chat/threads/thread-1/messages')
       .send({
         text: 'see file',
         turnId: 't1',
-        attachments: [{ id: 'a1', name: 'a.txt', type: 'text/plain', size: 5, content: 'hello' }],
+        attachments: [
+          {
+            id: 'a1',
+            name: 'a.txt',
+            type: 'text/plain',
+            size: 5,
+            content: 'hello',
+          },
+        ],
       });
 
     expect(res.status).toBe(202);
@@ -241,21 +330,28 @@ describe('POST /threads/:id/messages on a build-intake thread', () => {
 });
 
 describe('VT-06 — replay after a dropped stream (PBI-009 AC-1)', () => {
-  function readUntilStatus(port: number, headers: Record<string, string>): Promise<string> {
+  function readUntilStatus(
+    port: number,
+    headers: Record<string, string>
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
-      const req = http.get({ port, path: '/api/chat/threads/thread-1/stream', headers }, (res) => {
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk: string) => {
-          body += chunk;
-          if (body.includes('"type":"status"')) {
-            req.destroy();
-            resolve(body);
-          }
-        });
-      });
+      const req = http.get(
+        { port, path: '/api/chat/threads/thread-1/stream', headers },
+        (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => {
+            body += chunk;
+            if (body.includes('"type":"status"')) {
+              req.destroy();
+              resolve(body);
+            }
+          });
+        }
+      );
       req.on('error', (error) => {
-        if ((error as NodeJS.ErrnoException).code !== 'ECONNRESET') reject(error);
+        if ((error as NodeJS.ErrnoException).code !== 'ECONNRESET')
+          reject(error);
       });
     });
   }
@@ -263,18 +359,33 @@ describe('VT-06 — replay after a dropped stream (PBI-009 AC-1)', () => {
   it('replays every stored message once, in order, when resuming with Last-Event-ID', async () => {
     const stored = intakeThread({
       messages: [
-        { id: 'm1', role: 'user', text: 'Add dark mode', ts: '2026-01-01T00:00:01Z' },
-        { id: 'm2', role: 'agent', text: 'You want dark mode.', ts: '2026-01-01T00:00:02Z' },
+        {
+          id: 'm1',
+          role: 'user',
+          text: 'Add dark mode',
+          ts: '2026-01-01T00:00:01Z',
+        },
+        {
+          id: 'm2',
+          role: 'agent',
+          text: 'You want dark mode.',
+          ts: '2026-01-01T00:00:02Z',
+        },
         { id: 'm3', role: 'user', text: 'Yes', ts: '2026-01-01T00:00:03Z' },
       ],
     });
-    mockResolveThreadAccess.mockResolvedValue({ thread: stored, access: 'owner' });
+    mockResolveThreadAccess.mockResolvedValue({
+      thread: stored,
+      access: 'owner',
+    });
     mockChat.getThread.mockResolvedValue(stored);
 
     const server = buildApp().listen(0);
     try {
       const { port } = server.address() as AddressInfo;
-      const body = await readUntilStatus(port, { 'Last-Event-ID': 'event-after-m1' });
+      const body = await readUntilStatus(port, {
+        'Last-Event-ID': 'event-after-m1',
+      });
       const ids = [...body.matchAll(/"id":"(m\d)"/g)].map((match) => match[1]);
       expect(ids).toEqual(['m1', 'm2', 'm3']);
     } finally {

@@ -13,22 +13,36 @@ import type {
   BuildEvidenceSlot,
   BuildVerificationMatrixResponse,
 } from '../../shared/types/buildView';
+import type { BuildRevisionFastEditProgress } from '../../shared/types/buildRevision';
 
 const BUILD_POLL_MS = 5_000;
 
-const LIVE_BUILD_STATUSES: ReadonlySet<BuildRunStatus> = new Set<BuildRunStatus>([
-  'queued',
-  'intake',
-  'planning',
-  'building',
-  'checking',
-  'deploying',
-  'suspended',
-]);
+const LIVE_BUILD_STATUSES: ReadonlySet<BuildRunStatus> =
+  new Set<BuildRunStatus>([
+    'queued',
+    'intake',
+    'planning',
+    'building',
+    'checking',
+    'deploying',
+    'suspended',
+  ]);
 
 /** A status added later reads as settled, so polling stops by default. */
 export function isBuildLive(status: BuildRunStatus | undefined): boolean {
   return status !== undefined && LIVE_BUILD_STATUSES.has(status);
+}
+
+export function isFastEditLive(
+  revision: BuildDetailResponse['revision']
+): revision is BuildRevisionFastEditProgress {
+  return Boolean(
+    revision &&
+    'attemptId' in revision &&
+    ['classify', 'edit', 'apply', 'checking', 'rollback'].includes(
+      revision.status
+    )
+  );
 }
 
 export class BuildApiError extends Error {
@@ -36,7 +50,12 @@ export class BuildApiError extends Error {
   readonly code?: string;
   readonly refusals: string[];
 
-  constructor(status: number, message: string, code?: string, refusals: string[] = []) {
+  constructor(
+    status: number,
+    message: string,
+    code?: string,
+    refusals: string[] = []
+  ) {
     super(message);
     this.name = 'BuildApiError';
     this.status = status;
@@ -62,24 +81,37 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const body = await readJson(response);
   if (!response.ok) {
-    const refusals = Array.isArray(body.refusals) ? body.refusals.map((item) => String(item)) : [];
+    const refusals = Array.isArray(body.refusals)
+      ? body.refusals.map((item) => String(item))
+      : [];
     throw new BuildApiError(
       response.status,
       typeof body.error === 'string' ? body.error : 'The request failed.',
       typeof body.code === 'string' ? body.code : undefined,
-      refusals,
+      refusals
     );
   }
   return body as T;
 }
 
-function listKey(project: string, scope: string, state: string, limit: number, offset: number) {
+function listKey(
+  project: string,
+  scope: string,
+  state: string,
+  limit: number,
+  offset: number
+) {
   return ['builds', project, scope, state, limit, offset] as const;
 }
 
 export function useBuilds(
   project: string,
-  options: { scope?: 'project' | 'mine'; state?: 'all' | 'active'; limit?: number; offset?: number } = {},
+  options: {
+    scope?: 'project' | 'mine';
+    state?: 'all' | 'active';
+    limit?: number;
+    offset?: number;
+  } = {}
 ) {
   const scope = options.scope ?? 'project';
   const state = options.state ?? 'all';
@@ -97,13 +129,17 @@ export function useBuilds(
       });
       return apiFetch<BuildListResponse>(`/api/builds?${params.toString()}`);
     },
-    refetchInterval: (query) => (
-      query.state.data?.builds.some((build) => isBuildInProgress(build.status)) ? 5_000 : false
-    ),
+    refetchInterval: (query) =>
+      query.state.data?.builds.some((build) => isBuildInProgress(build.status))
+        ? 5_000
+        : false,
   });
 }
 
-export function useActiveBuildCount(project: string | undefined, enabled: boolean) {
+export function useActiveBuildCount(
+  project: string | undefined,
+  enabled: boolean
+) {
   return useQuery({
     queryKey: ['builds', project, 'active-count'],
     enabled: Boolean(project) && enabled,
@@ -116,12 +152,14 @@ export function useActiveBuildCount(project: string | undefined, enabled: boolea
       });
       return apiFetch<BuildListResponse>(`/api/builds?${params.toString()}`);
     },
-    refetchInterval: (query) => ((query.state.data?.total ?? 0) > 0 ? 5_000 : 30_000),
+    refetchInterval: (query) =>
+      (query.state.data?.total ?? 0) > 0 ? 5_000 : 30_000,
   });
 }
 
 function retryUnlessDenied(failureCount: number, error: unknown): boolean {
-  if (error instanceof BuildApiError && [401, 403, 404].includes(error.status)) return false;
+  if (error instanceof BuildApiError && [401, 403, 404].includes(error.status))
+    return false;
   return failureCount < 2;
 }
 
@@ -133,9 +171,12 @@ function buildEventsKey(project: string, buildId: string) {
   return ['build-events', project, buildId] as const;
 }
 
-function fetchBuildDetail(project: string, buildId: string): Promise<BuildDetailResponse> {
+function fetchBuildDetail(
+  project: string,
+  buildId: string
+): Promise<BuildDetailResponse> {
   return apiFetch<BuildDetailResponse>(
-    `/api/builds/${encodeURIComponent(buildId)}?project=${encodeURIComponent(project)}`,
+    `/api/builds/${encodeURIComponent(buildId)}?project=${encodeURIComponent(project)}`
   );
 }
 
@@ -147,7 +188,10 @@ export function useBuild(project: string, buildId: string) {
     refetchInterval: (query) => {
       const data = query.state.data;
       const depStatus = data?.deployment?.status;
-      if (depStatus === 'queued' || depStatus === 'deploying') return BUILD_POLL_MS;
+      if (depStatus === 'queued' || depStatus === 'deploying')
+        return BUILD_POLL_MS;
+      if (isFastEditLive(data?.revision)) return BUILD_POLL_MS;
+      if (data?.logoReview?.status === 'running') return BUILD_POLL_MS;
       return isBuildLive(data?.build.status) ? BUILD_POLL_MS : false;
     },
     // A build page in a side panel stays visibility:hidden, so background polling is what keeps the steps moving.
@@ -157,16 +201,24 @@ export function useBuild(project: string, buildId: string) {
   });
 }
 
-export function useBuildEvents(project: string, buildId: string, options: { enabled: boolean }) {
+export function useBuildEvents(
+  project: string,
+  buildId: string,
+  options: { enabled: boolean }
+) {
   const client = useQueryClient();
   return useQuery({
     queryKey: buildEventsKey(project, buildId),
     enabled: options.enabled && Boolean(project) && Boolean(buildId),
-    queryFn: () => apiFetch<BuildEventsResponse>(
-      `/api/builds/${encodeURIComponent(buildId)}/events?project=${encodeURIComponent(project)}`,
-    ),
+    queryFn: () =>
+      apiFetch<BuildEventsResponse>(
+        `/api/builds/${encodeURIComponent(buildId)}/events?project=${encodeURIComponent(project)}`
+      ),
     refetchInterval: () => {
-      const detail = client.getQueryData<BuildDetailResponse>(buildDetailKey(project, buildId));
+      const detail = client.getQueryData<BuildDetailResponse>(
+        buildDetailKey(project, buildId)
+      );
+      if (isFastEditLive(detail?.revision)) return BUILD_POLL_MS;
       return isBuildLive(detail?.build.status) ? BUILD_POLL_MS : false;
     },
     refetchIntervalInBackground: true,
@@ -185,26 +237,37 @@ export function useBuildIntake(project: string, buildId: string | undefined) {
     queryKey: buildDetailKey(project, buildId ?? ''),
     enabled: Boolean(project) && Boolean(buildId),
     queryFn: () => fetchBuildDetail(project, buildId ?? ''),
-    select: (detail): BuildIntakeRef => ({ interviewId: detail.build.intakeInterviewId }),
+    select: (detail): BuildIntakeRef => ({
+      interviewId: detail.build.intakeInterviewId,
+    }),
     refetchInterval: (query) => {
       const build = query.state.data?.build;
-      return build && !build.intakeInterviewId && isBuildLive(build.status) ? BUILD_POLL_MS : false;
+      return build && !build.intakeInterviewId && isBuildLive(build.status)
+        ? BUILD_POLL_MS
+        : false;
     },
     retry: retryUnlessDenied,
   });
 }
 
-function useBuildAction<TBody extends object>(project: string, buildId: string, action: string) {
+function useBuildAction<TBody extends object>(
+  project: string,
+  buildId: string,
+  action: string
+) {
   const client = useQueryClient();
   const invalidate = () => {
-    void client.invalidateQueries({ queryKey: buildDetailKey(project, buildId) });
+    void client.invalidateQueries({
+      queryKey: buildDetailKey(project, buildId),
+    });
     void client.invalidateQueries({ queryKey: ['builds', project] });
   };
   return useMutation({
-    mutationFn: (body: TBody) => apiFetch<Record<string, unknown>>(
-      `/api/builds/${encodeURIComponent(buildId)}/${action}?project=${encodeURIComponent(project)}`,
-      { method: 'POST', body: JSON.stringify({ ...body, project }) },
-    ),
+    mutationFn: (body: TBody) =>
+      apiFetch<Record<string, unknown>>(
+        `/api/builds/${encodeURIComponent(buildId)}/${action}?project=${encodeURIComponent(project)}`,
+        { method: 'POST', body: JSON.stringify({ ...body, project }) }
+      ),
     onSuccess: invalidate,
     onError: (error) => {
       if (error instanceof BuildApiError && error.status === 403) invalidate();
@@ -214,7 +277,38 @@ function useBuildAction<TBody extends object>(project: string, buildId: string, 
 
 /** Routes below are built in Epic 2; the request bodies follow the PRD API table. */
 export function useRequestBuildRevision(project: string, buildId: string) {
-  return useBuildAction<{ feedback: string }>(project, buildId, 'revisions');
+  return useBuildAction<{
+    feedback: string;
+    hasAttachments?: boolean;
+    approvedLogoCandidateId?: string;
+  }>(project, buildId, 'revisions');
+}
+
+export function useGenerateBuildLogoOptions(project: string, buildId: string) {
+  return useBuildAction<{ prompt: string }>(
+    project,
+    buildId,
+    'logo-candidates'
+  );
+}
+
+export function useDecideBuildLogoCandidate(project: string, buildId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      candidateId: string;
+      decision: 'approve' | 'reject';
+    }) =>
+      apiFetch<Record<string, unknown>>(
+        `/api/builds/${encodeURIComponent(buildId)}/logo-candidates/${encodeURIComponent(input.candidateId)}/${input.decision}?project=${encodeURIComponent(project)}`,
+        { method: 'POST', body: JSON.stringify({ project }) }
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({
+        queryKey: buildDetailKey(project, buildId),
+      });
+    },
+  });
 }
 
 export function useAcceptBuild(project: string, buildId: string) {
@@ -230,40 +324,82 @@ export function useResumeBuild(project: string, buildId: string) {
 }
 
 export function useRetryBuildDeployment(project: string, buildId: string) {
-  return useBuildAction<Record<string, never>>(project, buildId, 'retry-deployment');
+  return useBuildAction<Record<string, never>>(
+    project,
+    buildId,
+    'retry-deployment'
+  );
+}
+
+export function useRetryBuildFastEdit(project: string, buildId: string) {
+  return useBuildAction<{ attemptId: string }>(
+    project,
+    buildId,
+    'retry-fast-edit'
+  );
+}
+
+export function useRollbackBuildFastEdit(project: string, buildId: string) {
+  return useBuildAction<{ attemptId: string }>(
+    project,
+    buildId,
+    'rollback-fast-edit'
+  );
+}
+
+export function useStartLocalBuildPreview(project: string, buildId: string) {
+  return useBuildAction<Record<string, never>>(
+    project,
+    buildId,
+    'local-preview'
+  );
 }
 
 export function useConfirmBuildIntake(project: string, buildId: string) {
-  return useBuildAction<Record<string, never>>(project, buildId, 'confirm-intake');
+  return useBuildAction<Record<string, never>>(
+    project,
+    buildId,
+    'confirm-intake'
+  );
 }
 
 export function useEnsureBuildPlanning(project: string, buildId: string) {
-  return useBuildAction<Record<string, never>>(project, buildId, 'start-planning');
+  return useBuildAction<Record<string, never>>(
+    project,
+    buildId,
+    'start-planning'
+  );
 }
 
 export function useBuildRepositories(project: string) {
   return useQuery({
     queryKey: ['builds', 'repositories', project],
-    queryFn: () => apiFetch<{ repositories: BuildRepositoryOption[] }>(
-      `/api/builds/repositories?project=${encodeURIComponent(project)}`,
-    ),
+    queryFn: () =>
+      apiFetch<{ repositories: BuildRepositoryOption[] }>(
+        `/api/builds/repositories?project=${encodeURIComponent(project)}`
+      ),
   });
 }
 
 export function useStartBuild(project: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (request: Omit<StartBuildRequest, 'project'>) => apiFetch<StartBuildResponse>(
-      `/api/builds?project=${encodeURIComponent(project)}`,
-      { method: 'POST', body: JSON.stringify({ ...request, project }) },
-    ),
+    mutationFn: (request: Omit<StartBuildRequest, 'project'>) =>
+      apiFetch<StartBuildResponse>(
+        `/api/builds?project=${encodeURIComponent(project)}`,
+        { method: 'POST', body: JSON.stringify({ ...request, project }) }
+      ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['builds', project] });
     },
   });
 }
 
-function buildVerificationKey(project: string, buildId: string, revision: number | undefined) {
+function buildVerificationKey(
+  project: string,
+  buildId: string,
+  revision: number | undefined
+) {
   return ['build-verification', project, buildId, revision ?? null] as const;
 }
 
@@ -272,7 +408,7 @@ function buildEvidenceKey(
   buildId: string,
   rowId: string | null,
   slot: BuildEvidenceSlot | null,
-  recordedAt: string | null,
+  recordedAt: string | null
 ) {
   return ['build-evidence', project, buildId, rowId, slot, recordedAt] as const;
 }
@@ -280,7 +416,11 @@ function buildEvidenceKey(
 export function useBuildVerification(
   project: string,
   buildId: string,
-  options?: { revision?: number; enabled?: boolean; buildStatus?: BuildRunStatus },
+  options?: {
+    revision?: number;
+    enabled?: boolean;
+    buildStatus?: BuildRunStatus;
+  }
 ) {
   const client = useQueryClient();
   const revision = options?.revision;
@@ -290,16 +430,24 @@ export function useBuildVerification(
     enabled: enabled && Boolean(project) && Boolean(buildId),
     queryFn: () => {
       const revisionQuery =
-        revision !== undefined ? `&revision=${encodeURIComponent(String(revision))}` : '';
+        revision !== undefined
+          ? `&revision=${encodeURIComponent(String(revision))}`
+          : '';
       return apiFetch<BuildVerificationMatrixResponse>(
-        `/api/builds/${encodeURIComponent(buildId)}/verification?project=${encodeURIComponent(project)}${revisionQuery}`,
+        `/api/builds/${encodeURIComponent(buildId)}/verification?project=${encodeURIComponent(project)}${revisionQuery}`
       );
     },
     refetchInterval: () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
+      if (
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'hidden'
+      )
+        return false;
       const status =
         options?.buildStatus ??
-        client.getQueryData<BuildDetailResponse>(buildDetailKey(project, buildId))?.build.status;
+        client.getQueryData<BuildDetailResponse>(
+          buildDetailKey(project, buildId)
+        )?.build.status;
       if (status !== undefined) {
         return isBuildLive(status) ? BUILD_POLL_MS : false;
       }
@@ -315,11 +463,11 @@ async function fetchBuildEvidence(
   project: string,
   buildId: string,
   rowId: string,
-  slot: BuildEvidenceSlot,
+  slot: BuildEvidenceSlot
 ): Promise<string> {
   const response = await fetch(
     `/api/builds/${encodeURIComponent(buildId)}/evidence/${encodeURIComponent(rowId)}/${encodeURIComponent(slot)}?project=${encodeURIComponent(project)}`,
-    { credentials: 'include' },
+    { credentials: 'include' }
   );
   if (!response.ok) {
     let body: Record<string, unknown> = {};
@@ -328,12 +476,14 @@ async function fetchBuildEvidence(
     } catch {
       body = {};
     }
-    const refusals = Array.isArray(body.refusals) ? body.refusals.map((item) => String(item)) : [];
+    const refusals = Array.isArray(body.refusals)
+      ? body.refusals.map((item) => String(item))
+      : [];
     throw new BuildApiError(
       response.status,
       typeof body.error === 'string' ? body.error : 'The request failed.',
       typeof body.code === 'string' ? body.code : undefined,
-      refusals,
+      refusals
     );
   }
   return response.text();
@@ -342,14 +492,19 @@ async function fetchBuildEvidence(
 export function useBuildEvidence(
   project: string,
   buildId: string,
-  target: { rowId: string; slot: BuildEvidenceSlot; recordedAt?: string | null } | null,
+  target: {
+    rowId: string;
+    slot: BuildEvidenceSlot;
+    recordedAt?: string | null;
+  } | null
 ) {
   const rowId = target?.rowId ?? null;
   const slot = target?.slot ?? null;
   const recordedAt = target?.recordedAt ?? null;
   return useQuery({
     queryKey: buildEvidenceKey(project, buildId, rowId, slot, recordedAt),
-    enabled: Boolean(project) && Boolean(buildId) && Boolean(rowId) && Boolean(slot),
+    enabled:
+      Boolean(project) && Boolean(buildId) && Boolean(rowId) && Boolean(slot),
     queryFn: () => fetchBuildEvidence(project, buildId, rowId!, slot!),
     staleTime: Infinity,
     refetchInterval: false,

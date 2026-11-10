@@ -17,6 +17,7 @@ import {
 } from '../services/builds/buildEvidenceStore';
 import {
   recordTaskEvidence,
+  resolveTaskOwnedSpecs,
   type RecordTaskEvidenceDeps,
   type VerificationRecorderStore,
 } from '../services/builds/verificationEvidenceRecorder';
@@ -51,7 +52,12 @@ class InMemoryRecorderStore implements VerificationRecorderStore {
     revisionNumber: 1,
     classification: 'small' as 'small' | 'full' | null,
     requirements: [
-      { id: 'AC-1', kind: 'ac', text: 'Users can submit a request', retired: false },
+      {
+        id: 'AC-1',
+        kind: 'ac',
+        text: 'Users can submit a request',
+        retired: false,
+      },
       { id: 'NFR-1', kind: 'nfr', text: 'Responds under 1s', retired: false },
     ] as BuildRequirement[],
     riskDecisions: [
@@ -71,14 +77,21 @@ class InMemoryRecorderStore implements VerificationRecorderStore {
     qualityManifestSnapshot: DEFAULT_MANIFEST,
   };
 
-  rows = new Map<string, Omit<BuildVerificationRow, 'id' | 'createdAt' | 'updatedAt'>>();
+  rows = new Map<
+    string,
+    Omit<BuildVerificationRow, 'id' | 'createdAt' | 'updatedAt'>
+  >();
   events: BuildEvent[] = [];
   upsertCalls = 0;
 
   async loadContext(buildTaskId: string) {
     if (buildTaskId !== this.task.id) return null;
     return {
-      task: { ...this.task, ownedFiles: [...this.task.ownedFiles], covers: [...this.task.covers] },
+      task: {
+        ...this.task,
+        ownedFiles: [...this.task.ownedFiles],
+        covers: [...this.task.covers],
+      },
       revision: {
         ...this.revision,
         requirements: [...this.revision.requirements],
@@ -93,10 +106,18 @@ class InMemoryRecorderStore implements VerificationRecorderStore {
     attemptNumber: number;
     buildRunId: string;
     buildRevisionId: string;
-    rows: Array<Omit<BuildVerificationRow, 'id' | 'createdAt' | 'updatedAt' | 'carriedFromRevisionNumber'>>;
+    rows: Array<
+      Omit<
+        BuildVerificationRow,
+        'id' | 'createdAt' | 'updatedAt' | 'carriedFromRevisionNumber'
+      >
+    >;
     events: AppendBuildEventInput[];
   }): Promise<{ stale: boolean }> {
-    if (input.buildTaskId !== this.task.id || this.task.attempt !== input.attemptNumber) {
+    if (
+      input.buildTaskId !== this.task.id ||
+      this.task.attempt !== input.attemptNumber
+    ) {
       return { stale: true };
     }
 
@@ -113,7 +134,9 @@ class InMemoryRecorderStore implements VerificationRecorderStore {
       if (
         ev.dedupeKey &&
         this.events.some(
-          (existing) => existing.buildRunId === ev.buildRunId && existing.dedupeKey === ev.dedupeKey,
+          (existing) =>
+            existing.buildRunId === ev.buildRunId &&
+            existing.dedupeKey === ev.dedupeKey
         )
       ) {
         continue;
@@ -154,7 +177,8 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
     const evidenceStore = createInMemoryEvidenceStore('ai-run-artifacts');
     const knownSecret = 'super-secret-known-value-9999';
     const bearerToken = 'Bearer eyJhbGciOiJIUzI1NiJ9_secret_token_value';
-    const connString = 'postgres://admin:topsecretpass@db.internal:5432/apexprod';
+    const connString =
+      'postgres://admin:topsecretpass@db.internal:5432/apexprod';
     const logLines: string[] = [];
 
     const deps: RecordTaskEvidenceDeps = {
@@ -177,7 +201,9 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         {
           requirementId: 'AC-1',
           tier: 'unit',
-          testReferences: [{ file: 'src/server/__tests__/ac1.test.ts', name: testNameAc1 }],
+          testReferences: [
+            { file: 'src/server/__tests__/ac1.test.ts', name: testNameAc1 },
+          ],
           red: {
             commit: 'a111111',
             command: `npx jest src/server/__tests__/ac1.test.ts --env=${connString}`,
@@ -197,7 +223,9 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         {
           requirementId: 'NFR-1',
           tier: 'e2e',
-          testReferences: [{ file: 'tests/e2e/nfr1.spec.ts', name: testNameNfr1 }],
+          testReferences: [
+            { file: 'tests/e2e/nfr1.spec.ts', name: testNameNfr1 },
+          ],
           red: null,
           green: null,
           deferral: {
@@ -207,7 +235,9 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         {
           requirementId: 'RD-1',
           tier: 'unit',
-          testReferences: [{ file: 'src/server/__tests__/rd1.test.ts', name: testNameRd1 }],
+          testReferences: [
+            { file: 'src/server/__tests__/rd1.test.ts', name: testNameRd1 },
+          ],
           red: {
             commit: 'c333333',
             command: `npx jest src/server/__tests__/rd1.test.ts`,
@@ -229,7 +259,8 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         typeCheck: { command: DEFAULT_MANIFEST.typeCheck, exitCode: 0 },
         lint: { command: DEFAULT_MANIFEST.lint, exitCode: 0 },
         relatedTests: {
-          command: 'npx jest --findRelatedTests src/server/__tests__/ac1.test.ts',
+          command:
+            'npx jest --findRelatedTests src/server/__tests__/ac1.test.ts',
           exitCode: 0,
         },
       },
@@ -244,7 +275,7 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         message: buildMessageWithBlock(block),
         agentRunId: AGENT_RUN_ID,
       },
-      deps,
+      deps
     );
 
     expect(result).toEqual({
@@ -264,24 +295,42 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
     expect(redBlob).toContain('FAIL ordinary red output with');
     expect(greenBlob).toContain('PASS ordinary green output with');
 
-    for (const secret of [knownSecret, bearerToken, connString, 'topsecretpass']) {
+    for (const secret of [
+      knownSecret,
+      bearerToken,
+      connString,
+      'topsecretpass',
+    ]) {
       expect(redBlob).not.toContain(secret);
       expect(greenBlob).not.toContain(secret);
     }
 
     const serializedRows = JSON.stringify([...store.rows.values()]);
-    for (const secret of [knownSecret, bearerToken, connString, 'topsecretpass']) {
+    for (const secret of [
+      knownSecret,
+      bearerToken,
+      connString,
+      'topsecretpass',
+    ]) {
       expect(serializedRows).not.toContain(secret);
     }
 
     const ac1Row = store.rows.get(`${REV_ID}:AC-1`)!;
-    expect(ac1Row.testRefs[0].name).toContain('AC-1: submits request with ordinary text');
-    expect(ac1Row.redEvidence?.command).toContain('npx jest src/server/__tests__/ac1.test.ts');
-    expect(ac1Row.greenEvidence?.command).toContain('npx jest src/server/__tests__/ac1.test.ts');
+    expect(ac1Row.testRefs[0].name).toContain(
+      'AC-1: submits request with ordinary text'
+    );
+    expect(ac1Row.redEvidence?.command).toContain(
+      'npx jest src/server/__tests__/ac1.test.ts'
+    );
+    expect(ac1Row.greenEvidence?.command).toContain(
+      'npx jest src/server/__tests__/ac1.test.ts'
+    );
 
     const nfr1Row = store.rows.get(`${REV_ID}:NFR-1`)!;
     expect(nfr1Row.status).toBe('deferred');
-    expect(nfr1Row.deferralReason).toContain('Deferred in unit sandbox; DSN was');
+    expect(nfr1Row.deferralReason).toContain(
+      'Deferred in unit sandbox; DSN was'
+    );
 
     // Structured log never contains output text or secrets
     expect(logLines).toHaveLength(1);
@@ -293,7 +342,12 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
   it('VT-18: applying the same block twice produces one row set, the same Blob keys, and one verification.recorded event; a stale attempt returns stale: true and writes nothing', async () => {
     const store = new InMemoryRecorderStore();
     store.revision.requirements = [
-      { id: 'AC-1', kind: 'ac', text: 'Users can submit a request', retired: false },
+      {
+        id: 'AC-1',
+        kind: 'ac',
+        text: 'Users can submit a request',
+        retired: false,
+      },
     ];
     store.revision.riskDecisions = [];
 
@@ -316,7 +370,9 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         {
           requirementId: 'AC-1',
           tier: 'unit',
-          testReferences: [{ file: 'src/server/__tests__/ac1.test.ts', name: testName }],
+          testReferences: [
+            { file: 'src/server/__tests__/ac1.test.ts', name: testName },
+          ],
           red: {
             commit: 'red-111',
             command: 'npx jest src/server/__tests__/ac1.test.ts',
@@ -338,7 +394,8 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
         typeCheck: { command: DEFAULT_MANIFEST.typeCheck, exitCode: 0 },
         lint: { command: DEFAULT_MANIFEST.lint, exitCode: 0 },
         relatedTests: {
-          command: 'npx jest --findRelatedTests src/server/__tests__/ac1.test.ts',
+          command:
+            'npx jest --findRelatedTests src/server/__tests__/ac1.test.ts',
           exitCode: 0,
         },
       },
@@ -347,26 +404,46 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
     });
 
     const first = await recordTaskEvidence(
-      { buildTaskId: TASK_ID, attemptNumber: 1, message, agentRunId: AGENT_RUN_ID },
-      deps,
+      {
+        buildTaskId: TASK_ID,
+        attemptNumber: 1,
+        message,
+        agentRunId: AGENT_RUN_ID,
+      },
+      deps
     );
     const blobKeysAfterFirst = [...evidenceStore.blobs.keys()].sort();
 
     const second = await recordTaskEvidence(
-      { buildTaskId: TASK_ID, attemptNumber: 1, message, agentRunId: AGENT_RUN_ID },
-      deps,
+      {
+        buildTaskId: TASK_ID,
+        attemptNumber: 1,
+        message,
+        agentRunId: AGENT_RUN_ID,
+      },
+      deps
     );
     const blobKeysAfterSecond = [...evidenceStore.blobs.keys()].sort();
 
-    expect(first).toMatchObject({ stale: false, outcome: 'done', mayReportDone: true });
-    expect(second).toMatchObject({ stale: false, outcome: 'done', mayReportDone: true });
+    expect(first).toMatchObject({
+      stale: false,
+      outcome: 'done',
+      mayReportDone: true,
+    });
+    expect(second).toMatchObject({
+      stale: false,
+      outcome: 'done',
+      mayReportDone: true,
+    });
 
     // One row set and identical Blob keys
     expect(store.rows.size).toBe(1);
     expect(blobKeysAfterSecond).toEqual(blobKeysAfterFirst);
 
     // Only one verification.recorded event (and one verification.standards_review event)
-    const recordedEvents = store.events.filter((e) => e.eventType === 'verification.recorded');
+    const recordedEvents = store.events.filter(
+      (e) => e.eventType === 'verification.recorded'
+    );
     expect(recordedEvents).toHaveLength(1);
     expect(recordedEvents[0].correlationKind).toBe('agent_run');
     expect(recordedEvents[0].correlationId).toBe(AGENT_RUN_ID);
@@ -378,13 +455,69 @@ describe('verificationEvidenceRecorder.recordTaskEvidence (S6)', () => {
     const eventsBeforeStale = store.events.length;
 
     const staleResult = await recordTaskEvidence(
-      { buildTaskId: TASK_ID, attemptNumber: 1, message, agentRunId: AGENT_RUN_ID },
-      deps,
+      {
+        buildTaskId: TASK_ID,
+        attemptNumber: 1,
+        message,
+        agentRunId: AGENT_RUN_ID,
+      },
+      deps
     );
 
     expect(staleResult).toEqual({ stale: true });
     expect(putEvidenceSpy).not.toHaveBeenCalled();
     expect(store.upsertCalls).toBe(upsertCallsBeforeStale);
     expect(store.events).toHaveLength(eventsBeforeStale);
+  });
+
+  it('reports a block that fails to parse as unreadable, and a missing block as missing entries', async () => {
+    const run = async (message: string) => {
+      const store = new InMemoryRecorderStore();
+      store.revision.requirements = [
+        { id: 'AC-1', kind: 'ac', text: 'Users can submit a request', retired: false },
+      ];
+      store.revision.riskDecisions = [];
+      const result = await recordTaskEvidence(
+        { buildTaskId: TASK_ID, attemptNumber: 1, message, agentRunId: AGENT_RUN_ID },
+        {
+          store,
+          evidenceStore: createInMemoryEvidenceStore('ai-run-artifacts'),
+          now: () => '2026-11-03T12:00:00.000Z',
+          log: () => undefined,
+        }
+      );
+      return { result, store };
+    };
+
+    const broken = await run('```apex-evidence\n{not json}\n```');
+    expect(broken.result).toMatchObject({ stale: false, outcome: 'refused' });
+    if (!broken.result.stale) {
+      expect(broken.result.violations).toEqual([
+        { code: 'unreadable_evidence_block', requirementId: null },
+      ]);
+    }
+    expect(
+      broken.store.events.find((e) => e.eventType === 'verification.refused')?.message
+    ).toBe('The test report could not be read (invalid_json).');
+
+    const absent = await run('All done.');
+    if (!absent.result.stale) {
+      expect(absent.result.violations).toEqual([
+        { code: 'missing_evidence_entry', requirementId: 'AC-1' },
+      ]);
+    }
+  });
+
+  it('limits a small revision task to its explicit changed requirement IDs', async () => {
+    const store = new InMemoryRecorderStore();
+    store.task.covers = ['AC-1'];
+    store.revision.classification = 'small';
+    const context = await store.loadContext(TASK_ID);
+
+    const ownership = resolveTaskOwnedSpecs(context!);
+    expect(ownership.ownedIds).toEqual([
+      { id: 'AC-1', kind: 'ac', retired: false },
+    ]);
+    expect(ownership.ownedFiles).toBeNull();
   });
 });

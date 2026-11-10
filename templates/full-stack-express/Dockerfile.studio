@@ -1,0 +1,37 @@
+# Writable development image for an Apex Studio session. The browser reaches
+# Vite through the provider-owned proxy; application source stays inside the
+# isolated session and is updated with content-addressed change sets.
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    CHOKIDAR_USEPOLLING=true \
+    CHOKIDAR_INTERVAL=250
+
+RUN corepack enable \
+  && corepack prepare pnpm@10.34.9 --activate \
+  && groupadd --system --gid 10001 studio \
+  && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /home/studio studio \
+  && mkdir -p /workspace \
+  && chown 10001:10001 /workspace
+
+WORKDIR /workspace
+
+COPY --chown=10001:10001 package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=10001:10001 apps/api/package.json ./apps/api/package.json
+COPY --chown=10001:10001 apps/web/package.json ./apps/web/package.json
+COPY --chown=10001:10001 packages/config/package.json ./packages/config/package.json
+COPY --chown=10001:10001 packages/contracts/package.json ./packages/contracts/package.json
+COPY --chown=10001:10001 packages/ui/package.json ./packages/ui/package.json
+COPY --chown=10001:10001 scripts/check-toolchain.mjs ./scripts/check-toolchain.mjs
+
+USER 10001
+RUN corepack pnpm install --frozen-lockfile
+
+COPY --chown=10001:10001 . .
+
+RUN corepack pnpm --filter @project-scope/contracts build \
+  && corepack pnpm --filter @project-scope/ui build
+
+EXPOSE 5173
+
+CMD ["corepack", "pnpm", "--filter", "@project-scope/web", "exec", "vite", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]

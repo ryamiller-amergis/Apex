@@ -15,8 +15,6 @@ export const BUILD_INTAKE_PAUSED_MESSAGE =
 export const BUILD_BRIEF_PAUSED_MESSAGE =
   'Build from prompt is turned off for this project. Ask a Platform Admin to turn it back on.';
 
-export const BUILD_INTAKE_ATTACHMENTS_MESSAGE = 'Attachments are not supported in a build intake chat.';
-
 /** Returned when the project and repository pair is not on the build allow-list. */
 export const BUILD_PAIR_NOT_ALLOWED_CODE = 'BUILD_PAIR_NOT_ALLOWED';
 export const BUILD_PAIR_NOT_ALLOWED_MESSAGE =

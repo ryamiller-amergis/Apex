@@ -309,23 +309,14 @@ function createDefaultFinalCheckDeps(): FinalCheckDeps {
   };
 }
 
-export async function autoOpenPullRequestForPoc(
-  buildRunId: string
-): Promise<void> {
-  try {
-    const { defaultBuildAcceptService } = await import('./buildAcceptService');
-    await defaultBuildAcceptService.continueAccept(buildRunId);
-  } catch (error) {
-    console.warn(
-      '[final-check] auto-PR creation skipped or deferred:',
-      error instanceof Error ? error.message : String(error)
-    );
-  }
-}
-
 export async function markValidated(
   revisionId: string,
-  commit: string
+  commit: string,
+  options?: {
+    skipEditablePreviewApply?: boolean;
+    /** The warm preview already shows the commit; deploy it on accept. */
+    deferDeployment?: boolean;
+  }
 ): Promise<void> {
   let targetBuildRunId: string | null = null;
   await db.transaction(async (tx) => {
@@ -333,7 +324,6 @@ export async function markValidated(
       .select({
         validatedCommit: buildRevisions.validatedCommit,
         buildRunId: buildRevisions.buildRunId,
-        revisionNumber: buildRevisions.revisionNumber,
       })
       .from(buildRevisions)
       .where(eq(buildRevisions.id, revisionId));
@@ -363,13 +353,13 @@ export async function markValidated(
 
     targetBuildRunId = rev.buildRunId;
     const now = new Date().toISOString();
-    // Checks passed. Stay on `checking` until the pull request URL and end
-    // time are stored together. `accepted` is rejected without both.
+    // Checks passed. Deployment enqueue moves the run from `checking` to
+    // `deploying`; only an explicit Accept action records an accepted revision.
+    // A deferred deployment leaves the run on its warm preview.
     await tx
       .update(buildRuns)
       .set({
-        status: 'checking',
-        acceptedRevisionNumber: rev.revisionNumber,
+        status: options?.deferDeployment ? 'preview_ready' : 'checking',
         updatedAt: now,
       })
       .where(
@@ -386,28 +376,47 @@ export async function markValidated(
   });
 
   if (targetBuildRunId && process.env.NODE_ENV !== 'test') {
-    void autoOpenPullRequestForPoc(targetBuildRunId);
-    const { defaultBuildDeploymentService } = await import('../buildDeploymentService');
-    void defaultBuildDeploymentService.enqueueRevisionDeployment(targetBuildRunId);
+    const { defaultBuildEditablePreviewSessionService } =
+      await import('./buildEditablePreviewLocalService');
+    if (!options?.skipEditablePreviewApply) {
+      void defaultBuildEditablePreviewSessionService.applyValidatedRevision({
+        buildRunId: targetBuildRunId,
+        draftRevisionId: revisionId,
+        validatedCommit: commit,
+      });
+    }
+    if (options?.deferDeployment) return;
+    const { defaultBuildDeploymentService } =
+      await import('../buildDeploymentService');
+    void defaultBuildDeploymentService.enqueueRevisionDeployment(
+      targetBuildRunId
+    );
   }
 }
 
 export async function onAllTasksMerged(
   revisionId: string,
-  deps?: FinalCheckDeps
+  deps?: FinalCheckDeps,
+  mergedCommit?: string
 ): Promise<void> {
   const resolved = deps ?? createDefaultFinalCheckDeps();
 
   await resolved.withRevisionLock(revisionId, async () => {
     const state = await resolved.loadRevisionState(revisionId);
     if (!state) return;
+    // Completion can be observed by both dispatch and merge callbacks. Once a
+    // revision is validated, do not enqueue its preview or apply it again.
+    if (state.validatedCommit) return;
 
     if (state.tasks.some((t) => t.taskKey === 'final-check')) {
       return;
     }
 
     if (!shouldRunFinalCheck(state.tasks)) {
-      const head = await resolved.getIntegrationBranchHead(revisionId);
+      // The merge API is the source of truth immediately after a merge. A
+      // branch read can briefly return the previous revision's head.
+      const head =
+        mergedCommit ?? (await resolved.getIntegrationBranchHead(revisionId));
       if (!head) return;
       await resolved.markValidated(revisionId, head);
       await resolved.appendEvent({

@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type {
   BuildDeploymentView,
   BuildPreviewEntry,
   BuildRunStatus,
 } from '../../shared/types/build';
+import type { BuildRevisionFastEditProgress } from '../../shared/types/buildRevision';
 import styles from './BuildSandboxPreview.module.css';
 
 export type SandboxViewport = 'desktop' | 'tablet' | 'phone';
@@ -15,18 +16,46 @@ export interface BuildSandboxPreviewProps {
   livePreviewUrl: string | null;
   pipelineSteps: React.ReactNode;
   showPipelineSteps: boolean;
+  revisionProgress?: BuildRevisionFastEditProgress | null;
 }
 
 function sandboxStatusLabel(input: {
   deployment: BuildDeploymentView | null | undefined;
   livePreviewUrl: string | null;
   buildStatus: BuildRunStatus | undefined;
+  revisionProgress?: BuildRevisionFastEditProgress | null;
 }): string {
-  const { deployment, livePreviewUrl, buildStatus } = input;
+  const { deployment, livePreviewUrl, buildStatus, revisionProgress } = input;
+  if (revisionProgress) {
+    switch (revisionProgress.status) {
+      case 'classify':
+      case 'edit':
+      case 'apply':
+        return 'Updating preview';
+      case 'checking':
+        return 'Preview updated—checking';
+      case 'failed':
+        return revisionProgress.error?.code === 'checks_failed'
+          ? 'Checks failed'
+          : 'Update needs attention';
+      case 'ready':
+        return 'Ready';
+      case 'escalate':
+        return 'Escalated to full build';
+      case 'rollback':
+        return 'Rolling back preview';
+      case 'superseded':
+        break;
+      default: {
+        const unhandled: never = revisionProgress.status;
+        return unhandled;
+      }
+    }
+  }
   if (buildStatus === 'deployment_failed' || deployment?.status === 'failed') {
     return 'Preview needs attention';
   }
-  if (livePreviewUrl && deployment?.status === 'succeeded') {
+  if (livePreviewUrl) {
     return 'Preview ready';
   }
   if (deployment?.status === 'deploying') {
@@ -45,6 +74,20 @@ function formatUpdatedAt(iso: string | null | undefined): string | null {
   return new Date(parsed).toLocaleString();
 }
 
+function iframeSandboxFor(previewUrl: string | null): string {
+  const restricted = 'allow-forms allow-modals allow-scripts';
+  if (!previewUrl) return restricted;
+
+  try {
+    const hostname = new URL(previewUrl).hostname;
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(hostname)
+      ? `${restricted} allow-same-origin`
+      : restricted;
+  } catch {
+    return restricted;
+  }
+}
+
 export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
   buildStatus,
   deployment,
@@ -52,27 +95,35 @@ export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
   livePreviewUrl,
   pipelineSteps,
   showPipelineSteps,
+  revisionProgress,
 }) => {
   const [viewport, setViewport] = useState<SandboxViewport>('desktop');
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const liveEntry = useMemo(
     () => previews?.find((entry) => entry.isLive) ?? null,
-    [previews],
+    [previews]
   );
 
-  useEffect(() => {
-    setReloadNonce((value) => value + 1);
-  }, [livePreviewUrl]);
-
-  const statusLabel = sandboxStatusLabel({ deployment, livePreviewUrl, buildStatus });
+  const statusLabel = sandboxStatusLabel({
+    deployment,
+    livePreviewUrl,
+    buildStatus,
+    revisionProgress,
+  });
   const updatedLabel = formatUpdatedAt(liveEntry?.finishedAt ?? null);
   const showIframe = Boolean(livePreviewUrl);
 
   return (
-    <div className={styles.root} {...{ 'data-testid': 'build-sandbox-preview' }}>
+    <div
+      className={styles.root}
+      {...{ 'data-testid': 'build-sandbox-preview' }}
+    >
       <div className={styles.toolbar}>
-        <span className={styles.statusBadge} {...{ 'data-testid': 'build-sandbox-status' }}>
+        <span
+          className={styles.statusBadge}
+          {...{ 'data-testid': 'build-sandbox-status' }}
+        >
           {statusLabel}
         </span>
         <div className={styles.toolbarActions}>
@@ -91,7 +142,11 @@ export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
                 onClick={() => setViewport(size)}
                 {...{ 'data-testid': `build-sandbox-viewport-${size}` }}
               >
-                {size === 'desktop' ? 'Desktop' : size === 'tablet' ? 'Tablet' : 'Phone'}
+                {size === 'desktop'
+                  ? 'Desktop'
+                  : size === 'tablet'
+                    ? 'Tablet'
+                    : 'Phone'}
               </button>
             ))}
           </div>
@@ -118,7 +173,10 @@ export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
       </div>
 
       {updatedLabel ? (
-        <p className={styles.meta} {...{ 'data-testid': 'build-sandbox-updated' }}>
+        <p
+          className={styles.meta}
+          {...{ 'data-testid': 'build-sandbox-updated' }}
+        >
           {`Last updated ${updatedLabel}`}
         </p>
       ) : null}
@@ -140,11 +198,11 @@ export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
         <div className={styles.sandboxViewport}>
           {showIframe ? (
             <iframe
-              key={`${livePreviewUrl}-${reloadNonce}`}
+              key={reloadNonce}
               className={styles.previewFrame}
               src={livePreviewUrl ?? undefined}
               title="Build preview"
-              sandbox="allow-forms allow-modals allow-scripts"
+              sandbox={iframeSandboxFor(livePreviewUrl)}
               referrerPolicy="no-referrer"
               {...{ 'data-testid': 'build-workspace-preview-iframe' }}
             />
@@ -152,7 +210,8 @@ export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
             <div className={styles.placeholder}>
               <p className={styles.placeholderTitle}>{statusLabel}</p>
               <p className={styles.placeholderCopy}>
-                {deployment?.status === 'failed' || buildStatus === 'deployment_failed'
+                {deployment?.status === 'failed' ||
+                buildStatus === 'deployment_failed'
                   ? 'We could not prepare an interactive preview. Apex will try again when it can.'
                   : deployment?.status === 'queued'
                     ? 'Another build may be using the shared preview slot. Yours will start automatically.'

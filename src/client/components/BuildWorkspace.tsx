@@ -12,6 +12,15 @@ import {
 } from '../../shared/types/build';
 import type { ChatMessage } from '../../shared/types/chat';
 import { stripBuildIntakeMarkers } from '../../shared/utils/buildIntakeMarkers';
+import {
+  approvedLogoImplementationPrompt,
+  isLogoReviewRequest,
+} from '../../shared/buildLogoReview';
+import { isBuildChangeRequest } from '../../shared/buildRevisionIntent';
+import type {
+  BuildEventView,
+  BuildRevisionSummary,
+} from '../../shared/types/buildView';
 import { friendlyToolActivityLabel } from '../../shared/utils/chatProgressCopy';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import {
@@ -19,6 +28,7 @@ import {
   type AgentChatSession,
 } from '../hooks/useAgentChatSession';
 import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import {
   BuildApiError,
   isBuildLive,
@@ -29,9 +39,14 @@ import {
   useCancelBuild,
   useConfirmBuildIntake,
   useEnsureBuildPlanning,
+  useGenerateBuildLogoOptions,
+  useDecideBuildLogoCandidate,
   useRequestBuildRevision,
+  useRetryBuildFastEdit,
   useResumeBuild,
+  useRollbackBuildFastEdit,
   useRetryBuildDeployment,
+  useStartLocalBuildPreview,
   useStartBuild,
 } from '../hooks/useBuilds';
 import { useChatThread } from '../hooks/useChatThreads';
@@ -52,12 +67,18 @@ import {
   userFacingBuildEvent,
 } from './buildProgressCopy';
 import { BuildSandboxPreview } from './BuildSandboxPreview';
+import { BuildLogoReviewCard } from './BuildLogoReviewCard';
 import styles from './BuildWorkspace.module.css';
 
 export interface BuildWorkspaceProps {
   project: string;
   buildId?: string;
   initialTab?: string;
+}
+
+function isLoopbackBrowser(): boolean {
+  if (typeof window === 'undefined') return false;
+  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
 export interface BuildActivityItem {
@@ -129,6 +150,19 @@ function cleanDisplayText(raw: string): string {
   return stripBuildIntakeMarkers(stripInterviewPhaseMarkers(raw)).trim();
 }
 
+const BUILD_STATUS_QUESTION_PREFIX = 'Build status question: ';
+const BUILD_STATUS_QUESTION_INSTRUCTIONS =
+  '\n\nThe repository build is still running.';
+
+/** Shows only what the requester typed, not the instructions Apex added to a status question. */
+function requesterText(raw: string): string {
+  const text = raw.trim();
+  if (!text.startsWith(BUILD_STATUS_QUESTION_PREFIX)) return text;
+  const body = text.slice(BUILD_STATUS_QUESTION_PREFIX.length);
+  const end = body.indexOf(BUILD_STATUS_QUESTION_INSTRUCTIONS);
+  return (end === -1 ? body : body.slice(0, end)).trim();
+}
+
 /**
  * Groups raw `ChatMessage[]` (including `_reasoning`, `_thinking`, and `role: 'tool'` rows)
  * into Brainstorm-style turns where each assistant message carries its `activity` trace,
@@ -142,10 +176,11 @@ export function groupChatMessagesIntoTurns(messages: readonly ChatMessage[]): {
   let stagedActivity: BuildActivityItem[] = [];
 
   for (const msg of messages) {
+    if (msg.hidden) continue;
     if (msg.role === 'user') {
       if (msg.text === 'Begin.') continue;
       // Hide synthetic Confirm messages if any exist from older runs
-      const cleanedUser = msg.text.trim();
+      const cleanedUser = requesterText(msg.text);
       if (!cleanedUser) continue;
       turns.push({
         id: msg.id,
@@ -199,6 +234,136 @@ export function groupChatMessagesIntoTurns(messages: readonly ChatMessage[]): {
     turns,
     pendingActivity: stagedActivity,
   };
+}
+
+function BuildEventRows({ events }: { events: BuildEventView[] }) {
+  return (
+    <div className={styles.activityScroller}>
+      {events.map((ev) => (
+        <div
+          key={ev.id}
+          className={styles.stepRow}
+          {...{ 'data-testid': 'build-workspace-event-row' }}
+        >
+          <span className={styles.stepBullet} aria-hidden="true">
+            •
+          </span>
+          <span>
+            <span>{userFacingBuildEvent(ev.message)}</span>
+          </span>
+          {ev.cloudAgentUrl && (
+            <a
+              className={styles.agentRunLink}
+              href={ev.cloudAgentUrl}
+              target="_blank"
+              rel="noreferrer"
+              {...{ 'data-testid': 'build-workspace-agent-run-link' }}
+            >
+              Open agent run
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function pastRevisionHeadline(revision: BuildRevisionSummary): string {
+  if (revision.deploymentStatus === 'succeeded' || revision.previewUrl) {
+    return 'The preview was updated with this change.';
+  }
+  if (revision.deploymentStatus === 'failed') {
+    return 'This change was made, but its preview did not update.';
+  }
+  return 'A later revision replaced this one.';
+}
+
+/** One section per requested change, below the original build's details. */
+export function BuildRevisionSections({
+  revisions,
+  events,
+  currentRevisionNumber,
+  currentHeadline,
+  showSpinner,
+}: {
+  revisions: readonly BuildRevisionSummary[];
+  events: readonly BuildEventView[];
+  currentRevisionNumber: number;
+  currentHeadline: string;
+  showSpinner: boolean;
+}) {
+  const queued = events.filter((ev) => ev.kind === 'revision.queued').length;
+  const started = events.filter(
+    (ev) => ev.kind === 'revision.queue_started'
+  ).length;
+  const waiting = queued > started;
+  const sections = revisions.filter((revision) => revision.number > 1);
+  if (sections.length === 0 && !waiting) return null;
+
+  return (
+    <>
+      {sections.map((revision) => {
+        const isCurrent = revision.number === currentRevisionNumber;
+        const revisionEvents = events.filter(
+          (ev) => ev.revisionNumber === revision.number
+        );
+        return (
+          <article
+            key={revision.number}
+            className={`${styles.message} ${styles.collaborator}`}
+            aria-label={`Revision ${revision.number}`}
+            {...{ 'data-testid': `build-workspace-revision-${revision.number}` }}
+          >
+            <div className={styles.liveWorkBox}>
+              <p className={styles.revisionTitle}>
+                {`Revision ${revision.number}`}
+              </p>
+              {revision.feedback && (
+                <p className={styles.revisionRequest}>{revision.feedback}</p>
+              )}
+              <p className={styles.activity}>
+                {isCurrent && showSpinner && (
+                  <span className={styles.spinner} aria-hidden="true" />
+                )}
+                <span
+                  {...{
+                    'data-testid': `build-workspace-revision-${revision.number}-headline`,
+                  }}
+                >
+                  {isCurrent ? currentHeadline : pastRevisionHeadline(revision)}
+                </span>
+              </p>
+              {revisionEvents.length > 0 && (
+                <details className={styles.traceDrawer}>
+                  <summary className={styles.traceSummary}>
+                    {`Revision ${revision.number} details · ${revisionEvents.length} ${revisionEvents.length === 1 ? 'update' : 'updates'}`}
+                  </summary>
+                  <BuildEventRows events={revisionEvents} />
+                </details>
+              )}
+            </div>
+          </article>
+        );
+      })}
+      {waiting && (
+        <article
+          className={`${styles.message} ${styles.collaborator}`}
+          aria-label="Waiting revision"
+          {...{ 'data-testid': 'build-workspace-revision-waiting' }}
+        >
+          <div className={styles.liveWorkBox}>
+            <p className={styles.revisionTitle}>
+              {`Revision ${currentRevisionNumber + 1}`}
+            </p>
+            <p className={styles.activity}>
+              Waiting for the current build to finish. It will start on its
+              own.
+            </p>
+          </div>
+        </article>
+      )}
+    </>
+  );
 }
 
 function BuildActivityLog({ items }: { items: BuildActivityItem[] }) {
@@ -510,8 +675,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const [rememberForProject, setRememberForProject] = useState(false);
   const [eventsOpen, setEventsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [localPreviewStarted, setLocalPreviewStarted] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<string | null>(null);
   const [optimisticStartingBuild, setOptimisticStartingBuild] = useState(false);
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
 
   const isMinimized = sidePanelState === 'minimized';
   const isExpanded = sidePanelState === 'expanded';
@@ -536,9 +709,29 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const ensurePlanningMutation = useEnsureBuildPlanning(project, buildId ?? '');
   const acceptBuildMutation = useAcceptBuild(project, buildId ?? '');
   const revisionMutation = useRequestBuildRevision(project, buildId ?? '');
+  const generateLogoMutation = useGenerateBuildLogoOptions(
+    project,
+    buildId ?? ''
+  );
+  const decideLogoMutation = useDecideBuildLogoCandidate(
+    project,
+    buildId ?? ''
+  );
   const cancelMutation = useCancelBuild(project, buildId ?? '');
   const resumeMutation = useResumeBuild(project, buildId ?? '');
-  const retryDeploymentMutation = useRetryBuildDeployment(project, buildId ?? '');
+  const retryDeploymentMutation = useRetryBuildDeployment(
+    project,
+    buildId ?? ''
+  );
+  const retryFastEditMutation = useRetryBuildFastEdit(project, buildId ?? '');
+  const rollbackFastEditMutation = useRollbackBuildFastEdit(
+    project,
+    buildId ?? ''
+  );
+  const localPreviewMutation = useStartLocalBuildPreview(
+    project,
+    buildId ?? ''
+  );
 
   const detail = buildQuery.data ?? null;
   const buildStatus = detail?.build.status;
@@ -585,7 +778,10 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
 
   const turns = useMemo<GroupedChatTurn[]>(() => {
     if (rawTurns.length > 0) return rawTurns;
-    if (optimisticPrompt && (startBuildMutation.isPending || Boolean(buildId))) {
+    if (
+      optimisticPrompt &&
+      (startBuildMutation.isPending || Boolean(buildId))
+    ) {
       return [
         {
           id: 'optimistic-seed-user',
@@ -612,7 +808,8 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   );
   const threadError =
     chatSession.sendError ??
-    (effectiveBuildStatus === 'intake' && !rawTurns.some((t) => t.role === 'agent')
+    (effectiveBuildStatus === 'intake' &&
+    !rawTurns.some((t) => t.role === 'agent')
       ? (chatThreadQuery.data?.lastError ?? null)
       : null);
   const isStartingFirstTurn =
@@ -637,16 +834,28 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     chatSession.isAwaitingAgentResponse ||
     Boolean(streamingText) ||
     pendingActivity.length > 0;
+  // The optimistic flag bridges the gap between "Confirm" and the first status
+  // change. A successful confirm never clears it, so it must not outlive intake.
+  const optimisticStartPending =
+    optimisticStartingBuild && buildStatus === 'intake';
   const intakeBusy =
     isTurnStreaming ||
     confirmIntakeMutation.isPending ||
-    optimisticStartingBuild;
+    optimisticStartPending;
   const prUrl = detail?.pullRequest?.url ?? null;
   const hasPr = Boolean(prUrl);
   const pushedBranch = detail?.pushedBranch ?? null;
   const live = isBuildLive(effectiveBuildStatus);
   const tasks = detail?.currentRevision?.tasks ?? [];
   const events = eventsQuery.data?.events ?? [];
+  const currentRevisionNumber = detail?.build.currentRevisionNumber ?? 1;
+  const hasRevisionSections = currentRevisionNumber > 1;
+  const originalBuildEvents = events.filter(
+    (ev) =>
+      (ev.revisionNumber == null || ev.revisionNumber <= 1) &&
+      ev.kind !== 'revision.queued' &&
+      ev.kind !== 'revision.queue_started'
+  );
   const progress = buildProgressHeadline({
     status: effectiveBuildStatus,
     events,
@@ -654,7 +863,22 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     // eslint-disable-next-line react-hooks/purity -- staleness uses the time of this render
     nowMs: Date.now(),
   });
-  const canAskBuildQuestion = progress.stale && Boolean(chatThreadId);
+  // While deployment runs or after it fails, the server applies a change on
+  // the live preview when one is up and otherwise on the cloud agent.
+  const canReviseFromPreview =
+    buildStatus === 'preview_ready' ||
+    buildStatus === 'accepted' ||
+    buildStatus === 'deploying' ||
+    buildStatus === 'deployment_failed';
+  const canAskBuildQuestion =
+    progress.stale && Boolean(chatThreadId) && !canReviseFromPreview;
+  // The server holds a change sent mid-build and starts it once the preview is ready.
+  const canQueueChange =
+    Boolean(buildId) &&
+    (buildStatus === 'queued' ||
+      buildStatus === 'planning' ||
+      buildStatus === 'building' ||
+      buildStatus === 'checking');
 
   const handleThreadScroll = () => {
     const el = threadRef.current;
@@ -678,7 +902,27 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   ]);
 
   const handleConfirmAndBuild = useCallback(async () => {
-    if (!buildId || confirmIntakeMutation.isPending || optimisticStartingBuild) return;
+    if (!buildId || confirmIntakeMutation.isPending || optimisticStartingBuild)
+      return;
+    const latestUserText =
+      [...turns].reverse().find((turn) => turn.role === 'user')?.text ?? '';
+    if (
+      isLogoReviewRequest(latestUserText) &&
+      !detail?.logoReview?.approvedCandidateId
+    ) {
+      setActionError(null);
+      try {
+        await generateLogoMutation.mutateAsync({ prompt: latestUserText });
+        await buildQuery.refetch();
+      } catch (err) {
+        setActionError(
+          err instanceof Error
+            ? err.message
+            : 'Could not generate logo options.'
+        );
+      }
+      return;
+    }
     setActionError(null);
     setOptimisticStartingBuild(true);
     try {
@@ -696,9 +940,12 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     buildId,
     buildQuery,
     confirmIntakeMutation,
+    detail?.logoReview?.approvedCandidateId,
     eventsQuery,
+    generateLogoMutation,
     optimisticStartingBuild,
     refetchChatThread,
+    turns,
   ]);
 
   const handleChoiceClick = useCallback(
@@ -728,7 +975,12 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   );
 
   const handleSend = useCallback(async () => {
-    const text = draft.trim();
+    const outgoingAttachments = [...attachments];
+    const text =
+      draft.trim() ||
+      (outgoingAttachments.length > 0
+        ? 'Please use the pasted screenshot as context.'
+        : '');
     if (!text) return;
     setActionError(null);
     speech.stop();
@@ -763,6 +1015,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
 
     if (buildStatus === 'intake') {
       if (
+        outgoingAttachments.length === 0 &&
         /^(confirm|a\.?\s*confirm|yes|ship it|looks good|start build)$/i.test(
           text
         )
@@ -773,24 +1026,74 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       }
       if (!chatThreadId) return;
       setDraft('');
-      await chatSession.send(text, { model: selectedModel });
+      const sent = await chatSession.send(text, {
+        model: selectedModel,
+        ...(outgoingAttachments.length > 0
+          ? { attachments: outgoingAttachments }
+          : {}),
+      });
+      if (sent) {
+        clearAttachments();
+      } else {
+        setDraft(draft);
+      }
       return;
     }
 
-    if (canAskBuildQuestion) {
+    const sendAsRevision =
+      canReviseFromPreview ||
+      ((canQueueChange || canAskBuildQuestion) && isBuildChangeRequest(text));
+
+    if (canAskBuildQuestion && !sendAsRevision) {
       if (!chatThreadId) return;
       setDraft('');
-      await chatSession.send(
-        `Build status question: ${text}\n\nThe repository build is still running. Answer the requester in plain language using the build request and latest known context. Do not change the build or open a pull request.`,
-        { model: selectedModel },
+      const sent = await chatSession.send(
+        `Build status question: ${text}\n\nThe repository build is still running. Answer the requester in plain language using the build request and latest known context. If they are asking for a change, tell them it will be applied as soon as the preview is ready. Do not say the change cannot be done. Do not change the build or open a pull request yet.`,
+        {
+          model: selectedModel,
+          ...(outgoingAttachments.length > 0
+            ? { attachments: outgoingAttachments }
+            : {}),
+        }
+      );
+      if (sent) clearAttachments();
+      else setDraft(draft);
+      return;
+    }
+
+    if (!sendAsRevision && canQueueChange) {
+      setActionError(
+        'The build is still running. Describe the change you want, and it will start when the preview is ready.'
       );
       return;
     }
 
-    if (buildStatus === 'preview_ready' || buildStatus === 'accepted') {
+    if (sendAsRevision) {
       try {
         setDraft('');
-        await revisionMutation.mutateAsync({ feedback: text });
+        if (isLogoReviewRequest(text)) {
+          await generateLogoMutation.mutateAsync({ prompt: text });
+          await buildQuery.refetch();
+          return;
+        }
+        await revisionMutation.mutateAsync({
+          feedback: text,
+          ...(outgoingAttachments.length > 0 ? { hasAttachments: true } : {}),
+        });
+        if (outgoingAttachments.length > 0) {
+          if (!chatThreadId) {
+            throw new Error('This build has no collaborator chat thread.');
+          }
+          const sent = await chatSession.send(text, {
+            model: selectedModel,
+            attachments: outgoingAttachments,
+          });
+          if (!sent) {
+            setDraft(draft);
+            return;
+          }
+        }
+        if (outgoingAttachments.length > 0) clearAttachments();
         if (rememberForProject && buildId) {
           await fetch(
             `/api/builds/${encodeURIComponent(buildId)}/design-preference-proposal?project=${encodeURIComponent(project)}`,
@@ -799,10 +1102,11 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ feedback: text }),
-            },
+            }
           );
         }
         await buildQuery.refetch();
+        void refetchChatThread();
       } catch (err) {
         setDraft(text);
         setActionError(
@@ -811,19 +1115,25 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       }
     }
   }, [
+    attachments,
     buildId,
     buildQuery,
     buildStatus,
     canAskBuildQuestion,
+    canQueueChange,
+    canReviseFromPreview,
     chatSession,
     chatThreadId,
+    clearAttachments,
     draft,
     effectiveRepo,
+    generateLogoMutation,
     handleConfirmAndBuild,
     isNewMode,
     navigate,
     project,
     rememberForProject,
+    refetchChatThread,
     revisionMutation,
     selectedModel,
     speech,
@@ -851,10 +1161,49 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       ? startBuildMutation.error
       : null;
   const pipelineSteps = derivePipelineSteps(effectiveBuildStatus, hasPr);
+  const currentRevisionPreviewUrl =
+    detail?.revisions.find(
+      (revision) => revision.number === detail.build.currentRevisionNumber
+    )?.previewUrl ?? null;
   const livePreviewUrl =
-    detail?.previews?.find((entry) => entry.isLive)?.previewUrl
-    ?? detail?.deployment?.previewUrl
-    ?? null;
+    currentRevisionPreviewUrl ??
+    detail?.previews?.find((entry) => entry.isLive)?.previewUrl ??
+    detail?.deployment?.previewUrl ??
+    null;
+  const fastEditProgress =
+    detail?.revision && 'attemptId' in detail.revision ? detail.revision : null;
+  const currentDeploymentStatus =
+    detail?.deployment?.status ??
+    detail?.revisions.find(
+      (revision) => revision.number === detail.build.currentRevisionNumber
+    )?.deploymentStatus;
+  const canStartLocalPreview =
+    Boolean(detail) &&
+    Boolean(buildId) &&
+    !livePreviewUrl &&
+    isLoopbackBrowser() &&
+    (buildStatus === 'deploying' ||
+      buildStatus === 'deployment_failed' ||
+      buildStatus === 'accepted') &&
+    ['not_started', 'queued', 'deploying', 'failed'].includes(
+      currentDeploymentStatus ?? ''
+    );
+
+  const handleStartLocalPreview = async (): Promise<void> => {
+    setActionError(null);
+    try {
+      await localPreviewMutation.mutateAsync({});
+      setLocalPreviewStarted(true);
+      await buildQuery.refetch();
+      await eventsQuery.refetch();
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : 'Could not start local preview.'
+      );
+    }
+  };
 
   const pipelineStepList = (
     <ol
@@ -900,10 +1249,15 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       effectiveBuildStatus !== 'suspended' &&
       effectiveBuildStatus !== 'needs_developer');
 
-  const composerDisabled = composerBusy && !canAskBuildQuestion;
+  const composerDisabled =
+    revisionMutation.isPending ||
+    (composerBusy &&
+      !canAskBuildQuestion &&
+      !canQueueChange &&
+      !canReviseFromPreview);
 
   const canSend =
-    draft.trim().length > 0 &&
+    (draft.trim().length > 0 || (!isNewMode && attachments.length > 0)) &&
     draft.trim().length <= BUILD_PROMPT_MAX_LENGTH &&
     !composerDisabled &&
     (isNewMode ? Boolean(effectiveRepo) : true);
@@ -911,17 +1265,19 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const composerPlaceholder = isNewMode
     ? 'Describe what you want to build (e.g. Add a calendar component to the home page)…'
     : effectiveBuildStatus === 'intake'
-      ? 'Reply to the collaborator, or click Confirm & Start Build…'
+      ? 'Reply, paste a screenshot, or click Confirm & Start Build…'
       : canAskBuildQuestion
-        ? 'Ask what is happening with this build…'
-      : effectiveBuildStatus === 'preview_ready' || effectiveBuildStatus === 'accepted'
-        ? 'Ask for a change or revision to this build…'
-        : effectiveBuildStatus === 'failed' ||
-            effectiveBuildStatus === 'deployment_failed' ||
-            effectiveBuildStatus === 'suspended' ||
-            effectiveBuildStatus === 'needs_developer'
-          ? 'This build stopped. You can review what happened above.'
-          : 'Apex is building and testing your feature…';
+        ? 'Ask about this build, or describe a change to make next…'
+        : canQueueChange
+          ? 'Describe a change, and it will start when this build finishes…'
+          : canReviseFromPreview
+          ? 'Ask for a change, or paste a screenshot to show it…'
+          : effectiveBuildStatus === 'failed' ||
+              effectiveBuildStatus === 'deployment_failed' ||
+              effectiveBuildStatus === 'suspended' ||
+              effectiveBuildStatus === 'needs_developer'
+            ? 'This build stopped. You can review what happened above.'
+            : 'Apex is building and testing your feature…';
 
   const statusText = isNewMode
     ? 'New Build'
@@ -1156,6 +1512,48 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 </article>
               )}
 
+              {detail?.logoReview && (
+                <BuildLogoReviewCard
+                  review={detail.logoReview}
+                  buildId={buildId ?? ''}
+                  project={project}
+                  pending={
+                    generateLogoMutation.isPending ||
+                    decideLogoMutation.isPending
+                  }
+                  onApprove={(candidateId) => {
+                    void decideLogoMutation.mutateAsync({
+                      candidateId,
+                      decision: 'approve',
+                    });
+                  }}
+                  onReject={(candidateId) => {
+                    void decideLogoMutation.mutateAsync({
+                      candidateId,
+                      decision: 'reject',
+                    });
+                  }}
+                  onRegenerate={() => {
+                    void generateLogoMutation.mutateAsync({
+                      prompt: detail.logoReview?.prompt ?? '',
+                    });
+                  }}
+                  onUseInBuild={
+                    detail.logoReview.approvedCandidateId &&
+                    buildStatus === 'preview_ready'
+                      ? () => {
+                          void revisionMutation.mutateAsync({
+                            feedback: approvedLogoImplementationPrompt(),
+                            approvedLogoCandidateId:
+                              detail.logoReview?.approvedCandidateId ??
+                              undefined,
+                          });
+                        }
+                      : undefined
+                  }
+                />
+              )}
+
               {/* One-click Confirm & Start Build bar during Intake */}
               {effectiveBuildStatus === 'intake' &&
                 turns.some((t) => t.role === 'agent') &&
@@ -1165,9 +1563,13 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     {...{ 'data-testid': 'build-workspace-confirm-bar' }}
                   >
                     <p className={styles.confirmText}>
-                      Confirm that this captures what you want. Apex will build
-                      it, run the checks, fix what it can, and open a pull
-                      request.
+                      {isLogoReviewRequest(
+                        [...turns]
+                          .reverse()
+                          .find((turn) => turn.role === 'user')?.text ?? ''
+                      ) && !detail?.logoReview?.approvedCandidateId
+                        ? 'This request asks to review a logo first. Generate options before starting the build.'
+                        : 'Confirm that this captures what you want. Apex will build it, run the checks, fix what it can, and open a pull request.'}
                     </p>
                     <button
                       type="button"
@@ -1178,123 +1580,129 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                       }}
                       {...{ 'data-testid': 'build-workspace-confirm-button' }}
                     >
-                      {confirmIntakeMutation.isPending
-                        ? 'Starting build…'
-                        : 'Confirm & Start Build'}
+                      {generateLogoMutation.isPending
+                        ? 'Generating logos…'
+                        : isLogoReviewRequest(
+                              [...turns]
+                                .reverse()
+                                .find((turn) => turn.role === 'user')?.text ??
+                                ''
+                            ) && !detail?.logoReview?.approvedCandidateId
+                          ? 'Generate logo options'
+                          : confirmIntakeMutation.isPending
+                            ? 'Starting build…'
+                            : 'Confirm & Start Build'}
                     </button>
                   </div>
                 )}
 
               {/* Build Pipeline Stage Progress Card (Planning / Building / Checking) */}
-              {buildId && effectiveBuildStatus && effectiveBuildStatus !== 'intake' && (
-                <article
-                  className={`${styles.message} ${styles.collaborator}`}
-                  aria-label="Autonomous build status"
-                  {...{ 'data-testid': 'build-workspace-autonomous-card' }}
-                >
-                  <div className={styles.liveWorkBox}>
-                    <p className={styles.activity}>
-                      {live && !isTurnStreaming && !progress.stale && !progress.failed && (
-                        <span className={styles.spinner} aria-hidden="true" />
-                      )}
-                      <span
-                        {...{ 'data-testid': 'build-workspace-stage-headline' }}
-                      >
-                        {progress.headline}
-                      </span>
-                    </p>
-
-                    <details
-                      className={styles.traceDrawer}
-                      open={eventsOpen}
-                      onToggle={(e) =>
-                        setEventsOpen(
-                          (e.currentTarget as HTMLDetailsElement).open
-                        )
-                      }
-                      {...{ 'data-testid': 'build-workspace-events-trace' }}
-                    >
-                      <summary
-                        className={styles.traceSummary}
-                        {...{
-                          'data-testid': 'build-workspace-events-trace-toggle',
-                        }}
-                      >
+              {buildId &&
+                effectiveBuildStatus &&
+                effectiveBuildStatus !== 'intake' && (
+                  <article
+                    className={`${styles.message} ${styles.collaborator}`}
+                    aria-label="Autonomous build status"
+                    {...{ 'data-testid': 'build-workspace-autonomous-card' }}
+                  >
+                    <div className={styles.liveWorkBox}>
+                      <p className={styles.activity}>
+                        {live &&
+                          !hasRevisionSections &&
+                          !isTurnStreaming &&
+                          !progress.stale &&
+                          !progress.failed && (
+                            <span
+                              className={styles.spinner}
+                              aria-hidden="true"
+                            />
+                          )}
                         <span
-                          className={styles.traceChevron}
-                          aria-hidden="true"
+                          {...{
+                            'data-testid': 'build-workspace-stage-headline',
+                          }}
                         >
-                          {eventsOpen ? '▼' : '▶'}
+                          {hasRevisionSections
+                            ? 'The original build finished. Each change you asked for is shown below.'
+                            : progress.headline}
                         </span>
-                        <span>{`Build details · ${events.length} ${events.length === 1 ? 'update' : 'updates'}`}</span>
-                      </summary>
-                      <div className={styles.activityScroller}>
-                        {events.length === 0 ? (
-                          <div className={styles.stepRow}>
-                            <span>Preparing agent workspace…</span>
+                      </p>
+
+                      <details
+                        className={styles.traceDrawer}
+                        open={eventsOpen}
+                        onToggle={(e) =>
+                          setEventsOpen(
+                            (e.currentTarget as HTMLDetailsElement).open
+                          )
+                        }
+                        {...{ 'data-testid': 'build-workspace-events-trace' }}
+                      >
+                        <summary
+                          className={styles.traceSummary}
+                          {...{
+                            'data-testid':
+                              'build-workspace-events-trace-toggle',
+                          }}
+                        >
+                          <span
+                            className={styles.traceChevron}
+                            aria-hidden="true"
+                          >
+                            {eventsOpen ? '▼' : '▶'}
+                          </span>
+                          <span>{`Build details · ${originalBuildEvents.length} ${originalBuildEvents.length === 1 ? 'update' : 'updates'}`}</span>
+                        </summary>
+                        {originalBuildEvents.length === 0 ? (
+                          <div className={styles.activityScroller}>
+                            <div className={styles.stepRow}>
+                              <span>Preparing agent workspace…</span>
+                            </div>
                           </div>
                         ) : (
-                          events.map((ev) => (
-                            <div
-                              key={ev.id}
-                              className={styles.stepRow}
+                          <BuildEventRows events={originalBuildEvents} />
+                        )}
+                      </details>
+
+                      {(buildStatus === 'planning' ||
+                        buildStatus === 'building') &&
+                        !isTurnStreaming &&
+                        tasks.some((t) => t.status === 'failed') && (
+                          <div className={styles.choiceRow}>
+                            <button
+                              type="button"
+                              className={styles.secondaryButton}
+                              disabled={ensurePlanningMutation.isPending}
+                              onClick={() => {
+                                ensurePlanningMutation.mutate({});
+                              }}
                               {...{
-                                'data-testid': 'build-workspace-event-row',
+                                'data-testid': 'build-workspace-retry-planning',
                               }}
                             >
-                              <span
-                                className={styles.stepBullet}
-                                aria-hidden="true"
-                              >
-                                •
-                              </span>
-                              <span>
-                                <span>{userFacingBuildEvent(ev.message)}</span>
-                              </span>
-                              {ev.cloudAgentUrl && (
-                                <a
-                                  className={styles.agentRunLink}
-                                  href={ev.cloudAgentUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  {...{
-                                    'data-testid':
-                                      'build-workspace-agent-run-link',
-                                  }}
-                                >
-                                  Open agent run
-                                </a>
-                              )}
-                            </div>
-                          ))
+                              {ensurePlanningMutation.isPending
+                                ? 'Retrying…'
+                                : 'Retry build'}
+                            </button>
+                          </div>
                         )}
-                      </div>
-                    </details>
+                    </div>
+                  </article>
+                )}
 
-                    {(buildStatus === 'planning' ||
-                      buildStatus === 'building') &&
-                      !isTurnStreaming &&
-                      tasks.some((t) => t.status === 'failed') && (
-                        <div className={styles.choiceRow}>
-                          <button
-                            type="button"
-                            className={styles.secondaryButton}
-                            disabled={ensurePlanningMutation.isPending}
-                            onClick={() => {
-                              ensurePlanningMutation.mutate({});
-                            }}
-                            {...{
-                              'data-testid': 'build-workspace-retry-planning',
-                            }}
-                          >
-                            {ensurePlanningMutation.isPending
-                              ? 'Retrying…'
-                              : 'Retry build'}
-                          </button>
-                        </div>
-                      )}
-                  </div>
-                </article>
+              {buildId && detail && (
+                <BuildRevisionSections
+                  revisions={detail.revisions}
+                  events={events}
+                  currentRevisionNumber={currentRevisionNumber}
+                  currentHeadline={progress.headline}
+                  showSpinner={
+                    live &&
+                    !isTurnStreaming &&
+                    !progress.stale &&
+                    !progress.failed
+                  }
+                />
               )}
 
               {/* Pull Request Finish Card (POC Target) */}
@@ -1350,7 +1758,6 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   )}
                 </div>
               )}
-
             </div>
 
             <div className={styles.composerWrap}>
@@ -1361,9 +1768,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   {...{ 'data-testid': 'build-workspace-error-banner' }}
                 >
                   <strong>
-                    {startError?.message ??
-                      actionError ??
-                      threadError}
+                    {startError?.message ?? actionError ?? threadError}
                   </strong>
                   {startError && startError.refusals.length > 0 && (
                     <ul
@@ -1378,15 +1783,19 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 </div>
               )}
 
-              {(buildStatus === 'preview_ready' || buildStatus === 'accepted') && (
+              {(buildStatus === 'preview_ready' ||
+                buildStatus === 'accepted') && (
                 <label className={styles.rememberPreference}>
                   <input
                     type="checkbox"
                     checked={rememberForProject}
-                    onChange={(event) => setRememberForProject(event.target.checked)}
+                    onChange={(event) =>
+                      setRememberForProject(event.target.checked)
+                    }
                     data-testid="build-workspace-remember-preference"
                   />
-                  Remember this feedback as a design preference proposal for project admins
+                  Remember this feedback as a design preference proposal for
+                  project admins
                 </label>
               )}
 
@@ -1413,6 +1822,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 isBusy={composerDisabled}
                 isCancelling={chatSession.isCancelling}
                 canSend={canSend}
+                allowEmptySend={!isNewMode}
                 rows={3}
                 maxHeight={160}
                 placeholder={composerPlaceholder}
@@ -1429,6 +1839,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                 models={availableModels}
                 modelsLoading={modelsLoading}
                 onModelChange={setSelectedModel}
+                attachments={attachments}
+                attachmentError={attachmentError}
+                onRemoveAttachment={removeAttachment}
+                onPasteFiles={
+                  isNewMode
+                    ? undefined
+                    : (files) => {
+                        void addFiles(files);
+                      }
+                }
                 speech={{
                   isListening: speech.isListening,
                   isSpeechSupported: speech.isSpeechSupported,
@@ -1513,19 +1933,132 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
           {!isMinimized &&
             (sideTab === 'preview' ? (
               <section
-                className={styles.sidePanelBody}
+                className={`${styles.sidePanelBody} ${styles.previewPanelBody}`}
                 aria-label="Preview"
                 {...{ 'data-testid': 'build-workspace-preview-panel' }}
               >
-                <BuildSandboxPreview
-                  buildStatus={buildStatus}
-                  deployment={detail?.deployment ?? null}
-                  previews={detail?.previews}
-                  livePreviewUrl={livePreviewUrl}
-                  showPipelineSteps={!livePreviewUrl}
-                  pipelineSteps={pipelineStepList}
-                />
+                <div className={styles.previewFill}>
+                  <BuildSandboxPreview
+                    buildStatus={buildStatus}
+                    deployment={detail?.deployment ?? null}
+                    previews={detail?.previews}
+                    livePreviewUrl={livePreviewUrl}
+                    showPipelineSteps={!livePreviewUrl}
+                    pipelineSteps={pipelineStepList}
+                    revisionProgress={fastEditProgress}
+                  />
+                </div>
 
+                {fastEditProgress?.status === 'failed' && (
+                  <div
+                    className={styles.localPreviewPilot}
+                    {...{ 'data-testid': 'build-workspace-fast-edit-actions' }}
+                  >
+                    <strong>Preview checks need attention</strong>
+                    <p>
+                      The draft remains visible. Retry it or roll back to the
+                      last validated revision.
+                    </p>
+                    <div>
+                      <button
+                        type="button"
+                        className={styles.primaryButton}
+                        disabled={
+                          retryFastEditMutation.isPending ||
+                          rollbackFastEditMutation.isPending
+                        }
+                        onClick={() => {
+                          void retryFastEditMutation
+                            .mutateAsync({
+                              attemptId: fastEditProgress.attemptId,
+                            })
+                            .then(() => buildQuery.refetch())
+                            .catch((error: unknown) => {
+                              setActionError(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Could not retry the preview update.'
+                              );
+                            });
+                        }}
+                        {...{
+                          'data-testid': 'build-workspace-fast-edit-retry',
+                        }}
+                      >
+                        {retryFastEditMutation.isPending
+                          ? 'Retrying…'
+                          : 'Retry update'}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={
+                          retryFastEditMutation.isPending ||
+                          rollbackFastEditMutation.isPending
+                        }
+                        onClick={() => {
+                          void rollbackFastEditMutation
+                            .mutateAsync({
+                              attemptId: fastEditProgress.attemptId,
+                            })
+                            .then(() => buildQuery.refetch())
+                            .catch((error: unknown) => {
+                              setActionError(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Could not roll back the preview update.'
+                              );
+                            });
+                        }}
+                        {...{
+                          'data-testid': 'build-workspace-fast-edit-rollback',
+                        }}
+                      >
+                        {rollbackFastEditMutation.isPending
+                          ? 'Rolling back…'
+                          : 'Roll back'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {canStartLocalPreview && (
+                  <div
+                    className={styles.localPreviewPilot}
+                    {...{ 'data-testid': 'build-workspace-local-preview' }}
+                  >
+                    <strong>Local Docker preview</strong>
+                    <p>
+                      Apex builds the validated revision in Docker, starts an
+                      isolated app and database, then runs the browser check
+                      before showing it here.
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={
+                        localPreviewMutation.isPending || localPreviewStarted
+                      }
+                      onClick={() => {
+                        void handleStartLocalPreview();
+                      }}
+                      {...{
+                        'data-testid': 'build-workspace-start-local-preview',
+                      }}
+                    >
+                      {localPreviewMutation.isPending || localPreviewStarted
+                        ? 'Building local preview…'
+                        : 'Build local preview'}
+                    </button>
+                  </div>
+                )}
+              </section>
+            ) : (
+              <section
+                className={styles.sidePanelBody}
+                aria-label="Build details"
+                {...{ 'data-testid': 'build-workspace-plan-panel' }}
+              >
                 {detail && (
                   <div
                     className={styles.metricsRow}
@@ -1556,13 +2089,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                     </div>
                   </div>
                 )}
-              </section>
-            ) : (
-              <section
-                className={styles.sidePanelBody}
-                aria-label="Build details"
-                {...{ 'data-testid': 'build-workspace-plan-panel' }}
-              >
+
                 <div>
                   <h3 className={styles.sectionHeading}>Requirements</h3>
                   {detail?.currentRevision?.brief.status === 'ok' &&
@@ -1619,7 +2146,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   )}
                 </div>
 
-                <div {...{ 'data-testid': 'build-workspace-developers-section' }}>
+                <div
+                  {...{ 'data-testid': 'build-workspace-developers-section' }}
+                >
                   <h3 className={styles.sectionHeading}>For developers</h3>
                   {pushedBranch ? (
                     <p className={styles.emptySub}>

@@ -198,6 +198,26 @@ describe('evidenceBlockParser', () => {
       expect(parseEvidenceBlock(message)).toEqual({ ok: false, code: 'unsupported_version' });
     });
 
+    it('counts an unknown tier label such as component as unit instead of rejecting the block', () => {
+      const base = makeValidBlockJson() as { entries: Array<Record<string, unknown>> };
+      const payload = makeValidBlockJson({
+        entries: [{ ...base.entries[0], tier: 'component' }],
+      });
+      const result = parseEvidenceBlock(`\`\`\`apex-evidence\n${JSON.stringify(payload)}\n\`\`\``);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.block.entries[0].tier).toBe('unit');
+    });
+
+    it('still rejects a tier that is not a string', () => {
+      const base = makeValidBlockJson() as { entries: Array<Record<string, unknown>> };
+      const payload = makeValidBlockJson({
+        entries: [{ ...base.entries[0], tier: 7 }],
+      });
+      expect(
+        parseEvidenceBlock(`\`\`\`apex-evidence\n${JSON.stringify(payload)}\n\`\`\``),
+      ).toEqual({ ok: false, code: 'invalid_shape' });
+    });
+
     it('VT-02: returns invalid_shape when entries is missing or top-level fields are malformed', () => {
       const withoutEntries = makeValidBlockJson();
       delete withoutEntries.entries;

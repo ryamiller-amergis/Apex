@@ -18,19 +18,32 @@ function createRevisionHarness() {
     detail?: Record<string, unknown>;
     actorUserId?: string | null;
   }> = [];
-  const tasksCreated: Array<{ revisionId: string; taskKey: string; covers: string[] }> = [];
+  const tasksCreated: Array<{
+    revisionId: string;
+    taskKey: string;
+    covers: string[];
+  }> = [];
   const mergeCalls: Array<{
     sourceBranch: string;
     targetBranch: string;
     deleteSourceBranch: boolean;
   }> = [];
+  const feedbackTurns: Array<{
+    threadId: string;
+    feedback: string;
+    revisionNumber: number;
+  }> = [];
   const kickoffSends: Array<{ threadId: string; prompt: string }> = [];
+  const editableStarts: Array<{
+    buildRunId: string;
+    draftRevisionId: string;
+  }> = [];
   let mergeOutcome: 'merged' | 'nothing_to_merge' | 'conflict' = 'merged';
   let repairAttempts = 0;
 
   const seed = (
     runOverrides?: Partial<RevisionRunRecord>,
-    revOverrides?: Partial<RevisionStateRecord>,
+    revOverrides?: Partial<RevisionStateRecord>
   ) => {
     const run: RevisionRunRecord = {
       id: 'run-1',
@@ -81,23 +94,33 @@ function createRevisionHarness() {
     },
     loadCurrentRevision: async (buildRunId, revisionNumber) => {
       for (const rev of revisions.values()) {
-        if (rev.buildRunId === buildRunId && rev.revisionNumber === revisionNumber) {
+        if (
+          rev.buildRunId === buildRunId &&
+          rev.revisionNumber === revisionNumber
+        ) {
           return rev;
         }
       }
       return null;
     },
-    casTransitionToIntake: async ({ buildId, project, redactedFeedback, actorUserId }) => {
+    casTransitionToIntake: async ({
+      buildId,
+      project,
+      redactedFeedback,
+      actorUserId,
+    }) => {
       const run = runs.get(buildId);
       if (!run || run.project !== project) return { kind: 'not_found' };
       if (run.status === 'intake') {
         const openRev = [...revisions.values()].find(
-          (r) => r.buildRunId === buildId && r.revisionNumber === run.currentRevisionNumber,
+          (r) =>
+            r.buildRunId === buildId &&
+            r.revisionNumber === run.currentRevisionNumber
         );
         if (
-          openRev
-          && openRev.requestedByUserId === actorUserId
-          && openRev.feedback === redactedFeedback
+          openRev &&
+          openRev.requestedByUserId === actorUserId &&
+          openRev.feedback === redactedFeedback
         ) {
           return { kind: 'resumed', run, revision: openRev };
         }
@@ -115,7 +138,9 @@ function createRevisionHarness() {
       run.currentRevisionNumber += 1;
 
       const prevRev = [...revisions.values()].find(
-        (r) => r.buildRunId === buildId && r.revisionNumber === run.currentRevisionNumber - 1,
+        (r) =>
+          r.buildRunId === buildId &&
+          r.revisionNumber === run.currentRevisionNumber - 1
       );
       const nextRev: RevisionStateRecord = {
         id: `rev-${run.currentRevisionNumber}`,
@@ -126,8 +151,12 @@ function createRevisionHarness() {
         briefVersion: null,
         classification: null,
         catchUpConflict: false,
-        requirements: prevRev ? prevRev.requirements.map((r) => ({ ...r })) : [],
-        riskDecisions: prevRev ? prevRev.riskDecisions.map((r) => ({ ...r })) : [],
+        requirements: prevRev
+          ? prevRev.requirements.map((r) => ({ ...r }))
+          : [],
+        riskDecisions: prevRev
+          ? prevRev.riskDecisions.map((r) => ({ ...r }))
+          : [],
         changedAndAddedIds: [],
         hasKickoffTurnSent: false,
       };
@@ -135,15 +164,29 @@ function createRevisionHarness() {
       return { kind: 'started', run, revision: nextRev };
     },
     reopenBrief: async () => undefined,
+    appendRevisionFeedback: async (
+      threadId,
+      feedback,
+      _revisionId,
+      revisionNumber
+    ) => {
+      feedbackTurns.push({ threadId, feedback, revisionNumber });
+    },
     sendKickoffTurn: async (threadId, prompt, revisionId) => {
       kickoffSends.push({ threadId, prompt });
       const rev = revisions.get(revisionId);
       if (rev) rev.hasKickoffTurnSent = true;
     },
-    casApproveRevision: async (buildRunId, revisionNumber, classification, briefVersion) => {
+    casApproveRevision: async (
+      buildRunId,
+      revisionNumber,
+      classification,
+      briefVersion
+    ) => {
       const run = runs.get(buildRunId);
       const rev = [...revisions.values()].find(
-        (r) => r.buildRunId === buildRunId && r.revisionNumber === revisionNumber,
+        (r) =>
+          r.buildRunId === buildRunId && r.revisionNumber === revisionNumber
       );
       if (!run || !rev || run.status !== 'intake') return false;
       run.status = classification === 'small' ? 'building' : 'planning';
@@ -166,6 +209,9 @@ function createRevisionHarness() {
       tasksCreated.push({ revisionId, taskKey: 'r-small-1', covers });
     },
     launchRevisionAgent: async () => undefined,
+    beginEditablePreview: async (input) => {
+      editableStarts.push(input);
+    },
     appendEvent: async (ev) => {
       events.push(ev);
     },
@@ -177,7 +223,9 @@ function createRevisionHarness() {
     events,
     tasksCreated,
     mergeCalls,
+    feedbackTurns,
     kickoffSends,
+    editableStarts,
     setMergeOutcome: (o: 'merged' | 'nothing_to_merge' | 'conflict') => {
       mergeOutcome = o;
     },
@@ -189,6 +237,198 @@ function createRevisionHarness() {
 }
 
 describe('buildRevisionService (TBI-026, PBI-030..032 / VT-13..17, VT-28..32)', () => {
+  it('routes an accepted contained UI revision to the fast lane without reopening intake', async () => {
+    const h = createRevisionHarness();
+    h.seed();
+    h.deps.requestFastRevision = jest.fn(async () => {
+      h.revisions.set('rev-2', {
+        ...h.revisions.get('rev-1')!,
+        id: 'rev-2',
+        revisionNumber: 2,
+        feedback: 'Move the Cancel button to the right.',
+      });
+      return {
+        buildId: 'run-1',
+        revisionNumber: 2,
+        status: 'building' as const,
+        revisionsUsed: 1,
+        revisionsLimit: 5,
+        interviewId: 'iv-1',
+        chatThreadId: 'thread-1',
+        resumed: false,
+      };
+    });
+    const service = createBuildRevisionService(h.deps);
+
+    await expect(
+      service.requestRevision({
+        buildId: 'run-1',
+        project: 'Apex',
+        feedback: 'Move the Cancel button to the right.',
+        actor: {
+          userId: 'user-req',
+          displayName: 'Dana Lee',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
+    ).resolves.toMatchObject({ status: 'building', revisionNumber: 2 });
+
+    expect(h.deps.requestFastRevision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        redactedFeedback: 'Move the Cancel button to the right.',
+      })
+    );
+    expect(h.feedbackTurns).toEqual([
+      {
+        threadId: 'thread-1',
+        feedback: 'Move the Cancel button to the right.',
+        revisionNumber: 2,
+      },
+    ]);
+    expect(h.kickoffSends).toHaveLength(0);
+    expect(h.editableStarts).toHaveLength(0);
+  });
+
+  it('queues a change sent while the build runs and tells the requester in chat', async () => {
+    const h = createRevisionHarness();
+    h.seed({ status: 'building' });
+    const queued: string[] = [];
+    const replies: string[] = [];
+    h.deps.queueRevision = async ({ redactedFeedback }) => {
+      queued.push(redactedFeedback);
+    };
+    h.deps.appendAssistantReply = async (_threadId, text) => {
+      replies.push(text);
+    };
+    h.deps.requestFastRevision = jest.fn();
+    const service = createBuildRevisionService(h.deps);
+
+    await expect(
+      service.requestRevision({
+        buildId: 'run-1',
+        project: 'Apex',
+        feedback: 'Use a darker token set for the dark theme.',
+        actor: {
+          userId: 'user-req',
+          displayName: 'Dana Lee',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
+    ).resolves.toMatchObject({ status: 'queued', revisionNumber: 2 });
+
+    expect(queued).toEqual(['Use a darker token set for the dark theme.']);
+    expect(h.feedbackTurns).toEqual([
+      {
+        threadId: 'thread-1',
+        feedback: 'Use a darker token set for the dark theme.',
+        revisionNumber: 2,
+      },
+    ]);
+    expect(replies[0]).toContain('revision 2');
+    expect(h.deps.requestFastRevision).not.toHaveBeenCalled();
+    expect(h.runs.get('run-1')?.status).toBe('building');
+  });
+
+  it('keeps the request in chat and replies with the reason when it is refused', async () => {
+    const h = createRevisionHarness();
+    h.seed({ status: 'cancelled' });
+    const replies: string[] = [];
+    h.deps.appendAssistantReply = async (_threadId, text) => {
+      replies.push(text);
+    };
+
+    await expect(
+      createBuildRevisionService(h.deps).requestRevision({
+        buildId: 'run-1',
+        project: 'Apex',
+        feedback: 'Make the header blue.',
+        actor: {
+          userId: 'user-req',
+          displayName: 'Dana Lee',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
+    ).rejects.toMatchObject({ code: 'BUILD_NOT_REVISABLE' });
+
+    expect(h.feedbackTurns.map((turn) => turn.feedback)).toEqual([
+      'Make the header blue.',
+    ]);
+    expect(replies).toEqual([
+      'Changes can only be requested when the preview is ready.',
+    ]);
+  });
+
+  it('does not save the request again when a queued change starts', async () => {
+    const h = createRevisionHarness();
+    h.seed();
+
+    await h.service.requestRevision({
+      buildId: 'run-1',
+      project: 'Apex',
+      feedback: 'Change heading colour',
+      chatMessageSaved: true,
+      actor: {
+        userId: 'user-req',
+        isProjectAdmin: false,
+        isSuperAdmin: true,
+      },
+    });
+
+    expect(h.feedbackTurns).toHaveLength(0);
+  });
+
+  it('keeps screenshot-grounded revisions in intake so the agent can inspect the image', async () => {
+    const h = createRevisionHarness();
+    h.seed();
+    h.deps.requestFastRevision = jest.fn();
+    const service = createBuildRevisionService(h.deps);
+
+    await expect(
+      service.requestRevision({
+        buildId: 'run-1',
+        project: 'Apex',
+        feedback: 'Match the spacing in the pasted screenshot.',
+        hasAttachments: true,
+        actor: {
+          userId: 'user-req',
+          displayName: 'Dana Lee',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
+    ).resolves.toMatchObject({ status: 'intake', revisionNumber: 2 });
+
+    expect(h.deps.requestFastRevision).not.toHaveBeenCalled();
+    expect(h.feedbackTurns).toHaveLength(0);
+    expect(h.kickoffSends).toHaveLength(0);
+  });
+
+  it('requires an approved candidate id before applying a logo', async () => {
+    const h = createRevisionHarness();
+    h.seed();
+
+    await expect(
+      h.service.requestRevision({
+        buildId: 'run-1',
+        project: 'Apex',
+        feedback:
+          'Place the approved logo from /brand/logo.png in the top navigation.',
+        actor: {
+          userId: 'user-req',
+          displayName: 'Dana Lee',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
+    ).rejects.toMatchObject({
+      code: 'APPROVED_LOGO_REQUIRED',
+      statusCode: 409,
+    });
+  });
+
   it('VT-13 PBI-030 AC-0 / TBI-026 NFR redacts feedback, transitions run to intake, increments revisionsUsed, writes revision.requested, and dispatches kickoff', async () => {
     const h = createRevisionHarness();
     h.seed();
@@ -215,11 +455,23 @@ describe('buildRevisionService (TBI-026, PBI-030..032 / VT-13..17, VT-28..32)', 
       chatThreadId: 'thread-1',
       resumed: false,
     });
+    expect(h.editableStarts).toEqual([
+      { buildRunId: 'run-1', draftRevisionId: 'rev-2' },
+    ]);
 
     const rev2 = h.revisions.get('rev-2')!;
     expect(rev2.feedback).not.toContain('secretToken123456');
     expect(rev2.feedback).toContain('[REDACTED:bearer-token]');
-    expect(h.events.some((e) => e.eventType === 'revision.requested')).toBe(true);
+    expect(h.events.some((e) => e.eventType === 'revision.requested')).toBe(
+      true
+    );
+    expect(h.feedbackTurns).toEqual([
+      {
+        threadId: 'thread-1',
+        feedback: 'Please update label and remove [REDACTED:bearer-token]',
+        revisionNumber: 2,
+      },
+    ]);
     expect(h.kickoffSends).toHaveLength(1);
   });
 
@@ -238,7 +490,7 @@ describe('buildRevisionService (TBI-026, PBI-030..032 / VT-13..17, VT-28..32)', 
           isProjectAdmin: false,
           isSuperAdmin: false,
         },
-      }),
+      })
     ).rejects.toMatchObject({
       code: 'REVISION_CAP_REACHED',
       statusCode: 409,
@@ -292,7 +544,7 @@ describe('buildRevisionService (TBI-026, PBI-030..032 / VT-13..17, VT-28..32)', 
           isProjectAdmin: true,
           isSuperAdmin: false,
         },
-      }),
+      })
     ).rejects.toMatchObject({
       code: 'REVISION_IN_PROGRESS',
       statusCode: 409,

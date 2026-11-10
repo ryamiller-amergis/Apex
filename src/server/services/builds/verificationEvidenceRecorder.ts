@@ -24,11 +24,22 @@ import type {
   BuildVerificationRow,
 } from '../../../shared/types/build';
 import { db } from '../../db/drizzle';
-import { buildRevisions, buildRuns, buildTasks, buildVerificationRows } from '../../db/schema';
-import { describeRuntimeFailure, missingChecksMessage } from '../../../shared/buildRuntimeFailure';
+import {
+  buildRevisions,
+  buildRuns,
+  buildTasks,
+  buildVerificationRows,
+} from '../../db/schema';
+import {
+  describeRuntimeFailure,
+  missingChecksMessage,
+} from '../../../shared/buildRuntimeFailure';
 import type { BuildVisualBrief } from '../../../shared/buildVisualBrief';
 import { evaluateVisualQualityFromEvidence } from '../buildVisualVerificationService';
-import { appendBuildEvent, type AppendBuildEventInput } from '../buildEventsService';
+import {
+  appendBuildEvent,
+  type AppendBuildEventInput,
+} from '../buildEventsService';
 import { redactText, type KnownSecretSource } from '../buildRedactionService';
 import {
   buildEvidenceBlobPrefix,
@@ -86,7 +97,9 @@ export type VerificationRowUpsertRecord = Omit<
 >;
 
 export interface VerificationRecorderStore {
-  loadContext(buildTaskId: string): Promise<VerificationRecorderTaskContext | null>;
+  loadContext(
+    buildTaskId: string
+  ): Promise<VerificationRecorderTaskContext | null>;
   commitTransaction(input: {
     buildTaskId: string;
     attemptNumber: number;
@@ -120,18 +133,19 @@ interface PlanTestEntry {
 
 /**
  * Resolves the owned requirement and risk-decision specs for a task.
- * - On the small path (or when both `ownedFiles` and `covers` are empty), the task
- *   owns every requirement and risk decision of the revision.
+ * - When both `ownedFiles` and `covers` are empty, the task owns every
+ *   requirement and risk decision of the revision.
+ * - A revision task with explicit `covers` owns only its changed and added IDs,
+ *   even when the revision classification is `small`.
  * - On the full path, a task owns each ID in `task.covers` or where the plan's test
  *   reference points at a file in `task.ownedFiles`.
  */
 export function resolveTaskOwnedSpecs(
-  context: VerificationRecorderTaskContext,
+  context: VerificationRecorderTaskContext
 ): { ownedIds: OwnedRequirementSpec[]; ownedFiles: string[] | null } {
   const { task, revision } = context;
-  const isSmallPath =
-    revision.classification === 'small' ||
-    (task.ownedFiles.length === 0 && task.covers.length === 0);
+  const ownsEntireRevision =
+    task.ownedFiles.length === 0 && task.covers.length === 0;
 
   const allSpecsById = new Map<string, OwnedRequirementSpec>();
   for (const req of revision.requirements ?? []) {
@@ -149,7 +163,7 @@ export function resolveTaskOwnedSpecs(
     });
   }
 
-  if (isSmallPath) {
+  if (ownsEntireRevision) {
     return {
       ownedIds: [...allSpecsById.values()],
       ownedFiles: null,
@@ -158,7 +172,7 @@ export function resolveTaskOwnedSpecs(
 
   const ownedIdSet = new Set<string>(task.covers ?? []);
   const normalizedOwnedFiles = new Set(
-    (task.ownedFiles ?? []).map((file) => normalizePathForMatch(file)),
+    (task.ownedFiles ?? []).map((file) => normalizePathForMatch(file))
   );
 
   if (
@@ -200,13 +214,17 @@ export function resolveTaskOwnedSpecs(
 
   return {
     ownedIds,
-    ownedFiles: task.ownedFiles,
+    // An empty plan-time list means file ownership was not known yet; it does
+    // not mean that every repository-relative test reference is forbidden.
+    ownedFiles: task.ownedFiles.length > 0 ? task.ownedFiles : null,
   };
 }
 
 export function createDrizzleVerificationRecorderStore(): VerificationRecorderStore {
   return {
-    async loadContext(buildTaskId: string): Promise<VerificationRecorderTaskContext | null> {
+    async loadContext(
+      buildTaskId: string
+    ): Promise<VerificationRecorderTaskContext | null> {
       const [row] = await db
         .select({
           task: buildTasks,
@@ -214,7 +232,10 @@ export function createDrizzleVerificationRecorderStore(): VerificationRecorderSt
           run: buildRuns,
         })
         .from(buildTasks)
-        .innerJoin(buildRevisions, eq(buildRevisions.id, buildTasks.buildRevisionId))
+        .innerJoin(
+          buildRevisions,
+          eq(buildRevisions.id, buildTasks.buildRevisionId)
+        )
         .innerJoin(buildRuns, eq(buildRuns.id, buildRevisions.buildRunId))
         .where(eq(buildTasks.id, buildTaskId))
         .limit(1);
@@ -251,7 +272,7 @@ export function createDrizzleVerificationRecorderStore(): VerificationRecorderSt
     async commitTransaction(input) {
       return db.transaction(async (tx) => {
         const lockedResult = await tx.execute<{ attempt: number }>(
-          sql`SELECT attempt FROM build_tasks WHERE id = ${input.buildTaskId}::uuid FOR UPDATE`,
+          sql`SELECT attempt FROM build_tasks WHERE id = ${input.buildTaskId}::uuid FOR UPDATE`
         );
         const lockedRow = lockedResult.rows[0];
         if (!lockedRow || Number(lockedRow.attempt) !== input.attemptNumber) {
@@ -313,18 +334,19 @@ export async function recordTaskEvidence(
     message: string;
     agentRunId?: string | null;
   },
-  deps?: RecordTaskEvidenceDeps,
+  deps?: RecordTaskEvidenceDeps
 ): Promise<RecordTaskEvidenceResult> {
   const store = deps?.store ?? defaultRecorderStore;
-  const evidenceStore: Pick<BuildEvidenceStore, 'putEvidence'> = deps?.evidenceStore ?? {
-    putEvidence,
-  };
+  const evidenceStore: Pick<BuildEvidenceStore, 'putEvidence'> =
+    deps?.evidenceStore ?? {
+      putEvidence,
+    };
   const redact =
     deps?.redact ??
     ((text: string) =>
       redactText(
         text,
-        deps?.knownSecrets ? { knownSecrets: deps.knownSecrets } : undefined,
+        deps?.knownSecrets ? { knownSecrets: deps.knownSecrets } : undefined
       ));
   const nowIso = (deps?.now ?? (() => new Date().toISOString()))();
   const log = deps?.log ?? ((line: string) => console.info(line));
@@ -354,13 +376,16 @@ export async function recordTaskEvidence(
       green: null,
       deferralReason: null,
     }));
+    // A block that exists but fails to parse is a formatting error, not a missing requirement.
     const violations: Violation[] =
-      activeSpecs.length > 0
-        ? activeSpecs.map((spec) => ({
-            code: 'missing_evidence_entry' as const,
-            requirementId: spec.id,
-          }))
-        : [{ code: 'missing_evidence_entry' as const, requirementId: null }];
+      parsed.code !== 'no_block'
+        ? [{ code: 'unreadable_evidence_block' as const, requirementId: null }]
+        : activeSpecs.length > 0
+          ? activeSpecs.map((spec) => ({
+              code: 'missing_evidence_entry' as const,
+              requirementId: spec.id,
+            }))
+          : [{ code: 'missing_evidence_entry' as const, requirementId: null }];
 
     decision = {
       outcome: 'refused',
@@ -381,7 +406,8 @@ export async function recordTaskEvidence(
 
     if (decision.outcome === 'done') {
       const planRecord = revision.plan as Record<string, unknown> | null;
-      const visualBrief = (planRecord?.visualBrief ?? null) as BuildVisualBrief | null;
+      const visualBrief = (planRecord?.visualBrief ??
+        null) as BuildVisualBrief | null;
       const visual = evaluateVisualQualityFromEvidence({
         visualBrief,
         block: parsed.block,
@@ -412,15 +438,23 @@ export async function recordTaskEvidence(
       const prefix = buildEvidenceBlobPrefix(
         run.id,
         revision.revisionNumber,
-        row.requirementId,
+        row.requirementId
       );
       if (row.red !== null) {
         const redactedRedOutput = redact(row.red.output);
-        blobRef = await evidenceStore.putEvidence(prefix, 'red', redactedRedOutput);
+        blobRef = await evidenceStore.putEvidence(
+          prefix,
+          'red',
+          redactedRedOutput
+        );
       }
       if (row.green !== null) {
         const redactedGreenOutput = redact(row.green.output);
-        blobRef = await evidenceStore.putEvidence(prefix, 'green', redactedGreenOutput);
+        blobRef = await evidenceStore.putEvidence(
+          prefix,
+          'green',
+          redactedGreenOutput
+        );
       }
     }
 
@@ -513,10 +547,9 @@ export async function recordTaskEvidence(
     });
   }
 
-  const outcomeDedupeKey =
-    !parsed.ok
-      ? `verification.refused:${task.id}:${input.attemptNumber}`
-      : `verification.outcome:${task.id}:${input.attemptNumber}`;
+  const outcomeDedupeKey = !parsed.ok
+    ? `verification.refused:${task.id}:${input.attemptNumber}`
+    : `verification.outcome:${task.id}:${input.attemptNumber}`;
 
   if (decision.outcome === 'done') {
     events.push({
@@ -529,7 +562,9 @@ export async function recordTaskEvidence(
         taskKey: task.taskKey,
         attemptNumber: input.attemptNumber,
         rowCount: decision.rows.length,
-        ...(decision.notes && decision.notes.length > 0 ? { notes: decision.notes } : {}),
+        ...(decision.notes && decision.notes.length > 0
+          ? { notes: decision.notes }
+          : {}),
       },
       correlation,
       dedupeKey: outcomeDedupeKey,
@@ -543,13 +578,20 @@ export async function recordTaskEvidence(
       message:
         visualGateFindings.length > 0
           ? `Visual quality checks failed: ${visualGateFindings.join(' ')}`
-          : describeRuntimeFailure(input.message) ??
-            missingChecksMessage(decision.violations.map((violation) => violation.requirementId)),
+          : (describeRuntimeFailure(input.message) ??
+            (!parsed.ok && parsed.code !== 'no_block'
+              ? `The test report could not be read (${parsed.code}).`
+              : null) ??
+            missingChecksMessage(
+              decision.violations.map((violation) => violation.requirementId)
+            )),
       detail: {
         taskKey: task.taskKey,
         attemptNumber: input.attemptNumber,
         violations: decision.violations,
-        ...(visualGateFindings.length > 0 ? { visualFindings: visualGateFindings } : {}),
+        ...(visualGateFindings.length > 0
+          ? { visualFindings: visualGateFindings }
+          : {}),
       },
       correlation,
       dedupeKey: outcomeDedupeKey,
@@ -591,7 +633,7 @@ export async function recordTaskEvidence(
       attemptNumber: input.attemptNumber,
       outcome: decision.outcome,
       violationCodes: decision.violations.map((v) => v.code),
-    })}`,
+    })}`
   );
 
   return {

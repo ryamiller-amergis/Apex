@@ -9,7 +9,6 @@ import type { CloudAgentActivityEvent } from '../../../shared/types/devWorkbench
 import { db } from '../../db/drizzle';
 import { buildRuns, buildTasks, playbookStepRuns } from '../../db/schema';
 import { markTerminal, requestCancel } from '../agentRunLifecycleService';
-import { AzureDevOpsService } from '../azureDevOps';
 import { mergeTaskBranch } from '../build/buildMergeService';
 import { applyMergeOutcome } from '../build/mergeOutcome';
 import { createMayReportDone } from '../builds/buildVerificationApply';
@@ -54,48 +53,95 @@ export interface BuildDispatchPorts {
 
 const baseMayReportDone = createMayReportDone();
 
+const FINAL_REPORT_READ_ATTEMPTS = 4;
+const FINAL_REPORT_RETRY_DELAY_MS = 2_000;
+
+/**
+ * Reads the agent's final message and records its evidence. A read error or an
+ * empty result is retried: the run can settle before Cursor serves its result,
+ * and one failed read must not fail a build whose report is fine.
+ */
+async function readAndRecordFinalReport(
+  taskId: string,
+  currentAgent: BuildAgentRunRow & {
+    projectId: string;
+    cloudAgentIdentity: string;
+    dispatchMessageId: string;
+  }
+): Promise<{
+  resultText: string | null;
+  recordedOutcome: 'done' | 'refused' | 'escalate' | null;
+}> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= FINAL_REPORT_READ_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, FINAL_REPORT_RETRY_DELAY_MS)
+      );
+    }
+    try {
+      const observed = await getCloudAgentRun({
+        project: currentAgent.projectId,
+        cloudAgentId: currentAgent.cloudAgentIdentity,
+        cursorRunId: currentAgent.dispatchMessageId,
+      });
+      if (!observed.resultText) {
+        lastError = new Error('The agent run returned no result text.');
+        continue;
+      }
+      const [taskRow] = await db
+        .select({ attempt: buildTasks.attempt })
+        .from(buildTasks)
+        .where(eq(buildTasks.id, taskId))
+        .limit(1);
+      const recorded = await recordTaskEvidence({
+        buildTaskId: taskId,
+        attemptNumber: taskRow?.attempt ?? 1,
+        message: observed.resultText,
+        agentRunId: currentAgent.id,
+      });
+      return {
+        resultText: observed.resultText,
+        recordedOutcome: recorded.stale ? null : recorded.outcome,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  console.warn(
+    '[build-dispatch] could not read or record the final report',
+    JSON.stringify({
+      taskId,
+      attempts: FINAL_REPORT_READ_ATTEMPTS,
+      error: lastError instanceof Error ? lastError.message : String(lastError),
+    })
+  );
+  return { resultText: null, recordedOutcome: null };
+}
+
 const defaultMayReportDone: CompletionDeps['mayReportDone'] = async (input) => {
   if (await baseMayReportDone(input)) return true;
 
   const store = createDrizzleDispatchStore();
-  let anyRefused = false;
   for (const taskId of input.taskIds) {
     try {
       const currentAgent = await store.currentAgentRunForTask(taskId);
       if (currentAgent && canObserveAgentRun(currentAgent)) {
-        const observed = await getCloudAgentRun({
-          project: currentAgent.projectId,
-          cloudAgentId: currentAgent.cloudAgentIdentity,
-          cursorRunId: currentAgent.dispatchMessageId,
-        });
-        let recordedOutcome: 'done' | 'refused' | 'escalate' | null = null;
-        if (observed.resultText) {
-          const [taskRow] = await db
-            .select({ attempt: buildTasks.attempt })
-            .from(buildTasks)
-            .where(eq(buildTasks.id, taskId))
-            .limit(1);
-          const recorded = await recordTaskEvidence({
-            buildTaskId: taskId,
-            attemptNumber: taskRow?.attempt ?? 1,
-            message: observed.resultText,
-            agentRunId: currentAgent.id,
-          });
-          if (!recorded.stale) {
-            recordedOutcome = recorded.outcome;
-          }
-        }
+        const { resultText, recordedOutcome } = await readAndRecordFinalReport(
+          taskId,
+          currentAgent
+        );
         // Never allow an agent that stopped with a red-only escalation to merge as a finished feature.
         if (
           recordedOutcome === 'escalate' ||
-          (observed.resultText &&
+          (resultText &&
             /stopped before building|does not fit the small path/i.test(
-              observed.resultText
+              resultText
             ))
         ) {
           return false;
         }
-        if (recordedOutcome === 'refused') anyRefused = true;
+        if (recordedOutcome === 'refused') return false;
       }
     } catch (error) {
       console.warn('[build-dispatch] could not record task evidence', JSON.stringify({
@@ -107,34 +153,6 @@ const defaultMayReportDone: CompletionDeps['mayReportDone'] = async (input) => {
   }
 
   if (await baseMayReportDone(input)) return true;
-  // A refused evidence block means the agent's own checks failed; a pushed branch does not override that.
-  if (anyRefused) return false;
-
-  // Fallback for POC runs: if the agent pushed its task branch to Azure DevOps, allow merge
-  try {
-    const [headTask] = await db
-      .select({ branchName: buildTasks.branchName })
-      .from(buildTasks)
-      .where(eq(buildTasks.id, input.taskIds[0]))
-      .limit(1);
-    const [runRow] = await db
-      .select({ project: buildRuns.project, repository: buildRuns.repository })
-      .from(buildRuns)
-      .where(eq(buildRuns.id, input.buildRunId))
-      .limit(1);
-    if (headTask?.branchName && runRow) {
-      const ado = new AzureDevOpsService(runRow.project);
-      const branchHead = await ado.getBranchHeadCommit(
-        runRow.repository,
-        runRow.project,
-        headTask.branchName
-      );
-      if (branchHead) return true;
-    }
-  } catch {
-    // Fall through
-  }
-
   return false;
 };
 
@@ -318,7 +336,7 @@ async function reconcileAcceptedBuilds(): Promise<void> {
     .where(
     or(
       and(
-        eq(buildRuns.status, 'checking'),
+        eq(buildRuns.status, 'preview_ready'),
         isNotNull(buildRuns.acceptedRevisionNumber),
         isNull(buildRuns.pullRequestUrl)
       ),
@@ -392,7 +410,17 @@ export async function recheckStoppedBuildFeature(
 
 export async function reconcileBuildRuns(): Promise<BuildSweepOutcome> {
   const outcome = await current().reconcile();
-    await reconcileAcceptedBuilds();
+  await reconcileAcceptedBuilds();
+  const localPreview = await import('../build/buildLocalPreviewLaunchService');
+  await localPreview.recoverStuckLocalPreviews();
+  const endedBuilds = await import('./endedBuildPlaybooks');
+  await endedBuilds.releasePlaybookRunsOfEndedBuilds().catch((error: unknown) => {
+    console.warn('[build-dispatch] could not release ended builds\' Playbook runs', error instanceof Error ? error.message : String(error));
+  });
+  const revisions = await import('../buildRevisionService');
+  await revisions.startQueuedRevisions().catch((error: unknown) => {
+    console.warn('[build-dispatch] could not start queued revisions', error instanceof Error ? error.message : String(error));
+  });
   return outcome;
 }
 

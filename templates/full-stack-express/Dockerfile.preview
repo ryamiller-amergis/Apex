@@ -1,0 +1,46 @@
+# Versioned local preview runner. Application output arrives as a verified
+# runtime bundle; production dependencies stay in this image.
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+WORKDIR /src
+RUN corepack enable && corepack prepare pnpm@10.34.9 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps ./apps
+COPY packages ./packages
+COPY scripts/check-toolchain.mjs ./scripts/check-toolchain.mjs
+RUN corepack pnpm install --frozen-lockfile \
+  && corepack pnpm --filter @project-scope/api... run build \
+  && corepack pnpm --filter @project-scope/api deploy --legacy --prod /out/api
+
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS runtime
+
+LABEL com.amergis.apex.preview-runner="full-stack-express" \
+  com.amergis.apex.preview-runner-version="1.0.0" \
+  com.amergis.apex.preview-dependency-layout="workspace-runtime-v1"
+
+RUN rm -rf \
+    /usr/local/lib/node_modules/npm \
+    /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx \
+    /usr/local/bin/corepack \
+    /usr/local/bin/yarn \
+    /usr/local/bin/yarnpkg \
+  && groupadd --system --gid 10001 preview \
+  && useradd --system --uid 10001 --gid 10001 --home-dir /session --shell /usr/sbin/nologin preview \
+  && mkdir -p /runner /session /input \
+  && chown -R 10001:10001 /runner /session /input
+
+COPY --from=build --chown=10001:10001 /out/api /runner/api
+COPY --chown=10001:10001 scripts/preview/runner-entrypoint.sh /usr/local/bin/apex-preview-runner
+COPY --chown=10001:10001 scripts/preview/runner-tcp-proxy.mjs /usr/local/lib/apex-preview-runner/tcp-proxy.mjs
+RUN sed -i 's/\r$//' /usr/local/bin/apex-preview-runner \
+  && chmod 0555 /usr/local/bin/apex-preview-runner
+
+USER 10001
+WORKDIR /session
+EXPOSE 3000
+
+ENTRYPOINT ["/usr/local/bin/apex-preview-runner"]
+CMD ["start"]

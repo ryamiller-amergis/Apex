@@ -53,7 +53,8 @@ export async function beginPlanning(
   stepRunId: string
 ): Promise<boolean> {
   const row = await loadBuild(buildRunId);
-  if (!row || (row.status !== 'intake' && row.status !== 'planning')) return false;
+  if (!row || (row.status !== 'intake' && row.status !== 'planning'))
+    return false;
   const started = await beginPlanningRow(buildRunId, stepRunId);
   if (started && process.env.NODE_ENV !== 'test') {
     void driveBuildOrchestration(buildRunId);
@@ -70,14 +71,17 @@ export function synthesizeFallbackBuildPlan(
   return createSingleAgentPlan(buildRunId, requirements, riskDecisions);
 }
 
+export function publicBuildOrchestrationFailureMessage(
+  _error: unknown
+): string {
+  return 'The repository build agent did not start.';
+}
+
 async function markOrchestrationFailed(
   buildRunId: string,
   error: unknown
 ): Promise<void> {
-  const message =
-    error instanceof Error
-      ? error.message
-      : 'The repository build agent did not start.';
+  const message = publicBuildOrchestrationFailureMessage(error);
   const now = new Date().toISOString();
   const [failed] = await db
     .update(buildRuns)
@@ -177,18 +181,25 @@ export async function driveBuildOrchestration(
   activeOrchestrations.add(buildRunId);
 
   try {
-    const [revision] = await db
-      .select({ id: buildRevisions.id })
-      .from(buildRevisions)
-      .where(
-        and(
-          eq(buildRevisions.buildRunId, buildRunId),
-          eq(buildRevisions.revisionNumber, 1)
-        )
-      )
+    const row = await loadBuild(buildRunId);
+    const [runState] = await db
+      .select({ currentRevisionNumber: buildRuns.currentRevisionNumber })
+      .from(buildRuns)
+      .where(eq(buildRuns.id, buildRunId))
       .limit(1);
+    const [revision] = runState
+      ? await db
+          .select({ id: buildRevisions.id })
+          .from(buildRevisions)
+          .where(
+            and(
+              eq(buildRevisions.buildRunId, buildRunId),
+              eq(buildRevisions.revisionNumber, runState.currentRevisionNumber)
+            )
+          )
+          .limit(1)
+      : [];
     if (!revision) {
-      const row = await loadBuild(buildRunId);
       if (row?.interviewId) {
         const existingBrief = await getRedactedBuildBrief(row.interviewId);
         if (!existingBrief) {
@@ -258,7 +269,11 @@ export async function launchFinalCheckForRun(
     .limit(1);
   if (!checkTask || checkTask.status !== 'ready') return;
 
-  const branchName = `${taskBranchName(run.id, 'final-check')}-${checkTask.attempt}`;
+  const branchName = `${taskBranchName(
+    run.id,
+    run.currentRevisionNumber,
+    'final-check'
+  )}-${checkTask.attempt}`;
   const now = new Date().toISOString();
   const claimed = await db
     .update(buildTasks)
@@ -284,6 +299,7 @@ export async function launchFinalCheckForRun(
       requesterUserId: run.requestedByUserId,
       parallelismCap: run.parallelismCap,
       revisionId: revision.id,
+      revisionNumber: revision.revisionNumber,
     },
     unit: {
       mode: 'own_agent',

@@ -1,15 +1,26 @@
 /**
  * S4 — `mergeTaskBranch` unit tests (TBI-022 DoD-1..3, PBI-024 AC-0 / VT-03..VT-09).
  */
-import { mergeTaskBranch, type MergeDeps } from '../services/build/buildMergeService';
+import {
+  mergeTaskBranch,
+  type MergeDeps,
+} from '../services/build/buildMergeService';
 
 function createFakeMergeDeps(overrides: Partial<MergeDeps> = {}): MergeDeps & {
-  events: Array<{ eventType: string; message: string; detail?: Record<string, unknown> }>;
+  events: Array<{
+    eventType: string;
+    message: string;
+    detail?: Record<string, unknown>;
+  }>;
   taskStatuses: Map<string, string>;
   lockCalls: string[];
   adoCalls: string[];
 } {
-  const events: Array<{ eventType: string; message: string; detail?: Record<string, unknown> }> = [];
+  const events: Array<{
+    eventType: string;
+    message: string;
+    detail?: Record<string, unknown>;
+  }> = [];
   const taskStatuses = new Map<string, string>([
     ['task-1', 'running'],
     ['task-chain-2', 'running'],
@@ -29,7 +40,7 @@ function createFakeMergeDeps(overrides: Partial<MergeDeps> = {}): MergeDeps & {
         taskKey: 't-impl-1',
         status: (taskStatuses.get(taskId) as any) ?? 'running',
         attempt: 1,
-        branchName: 'apex/build-task/run-12345678/t-impl-1-1',
+        branchName: 'apex/build-task/run-12345678/r1/t-impl-1-1',
         covers: ['AC-1', 'DOD-1'],
         chainHeadKey: 't-impl-1',
       },
@@ -39,7 +50,8 @@ function createFakeMergeDeps(overrides: Partial<MergeDeps> = {}): MergeDeps & {
         project: 'Apex',
         repository: 'apex-repo',
         status: 'building',
-        integrationBranch: 'apex/build/run-12345678-0000-4000-8000-000000000001',
+        integrationBranch:
+          'apex/build/run-12345678-0000-4000-8000-000000000001',
       },
     }),
     markTasksMerged: async (taskIds, _prId, _mergeCommit) => {
@@ -108,7 +120,7 @@ describe('mergeTaskBranch (TBI-022 DoD-0..3 / VT-03..VT-09)', () => {
           taskKey: 't-impl-1',
           status: 'running',
           attempt: 1,
-          branchName: 'apex/build-task/run-1/t-impl-1-1',
+          branchName: 'apex/build-task/run-1/r1/t-impl-1-1',
           covers: ['AC-1', 'Bearer secretTokenValue12345'],
           chainHeadKey: 't-impl-1',
         },
@@ -232,11 +244,22 @@ describe('mergeTaskBranch (TBI-022 DoD-0..3 / VT-03..VT-09)', () => {
       order.push('create-start');
       await new Promise((r) => setTimeout(r, 10));
       order.push('create-end');
-      return { pullRequestId: 55, prUrl: 'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/55' };
+      return {
+        pullRequestId: 55,
+        prUrl: 'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/55',
+      };
     };
 
-    await Promise.all([mergeTaskBranch('task-1', deps), mergeTaskBranch('task-2', deps)]);
-    expect(order).toEqual(['create-start', 'create-end', 'create-start', 'create-end']);
+    await Promise.all([
+      mergeTaskBranch('task-1', deps),
+      mergeTaskBranch('task-2', deps),
+    ]);
+    expect(order).toEqual([
+      'create-start',
+      'create-end',
+      'create-start',
+      'create-end',
+    ]);
   });
 
   it('VT-07 TBI-022 NFR returns pending after 30s when mergeStatus stays queued without abandoning PR', async () => {
@@ -296,7 +319,7 @@ describe('mergeTaskBranch (TBI-022 DoD-0..3 / VT-03..VT-09)', () => {
           taskKey: 't-impl-1',
           status: 'running',
           attempt: 1,
-          branchName: 'apex/build-task/run-1/t-impl-1-1',
+          branchName: 'apex/build-task/run-1/r1/t-impl-1-1',
           covers: ['AC-1'],
           chainHeadKey: null,
         },

@@ -223,10 +223,11 @@ function parseEntry(raw: unknown): EvidenceEntry | null {
 
   let tier: EvidenceTier = 'unit';
   if (raw.tier !== undefined && raw.tier !== null) {
-    if (typeof raw.tier !== 'string' || !VALID_TIERS.has(raw.tier)) {
+    if (typeof raw.tier !== 'string') {
       return null;
     }
-    tier = raw.tier as EvidenceTier;
+    // Only `e2e` changes how an entry is judged, so a label such as `component` counts as `unit`.
+    tier = VALID_TIERS.has(raw.tier) ? (raw.tier as EvidenceTier) : 'unit';
   }
 
   const testReferences = parseTestReferences(raw.testReferences);

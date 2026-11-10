@@ -9,8 +9,14 @@ export default defineConfig(({ mode }) => {
   parseWebEnv(loadEnv(mode, envDir, 'VITE_'));
   const viteEnv = loadEnv(mode, envDir, 'VITE_');
   const previewSample = viteEnv.VITE_APEX_PREVIEW_MODE === 'sample';
-  const { PORT } = parseDevServerEnv(loadEnv(mode, envDir, ''));
-  const target = `http://localhost:${PORT}`;
+  const env = loadEnv(mode, envDir, '');
+  const { PORT } = parseDevServerEnv(env);
+  // An Apex Studio session has no API of its own. It sets this to the verified
+  // runtime's API so the editable preview shows the same data as the build.
+  const apiTarget = env.APEX_API_PROXY_TARGET?.trim() ?? '';
+  const target = /^https?:\/\/[^\s]+$/.test(apiTarget)
+    ? apiTarget
+    : `http://localhost:${PORT}`;
   return {
     envDir,
     base: previewSample ? './' : '/',

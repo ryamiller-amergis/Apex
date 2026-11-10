@@ -34,9 +34,11 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
   let requesterHasRunPermission = true;
   const preflightPasses = true;
   let stopResult = { stopped: 2, unconfirmed: [] as string[] };
-  const events: Array<{ eventType: string; detail?: Record<string, unknown> }> = [];
+  const events: Array<{ eventType: string; detail?: Record<string, unknown> }> =
+    [];
   const leasesReleased: string[] = [];
   const playbooksCancelled: string[] = [];
+  const fastEditsCancelled: string[] = [];
   const reconciledRuns: string[] = [];
   const rechecks: string[] = [];
 
@@ -60,6 +62,9 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
     cancelPlaybookRun: async (playbookRunId) => {
       playbooksCancelled.push(playbookRunId);
     },
+    cancelFastEdit: async (buildRunId) => {
+      fastEditsCancelled.push(buildRunId);
+    },
     readCurrentProfileCaps: async () => ({
       costLimitUsd: profileCostLimitUsd,
       elapsedLimitMs: profileElapsedLimitMs,
@@ -69,9 +74,9 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
     runConfigurationPreflight: async () => preflightPasses,
     casResumeRun: async (buildId, expectedReason, nextStage, updatedCaps) => {
       if (
-        run.id !== buildId
-        || run.status !== 'suspended'
-        || run.suspendReason !== expectedReason
+        run.id !== buildId ||
+        run.status !== 'suspended' ||
+        run.suspendReason !== expectedReason
       ) {
         return false;
       }
@@ -103,6 +108,7 @@ function createControlHarness(initial?: Partial<ControlRunRecord>) {
     events,
     leasesReleased,
     playbooksCancelled,
+    fastEditsCancelled,
     reconciledRuns,
     rechecks,
     setStopResult: (r: { stopped: number; unconfirmed: string[] }) => {
@@ -138,8 +144,9 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
     expect(first.unconfirmedAgents).toBe(1);
     expect(h.leasesReleased).toEqual([h.run.id]);
     expect(h.playbooksCancelled).toEqual(['pb-1']);
+    expect(h.fastEditsCancelled).toEqual([h.run.id]);
     expect(h.events.map((e) => e.eventType)).toEqual(
-      expect.arrayContaining(['run_cancelled', 'agent_cancel_failed']),
+      expect.arrayContaining(['run_cancelled', 'agent_cancel_failed'])
     );
 
     // Repeat cancel -> alreadyCancelled: true
@@ -157,7 +164,7 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
         buildId: settledHarness.run.id,
         projectId: 'Apex',
         actor: { userId: 'u-req', isProjectAdmin: false, isSuperAdmin: false },
-      }),
+      })
     ).rejects.toMatchObject({
       code: 'BUILD_ALREADY_SETTLED',
       statusCode: 409,
@@ -165,22 +172,33 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
   });
 
   it('VT-04, VT-10 PBI-035 AC-3 / PBI-036 AC-3 refuses non-requester member without admin role with 403 FORBIDDEN', async () => {
-    const h = createControlHarness({ status: 'suspended', suspendReason: 'cost_cap' });
+    const h = createControlHarness({
+      status: 'suspended',
+      suspendReason: 'cost_cap',
+    });
 
     await expect(
       h.service.cancel({
         buildId: h.run.id,
         projectId: 'Apex',
-        actor: { userId: 'u-other', isProjectAdmin: false, isSuperAdmin: false },
-      }),
+        actor: {
+          userId: 'u-other',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', statusCode: 403 });
 
     await expect(
       h.service.resume({
         buildId: h.run.id,
         projectId: 'Apex',
-        actor: { userId: 'u-other', isProjectAdmin: false, isSuperAdmin: false },
-      }),
+        actor: {
+          userId: 'u-other',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', statusCode: 403 });
   });
 
@@ -198,7 +216,7 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
         buildId: h.run.id,
         projectId: 'Apex',
         actor: { userId: 'u-admin', isProjectAdmin: true, isSuperAdmin: false },
-      }),
+      })
     ).rejects.toMatchObject({
       code: 'RESUME_CAUSE_NOT_CLEARED',
       remainingCause: 'cost_cap',
@@ -252,7 +270,7 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
         buildId: h.run.id,
         projectId: 'Apex',
         actor: { userId: 'u-admin', isProjectAdmin: true, isSuperAdmin: false },
-      }),
+      })
     ).rejects.toMatchObject({
       code: 'RESUME_CAUSE_NOT_CLEARED',
       remainingCause: 'flag_disabled',
@@ -279,7 +297,7 @@ describe('buildRunControlService (PBI-035, PBI-036, TBI-029 / VT-01..VT-12, VT-3
         buildId: permHarness.run.id,
         projectId: 'Apex',
         actor: { userId: 'u-admin', isProjectAdmin: true, isSuperAdmin: false },
-      }),
+      })
     ).rejects.toMatchObject({
       code: 'RESUME_CAUSE_NOT_CLEARED',
       remainingCause: 'permission_revoked',

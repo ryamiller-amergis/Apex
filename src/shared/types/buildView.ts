@@ -20,7 +20,11 @@ import type {
   BuildVerificationKind,
   BuildVerificationStatus,
 } from './build';
-import type { BuildRevisionProgressView } from './buildRevision';
+import type {
+  BuildRevisionFastEditProgress,
+  BuildRevisionProgressView,
+} from './buildRevision';
+import type { BuildLogoReviewView } from '../buildLogoReview';
 
 export type VerificationKind = BuildVerificationKind;
 export type VerificationTier = BuildTestTier;
@@ -108,6 +112,8 @@ export interface BuildRevisionSummary {
   classification: BuildClassification | null;
   deploymentStatus: BuildDeploymentStatus;
   previewUrl: string | null;
+  /** What the requester asked to change; null for the original build. */
+  feedback?: string | null;
 }
 
 export interface BuildVerificationSummary {
@@ -149,7 +155,8 @@ export interface BuildDetailResponse {
   lease: { state: 'waiting' | 'held' | 'none'; queuePosition: number | null } | null;
   deployment?: BuildDeploymentView;
   previews?: BuildPreviewEntry[];
-  revision?: BuildRevisionProgressView;
+  revision?: BuildRevisionProgressView | BuildRevisionFastEditProgress;
+  logoReview?: BuildLogoReviewView | null;
   pullRequest?: BuildPullRequestSummary | null;
   viewer?: {
     canRetryDeployment: boolean;
@@ -162,6 +169,8 @@ export interface BuildEventView {
   kind: string;
   message: string;
   taskKey: string | null;
+  /** Null for run-level events that belong to no revision. */
+  revisionNumber?: number | null;
   /** Direct Cursor Cloud Agent page for events correlated to a Cloud Agent run. */
   cloudAgentUrl: string | null;
 }

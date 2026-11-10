@@ -17,8 +17,14 @@ import {
 import { db } from '../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
 import { agentRuns, prds } from '../db/schema';
-import { isBackgroundWorkflowThread, toggleFlag } from '../services/chatThreadRepository';
-import { resolveThreadAccess, canWriteThread } from '../services/threadAccessService';
+import {
+  isBackgroundWorkflowThread,
+  toggleFlag,
+} from '../services/chatThreadRepository';
+import {
+  resolveThreadAccess,
+  canWriteThread,
+} from '../services/threadAccessService';
 import { getUserId } from '../utils/requestUser';
 import type {
   AgentRunEventEnvelope,
@@ -45,7 +51,6 @@ import { isBuildIntakeThread } from '../services/buildIntakeThread';
 import { isBuildFromPromptEnabled } from '../services/buildAccessService';
 import {
   BUILD_FLAG_DISABLED_CODE,
-  BUILD_INTAKE_ATTACHMENTS_MESSAGE,
   BUILD_INTAKE_PAUSED_MESSAGE,
 } from '../../shared/types/buildAccess';
 import { writeSseEvent, startSseHeartbeat } from '../utils/sseResponse';
@@ -61,7 +66,10 @@ import {
   type AgentRunHealthConfig,
   type AgentRunHealthSnapshot,
 } from '../services/agentRunReaperService';
-import { getMyWorkSessionContext, logMyWorkSession } from '../services/myWorkSessionLogger';
+import {
+  getMyWorkSessionContext,
+  logMyWorkSession,
+} from '../services/myWorkSessionLogger';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { trackEvent } from '../services/telemetry';
 import { deriveAgentModule } from '../services/agentEffortResolver';
@@ -95,7 +103,10 @@ const MAX_CHAT_ATTACHMENT_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_STREAM_EVENT_IDS = 2_000;
 
 /** Stable, user-readable text for each Home pill admission denial (FEAT-002 / TBI-005). */
-const THREAD_CREATION_DENIAL_MESSAGES: Record<ThreadCreationDenialReason, string> = {
+const THREAD_CREATION_DENIAL_MESSAGES: Record<
+  ThreadCreationDenialReason,
+  string
+> = {
   skill_pill_not_allowed:
     'You are not allowed to start a chat with this Home skill. Ask a project admin for access.',
   mcp_pill_not_allowed:
@@ -111,22 +122,27 @@ const THREAD_CREATION_DENIAL_MESSAGES: Record<ThreadCreationDenialReason, string
  */
 function namesHomePill(
   kickoff: Partial<ChatThreadKickoff>,
-  skillConfig: ProjectSkillConfig | null,
+  skillConfig: ProjectSkillConfig | null
 ): boolean {
   const { skillPath } = kickoff;
   const mcpServerName = kickoff.mcpPill?.mcpServerName;
   return Boolean(
-    (skillPath
-      && skillConfig?.quickSkillPills?.some((pill) => pill.skillPath === skillPath))
-    || (mcpServerName
-      && skillConfig?.quickMcpPills?.some((pill) => pill.mcpServerName === mcpServerName)),
+    (skillPath &&
+      skillConfig?.quickSkillPills?.some(
+        (pill) => pill.skillPath === skillPath
+      )) ||
+    (mcpServerName &&
+      skillConfig?.quickMcpPills?.some(
+        (pill) => pill.mcpServerName === mcpServerName
+      ))
   );
 }
 
 export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
-  const event: SseEvent = envelope.event.type === 'cancel'
-    ? { type: 'done', runId: envelope.runId }
-    : envelope.event;
+  const event: SseEvent =
+    envelope.event.type === 'cancel'
+      ? { type: 'done', runId: envelope.runId }
+      : envelope.event;
   return {
     ...event,
     runId: envelope.runId,
@@ -139,12 +155,14 @@ export function eventForRunEnvelope(envelope: AgentRunEventEnvelope): SseEvent {
 
 export function buildStreamStatusEvent(
   status: ChatThreadStatus,
-  eventDrivenTermination: boolean,
+  eventDrivenTermination: boolean
 ): SseStatusEvent {
   return { type: 'status', status, eventDrivenTermination };
 }
 
-async function isEventDrivenTerminationEnabled(thread: ChatThread): Promise<boolean> {
+async function isEventDrivenTerminationEnabled(
+  thread: ChatThread
+): Promise<boolean> {
   const project = thread.kickoff?.project;
   if (!project) return false;
   return isFeatureEnabled('event-driven-run-termination', {
@@ -153,7 +171,9 @@ async function isEventDrivenTerminationEnabled(thread: ChatThread): Promise<bool
   }).catch(() => false);
 }
 
-async function isAiRunsV2TransportEnabled(thread: ChatThread): Promise<boolean> {
+async function isAiRunsV2TransportEnabled(
+  thread: ChatThread
+): Promise<boolean> {
   const project = thread.kickoff?.project;
   if (!project) return false;
   return isFeatureEnabled('ai-runs-v2-transport', {
@@ -168,25 +188,29 @@ export function formatRunEventSse(envelope: AgentRunEventEnvelope): string {
 
 export function shouldForwardPgRunEvent(
   envelope: AgentRunEventEnvelope,
-  localInstance = RUN_EVENT_SOURCE_INSTANCE,
+  localInstance = RUN_EVENT_SOURCE_INSTANCE
 ): boolean {
   return envelope.sourceInstance !== localInstance;
 }
 
-export function shouldAssignRunEventSseId(envelope: AgentRunEventEnvelope): boolean {
+export function shouldAssignRunEventSseId(
+  envelope: AgentRunEventEnvelope
+): boolean {
   if (envelope.event.type === 'token') {
     const offset = envelope.event.streamOffset;
     return typeof offset === 'number' && Number.isFinite(offset) && offset >= 0;
   }
-  return envelope.event.type === 'phase'
-    || envelope.event.type === 'health'
-    || envelope.event.type === 'tool_call'
-    || envelope.event.type === 'tool_status'
-    || envelope.event.type === 'status'
-    || envelope.event.type === 'retrying'
-    || envelope.event.type === 'error'
-    || envelope.event.type === 'done'
-    || envelope.event.type === 'cancel';
+  return (
+    envelope.event.type === 'phase' ||
+    envelope.event.type === 'health' ||
+    envelope.event.type === 'tool_call' ||
+    envelope.event.type === 'tool_status' ||
+    envelope.event.type === 'status' ||
+    envelope.event.type === 'retrying' ||
+    envelope.event.type === 'error' ||
+    envelope.event.type === 'done' ||
+    envelope.event.type === 'cancel'
+  );
 }
 
 interface RunStatusRow extends AgentRunHealthSnapshot {
@@ -199,7 +223,7 @@ interface RunStatusRow extends AgentRunHealthSnapshot {
 export function buildRunStatusResponse(
   row: RunStatusRow | null,
   nowMs = Date.now(),
-  config: AgentRunHealthConfig = resolveAgentRunHealthConfig(),
+  config: AgentRunHealthConfig = resolveAgentRunHealthConfig()
 ): AgentRunStatusResponse {
   if (!row) {
     return {
@@ -277,7 +301,11 @@ function errorStatus(err: unknown, fallback = 500): number {
  * Loads a thread when the user has read access (owner or document-scoped viewer).
  * Returns 404 when access is denied to avoid leaking thread existence.
  */
-async function requireThreadRead(req: Request, res: Response, next: NextFunction): Promise<void> {
+async function requireThreadRead(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   const result = await resolveThreadAccess(getUserId(req), req.params.id);
   if (!result) {
     res.status(404).json({ error: 'Thread not found' });
@@ -292,7 +320,11 @@ async function requireThreadRead(req: Request, res: Response, next: NextFunction
 /**
  * Requires write access (thread owner, or assistant-thread approver/admin rules).
  */
-async function requireThreadWrite(req: Request, res: Response, next: NextFunction): Promise<void> {
+async function requireThreadWrite(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   const userId = getUserId(req);
   const threadId = req.params.id;
   const result = await resolveThreadAccess(userId, threadId);
@@ -317,7 +349,10 @@ function readAttachments(raw: unknown): ChatAttachment[] {
     throw new HttpError('attachments must be an array', 400);
   }
   if (raw.length > MAX_CHAT_ATTACHMENTS) {
-    throw new HttpError(`up to ${MAX_CHAT_ATTACHMENTS} attachments are allowed`, 413);
+    throw new HttpError(
+      `up to ${MAX_CHAT_ATTACHMENTS} attachments are allowed`,
+      413
+    );
   }
 
   let totalBytes = 0;
@@ -359,7 +394,13 @@ function readTurnSkill(raw: unknown): ChatTurnSkill | undefined {
   const candidate = raw as Partial<ChatTurnSkill>;
   const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
   const path = typeof candidate.path === 'string' ? candidate.path.trim() : '';
-  if (!name || !path || name.length > 120 || path.length > 500 || path.includes('\0')) {
+  if (
+    !name ||
+    !path ||
+    name.length > 120 ||
+    path.length > 500 ||
+    path.includes('\0')
+  ) {
     throw new HttpError('skill must contain a valid name and path', 400);
   }
   return { name, path };
@@ -374,7 +415,8 @@ function readTurnSkill(raw: unknown): ChatTurnSkill | undefined {
 router.get('/threads', async (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
-  const project = typeof req.query.project === 'string' ? req.query.project : undefined;
+  const project =
+    typeof req.query.project === 'string' ? req.query.project : undefined;
   const rawQ = typeof req.query.q === 'string' ? req.query.q.trim() : '';
   const flaggedOnly =
     req.query.flaggedOnly === 'true' || req.query.flaggedOnly === '1';
@@ -393,11 +435,17 @@ router.get('/threads', async (req: Request, res: Response) => {
       return;
     }
 
-    const summaries = await listThreadSummaries(getUserId(req), { limit, offset, project });
+    const summaries = await listThreadSummaries(getUserId(req), {
+      limit,
+      offset,
+      project,
+    });
     res.json(summaries);
   } catch (err: unknown) {
     console.error('[chat] listThreadSummaries error:', errorMessage(err));
-    res.status(500).json({ error: errorMessage(err) || 'Failed to list threads' });
+    res
+      .status(500)
+      .json({ error: errorMessage(err) || 'Failed to list threads' });
   }
 });
 
@@ -410,8 +458,10 @@ router.get('/threads', async (req: Request, res: Response) => {
 router.post('/threads', async (req: Request, res: Response) => {
   const body = req.body as Partial<StartChatRequest>;
 
-  if (!body.kickoff?.project) return res.status(400).json({ error: 'kickoff.project is required' });
-  if (!body.kickoff?.repo) return res.status(400).json({ error: 'kickoff.repo is required' });
+  if (!body.kickoff?.project)
+    return res.status(400).json({ error: 'kickoff.project is required' });
+  if (!body.kickoff?.repo)
+    return res.status(400).json({ error: 'kickoff.repo is required' });
 
   try {
     const userId = getUserId(req);
@@ -449,9 +499,14 @@ router.post('/threads', async (req: Request, res: Response) => {
         return res.status(404).json({ error: 'Not found' });
       }
       if (!isSuperAdminRequest(req)) {
-        const permissions = await getUserPermissions(userId, clientKickoff.project);
+        const permissions = await getUserPermissions(
+          userId,
+          clientKickoff.project
+        );
         if (!permissions.has('mcp-servers:view')) {
-          return res.status(403).json({ error: 'Forbidden', missing: ['mcp-servers:view'] });
+          return res
+            .status(403)
+            .json({ error: 'Forbidden', missing: ['mcp-servers:view'] });
         }
       }
       await assertCallerCanUseMcpServer({
@@ -506,10 +561,14 @@ router.post('/threads', async (req: Request, res: Response) => {
     res.status(201).json({ threadId: thread.id });
   } catch (err: unknown) {
     if (err instanceof McpServerError) {
-      return res.status(err.status).json({ error: err.message, code: err.code });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     }
     console.error('[chat] createThread error:', errorMessage(err));
-    res.status(500).json({ error: errorMessage(err) || 'Failed to create thread' });
+    res
+      .status(500)
+      .json({ error: errorMessage(err) || 'Failed to create thread' });
   }
 });
 
@@ -527,401 +586,427 @@ router.get('/threads/:id', requireThreadRead, (req: Request, res: Response) => {
  * GET /api/chat/threads/:id/stream
  * Server-Sent Events stream for real-time agent output.
  */
-router.get('/threads/:id/stream', requireThreadRead, async (req: Request, res: Response) => {
-  const thread = (req as ThreadRequest).thread!;
-  const eventDrivenTermination = await isEventDrivenTerminationEnabled(thread);
-  const v2Transport = await isAiRunsV2TransportEnabled(thread);
-  const streamStartedAt = Date.now();
-  const myWorkContext = thread.kickoff?.mode === 'development'
-    ? await getMyWorkSessionContext(req.params.id).catch(() => null)
-    : null;
+router.get(
+  '/threads/:id/stream',
+  requireThreadRead,
+  async (req: Request, res: Response) => {
+    const thread = (req as ThreadRequest).thread!;
+    const eventDrivenTermination =
+      await isEventDrivenTerminationEnabled(thread);
+    const v2Transport = await isAiRunsV2TransportEnabled(thread);
+    const streamStartedAt = Date.now();
+    const myWorkContext =
+      thread.kickoff?.mode === 'development'
+        ? await getMyWorkSessionContext(req.params.id).catch(() => null)
+        : null;
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering
-  res.flushHeaders();
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering
+    res.flushHeaders();
 
-  let stopHeartbeat = () => {};
-  let unsubscribe = () => {};
-  let unsubNotify = () => {};
-  let unsubLive = () => {};
-  const sentEventIds = new Set<string>();
-  const sentTokenOffsets = new Set<number>();
-  const sentEventIdOrder: string[] = [];
-  let replaying = true;
-  const pendingLiveEvents: AgentRunEventEnvelope[] = [];
+    let stopHeartbeat = () => {};
+    let unsubscribe = () => {};
+    let unsubNotify = () => {};
+    let unsubLive = () => {};
+    const sentEventIds = new Set<string>();
+    const sentTokenOffsets = new Set<number>();
+    const sentEventIdOrder: string[] = [];
+    let replaying = true;
+    const pendingLiveEvents: AgentRunEventEnvelope[] = [];
 
-  const rememberEventId = (eventId: string): boolean => {
-    if (sentEventIds.has(eventId)) return false;
-    sentEventIds.add(eventId);
-    sentEventIdOrder.push(eventId);
-    if (sentEventIdOrder.length > MAX_STREAM_EVENT_IDS) {
-      const oldest = sentEventIdOrder.shift();
-      if (oldest) sentEventIds.delete(oldest);
-    }
-    return true;
-  };
-
-  const closeStream = () => {
-    stopHeartbeat();
-    unsubscribe();
-    unsubNotify();
-    unsubLive();
-  };
-
-  const sendEvent = (event: object, eventId?: string) => {
-    if (eventId && !rememberEventId(eventId)) return;
-    const written = eventId
-      ? (!res.writableEnded && !res.destroyed && (() => {
-          try {
-            res.write(`id: ${eventId}\ndata: ${JSON.stringify(event)}\n\n`);
-            (res as Response & { flush?: () => void }).flush?.();
-            return true;
-          } catch {
-            return false;
-          }
-        })())
-      : writeSseEvent(res, event);
-    if (!written) {
-      closeStream();
-    }
-  };
-
-  const sendEnvelope = (envelope: AgentRunEventEnvelope) => {
-    if (envelope.event.type === 'cancel') {
-      sendEvent({ type: 'status', status: 'idle' });
-      sendEvent({ type: 'done', runId: envelope.runId }, envelope.eventId);
-      return;
-    }
-    // Dedupe Redis live vs durable replay by eventId and by token offsets.
-    if (envelope.event.type === 'token') {
-      const offset = envelope.event.streamOffset;
-      if (typeof offset === 'number' && Number.isFinite(offset)) {
-        if (sentTokenOffsets.has(offset)) return;
-        sentTokenOffsets.add(offset);
+    const rememberEventId = (eventId: string): boolean => {
+      if (sentEventIds.has(eventId)) return false;
+      sentEventIds.add(eventId);
+      sentEventIdOrder.push(eventId);
+      if (sentEventIdOrder.length > MAX_STREAM_EVENT_IDS) {
+        const oldest = sentEventIdOrder.shift();
+        if (oldest) sentEventIds.delete(oldest);
       }
-    }
-    sendEvent(
-      eventForRunEnvelope(envelope),
-      shouldAssignRunEventSseId(envelope) ? envelope.eventId : undefined,
-    );
-  };
+      return true;
+    };
 
-  const queueOrSendEnvelope = (envelope: AgentRunEventEnvelope) => {
-    if (replaying) {
-      pendingLiveEvents.push(envelope);
-    } else {
-      sendEnvelope(envelope);
-    }
-  };
+    const closeStream = () => {
+      stopHeartbeat();
+      unsubscribe();
+      unsubNotify();
+      unsubLive();
+    };
 
-  const sendLocalEvent = (event: SseEvent, envelope?: AgentRunEventEnvelope) => {
-    if (envelope) {
-      queueOrSendEnvelope(envelope);
-    } else if (!writeSseEvent(res, event)) {
-      closeStream();
-    }
-  };
-
-  // Hydrate the thread into memory BEFORE subscribing. subscribeToThread only
-  // attaches to the in-memory threads Map; if the thread was evicted (idle
-  // timeout) or lost (server restart), subscribing without hydration is a
-  // silent no-op and the client would receive no agent output when it later
-  // sends a message (e.g. resuming an interview the next day). Hydration also
-  // normalizes a stale 'running' status back to 'idle'.
-  const hydrated = await getThread(req.params.id).catch(() => null);
-
-  // Replay all existing messages so late-joining subscribers (including
-  // the very first connect right after thread creation) never miss events.
-  // Prefer the hydrated in-memory messages (may include writes not yet
-  // flushed to Postgres) over the stale middleware snapshot.
-  const replayMessages = [...(hydrated?.messages ?? thread.messages)].sort(
-    (a, b) => {
-      const byTs = a.ts.localeCompare(b.ts);
-      if (byTs !== 0) return byTs;
-      return a.id.localeCompare(b.id);
-    },
-  );
-  for (const msg of replayMessages) {
-    sendEvent({ type: 'message', message: msg });
-  }
-
-  // Subscribe BEFORE durable page replay so live Redis / PG events that arrive
-  // during the async hasMore loop are buffered and flushed after the final page
-  // (mirrors interactiveGatewayService).
-  unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
-
-  // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
-  // another worker's run are forwarded to this SSE connection. `sendEnvelope`
-  // deduplicates by `eventId`, so a local in-memory delivery will not be sent
-  // twice.
-  unsubNotify = subscribeRunEvents(req.params.id, (envelope) => {
-    queueOrSendEnvelope(envelope);
-  });
-
-  // Under ai-runs-v2-transport, WS→SSE fallback must see Redis live tokens.
-  if (v2Transport) {
-    unsubLive = interactiveLiveBus.subscribe(req.params.id, (envelope) => {
-      queueOrSendEnvelope(envelope);
-    });
-  }
-
-  const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
-  // A cold page load already receives persisted messages and the authoritative
-  // thread status above. Replaying old tool/phase events for an idle thread
-  // makes completed work look like it started again. Only resume durable
-  // events when the browser supplied a cursor or a run is currently active.
-  const shouldReplayEvents =
-    Boolean(lastEventId) || hydrated?.status === 'running';
-  let replayedEventCount = 0;
-  if (shouldReplayEvents) {
-    const coldStart = 'oldest' as const;
-    let afterEventId = lastEventId;
-    try {
-      for (;;) {
-        const page = await replayRunEventPage(req.params.id, {
-          afterEventId,
-          limit: 500,
-          runId: hydrated?.activeRunId,
-          coldStart,
-        });
-        for (const envelope of page.events) sendEnvelope(envelope);
-        replayedEventCount += page.events.length;
-        if (!page.hasMore || !page.nextEventId) break;
-        afterEventId = page.nextEventId;
+    const sendEvent = (event: object, eventId?: string) => {
+      if (eventId && !rememberEventId(eventId)) return;
+      const written = eventId
+        ? !res.writableEnded &&
+          !res.destroyed &&
+          (() => {
+            try {
+              res.write(`id: ${eventId}\ndata: ${JSON.stringify(event)}\n\n`);
+              (res as Response & { flush?: () => void }).flush?.();
+              return true;
+            } catch {
+              return false;
+            }
+          })()
+        : writeSseEvent(res, event);
+      if (!written) {
+        closeStream();
       }
-    } catch (err) {
-      console.error(
-        `[chat] run-event replay failed for thread ${req.params.id}:`,
-        (err as Error).message,
+    };
+
+    const sendEnvelope = (envelope: AgentRunEventEnvelope) => {
+      if (envelope.event.type === 'cancel') {
+        sendEvent({ type: 'status', status: 'idle' });
+        sendEvent({ type: 'done', runId: envelope.runId }, envelope.eventId);
+        return;
+      }
+      // Dedupe Redis live vs durable replay by eventId and by token offsets.
+      if (envelope.event.type === 'token') {
+        const offset = envelope.event.streamOffset;
+        if (typeof offset === 'number' && Number.isFinite(offset)) {
+          if (sentTokenOffsets.has(offset)) return;
+          sentTokenOffsets.add(offset);
+        }
+      }
+      sendEvent(
+        eventForRunEnvelope(envelope),
+        shouldAssignRunEventSseId(envelope) ? envelope.eventId : undefined
       );
+    };
+
+    const queueOrSendEnvelope = (envelope: AgentRunEventEnvelope) => {
+      if (replaying) {
+        pendingLiveEvents.push(envelope);
+      } else {
+        sendEnvelope(envelope);
+      }
+    };
+
+    const sendLocalEvent = (
+      event: SseEvent,
+      envelope?: AgentRunEventEnvelope
+    ) => {
+      if (envelope) {
+        queueOrSendEnvelope(envelope);
+      } else if (!writeSseEvent(res, event)) {
+        closeStream();
+      }
+    };
+
+    // Hydrate the thread into memory BEFORE subscribing. subscribeToThread only
+    // attaches to the in-memory threads Map; if the thread was evicted (idle
+    // timeout) or lost (server restart), subscribing without hydration is a
+    // silent no-op and the client would receive no agent output when it later
+    // sends a message (e.g. resuming an interview the next day). Hydration also
+    // normalizes a stale 'running' status back to 'idle'.
+    const hydrated = await getThread(req.params.id).catch(() => null);
+
+    // Replay all existing messages so late-joining subscribers (including
+    // the very first connect right after thread creation) never miss events.
+    // Prefer the hydrated in-memory messages (may include writes not yet
+    // flushed to Postgres) over the stale middleware snapshot.
+    const replayMessages = [...(hydrated?.messages ?? thread.messages)].sort(
+      (a, b) => {
+        const byTs = a.ts.localeCompare(b.ts);
+        if (byTs !== 0) return byTs;
+        return a.id.localeCompare(b.id);
+      }
+    );
+    for (const msg of replayMessages) {
+      sendEvent({ type: 'message', message: msg });
     }
-  }
 
-  // Historical phase/done events must not override the current thread state.
-  // Send the authoritative snapshot after replay, then drain events that
-  // arrived live while replay was in progress.
-  sendEvent(buildStreamStatusEvent(
-    hydrated?.status ?? thread.status,
-    eventDrivenTermination,
-  ));
-  replaying = false;
-  pendingLiveEvents
-    .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.sequence - right.sequence)
-    .forEach(sendEnvelope);
+    // Subscribe BEFORE durable page replay so live Redis / PG events that arrive
+    // during the async hasMore loop are buffered and flushed after the final page
+    // (mirrors interactiveGatewayService).
+    unsubscribe = subscribeToThread(req.params.id, sendLocalEvent);
 
-  stopHeartbeat = startSseHeartbeat(res);
-  if (myWorkContext) {
-    logMyWorkSession('stream.connected', {
-      ...myWorkContext,
-      threadStatus: hydrated?.status ?? thread.status,
-      replayedMessageCount: replayMessages.length,
-      replayedEventCount,
-      resumedFromEvent: Boolean(lastEventId),
+    // Cross-worker: also subscribe via Postgres LISTEN/NOTIFY so tokens from
+    // another worker's run are forwarded to this SSE connection. `sendEnvelope`
+    // deduplicates by `eventId`, so a local in-memory delivery will not be sent
+    // twice.
+    unsubNotify = subscribeRunEvents(req.params.id, (envelope) => {
+      queueOrSendEnvelope(envelope);
     });
-  }
 
-  req.on('close', () => {
-    closeStream();
-    if (myWorkContext) {
-      logMyWorkSession('stream.disconnected', {
-        ...myWorkContext,
-        durationMs: Date.now() - streamStartedAt,
-        threadStatus: hydrated?.status ?? thread.status,
+    // Under ai-runs-v2-transport, WS→SSE fallback must see Redis live tokens.
+    if (v2Transport) {
+      unsubLive = interactiveLiveBus.subscribe(req.params.id, (envelope) => {
+        queueOrSendEnvelope(envelope);
       });
     }
-  });
-});
+
+    const lastEventId = req.get('Last-Event-ID')?.trim() || undefined;
+    // A cold page load already receives persisted messages and the authoritative
+    // thread status above. Replaying old tool/phase events for an idle thread
+    // makes completed work look like it started again. Only resume durable
+    // events when the browser supplied a cursor or a run is currently active.
+    const shouldReplayEvents =
+      Boolean(lastEventId) || hydrated?.status === 'running';
+    let replayedEventCount = 0;
+    if (shouldReplayEvents) {
+      const coldStart = 'oldest' as const;
+      let afterEventId = lastEventId;
+      try {
+        for (;;) {
+          const page = await replayRunEventPage(req.params.id, {
+            afterEventId,
+            limit: 500,
+            runId: hydrated?.activeRunId,
+            coldStart,
+          });
+          for (const envelope of page.events) sendEnvelope(envelope);
+          replayedEventCount += page.events.length;
+          if (!page.hasMore || !page.nextEventId) break;
+          afterEventId = page.nextEventId;
+        }
+      } catch (err) {
+        console.error(
+          `[chat] run-event replay failed for thread ${req.params.id}:`,
+          (err as Error).message
+        );
+      }
+    }
+
+    // Historical phase/done events must not override the current thread state.
+    // Send the authoritative snapshot after replay, then drain events that
+    // arrived live while replay was in progress.
+    sendEvent(
+      buildStreamStatusEvent(
+        hydrated?.status ?? thread.status,
+        eventDrivenTermination
+      )
+    );
+    replaying = false;
+    pendingLiveEvents
+      .sort(
+        (left, right) =>
+          left.timestamp.localeCompare(right.timestamp) ||
+          left.sequence - right.sequence
+      )
+      .forEach(sendEnvelope);
+
+    stopHeartbeat = startSseHeartbeat(res);
+    if (myWorkContext) {
+      logMyWorkSession('stream.connected', {
+        ...myWorkContext,
+        threadStatus: hydrated?.status ?? thread.status,
+        replayedMessageCount: replayMessages.length,
+        replayedEventCount,
+        resumedFromEvent: Boolean(lastEventId),
+      });
+    }
+
+    req.on('close', () => {
+      closeStream();
+      if (myWorkContext) {
+        logMyWorkSession('stream.disconnected', {
+          ...myWorkContext,
+          durationMs: Date.now() - streamStartedAt,
+          threadStatus: hydrated?.status ?? thread.status,
+        });
+      }
+    });
+  }
+);
 
 /**
  * POST /api/chat/threads/:id/messages
  * Send a user message. The agent response streams via SSE.
  * Body: SendMessageRequest
  */
-router.post('/threads/:id/messages', requireThreadWrite, async (req: Request, res: Response) => {
-  const body = req.body as Partial<SendMessageRequest>;
-  let attachments: ChatAttachment[];
-  let turnSkill: ChatTurnSkill | undefined;
-  try {
-    attachments = readAttachments(body.attachments);
-    turnSkill = readTurnSkill(body.skill);
-  } catch (err: unknown) {
-    return res.status(errorStatus(err, 400)).json({ error: errorMessage(err) });
-  }
-  if (!body.text?.trim() && attachments.length === 0) {
-    return res.status(400).json({ error: 'text or attachments are required' });
-  }
-
-  const thread = (req as ThreadRequest).thread!;
-  if (await isBackgroundWorkflowThread(thread.id)) {
-    return res.status(409).json({
-      error: 'This thread belongs to a background document job and does not accept chat messages. Start a new chat.',
-      code: 'BACKGROUND_WORKFLOW_THREAD',
-    });
-  }
-  const requesterUserId = getUserId(req);
-  const buildIntake = isBuildIntakeThread(thread);
-  if (buildIntake) {
-    const buildsEnabled = await isBuildFromPromptEnabled({
-      userId: requesterUserId,
-      project: thread.kickoff.project,
-    });
-    // @feature-flag:build-from-prompt start winner=enabled
-    if (!buildsEnabled) {
-      // @feature-flag:build-from-prompt disabled-start
-      return res.status(403).json({ error: BUILD_INTAKE_PAUSED_MESSAGE, code: BUILD_FLAG_DISABLED_CODE });
-      // @feature-flag:build-from-prompt disabled-end
-    }
-    // @feature-flag:build-from-prompt enabled-start
-    // Enabled projects accept build-intake messages.
-    // @feature-flag:build-from-prompt enabled-end
-    // @feature-flag:build-from-prompt end
-    if (attachments.length > 0) {
-      return res.status(400).json({ error: BUILD_INTAKE_ATTACHMENTS_MESSAGE });
-    }
-  }
-
-  let releaseAdoWriteTurn = () => {};
-  let durableToolGrant:
-    | {
-        allowedOperations: readonly ['ado:read', 'ado:write'];
-        delegatedAdoToken: string | null;
-      }
-    | undefined;
-  const calendarAssistant =
-    thread.kickoff.assistantType === 'calendar-work-item';
-  const explicitAdoWrite =
-    !calendarAssistant && isExplicitAdoWriteIntent(body.text ?? '');
-  const operationalAdoWrite =
-    !calendarAssistant &&
-    (skillRequiresAdoOperations(
-      turnSkill?.path ??
-        thread.kickoff.skillPath ??
-        thread.kickoff.standupSkillPath,
-      turnSkill?.name ?? thread.kickoff.pillLabel,
-    ) ||
-      Boolean(thread.kickoff.standupSessionId) ||
-      thread.kickoff.mode === 'standup-participant' ||
-      thread.kickoff.mode === 'standup-facilitator');
-  if (explicitAdoWrite || operationalAdoWrite) {
+router.post(
+  '/threads/:id/messages',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    const body = req.body as Partial<SendMessageRequest>;
+    let attachments: ChatAttachment[];
+    let turnSkill: ChatTurnSkill | undefined;
     try {
-      const token = await getAdoTokenForUser(req);
-      releaseAdoWriteTurn = await registerChatAdoWriteTurn({
-        threadId: req.params.id,
+      attachments = readAttachments(body.attachments);
+      turnSkill = readTurnSkill(body.skill);
+    } catch (err: unknown) {
+      return res
+        .status(errorStatus(err, 400))
+        .json({ error: errorMessage(err) });
+    }
+    if (!body.text?.trim() && attachments.length === 0) {
+      return res
+        .status(400)
+        .json({ error: 'text or attachments are required' });
+    }
+
+    const thread = (req as ThreadRequest).thread!;
+    if (await isBackgroundWorkflowThread(thread.id)) {
+      return res.status(409).json({
+        error:
+          'This thread belongs to a background document job and does not accept chat messages. Start a new chat.',
+        code: 'BACKGROUND_WORKFLOW_THREAD',
+      });
+    }
+    const requesterUserId = getUserId(req);
+    const buildIntake = isBuildIntakeThread(thread);
+    if (buildIntake) {
+      const buildsEnabled = await isBuildFromPromptEnabled({
         userId: requesterUserId,
         project: thread.kickoff.project,
-        token,
-        isSuperAdmin: isSuperAdminRequest(req),
       });
-      durableToolGrant = {
-        allowedOperations: ['ado:read', 'ado:write'],
-        delegatedAdoToken: token,
-      };
-    } catch (err: unknown) {
-      if (explicitAdoWrite) {
+      // @feature-flag:build-from-prompt start winner=enabled
+      if (!buildsEnabled) {
+        // @feature-flag:build-from-prompt disabled-start
         return res
-          .status(errorStatus(err, 403))
-          .json({ error: errorMessage(err) });
+          .status(403)
+          .json({
+            error: BUILD_INTAKE_PAUSED_MESSAGE,
+            code: BUILD_FLAG_DISABLED_CODE,
+          });
+        // @feature-flag:build-from-prompt disabled-end
+      }
+      // @feature-flag:build-from-prompt enabled-start
+      // Enabled projects accept build-intake messages.
+      // @feature-flag:build-from-prompt enabled-end
+      // @feature-flag:build-from-prompt end
+    }
+
+    let releaseAdoWriteTurn = () => {};
+    let durableToolGrant:
+      | {
+          allowedOperations: readonly ['ado:read', 'ado:write'];
+          delegatedAdoToken: string | null;
+        }
+      | undefined;
+    const calendarAssistant =
+      thread.kickoff.assistantType === 'calendar-work-item';
+    const explicitAdoWrite =
+      !calendarAssistant && isExplicitAdoWriteIntent(body.text ?? '');
+    const operationalAdoWrite =
+      !calendarAssistant &&
+      (skillRequiresAdoOperations(
+        turnSkill?.path ??
+          thread.kickoff.skillPath ??
+          thread.kickoff.standupSkillPath,
+        turnSkill?.name ?? thread.kickoff.pillLabel
+      ) ||
+        Boolean(thread.kickoff.standupSessionId) ||
+        thread.kickoff.mode === 'standup-participant' ||
+        thread.kickoff.mode === 'standup-facilitator');
+    if (explicitAdoWrite || operationalAdoWrite) {
+      try {
+        const token = await getAdoTokenForUser(req);
+        releaseAdoWriteTurn = await registerChatAdoWriteTurn({
+          threadId: req.params.id,
+          userId: requesterUserId,
+          project: thread.kickoff.project,
+          token,
+          isSuperAdmin: isSuperAdminRequest(req),
+        });
+        durableToolGrant = {
+          allowedOperations: ['ado:read', 'ado:write'],
+          delegatedAdoToken: token,
+        };
+      } catch (err: unknown) {
+        if (explicitAdoWrite) {
+          return res
+            .status(errorStatus(err, 403))
+            .json({ error: errorMessage(err) });
+        }
       }
     }
-  }
 
-  // The legacy callback detaches after its running-thread gate. Durable
-  // admission is awaited so the 202 can carry the persisted turn identity.
-  const threadId = req.params.id;
-  console.log('[chat] messages.accepted', {
-    threadId,
-    attachmentCount: attachments.length,
-  });
-  trackEvent('chat.messages.accepted', {
-    threadId,
-    attachmentCount: String(attachments.length),
-  });
-  let internalContext: string | undefined;
-  let draftBriefAfterSend = false;
-  if (buildIntake) {
-    try {
-      const prepared = await prepareBuildIntakeTurn({
-        threadId,
-        messageText: body.text ?? '',
-        turnId: body.turnId ?? '',
-      });
-      internalContext = prepared.internalContext;
-      draftBriefAfterSend = prepared.confirmed;
-    } catch (err: unknown) {
-      console.error(
-        `[chat] build intake preparation failed for thread ${threadId}:`,
-        err instanceof Error ? err.name : 'UnknownError',
-      );
-    }
-  } else if (isMultiAgentAssistedThread(thread)) {
-    try {
-      const prepared = await prepareAutonomousInterviewTurn({
-        mainThreadId: threadId,
-        answerText: body.text ?? '',
-      });
-      if (prepared.internalContext) internalContext = prepared.internalContext;
-    } catch (err: unknown) {
-      console.error(
-        `[chat] assisted interview preparation failed for thread ${threadId}:`,
-        errorMessage(err),
-      );
-    }
-  }
-
-  try {
-    // Unified send: canonical flag-off/error runs legacy (detach); flag-on admits
-    // durably and returns the accepted identity. Enabled-path failures never fall
-    // back to App Service Cursor/model execution.
-    const submission = await sendMessage(
+    // The legacy callback detaches after its running-thread gate. Durable
+    // admission is awaited so the 202 can carry the persisted turn identity.
+    const threadId = req.params.id;
+    console.log('[chat] messages.accepted', {
       threadId,
-      body.text ?? '',
-      body.model,
-      attachments,
-      {
-        turnSkill,
-        turnId: body.turnId,
-        turnIdPolicy: 'required',
-        legacyCompletion: 'detach',
-        requesterUserId,
-        toolGrant: durableToolGrant,
-        onLegacySettled: releaseAdoWriteTurn,
-        ...(internalContext ? { internalContext } : {}),
-      },
-    );
-    if (draftBriefAfterSend) void autoDraftBuildBriefForThread(threadId);
-    if (submission?.route === 'durable') {
-      releaseAdoWriteTurn();
-      const accepted = submission.response;
-      return res.status(202).json({
-        turnId: accepted.turnId,
-        runId: accepted.runId,
-        status: accepted.status,
-        interactiveClass: accepted.interactiveClass,
-      } satisfies InteractiveTurnAcceptedResponse);
-    }
-    // Undefined is retained only for isolated route tests that mock the older
-    // void-returning send service. Production always returns a route decision.
-    if (!submission) releaseAdoWriteTurn();
-    return res.status(202).json({ ok: true });
-  } catch (err: unknown) {
-    releaseAdoWriteTurn();
-    console.error(
-      `[chat] sendMessage error for thread ${threadId}:`,
-      errorMessage(err),
-    );
-    trackEvent('chat.send.failed', {
-      threadId,
-      errorType: err instanceof Error ? err.name : 'UnknownError',
-      errorMessage: errorMessage(err).slice(0, 200),
-
+      attachmentCount: attachments.length,
     });
-    return res
-      .status(errorStatus(err))
-      .json({ error: errorMessage(err) });
+    trackEvent('chat.messages.accepted', {
+      threadId,
+      attachmentCount: String(attachments.length),
+    });
+    let internalContext: string | undefined;
+    let draftBriefAfterSend = false;
+    if (buildIntake) {
+      try {
+        const prepared = await prepareBuildIntakeTurn({
+          threadId,
+          messageText: body.text ?? '',
+          turnId: body.turnId ?? '',
+        });
+        internalContext = prepared.internalContext;
+        draftBriefAfterSend = prepared.confirmed;
+      } catch (err: unknown) {
+        console.error(
+          `[chat] build intake preparation failed for thread ${threadId}:`,
+          err instanceof Error ? err.name : 'UnknownError'
+        );
+      }
+    } else if (isMultiAgentAssistedThread(thread)) {
+      try {
+        const prepared = await prepareAutonomousInterviewTurn({
+          mainThreadId: threadId,
+          answerText: body.text ?? '',
+        });
+        if (prepared.internalContext)
+          internalContext = prepared.internalContext;
+      } catch (err: unknown) {
+        console.error(
+          `[chat] assisted interview preparation failed for thread ${threadId}:`,
+          errorMessage(err)
+        );
+      }
+    }
+
+    try {
+      // Unified send: canonical flag-off/error runs legacy (detach); flag-on admits
+      // durably and returns the accepted identity. Enabled-path failures never fall
+      // back to App Service Cursor/model execution.
+      const submission = await sendMessage(
+        threadId,
+        body.text ?? '',
+        body.model,
+        attachments,
+        {
+          turnSkill,
+          turnId: body.turnId,
+          turnIdPolicy: 'required',
+          legacyCompletion: 'detach',
+          requesterUserId,
+          toolGrant: durableToolGrant,
+          onLegacySettled: releaseAdoWriteTurn,
+          ...(internalContext ? { internalContext } : {}),
+        }
+      );
+      if (draftBriefAfterSend) void autoDraftBuildBriefForThread(threadId);
+      if (submission?.route === 'durable') {
+        releaseAdoWriteTurn();
+        const accepted = submission.response;
+        return res.status(202).json({
+          turnId: accepted.turnId,
+          runId: accepted.runId,
+          status: accepted.status,
+          interactiveClass: accepted.interactiveClass,
+        } satisfies InteractiveTurnAcceptedResponse);
+      }
+      // Undefined is retained only for isolated route tests that mock the older
+      // void-returning send service. Production always returns a route decision.
+      if (!submission) releaseAdoWriteTurn();
+      return res.status(202).json({ ok: true });
+    } catch (err: unknown) {
+      releaseAdoWriteTurn();
+      console.error(
+        `[chat] sendMessage error for thread ${threadId}:`,
+        errorMessage(err)
+      );
+      trackEvent('chat.send.failed', {
+        threadId,
+        errorType: err instanceof Error ? err.name : 'UnknownError',
+        errorMessage: errorMessage(err).slice(0, 200),
+      });
+      return res.status(errorStatus(err)).json({ error: errorMessage(err) });
+    }
   }
-});
+);
 
 /**
  * POST /api/chat/threads/:id/runs/:runId/retry
@@ -953,7 +1038,7 @@ router.post(
       !calendarAssistant &&
       (skillRequiresAdoOperations(
         thread.kickoff.skillPath ?? thread.kickoff.standupSkillPath,
-        thread.kickoff.pillLabel,
+        thread.kickoff.pillLabel
       ) ||
         Boolean(thread.kickoff.standupSessionId) ||
         thread.kickoff.mode === 'standup-participant' ||
@@ -996,141 +1081,184 @@ router.post(
       if (err instanceof DurableInteractiveTurnError) {
         return res.status(err.status).json({ error: err.code });
       }
-      return res
-        .status(errorStatus(err))
-        .json({ error: errorMessage(err) });
+      return res.status(errorStatus(err)).json({ error: errorMessage(err) });
     }
-  },
+  }
 );
 
 /**
  * POST /api/chat/threads/:id/cancel
  * Cancel the active run.
  */
-router.post('/threads/:id/cancel', requireThreadWrite, async (req: Request, res: Response) => {
-  try {
-    await cancelRun(req.params.id);
-    res.json({ ok: true });
-  } catch (err: unknown) {
-    res.status(500).json({ error: errorMessage(err) || 'Failed to cancel' });
+router.post(
+  '/threads/:id/cancel',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    try {
+      await cancelRun(req.params.id);
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: errorMessage(err) || 'Failed to cancel' });
+    }
   }
-});
+);
 
 /**
  * GET /api/chat/threads/:id/prd
  * Read the output PRD.md written by the agent (if available).
  */
-router.get('/threads/:id/prd', requireThreadRead, (req: Request, res: Response) => {
-  const content = readOutputPrd(req.params.id);
-  if (content === null) return res.status(404).json({ error: 'PRD not yet generated' });
-  res.type('text/markdown').send(content);
-});
+router.get(
+  '/threads/:id/prd',
+  requireThreadRead,
+  (req: Request, res: Response) => {
+    const content = readOutputPrd(req.params.id);
+    if (content === null)
+      return res.status(404).json({ error: 'PRD not yet generated' });
+    res.type('text/markdown').send(content);
+  }
+);
 
 /**
  * GET /api/chat/threads/:id/backlog
  * Read the output *.backlog.json written by the agent (if available).
  */
-router.get('/threads/:id/backlog', requireThreadRead, (req: Request, res: Response) => {
-  const content = readOutputBacklog(req.params.id);
-  if (content === null) return res.status(404).json({ error: 'Backlog not yet generated' });
-  res.json(content);
-});
+router.get(
+  '/threads/:id/backlog',
+  requireThreadRead,
+  (req: Request, res: Response) => {
+    const content = readOutputBacklog(req.params.id);
+    if (content === null)
+      return res.status(404).json({ error: 'Backlog not yet generated' });
+    res.json(content);
+  }
+);
 
 /**
  * PUT /api/chat/threads/:id/prd
  * Overwrite the PRD with user-edited content.
  * Body: plain text (text/markdown or text/plain)
  */
-router.put('/threads/:id/prd', requireThreadWrite, async (req: Request, res: Response) => {
-  const content = typeof req.body === 'string' ? req.body : req.body?.content;
-  if (typeof content !== 'string') return res.status(400).json({ error: 'body must be the markdown text' });
-  try {
-    const threadId = req.params.id;
-    const prdRow = await db.query.prds.findFirst({ where: eq(prds.chatThreadId, threadId) });
-    if (!prdRow) {
-      return res.status(404).json({ error: 'No PRD found for this thread' });
+router.put(
+  '/threads/:id/prd',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    const content = typeof req.body === 'string' ? req.body : req.body?.content;
+    if (typeof content !== 'string')
+      return res.status(400).json({ error: 'body must be the markdown text' });
+    try {
+      const threadId = req.params.id;
+      const prdRow = await db.query.prds.findFirst({
+        where: eq(prds.chatThreadId, threadId),
+      });
+      if (!prdRow) {
+        return res.status(404).json({ error: 'No PRD found for this thread' });
+      }
+      await db
+        .update(prds)
+        .set({ content, updatedAt: new Date().toISOString() })
+        .where(eq(prds.id, prdRow.id));
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res
+        .status(500)
+        .json({ error: errorMessage(err) || 'Failed to write PRD' });
     }
-    await db.update(prds).set({ content, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdRow.id));
-    res.json({ ok: true });
-  } catch (err: unknown) {
-    res.status(500).json({ error: errorMessage(err) || 'Failed to write PRD' });
   }
-});
+);
 
 /**
  * PATCH /api/chat/threads/:id/flag
  * Toggle the flagged state for a thread.
  * Body: { flagged: boolean }
  */
-router.patch('/threads/:id/flag', requireThreadWrite, async (req: Request, res: Response) => {
-  const { flagged } = req.body as { flagged?: boolean };
-  if (typeof flagged !== 'boolean') {
-    return res.status(400).json({ error: 'flagged (boolean) is required' });
+router.patch(
+  '/threads/:id/flag',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    const { flagged } = req.body as { flagged?: boolean };
+    if (typeof flagged !== 'boolean') {
+      return res.status(400).json({ error: 'flagged (boolean) is required' });
+    }
+    try {
+      const result = await toggleFlag(req.params.id, flagged);
+      res.json(result);
+    } catch (err: unknown) {
+      console.error('[chat] toggleFlag error:', errorMessage(err));
+      res
+        .status(500)
+        .json({ error: errorMessage(err) || 'Failed to toggle flag' });
+    }
   }
-  try {
-    const result = await toggleFlag(req.params.id, flagged);
-    res.json(result);
-  } catch (err: unknown) {
-    console.error('[chat] toggleFlag error:', errorMessage(err));
-    res.status(500).json({ error: errorMessage(err) || 'Failed to toggle flag' });
-  }
-});
+);
 
 /**
  * GET /api/chat/threads/:id/run-status
  * Lightweight polling endpoint — returns only { status, lastError } from Postgres.
  * Used by the client as a fallback when SSE is disconnected while status==='running'.
  */
-router.get('/threads/:id/run-status', requireThreadRead, async (req: Request, res: Response) => {
-  try {
-    const thread = (req as ThreadRequest).thread!;
-    const eventDrivenTermination = await isEventDrivenTerminationEnabled(thread);
-    // @feature-flag:event-driven-run-termination start winner=enabled
-    if (eventDrivenTermination) {
-      // @feature-flag:event-driven-run-termination enabled-start
-      res.status(404).json({ error: 'Run status polling is disabled' });
-      // @feature-flag:event-driven-run-termination enabled-end
-    } else {
-      // @feature-flag:event-driven-run-termination disabled-start
-      const [row] = await db
-        .select({
-          id: agentRuns.id,
-          status: agentRuns.status,
-          lastError: agentRuns.lastError,
-          progressAt: agentRuns.progressAt,
-          progressLabel: agentRuns.progressLabel,
-          progressPhase: agentRuns.progressPhase,
-          createdAt: agentRuns.createdAt,
-          startedAt: agentRuns.startedAt,
-          heartbeatAt: agentRuns.heartbeatAt,
-          timeoutAt: agentRuns.timeoutAt,
-        })
-        .from(agentRuns)
-        .where(eq(agentRuns.threadId, req.params.id))
-        .orderBy(desc(agentRuns.createdAt))
-        .limit(1);
+router.get(
+  '/threads/:id/run-status',
+  requireThreadRead,
+  async (req: Request, res: Response) => {
+    try {
+      const thread = (req as ThreadRequest).thread!;
+      const eventDrivenTermination =
+        await isEventDrivenTerminationEnabled(thread);
+      // @feature-flag:event-driven-run-termination start winner=enabled
+      if (eventDrivenTermination) {
+        // @feature-flag:event-driven-run-termination enabled-start
+        res.status(404).json({ error: 'Run status polling is disabled' });
+        // @feature-flag:event-driven-run-termination enabled-end
+      } else {
+        // @feature-flag:event-driven-run-termination disabled-start
+        const [row] = await db
+          .select({
+            id: agentRuns.id,
+            status: agentRuns.status,
+            lastError: agentRuns.lastError,
+            progressAt: agentRuns.progressAt,
+            progressLabel: agentRuns.progressLabel,
+            progressPhase: agentRuns.progressPhase,
+            createdAt: agentRuns.createdAt,
+            startedAt: agentRuns.startedAt,
+            heartbeatAt: agentRuns.heartbeatAt,
+            timeoutAt: agentRuns.timeoutAt,
+          })
+          .from(agentRuns)
+          .where(eq(agentRuns.threadId, req.params.id))
+          .orderBy(desc(agentRuns.createdAt))
+          .limit(1);
 
-      res.json(buildRunStatusResponse(row ?? null));
-      // @feature-flag:event-driven-run-termination disabled-end
+        res.json(buildRunStatusResponse(row ?? null));
+        // @feature-flag:event-driven-run-termination disabled-end
+      }
+      // @feature-flag:event-driven-run-termination end
+    } catch (err: unknown) {
+      console.error('[chat] run-status error:', errorMessage(err));
+      res
+        .status(500)
+        .json({ error: errorMessage(err) || 'Failed to fetch run status' });
     }
-    // @feature-flag:event-driven-run-termination end
-  } catch (err: unknown) {
-    console.error('[chat] run-status error:', errorMessage(err));
-    res.status(500).json({ error: errorMessage(err) || 'Failed to fetch run status' });
   }
-});
+);
 
 /**
  * DELETE /api/chat/threads/:id
  * Permanently delete the thread from memory, workspace, and database.
  */
-router.delete('/threads/:id', requireThreadWrite, async (req: Request, res: Response) => {
-  try {
-    await permanentlyDeleteThread(req.params.id);
-    res.json({ ok: true });
-  } catch (err: unknown) {
-    res.status(500).json({ error: errorMessage(err) || 'Failed to delete thread' });
+router.delete(
+  '/threads/:id',
+  requireThreadWrite,
+  async (req: Request, res: Response) => {
+    try {
+      await permanentlyDeleteThread(req.params.id);
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res
+        .status(500)
+        .json({ error: errorMessage(err) || 'Failed to delete thread' });
+    }
   }
-});
+);
 
 export default router;

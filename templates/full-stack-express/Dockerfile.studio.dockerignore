@@ -1,0 +1,10 @@
+.git
+**/node_modules
+artifacts
+docs
+**/.env
+**/.env.*
+!**/.env.example
+coverage
+**/*.tsbuildinfo
+.pnpm-store

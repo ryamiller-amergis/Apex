@@ -28,6 +28,14 @@ import { defaultPreviewLeaseService } from './buildPreviewLeaseService';
 import { redactText } from './buildRedactionService';
 import { isFeatureEnabled } from './featureFlagService';
 import { loadSettingsForRepository } from './buildProfileService';
+import {
+  evaluateBuildPreviewCompletion,
+  type BuildPreviewCompletionPort,
+} from './build/buildPreviewCompletionInvariant';
+import {
+  currentBuildPreviewBrowserCheckCondition,
+  defaultBuildPreviewCompletionPort,
+} from './build/buildPreviewCompletionStore';
 
 export interface DeploymentRunRecord {
   id: string;
@@ -65,7 +73,7 @@ export interface RetryActor {
 
 export function assertMayRetry(
   actor: RetryActor,
-  run: Pick<DeploymentRunRecord, 'supportContacts'>,
+  run: Pick<DeploymentRunRecord, 'supportContacts'>
 ): boolean {
   if (actor.isSuperAdmin || actor.isProjectAdmin) return true;
   if (!actor.userId) return false;
@@ -87,15 +95,15 @@ export function buildPreviewsList(input: {
     .sort((a, b) => b.revisionNumber - a.revisionNumber)
     .map((rev) => {
       const isLive =
-        rev.deploymentStatus === 'succeeded'
-        && input.activeLeaseRevisionId !== null
-        && rev.id === input.activeLeaseRevisionId;
+        rev.deploymentStatus === 'succeeded' &&
+        input.activeLeaseRevisionId !== null &&
+        rev.id === input.activeLeaseRevisionId;
       return {
         revisionNumber: rev.revisionNumber,
         commit: rev.validatedCommit ?? '',
         deploymentStatus: rev.deploymentStatus,
         finishedAt: rev.deployedAt ?? null,
-        previewUrl: isLive ? rev.previewUrl ?? null : null,
+        previewUrl: isLive ? (rev.previewUrl ?? null) : null,
         isLive,
       };
     });
@@ -103,13 +111,16 @@ export function buildPreviewsList(input: {
 
 export interface BuildDeploymentServiceDeps {
   now: () => Date;
+  previewCompletion: BuildPreviewCompletionPort;
   isFlagEnabled: (project: string, userId: string) => Promise<boolean>;
-  loadByPipelineRunId: (
-    pipelineRunId: string,
-  ) => Promise<{ run: DeploymentRunRecord; revision: DeploymentRevisionRecord } | null>;
-  loadRunAndCurrentRevision: (
-    buildRunId: string,
-  ) => Promise<{ run: DeploymentRunRecord; revision: DeploymentRevisionRecord } | null>;
+  loadByPipelineRunId: (pipelineRunId: string) => Promise<{
+    run: DeploymentRunRecord;
+    revision: DeploymentRevisionRecord;
+  } | null>;
+  loadRunAndCurrentRevision: (buildRunId: string) => Promise<{
+    run: DeploymentRunRecord;
+    revision: DeploymentRevisionRecord;
+  } | null>;
   casSettleRevision: (
     pipelineRunId: string,
     update: {
@@ -120,22 +131,56 @@ export interface BuildDeploymentServiceDeps {
       errorText?: string | null;
       pipelineUrl?: string | null;
     },
+    currentBrowserCheck?: {
+      revisionId: string;
+      browserCheckId: string;
+    }
+  ) => Promise<boolean>;
+  casSettlePreviewReady: (
+    pipelineRunId: string,
+    runId: string,
+    update: {
+      previewUrl: string;
+      deployedAt: string;
+      pipelineUrl?: string | null;
+    },
+    currentBrowserCheck?: {
+      revisionId: string;
+      browserCheckId: string;
+    }
   ) => Promise<boolean>;
   setRunStatus: (runId: string, status: BuildRunStatus) => Promise<void>;
+  /** Finishes an accept that was waiting for this preview deployment. */
+  completeRequestedAccept?: (runId: string) => Promise<void>;
+  recordPendingPreviewUrl: (
+    revisionId: string,
+    previewUrl: string
+  ) => Promise<void>;
   extendLease: (runId: string, finishedAtIso: string) => Promise<void>;
-  releaseLease: (runId: string, reason: 'failure' | 'cancel' | 'accept') => Promise<void>;
+  releaseLease: (
+    runId: string,
+    reason: 'failure' | 'cancel' | 'accept'
+  ) => Promise<void>;
   tryClaimNextWaiting: (
     project: string,
-    repository: string,
-  ) => Promise<{ run: DeploymentRunRecord; revision: DeploymentRevisionRecord } | null>;
+    repository: string
+  ) => Promise<{
+    run: DeploymentRunRecord;
+    revision: DeploymentRevisionRecord;
+  } | null>;
   storePipelineRun: (
     revisionId: string,
     pipelineRunId: string,
-    pipelineUrl: string | null,
+    pipelineUrl: string | null
   ) => Promise<void>;
-  casRetryRevision: (revisionId: string, queuedAtIso: string) => Promise<boolean>;
+  casRetryRevision: (
+    revisionId: string,
+    queuedAtIso: string
+  ) => Promise<boolean>;
   getQueuePosition: (revisionId: string) => Promise<number | null>;
-  queuePipelineBuild: (input: QueuePipelineBuildInput) => Promise<QueuedPipelineBuild>;
+  queuePipelineBuild: (
+    input: QueuePipelineBuildInput
+  ) => Promise<QueuedPipelineBuild>;
   notifyPreviewReady: (input: {
     buildRunId: string;
     revisionId: string;
@@ -163,17 +208,30 @@ export interface BuildDeploymentServiceDeps {
     actorUserId?: string | null;
   }) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Starts the local Docker preview instead of an ADO pipeline run. Returns true
+   * when a local preview owns the revision. Absent in tests that exercise the pipeline path.
+   */
+  startLocalPreview?: (input: {
+    buildRunId: string;
+    project: string;
+    repository: string;
+    requesterUserId: string;
+    /** The configured deploy pipeline refused the run; build the preview locally instead. */
+    pipelineRefused?: boolean;
+  }) => Promise<boolean>;
   casEnqueueRevision: (
     revisionId: string,
     buildRunId: string,
-    queuedAtIso: string,
+    queuedAtIso: string
   ) => Promise<boolean>;
 }
 
 function isRetryableTriggerError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
-  const code = (err as { statusCode?: number; status?: number }).statusCode
-    ?? (err as { status?: number }).status;
+  const code =
+    (err as { statusCode?: number; status?: number }).statusCode ??
+    (err as { status?: number }).status;
   if (typeof code === 'number') {
     return code >= 500;
   }
@@ -183,7 +241,7 @@ function isRetryableTriggerError(err: unknown): boolean {
 function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
   const mapRow = (
     run: typeof buildRuns.$inferSelect,
-    rev: typeof buildRevisions.$inferSelect,
+    rev: typeof buildRevisions.$inferSelect
   ): { run: DeploymentRunRecord; revision: DeploymentRevisionRecord } => ({
     run: {
       id: run.id,
@@ -215,6 +273,7 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
 
   return {
     now: () => new Date(),
+    previewCompletion: defaultBuildPreviewCompletionPort,
     async isFlagEnabled(project, userId) {
       // @feature-flag:build-from-prompt start winner=enabled
       const enabled = await isFeatureEnabled(BUILD_FROM_PROMPT_FLAG, {
@@ -249,21 +308,25 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
           buildRevisions,
           and(
             eq(buildRevisions.buildRunId, buildRuns.id),
-            eq(buildRevisions.revisionNumber, buildRuns.currentRevisionNumber),
-          ),
+            eq(buildRevisions.revisionNumber, buildRuns.currentRevisionNumber)
+          )
         )
         .where(eq(buildRuns.id, buildRunId))
         .limit(1);
       if (!row) return null;
       return mapRow(row.run, row.rev);
     },
-    async casSettleRevision(pipelineRunId, update) {
+    async casSettleRevision(pipelineRunId, update, currentBrowserCheck) {
       const rows = await db
         .update(buildRevisions)
         .set({
           deploymentStatus: update.deploymentStatus,
-          ...(update.previewUrl !== undefined ? { previewUrl: update.previewUrl } : {}),
-          ...(update.deployedAt !== undefined ? { deployedAt: update.deployedAt } : {}),
+          ...(update.previewUrl !== undefined
+            ? { previewUrl: update.previewUrl }
+            : {}),
+          ...(update.deployedAt !== undefined
+            ? { deployedAt: update.deployedAt }
+            : {}),
           ...(update.failedStage !== undefined
             ? { deploymentFailedStage: update.failedStage }
             : {}),
@@ -276,10 +339,65 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
           and(
             eq(buildRevisions.pipelineRunId, pipelineRunId),
             eq(buildRevisions.deploymentStatus, 'deploying'),
-          ),
+            currentBrowserCheck
+              ? currentBuildPreviewBrowserCheckCondition(
+                  currentBrowserCheck.revisionId,
+                  currentBrowserCheck.browserCheckId
+                )
+              : undefined
+          )
         )
         .returning({ id: buildRevisions.id });
       return rows.length > 0;
+    },
+    async casSettlePreviewReady(
+      pipelineRunId,
+      runId,
+      update,
+      currentBrowserCheck
+    ) {
+      return db.transaction(async (tx) => {
+        const revisions = await tx
+          .update(buildRevisions)
+          .set({
+            deploymentStatus: 'succeeded',
+            previewUrl: update.previewUrl,
+            deployedAt: update.deployedAt,
+            ...(update.pipelineUrl !== undefined
+              ? { deploymentPipelineUrl: update.pipelineUrl }
+              : {}),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(
+            and(
+              eq(buildRevisions.pipelineRunId, pipelineRunId),
+              eq(buildRevisions.deploymentStatus, 'deploying'),
+              currentBrowserCheck
+                ? currentBuildPreviewBrowserCheckCondition(
+                    currentBrowserCheck.revisionId,
+                    currentBrowserCheck.browserCheckId
+                  )
+                : undefined
+            )
+          )
+          .returning({ id: buildRevisions.id });
+        if (revisions.length === 0) return false;
+
+        const runs = await tx
+          .update(buildRuns)
+          .set({
+            status: 'preview_ready',
+            updatedAt: new Date().toISOString(),
+          })
+          .where(
+            and(eq(buildRuns.id, runId), eq(buildRuns.status, 'deploying'))
+          )
+          .returning({ id: buildRuns.id });
+        // A fast UI revision may already have moved the run on. Keep the old
+        // revision's deployment result and leave the run status alone.
+        if (runs.length !== 1) return false;
+        return true;
+      });
     },
     async setRunStatus(runId, status) {
       await db
@@ -287,16 +405,30 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
         .set({ status, updatedAt: new Date().toISOString() })
         .where(eq(buildRuns.id, runId));
     },
+    async recordPendingPreviewUrl(revisionId, previewUrl) {
+      await db
+        .update(buildRevisions)
+        .set({ previewUrl })
+        .where(
+          and(
+            eq(buildRevisions.id, revisionId),
+            eq(buildRevisions.deploymentStatus, 'deploying')
+          )
+        );
+    },
     async extendLease(runId, finishedAtIso) {
       await defaultPreviewLeaseService.extendLease(runId, finishedAtIso);
     },
     async releaseLease(runId, reason) {
-      await defaultPreviewLeaseService.releaseLease({ buildRunId: runId, reason });
+      await defaultPreviewLeaseService.releaseLease({
+        buildRunId: runId,
+        reason,
+      });
     },
     async tryClaimNextWaiting(project, repository) {
       const lease = await defaultPreviewLeaseService.claimNextWaitingLease(
         project,
-        repository,
+        repository
       );
       if (!lease) return null;
       const now = new Date().toISOString();
@@ -337,8 +469,8 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
           .where(
             and(
               eq(buildRevisions.id, revisionId),
-              eq(buildRevisions.deploymentStatus, 'failed'),
-            ),
+              eq(buildRevisions.deploymentStatus, 'failed')
+            )
           )
           .returning({ buildRunId: buildRevisions.buildRunId });
         if (rows.length === 0) return false;
@@ -354,12 +486,51 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
     queuePipelineBuild,
     notifyPreviewReady: (input) =>
       defaultBuildDeploymentNotifier.notifyPreviewReady(input),
+    async completeRequestedAccept(runId) {
+      const { defaultBuildAcceptService } =
+        await import('./build/buildAcceptService');
+      await defaultBuildAcceptService.completeRequestedAccept(runId);
+    },
     notifyDeploymentFailed: (input) =>
       defaultBuildDeploymentNotifier.notifyDeploymentFailed(input),
     async appendEvent(input) {
       await appendBuildEvent(input);
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    async startLocalPreview({
+      buildRunId,
+      project,
+      repository,
+      requesterUserId,
+      pipelineRefused,
+    }) {
+      const local = await import('./build/buildLocalPreviewLaunchService');
+      if (!local.isLocalBuildPreviewAvailable()) return false;
+      // A configured deploy pipeline means the team wants the pipeline preview,
+      // unless that pipeline just refused the run.
+      if (!pipelineRefused) {
+        const settings = await loadSettingsForRepository(project, repository);
+        if (settings?.buildProfile?.deployPipelineId != null) return false;
+      }
+      try {
+        const started = await local.defaultBuildLocalPreviewLaunchService.start({
+          buildRunId,
+          project,
+          actor: {
+            userId: requesterUserId,
+            isProjectAdmin: false,
+            isSuperAdmin: false,
+          },
+        });
+        return started.kind === 'started' || started.kind === 'already_active';
+      } catch (error) {
+        console.warn(
+          '[build-deployment] local preview did not start; using the pipeline',
+          error instanceof Error ? error.message : String(error)
+        );
+        return false;
+      }
+    },
     async casEnqueueRevision(revisionId, buildRunId, queuedAtIso) {
       return db.transaction(async (tx) => {
         const rows = await tx
@@ -372,8 +543,11 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
           .where(
             and(
               eq(buildRevisions.id, revisionId),
-              inArray(buildRevisions.deploymentStatus, ['not_started', 'failed']),
-            ),
+              inArray(buildRevisions.deploymentStatus, [
+                'not_started',
+                'failed',
+              ])
+            )
           )
           .returning({ id: buildRevisions.id });
         if (rows.length === 0) return false;
@@ -389,8 +563,8 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
                 'deploying',
                 'preview_ready',
                 'deployment_failed',
-              ]),
-            ),
+              ])
+            )
           );
         return true;
       });
@@ -399,11 +573,11 @@ function createDefaultDeploymentDeps(): BuildDeploymentServiceDeps {
 }
 
 export function createBuildDeploymentService(
-  deps: BuildDeploymentServiceDeps = createDefaultDeploymentDeps(),
+  deps: BuildDeploymentServiceDeps = createDefaultDeploymentDeps()
 ) {
   const service = {
     async settleFromCallback(
-      input: BuildDeploymentCallbackRequest,
+      input: BuildDeploymentCallbackRequest
     ): Promise<
       | { kind: 'ok'; response: BuildDeploymentCallbackResponse }
       | { kind: 'not_found' }
@@ -415,13 +589,17 @@ export function createBuildDeploymentService(
       }
 
       const { run, revision } = found;
-      if (revision.validatedCommit && revision.validatedCommit !== input.commit) {
+      if (
+        revision.validatedCommit &&
+        revision.validatedCommit !== input.commit
+      ) {
         await deps.appendEvent({
           buildRunId: run.id,
           buildRevisionId: revision.id,
           eventType: 'callback_commit_mismatch',
           severity: 'warn',
-          message: 'Deployment callback commit did not match the revision validated commit.',
+          message:
+            'Deployment callback commit did not match the revision validated commit.',
           detail: {
             pipelineRunId: input.pipelineRunId,
             expectedCommit: revision.validatedCommit,
@@ -431,7 +609,11 @@ export function createBuildDeploymentService(
         return { kind: 'commit_mismatch' };
       }
 
-      if (run.status === 'cancelled' || run.status === 'failed' || run.status === 'accepted') {
+      if (
+        run.status === 'cancelled' ||
+        run.status === 'failed' ||
+        run.status === 'accepted'
+      ) {
         return {
           kind: 'ok',
           response: { applied: false, reason: 'run_not_deploying' },
@@ -442,10 +624,10 @@ export function createBuildDeploymentService(
 
       if (input.status === 'succeeded') {
         const previewUrl =
-          input.previewUrl
-          ?? revision.previewUrl
-          ?? run.defaultPreviewUrl
-          ?? null;
+          input.previewUrl ??
+          revision.previewUrl ??
+          run.defaultPreviewUrl ??
+          null;
         if (!previewUrl) {
           await deps.appendEvent({
             buildRunId: run.id,
@@ -453,7 +635,10 @@ export function createBuildDeploymentService(
             eventType: 'deployment_failed',
             severity: 'error',
             message: 'Preview deployment succeeded without a preview URL.',
-            detail: { pipelineRunId: input.pipelineRunId, failedStage: 'preview_url' },
+            detail: {
+              pipelineRunId: input.pipelineRunId,
+              failedStage: 'preview_url',
+            },
           });
           await deps.casSettleRevision(input.pipelineRunId, {
             deploymentStatus: 'failed',
@@ -469,12 +654,56 @@ export function createBuildDeploymentService(
           return { kind: 'ok', response: { applied: true } };
         }
 
-        const won = await deps.casSettleRevision(input.pipelineRunId, {
-          deploymentStatus: 'succeeded',
-          previewUrl,
-          deployedAt: finishedAt,
-          pipelineUrl: input.pipelineUrl ?? revision.deploymentPipelineUrl,
+        const completionGate = await deps.previewCompletion.loadGate({
+          revisionId: revision.id,
+          project: run.project,
+          repository: run.repository,
         });
+        const completion = evaluateBuildPreviewCompletion({
+          mode: completionGate.mode,
+          expectedRevisionId: revision.id,
+          expectedCommit: revision.validatedCommit,
+          evidence: completionGate.evidence,
+        });
+        if (!completion.satisfied) {
+          await deps.recordPendingPreviewUrl(revision.id, previewUrl);
+          await deps.appendEvent({
+            buildRunId: run.id,
+            buildRevisionId: revision.id,
+            eventType: 'preview_completion_blocked',
+            severity: 'warn',
+            message:
+              'Preview completion is waiting for matching live browser evidence.',
+            detail: {
+              pipelineRunId: input.pipelineRunId,
+              reason: completion.reason,
+            },
+          });
+          return {
+            kind: 'ok',
+            response: {
+              applied: false,
+              reason: 'preview_evidence_pending',
+            },
+          };
+        }
+
+        const won = await deps.casSettlePreviewReady(
+          input.pipelineRunId,
+          run.id,
+          {
+            previewUrl,
+            deployedAt: finishedAt,
+            pipelineUrl: input.pipelineUrl ?? revision.deploymentPipelineUrl,
+          },
+          completionGate.mode === 'live' &&
+            completionGate.evidence?.browserCheck
+            ? {
+                revisionId: revision.id,
+                browserCheckId: completionGate.evidence.browserCheck.id,
+              }
+            : undefined
+        );
         if (!won) {
           return {
             kind: 'ok',
@@ -482,35 +711,42 @@ export function createBuildDeploymentService(
           };
         }
 
-        if (run.status === 'deploying') {
-          await deps.setRunStatus(run.id, 'preview_ready');
-        }
-        await deps.extendLease(run.id, finishedAt);
-        await deps.appendEvent({
-          buildRunId: run.id,
-          buildRevisionId: revision.id,
-          eventType: 'deployment_succeeded',
-          message: `Preview deployed for revision ${revision.revisionNumber}.`,
-          detail: {
-            pipelineRunId: input.pipelineRunId,
+        await Promise.allSettled([
+          deps.extendLease(run.id, finishedAt),
+          deps.appendEvent({
+            buildRunId: run.id,
+            buildRevisionId: revision.id,
+            eventType: 'deployment_succeeded',
+            message: `Preview deployed for revision ${revision.revisionNumber}.`,
+            detail: {
+              pipelineRunId: input.pipelineRunId,
+              revisionNumber: revision.revisionNumber,
+            },
+          }),
+          deps.notifyPreviewReady({
+            buildRunId: run.id,
+            revisionId: revision.id,
             revisionNumber: revision.revisionNumber,
-          },
-        });
-        await deps.notifyPreviewReady({
-          buildRunId: run.id,
-          revisionId: revision.id,
-          revisionNumber: revision.revisionNumber,
-          pipelineRunId: input.pipelineRunId,
-          requesterUserId: run.requesterUserId,
-        });
+            pipelineRunId: input.pipelineRunId,
+            requesterUserId: run.requesterUserId,
+          }),
+        ]);
+        if (deps.completeRequestedAccept) {
+          void deps.completeRequestedAccept(run.id).catch(() => undefined);
+        }
 
         return { kind: 'ok', response: { applied: true } };
       }
 
       // Failed outcome
-      const redactedStage = redactText(input.failedStage?.trim() || 'deploy').slice(0, 200);
-      const redactedError = redactText(input.errorText?.trim() || 'Deployment failed').slice(0, 4000);
-      const pipelineUrl = input.pipelineUrl ?? revision.deploymentPipelineUrl ?? null;
+      const redactedStage = redactText(
+        input.failedStage?.trim() || 'deploy'
+      ).slice(0, 200);
+      const redactedError = redactText(
+        input.errorText?.trim() || 'Deployment failed'
+      ).slice(0, 4000);
+      const pipelineUrl =
+        input.pipelineUrl ?? revision.deploymentPipelineUrl ?? null;
 
       const won = await deps.casSettleRevision(input.pipelineRunId, {
         deploymentStatus: 'failed',
@@ -572,7 +808,10 @@ export function createBuildDeploymentService(
       const branch = run.integrationBranch ?? `apex/build/${run.id}`;
       let pipelineDefinitionId = run.deployPipelineId ?? null;
       if (pipelineDefinitionId == null) {
-        const settings = await loadSettingsForRepository(run.project, run.repository);
+        const settings = await loadSettingsForRepository(
+          run.project,
+          run.repository
+        );
         pipelineDefinitionId = settings?.buildProfile?.deployPipelineId ?? null;
       }
       const pipelineId = pipelineDefinitionId ?? 1;
@@ -604,7 +843,9 @@ export function createBuildDeploymentService(
 
       if (!queued) {
         const errMsg = redactText(
-          lastError instanceof Error ? lastError.message : 'Pipeline trigger failed',
+          lastError instanceof Error
+            ? lastError.message
+            : 'Pipeline trigger failed'
         ).slice(0, 4000);
         const SyntheticRunId = `trigger-failed:${revision.id}`;
         await deps.storePipelineRun(revision.id, SyntheticRunId, null);
@@ -623,8 +864,30 @@ export function createBuildDeploymentService(
           eventType: 'deployment_failed',
           severity: 'error',
           message: 'Preview deployment failed at stage trigger.',
-          detail: { failedStage: 'trigger', errorExcerpt: errMsg.slice(0, 500) },
+          detail: {
+            failedStage: 'trigger',
+            errorExcerpt: errMsg.slice(0, 500),
+          },
         });
+        if (
+          deps.startLocalPreview &&
+          (await deps.startLocalPreview({
+            buildRunId: run.id,
+            project: run.project,
+            repository: run.repository,
+            requesterUserId: run.requesterUserId,
+            pipelineRefused: true,
+          }))
+        ) {
+          await deps.appendEvent({
+            buildRunId: run.id,
+            buildRevisionId: revision.id,
+            eventType: 'deployment.local_fallback',
+            message:
+              'The deploy pipeline would not start, so Apex is building the preview locally instead.',
+          });
+          return false;
+        }
         await deps.notifyDeploymentFailed({
           buildRunId: run.id,
           revisionId: revision.id,
@@ -641,7 +904,7 @@ export function createBuildDeploymentService(
       await deps.storePipelineRun(
         revision.id,
         queued.pipelineRunId,
-        queued.pipelineUrl,
+        queued.pipelineUrl
       );
       await deps.appendEvent({
         buildRunId: run.id,
@@ -656,7 +919,9 @@ export function createBuildDeploymentService(
       return true;
     },
 
-    async enqueueRevisionDeployment(buildRunId: string): Promise<
+    async enqueueRevisionDeployment(
+      buildRunId: string
+    ): Promise<
       | { kind: 'ok' }
       | { kind: 'not_found' }
       | { kind: 'skipped'; reason: 'not_validated' }
@@ -670,16 +935,20 @@ export function createBuildDeploymentService(
       }
 
       if (
-        revision.deploymentStatus === 'queued'
-        || revision.deploymentStatus === 'deploying'
-        || revision.deploymentStatus === 'succeeded'
+        revision.deploymentStatus === 'queued' ||
+        revision.deploymentStatus === 'deploying' ||
+        revision.deploymentStatus === 'succeeded'
       ) {
         await service.grantNext(run.project, run.repository);
         return { kind: 'ok' };
       }
 
       const queuedAt = deps.now().toISOString();
-      const changed = await deps.casEnqueueRevision(revision.id, run.id, queuedAt);
+      const changed = await deps.casEnqueueRevision(
+        revision.id,
+        run.id,
+        queuedAt
+      );
       if (changed) {
         await deps.appendEvent({
           buildRunId: run.id,
@@ -691,6 +960,17 @@ export function createBuildDeploymentService(
             commit: revision.validatedCommit,
           },
         });
+        if (
+          deps.startLocalPreview &&
+          (await deps.startLocalPreview({
+            buildRunId: run.id,
+            project: run.project,
+            repository: run.repository,
+            requesterUserId: run.requesterUserId,
+          }))
+        ) {
+          return { kind: 'ok' };
+        }
       }
 
       await service.grantNext(run.project, run.repository);
@@ -715,12 +995,13 @@ export function createBuildDeploymentService(
       }
 
       if (
-        run.status !== 'deployment_failed'
-        && !(run.status === 'deploying' && revision.deploymentStatus === 'queued')
+        run.status !== 'deployment_failed' &&
+        !(run.status === 'deploying' && revision.deploymentStatus === 'queued')
       ) {
         return {
           kind: 'not_retryable',
-          message: 'Deployment can only be retried when the build is in Deployment failed.',
+          message:
+            'Deployment can only be retried when the build is in Deployment failed.',
         };
       }
 

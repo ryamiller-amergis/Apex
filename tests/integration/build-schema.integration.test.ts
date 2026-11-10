@@ -4,7 +4,9 @@
  */
 import pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { sql } from 'drizzle-orm';
 import * as schema from '../../src/server/db/schema';
+import { currentBuildPreviewBrowserCheckCondition } from '../../src/server/services/build/buildPreviewCompletionStore';
 import { appendBuildEvent } from '../../src/server/services/buildEventsService';
 import { redactJson, redactText } from '../../src/server/services/buildRedactionService';
 import {
@@ -42,6 +44,9 @@ const BUILD_TABLES = [
   'build_tasks',
   'build_verification_rows',
   'build_preview_leases',
+  'build_preview_artifacts',
+  'build_preview_instances',
+  'build_preview_browser_checks',
   'build_events',
 ] as const;
 
@@ -67,6 +72,13 @@ const INDEXES = [
   'uq_build_preview_leases_project_repository',
   'uq_build_preview_leases_run',
   'idx_build_preview_leases_expires',
+  'uq_build_preview_artifacts_revision',
+  'idx_build_preview_instances_artifact_created',
+  'uq_build_preview_instances_provider_handle',
+  'uq_build_preview_instances_gateway_key_hash',
+  'idx_build_preview_instances_expires',
+  'idx_build_preview_instances_reconcile',
+  'idx_build_preview_browser_checks_instance_created',
   'uq_build_events_ordinal',
   'idx_build_events_run_ordinal',
   'uq_build_events_dedupe',
@@ -353,6 +365,133 @@ describe('VT-03 one preview lease per project and repository', () => {
     await otherClient.end();
     expect(raced.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(raced.filter((result) => result.status === 'rejected')).toHaveLength(1);
+  });
+});
+
+describe('P2-SBX-002 live preview evidence schema', () => {
+  it('pins rollout mode and enforces artifact, readiness, and browser evidence shape', async () => {
+    const playbookRunId = await seedPlaybookRun();
+    const runId = await seedBuildRun(playbookRunId, 'repo-live-preview');
+    const [revision] = await query<{
+      id: string;
+      preview_rollout_mode: string;
+    }>(
+      `INSERT INTO build_revisions (
+         build_run_id, revision_number, validated_commit, preview_rollout_mode
+       ) VALUES ($1, 1, $2, 'live')
+       RETURNING id, preview_rollout_mode`,
+      [runId, COMMIT],
+    );
+    expect(revision.preview_rollout_mode).toBe('live');
+    await expect(
+      query(
+        `UPDATE build_revisions SET preview_rollout_mode = 'legacy_static' WHERE id = $1`,
+        [revision.id],
+      ),
+    ).rejects.toThrow(/preview rollout mode is write-once/);
+
+    await expect(
+      query(
+        `INSERT INTO build_preview_artifacts (
+           build_revision_id, commit, template_version, blob_ref, digest, size_bytes
+         ) VALUES ($1, $2, '1.0.0', '{"container":"preview","key":"bad"}'::jsonb, 'bad', 1)`,
+        [revision.id, COMMIT],
+      ),
+    ).rejects.toThrow(/build_preview_artifacts_digest_check/);
+
+    const digest = `sha256:${'b'.repeat(64)}`;
+    const [artifact] = await query<{ id: string }>(
+      `INSERT INTO build_preview_artifacts (
+         build_revision_id, commit, template_version, blob_ref, digest, size_bytes
+       ) VALUES (
+         $1, $2, '1.0.0', '{"container":"preview","key":"bundle.tar.zst"}'::jsonb, $3, 1024
+       ) RETURNING id`,
+      [revision.id, COMMIT, digest],
+    );
+
+    await expect(
+      query(
+        `INSERT INTO build_preview_instances (
+           build_preview_artifact_id, commit, artifact_digest, provider, state,
+           readiness_status, expires_at
+         ) VALUES ($1, $2, $3, 'fake', 'ready', 'pending', now() + interval '1 hour')`,
+        [artifact.id, COMMIT, digest],
+      ),
+    ).rejects.toThrow(/build_preview_instances_readiness_coherence_check/);
+
+    const [instance] = await query<{ id: string }>(
+      `INSERT INTO build_preview_instances (
+         build_preview_artifact_id, commit, artifact_digest, provider,
+         provider_handle, state, readiness_status, readiness_checked_at, expires_at
+       ) VALUES (
+         $1, $2, $3, 'fake', 'sandbox-1', 'ready', 'passed', now(),
+         now() + interval '1 hour'
+       ) RETURNING id`,
+      [artifact.id, COMMIT, digest],
+    );
+
+    await expect(
+      query(
+        `INSERT INTO build_preview_browser_checks (
+           build_preview_instance_id, commit, artifact_digest, status,
+           journey_version, evidence_refs, started_at
+         ) VALUES ($1, $2, $3, 'passed', '1', '[]'::jsonb, now())`,
+        [instance.id, COMMIT, digest],
+      ),
+    ).rejects.toThrow(/build_preview_browser_checks_completion_check/);
+
+    const [passedCheck] = await query<{ id: string }>(
+      `INSERT INTO build_preview_browser_checks (
+         build_preview_instance_id, commit, artifact_digest, status,
+         journey_version, evidence_refs, started_at, completed_at
+       ) VALUES ($1, $2, $3, 'passed', '1', '[]'::jsonb, now(), now())
+       RETURNING id`,
+      [instance.id, COMMIT, digest],
+    );
+    const pool = new pg.Pool({ connectionString: scratch.connectionString });
+    const scratchDb = drizzle(pool, { schema });
+    try {
+      const current = await scratchDb.execute<{ matches: boolean }>(
+        sql`SELECT ${currentBuildPreviewBrowserCheckCondition(
+          revision.id,
+          passedCheck.id,
+        )} AS matches`,
+      );
+      expect(current.rows[0]?.matches).toBe(true);
+
+      await query(
+        `UPDATE build_preview_browser_checks SET status = 'failed' WHERE id = $1`,
+        [passedCheck.id],
+      );
+      const mutated = await scratchDb.execute<{ matches: boolean }>(
+        sql`SELECT ${currentBuildPreviewBrowserCheckCondition(
+          revision.id,
+          passedCheck.id,
+        )} AS matches`,
+      );
+      expect(mutated.rows[0]?.matches).toBe(false);
+      await query(
+        `UPDATE build_preview_browser_checks SET status = 'passed' WHERE id = $1`,
+        [passedCheck.id],
+      );
+
+      await query(
+        `INSERT INTO build_preview_browser_checks (
+           build_preview_instance_id, commit, artifact_digest, status,
+           journey_version, evidence_refs, started_at, completed_at
+         ) VALUES ($1, $2, $3, 'failed', '1', '[]'::jsonb, now(), now())`,
+        [instance.id, COMMIT, digest],
+      );
+      const stale = await scratchDb.execute<{ matches: boolean }>(
+        sql`SELECT ${currentBuildPreviewBrowserCheckCondition(
+          revision.id,
+          passedCheck.id,
+        )} AS matches`,
+      );
+      expect(stale.rows[0]?.matches).toBe(false);
+    } finally {
+      await pool.end();
+    }
   });
 });
 

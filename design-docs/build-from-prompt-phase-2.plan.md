@@ -74,14 +74,16 @@ This separation lets one infrastructure fix protect every generated app without 
 
 ### Decision 2 — Use a provider port
 
-Introduce a provider-neutral `BuildPreviewProvider` boundary. The provider owns compute allocation, not Apex build state.
+Introduce a provider-neutral `SandboxProvider` boundary. The provider owns compute allocation, not Apex build state.
 
 Required operations:
 
-- `allocate`
+- `provision`
 - `inspect`
 - `renew`
-- `terminate`
+- `suspend`
+- `resume`
+- `destroy`
 
 Apex continues to own:
 
@@ -97,12 +99,14 @@ Adapters:
 
 1. In-memory provider for service tests
 2. Local Docker provider for local development and deterministic integration tests
-3. Azure Container Apps custom Dynamic Sessions pilot provider
+3. Azure Container Apps Sandboxes pilot provider
 4. Existing static bundle provider during migration
-5. Regular Azure Container Apps for trusted workloads or Azure Container Apps Sandboxes as fallback providers
+5. Regular Azure Container Apps fallback for repositories classified as trusted
 6. Optional E2B/Daytona provider only if Azure options fail the acceptance criteria
 
-Azure Container Apps custom Dynamic Sessions are the preferred pilot because they provide prewarmed custom containers, Hyper-V isolation, configurable lifecycle, and outbound-network controls while matching the existing Azure platform. They remain a pilot candidate until a spike proves the required HTTP methods, streaming, WebSockets, cookies, payload limits, and latency. Documented custom-session endpoints currently guarantee only GET and POST.
+Azure Container Apps Sandboxes are the preferred isolated pilot because they are generally available and provide custom OCI workloads, hardware-isolated microVMs, process and port operations, and granular egress controls. Production selection remains conditional because the service has no availability SLA and does not yet document the complete browser-ingress contract. The pilot must prove all required HTTP methods, streaming, WebSockets, cookies, payload limits, private PostgreSQL, gateway routing, latency, and teardown.
+
+Custom Dynamic Sessions are rejected as the direct browser runtime for Phase 2. Their documented custom application endpoints support only GET and POST, require Apex to retain the Entra management token, and do not document the browser protocol surface required by generated applications.
 
 Keep compute allocation separate from the other external seams:
 
@@ -328,7 +332,7 @@ Goal: Freeze measurable baselines and resolve hosting constraints.
 Work:
 
 - Record current static-preview success rate and timing
-- Record Golden Stack cold/warm install, build, check, and test times
+- Record Golden Stack fresh-workspace and immediate warm-rerun install, build, check, and test times; record cache state with the measurements
 - Confirm preview concurrency, startup SLO, TTL, regional, and sharing requirements
 - Confirm whether requester-only synthetic identity is enough for Phase 2
 - Prove or reject Dynamic Sessions support for required methods, streaming, WebSockets, cookies, payload size, and startup latency
@@ -339,6 +343,15 @@ Exit:
 - Decisions are approved
 - Baseline metrics are reproducible
 - No implementation assumption remains hidden
+
+Completion record: `design-docs/build-from-prompt-phase-2-milestone-0.md`
+
+Accepted ADRs:
+
+- `design-docs/build-preview-sandbox-ownership-adr.md`
+- `design-docs/build-preview-provider-boundary-adr.md`
+- `design-docs/build-preview-origin-access-adr.md`
+- `design-docs/build-preview-data-isolation-adr.md`
 
 ### Milestone 1 — Completion invariant and local walking skeleton
 
@@ -372,13 +385,13 @@ Goal: Run the same contract in an enterprise-isolated cloud session.
 
 Red:
 
-- Provider conformance tests for allocation, inspect, renew, terminate, timeout, and reconciliation
+- Provider conformance tests for provision, inspect, renew, suspend, resume, destroy, timeout, and reconciliation
 - Gateway tests for authorization, expiry, path forwarding, API traffic, and WebSockets
 
 Green:
 
 - Dedicated preview gateway on a separate registrable origin
-- Azure Dynamic Sessions pilot adapter, or the selected fallback adapter if the protocol spike fails
+- Azure Container Apps Sandboxes pilot adapter, or the regular Container Apps fallback for a repository explicitly classified as trusted
 - Private artifact grant flow
 - Per-session database credential delivery through the authenticated control channel
 - Restricted egress and no workload managed identity
@@ -506,13 +519,13 @@ Monitor:
 - P2-SBX-001: ADR and versioned preview manifest
 - P2-SBX-002: Preview artifact, instance, and browser-check schema
 - P2-SBX-003: Guard `preview_ready` and `accept`
-- P2-SBX-004: `BuildPreviewProvider` and fake conformance suite
+- P2-SBX-004: `SandboxProvider` and fake conformance suite
 - P2-SBX-005: Deterministic runtime bundle
 - P2-SBX-006: Local Docker provider
 - P2-SBX-007: Full-stack migration/seed/start contract
 - P2-SBX-008: Browser verifier and evidence recorder
 - P2-SBX-009: Preview gateway and opaque host mapping
-- P2-SBX-010: Azure Dynamic Sessions provider
+- P2-SBX-010: Azure Container Apps Sandboxes pilot provider
 - P2-SBX-011: Reconciler, TTL cleanup, quotas, and telemetry
 - P2-SBX-012: Replace static settlement behind a flag
 - P2-SBX-013: Preview identity adapter and launch-ticket exchange
@@ -556,15 +569,20 @@ Phase 2 is done only when:
 - Accept is refused if the current preview evidence is missing or stale
 - The same provider conformance and Playwright suites pass locally and in Azure
 
-## Decision Defaults Pending Confirmation
+## Milestone 0 Accepted Pilot Defaults
 
-- Production provider: chosen after the Dynamic Sessions protocol spike; Dynamic Sessions is the preferred pilot
-- Fallback provider: regular Azure Container Apps for trusted workloads or Azure Container Apps Sandboxes where available
+- Production provider: chosen after the Azure Container Apps Sandboxes pilot; Sandboxes is generally available but still must pass Apex's no-SLA reliability and browser-protocol production gate
+- Fallback provider: regular Azure Container Apps only for repositories classified as trusted
 - Local provider: Docker
 - Preview visibility: requester and project viewers only
-- Preview identity: synthetic preview principal
+- Preview identity: distinct pseudonymous synthetic principal per viewer and instance; separate verifier principal
 - Outbound network: denied by default
 - Session scope: one session per build revision
+- Concurrency: 2 sessions per requester, 4 per project, 8 platform-wide; at most 4 provisioning
+- Startup objective: readiness P95 at 90 seconds, hard timeout at 180 seconds; published browser proof P95 at 150 seconds
+- TTL: 30-minute idle, 8-hour absolute, 5-minute superseded-revision grace, cleanup within 10 minutes
+- Region: one pilot region colocated with Apex, Blob, gateway, and preview PostgreSQL
+- Preview data: one database and role per instance on a shared preview-only PostgreSQL server
 - Prior preview: remain live until replacement is verified
 - Static preview: rollback-only legacy mode
 - Vite+: adopt after parity spike
@@ -576,6 +594,8 @@ Phase 2 is done only when:
 - Base44 app code overview: https://docs.base44.com/developers/app-code/overview/introduction
 - Azure Container Apps Dynamic Sessions: https://learn.microsoft.com/en-us/azure/container-apps/sessions
 - Azure custom container sessions: https://learn.microsoft.com/en-us/azure/container-apps/sessions-custom-container
+- Azure Container Apps Sandboxes: https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview
+- Azure Container Apps Sandboxes reliability: https://learn.microsoft.com/en-us/azure/reliability/reliability-container-apps-sandboxes
 - E2B runtime architecture: https://github.com/e2b-dev/infra/blob/main/docs/ARCHITECTURE.md
 - Vite+ migration: https://viteplus.dev/guide/migrate
 - Vite+ task caching: https://viteplus.dev/guide/cache

@@ -23,6 +23,14 @@ import { createNotification } from '../notificationService';
 import { canActOnBuild, type BuildActorContext } from './buildAccessPolicy';
 import { deriveAcceptState } from './buildAcceptState';
 import {
+  evaluateBuildPreviewCompletion,
+  type BuildPreviewCompletionPort,
+} from './buildPreviewCompletionInvariant';
+import {
+  currentBuildPreviewBrowserCheckCondition,
+  defaultBuildPreviewCompletionPort,
+} from './buildPreviewCompletionStore';
+import {
   composePullRequestBody,
   type PullRequestRequirementEntry,
 } from './buildPullRequestBody';
@@ -133,6 +141,8 @@ export interface AcceptRunRecord {
   requesterDisplayName: string;
   currentRevisionNumber: number;
   acceptedRevisionNumber: number | null;
+  /** Revision whose accept waits for its preview deployment to succeed. */
+  acceptRequestedRevisionNumber?: number | null;
   integrationBranch: string | null;
   pullRequestUrl: string | null;
   pullRequestId: number | null;
@@ -160,6 +170,7 @@ export interface AcceptSyncTaskRecord {
 
 export interface BuildAcceptServiceDeps {
   now: () => number;
+  previewCompletion: BuildPreviewCompletionPort;
   sleep: (ms: number) => Promise<void>;
   withAcceptLock: <T>(runId: string, fn: () => Promise<T>) => Promise<T | null>;
   loadRun: (buildId: string) => Promise<AcceptRunRecord | null>;
@@ -169,7 +180,11 @@ export interface BuildAcceptServiceDeps {
   ) => Promise<AcceptRevisionRecord | null>;
   casClaimAccept: (
     buildId: string,
-    revisionNumber: number
+    revisionNumber: number,
+    currentBrowserCheck?: {
+      revisionId: string;
+      browserCheckId: string;
+    },
   ) => Promise<
     | { kind: 'claimed'; run: AcceptRunRecord }
     | { kind: 'already_claimed'; run: AcceptRunRecord }
@@ -178,6 +193,23 @@ export interface BuildAcceptServiceDeps {
     | { kind: 'not_acceptable' }
   >;
   releaseLease: (runId: string) => Promise<void>;
+  /**
+   * Records the accept and moves a `preview_ready` run to `deploying`.
+   * Returns false when the run is no longer on that revision's preview.
+   */
+  requestAcceptAfterDeploy?: (
+    runId: string,
+    revisionNumber: number
+  ) => Promise<boolean>;
+  /** Clears a waiting accept; `restorePreview` returns the run to `preview_ready`. */
+  clearAcceptRequest?: (
+    runId: string,
+    options?: { restorePreview?: boolean }
+  ) => Promise<void>;
+  startRevisionDeployment?: (input: {
+    run: AcceptRunRecord;
+    actor: BuildActorContext;
+  }) => Promise<void>;
   findOrInsertSyncTask: (
     revisionId: string,
     revisionNumber: number
@@ -243,6 +275,7 @@ function createDefaultBuildAcceptDeps(): BuildAcceptServiceDeps {
     requesterDisplayName: row.requestedByUserId,
     currentRevisionNumber: row.currentRevisionNumber,
     acceptedRevisionNumber: row.acceptedRevisionNumber ?? null,
+    acceptRequestedRevisionNumber: row.acceptRequestedRevisionNumber ?? null,
     integrationBranch: row.integrationBranch ?? `apex/build/${row.id}`,
     pullRequestUrl: row.pullRequestUrl ?? null,
     pullRequestId: row.pullRequestId ?? null,
@@ -295,6 +328,7 @@ function createDefaultBuildAcceptDeps(): BuildAcceptServiceDeps {
 
   return {
     now: Date.now,
+    previewCompletion: defaultBuildPreviewCompletionPort,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     async withAcceptLock(runId, fn) {
       return db.transaction(async (tx) => {
@@ -354,7 +388,7 @@ function createDefaultBuildAcceptDeps(): BuildAcceptServiceDeps {
         })),
       };
     },
-    async casClaimAccept(buildId, revisionNumber) {
+    async casClaimAccept(buildId, revisionNumber, currentBrowserCheck) {
       const [existing] = await db
         .select()
         .from(buildRuns)
@@ -386,11 +420,31 @@ function createDefaultBuildAcceptDeps(): BuildAcceptServiceDeps {
           and(
             eq(buildRuns.id, buildId),
             eq(buildRuns.status, 'preview_ready'),
-            eq(buildRuns.currentRevisionNumber, revisionNumber)
+            eq(buildRuns.currentRevisionNumber, revisionNumber),
+            currentBrowserCheck
+              ? currentBuildPreviewBrowserCheckCondition(
+                  currentBrowserCheck.revisionId,
+                  currentBrowserCheck.browserCheckId,
+                )
+              : undefined,
           )
         )
         .returning();
-      if (!updated) return { kind: 'already_claimed', run: mapRun(existing) };
+      if (!updated) {
+        const [current] = await db
+          .select()
+          .from(buildRuns)
+          .where(eq(buildRuns.id, buildId))
+          .limit(1);
+        if (!current) return { kind: 'not_found' };
+        if (current.acceptedRevisionNumber === revisionNumber) {
+          return { kind: 'already_claimed', run: mapRun(current) };
+        }
+        if (current.currentRevisionNumber !== revisionNumber) {
+          return { kind: 'stale_revision' };
+        }
+        return { kind: 'not_acceptable' };
+      }
       return {
         kind: 'claimed',
         run: { ...mapRun(updated), status: 'accepted' },
@@ -401,6 +455,60 @@ function createDefaultBuildAcceptDeps(): BuildAcceptServiceDeps {
         buildRunId: runId,
         reason: 'accept',
       });
+    },
+    async requestAcceptAfterDeploy(runId, revisionNumber) {
+      const rows = await db
+        .update(buildRuns)
+        .set({
+          acceptRequestedRevisionNumber: revisionNumber,
+          status: 'deploying',
+          updatedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(buildRuns.id, runId),
+            eq(buildRuns.status, 'preview_ready'),
+            eq(buildRuns.currentRevisionNumber, revisionNumber)
+          )
+        )
+        .returning({ id: buildRuns.id });
+      return rows.length === 1;
+    },
+    async clearAcceptRequest(runId, options) {
+      await db
+        .update(buildRuns)
+        .set({
+          acceptRequestedRevisionNumber: null,
+          ...(options?.restorePreview ? { status: 'preview_ready' as const } : {}),
+          updatedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(buildRuns.id, runId),
+            options?.restorePreview
+              ? eq(buildRuns.status, 'deploying')
+              : undefined
+          )
+        );
+    },
+    async startRevisionDeployment({ run, actor }) {
+      const local = await import('./buildLocalPreviewLaunchService');
+      if (local.isLocalBuildPreviewAvailable()) {
+        const started = await local.defaultBuildLocalPreviewLaunchService.start(
+          { buildRunId: run.id, project: run.project, actor }
+        );
+        if (started.kind !== 'started' && started.kind !== 'already_active') {
+          throw new Error(
+            'message' in started && typeof started.message === 'string'
+              ? started.message
+              : `Local preview could not start: ${started.kind}.`
+          );
+        }
+        return;
+      }
+      const { defaultBuildDeploymentService } =
+        await import('../buildDeploymentService');
+      await defaultBuildDeploymentService.enqueueRevisionDeployment(run.id);
     },
     async findOrInsertSyncTask(revisionId, revisionNumber) {
       const taskKey = `sync-r${revisionNumber}`;
@@ -550,7 +658,43 @@ function createDefaultBuildAcceptDeps(): BuildAcceptServiceDeps {
 export function createBuildAcceptService(
   deps: BuildAcceptServiceDeps = createDefaultBuildAcceptDeps()
 ) {
-  return {
+  const loadCurrentPreviewCompletion = async (
+    run: Pick<AcceptRunRecord, 'project' | 'repository'>,
+    revision: Pick<AcceptRevisionRecord, 'id' | 'validatedCommit'>
+  ): Promise<{
+    satisfied: boolean;
+    currentBrowserCheck?: {
+      revisionId: string;
+      browserCheckId: string;
+    };
+  }> => {
+    const gate = await deps.previewCompletion.loadGate({
+      revisionId: revision.id,
+      project: run.project,
+      repository: run.repository,
+    });
+    const completion = evaluateBuildPreviewCompletion({
+      mode: gate.mode,
+      expectedRevisionId: revision.id,
+      expectedCommit: revision.validatedCommit,
+      evidence: gate.evidence,
+    });
+    return {
+      satisfied: completion.satisfied,
+      ...(completion.satisfied
+        && gate.mode === 'live'
+        && gate.evidence?.browserCheck
+        ? {
+            currentBrowserCheck: {
+              revisionId: revision.id,
+              browserCheckId: gate.evidence.browserCheck.id,
+            },
+          }
+        : {}),
+    };
+  };
+
+  const service = {
     async acceptBuild(input: {
       buildId: string;
       project: string;
@@ -616,10 +760,61 @@ export function createBuildAcceptService(
         );
       }
 
+      if (
+        precheckRun.status === 'deploying' &&
+        precheckRun.acceptRequestedRevisionNumber === input.revisionNumber
+      ) {
+        return deployingResponse(precheckRun.id, input.revisionNumber);
+      }
+
       const revision = await deps.loadRevision(
         input.buildId,
         input.revisionNumber
       );
+      if (
+        precheckRun.status === 'preview_ready' &&
+        revision?.validatedCommit &&
+        revision.deploymentStatus === 'not_started' &&
+        deps.requestAcceptAfterDeploy &&
+        deps.startRevisionDeployment
+      ) {
+        const requested = await deps.requestAcceptAfterDeploy(
+          precheckRun.id,
+          input.revisionNumber
+        );
+        if (!requested) {
+          throw new BuildAcceptError(
+            'BUILD_NOT_ACCEPTABLE',
+            'This build preview is not ready to accept yet.',
+            409
+          );
+        }
+        try {
+          await deps.startRevisionDeployment({
+            run: precheckRun,
+            actor: input.actor,
+          });
+        } catch (error) {
+          await deps.clearAcceptRequest?.(precheckRun.id, {
+            restorePreview: true,
+          });
+          throw new BuildAcceptError(
+            'BUILD_NOT_ACCEPTABLE',
+            error instanceof Error && error.message
+              ? error.message
+              : 'The preview deployment could not start.',
+            409
+          );
+        }
+        await deps.appendEvent({
+          buildRunId: precheckRun.id,
+          buildRevisionId: revision.id,
+          eventType: 'accept_waiting_for_deployment',
+          message: `Deploying revision ${input.revisionNumber} before accepting it.`,
+          detail: { revisionNumber: input.revisionNumber },
+        });
+        return deployingResponse(precheckRun.id, input.revisionNumber);
+      }
       if (
         precheckRun.status !== 'preview_ready' ||
         !revision ||
@@ -628,6 +823,78 @@ export function createBuildAcceptService(
         throw new BuildAcceptError(
           'BUILD_NOT_ACCEPTABLE',
           'This build preview is not ready to accept yet.',
+          409
+        );
+      }
+      return service.claimDeployedRevision(
+        precheckRun,
+        revision,
+        input.revisionNumber
+      );
+    },
+
+    /**
+     * Finishes an accept that waited for its preview deployment. Runs after a
+     * deployment settles; the requester's permission was checked on request.
+     */
+    async completeRequestedAccept(buildRunId: string): Promise<void> {
+      const run = await deps.loadRun(buildRunId);
+      const revisionNumber = run?.acceptRequestedRevisionNumber ?? null;
+      if (!run || revisionNumber === null) return;
+      if (
+        run.currentRevisionNumber !== revisionNumber ||
+        run.status !== 'preview_ready'
+      ) {
+        if (run.currentRevisionNumber !== revisionNumber) {
+          await deps.clearAcceptRequest?.(run.id);
+        }
+        return;
+      }
+      await deps.clearAcceptRequest?.(run.id);
+      const revision = await deps.loadRevision(run.id, revisionNumber);
+      try {
+        if (!revision || revision.deploymentStatus !== 'succeeded') {
+          throw new BuildAcceptError(
+            'BUILD_NOT_ACCEPTABLE',
+            'This build preview is not ready to accept yet.',
+            409
+          );
+        }
+        const result = await service.claimDeployedRevision(
+          run,
+          revision,
+          revisionNumber
+        );
+        if (result.firstClaim) await service.continueAccept(run.id);
+      } catch (error) {
+        await deps.appendEvent({
+          buildRunId: run.id,
+          buildRevisionId: revision?.id ?? null,
+          eventType: 'accept_after_deployment_failed',
+          severity: 'warn',
+          message:
+            error instanceof Error && error.message
+              ? error.message
+              : 'The accept could not finish after deployment.',
+          detail: { revisionNumber },
+        });
+      }
+    },
+
+    async claimDeployedRevision(
+      precheckRun: AcceptRunRecord,
+      revision: AcceptRevisionRecord,
+      revisionNumber: number
+    ): Promise<{ firstClaim: boolean; response: BuildAcceptResponse }> {
+      const input = { buildId: precheckRun.id, revisionNumber };
+      const previewCompletion = await loadCurrentPreviewCompletion(
+        precheckRun,
+        revision,
+      );
+      if (!previewCompletion.satisfied) {
+        throw new BuildAcceptError(
+          'BUILD_NOT_ACCEPTABLE',
+          'This build preview has not passed live browser verification yet.',
           409
         );
       }
@@ -660,7 +927,8 @@ export function createBuildAcceptService(
 
       const claim = await deps.casClaimAccept(
         input.buildId,
-        input.revisionNumber
+        input.revisionNumber,
+        previewCompletion.currentBrowserCheck,
       );
       switch (claim.kind) {
         case 'not_found':
@@ -746,15 +1014,20 @@ export function createBuildAcceptService(
         }
         if (
           run.status !== 'accepted' &&
-          run.status !== 'checking' &&
           run.status !== 'preview_ready'
         ) {
           return;
         }
+        if (run.acceptedRevisionNumber === null) {
+          return;
+        }
 
-        const revNum = run.acceptedRevisionNumber ?? run.currentRevisionNumber;
+        const revNum = run.acceptedRevisionNumber;
         const revision = await deps.loadRevision(run.id, revNum);
         if (!revision) return;
+        if (!(await loadCurrentPreviewCompletion(run, revision)).satisfied) {
+          return;
+        }
 
         const integrationBranch =
           run.integrationBranch ?? `apex/build/${run.id}`;
@@ -1105,6 +1378,23 @@ export function createBuildAcceptService(
         }
         return;
       }
+    },
+  };
+  return service;
+}
+
+function deployingResponse(
+  buildId: string,
+  revisionNumber: number
+): { firstClaim: boolean; response: BuildAcceptResponse } {
+  return {
+    firstClaim: false,
+    response: {
+      buildId,
+      revisionNumber,
+      status: 'deploying',
+      acceptState: 'deploying_preview',
+      pullRequestUrl: null,
     },
   };
 }

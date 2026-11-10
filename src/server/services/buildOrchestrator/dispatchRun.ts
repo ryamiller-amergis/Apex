@@ -10,16 +10,28 @@ import {
   type LaunchUnit,
 } from './dispatcher';
 import { DISPATCH_EVENT_TYPES } from './dispatchEvents';
-import type { DispatchRunRow, DispatchStore, DispatchTaskRow } from './dispatchStore';
+import type {
+  DispatchRunRow,
+  DispatchStore,
+  DispatchTaskRow,
+} from './dispatchStore';
 import type { GuardRun, LaunchGuardDecision } from './launchGuard';
 import type { TaskFailurePolicy } from './taskFailure';
 import type { BuildTaskLauncher } from './taskLauncher';
 
 export type DispatchOutcome =
-  | { kind: 'skipped'; reason: 'run_not_found' | 'not_building' | 'no_revision' }
+  | {
+      kind: 'skipped';
+      reason: 'run_not_found' | 'not_building' | 'no_revision';
+    }
   | { kind: 'suspended'; reason: BuildSuspendReason }
   | { kind: 'deferred'; headKey: string }
-  | { kind: 'dispatched'; promoted: string[]; launched: string[]; waiting: string[] };
+  | {
+      kind: 'dispatched';
+      promoted: string[];
+      launched: string[];
+      waiting: string[];
+    };
 
 export interface LaunchedAgent {
   buildRunId: string;
@@ -35,28 +47,44 @@ export interface DispatchDeps {
   launch: BuildTaskLauncher;
   failTask: TaskFailurePolicy;
   onLaunched?: (agent: LaunchedAgent) => void;
-  track: (name: string, props: Record<string, string>, measurements?: Record<string, number>) => void;
+  track: (
+    name: string,
+    props: Record<string, string>,
+    measurements?: Record<string, number>
+  ) => void;
 }
 
-export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => Promise<DispatchOutcome> {
+export function createDispatchNext(
+  deps: DispatchDeps
+): (buildRunId: string) => Promise<DispatchOutcome> {
   const { store, track } = deps;
 
-  const suspend = async (run: DispatchRunRow, reason: BuildSuspendReason): Promise<DispatchOutcome> => {
+  const suspend = async (
+    run: DispatchRunRow,
+    reason: BuildSuspendReason
+  ): Promise<DispatchOutcome> => {
     if (await store.suspend(run.id, reason)) {
       track('build_run.suspended', { buildRunId: run.id, reason });
     }
     return { kind: 'suspended', reason };
   };
 
-  const membersOf = (unit: LaunchUnit, tasks: DispatchTaskRow[]): DispatchTaskRow[] =>
+  const membersOf = (
+    unit: LaunchUnit,
+    tasks: DispatchTaskRow[]
+  ): DispatchTaskRow[] =>
     unit.taskKeys.map((key) => tasks.find((task) => task.key === key)!);
 
   return async (buildRunId) => {
     const run = await store.loadRun(buildRunId);
     if (!run) return { kind: 'skipped', reason: 'run_not_found' };
-    if (run.status !== 'building') return { kind: 'skipped', reason: 'not_building' };
+    if (run.status !== 'building')
+      return { kind: 'skipped', reason: 'not_building' };
     const revisionId = run.revisionId;
-    if (!revisionId) return { kind: 'skipped', reason: 'no_revision' };
+    const revisionNumber = run.revisionNumber;
+    if (!revisionId || revisionNumber == null) {
+      return { kind: 'skipped', reason: 'no_revision' };
+    }
 
     const tasks = await store.loadPlanTasks(revisionId);
     let decision: DispatchDecision;
@@ -75,13 +103,18 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
       return suspend(run, 'plan_invalid');
     }
 
-    const idsFor = (keys: string[]) => keys.map((key) => tasks.find((task) => task.key === key)!.id);
-    if (decision.promote.length > 0) await store.promote(idsFor(decision.promote));
+    const idsFor = (keys: string[]) =>
+      keys.map((key) => tasks.find((task) => task.key === key)!.id);
+    if (decision.promote.length > 0)
+      await store.promote(idsFor(decision.promote));
 
     const launched: string[] = [];
     const waiting = decision.waiting.map((entry) => entry.headKey);
     for (const unit of decision.launch) {
-      const verdict = await deps.guard({ requesterUserId: run.requesterUserId, project: run.project });
+      const verdict = await deps.guard({
+        requesterUserId: run.requesterUserId,
+        project: run.project,
+      });
       if (verdict.outcome === 'refuse') {
         track('build_dispatch.refused', { buildRunId, reason: verdict.reason });
         return suspend(run, verdict.reason);
@@ -104,6 +137,7 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
       const claimed = await store.claim({
         buildRunId,
         revisionId,
+        revisionNumber,
         headTaskId: members[0].id,
         headKey: unit.headKey,
         taskIds: members.map((task) => task.id),
@@ -133,7 +167,11 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
             correlation: { kind: 'agent_run', id: result.agentRunId },
             dedupeKey: `launched:${result.agentRunId}`,
           });
-          track('build_dispatch.launched', { buildRunId }, { unitSize: unit.taskKeys.length, attempt: claimed.attempt });
+          track(
+            'build_dispatch.launched',
+            { buildRunId },
+            { unitSize: unit.taskKeys.length, attempt: claimed.attempt }
+          );
           deps.onLaunched?.({
             buildRunId,
             agentRunId: result.agentRunId,
@@ -144,7 +182,10 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
           break;
         }
         case 'refused': {
-          track('build_dispatch.refused', { buildRunId, reason: 'configuration' });
+          track('build_dispatch.refused', {
+            buildRunId,
+            reason: 'configuration',
+          });
           await store.resetToReady(members.map((task) => task.id));
           return suspend(run, 'configuration');
         }
@@ -157,7 +198,8 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
             detail: result.detail,
             dedupeKey: `launch_failed:${members[0].id}:${claimed.attempt}`,
           });
-          if (failure === 'suspended') return { kind: 'suspended', reason: 'repair_cap' };
+          if (failure === 'suspended')
+            return { kind: 'suspended', reason: 'repair_cap' };
           break;
         }
         default: {
@@ -167,6 +209,11 @@ export function createDispatchNext(deps: DispatchDeps): (buildRunId: string) => 
       }
     }
 
-    return { kind: 'dispatched', promoted: decision.promote, launched, waiting };
+    return {
+      kind: 'dispatched',
+      promoted: decision.promote,
+      launched,
+      waiting,
+    };
   };
 }

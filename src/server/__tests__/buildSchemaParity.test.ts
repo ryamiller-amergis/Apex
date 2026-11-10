@@ -10,6 +10,9 @@ import {
   BUILD_CORRELATION_KINDS,
   BUILD_DEPLOYMENT_STATUSES,
   BUILD_EVENT_SEVERITIES,
+  BUILD_PREVIEW_EVIDENCE_STATUSES,
+  BUILD_PREVIEW_INSTANCE_STATES,
+  BUILD_PREVIEW_ROLLOUT_MODES,
   BUILD_RUN_SLOT_STATUSES,
   BUILD_RUN_STATUSES,
   BUILD_SUSPEND_REASONS,
@@ -20,11 +23,14 @@ import {
   BUILD_VERIFICATION_KINDS,
   BUILD_VERIFICATION_STATUSES,
 } from '../../shared/types/build';
+import { BUILD_REVISION_FAST_EDIT_STATUSES } from '../../shared/types/buildRevision';
 import * as schema from '../db/schema';
 
 const TABLES_SQL = [
   'migrations/20261023143900_a1a4_build-from-prompt-tables.sql',
   'migrations/20261026210000_f4b1_build-start-queue.sql',
+  'migrations/20261105214500_build-preview-evidence.sql',
+  'migrations/20261106120000_build-revision-fast-edit.sql',
 ]
   .map((file) => fs.readFileSync(path.resolve(process.cwd(), file), 'utf8').split(/^--\s*Down Migration/im)[0])
   .join('\n');
@@ -39,6 +45,11 @@ const BUILD_TABLES: PgTable[] = [
   schema.buildTasks,
   schema.buildVerificationRows,
   schema.buildPreviewLeases,
+  schema.buildPreviewArtifacts,
+  schema.buildPreviewInstances,
+  schema.buildPreviewBrowserChecks,
+  schema.buildRevisionFastEditAttempts,
+  schema.buildRevisionFastEditChangeSets,
   schema.buildEvents,
 ];
 
@@ -81,8 +92,12 @@ describe('VT-08 Drizzle matches the build migrations', () => {
     quoted(BUILD_VERIFICATION_STATUSES);
     quoted(BUILD_TEST_TIERS);
     quoted(BUILD_DEPLOYMENT_STATUSES);
+    quoted(BUILD_PREVIEW_ROLLOUT_MODES);
+    quoted(BUILD_PREVIEW_INSTANCE_STATES);
+    quoted(BUILD_PREVIEW_EVIDENCE_STATUSES);
     quoted(BUILD_EVENT_SEVERITIES);
     quoted(BUILD_CORRELATION_KINDS);
+    quoted(BUILD_REVISION_FAST_EDIT_STATUSES);
     expect(AGENT_SQL).toContain(`'build-task'`);
   });
 });

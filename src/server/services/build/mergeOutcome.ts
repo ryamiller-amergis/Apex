@@ -24,6 +24,7 @@ export interface MergeOutcomeContext {
   taskKey: string;
   attempt: number;
   revisionId: string;
+  revisionNumber: number;
   buildRunId: string;
   integrationBranch: string;
   supportContacts: BuildSupportContact[];
@@ -55,7 +56,10 @@ export interface MergeOutcomeDeps {
     detail?: Record<string, unknown>;
   }) => Promise<void>;
   dispatchNext: (buildRunId: string) => Promise<void>;
-  onAllTasksMerged: (revisionId: string) => Promise<void>;
+  onAllTasksMerged: (
+    revisionId: string,
+    mergedCommit?: string
+  ) => Promise<void>;
 }
 
 function formatContactNames(contacts: readonly BuildSupportContact[]): string {
@@ -118,6 +122,7 @@ function createDefaultMergeOutcomeDeps(
         taskKey: row.task.taskKey,
         attempt: row.task.attempt,
         revisionId: row.revision.id,
+        revisionNumber: row.revision.revisionNumber,
         buildRunId: row.run.id,
         integrationBranch:
           row.run.integrationBranch ?? `apex/build/${row.run.id}`,
@@ -181,8 +186,8 @@ function createDefaultMergeOutcomeDeps(
         await import('../buildOrchestrator/dispatchWiring');
       await defaultDispatchNext(buildRunId);
     },
-    async onAllTasksMerged(revisionId) {
-      await onAllTasksMerged(revisionId);
+    async onAllTasksMerged(revisionId, mergedCommit) {
+      await onAllTasksMerged(revisionId, undefined, mergedCommit);
     },
   };
 }
@@ -199,9 +204,13 @@ export async function applyMergeOutcome(
   switch (outcome.outcome) {
     case 'merged':
     case 'already_merged': {
-      await resolved.dispatchNext(context.buildRunId);
       if (context.allNonOmittedPlanTasksMerged) {
-        await resolved.onAllTasksMerged(context.revisionId);
+        await resolved.onAllTasksMerged(
+          context.revisionId,
+          outcome.outcome === 'merged' ? outcome.mergeCommit : undefined
+        );
+      } else {
+        await resolved.dispatchNext(context.buildRunId);
       }
       return;
     }
@@ -210,7 +219,11 @@ export async function applyMergeOutcome(
       const repair = await resolved.requestRepairAttempt(context.revisionId);
       if (repair.granted) {
         const nextAttempt = context.attempt + 1;
-        const nextBranch = `${taskBranchName(context.buildRunId, context.taskKey)}-${nextAttempt}`;
+        const nextBranch = `${taskBranchName(
+          context.buildRunId,
+          context.revisionNumber,
+          context.taskKey
+        )}-${nextAttempt}`;
         await resolved.requeueTaskForConflict(
           context.taskId,
           nextAttempt,

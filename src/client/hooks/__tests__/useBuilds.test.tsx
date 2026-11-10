@@ -1,7 +1,13 @@
 import React from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BuildApiError, useActiveBuildCount, useBuilds, useStartBuild } from '../useBuilds';
+import {
+  BuildApiError,
+  useActiveBuildCount,
+  useBuilds,
+  useStartBuild,
+  useStartLocalBuildPreview,
+} from '../useBuilds';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -89,5 +95,30 @@ describe('useBuilds', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['builds', 'Apex'] });
+  });
+
+  it('starts a local preview and refreshes the selected build', async () => {
+    mockFetch(202, { status: 'started', revisionNumber: 2 });
+    const { wrapper, queryClient } = createWrapper();
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(
+      () => useStartLocalBuildPreview('Apex', 'build-1'),
+      { wrapper }
+    );
+
+    await act(async () => {
+      await result.current.mutateAsync({});
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/builds/build-1/local-preview?project=Apex',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ project: 'Apex' }),
+      })
+    );
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['build', 'Apex', 'build-1'],
+    });
   });
 });

@@ -1,4 +1,10 @@
-import { taskBranchName, type BuildRunStatus, type BuildSuspendReason, type BuildTaskRole, type BuildTaskStatus } from '../../shared/types/build';
+import {
+  taskBranchName,
+  type BuildRunStatus,
+  type BuildSuspendReason,
+  type BuildTaskRole,
+  type BuildTaskStatus,
+} from '../../shared/types/build';
 import type { AppendBuildEventInput } from '../services/buildEventsService';
 import {
   createCompletionHandler,
@@ -14,7 +20,11 @@ import {
   type DispatchStore,
   type DispatchTaskRow,
 } from '../services/buildOrchestrator/dispatchStore';
-import type { BuildFlagState, GuardRun, LaunchGuardDecision } from '../services/buildOrchestrator/launchGuard';
+import type {
+  BuildFlagState,
+  GuardRun,
+  LaunchGuardDecision,
+} from '../services/buildOrchestrator/launchGuard';
 import { createBuildReconciler } from '../services/buildOrchestrator/reconcile';
 import { createTaskFailurePolicy } from '../services/buildOrchestrator/taskFailure';
 import {
@@ -26,7 +36,11 @@ import {
 const RUN_ID = 'run-1';
 const REVISION_ID = 'rev-1';
 
-type MemoryTask = DispatchTaskRow & { revisionId: string; startedAt: string | null; claimedAtMs: number };
+type MemoryTask = DispatchTaskRow & {
+  revisionId: string;
+  startedAt: string | null;
+  claimedAtMs: number;
+};
 /** `attempt` stands in for build_launch_snapshot.attempt. */
 type MemoryAgentRun = BuildAgentRunRow & { seq: number; attempt: number };
 
@@ -50,14 +64,20 @@ class MemoryDispatchStore implements DispatchStore {
       requesterUserId: 'user-1',
       parallelismCap: 4,
       revisionId: REVISION_ID,
+      revisionNumber: 1,
       ...overrides,
     };
     this.runs.set(run.id, run);
     return run;
   }
 
-  addTask(key: string, status: BuildTaskStatus, blockers: string[] = [], chainHeadKey: string | null = null,
-    role: BuildTaskRole = 'implementer'): MemoryTask {
+  addTask(
+    key: string,
+    status: BuildTaskStatus,
+    blockers: string[] = [],
+    chainHeadKey: string | null = null,
+    role: BuildTaskRole = 'implementer'
+  ): MemoryTask {
     const row: MemoryTask = {
       id: `task-${key}`,
       key,
@@ -68,15 +88,22 @@ class MemoryDispatchStore implements DispatchStore {
       chainHeadKey,
       branchName: null,
       revisionId: REVISION_ID,
-      startedAt: status === 'running' || status === 'merged' ? '2026-10-30T00:00:00.000Z' : null,
+      startedAt:
+        status === 'running' || status === 'merged'
+          ? '2026-10-30T00:00:00.000Z'
+          : null,
       claimedAtMs: this.nowMs,
     };
     this.tasks.push(row);
     return row;
   }
 
-  addAgentRun(taskId: string, status = 'running', withCursorIds = true,
-    attempt = this.tasks.find((row) => row.id === taskId)?.attempt ?? 1): string {
+  addAgentRun(
+    taskId: string,
+    status = 'running',
+    withCursorIds = true,
+    attempt = this.tasks.find((row) => row.id === taskId)?.attempt ?? 1
+  ): string {
     this.seq += 1;
     const id = `agent-${this.seq}`;
     this.agentRuns.push({
@@ -108,7 +135,11 @@ class MemoryDispatchStore implements DispatchStore {
     this.agentRuns.find((row) => row.id === id)!.status = status;
   }
 
-  private move(taskIds: string[], from: BuildTaskStatus, to: BuildTaskStatus): number {
+  private move(
+    taskIds: string[],
+    from: BuildTaskStatus,
+    to: BuildTaskStatus
+  ): number {
     let moved = 0;
     for (const row of this.tasks) {
       if (taskIds.includes(row.id) && row.status === from) {
@@ -120,7 +151,12 @@ class MemoryDispatchStore implements DispatchStore {
   }
 
   private strip(row: MemoryTask): DispatchTaskRow {
-    const { revisionId: _revisionId, startedAt: _startedAt, claimedAtMs: _claimedAtMs, ...rest } = row;
+    const {
+      revisionId: _revisionId,
+      startedAt: _startedAt,
+      claimedAtMs: _claimedAtMs,
+      ...rest
+    } = row;
     return { ...rest, blockers: [...rest.blockers] };
   }
 
@@ -136,17 +172,29 @@ class MemoryDispatchStore implements DispatchStore {
 
   async loadPlanTasks(revisionId: string) {
     return this.tasks
-      .filter((row) => row.revisionId === revisionId && (row.role === 'implementer' || row.role === 'qa'))
+      .filter(
+        (row) =>
+          row.revisionId === revisionId &&
+          (row.role === 'implementer' || row.role === 'qa')
+      )
       .map((row) => this.strip(row));
   }
 
   async loadRevisionTasks(revisionId: string) {
-    return this.tasks.filter((row) => row.revisionId === revisionId).map((row) => this.strip(row));
+    return this.tasks
+      .filter((row) => row.revisionId === revisionId)
+      .map((row) => this.strip(row));
   }
 
   async loadTaskContext(taskId: string) {
     const row = this.tasks.find((candidate) => candidate.id === taskId);
-    return row ? { task: this.strip(row), buildRunId: RUN_ID, revisionId: row.revisionId } : null;
+    return row
+      ? {
+          task: this.strip(row),
+          buildRunId: RUN_ID,
+          revisionId: row.revisionId,
+        }
+      : null;
   }
 
   async loadAgentRun(agentRunId: string) {
@@ -155,14 +203,18 @@ class MemoryDispatchStore implements DispatchStore {
   }
 
   async latestAgentRunForTask(taskId: string) {
-    const rows = this.agentRuns.filter((row) => row.buildTaskId === taskId).sort((a, b) => b.seq - a.seq);
+    const rows = this.agentRuns
+      .filter((row) => row.buildTaskId === taskId)
+      .sort((a, b) => b.seq - a.seq);
     return rows[0] ? this.strippedAgent(rows[0]) : null;
   }
 
   async currentAgentRunForTask(taskId: string) {
     const task = this.tasks.find((row) => row.id === taskId);
     const rows = this.agentRuns
-      .filter((row) => row.buildTaskId === taskId && row.attempt === task?.attempt)
+      .filter(
+        (row) => row.buildTaskId === taskId && row.attempt === task?.attempt
+      )
       .sort((a, b) => b.seq - a.seq);
     return rows[0] ? this.strippedAgent(rows[0]) : null;
   }
@@ -172,15 +224,31 @@ class MemoryDispatchStore implements DispatchStore {
   }
 
   async claim(request: ClaimRequest) {
-    const heads = new Set(this.tasks
-      .filter((row) => row.status === 'running' && (row.role === 'implementer' || row.role === 'qa'))
-      .map((row) => row.chainHeadKey ?? row.key));
+    const heads = new Set(
+      this.tasks
+        .filter(
+          (row) =>
+            row.status === 'running' &&
+            (row.role === 'implementer' || row.role === 'qa')
+        )
+        .map((row) => row.chainHeadKey ?? row.key)
+    );
     if (heads.size >= request.parallelismLimit) return null;
-    const members = this.tasks.filter((row) => request.taskIds.includes(row.id));
-    if (members.length !== request.taskIds.length || members.some((row) => row.status !== 'ready')) return null;
+    const members = this.tasks.filter((row) =>
+      request.taskIds.includes(row.id)
+    );
+    if (
+      members.length !== request.taskIds.length ||
+      members.some((row) => row.status !== 'ready')
+    )
+      return null;
     const head = this.tasks.find((row) => row.id === request.headTaskId)!;
     const attempt = head.startedAt ? head.attempt + 1 : head.attempt;
-    const branchName = `${taskBranchName(request.buildRunId, request.headKey)}-${attempt}`;
+    const branchName = `${taskBranchName(
+      request.buildRunId,
+      request.revisionNumber,
+      request.headKey
+    )}-${attempt}`;
     for (const row of members) {
       row.status = 'running';
       row.attempt = attempt;
@@ -212,16 +280,31 @@ class MemoryDispatchStore implements DispatchStore {
 
   async suspend(buildRunId: string, reason: BuildSuspendReason) {
     const run = this.runs.get(buildRunId);
-    if (!run || !(AGENT_STAGE_STATUSES as readonly string[]).includes(run.status)) return false;
+    if (
+      !run ||
+      !(AGENT_STAGE_STATUSES as readonly string[]).includes(run.status)
+    )
+      return false;
     run.status = 'suspended';
     run.suspendReason = reason;
-    this.events.push({ buildRunId, eventType: 'run.suspended', message: reason, detail: { reason } });
+    this.events.push({
+      buildRunId,
+      eventType: 'run.suspended',
+      message: reason,
+      detail: { reason },
+    });
     return true;
   }
 
   async appendEvent(input: AppendBuildEventInput) {
-    if (input.dedupeKey && this.events.some((event) =>
-      event.buildRunId === input.buildRunId && event.dedupeKey === input.dedupeKey)) {
+    if (
+      input.dedupeKey &&
+      this.events.some(
+        (event) =>
+          event.buildRunId === input.buildRunId &&
+          event.dedupeKey === input.dedupeKey
+      )
+    ) {
       return false;
     }
     this.events.push(input);
@@ -229,19 +312,24 @@ class MemoryDispatchStore implements DispatchStore {
   }
 
   async listRuns(statuses: readonly BuildRunStatus[]) {
-    return [...this.runs.values()].filter((run) => statuses.includes(run.status)).map((run) => ({ ...run }));
+    return [...this.runs.values()]
+      .filter((run) => statuses.includes(run.status))
+      .map((run) => ({ ...run }));
   }
 
   async listRunsSuspendedFor(reason: BuildSuspendReason) {
     return [...this.runs.values()]
-      .filter((run) => run.status === 'suspended' && run.suspendReason === reason)
+      .filter(
+        (run) => run.status === 'suspended' && run.suspendReason === reason
+      )
       .map((run) => ({ ...run }));
   }
 
   async listRunningHeadAgentRunIds() {
     const ids: string[] = [];
     for (const row of this.tasks) {
-      if (row.status !== 'running' || (row.chainHeadKey ?? row.key) !== row.key) continue;
+      if (row.status !== 'running' || (row.chainHeadKey ?? row.key) !== row.key)
+        continue;
       if (row.role !== 'implementer' && row.role !== 'qa') continue;
       const current = await this.currentAgentRunForTask(row.id);
       if (current) ids.push(current.id);
@@ -251,10 +339,21 @@ class MemoryDispatchStore implements DispatchStore {
 
   async listRunningHeadsClaimedBefore(olderThanMs: number) {
     return this.tasks
-      .filter((row) => row.status === 'running' && (row.role === 'implementer' || row.role === 'qa')
-        && (row.chainHeadKey ?? row.key) === row.key && row.claimedAtMs < this.nowMs - olderThanMs
-        && this.runs.get(RUN_ID)?.status === 'building')
-      .map((row) => ({ buildRunId: RUN_ID, revisionId: row.revisionId, taskId: row.id, key: row.key, attempt: row.attempt }));
+      .filter(
+        (row) =>
+          row.status === 'running' &&
+          (row.role === 'implementer' || row.role === 'qa') &&
+          (row.chainHeadKey ?? row.key) === row.key &&
+          row.claimedAtMs < this.nowMs - olderThanMs &&
+          this.runs.get(RUN_ID)?.status === 'building'
+      )
+      .map((row) => ({
+        buildRunId: RUN_ID,
+        revisionId: row.revisionId,
+        taskId: row.id,
+        key: row.key,
+        attempt: row.attempt,
+      }));
   }
 
   async withRunLock<T>(_buildRunId: string, fn: () => Promise<T>) {
@@ -275,11 +374,20 @@ function harness() {
   const store = new MemoryDispatchStore();
   const track = jest.fn();
   const launches: BuildTaskLaunchRequest[] = [];
-  let launchResult: (request: BuildTaskLaunchRequest) => BuildTaskLaunchResult = (request) => {
+  let launchResult: (
+    request: BuildTaskLaunchRequest
+  ) => BuildTaskLaunchResult = (request) => {
     const agentRunId = store.addAgentRun(request.tasks[0].id);
-    return { kind: 'launched', agentRunId, cloudAgentId: `bc-${agentRunId}`, cursorRunId: `msg-${agentRunId}` };
+    return {
+      kind: 'launched',
+      agentRunId,
+      cloudAgentId: `bc-${agentRunId}`,
+      cursorRunId: `msg-${agentRunId}`,
+    };
   };
-  const guard = jest.fn(async (): Promise<LaunchGuardDecision> => ({ outcome: 'allow' }));
+  const guard = jest.fn(
+    async (): Promise<LaunchGuardDecision> => ({ outcome: 'allow' })
+  );
   const failTask = createTaskFailurePolicy({ store, track });
   const dispatchNext = createDispatchNext({
     store,
@@ -294,8 +402,15 @@ function harness() {
   const dispatchSpy = jest.fn((buildRunId: string) => dispatchNext(buildRunId));
   const requestMerge = jest.fn(async () => undefined);
   const mayReportDone = jest.fn(async () => true);
-  const observe = jest.fn(async () => ({ status: 'running', prUrl: null, resultText: null, settled: false }));
-  const markTerminal = jest.fn(async (agentRunId: string, status: string) => store.setAgentStatus(agentRunId, status));
+  const observe = jest.fn(async () => ({
+    status: 'running',
+    prUrl: null,
+    resultText: null,
+    settled: false,
+  }));
+  const markTerminal = jest.fn(async (agentRunId: string, status: string) =>
+    store.setAgentStatus(agentRunId, status)
+  );
   const applyCompletion = createCompletionHandler({
     store,
     observe,
@@ -306,8 +421,12 @@ function harness() {
     dispatchNext: dispatchSpy,
     track,
   });
-  const cancelAgent = jest.fn(async (agentRun: BuildAgentRunRow) => store.setAgentStatus(agentRun.id, 'cancelled'));
-  const readFlag = jest.fn(async (_run: GuardRun): Promise<BuildFlagState> => 'on');
+  const cancelAgent = jest.fn(async (agentRun: BuildAgentRunRow) =>
+    store.setAgentStatus(agentRun.id, 'cancelled')
+  );
+  const readFlag = jest.fn(
+    async (_run: GuardRun): Promise<BuildFlagState> => 'on'
+  );
   const reconcile = createBuildReconciler({
     store,
     readFlag,
@@ -347,10 +466,23 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
 
     const outcome = await h.dispatchNext(RUN_ID);
 
-    expect(outcome).toEqual({ kind: 'dispatched', promoted: ['a', 'b'], launched: ['a', 'b'], waiting: [] });
-    expect(h.launches.map((request) => request.unit.taskKeys)).toEqual([['a'], ['b']]);
-    expect(h.store.agentRuns.map((row) => row.buildTaskId)).toEqual(['task-a', 'task-b']);
-    expect(h.store.task('a').branchName).toBe(`${taskBranchName(RUN_ID, 'a')}-1`);
+    expect(outcome).toEqual({
+      kind: 'dispatched',
+      promoted: ['a', 'b'],
+      launched: ['a', 'b'],
+      waiting: [],
+    });
+    expect(h.launches.map((request) => request.unit.taskKeys)).toEqual([
+      ['a'],
+      ['b'],
+    ]);
+    expect(h.store.agentRuns.map((row) => row.buildTaskId)).toEqual([
+      'task-a',
+      'task-b',
+    ]);
+    expect(h.store.task('a').branchName).toBe(
+      `${taskBranchName(RUN_ID, 1, 'a')}-1`
+    );
     expect(h.store.eventTypes()).toEqual(['task.launched', 'task.launched']);
   });
 
@@ -364,9 +496,21 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     await h.dispatchNext(RUN_ID);
 
     expect(h.launches).toHaveLength(1);
-    expect(h.launches[0].unit).toEqual({ headKey: 'a', taskKeys: ['a', 'b', 'c'], mode: 'chain' });
-    expect(h.launches[0].tasks.map((task) => task.key)).toEqual(['a', 'b', 'c']);
-    expect(['a', 'b', 'c'].map((key) => h.store.task(key).status)).toEqual(['running', 'running', 'running']);
+    expect(h.launches[0].unit).toEqual({
+      headKey: 'a',
+      taskKeys: ['a', 'b', 'c'],
+      mode: 'chain',
+    });
+    expect(h.launches[0].tasks.map((task) => task.key)).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    expect(['a', 'b', 'c'].map((key) => h.store.task(key).status)).toEqual([
+      'running',
+      'running',
+      'running',
+    ]);
     expect(h.store.agentRuns).toHaveLength(1);
   });
 
@@ -379,7 +523,11 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
 
     const outcome = await h.dispatchNext(RUN_ID);
 
-    expect(outcome).toMatchObject({ kind: 'dispatched', launched: ['b'], waiting: ['c'] });
+    expect(outcome).toMatchObject({
+      kind: 'dispatched',
+      launched: ['b'],
+      waiting: ['c'],
+    });
     expect(h.store.task('c').status).toBe('ready');
     expect(h.store.run().status).toBe('building');
   });
@@ -387,20 +535,26 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
   it.each([
     ['VT-06/VT-07 PBI-021 AC-0', 'flag_disabled' as const],
     ['VT-08 PBI-020 AC-3', 'permission_revoked' as const],
-  ])('%s: a refused guard claims nothing, launches nothing, and suspends with %s', async (_label, reason) => {
-    const h = harness();
-    h.store.addRun();
-    h.store.addTask('a', 'ready');
-    h.guard.mockResolvedValueOnce({ outcome: 'refuse', reason });
+  ])(
+    '%s: a refused guard claims nothing, launches nothing, and suspends with %s',
+    async (_label, reason) => {
+      const h = harness();
+      h.store.addRun();
+      h.store.addTask('a', 'ready');
+      h.guard.mockResolvedValueOnce({ outcome: 'refuse', reason });
 
-    const outcome = await h.dispatchNext(RUN_ID);
+      const outcome = await h.dispatchNext(RUN_ID);
 
-    expect(outcome).toEqual({ kind: 'suspended', reason });
-    expect(h.launches).toHaveLength(0);
-    expect(h.store.task('a').status).toBe('ready');
-    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: reason });
-    expect(h.store.eventTypes()).toEqual(['run.suspended']);
-  });
+      expect(outcome).toEqual({ kind: 'suspended', reason });
+      expect(h.launches).toHaveLength(0);
+      expect(h.store.task('a').status).toBe('ready');
+      expect(h.store.run()).toMatchObject({
+        status: 'suspended',
+        suspendReason: reason,
+      });
+      expect(h.store.eventTypes()).toEqual(['run.suspended']);
+    }
+  );
 
   it('VT-09: a lookup error defers the launch, keeps the task ready, and does not suspend', async () => {
     const h = harness();
@@ -408,7 +562,10 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     h.store.addTask('a', 'ready');
     h.guard.mockResolvedValue({ outcome: 'defer', detail: 'db down' });
 
-    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({ kind: 'deferred', headKey: 'a' });
+    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({
+      kind: 'deferred',
+      headKey: 'a',
+    });
     await h.dispatchNext(RUN_ID);
 
     expect(h.launches).toHaveLength(0);
@@ -431,12 +588,21 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
 
     h.setLaunchResult((request) => {
       const agentRunId = h.store.addAgentRun(request.tasks[0].id);
-      return { kind: 'launched', agentRunId, cloudAgentId: 'bc', cursorRunId: 'msg' };
+      return {
+        kind: 'launched',
+        agentRunId,
+        cloudAgentId: 'bc',
+        cursorRunId: 'msg',
+      };
     });
     await h.dispatchNext(RUN_ID);
 
     expect(h.launches.map((request) => request.attempt)).toEqual([1, 2]);
-    expect(h.store.task('a')).toMatchObject({ status: 'running', attempt: 2, branchName: `${taskBranchName(RUN_ID, 'a')}-2` });
+    expect(h.store.task('a')).toMatchObject({
+      status: 'running',
+      attempt: 2,
+      branchName: `${taskBranchName(RUN_ID, 1, 'a')}-2`,
+    });
   });
 
   it('VT-11 PBI-020 AC-1: with no repair attempt left the task stays failed and the run suspends with repair_cap', async () => {
@@ -446,10 +612,16 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     h.store.repairAttempts.set(REVISION_ID, BUILD_REPAIR_ATTEMPT_CAP);
     h.setLaunchResult(() => ({ kind: 'failed', detail: 'Cursor is down.' }));
 
-    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({ kind: 'suspended', reason: 'repair_cap' });
+    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({
+      kind: 'suspended',
+      reason: 'repair_cap',
+    });
 
     expect(h.store.task('a').status).toBe('failed');
-    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: 'repair_cap' });
+    expect(h.store.run()).toMatchObject({
+      status: 'suspended',
+      suspendReason: 'repair_cap',
+    });
     expect(h.store.eventTypes()).toEqual(['task.failed', 'run.suspended']);
   });
 
@@ -457,12 +629,21 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     const h = harness();
     h.store.addRun();
     h.store.addTask('a', 'ready');
-    h.setLaunchResult(() => ({ kind: 'refused', detail: 'The task launch was refused: snapshot_secret_value.' }));
+    h.setLaunchResult(() => ({
+      kind: 'refused',
+      detail: 'The task launch was refused: snapshot_secret_value.',
+    }));
 
-    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({ kind: 'suspended', reason: 'configuration' });
+    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({
+      kind: 'suspended',
+      reason: 'configuration',
+    });
 
     expect(h.store.task('a').status).toBe('ready');
-    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: 'configuration' });
+    expect(h.store.run()).toMatchObject({
+      status: 'suspended',
+      suspendReason: 'configuration',
+    });
     expect(h.store.repairAttempts.get(REVISION_ID)).toBeUndefined();
   });
 
@@ -474,7 +655,11 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
 
     const outcome = await h.dispatchNext(RUN_ID);
 
-    expect(outcome).toMatchObject({ kind: 'dispatched', promoted: ['b'], launched: ['b'] });
+    expect(outcome).toMatchObject({
+      kind: 'dispatched',
+      promoted: ['b'],
+      launched: ['b'],
+    });
   });
 
   it('suspends with plan_invalid when the stored tasks are inconsistent', async () => {
@@ -483,7 +668,10 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     h.store.addTask('a', 'merged', [], 'a');
     h.store.addTask('b', 'ready', ['a'], 'a');
 
-    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({ kind: 'suspended', reason: 'plan_invalid' });
+    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({
+      kind: 'suspended',
+      reason: 'plan_invalid',
+    });
     expect(h.launches).toHaveLength(0);
   });
 
@@ -491,7 +679,10 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     const h = harness();
     h.store.addRun({ status: 'suspended', suspendReason: 'flag_disabled' });
     h.store.addTask('a', 'ready');
-    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({ kind: 'skipped', reason: 'not_building' });
+    await expect(h.dispatchNext(RUN_ID)).resolves.toEqual({
+      kind: 'skipped',
+      reason: 'not_building',
+    });
   });
 
   it('VT-19 PBI-021 AC-2 (dispatcher half): after resume, unmerged tasks relaunch with attempt + 1 and merged ones stay merged', async () => {
@@ -501,13 +692,19 @@ describe('dispatchNext (TBI-018, PBI-020)', () => {
     const b = h.store.addTask('b', 'ready', ['a']);
     const c = h.store.addTask('c', 'ready', ['a']);
     b.startedAt = c.startedAt = '2026-10-30T00:00:00.000Z';
-    b.branchName = `${taskBranchName(RUN_ID, 'b')}-1`;
+    b.branchName = `${taskBranchName(RUN_ID, 1, 'b')}-1`;
 
     Object.assign(h.store.run(), { status: 'building', suspendReason: null });
     await h.dispatchNext(RUN_ID);
 
-    expect(h.launches.map((request) => request.unit.headKey)).toEqual(['b', 'c']);
-    expect(h.store.task('b')).toMatchObject({ attempt: 2, branchName: `${taskBranchName(RUN_ID, 'b')}-2` });
+    expect(h.launches.map((request) => request.unit.headKey)).toEqual([
+      'b',
+      'c',
+    ]);
+    expect(h.store.task('b')).toMatchObject({
+      attempt: 2,
+      branchName: `${taskBranchName(RUN_ID, 1, 'b')}-2`,
+    });
     expect(h.store.task('c').attempt).toBe(2);
     expect(h.store.task('a').status).toBe('merged');
   });
@@ -527,7 +724,11 @@ describe('createTaskLauncher (PBI-020 AC-1, VT-12)', () => {
     const launchRun = jest.fn();
     const launch = createTaskLauncher({
       buildCandidate: async () => ({ ok: true, candidate }),
-      writeSnapshot: jest.fn(async () => ({ ok: false as const, refused: true as const, refusals: [{ code: 'snapshot_secret_value' as const }] })),
+      writeSnapshot: jest.fn(async () => ({
+        ok: false as const,
+        refused: true as const,
+        refusals: [{ code: 'snapshot_secret_value' as const }],
+      })),
       launchRun,
     });
     await expect(launch(request)).resolves.toEqual({
@@ -543,35 +744,56 @@ describe('createTaskLauncher (PBI-020 AC-1, VT-12)', () => {
       buildCandidate: async () => ({ ok: false, detail: 'missing model' }),
       writeSnapshot,
     });
-    await expect(launch(request)).resolves.toEqual({ kind: 'refused', detail: 'missing model' });
+    await expect(launch(request)).resolves.toEqual({
+      kind: 'refused',
+      detail: 'missing model',
+    });
     expect(writeSnapshot).not.toHaveBeenCalled();
   });
 
   it.each([
     ['another task', { buildTaskId: 'task-b', attempt: 1 }],
     ['another attempt', { buildTaskId: 'task-a', attempt: 2 }],
-  ])('refuses a candidate prepared for %s without writing anything', async (_label, mismatched) => {
-    const writeSnapshot = jest.fn();
-    const launch = createTaskLauncher({ buildCandidate: async () => ({ ok: true, candidate: mismatched }), writeSnapshot });
-    await expect(launch(request)).resolves.toEqual({
-      kind: 'refused',
-      detail: 'The task instructions were prepared for a different task or attempt.',
-    });
-    expect(writeSnapshot).not.toHaveBeenCalled();
-  });
+  ])(
+    'refuses a candidate prepared for %s without writing anything',
+    async (_label, mismatched) => {
+      const writeSnapshot = jest.fn();
+      const launch = createTaskLauncher({
+        buildCandidate: async () => ({ ok: true, candidate: mismatched }),
+        writeSnapshot,
+      });
+      await expect(launch(request)).resolves.toEqual({
+        kind: 'refused',
+        detail:
+          'The task instructions were prepared for a different task or attempt.',
+      });
+      expect(writeSnapshot).not.toHaveBeenCalled();
+    }
+  );
 
   it('reports a thrown launch as failed', async () => {
     const launch = createTaskLauncher({
       buildCandidate: async () => ({ ok: true, candidate }),
-      writeSnapshot: jest.fn(async () => ({ ok: true as const, runId: 'agent-1' })),
-      launchRun: jest.fn(async () => { throw new Error('network'); }),
+      writeSnapshot: jest.fn(async () => ({
+        ok: true as const,
+        runId: 'agent-1',
+      })),
+      launchRun: jest.fn(async () => {
+        throw new Error('network');
+      }),
     });
-    await expect(launch(request)).resolves.toEqual({ kind: 'failed', detail: 'network' });
+    await expect(launch(request)).resolves.toEqual({
+      kind: 'failed',
+      detail: 'network',
+    });
   });
 });
 
 describe('applyAgentCompletion (TBI-019)', () => {
-  function runningTask(h: ReturnType<typeof harness>, agentStatus = 'completed') {
+  function runningTask(
+    h: ReturnType<typeof harness>,
+    agentStatus = 'completed'
+  ) {
     h.store.addRun();
     h.store.addTask('a', 'running');
     return h.store.addAgentRun('task-a', agentStatus);
@@ -582,10 +804,16 @@ describe('applyAgentCompletion (TBI-019)', () => {
     const agentRunId = runningTask(h);
 
     await expect(h.applyCompletion({ agentRunId })).resolves.toBe('finished');
-    await expect(h.applyCompletion({ agentRunId })).resolves.toBe('already_applied');
+    await expect(h.applyCompletion({ agentRunId })).resolves.toBe(
+      'already_applied'
+    );
 
     expect(h.store.eventTypes()).toEqual(['task.completed']);
-    expect(h.requestMerge).toHaveBeenCalledWith({ buildRunId: RUN_ID, headTaskId: 'task-a', taskIds: ['task-a'] });
+    expect(h.requestMerge).toHaveBeenCalledWith({
+      buildRunId: RUN_ID,
+      headTaskId: 'task-a',
+      taskIds: ['task-a'],
+    });
     expect(h.store.task('a').status).toBe('running');
   });
 
@@ -593,28 +821,46 @@ describe('applyAgentCompletion (TBI-019)', () => {
     const h = harness();
     const agentRunId = runningTask(h, 'running');
 
-    await expect(h.applyCompletion({ agentRunId })).resolves.toBe('not_settled');
-    h.observe.mockResolvedValueOnce({ status: 'finished', prUrl: null, resultText: null, settled: true });
+    await expect(h.applyCompletion({ agentRunId })).resolves.toBe(
+      'not_settled'
+    );
+    h.observe.mockResolvedValueOnce({
+      status: 'finished',
+      prUrl: null,
+      resultText: null,
+      settled: true,
+    });
     await expect(h.applyCompletion({ agentRunId })).resolves.toBe('finished');
 
-    expect(h.markTerminal).toHaveBeenCalledWith(agentRunId, 'completed', `msg-${agentRunId}`);
+    expect(h.markTerminal).toHaveBeenCalledWith(
+      agentRunId,
+      'completed',
+      `msg-${agentRunId}`
+    );
   });
 
   it.each([
     ['finished without evidence', 'completed', false],
     ['failed', 'failed', true],
     ['cancelled unexpectedly', 'cancelled', true],
-  ])('a task whose agent %s is failed, requeued, and dispatched again', async (_label, status, evidence) => {
-    const h = harness();
-    const agentRunId = runningTask(h, status);
-    h.mayReportDone.mockResolvedValue(evidence);
+  ])(
+    'a task whose agent %s is failed, requeued, and dispatched again',
+    async (_label, status, evidence) => {
+      const h = harness();
+      const agentRunId = runningTask(h, status);
+      h.mayReportDone.mockResolvedValue(evidence);
 
-    await expect(h.applyCompletion({ agentRunId })).resolves.toBe('failed');
+      await expect(h.applyCompletion({ agentRunId })).resolves.toBe('failed');
 
-    expect(h.store.eventTypes()).toEqual(['task.failed', 'task.requeued', 'task.launched']);
-    expect(h.requestMerge).not.toHaveBeenCalled();
-    expect(h.dispatchSpy).toHaveBeenCalledWith(RUN_ID);
-  });
+      expect(h.store.eventTypes()).toEqual([
+        'task.failed',
+        'task.requeued',
+        'task.launched',
+      ]);
+      expect(h.requestMerge).not.toHaveBeenCalled();
+      expect(h.dispatchSpy).toHaveBeenCalledWith(RUN_ID);
+    }
+  );
 
   it('a build-feature agent that finished with refused evidence gets one fix-up pass, then the run stops', async () => {
     const h = harness();
@@ -623,15 +869,26 @@ describe('applyAgentCompletion (TBI-019)', () => {
     const first = h.store.addAgentRun('task-build-feature', 'completed');
     h.mayReportDone.mockResolvedValue(false);
 
-    await expect(h.applyCompletion({ agentRunId: first })).resolves.toBe('failed');
-    expect(h.store.eventTypes()).toEqual(['task.failed', 'task.requeued', 'task.launched']);
+    await expect(h.applyCompletion({ agentRunId: first })).resolves.toBe(
+      'failed'
+    );
+    expect(h.store.eventTypes()).toEqual([
+      'task.failed',
+      'task.requeued',
+      'task.launched',
+    ]);
     expect(h.store.task('build-feature').attempt).toBe(2);
     expect(h.store.run().status).toBe('building');
 
     const second = h.store.agentRuns[h.store.agentRuns.length - 1].id;
     h.store.setAgentStatus(second, 'completed');
-    await expect(h.applyCompletion({ agentRunId: second })).resolves.toBe('failed');
-    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: 'repair_cap' });
+    await expect(h.applyCompletion({ agentRunId: second })).resolves.toBe(
+      'failed'
+    );
+    expect(h.store.run()).toMatchObject({
+      status: 'suspended',
+      suspendReason: 'repair_cap',
+    });
     expect(h.launches).toHaveLength(1);
   });
 
@@ -653,7 +910,9 @@ describe('applyAgentCompletion (TBI-019)', () => {
     h.store.addAgentRun('task-a', 'running');
     h.store.setAgentStatus(earlier, 'completed');
 
-    await expect(h.applyCompletion({ agentRunId: earlier })).resolves.toBe('ignored_superseded');
+    await expect(h.applyCompletion({ agentRunId: earlier })).resolves.toBe(
+      'ignored_superseded'
+    );
 
     expect(h.store.task('a').status).toBe('running');
     expect(h.store.events).toHaveLength(0);
@@ -665,7 +924,12 @@ describe('applyAgentCompletion (TBI-019)', () => {
     h.observe.mockImplementationOnce(async () => {
       await h.store.suspend(RUN_ID, 'flag_disabled');
       await h.store.resetToReady(['task-a']);
-      return { status: 'finished', prUrl: null, resultText: null, settled: true };
+      return {
+        status: 'finished',
+        prUrl: null,
+        resultText: null,
+        settled: true,
+      };
     });
 
     await expect(h.applyCompletion({ agentRunId })).resolves.toBe('discarded');
@@ -682,14 +946,19 @@ describe('applyAgentCompletion (TBI-019)', () => {
     const earlier = h.store.addAgentRun('task-a', 'failed');
     h.store.task('a').attempt = 2;
 
-    await expect(h.applyCompletion({ agentRunId: earlier })).resolves.toBe('ignored_superseded');
+    await expect(h.applyCompletion({ agentRunId: earlier })).resolves.toBe(
+      'ignored_superseded'
+    );
     expect(h.store.events).toHaveLength(0);
   });
 
   it('discards the result while the run is suspended for the flag', async () => {
     const h = harness();
     const agentRunId = runningTask(h);
-    Object.assign(h.store.run(), { status: 'suspended', suspendReason: 'flag_disabled' });
+    Object.assign(h.store.run(), {
+      status: 'suspended',
+      suspendReason: 'flag_disabled',
+    });
 
     await expect(h.applyCompletion({ agentRunId })).resolves.toBe('discarded');
 
@@ -702,13 +971,17 @@ describe('applyAgentCompletion (TBI-019)', () => {
     const h = harness();
     const agentRunId = runningTask(h);
     Object.assign(h.store.run(), { status: 'cancelled' });
-    await expect(h.applyCompletion({ agentRunId })).resolves.toBe('recorded_only');
+    await expect(h.applyCompletion({ agentRunId })).resolves.toBe(
+      'recorded_only'
+    );
     expect(h.store.events).toHaveLength(0);
   });
 
   it('ignores an agent run with no build task', async () => {
     const h = harness();
-    await expect(h.applyCompletion({ agentRunId: 'my-work-run' })).resolves.toBe('ignored_unknown_run');
+    await expect(
+      h.applyCompletion({ agentRunId: 'my-work-run' })
+    ).resolves.toBe('ignored_unknown_run');
   });
 });
 
@@ -716,10 +989,18 @@ describe('completion watcher (TBI-019 DoD-2)', () => {
   it('applies the completion once the stream ends', async () => {
     const apply = jest.fn(async () => 'finished' as const);
     const watcher = createCompletionWatcher({
-      stream: () => (async function* () { yield 'step'; })(),
+      stream: () =>
+        (async function* () {
+          yield 'step';
+        })(),
       apply,
     });
-    watcher.watch({ agentRunId: 'agent-1', project: 'Apex', cloudAgentId: 'bc', cursorRunId: 'msg' });
+    watcher.watch({
+      agentRunId: 'agent-1',
+      project: 'Apex',
+      cloudAgentId: 'bc',
+      cursorRunId: 'msg',
+    });
     await new Promise((resolve) => setImmediate(resolve));
     expect(apply).toHaveBeenCalledWith({ agentRunId: 'agent-1' });
     expect(watcher.watching()).toBe(0);
@@ -732,12 +1013,21 @@ describe('completion watcher (TBI-019 DoD-2)', () => {
     const agentRunId = h.store.addAgentRun('task-a', 'running');
     const logError = jest.fn();
     const watcher = createCompletionWatcher({
-      stream: () => ({ next: async () => { throw new Error('stream dropped'); } }),
+      stream: () => ({
+        next: async () => {
+          throw new Error('stream dropped');
+        },
+      }),
       apply: h.applyCompletion,
       logError,
     });
 
-    watcher.watch({ agentRunId, project: 'Apex', cloudAgentId: 'bc', cursorRunId: 'msg' });
+    watcher.watch({
+      agentRunId,
+      project: 'Apex',
+      cloudAgentId: 'bc',
+      cursorRunId: 'msg',
+    });
     await new Promise((resolve) => setImmediate(resolve));
     expect(logError).toHaveBeenCalled();
 
@@ -764,9 +1054,17 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
 
     const outcome = await h.reconcile();
 
-    expect(h.cancelAgent.mock.calls.map(([agentRun]) => agentRun.id)).toEqual(agents);
-    expect([h.store.task('a').status, h.store.task('b').status]).toEqual(['ready', 'ready']);
-    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: 'flag_disabled' });
+    expect(h.cancelAgent.mock.calls.map(([agentRun]) => agentRun.id)).toEqual(
+      agents
+    );
+    expect([h.store.task('a').status, h.store.task('b').status]).toEqual([
+      'ready',
+      'ready',
+    ]);
+    expect(h.store.run()).toMatchObject({
+      status: 'suspended',
+      suspendReason: 'flag_disabled',
+    });
     expect(h.store.eventTypes()).toEqual(['run.suspended']);
     expect(outcome).toMatchObject({ flagSuspended: 1, skipped: false });
   });
@@ -783,9 +1081,17 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
     await h.reconcile();
     await h.reconcile();
 
-    expect(h.store.run()).toMatchObject({ status: 'suspended', suspendReason: 'flag_disabled' });
-    expect(h.store.eventTypes().filter((type) => type === 'agent.cancel_failed')).toHaveLength(1);
-    expect(h.cancelAgent.mock.calls.filter(([agentRun]) => agentRun.id === first).length).toBeGreaterThanOrEqual(3);
+    expect(h.store.run()).toMatchObject({
+      status: 'suspended',
+      suspendReason: 'flag_disabled',
+    });
+    expect(
+      h.store.eventTypes().filter((type) => type === 'agent.cancel_failed')
+    ).toHaveLength(1);
+    expect(
+      h.cancelAgent.mock.calls.filter(([agentRun]) => agentRun.id === first)
+        .length
+    ).toBeGreaterThanOrEqual(3);
     expect(h.launches).toHaveLength(0);
   });
 
@@ -837,8 +1143,13 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
 
       expect(outcome.launchesRecovered).toBe(1);
       expect(h.store.repairAttempts.get(REVISION_ID)).toBeUndefined();
-      expect(h.store.eventTypes()).toEqual(['task.launch_lost', 'task.launched']);
-      expect(h.launches.map((request) => [request.unit.headKey, request.attempt])).toEqual([['a', 2]]);
+      expect(h.store.eventTypes()).toEqual([
+        'task.launch_lost',
+        'task.launched',
+      ]);
+      expect(
+        h.launches.map((request) => [request.unit.headKey, request.attempt])
+      ).toEqual([['a', 2]]);
     });
 
     it('a queued agent run that never got its Cursor IDs is cancelled before the task is reset', async () => {
@@ -848,7 +1159,9 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
 
       await h.reconcile();
 
-      expect(h.cancelAgent.mock.calls.map(([agentRun]) => agentRun.id)).toEqual([stuck]);
+      expect(h.cancelAgent.mock.calls.map(([agentRun]) => agentRun.id)).toEqual(
+        [stuck]
+      );
       expect(h.store.eventTypes()[0]).toBe('task.launch_lost');
       expect(h.launches).toHaveLength(1);
     });
@@ -858,16 +1171,24 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
       claimedLongAgo(h);
       const reaped = h.store.addAgentRun('task-a', 'failed', false);
 
-      await expect(h.applyCompletion({ agentRunId: reaped })).resolves.toBe('not_launched');
+      await expect(h.applyCompletion({ agentRunId: reaped })).resolves.toBe(
+        'not_launched'
+      );
       const outcome = await h.reconcile();
 
-      expect(outcome).toMatchObject({ completionsApplied: 0, launchesRecovered: 1 });
+      expect(outcome).toMatchObject({
+        completionsApplied: 0,
+        launchesRecovered: 1,
+      });
       expect(h.store.repairAttempts.get(REVISION_ID)).toBeUndefined();
-      expect(h.store.eventTypes()).toEqual(['task.launch_lost', 'task.launched']);
+      expect(h.store.eventTypes()).toEqual([
+        'task.launch_lost',
+        'task.launched',
+      ]);
       expect(h.cancelAgent).not.toHaveBeenCalled();
     });
 
-    it('an agent run from an earlier attempt does not count as this attempt\'s agent', async () => {
+    it("an agent run from an earlier attempt does not count as this attempt's agent", async () => {
       const h = harness();
       const task = claimedLongAgo(h);
       h.store.addAgentRun('task-a', 'failed');
@@ -875,7 +1196,10 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
 
       await h.reconcile();
 
-      expect(h.store.eventTypes()).toEqual(['task.launch_lost', 'task.launched']);
+      expect(h.store.eventTypes()).toEqual([
+        'task.launch_lost',
+        'task.launched',
+      ]);
     });
 
     it('leaves a recent claim and a live agent alone', async () => {
@@ -887,7 +1211,10 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
       const outcome = await h.reconcile();
 
       expect(outcome.launchesRecovered).toBe(0);
-      expect([h.store.task('a').status, h.store.task('b').status]).toEqual(['running', 'running']);
+      expect([h.store.task('a').status, h.store.task('b').status]).toEqual([
+        'running',
+        'running',
+      ]);
       expect(h.cancelAgent).not.toHaveBeenCalled();
     });
   });
@@ -896,7 +1223,10 @@ describe('reconcileBuildRuns (TBI-019, PBI-021)', () => {
     const h = harness();
     twoRunning(h);
     h.store.sweepLocked = true;
-    await expect(h.reconcile()).resolves.toMatchObject({ skipped: true, flagSuspended: 0 });
+    await expect(h.reconcile()).resolves.toMatchObject({
+      skipped: true,
+      flagSuspended: 0,
+    });
     expect(h.readFlag).not.toHaveBeenCalled();
   });
 

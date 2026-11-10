@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BUILD_RUN_STATUSES, type BuildRunStatus } from '../../../shared/types/build';
 import {
   BuildApiError,
+  isFastEditLive,
   isBuildLive,
   useBuild,
   useBuildEvents,
@@ -67,6 +68,25 @@ describe('isBuildLive', () => {
   });
 });
 
+describe('isFastEditLive', () => {
+  it('keeps polling while a preview-ready build is checking a fast edit', () => {
+    expect(
+      isFastEditLive({
+        attemptId: 'attempt-1',
+        revisionNumber: 2,
+        status: 'checking',
+        route: 'fast_edit',
+        requestedAt: '2026-11-06T18:00:00.000Z',
+        previewUpdatedAt: '2026-11-06T18:00:20.000Z',
+        checksCompletedAt: null,
+        checkSummary: null,
+        error: null,
+        workspaceVersion: 1,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe('useBuild', () => {
   it('VT-15 TBI-015 DoD-1 polls every 5 seconds while building and stops after preview_ready', async () => {
     fetchMock
@@ -96,6 +116,33 @@ describe('useBuild', () => {
     await waitFor(() => expect(result.current.data?.build.status).toBe('cancelled'));
     await advance(20_000);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues polling preview_ready while fast-edit checks are pending', async () => {
+    const fastDetail = {
+      ...detail('preview_ready'),
+      revision: {
+        attemptId: 'attempt-1',
+        revisionNumber: 2,
+        status: 'checking',
+        route: 'fast_edit',
+        requestedAt: '2026-11-06T18:00:00.000Z',
+        previewUpdatedAt: '2026-11-06T18:00:20.000Z',
+        checksCompletedAt: null,
+        checkSummary: null,
+        error: null,
+        workspaceVersion: 1,
+      },
+    };
+    fetchMock.mockResolvedValue(response(200, fastDetail));
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useBuild('Apex', BUILD_ID), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.data?.revision).toBeDefined());
+
+    await advance(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([403, 404])('VT-16 does not retry a %d', async (status) => {

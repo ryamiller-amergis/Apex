@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "template": {
+    "id": "full-stack-express",
+    "version": "1.0.0"
+  },
+  "runner": {
+    "id": "full-stack-express",
+    "version": "1.0.0",
+    "dependencyLayout": "workspace-runtime-v1"
+  },
+  "toolchain": {
+    "node": ">=24.0.0 <25.0.0",
+    "packageManager": "pnpm@10.34.9+sha512.f49b5a8ea0fdedb44bb3c0c1d6575092a53c2950d95b7ad15df11f17974877a2de3a01c07e934e9b28ce716e51c09a94962c7306d09be2e1e4b18a8c8762fd32"
+  },
+  "commands": {
+    "install": ["corepack", "pnpm", "install", "--frozen-lockfile"],
+    "build": ["corepack", "pnpm", "build"],
+    "migrate": ["node", "api/dist/cli/migrate.js"],
+    "seed": ["node", "api/dist/cli/seed.js"],
+    "start": [
+      "node",
+      "--import",
+      "./api/dist/instrument.js",
+      "api/dist/index.js"
+    ],
+    "runtimeBundle": ["node", "scripts/preview/build-runtime-bundle.mjs"]
+  },
+  "application": {
+    "port": 3000,
+    "livenessPath": "/health/live",
+    "readinessPath": "/health/ready"
+  },
+  "development": {
+    "dockerfile": "Dockerfile.studio",
+    "applicationPort": 5173,
+    "requiredTransports": ["http", "websocket", "vite_hmr"],
+    "tasks": {
+      "typecheck": ["corepack", "pnpm", "typecheck"],
+      "unit_test": ["corepack", "pnpm", "test:unit"],
+      "quality_check": ["corepack", "pnpm", "check"],
+      "production_build": ["corepack", "pnpm", "build"]
+    }
+  },
+  "verification": {
+    "journey": "e2e/specs/profile.spec.ts"
+  },
+  "allowedEnvironmentNames": [
+    "AUTH_MODE",
+    "CLIENT_DIST_DIR",
+    "DATABASE_URL",
+    "FEATURE_FLAGS",
+    "LOG_LEVEL",
+    "NODE_ENV",
+    "OTEL_BSP_SCHEDULE_DELAY",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TIMEOUT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_METRIC_EXPORT_INTERVAL",
+    "OTEL_SDK_DISABLED",
+    "OTEL_SERVICE_NAME",
+    "OTEL_TRACES_EXPORTER",
+    "PORT",
+    "RATE_LIMIT_MAX",
+    "RATE_LIMIT_WINDOW_MS",
+    "READINESS_TIMEOUT_MS",
+    "SHUTDOWN_TIMEOUT_MS"
+  ],
+  "bundle": {
+    "format": "tar",
+    "output": "artifacts/preview/apex-preview-runtime.tar",
+    "sbomRef": "golden-stack:full-stack-express:1.0.0",
+    "includes": [
+      {
+        "source": "apps/api/dist",
+        "target": "api/dist"
+      },
+      {
+        "source": "apps/api/drizzle",
+        "target": "api/drizzle"
+      },
+      {
+        "source": "apps/api/package.json",
+        "target": "api/package.json"
+      },
+      {
+        "source": "apps/web/dist",
+        "target": "web"
+      },
+      {
+        "source": "packages/config/format-env-issues.mjs",
+        "target": "packages/config/format-env-issues.mjs"
+      },
+      {
+        "source": "packages/config/package.json",
+        "target": "packages/config/package.json"
+      },
+      {
+        "source": "packages/contracts/dist",
+        "target": "packages/contracts/dist"
+      },
+      {
+        "source": "packages/contracts/package.json",
+        "target": "packages/contracts/package.json"
+      }
+    ],
+    "requiredFiles": [
+      "api/dist/cli/migrate.js",
+      "api/dist/cli/seed.js",
+      "api/dist/index.js",
+      "api/dist/instrument.js",
+      "api/drizzle/0000_init_app_users.sql",
+      "api/drizzle/meta/_journal.json",
+      "packages/config/format-env-issues.mjs",
+      "packages/config/package.json",
+      "packages/contracts/dist/index.js",
+      "packages/contracts/package.json",
+      "web/index.html"
+    ]
+  }
+}

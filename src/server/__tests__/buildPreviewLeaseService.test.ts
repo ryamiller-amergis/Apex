@@ -186,6 +186,25 @@ describe('buildPreviewLeaseService (TBI-024 DoD-0..3, PBI-027 AC-0..3 / VT-01..V
     expect(leases.get('Apex::apex-repo')?.buildRunId).toBe(winners[0].lease?.buildRunId);
   });
 
+  it('uses a shorter caller TTL for a local preview lease', async () => {
+    const nowMs = 1_000_000;
+    const { store } = createMemoryLeaseStore(nowMs);
+    const service = createPreviewLeaseService(store);
+
+    const result = await service.tryGrantLease({
+      project: 'Apex',
+      repository: 'apex-repo',
+      buildRunId: 'run-local',
+      buildRevisionId: 'rev-local',
+      ttlMs: 2 * 60 * 60 * 1_000,
+    });
+
+    expect(result.granted).toBe(true);
+    expect(new Date(result.lease!.expiresAt).getTime()).toBe(
+      nowMs + 2 * 60 * 60 * 1_000,
+    );
+  });
+
   it('VT-02 TBI-024 DoD-2 / PBI-027 AC-0 orders waiting revisions first-come-first-served with tie-break on revisionId', async () => {
     const { store, revisions } = createMemoryLeaseStore();
     const service = createPreviewLeaseService(store);

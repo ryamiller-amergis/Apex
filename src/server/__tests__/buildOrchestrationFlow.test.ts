@@ -8,7 +8,10 @@ import {
   validateBuildLaunchSnapshot,
 } from '../services/buildExecutionSnapshot';
 import { buildTaskExecutionPrompt } from '../services/buildOrchestrator/taskCandidateBuilder';
-import { synthesizeFallbackBuildPlan } from '../services/buildOrchestrator/planning';
+import {
+  publicBuildOrchestrationFailureMessage,
+  synthesizeFallbackBuildPlan,
+} from '../services/buildOrchestrator/planning';
 import { validateBuildPlan } from '../services/buildPlanning/planValidator';
 
 function sha256Hex(text: string): string {
@@ -16,6 +19,16 @@ function sha256Hex(text: string): string {
 }
 
 describe('buildOrchestrationFlow & taskCandidateBuilder', () => {
+  it('does not expose query text or parameters in a build failure message', () => {
+    const error = new Error(
+      'Failed query: update "build_revisions" set "plan" = $1\nparams: [{"secret":"value"}]'
+    );
+
+    expect(publicBuildOrchestrationFailureMessage(error)).toBe(
+      'The repository build agent did not start.'
+    );
+  });
+
   it('formats a complete task execution prompt with requirements, risk decisions, owned files, and standards', () => {
     const prompt = buildTaskExecutionPrompt({
       buildRunId: '16dd6dcc-595d-48b8-8da8-1110751a2320',
@@ -81,6 +94,18 @@ describe('buildOrchestrationFlow & taskCandidateBuilder', () => {
         },
       },
       skillPath: '.cursor/skills/build-implementer/SKILL.md',
+      priorAttemptFindings: [
+        {
+          attemptNumber: 1,
+          message: 'The test report omitted a referenced passing test.',
+          violations: [
+            { code: 'test_not_in_run', requirementId: 'BR-2' },
+          ],
+          visualFindings: [],
+        },
+      ],
+      previousBranch:
+        'apex/build-task/16dd6dcc-595d-48b8-8da8-1110751a2320/r1/implement-widget-1',
     });
 
     expect(prompt).toContain(
@@ -99,6 +124,10 @@ describe('buildOrchestrationFlow & taskCandidateBuilder', () => {
     expect(prompt).toContain('packages/ui/src/index.ts (LoadingState)');
     expect(prompt).toContain('corepack pnpm typecheck');
     expect(prompt).toContain('apex-evidence');
+    expect(prompt).toContain('test_not_in_run (BR-2)');
+    expect(prompt).toContain(
+      'List every testReferences[].name for this requirement in green.passedTests exactly as written.'
+    );
   });
 
   it('caches and reads local build prompt blobs and validates the snapshot schema', async () => {

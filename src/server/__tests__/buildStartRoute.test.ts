@@ -32,12 +32,21 @@ jest.mock('../services/buildQueryService', () => ({
   normalizeListQuery: jest.requireActual('../services/buildQueryService').normalizeListQuery,
 }));
 
+jest.mock('../services/build/buildLocalPreviewLaunchService', () => ({
+  defaultBuildLocalPreviewLaunchService: {
+    start: jest.fn(),
+  },
+}));
+
 import buildsRouter from '../routes/builds';
 import { startBuild } from '../services/buildOrchestrator/startBuild';
 import { listBuilds, normalizeListQuery } from '../services/buildQueryService';
+import { defaultBuildLocalPreviewLaunchService } from '../services/build/buildLocalPreviewLaunchService';
 
 const start = startBuild as jest.Mock;
 const list = listBuilds as jest.Mock;
+const startLocalPreview =
+  defaultBuildLocalPreviewLaunchService.start as jest.Mock;
 
 function app() {
   const server = express();
@@ -69,6 +78,7 @@ beforeEach(() => {
     replayed: false,
   });
   list.mockResolvedValue({ builds: [], total: 0, limit: 50, offset: 0 });
+  startLocalPreview.mockResolvedValue({ kind: 'started', revisionNumber: 2 });
 });
 
 describe('POST /api/builds', () => {
@@ -118,5 +128,57 @@ describe('GET /api/builds', () => {
       scope: 'mine',
       state: 'active',
     });
+  });
+});
+
+describe('POST /api/builds/:id/local-preview', () => {
+  it('requires builds:run', async () => {
+    permissions = new Set(['builds:view']);
+
+    const res = await request(app()).post(
+      '/api/builds/build-1/local-preview?project=Apex'
+    );
+
+    expect(res.status).toBe(403);
+    expect(startLocalPreview).not.toHaveBeenCalled();
+  });
+
+  it('starts a local preview for an authorized build', async () => {
+    const res = await request(app()).post(
+      '/api/builds/build-1/local-preview?project=Apex'
+    );
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ status: 'started', revisionNumber: 2 });
+    expect(startLocalPreview).toHaveBeenCalledWith({
+      buildRunId: 'build-1',
+      project: 'Apex',
+      actor: {
+        userId: 'user-1',
+        isProjectAdmin: false,
+        isSuperAdmin: false,
+      },
+    });
+  });
+
+  it.each([
+    ['unavailable', 404, 'LOCAL_PREVIEW_UNAVAILABLE'],
+    ['not_found', 404, 'LOCAL_PREVIEW_NOT_FOUND'],
+    ['forbidden', 403, 'LOCAL_PREVIEW_FORBIDDEN'],
+    ['not_ready', 409, 'LOCAL_PREVIEW_NOT_READY'],
+    ['already_active', 409, 'LOCAL_PREVIEW_ALREADY_ACTIVE'],
+    ['busy', 409, 'LOCAL_PREVIEW_BUSY'],
+  ])('maps %s to a stable HTTP error', async (kind, status, code) => {
+    startLocalPreview.mockResolvedValue({
+      kind,
+      message: kind === 'not_ready' ? 'The build is not ready.' : undefined,
+    });
+
+    const res = await request(app()).post(
+      '/api/builds/build-1/local-preview?project=Apex'
+    );
+
+    expect(res.status).toBe(status);
+    expect(res.body.code).toBe(code);
   });
 });

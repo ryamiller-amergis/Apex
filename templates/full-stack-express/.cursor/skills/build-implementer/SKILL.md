@@ -70,6 +70,7 @@ Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type
    - Commit the implementation separately as `feat(build): <summary>` and immediately push to `origin` (`git push -u origin <targetBranch>`). The red and green commit SHAs must differ.
 4. **Verify every requirement**:
    - Run the focused tests again and map each requirement and risk decision to its named passing test and the shared red/green commit pair.
+   - Do not go on while any owned id lacks a passing test. A requirement that cites two test files needs a passing run for each file.
 5. **Run quality manifest checks (`typeCheck`, `lint`, `relatedTests`)**:
    - Run the manifest's `typeCheck` command, `lint` command, and `relatedTests` command (replacing `{files}` with the changed files).
    - If any check or related test fails because of your change, fix the break inside the current session, commit and `git push` the fix, and re-run until `typeCheck`, `lint`, and `relatedTests` all exit with `0`.
@@ -82,8 +83,12 @@ Cursor cloud machines ship Node 22 and ignore `.nvmrc`. Before any install, type
    - Commit the Playwright visual snapshot spec file (`apps/web/e2e/*.spec.ts`) and, for any Playwright visual snapshot requirement (`DOD-*`), record it in `apex-evidence` using the `e2e` deferral rule (`"tier": "e2e"`, `"deferral": { "reason": "Playwright browser snapshots deferred to CI; verified via Vitest component tests." }`, `"red": null`, `"green": null`).
    - Prefer `PageHeader`, `ContentSurface`, catalog components, and `@mui/x-date-pickers` when appropriate; record reuse rationale.
    - Set `visualReview: { "completed": true, "findings": [], "screenshotPaths": ["..."], "componentReuseRationale": "..." }`.
-8. **Emit the `apex-evidence` block**:
-   - End your final message with one fenced `apex-evidence` JSON block matching version `1`.
+8. **Emit the `apex-evidence` block only when every owned check passes**:
+   - Do not end the turn, and do not say the task is finished, until every owned requirement and risk decision is covered.
+   - One entry per owned id. For an entry that is not an allowed e2e deferral, `green.exitCode` is `0` and every `testReferences[].name` appears in `green.passedTests` from the command that ran that test file. A filtered command that lists one test does not cover a second cited file.
+   - `checks.typeCheck`, `checks.lint`, and `checks.relatedTests` each record exit code `0`.
+   - If any owned id is missing, or any cited test is absent from `passedTests`, keep working. Do not emit the block.
+   - When the gate passes, end your final message with one fenced `apex-evidence` JSON block matching version `1`.
    - Keep each `red.output` and `green.output` string to at most the last 100 KB.
 
 ## Deferral rule

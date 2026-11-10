@@ -35,6 +35,8 @@ export function describeAcceptState(
 ): string {
   const who = formatSupportContacts(contactNames);
   switch (state) {
+    case 'deploying_preview':
+      return 'Deploying your preview. Apex opens the pull request when it is ready.';
     case 'opening_pull_request':
       return 'Opening your pull request…';
     case 'syncing':

@@ -18,6 +18,7 @@ import type {
 } from './evidenceBlockParser';
 
 export type ViolationCode =
+  | 'unreadable_evidence_block'
   | 'missing_evidence_entry'
   | 'missing_test_reference'
   | 'missing_red_evidence'
@@ -333,7 +334,8 @@ export function decideTaskDone(input: DecideTaskDoneInput): DecideTaskDoneResult
         testReferences: entry.testReferences,
         red: isDeferredPass ? null : entry.red,
         green: isDeferredPass ? null : entry.green,
-        deferralReason: reason.length > 0 ? reason : null,
+      deferralReason:
+        isDeferredPass && reason.length > 0 ? reason : null,
       });
       continue;
     }

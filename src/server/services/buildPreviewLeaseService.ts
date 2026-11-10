@@ -231,15 +231,19 @@ export function createPreviewLeaseService(
       repository: string;
       buildRunId: string;
       buildRevisionId: string;
+      ttlMs?: number;
     }): Promise<{ granted: boolean; lease: PreviewLeaseRecord | null }> {
       const grantedAtDate = store.now();
       const grantedAt = grantedAtDate.toISOString();
       const expiresAt = new Date(
-        grantedAtDate.getTime() + PREVIEW_LEASE_TTL_MS,
+        grantedAtDate.getTime() + (input.ttlMs ?? PREVIEW_LEASE_TTL_MS),
       ).toISOString();
 
       const lease = await store.tryUpsertLease({
-        ...input,
+        project: input.project,
+        repository: input.repository,
+        buildRunId: input.buildRunId,
+        buildRevisionId: input.buildRevisionId,
         grantedAt,
         expiresAt,
       });
@@ -323,6 +327,10 @@ export function createPreviewLeaseService(
     async extendLease(buildRunId: string, finishedAtIso: string): Promise<boolean> {
       const finishMs = new Date(finishedAtIso).getTime();
       const expiresAt = new Date(finishMs + PREVIEW_LEASE_TTL_MS).toISOString();
+      return store.updateLeaseExpiry(buildRunId, expiresAt);
+    },
+
+    async setLeaseExpiry(buildRunId: string, expiresAt: string): Promise<boolean> {
       return store.updateLeaseExpiry(buildRunId, expiresAt);
     },
 

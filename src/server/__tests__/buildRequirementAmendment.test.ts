@@ -9,6 +9,7 @@ import type {
 import {
   applyRequirementAmendment,
   classifyRevisionChange,
+  deriveRevisionDelta,
   planVerificationRows,
 } from '../services/buildRequirementAmendment';
 
@@ -33,12 +34,17 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
         classification: 'small',
         touchesMigration: false,
       },
-      2,
+      2
     );
 
     expect(result.requirements).toEqual([
       { id: 'AC-1', kind: 'ac', text: 'First criterion', retired: false },
-      { id: 'AC-2', kind: 'ac', text: 'Updated second criterion', retired: false },
+      {
+        id: 'AC-2',
+        kind: 'ac',
+        text: 'Updated second criterion',
+        retired: false,
+      },
       { id: 'BR-1', kind: 'br', text: 'First business rule', retired: false },
     ]);
     expect(result.changedIds).toEqual(['AC-2']);
@@ -66,7 +72,7 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
         classification: 'small',
         touchesMigration: false,
       },
-      2,
+      2
     );
 
     expect(result.addedIds).toEqual(['AC-4']);
@@ -92,7 +98,7 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
         classification: 'small',
         touchesMigration: false,
       },
-      3,
+      3
     );
 
     expect(result.requirements).toHaveLength(baseRequirements.length);
@@ -119,8 +125,8 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
           classification: 'small',
           touchesMigration: false,
         },
-        2,
-      ),
+        2
+      )
     ).toThrow(/UNKNOWN_REQUIREMENT_ID/);
     expect(JSON.stringify(baseRequirements)).toBe(snapshot);
 
@@ -142,8 +148,8 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
           classification: 'small',
           touchesMigration: false,
         },
-        2,
-      ),
+        2
+      )
     ).toThrow(/RETIRED_REQUIREMENT_EDIT/);
 
     expect(() =>
@@ -160,8 +166,8 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
           classification: 'small',
           touchesMigration: false,
         },
-        2,
-      ),
+        2
+      )
     ).toThrow(/EMPTY_AMENDMENT/);
   });
 
@@ -171,7 +177,7 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
         agentClassification: 'small',
         touchesMigration: false,
         newOrChangedRiskDecisions: [],
-      }),
+      })
     ).toBe('small');
 
     expect(
@@ -179,7 +185,7 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
         agentClassification: 'small',
         touchesMigration: true,
         newOrChangedRiskDecisions: [],
-      }),
+      })
     ).toBe('full');
 
     expect(
@@ -195,7 +201,7 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
             rationale: 'Reversible',
           },
         ],
-      }),
+      })
     ).toBe('full');
 
     // VT-08: carried-over high risk decision not in newOrChangedRiskDecisions -> stays small
@@ -204,7 +210,7 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
         agentClassification: 'small',
         touchesMigration: false,
         newOrChangedRiskDecisions: [],
-      }),
+      })
     ).toBe('small');
   });
 
@@ -299,9 +305,37 @@ describe('buildRequirementAmendment (TBI-026 DoD-0, PBI-030, PBI-031 / VT-01..VT
     expect(plan.copy.map((r) => r.requirementId)).toEqual(['AC-1']);
     expect(plan.copy[0].carriedFromRevisionNumber).toBe(1);
     expect(plan.copy[0].status).toBe('pass');
-    expect(plan.createPending.map((r) => r.requirementId)).toEqual(['AC-2', 'AC-4']);
+    expect(plan.createPending.map((r) => r.requirementId)).toEqual([
+      'AC-2',
+      'AC-4',
+    ]);
     expect(plan.createPending.every((r) => r.status === 'pending')).toBe(true);
     expect(plan.closeRetired.map((r) => r.requirementId)).toEqual(['AC-3']);
     expect(plan.closeRetired[0].status).toBe('retired');
+  });
+
+  it('derives only changed, added, and retired IDs for a revision task', () => {
+    expect(
+      deriveRevisionDelta({
+        previousRequirements: baseRequirements,
+        previousRiskDecisions: [],
+        nextRequirements: [
+          baseRequirements[0],
+          { ...baseRequirements[1], text: 'Updated second criterion' },
+          { ...baseRequirements[2], retired: true },
+          {
+            id: 'NFR-1',
+            kind: 'nfr',
+            text: 'Use the dark palette',
+            retired: false,
+          },
+        ],
+        nextRiskDecisions: [],
+      })
+    ).toEqual({
+      changedIds: ['AC-2'],
+      addedIds: ['NFR-1'],
+      droppedIds: ['BR-1'],
+    });
   });
 });

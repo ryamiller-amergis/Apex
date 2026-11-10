@@ -507,7 +507,10 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
       expect(result.violations).toEqual([
         { code: 'deferral_not_allowed', requirementId: 'AC-2' },
       ]);
-      expect(result.rows.find((r) => r.requirementId === 'AC-2')?.status).toBe('fail');
+      expect(result.rows.find((r) => r.requirementId === 'AC-2')).toMatchObject({
+        status: 'fail',
+        deferralReason: null,
+      });
     });
 
     it('VT-13: refuses an e2e deferral when the reason is empty or whitespace', () => {
@@ -534,7 +537,10 @@ describe('verificationEvidenceChecker.decideTaskDone', () => {
       expect(result.violations).toEqual([
         { code: 'deferral_not_allowed', requirementId: 'AC-2' },
       ]);
-      expect(result.rows.find((r) => r.requirementId === 'AC-2')?.status).toBe('fail');
+      expect(result.rows.find((r) => r.requirementId === 'AC-2')).toMatchObject({
+        status: 'fail',
+        deferralReason: null,
+      });
     });
   });
 

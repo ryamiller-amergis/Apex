@@ -7,6 +7,7 @@ import { db } from '../db/drizzle';
 import {
   agentRuns,
   buildEvents,
+  buildRevisionFastEditAttempts,
   buildRevisions,
   buildRuns,
   buildTasks,
@@ -36,6 +37,8 @@ import {
   type BuildTaskView,
   type BuildVerificationSummary,
 } from '../../shared/types/buildView';
+import type { BuildRevisionFastEditProgress } from '../../shared/types/buildRevision';
+import type { BuildLogoReviewView } from '../../shared/buildLogoReview';
 import { redactText } from './buildRedactionService';
 import { queuePositionFor } from './buildOrchestrator/store';
 import { deriveBuildStage, deriveBuildTiming } from './buildStageDerivation';
@@ -65,6 +68,7 @@ export interface ProjectionRevisionRow {
   deploymentFailedStage: string | null;
   deploymentPipelineUrl: string | null;
   previewUrl: string | null;
+  feedback?: string | null;
   createdAt: string;
 }
 
@@ -111,6 +115,7 @@ export interface ProjectionEventRow {
   message: string;
   taskKey: string | null;
   cloudAgentIdentity: string | null;
+  revisionNumber?: number | null;
   createdAt: string;
 }
 
@@ -121,6 +126,10 @@ export interface BuildRunProjectionDeps {
   loadVerificationCounts: (revisionId: string) => Promise<Array<{ status: BuildVerificationStatus; count: number }>>;
   /** Latest branch a build agent pushed for this revision, or null before any push. */
   loadPushedBranch?: (revisionId: string) => Promise<string | null>;
+  loadFastEditProgress?: (
+    revisionId: string,
+    revisionNumber: number,
+  ) => Promise<BuildRevisionFastEditProgress | null>;
   queuePosition: (project: string, buildId: string) => Promise<number | null>;
   /** Latest `limit` rows, newest first, plus the full count. */
   loadEvents: (buildId: string, limit: number) => Promise<{ rows: ProjectionEventRow[]; total: number }>;
@@ -132,6 +141,7 @@ export interface BuildRunProjectionDeps {
     currentRevision: ProjectionRevisionRow | null;
     viewer?: BuildDetailViewer;
   }) => ReturnType<typeof projectBuildDeploymentFields>;
+  loadLogoReview?: (buildRunId: string) => Promise<BuildLogoReviewView | null>;
 }
 
 const defaultDeps: BuildRunProjectionDeps = {
@@ -179,6 +189,7 @@ const defaultDeps: BuildRunProjectionDeps = {
             deploymentFailedStage: true,
             deploymentPipelineUrl: true,
             previewUrl: true,
+            feedback: true,
             createdAt: true,
           },
           orderBy: asc(buildRevisions.revisionNumber),
@@ -226,6 +237,36 @@ const defaultDeps: BuildRunProjectionDeps = {
       .limit(1);
     return row?.branch ?? null;
   },
+  loadFastEditProgress: async (revisionId, revisionNumber) => {
+    const [row] = await db
+      .select()
+      .from(buildRevisionFastEditAttempts)
+      .where(eq(buildRevisionFastEditAttempts.buildRevisionId, revisionId))
+      .orderBy(desc(buildRevisionFastEditAttempts.createdAt))
+      .limit(1);
+    if (!row) return null;
+    return {
+      attemptId: row.id,
+      revisionNumber,
+      status: row.status,
+      route: row.route,
+      requestedAt: row.requestedAt,
+      previewUpdatedAt: row.previewUpdatedAt,
+      checksCompletedAt: row.checksCompletedAt,
+      checkSummary: row.checkSummary,
+      error: row.failureCode
+        ? {
+            code: row.failureCode,
+            message:
+              row.failureCode === 'checks_failed'
+                ? 'The preview updated, but checks failed.'
+                : 'The revision could not be completed.',
+          }
+        : null,
+      workspaceVersion:
+        row.appliedWorkspaceVersion ?? row.expectedWorkspaceVersion,
+    };
+  },
   queuePosition: queuePositionFor,
   loadEvents: async (buildId, limit) => {
     const [rows, totals] = await Promise.all([
@@ -236,10 +277,12 @@ const defaultDeps: BuildRunProjectionDeps = {
           message: buildEvents.message,
           taskKey: sql<string | null>`${buildEvents.detail} ->> 'taskKey'`,
           cloudAgentIdentity: agentRuns.cloudAgentIdentity,
+          revisionNumber: buildRevisions.revisionNumber,
           createdAt: buildEvents.createdAt,
         })
         .from(buildEvents)
         .leftJoin(agentRuns, sql`${buildEvents.correlationKind} = 'agent_run' AND ${buildEvents.correlationId} = ${agentRuns.id}::text`)
+        .leftJoin(buildRevisions, eq(buildEvents.buildRevisionId, buildRevisions.id))
         .where(eq(buildEvents.buildRunId, buildId))
         .orderBy(desc(buildEvents.ordinal))
         .limit(limit),
@@ -251,6 +294,15 @@ const defaultDeps: BuildRunProjectionDeps = {
   now: () => new Date(),
   warn: (event, fields) => console.warn(event, fields),
   loadDeploymentProjection: (input) => projectBuildDeploymentFields(input),
+  loadLogoReview: async (buildRunId) => {
+    try {
+      const { defaultBuildLogoCandidateService } = await import('./build/buildLogoCandidateService');
+      return await defaultBuildLogoCandidateService.review(buildRunId);
+    } catch (error) {
+      console.warn('[build] logo review unavailable', error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  },
 };
 
 export type BuildDetailResult =
@@ -385,7 +437,7 @@ export async function getBuildDetail(
 
   const redact = makeRedactor(deps, input.buildId);
   const current = run.revisions.find((row) => row.revisionNumber === run.currentRevisionNumber) ?? null;
-  const [taskRows, verificationCounts, queuePosition, pushedBranchName, deploymentFields] =
+  const [taskRows, verificationCounts, queuePosition, pushedBranchName, deploymentFields, fastEditProgress] =
     await Promise.all([
     current ? deps.loadTasks(current.id) : Promise.resolve([]),
     current ? deps.loadVerificationCounts(current.id) : Promise.resolve([]),
@@ -396,6 +448,9 @@ export async function getBuildDetail(
       currentRevision: current,
       viewer: input.viewer,
     }),
+    current && deps.loadFastEditProgress
+      ? deps.loadFastEditProgress(current.id, current.revisionNumber)
+      : Promise.resolve(null),
   ]);
 
   let brief: BuildBriefView = { status: 'unavailable' };
@@ -446,6 +501,7 @@ export async function getBuildDetail(
         classification: row.classification,
         deploymentStatus: row.deploymentStatus,
         previewUrl: row.previewUrl,
+        feedback: row.feedback ? redact(row.feedback) : null,
       })),
     currentRevision: current
       ? {
@@ -463,6 +519,10 @@ export async function getBuildDetail(
     lease: deploymentFields.lease,
     deployment: deploymentFields.deployment,
     previews: deploymentFields.previews,
+    ...(fastEditProgress ? { revision: fastEditProgress } : {}),
+    ...(deps.loadLogoReview
+      ? { logoReview: await deps.loadLogoReview(run.id) }
+      : {}),
     ...(deploymentFields.viewer ? { viewer: deploymentFields.viewer } : {}),
     ...(run.status === 'accepted' && run.pullRequestUrl
       ? {
@@ -486,6 +546,7 @@ function mapEvent(row: ProjectionEventRow, redact: (text: string) => string): Bu
     kind: row.eventType,
     message: redact(row.message),
     taskKey: row.taskKey,
+    revisionNumber: row.revisionNumber ?? null,
     cloudAgentUrl: row.cloudAgentIdentity?.startsWith('bc-')
       ? `https://cursor.com/agents/${row.cloudAgentIdentity}`
       : null,

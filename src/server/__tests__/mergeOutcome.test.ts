@@ -1,22 +1,43 @@
 /**
  * S4 — `applyMergeOutcome` unit tests (TBI-022 DoD-1, TBI-023 DoD-2, PBI-024 AC-3 / VT-08, VT-12).
  */
-import { applyMergeOutcome, type MergeOutcomeDeps } from '../services/build/mergeOutcome';
+import {
+  applyMergeOutcome,
+  type MergeOutcomeDeps,
+} from '../services/build/mergeOutcome';
 
 function createOutcomeDeps(repairAttemptsInitial = 0): MergeOutcomeDeps & {
-  events: Array<{ eventType: string; message: string; detail?: Record<string, unknown> }>;
+  events: Array<{
+    eventType: string;
+    message: string;
+    detail?: Record<string, unknown>;
+  }>;
   requeuedTasks: Array<{ taskId: string; attempt: number; branchName: string }>;
   suspendedRuns: Array<{ runId: string; reason: string; message: string }>;
   dispatchedRuns: string[];
   allMergedRevisions: string[];
+  allMergedCommits: Array<string | undefined>;
   getCounter: () => number;
 } {
   let counter = repairAttemptsInitial;
-  const events: Array<{ eventType: string; message: string; detail?: Record<string, unknown> }> = [];
-  const requeuedTasks: Array<{ taskId: string; attempt: number; branchName: string }> = [];
-  const suspendedRuns: Array<{ runId: string; reason: string; message: string }> = [];
+  const events: Array<{
+    eventType: string;
+    message: string;
+    detail?: Record<string, unknown>;
+  }> = [];
+  const requeuedTasks: Array<{
+    taskId: string;
+    attempt: number;
+    branchName: string;
+  }> = [];
+  const suspendedRuns: Array<{
+    runId: string;
+    reason: string;
+    message: string;
+  }> = [];
   const dispatchedRuns: string[] = [];
   const allMergedRevisions: string[] = [];
+  const allMergedCommits: Array<string | undefined> = [];
 
   return {
     events,
@@ -24,15 +45,19 @@ function createOutcomeDeps(repairAttemptsInitial = 0): MergeOutcomeDeps & {
     suspendedRuns,
     dispatchedRuns,
     allMergedRevisions,
+    allMergedCommits,
     getCounter: () => counter,
     loadContext: async (taskId) => ({
       taskId,
       taskKey: 't-impl-1',
       attempt: 1,
       revisionId: 'rev-1',
+      revisionNumber: 1,
       buildRunId: 'run-1',
       integrationBranch: 'apex/build/run-1',
-      supportContacts: [{ userId: 'u1', displayName: 'Dana', email: 'dana@example.com' }],
+      supportContacts: [
+        { userId: 'u1', displayName: 'Dana', email: 'dana@example.com' },
+      ],
       allNonOmittedPlanTasksMerged: false,
     }),
     requestRepairAttempt: async () => {
@@ -55,20 +80,47 @@ function createOutcomeDeps(repairAttemptsInitial = 0): MergeOutcomeDeps & {
     dispatchNext: async (runId) => {
       dispatchedRuns.push(runId);
     },
-    onAllTasksMerged: async (revisionId) => {
+    onAllTasksMerged: async (revisionId, mergedCommit) => {
       allMergedRevisions.push(revisionId);
+      allMergedCommits.push(mergedCommit);
     },
   };
 }
 
 describe('applyMergeOutcome (TBI-022 DoD-1, TBI-023 DoD-2, PBI-024 AC-3 / VT-08, VT-12)', () => {
+  it('validates the merge commit before any redispatch when the last task merges', async () => {
+    const deps = createOutcomeDeps(0);
+    const originalLoadContext = deps.loadContext;
+    deps.loadContext = async (taskId) => ({
+      ...(await originalLoadContext(taskId))!,
+      allNonOmittedPlanTasksMerged: true,
+    });
+
+    await applyMergeOutcome(
+      'task-1',
+      {
+        outcome: 'merged',
+        mergeCommit: 'b'.repeat(40),
+        prUrl: 'https://dev.azure.com/org/Apex/_git/repo/pullrequest/13',
+      },
+      deps
+    );
+
+    expect(deps.allMergedRevisions).toEqual(['rev-1']);
+    expect(deps.allMergedCommits).toEqual(['b'.repeat(40)]);
+    expect(deps.dispatchedRuns).toEqual([]);
+  });
+
   it('VT-12 Case A: conflict with repair_attempts = 0 spends 1 attempt, sets task ready with attempt 2 and non-nested branch, and dispatches', async () => {
     const deps = createOutcomeDeps(0);
 
     await applyMergeOutcome(
       'task-1',
-      { outcome: 'conflict', prUrl: 'https://dev.azure.com/org/Apex/_git/repo/pullrequest/12' },
-      deps,
+      {
+        outcome: 'conflict',
+        prUrl: 'https://dev.azure.com/org/Apex/_git/repo/pullrequest/12',
+      },
+      deps
     );
 
     expect(deps.getCounter()).toBe(1);
@@ -76,10 +128,12 @@ describe('applyMergeOutcome (TBI-022 DoD-1, TBI-023 DoD-2, PBI-024 AC-3 / VT-08,
       {
         taskId: 'task-1',
         attempt: 2,
-        branchName: 'apex/build-task/run-1/t-impl-1-2',
+        branchName: 'apex/build-task/run-1/r1/t-impl-1-2',
       },
     ]);
-    expect(deps.requeuedTasks[0].branchName.startsWith('apex/build/run-1/')).toBe(false);
+    expect(
+      deps.requeuedTasks[0].branchName.startsWith('apex/build/run-1/')
+    ).toBe(false);
     expect(deps.dispatchedRuns).toEqual(['run-1']);
     expect(deps.suspendedRuns).toHaveLength(0);
     expect(deps.events.map((e) => e.eventType)).toContain('repair.granted');
@@ -90,8 +144,11 @@ describe('applyMergeOutcome (TBI-022 DoD-1, TBI-023 DoD-2, PBI-024 AC-3 / VT-08,
 
     await applyMergeOutcome(
       'task-1',
-      { outcome: 'conflict', prUrl: 'https://dev.azure.com/org/Apex/_git/repo/pullrequest/12' },
-      deps,
+      {
+        outcome: 'conflict',
+        prUrl: 'https://dev.azure.com/org/Apex/_git/repo/pullrequest/12',
+      },
+      deps
     );
 
     expect(deps.getCounter()).toBe(2);
@@ -108,7 +165,7 @@ describe('applyMergeOutcome (TBI-022 DoD-1, TBI-023 DoD-2, PBI-024 AC-3 / VT-08,
     await applyMergeOutcome(
       'task-1',
       { outcome: 'blocked_by_policy', branch: 'apex/build/run-1' },
-      deps,
+      deps
     );
 
     expect(deps.getCounter()).toBe(0);

@@ -9,6 +9,10 @@ import {
   type AcceptScmPort,
   type BuildAcceptServiceDeps,
 } from '../services/build/buildAcceptService';
+import type {
+  BuildPreviewCompletionEvidence,
+  BuildPreviewRolloutMode,
+} from '../services/build/buildPreviewCompletionInvariant';
 
 function createAcceptHarness() {
   const runs = new Map<string, AcceptRunRecord>();
@@ -40,7 +44,9 @@ function createAcceptHarness() {
     dedupeKey: string;
   }> = [];
   const releasedLeases: string[] = [];
+  const startedDeployments: string[] = [];
   const launchedSyncTasks: string[] = [];
+  const claimedBrowserChecks: Array<string | null> = [];
   const reportedTerminals: Array<{
     buildRunId: string;
     pullRequestUrl: string;
@@ -63,6 +69,8 @@ function createAcceptHarness() {
   let reviewerThrow = false;
   let unresolvedReviewerEmail: string | null = null;
   let nowMs = 10_000;
+  let completionMode: BuildPreviewRolloutMode = 'legacy_static';
+  let completionEvidence: BuildPreviewCompletionEvidence | null = null;
 
   const seed = (
     runOverrides?: Partial<AcceptRunRecord>,
@@ -158,6 +166,12 @@ function createAcceptHarness() {
 
   const deps: BuildAcceptServiceDeps = {
     now: () => nowMs,
+    previewCompletion: {
+      loadGate: async () => ({
+        mode: completionMode,
+        evidence: completionEvidence,
+      }),
+    },
     sleep: async (ms) => {
       nowMs += ms;
     },
@@ -165,7 +179,8 @@ function createAcceptHarness() {
     loadRun: async (buildId) => runs.get(buildId) ?? null,
     loadRevision: async (buildId, revNum) =>
       revisions.get(`${buildId}:${revNum}`) ?? null,
-    casClaimAccept: async (buildId, revisionNumber) => {
+    casClaimAccept: async (buildId, revisionNumber, currentBrowserCheck) => {
+      claimedBrowserChecks.push(currentBrowserCheck?.browserCheckId ?? null);
       const run = runs.get(buildId);
       if (!run) return { kind: 'not_found' };
       if (run.status === 'accepted' || run.status === 'needs_developer') {
@@ -191,6 +206,30 @@ function createAcceptHarness() {
     },
     releaseLease: async (runId) => {
       releasedLeases.push(runId);
+    },
+    requestAcceptAfterDeploy: async (runId, revisionNumber) => {
+      const run = runs.get(runId);
+      if (
+        !run ||
+        run.status !== 'preview_ready' ||
+        run.currentRevisionNumber !== revisionNumber
+      ) {
+        return false;
+      }
+      run.status = 'deploying';
+      run.acceptRequestedRevisionNumber = revisionNumber;
+      return true;
+    },
+    clearAcceptRequest: async (runId, options) => {
+      const run = runs.get(runId);
+      if (!run) return;
+      run.acceptRequestedRevisionNumber = null;
+      if (options?.restorePreview && run.status === 'deploying') {
+        run.status = 'preview_ready';
+      }
+    },
+    startRevisionDeployment: async ({ run }) => {
+      startedDeployments.push(run.id);
     },
     findOrInsertSyncTask: async (revisionId, revisionNumber) => {
       const key = `sync-r${revisionNumber}`;
@@ -259,7 +298,9 @@ function createAcceptHarness() {
     requesterNotifications,
     contactNotifications,
     releasedLeases,
+    startedDeployments,
     launchedSyncTasks,
+    claimedBrowserChecks,
     reportedTerminals,
     getPrState: () => ({
       draftPrUrl,
@@ -279,6 +320,13 @@ function createAcceptHarness() {
     },
     setUnresolvedReviewerEmail: (email: string | null) => {
       unresolvedReviewerEmail = email;
+    },
+    setCompletion: (
+      mode: BuildPreviewRolloutMode,
+      evidence: BuildPreviewCompletionEvidence | null,
+    ) => {
+      completionMode = mode;
+      completionEvidence = evidence;
     },
     seed,
     scm,
@@ -337,6 +385,199 @@ describe('buildAcceptService (TBI-027, PBI-033, PBI-034 / VT-01..VT-11, VT-16..V
     expect(Number(prOpenedEvent.detail?.durationMs)).toBeLessThan(30_000);
     expect(h.requesterNotifications).toHaveLength(1);
     expect(h.requesterNotifications[0].body).toContain(run.pullRequestUrl!);
+  });
+
+  it('deploys an undeployed warm-preview revision on accept and opens the PR once it is live', async () => {
+    const h = createAcceptHarness();
+    h.seed({}, { deploymentStatus: 'not_started' });
+    const actor = {
+      userId: 'user-req',
+      isProjectAdmin: false,
+      isSuperAdmin: false,
+    };
+
+    const requested = await h.service.acceptBuild({
+      buildId: 'run-1',
+      project: 'Apex',
+      revisionNumber: 2,
+      actor,
+    });
+    expect(requested).toEqual({
+      firstClaim: false,
+      response: expect.objectContaining({
+        status: 'deploying',
+        acceptState: 'deploying_preview',
+      }),
+    });
+    expect(h.startedDeployments).toEqual(['run-1']);
+    await expect(
+      h.service.acceptBuild({
+        buildId: 'run-1',
+        project: 'Apex',
+        revisionNumber: 2,
+        actor,
+      })
+    ).resolves.toMatchObject({ response: { status: 'deploying' } });
+    expect(h.startedDeployments).toEqual(['run-1']);
+
+    const run = h.runs.get('run-1')!;
+    run.status = 'preview_ready';
+    h.revisions.get('run-1:2')!.deploymentStatus = 'succeeded';
+    await h.service.completeRequestedAccept('run-1');
+
+    expect(run.acceptRequestedRevisionNumber).toBeNull();
+    expect(run.acceptedRevisionNumber).toBe(2);
+    expect(run.pullRequestUrl).toBe(
+      'https://dev.azure.com/org/Apex/_git/apex-repo/pullrequest/901'
+    );
+  });
+
+  it('drops a waiting accept when a newer revision replaces it', async () => {
+    const h = createAcceptHarness();
+    h.seed(
+      { status: 'preview_ready', acceptRequestedRevisionNumber: 1 },
+      { deploymentStatus: 'succeeded' }
+    );
+
+    await h.service.completeRequestedAccept('run-1');
+
+    const run = h.runs.get('run-1')!;
+    expect(run.acceptRequestedRevisionNumber).toBeNull();
+    expect(run.acceptedRevisionNumber).toBeNull();
+    expect(run.pullRequestUrl).toBeNull();
+  });
+
+  it('rejects accept in live mode when browser completion evidence is missing', async () => {
+    const h = createAcceptHarness();
+    h.seed();
+    h.setCompletion('live', null);
+
+    await expect(
+      h.service.acceptBuild({
+        buildId: 'run-1',
+        project: 'Apex',
+        revisionNumber: 2,
+        actor: {
+          userId: 'user-req',
+          isProjectAdmin: false,
+          isSuperAdmin: false,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 'BUILD_NOT_ACCEPTABLE',
+      statusCode: 409,
+    });
+    expect(h.runs.get('run-1')?.acceptedRevisionNumber).toBeNull();
+    expect(h.releasedLeases).toHaveLength(0);
+  });
+
+  it('accepts in live mode only when evidence matches the current revision and commit', async () => {
+    const h = createAcceptHarness();
+    h.seed();
+    const commit = 'a'.repeat(40);
+    const digest = `sha256:${'b'.repeat(64)}`;
+    h.setCompletion('live', {
+      revisionId: 'rev-2',
+      validatedCommit: commit,
+      artifact: { revisionId: 'rev-2', commit, digest },
+      instance: {
+        id: 'instance-2',
+        revisionId: 'rev-2',
+        commit,
+        artifactDigest: digest,
+        state: 'ready',
+      },
+      readiness: {
+        status: 'passed',
+        revisionId: 'rev-2',
+        instanceId: 'instance-2',
+        artifactDigest: digest,
+      },
+      browserCheck: {
+        id: 'browser-check-1',
+        status: 'passed',
+        revisionId: 'rev-2',
+        commit,
+        instanceId: 'instance-2',
+        artifactDigest: digest,
+      },
+    });
+
+    const result = await h.service.acceptBuild({
+      buildId: 'run-1',
+      project: 'Apex',
+      revisionNumber: 2,
+      actor: {
+        userId: 'user-req',
+        isProjectAdmin: false,
+        isSuperAdmin: false,
+      },
+    });
+
+    expect(result.firstClaim).toBe(true);
+    expect(h.runs.get('run-1')?.acceptedRevisionNumber).toBe(2);
+    expect(h.claimedBrowserChecks).toEqual(['browser-check-1']);
+  });
+
+  it('does not open a pull request unless accept has claimed a revision', async () => {
+    const h = createAcceptHarness();
+    h.seed({ status: 'checking', acceptedRevisionNumber: null });
+
+    await h.service.continueAccept('run-1');
+
+    expect(h.getPrState().draftPrUrl).toBeNull();
+    expect(h.requesterNotifications).toHaveLength(0);
+    expect(h.reportedTerminals).toHaveLength(0);
+  });
+
+  it('rechecks live completion evidence before opening the pull request', async () => {
+    const h = createAcceptHarness();
+    h.seed();
+    const commit = 'a'.repeat(40);
+    const digest = `sha256:${'b'.repeat(64)}`;
+    h.setCompletion('live', {
+      revisionId: 'rev-2',
+      validatedCommit: commit,
+      artifact: { revisionId: 'rev-2', commit, digest },
+      instance: {
+        id: 'instance-2',
+        revisionId: 'rev-2',
+        commit,
+        artifactDigest: digest,
+        state: 'ready',
+      },
+      readiness: {
+        status: 'passed',
+        revisionId: 'rev-2',
+        instanceId: 'instance-2',
+        artifactDigest: digest,
+      },
+      browserCheck: {
+        id: 'browser-check-stale',
+        status: 'passed',
+        revisionId: 'rev-2',
+        commit,
+        instanceId: 'instance-2',
+        artifactDigest: digest,
+      },
+    });
+
+    await h.service.acceptBuild({
+      buildId: 'run-1',
+      project: 'Apex',
+      revisionNumber: 2,
+      actor: {
+        userId: 'user-req',
+        isProjectAdmin: false,
+        isSuperAdmin: false,
+      },
+    });
+    h.setCompletion('live', null);
+
+    await h.service.continueAccept('run-1');
+
+    expect(h.getPrState().draftPrUrl).toBeNull();
+    expect(h.requesterNotifications).toHaveLength(0);
   });
 
   it('VT-03, VT-04 PBI-033 AC-1 / PBI-034 AC-2 / TBI-027 DoD-1 launches 1 sync agent on conflicts and publishes PR with sync commit note on sync success', async () => {

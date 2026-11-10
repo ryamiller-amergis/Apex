@@ -46,7 +46,7 @@ export class BuildRunControlError extends Error {
     code: BuildRunControlErrorCode,
     message: string,
     statusCode: number,
-    remainingCause?: BuildSuspendReason,
+    remainingCause?: BuildSuspendReason
   ) {
     super(message);
     this.name = 'BuildRunControlError';
@@ -76,9 +76,12 @@ export interface ControlRunRecord {
 }
 
 export interface BuildRunControlDeps {
-  loadRun: (buildId: string, projectId: string) => Promise<ControlRunRecord | null>;
-  casCancelRun: (
+  loadRun: (
     buildId: string,
+    projectId: string
+  ) => Promise<ControlRunRecord | null>;
+  casCancelRun: (
+    buildId: string
   ) => Promise<
     | { kind: 'cancelled' }
     | { kind: 'already_cancelled' }
@@ -86,25 +89,34 @@ export interface BuildRunControlDeps {
     | { kind: 'not_found' }
   >;
   stopRunningAgents: (
-    buildId: string,
+    buildId: string
   ) => Promise<{ stopped: number; unconfirmed: string[] }>;
   releasePreviewLease: (buildId: string) => Promise<void>;
-  cancelPlaybookRun: (playbookRunId: string, requesterUserId: string) => Promise<void>;
+  cancelPlaybookRun: (
+    playbookRunId: string,
+    requesterUserId: string
+  ) => Promise<void>;
+  cancelFastEdit: (buildRunId: string) => Promise<void>;
   readCurrentProfileCaps: (
-    projectId: string,
+    projectId: string
   ) => Promise<{ costLimitUsd: number; elapsedLimitMs: number }>;
   isFlagOperational: (projectId: string, userId: string) => Promise<boolean>;
-  requesterHasBuildsRun: (userId: string, projectId: string) => Promise<boolean>;
+  requesterHasBuildsRun: (
+    userId: string,
+    projectId: string
+  ) => Promise<boolean>;
   runConfigurationPreflight: (buildId: string) => Promise<boolean>;
   casResumeRun: (
     buildId: string,
     expectedReason: BuildSuspendReason,
     nextStage: 'planning' | 'building' | 'checking',
-    updatedCaps?: { costLimitUsd?: number; elapsedLimitMs?: number },
+    updatedCaps?: { costLimitUsd?: number; elapsedLimitMs?: number }
   ) => Promise<boolean>;
   reconcileRun: (buildId: string) => Promise<void>;
   /** Re-reads a stopped single-agent build's last report before any new agent runs. */
-  recheckStoppedTask?: (buildId: string) => Promise<'merged' | 'fix_up' | 'none'>;
+  recheckStoppedTask?: (
+    buildId: string
+  ) => Promise<'merged' | 'fix_up' | 'none'>;
   appendEvent: (input: {
     buildRunId: string;
     eventType: string;
@@ -116,7 +128,7 @@ export interface BuildRunControlDeps {
   track: (
     name: string,
     props: Record<string, string>,
-    measurements?: Record<string, number>,
+    measurements?: Record<string, number>
   ) => void;
 }
 
@@ -136,8 +148,8 @@ function createDefaultControlDeps(): BuildRunControlDeps {
         .where(
           and(
             eq(buildRevisions.buildRunId, buildId),
-            eq(buildRevisions.revisionNumber, row.currentRevisionNumber),
-          ),
+            eq(buildRevisions.revisionNumber, row.currentRevisionNumber)
+          )
         )
         .limit(1);
 
@@ -162,7 +174,9 @@ function createDefaultControlDeps(): BuildRunControlDeps {
         revisionsLimit: row.revisionCap,
         runningAgents: row.parallelismUsed,
         parallelismLimit: row.parallelismCap,
-        hasValidatedPlan: rev?.planValidation?.status === 'pass' || rev?.classification === 'small',
+        hasValidatedPlan:
+          rev?.planValidation?.status === 'pass' ||
+          rev?.classification === 'small',
         tasks,
         playbookRunId: row.playbookRunId ?? null,
       };
@@ -191,11 +205,13 @@ function createDefaultControlDeps(): BuildRunControlDeps {
         .where(
           and(
             eq(buildRuns.id, buildId),
-            notInArray(buildRuns.status, ['accepted', 'cancelled', 'failed']),
-          ),
+            notInArray(buildRuns.status, ['accepted', 'cancelled', 'failed'])
+          )
         )
         .returning({ id: buildRuns.id });
-      return updated.length > 0 ? { kind: 'cancelled' } : { kind: 'already_cancelled' };
+      return updated.length > 0
+        ? { kind: 'cancelled' }
+        : { kind: 'already_cancelled' };
     },
     stopRunningAgents: (buildId) => stopRunningAgents(buildId),
     async releasePreviewLease(buildId) {
@@ -204,8 +220,15 @@ function createDefaultControlDeps(): BuildRunControlDeps {
         reason: 'cancel',
       });
     },
-    async cancelPlaybookRun() {
-      // Best-effort playbook cancellation
+    async cancelPlaybookRun(playbookRunId, requesterUserId) {
+      const { cancelBuildPlaybookRun } =
+        await import('./buildOrchestrator/endedBuildPlaybooks');
+      await cancelBuildPlaybookRun(playbookRunId, requesterUserId);
+    },
+    async cancelFastEdit(buildRunId) {
+      const { cancelBuildRevisionFastEdit } =
+        await import('./build/buildRevisionFastEditLocalService');
+      await cancelBuildRevisionFastEdit(buildRunId);
     },
     async readCurrentProfileCaps() {
       return { costLimitUsd: 25, elapsedLimitMs: 4 * 3600_000 };
@@ -245,11 +268,17 @@ function createDefaultControlDeps(): BuildRunControlDeps {
             ? { costCapUsd: updatedCaps.costLimitUsd.toFixed(4) }
             : {}),
           ...(updatedCaps?.elapsedLimitMs !== undefined
-            ? { elapsedCapSeconds: Math.floor(updatedCaps.elapsedLimitMs / 1000) }
+            ? {
+                elapsedCapSeconds: Math.floor(
+                  updatedCaps.elapsedLimitMs / 1000
+                ),
+              }
             : {}),
           updatedAt: now,
         })
-        .where(and(eq(buildRuns.id, buildId), eq(buildRuns.status, 'suspended')))
+        .where(
+          and(eq(buildRuns.id, buildId), eq(buildRuns.status, 'suspended'))
+        )
         .returning({ id: buildRuns.id });
       return rows.length > 0;
     },
@@ -265,7 +294,7 @@ function createDefaultControlDeps(): BuildRunControlDeps {
 }
 
 export function createBuildRunControlService(
-  deps: BuildRunControlDeps = createDefaultControlDeps(),
+  deps: BuildRunControlDeps = createDefaultControlDeps()
 ) {
   return {
     async cancel(input: {
@@ -279,7 +308,7 @@ export function createBuildRunControlService(
         throw new BuildRunControlError(
           'BUILD_NOT_FOUND',
           'This build does not exist in this project.',
-          404,
+          404
         );
       }
 
@@ -287,7 +316,7 @@ export function createBuildRunControlService(
         throw new BuildRunControlError(
           'FORBIDDEN',
           'Only the requester, a Project Admin, or a Platform Admin can cancel this build.',
-          403,
+          403
         );
       }
 
@@ -297,13 +326,13 @@ export function createBuildRunControlService(
           throw new BuildRunControlError(
             'BUILD_NOT_FOUND',
             'This build does not exist in this project.',
-            404,
+            404
           );
         case 'already_settled':
           throw new BuildRunControlError(
             'BUILD_ALREADY_SETTLED',
             'This build is already settled and cannot be cancelled.',
-            409,
+            409
           );
         case 'already_cancelled':
           return {
@@ -329,6 +358,16 @@ export function createBuildRunControlService(
             actorUserId: input.actor.userId,
           });
 
+          try {
+            await deps.cancelFastEdit(run.id);
+          } catch {
+            await deps.appendEvent({
+              buildRunId: run.id,
+              eventType: 'revision.fast_edit_cancel_failed',
+              severity: 'warn',
+              message: 'The active fast revision did not confirm cancellation.',
+            });
+          }
           const { stopped, unconfirmed } = await deps.stopRunningAgents(run.id);
           for (const agentRunId of unconfirmed) {
             await deps.appendEvent({
@@ -348,10 +387,14 @@ export function createBuildRunControlService(
             try {
               await deps.cancelPlaybookRun(
                 run.playbookRunId,
-                run.requestedByUserId,
+                run.requestedByUserId
               );
-            } catch {
-              // Best-effort playbook cancellation
+            } catch (error) {
+              // The reconciliation sweep releases it later.
+              console.warn('[build-cancel] could not cancel the Playbook run', {
+                buildId: run.id,
+                reason: error instanceof Error ? error.message : String(error),
+              });
             }
           }
 
@@ -366,7 +409,9 @@ export function createBuildRunControlService(
         }
         default: {
           const exhaustive: never = cas;
-          throw new Error(`Unhandled cancel outcome: ${JSON.stringify(exhaustive)}`);
+          throw new Error(
+            `Unhandled cancel outcome: ${JSON.stringify(exhaustive)}`
+          );
         }
       }
     },
@@ -381,7 +426,7 @@ export function createBuildRunControlService(
         throw new BuildRunControlError(
           'BUILD_NOT_FOUND',
           'This build does not exist in this project.',
-          404,
+          404
         );
       }
 
@@ -389,7 +434,7 @@ export function createBuildRunControlService(
         throw new BuildRunControlError(
           'FORBIDDEN',
           'Only the requester, a Project Admin, or a Platform Admin can resume this build.',
-          403,
+          403
         );
       }
 
@@ -397,7 +442,7 @@ export function createBuildRunControlService(
         throw new BuildRunControlError(
           'BUILD_NOT_SUSPENDED',
           'This build is not suspended.',
-          409,
+          409
         );
       }
 
@@ -406,14 +451,14 @@ export function createBuildRunControlService(
       // Always check the feature flag first
       const flagOn = await deps.isFlagOperational(
         input.projectId,
-        run.requestedByUserId,
+        run.requestedByUserId
       );
       if (!flagOn) {
         throw new BuildRunControlError(
           'RESUME_CAUSE_NOT_CLEARED',
           suspensionReasonPlainMessage('flag_disabled'),
           409,
-          'flag_disabled',
+          'flag_disabled'
         );
       }
 
@@ -422,11 +467,13 @@ export function createBuildRunControlService(
           'RESUME_NOT_SUPPORTED',
           suspensionReasonPlainMessage(reason),
           409,
-          reason,
+          reason
         );
       }
 
-      let updatedCaps: { costLimitUsd?: number; elapsedLimitMs?: number } | undefined;
+      let updatedCaps:
+        | { costLimitUsd?: number; elapsedLimitMs?: number }
+        | undefined;
 
       if (reason === 'cost_cap') {
         const currentCaps = await deps.readCurrentProfileCaps(input.projectId);
@@ -435,7 +482,7 @@ export function createBuildRunControlService(
             'RESUME_CAUSE_NOT_CLEARED',
             suspensionReasonPlainMessage('cost_cap'),
             409,
-            'cost_cap',
+            'cost_cap'
           );
         }
         updatedCaps = { costLimitUsd: currentCaps.costLimitUsd };
@@ -446,21 +493,21 @@ export function createBuildRunControlService(
             'RESUME_CAUSE_NOT_CLEARED',
             suspensionReasonPlainMessage('elapsed_cap'),
             409,
-            'elapsed_cap',
+            'elapsed_cap'
           );
         }
         updatedCaps = { elapsedLimitMs: currentCaps.elapsedLimitMs };
       } else if (reason === 'permission_revoked') {
         const hasPerm = await deps.requesterHasBuildsRun(
           run.requestedByUserId,
-          input.projectId,
+          input.projectId
         );
         if (!hasPerm) {
           throw new BuildRunControlError(
             'RESUME_CAUSE_NOT_CLEARED',
             suspensionReasonPlainMessage('permission_revoked'),
             409,
-            'permission_revoked',
+            'permission_revoked'
           );
         }
       } else if (reason === 'configuration') {
@@ -470,7 +517,7 @@ export function createBuildRunControlService(
             'RESUME_CAUSE_NOT_CLEARED',
             suspensionReasonPlainMessage('configuration'),
             409,
-            'configuration',
+            'configuration'
           );
         }
       }
@@ -484,13 +531,13 @@ export function createBuildRunControlService(
         run.id,
         reason,
         nextStage,
-        updatedCaps,
+        updatedCaps
       );
       if (!won) {
         throw new BuildRunControlError(
           'BUILD_NOT_SUSPENDED',
           'This build was already resumed by another request.',
-          409,
+          409
         );
       }
 
