@@ -170,3 +170,9 @@ ai_runs_key_vault_secrets_officer_ids = [
   "1ceaafde-4871-4411-9ef7-5432c7b4e080", # Aneesh Nedunuri
   "eeec9951-5180-4bcf-b434-a7911f8cbf27", # apex-prd-sp (deploy.yml AZURE_CREDENTIALS)
 ]
+
+# mi-apex-insights-reader-dev, owned by dev state. apex-prd-sp cannot read MSS-DevTest.
+ai_runs_insights_reader_identity = {
+  id        = "/subscriptions/9d08693d-0c89-4f11-aa43-6cbdb89cf1cb/resourceGroups/rg-scrum-dev/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-apex-insights-reader-dev"
+  client_id = "e4392547-a5c9-4cf7-8425-c0d133c2452c"
+}
