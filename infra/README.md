@@ -637,7 +637,7 @@ remains inert behind the disabled feature flag.
 | Runner MI | `AiRun.Runner` app role | Entra app when `enable_ai_runs_entra_app=true` |
 | `mi-apex-insights-reader-dev` | Monitoring Reader, Log Analytics Reader, and Reader on MaxView production telemetry | Assigned outside this module. Apply does not create or remove those role assignments. |
 
-Dev state owns `mi-apex-insights-reader-dev`. Prod does not create `mi-apex-insights-reader-prd`. A prod apply reads the dev identity and attaches it to `caj-apex-ai-runs-prd` and `ca-apex-ai-runs-documents-v2-prd`, and sets `AZURE_INSIGHTS_CLIENT_ID`. `AZURE_CLIENT_ID` stays the worker's own identity.
+Dev state owns `mi-apex-insights-reader-dev`. Prod does not create `mi-apex-insights-reader-prd`. `env/prd.tfvars` holds the dev identity's ID and client ID (`ai_runs_insights_reader_identity`), because apex-prd-sp cannot read MSS-DevTest. A prod apply attaches it to `caj-apex-ai-runs-prd` and `ca-apex-ai-runs-documents-v2-prd`, and sets `AZURE_INSIGHTS_CLIENT_ID`. `AZURE_CLIENT_ID` stays the worker's own identity.
 
 The identity already exists. Import it into the **default** workspace before the first dev apply, or apply tries to create a second identity with the same name:
 
