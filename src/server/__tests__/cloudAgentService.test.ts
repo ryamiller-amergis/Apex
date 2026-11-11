@@ -17,6 +17,7 @@ const mockBuildLocalDevContext = jest.fn().mockResolvedValue({ files: [] });
 const mockPersistLeftoverWork = jest.fn(async () => ({ firstWrite: true }));
 const mockWriteLeftoverWorkToAdo = jest.fn(async () => undefined);
 const mockRecordCloudAgentUsage = jest.fn();
+const mockCreateNotification = jest.fn().mockResolvedValue({});
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -69,6 +70,9 @@ jest.mock('../services/cursorCloudAgentClient', () => ({
   getCloudAgentRun: jest.fn(),
   streamCloudAgentRun: jest.fn(),
   cancelCursorCloudAgentRun: (...args: unknown[]) => mockVendorCancel(...args),
+}));
+jest.mock('../services/notificationService', () => ({
+  createNotification: (...args: unknown[]) => mockCreateNotification(...args),
 }));
 jest.mock('../services/cloudAgentUsageService', () => ({
   recordCloudAgentUsage: (...args: unknown[]) => mockRecordCloudAgentUsage(...args),
@@ -692,6 +696,22 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     expect(prompt).toContain('Name the work item as AB#123');
     expect(prompt).toContain('Do not move this work item or its backlog items to In Pull Request.');
     expect(prompt).not.toContain('Do not open a pull request.');
+  });
+
+  it('tells a Playbook agent to push the branch and leave the pull request to Apex', async () => {
+    const prompt = await buildCloudAgentPrompt({
+      project: 'MaxView',
+      workItemId: 123,
+      workItemTitle: 'Shift Scheduler',
+      targetBranch: 'develop',
+      apexOpensPullRequest: true,
+    });
+
+    expect(prompt).toContain('Do not open a pull request: Apex opens it when you finish.');
+    expect(prompt).toContain('<pr-description>');
+    expect(prompt).toContain('Name the work item as AB#123');
+    expect(prompt).not.toContain('Open a pull request titled');
+    expect(prompt).not.toContain('Open the pull request into');
   });
 
   it('names a bug branch and tells the agent to merge into the configured branch', async () => {
@@ -1975,6 +1995,142 @@ describe('reconcileRunningCloudAgentRuns', () => {
     }));
   });
 
+  describe('Playbook runs, where Apex opens the pull request as the Playbook author', () => {
+    function playbookExecution() {
+      return liveExecution({
+        executionSnapshot: {
+          provider: 'ado',
+          repository: 'MaxView',
+          cloudAgent: {
+            workItemId: 42,
+            workItemTitle: 'Add search',
+            workItemType: 'Feature',
+            branchName: 'feat/42-add-search',
+            baseBranch: 'main',
+            pullRequestAuthorId: 'author-oid',
+          },
+        },
+      });
+    }
+
+    it('opens the pull request with the author token once the branch is pushed', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: 'feat/42-add-search',
+        resultText: 'Done.\n<pr-description>Adds search.</pr-description>',
+      }));
+      const openCloudAgentPullRequest = jest.fn().mockResolvedValue(PR_URL);
+      const getStoredAdoTokenForUser = jest.fn().mockResolvedValue('author-token');
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getStoredAdoTokenForUser,
+      }));
+
+      expect(getStoredAdoTokenForUser).toHaveBeenCalledWith('author-oid');
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        project: 'MaxView',
+        repo: 'MaxView',
+        sourceBranch: 'feat/42-add-search',
+        targetBranch: 'main',
+        workItemId: 42,
+        adoUserToken: 'author-token',
+        summary: expect.stringContaining('<pr-description>Adds search.</pr-description>'),
+      }));
+      expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+        status: 'completed',
+      }));
+      const prWrite = mockUpdateSet.mock.invocationCallOrder[
+        mockUpdateSet.mock.calls.findIndex((call) =>
+          (call[0] as { cloudPrUrl?: string }).cloudPrUrl === PR_URL)
+      ];
+      expect(prWrite).toBeLessThan(mockMarkTerminal.mock.invocationCallOrder[0]);
+      expect(mockCreateNotification).not.toHaveBeenCalled();
+    });
+
+    it('opens the pull request on the planned branch when Cursor reports none', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
+      }));
+      const openCloudAgentPullRequest = jest.fn().mockResolvedValue(PR_URL);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        sourceBranch: 'feat/42-add-search',
+        adoUserToken: 'author-token',
+      }));
+      expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+        status: 'completed',
+      }));
+    });
+
+    it('opens it with the service account and tells the author when their token no longer redeems', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: 'feat/42-add-search',
+      }));
+      const openCloudAgentPullRequest = jest.fn().mockResolvedValue(PR_URL);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue(null),
+      }));
+
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        adoUserToken: null,
+        allowServiceAccount: true,
+      }));
+      expect(mockCreateNotification).toHaveBeenCalledWith(
+        'author-oid',
+        expect.objectContaining({ type: 'system' }),
+        { dedupeKey: `playbook-pr-author-fallback:${RUN_ID}` },
+      );
+    });
+
+    it('keeps waiting when the pull request could not be opened', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: 'feat/42-add-search',
+      }));
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest: jest.fn().mockRejectedValue(new Error('TF401019')),
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+    });
+
+    it('keeps waiting when Cursor reports no branch and the pull request could not be opened', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
+      }));
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest: jest.fn().mockRejectedValue(new Error('TF401019')),
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+
+      expect(mockMarkTerminal).not.toHaveBeenCalled();
+    });
+  });
+
   it('leaves a still-running execution alone', async () => {
     mockLiveRows([liveExecution()]);
     const getCloudAgentRun = jest.fn().mockResolvedValue(observation());
@@ -2026,7 +2182,9 @@ describe('reconcileRunningCloudAgentRuns', () => {
 
     expect(mockMarkTerminal).toHaveBeenCalledTimes(1);
     expect(mockPersistLeftoverWork).not.toHaveBeenCalled();
-    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ cloudPrUrl: PR_URL }));
+    expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ cloudPrStatus: expect.anything() }));
     expect(setImmediateSpy).not.toHaveBeenCalled();
   });
 

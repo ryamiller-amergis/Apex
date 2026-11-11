@@ -63,7 +63,7 @@ const FlowGlyphs: React.FC<{ project: string; definitionId: string }> = ({ proje
           <li
             key={node.id}
             className={styles.flowGlyph}
-            title={`${meta.title} · ${node.id}`}
+            title={node.title?.trim() ? `${node.title.trim()} · ${meta.title}` : `${meta.title} · ${node.id}`}
             {...{ 'data-group': meta.group }}
           >
             <Icon size={13} aria-hidden />

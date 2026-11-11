@@ -169,6 +169,7 @@ shared_storage_account_name = null
 # ai_runs_workspace_mount_path      = "/home/data/ai-pilot/workspaces"
 # ai_runs_vnet_subnet_id            = null
 # ai_runs_key_vault_name            = null  # derives "kv-apex-ai-{environment}" and seeds cursor-api-key
+# ai_runs_key_vault_secrets_officer_ids = ["<object-id of each person or pipeline identity that runs apply>"]
 # To use an existing vault instead, set both:
 # ai_runs_key_vault_id              = "/subscriptions/.../vaults/kv-apex-dev"
 # ai_runs_cursor_api_key_secret_id  = "https://kv-apex-dev.vault.azure.net/secrets/cursor-api-key/<version>"

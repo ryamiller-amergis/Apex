@@ -37,14 +37,16 @@ locals {
   ai_runs_data_dir = regex("^(.*)/[^/]+/?$", var.ai_runs_workspace_mount_path)[0]
 
   ai_runs_runner_principal_id = azurerm_user_assigned_identity.ai_runs_runner.principal_id
-  ai_runs_insights_reader_id = concat(
-    azurerm_user_assigned_identity.ai_runs_insights_reader[*].id,
-    data.azurerm_user_assigned_identity.ai_runs_insights_reader[*].id,
-  )[0]
-  ai_runs_insights_reader_client_id = concat(
-    azurerm_user_assigned_identity.ai_runs_insights_reader[*].client_id,
-    data.azurerm_user_assigned_identity.ai_runs_insights_reader[*].client_id,
-  )[0]
+  ai_runs_insights_reader_id = (
+    var.environment == "dev"
+    ? azurerm_user_assigned_identity.ai_runs_insights_reader[0].id
+    : var.ai_runs_insights_reader_identity.id
+  )
+  ai_runs_insights_reader_client_id = (
+    var.environment == "dev"
+    ? azurerm_user_assigned_identity.ai_runs_insights_reader[0].client_id
+    : var.ai_runs_insights_reader_identity.client_id
+  )
   ai_runs_key_vault_id = var.ai_runs_key_vault_id != null ? (
     var.ai_runs_key_vault_id
     ) : (
@@ -125,21 +127,14 @@ resource "azurerm_user_assigned_identity" "ai_runs_runner" {
 }
 
 # One principal for MaxView reads. Dev state owns it. Every other environment
-# looks it up and attaches it, so apply does not create mi-apex-insights-reader-prd
-# and does not drop AZURE_INSIGHTS_CLIENT_ID.
+# attaches it from var.ai_runs_insights_reader_identity, so apply does not create
+# mi-apex-insights-reader-prd and does not drop AZURE_INSIGHTS_CLIENT_ID.
 resource "azurerm_user_assigned_identity" "ai_runs_insights_reader" {
   count               = var.environment == "dev" ? 1 : 0
   name                = var.ai_runs_insights_reader_name
   location            = var.ai_runs_insights_reader_location
   resource_group_name = var.ai_runs_insights_reader_resource_group_name
   tags                = merge(var.tags, { Environment = "dev", Workload = "ai-runs-insights-reader" })
-}
-
-data "azurerm_user_assigned_identity" "ai_runs_insights_reader" {
-  count               = var.environment == "dev" ? 0 : 1
-  provider            = azurerm.insights_reader
-  name                = var.ai_runs_insights_reader_name
-  resource_group_name = var.ai_runs_insights_reader_resource_group_name
 }
 
 # ---------------------------------------------------------------------------
@@ -163,12 +158,14 @@ resource "azurerm_key_vault" "ai_runs" {
 
 # Terraform needs data-plane permission to seed CURSOR_API_KEY. This role is
 # scoped to the dedicated vault and is not created when existing vault IDs are used.
+# Principals are listed explicitly: keying on the caller would move the grant to
+# whoever ran apply last.
 resource "azurerm_role_assignment" "ai_runs_deployer_kv_secrets_officer" {
-  count = var.ai_runs_key_vault_id == null ? 1 : 0
+  for_each = var.ai_runs_key_vault_id == null ? var.ai_runs_key_vault_secrets_officer_ids : toset([])
 
   scope                = azurerm_key_vault.ai_runs[0].id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = each.value
 }
 
 resource "azurerm_key_vault_secret" "ai_runs_cursor_api_key" {

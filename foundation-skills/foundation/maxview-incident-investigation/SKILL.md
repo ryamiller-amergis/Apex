@@ -19,6 +19,8 @@ Also activates on: "investigate MaxView logs", "check App Insights", "query fire
 - [RESOURCE_CATALOG.md](RESOURCE_CATALOG.md) — which app / resource / environment to look at.
 - [INVESTIGATION_GUIDE.md](INVESTIGATION_GUIDE.md) — read-only rules, the zero-result recovery procedure, and how to report evidence.
 
+If `az account show` fails, run `az login --identity --client-id "$AZURE_INSIGHTS_CLIENT_ID" --output none`, and stop if that variable is missing or the login fails.
+
 ## Workflow
 
 1. **Intake.** Take any clue: operation ID, exception, app/resource, environment, route, alert, time window, IP, queue/topic, or plain symptom. If environment or time window is missing and cannot be inferred, ask one short question. Otherwise proceed and state your assumptions.

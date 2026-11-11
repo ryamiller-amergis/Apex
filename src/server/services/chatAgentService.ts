@@ -2181,6 +2181,8 @@ export interface PreparedBackgroundWorkflowTurn {
   /** Set when the caller passed `findTargetGrounding`. */
   targetGrounding?: RunGrounding | null;
   repository: RepositoryPreparationTarget;
+  /** Pinned commit, when this thread has a local or recorded checkout. */
+  groundedSha?: string;
 }
 
 export function buildBackgroundWorkflowPrompt(
@@ -2212,6 +2214,8 @@ async function resolveBackgroundGroundingReader(
   repoReader: RepoReader | undefined;
   skipProviderCatalogFetch: boolean;
   groundingProvenance: GroundingProvenance | undefined;
+  /** Pinned commit when the thread has a local checkout. */
+  resolvedSha?: string;
 }> {
   const grounding = await waitForReadyThreadGrounding(state);
   if (grounding.mode !== 'local') {
@@ -2235,6 +2239,7 @@ async function resolveBackgroundGroundingReader(
     // Local grounding must never HTTP-fetch the old GitHub/ADO skill catalog.
     skipProviderCatalogFetch: !repoReader,
     groundingProvenance: groundingProvenanceFor(grounding, kickoff),
+    resolvedSha: grounding.resolvedSha,
   };
 }
 
@@ -2265,6 +2270,7 @@ export async function prepareBackgroundWorkflowTurn(
   let repoReader: RepoReader | undefined;
   let skipProviderCatalogFetch = false;
   let groundingProvenance: GroundingProvenance | undefined;
+  let localResolvedSha: string | undefined;
 
   const findTarget = options?.findTargetGrounding;
   let target: RunGrounding | null | undefined;
@@ -2301,8 +2307,12 @@ export async function prepareBackgroundWorkflowTurn(
       sha: pinnedSha,
     };
   } else {
-    ({ repoReader, skipProviderCatalogFetch, groundingProvenance } =
-      await resolveBackgroundGroundingReader(state, kickoff));
+    ({
+      repoReader,
+      skipProviderCatalogFetch,
+      groundingProvenance,
+      resolvedSha: localResolvedSha,
+    } = await resolveBackgroundGroundingReader(state, kickoff));
     target = findTarget ? await findTarget() : undefined;
   }
 
@@ -2323,6 +2333,10 @@ export async function prepareBackgroundWorkflowTurn(
   const frozenSkill = resolvedSkill as
     | { path: string; content: string }
     | null;
+  const groundedSha = (target?.isActive ? target.groundedSha.trim() : '')
+    || localResolvedSha?.trim()
+    || state.thread.groundedSha?.trim()
+    || '';
   return {
     prompt,
     model: resolveModelId(kickoff.model),
@@ -2338,6 +2352,7 @@ export async function prepareBackgroundWorkflowTurn(
         : {}),
     projectId: kickoff.project,
     threadWorkspacePath: state.thread.workspaceDir,
+    ...(groundedSha ? { groundedSha } : {}),
     scratchInputs: buildKickoffScratchInputs(threadId, kickoff),
     ...(findTarget ? { targetGrounding: target ?? null } : {}),
     repository: {

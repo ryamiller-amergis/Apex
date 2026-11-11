@@ -43,6 +43,7 @@ jest.mock('../services/playbookAdvanceService', () => ({
 }));
 
 jest.mock('../services/chatAgentService', () => ({
+  getThread: jest.fn().mockResolvedValue(null),
   hydrateThread: jest.fn().mockResolvedValue(true),
   isOutputWorkspaceReadable: jest.fn().mockReturnValue(true),
   readOutputValidationScorecard: jest.fn().mockReturnValue(null),

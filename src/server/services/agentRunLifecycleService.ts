@@ -387,6 +387,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.userTokenInstance
               ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
               : {}),
+            ...(input.snapshot.cloudAgent.pullRequestAuthorId
+              ? { pullRequestAuthorId: input.snapshot.cloudAgent.pullRequestAuthorId }
+              : {}),
             ...(input.snapshot.cloudAgent.delivery
               ? { delivery: input.snapshot.cloudAgent.delivery }
               : {}),
@@ -909,13 +912,11 @@ export async function markTerminal(
         where: eq(agentRuns.id, runId),
         columns: { cloudPrUrl: true, requestedByUserId: true },
       });
-      const findOwner = db.query.playbookStepRuns?.findFirst;
-      const owner = findOwner
-        ? await findOwner({
-          where: eq(playbookStepRuns.agentRunId, runId),
-          columns: { runId: true },
-        })
-        : undefined;
+      const [owner] = await db
+        .select({ runId: playbookStepRuns.runId })
+        .from(playbookStepRuns)
+        .where(eq(playbookStepRuns.agentRunId, runId))
+        .limit(1);
       const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
       await publishPlaybookApexEvent({
         project: latest.projectId,

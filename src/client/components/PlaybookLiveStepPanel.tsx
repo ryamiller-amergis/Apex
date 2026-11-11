@@ -78,7 +78,7 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
     <section
       className={`${styles.panel} ${expanded ? styles.panelExpanded : ''}`}
       data-status={step.status}
-      aria-label={`${meta.title} ${step.stepId}`}
+      aria-label={`${step.title ?? meta.title} ${step.stepId}`}
       {...{ 'data-testid': testId }}
     >
       <div className={styles.bar}>
@@ -94,8 +94,8 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
           </span>
           <span className={styles.heading}>
             <span className={styles.titleRow}>
-              <span className={styles.title}>{meta.title}</span>
-              <span className={styles.stepId}>{step.stepId}</span>
+              <span className={styles.title}>{step.title ?? meta.title}</span>
+              <span className={styles.stepId}>{step.title ? `${meta.title} · ${step.stepId}` : step.stepId}</span>
               <span className={styles.statusPill} data-status={step.status}>
                 <StatusIcon status={step.status} size={12} />
                 {stepStatusLabel(step.status)}

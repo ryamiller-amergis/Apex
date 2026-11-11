@@ -20,7 +20,11 @@
  */
 import { z } from 'zod';
 import { PLAYBOOK_CONNECTOR_IDS } from '../../../shared/types/playbookConnectors';
-import { PLAYBOOK_STEP_SIDE_EFFECTS } from '../../../shared/types/playbook';
+import {
+  PLAYBOOK_MAX_OUTCOMES,
+  PLAYBOOK_OUTCOME_PATTERN,
+  PLAYBOOK_STEP_SIDE_EFFECTS,
+} from '../../../shared/types/playbook';
 import type {
   ApprovalGateStepConfig,
   BranchStepConfig,
@@ -81,7 +85,7 @@ const READABLE_TIMESTAMP = z
  * carrying something the next step's condition could not be evaluated against.
  */
 const CURSOR_AGENT_INPUT_SCHEMA = z.object({
-  skillPath: z.string().min(1),
+  skillPath: z.string().min(1).optional(),
   prompt: z.string().min(1),
   model: z.string().optional(),
   // Optional for immutable Phase 0 history; every newly published graph is checked separately.
@@ -90,6 +94,13 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
   ),
   deadlineMs: z.number().positive().max(CURSOR_AGENT_DEADLINE_MS).optional(),
   threadId: z.string().min(1).optional(),
+  outcomes: z
+    .array(z.string().regex(PLAYBOOK_OUTCOME_PATTERN))
+    .min(2)
+    .max(PLAYBOOK_MAX_OUTCOMES)
+    .refine((values) => new Set(values).size === values.length, 'outcomes must be different')
+    .optional()
+    .describe('Results the agent picks from. A branch can route on the one it picked.'),
 });
 
 const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
@@ -98,6 +109,10 @@ const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
   threadId: z.string().optional(),
   scorecard: z.unknown().optional(),
   reportMd: z.string().optional(),
+  /** What the agent produced: a Skill's report if it wrote one, else its last reply. */
+  output: z.string().optional(),
+  /** The result the agent picked from the step's `outcomes`. */
+  outcome: z.string().optional(),
 });
 
 const APPROVAL_GATE_INPUT_SCHEMA = z.object({
@@ -108,6 +123,7 @@ const APPROVAL_GATE_INPUT_SCHEMA = z.object({
   // Optional only for Phase 1 rows. Production gates provide both values together.
   approverPool: z.enum(['prd', 'design_doc', 'design_prototype', 'test_case', 'adr']).optional(),
   gatedStepId: z.string().min(1).optional(),
+  notifyApprovers: z.boolean().optional(),
 });
 
 const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
@@ -160,7 +176,7 @@ const INGEST_ARTIFACT_OUTPUT_SCHEMA = z.object({
 const BRANCH_CONDITION_SCHEMA = z.object({
   sourceStepId: z.string().min(1),
   field: z.string().min(1),
-  operator: z.enum(['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte']),
+  operator: z.enum(['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte', 'contains', 'exists', 'missing']),
   value: z.unknown(),
 });
 

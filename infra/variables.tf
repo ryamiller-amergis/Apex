@@ -574,10 +574,18 @@ variable "ai_runs_insights_reader_location" {
   default     = "East US"
 }
 
-variable "ai_runs_insights_reader_subscription_id" {
-  description = "Subscription that holds mi-apex-insights-reader-dev. Prod apply reads the identity from here."
-  type        = string
-  default     = "9d08693d-0c89-4f11-aa43-6cbdb89cf1cb"
+variable "ai_runs_insights_reader_identity" {
+  description = "Resource ID and client ID of mi-apex-insights-reader-dev for environments other than dev. The deploy principal outside dev cannot read the dev subscription, so these are passed in rather than looked up."
+  type = object({
+    id        = string
+    client_id = string
+  })
+  default = null
+
+  validation {
+    condition     = var.environment == "dev" || var.ai_runs_insights_reader_identity != null
+    error_message = "Set ai_runs_insights_reader_identity for every environment except dev."
+  }
 }
 
 variable "ai_runs_max_in_flight" {
@@ -646,6 +654,12 @@ variable "ai_runs_key_vault_id" {
   description = "Existing Key Vault resource ID holding CURSOR_API_KEY. Null provisions a dedicated Apex AI-runs vault."
   type        = string
   default     = null
+}
+
+variable "ai_runs_key_vault_secrets_officer_ids" {
+  description = "Entra object IDs (people or pipeline identities that run apply) granted Key Vault Secrets Officer on the dedicated AI-runs vault, so Terraform can write CURSOR_API_KEY."
+  type        = set(string)
+  default     = []
 }
 
 variable "ai_runs_cursor_api_key_secret_id" {

@@ -4,18 +4,29 @@
  */
 import React, { useState } from 'react';
 import {
+  Bell,
+  BellOff,
   BookOpenText,
   Cpu,
   FileCheck2,
+  GitBranch,
   ListPlus,
   MessageSquarePlus,
+  Plus,
   ShieldCheck,
   SquarePen,
   Ticket,
   UserCheck,
   Users,
+  X,
 } from 'lucide-react';
-import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
+import {
+  PLAYBOOK_MAX_OUTCOMES,
+  PLAYBOOK_OUTCOME_PATTERN,
+  type PlaybookBranchCondition,
+  type PlaybookGraphNode,
+  type PlaybookStepTypePaletteItem,
+} from '../../shared/types/playbook';
 import {
   PLAYBOOK_CONNECTORS,
   playbookConnector,
@@ -24,8 +35,11 @@ import {
 import { usePlaybookSkills } from '../hooks/usePlaybookCanvas';
 import { useAvailableModels } from '../hooks/useProjectSkillConfig';
 import {
+  comparableOutputFields,
   nearestProducer,
   type PlaybookBindingOption,
+  type PlaybookComparableField,
+  type PlaybookComparableKind,
   type PlaybookTokenReference,
 } from '../utils/playbookBindings';
 import { PlaybookBindingText } from './PlaybookBindingText';
@@ -121,6 +135,87 @@ export const DeadlineField: React.FC<{
   );
 };
 
+/** The results an agent picks from, stored lowercase so its answer compares exactly. */
+const OutcomesField: React.FC<{
+  id: string;
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: string[] | undefined) => void;
+}> = ({ id, value, disabled, onChange }) => {
+  const outcomes = Array.isArray(value) ? value.map(String) : [];
+  const [draft, setDraft] = useState('');
+  const candidate = draft.trim().toLowerCase().replace(/\s+/g, ' ');
+  const problem = !candidate
+    ? null
+    : outcomes.includes(candidate)
+      ? 'Already in the list.'
+      : !PLAYBOOK_OUTCOME_PATTERN.test(candidate)
+        ? 'Use letters, numbers, spaces, or hyphens, up to 40 characters.'
+        : outcomes.length >= PLAYBOOK_MAX_OUTCOMES
+          ? `Up to ${PLAYBOOK_MAX_OUTCOMES} outcomes.`
+          : null;
+  const add = () => {
+    if (!candidate || problem) return;
+    onChange([...outcomes, candidate]);
+    setDraft('');
+  };
+  return (
+    <>
+      {outcomes.length ? (
+        <ul className={styles.outcomeList} aria-label="Outcomes">
+          {outcomes.map((outcome) => (
+            <li key={outcome} className={styles.outcomeChip}>
+              {outcome}
+              <button
+                type="button"
+                className={styles.outcomeRemove}
+                aria-label={`Remove ${outcome}`}
+                disabled={disabled}
+                onClick={() => {
+                  const next = outcomes.filter((existing) => existing !== outcome);
+                  onChange(next.length ? next : undefined);
+                }}
+                {...{ 'data-testid': `playbook-outcome-remove-${outcome}` }}
+              >
+                <X size={12} aria-hidden />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className={styles.outcomeAdd}>
+        <input
+          id={id}
+          className={styles.fieldInput}
+          placeholder={outcomes.length ? 'Add another outcome' : 'For example: fixed'}
+          value={draft}
+          disabled={disabled}
+          aria-invalid={problem ? true : undefined}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              add();
+            }
+          }}
+          {...{ 'data-testid': 'playbook-inspector-field-outcomes' }}
+        />
+        <button
+          type="button"
+          className={styles.secondaryButton}
+          disabled={disabled || !candidate || Boolean(problem)}
+          onClick={add}
+          {...{ 'data-testid': 'playbook-outcome-add' }}
+        >
+          <Plus size={14} aria-hidden /> Add
+        </button>
+      </div>
+      {problem ? <span className={styles.fieldError}>{problem}</span> : null}
+      {outcomes.length === 1 ? <span className={styles.fieldError}>Add at least one more outcome.</span> : null}
+    </>
+  );
+};
+
 function skillTitle(name: string): string {
   const words = name.replace(/[-_]+/g, ' ').trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
@@ -147,21 +242,22 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
   return (
     <>
-      <Field label="Skill" htmlFor={`${node.id}-skill`} required hint="The procedure the agent follows." {...{ 'data-testid': `playbook-field-${node.id}-skill` }}>
+      <Field label="Skill" htmlFor={`${node.id}-skill`} hint="Optional. A procedure the agent follows on top of your prompt." {...{ 'data-testid': `playbook-field-${node.id}-skill` }}>
         <PlaybookOptionPicker
           id={`${node.id}-skill`}
           value={skillPath}
           options={skillOptions}
           loading={skills.isPending}
-          placeholder="Choose a Skill"
+          placeholder="No Skill"
           searchPlaceholder="Search Skills"
+          emptyOption={{ label: 'No Skill', description: 'The agent follows your prompt only' }}
           icon={<BookOpenText size={14} />}
           disabled={disabled}
           onChange={(value) => setField('skillPath', value)}
           {...{ 'data-testid': "playbook-inspector-field-skillPath" }}
         />
       </Field>
-      <Field label="Prompt" htmlFor={`${node.id}-prompt`} required hint="What this run of the Skill should do." {...{ 'data-testid': `playbook-field-${node.id}-prompt` }}>
+      <Field label="Prompt" htmlFor={`${node.id}-prompt`} required hint="What the agent should do." {...{ 'data-testid': `playbook-field-${node.id}-prompt` }}>
         <PlaybookBindingText
           id={`${node.id}-prompt`}
           value={prompt}
@@ -172,6 +268,20 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           references={referencesFor(prompt)}
           onChange={(value) => setField('prompt', value)}
           {...{ 'data-testid': "playbook-inspector-field-prompt" }}
+        />
+      </Field>
+      <Field
+        label="Outcomes"
+        htmlFor={`${node.id}-outcomes`}
+        hint="Optional. The agent ends by picking one, and a branch step can route on it."
+        {...{ 'data-testid': `playbook-field-${node.id}-outcomes` }}
+      >
+        {/* data-testid-exempt: its input, Add, and remove buttons carry their own ids. */}
+        <OutcomesField
+          id={`${node.id}-outcomes`}
+          value={config.outcomes}
+          disabled={disabled}
+          onChange={(value) => setField('outcomes', value)}
         />
       </Field>
       <Field label="Model" htmlFor={`${node.id}-model`} {...{ 'data-testid': `playbook-field-${node.id}-model` }}>
@@ -334,6 +444,30 @@ const ApprovalGateFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           </Field>
         </>
       ) : null}
+      <div className={styles.field}>
+        <span className={styles.fieldLabel}>Notifications</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={config.notifyApprovers === true}
+          disabled={disabled}
+          className={`${styles.choiceCard} ${config.notifyApprovers === true ? styles.choiceCardActive : ''}`}
+          onClick={() => setField('notifyApprovers', config.notifyApprovers === true ? undefined : true)}
+          {...{ 'data-testid': 'playbook-gate-notify-approvers' }}
+        >
+          {config.notifyApprovers === true ? <Bell size={15} aria-hidden /> : <BellOff size={15} aria-hidden />}
+          <span className={styles.choiceText}>
+            <span className={styles.choiceTitle}>
+              {config.notifyApprovers === true ? 'Notify approvers' : 'Don\u2019t notify approvers'}
+            </span>
+            <span className={styles.choiceDescription}>
+              {mode === 'group'
+                ? 'When the step opens, everyone in the reviewer group gets an Apex notification and a Teams message.'
+                : 'When the step opens, the run owner gets an Apex notification and a Teams message.'}
+            </span>
+          </span>
+        </button>
+      </div>
       <Field label="Deadline" htmlFor={`${node.id}-deadline`} hint="Blank waits up to 48 hours." {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}>
         <DeadlineField
           id={`${node.id}-deadline`}
@@ -343,6 +477,303 @@ const ApprovalGateFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           {...{ 'data-testid': "playbook-inspector-field-deadlineMs" }}
         />
       </Field>
+    </>
+  );
+};
+
+const BRANCH_TESTS: Record<PlaybookComparableKind, PlaybookPickerOption[]> = {
+  choice: [
+    { value: 'eq', label: 'is' },
+    { value: 'neq', label: 'is not' },
+    { value: 'in', label: 'is one of' },
+  ],
+  text: [
+    { value: 'eq', label: 'is' },
+    { value: 'neq', label: 'is not' },
+    { value: 'contains', label: 'contains', description: 'Ignores capital letters' },
+  ],
+  number: [
+    { value: 'eq', label: 'is' },
+    { value: 'neq', label: 'is not' },
+    { value: 'gt', label: 'is more than' },
+    { value: 'gte', label: 'is at least' },
+    { value: 'lt', label: 'is less than' },
+    { value: 'lte', label: 'is at most' },
+  ],
+  boolean: [{ value: 'eq', label: 'is' }],
+};
+
+const PRESENCE_TESTS: PlaybookPickerOption[] = [
+  { value: 'exists', label: 'has a value' },
+  { value: 'missing', label: 'is empty' },
+];
+
+function branchTestsFor(field: PlaybookComparableField): PlaybookPickerOption[] {
+  return field.optional ? [...BRANCH_TESTS[field.kind], ...PRESENCE_TESTS] : BRANCH_TESTS[field.kind];
+}
+
+/** Tests that compare against nothing, a list, or one value. Switching shape resets the value. */
+function testShape(operator: string | undefined): 'none' | 'list' | 'one' {
+  if (operator === 'exists' || operator === 'missing') return 'none';
+  return operator === 'in' ? 'list' : 'one';
+}
+
+function choiceLabel(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1).replace(/[_-]+/g, ' ');
+}
+
+/** The value box for a branch test, shaped by the field: a list, yes/no, a number, or text. */
+const BranchValueField: React.FC<{
+  id: string;
+  field: PlaybookComparableField;
+  operator: string;
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: unknown) => void;
+}> = ({ id, field, operator, value, disabled, onChange }) => {
+  const [numberText, setNumberText] = useState(typeof value === 'number' ? String(value) : '');
+  if (field.kind === 'boolean') {
+    return (
+      <div className={styles.choiceCards} role="radiogroup" aria-label="Value">
+        {([[true, 'Yes'], [false, 'No']] as const).map(([option, label]) => (
+          <button
+            key={label}
+            type="button"
+            role="radio"
+            aria-checked={value === option}
+            disabled={disabled}
+            className={`${styles.choiceCard} ${value === option ? styles.choiceCardActive : ''}`}
+            onClick={() => onChange(option)}
+            {...{ 'data-testid': `playbook-branch-value-${label.toLowerCase()}` }}
+          >
+            <span className={styles.choiceTitle}>{label}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (field.kind === 'choice' && operator === 'in') {
+    const selected = Array.isArray(value) ? value.map(String) : [];
+    return (
+      <div className={styles.field} role="group" aria-label="Values">
+        {field.choices.map((choice) => (
+          <label key={choice} className={styles.checkOption}>
+            <input
+              type="checkbox"
+              className={styles.fieldCheckbox}
+              checked={selected.includes(choice)}
+              disabled={disabled}
+              onChange={(event) => onChange(
+                event.target.checked
+                  ? [...selected, choice]
+                  : selected.filter((candidate) => candidate !== choice),
+              )}
+              {...{ 'data-testid': `playbook-branch-value-${choice}` }}
+            />
+            {choiceLabel(choice)}
+          </label>
+        ))}
+      </div>
+    );
+  }
+  if (field.kind === 'choice') {
+    return (
+      <PlaybookOptionPicker
+        id={id}
+        value={typeof value === 'string' ? value : undefined}
+        options={field.choices.map((choice) => ({ value: choice, label: choiceLabel(choice) }))}
+        placeholder="Choose a value"
+        disabled={disabled}
+        onChange={(next) => onChange(next)}
+        {...{ 'data-testid': 'playbook-branch-value' }}
+      />
+    );
+  }
+  if (field.kind === 'number') {
+    return (
+      <input
+        id={id}
+        className={styles.fieldInput}
+        inputMode="decimal"
+        placeholder="A number"
+        value={numberText}
+        disabled={disabled}
+        onChange={(event) => {
+          setNumberText(event.target.value);
+          const parsed = Number(event.target.value);
+          onChange(event.target.value.trim() && Number.isFinite(parsed) ? parsed : undefined);
+        }}
+        {...{ 'data-testid': 'playbook-branch-value' }}
+      />
+    );
+  }
+  return (
+    <input
+      id={id}
+      className={styles.fieldInput}
+      placeholder={operator === 'contains' ? 'Words to look for' : 'The exact text to match'}
+      value={typeof value === 'string' ? value : ''}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value || undefined)}
+      {...{ 'data-testid': 'playbook-branch-value' }}
+    />
+  );
+};
+
+function defaultBranchValue(field: PlaybookComparableField, operator: string): unknown {
+  if (testShape(operator) === 'none') return undefined;
+  if (field.kind === 'boolean') return true;
+  if (field.kind === 'choice') return operator === 'in' ? [] : field.choices[0];
+  return undefined;
+}
+
+const BranchFields: React.FC<PlaybookStepFieldsProps> = (props) => {
+  const { node, config, disabled, setConfig, priorNodeIds, nextNodeIds, allNodes, paletteItems } = props;
+  const condition = (config.condition && typeof config.condition === 'object' && !Array.isArray(config.condition)
+    ? config.condition
+    : {}) as Partial<PlaybookBranchCondition>;
+  const label = (id: string) => {
+    const found = allNodes.find((candidate) => candidate.id === id);
+    return found ? stepDisplayName(found) : id;
+  };
+  const sources = priorNodeIds
+    .map((id) => allNodes.find((candidate) => candidate.id === id))
+    .filter((candidate): candidate is PlaybookGraphNode => Boolean(candidate))
+    .map((source) => ({
+      node: source,
+      fields: comparableOutputFields(paletteItems.find((item) => item.stepType === source.stepType), source),
+    }))
+    .filter((source) => source.fields.length > 0);
+  const source = sources.find((candidate) => candidate.node.id === condition.sourceStepId);
+  const field = source?.fields.find((candidate) => candidate.field === condition.field);
+  const tests = field ? branchTestsFor(field) : [];
+  const needsValue = testShape(condition.operator) !== 'none';
+
+  const setCondition = (next: Partial<PlaybookBranchCondition>) => {
+    setConfig({ ...config, condition: { ...condition, ...next } });
+  };
+  const chooseSource = (sourceStepId: string | undefined) => {
+    const picked = sources.find((candidate) => candidate.node.id === sourceStepId);
+    const firstField = picked?.fields[0];
+    setConfig({
+      ...config,
+      condition: firstField
+        ? { sourceStepId, field: firstField.field, operator: 'eq', value: defaultBranchValue(firstField, 'eq') }
+        : { sourceStepId },
+    });
+  };
+  const chooseField = (name: string | undefined) => {
+    const picked = source?.fields.find((candidate) => candidate.field === name);
+    setCondition({ field: name, operator: 'eq', value: picked ? defaultBranchValue(picked, 'eq') : undefined });
+  };
+  const chooseTest = (operator: string | undefined) => {
+    const next = (operator ?? 'eq') as PlaybookBranchCondition['operator'];
+    const switchesShape = testShape(next) !== testShape(condition.operator);
+    setCondition({
+      operator: next,
+      ...(switchesShape && field ? { value: defaultBranchValue(field, next) } : {}),
+    });
+  };
+
+  const destinations: PlaybookPickerOption[] = [
+    ...nextNodeIds.map((id) => ({ value: id, label: label(id), description: 'Connected after this branch' })),
+    ...allNodes
+      .filter((candidate) => candidate.id !== node.id && !nextNodeIds.includes(candidate.id) && !priorNodeIds.includes(candidate.id))
+      .map((candidate) => ({ value: candidate.id, label: stepDisplayName(candidate) })),
+  ];
+
+  return (
+    <>
+      <div className={styles.infoCard}>
+        <GitBranch size={15} aria-hidden />
+        <span>
+          {source && field
+            ? `If ${label(source.node.id)}'s ${field.label.toLowerCase()} ${tests.find((test) => test.value === condition.operator)?.label ?? 'is'}${
+              !needsValue
+                ? ''
+                : ` ${Array.isArray(condition.value)
+                  ? condition.value.map((choice) => choiceLabel(String(choice))).join(' or ') || '…'
+                  : condition.value === undefined
+                    ? '…'
+                    : typeof condition.value === 'boolean'
+                      ? (condition.value ? 'yes' : 'no')
+                      : field.kind === 'choice' ? choiceLabel(String(condition.value)) : `"${String(condition.value)}"`}`
+            }, the run goes one way. Otherwise it goes the other.`
+            : 'Pick an earlier step and what to check in its result.'}
+        </span>
+      </div>
+      <Field label="Check the result of" htmlFor={`${node.id}-source`} required {...{ 'data-testid': `playbook-field-${node.id}-source` }}>
+        <PlaybookOptionPicker
+          id={`${node.id}-source`}
+          value={source ? source.node.id : undefined}
+          options={sources.map((candidate) => ({ value: candidate.node.id, label: stepDisplayName(candidate.node) }))}
+          placeholder={sources.length ? 'Choose an earlier step' : 'Connect a step before this branch first'}
+          disabled={disabled || sources.length === 0}
+          onChange={chooseSource}
+          {...{ 'data-testid': 'playbook-branch-source' }}
+        />
+      </Field>
+      {source ? (
+        <Field label="What to check" htmlFor={`${node.id}-field`} required {...{ 'data-testid': `playbook-field-${node.id}-field` }}>
+          <PlaybookOptionPicker
+            id={`${node.id}-field`}
+            value={field?.field}
+            options={source.fields.map((candidate) => ({ value: candidate.field, label: candidate.label }))}
+            placeholder="Choose what to check"
+            disabled={disabled}
+            onChange={chooseField}
+            {...{ 'data-testid': 'playbook-branch-field' }}
+          />
+        </Field>
+      ) : null}
+      {field ? (
+        <>
+          <Field label="Test" htmlFor={`${node.id}-test`} required {...{ 'data-testid': `playbook-field-${node.id}-test` }}>
+            <PlaybookOptionPicker
+              id={`${node.id}-test`}
+              value={typeof condition.operator === 'string' ? condition.operator : undefined}
+              options={tests}
+              placeholder="Choose a test"
+              disabled={disabled || tests.length < 2}
+              onChange={chooseTest}
+              {...{ 'data-testid': 'playbook-branch-test' }}
+            />
+          </Field>
+          {needsValue ? (
+            <Field label="Value" htmlFor={`${node.id}-value`} required {...{ 'data-testid': `playbook-field-${node.id}-value` }}>
+              {/* data-testid-exempt: each value control carries its own id. */}
+              <BranchValueField
+                key={`${field.field}-${testShape(condition.operator)}`}
+                id={`${node.id}-value`}
+                field={field}
+                operator={typeof condition.operator === 'string' ? condition.operator : 'eq'}
+                value={condition.value}
+                disabled={disabled}
+                onChange={(value) => setCondition({ value })}
+              />
+            </Field>
+          ) : null}
+        </>
+      ) : null}
+      {(['whenTrue', 'whenFalse'] as const).map((key) => (
+        <Field
+          key={key}
+          label={key === 'whenTrue' ? 'If it matches, go to' : 'Otherwise, go to'}
+          htmlFor={`${node.id}-${key}`}
+          required
+          {...{ 'data-testid': `playbook-field-${node.id}-${key}` }}
+        >
+          <PlaybookOptionPicker
+            id={`${node.id}-${key}`}
+            value={typeof config[key] === 'string' ? (config[key] as string) : undefined}
+            options={destinations}
+            placeholder="Choose a step"
+            disabled={disabled}
+            onChange={(value) => props.setField(key, value)}
+            {...{ 'data-testid': `playbook-inspector-field-${key}` }}
+          />
+        </Field>
+      ))}
     </>
   );
 };
@@ -583,13 +1014,13 @@ function defaultParameters(operation: string, props: PlaybookStepFieldsProps): C
     return {
       workItemType: 'Bug',
       title: 'Playbook finding',
-      description: agent ? `\${steps.${agent.id}.reportMd}` : '',
+      description: agent ? `\${steps.${agent.id}.output}` : '',
     };
   }
   if (operation === 'post-ado-comment') {
     return {
       workItemId: creator ? `\${steps.${creator.id}.workItemId}` : '${input.workItemId}',
-      text: agent ? `\${steps.${agent.id}.reportMd}` : '',
+      text: agent ? `\${steps.${agent.id}.output}` : '',
     };
   }
   if (operation === 'set-document-status') return { documentType: 'design_doc', documentId: '', status: 'approved' };
@@ -809,12 +1240,16 @@ export const STEP_FIELD_RENDERERS: Record<string, {
   Component: React.FC<PlaybookStepFieldsProps>;
 }> = {
   'cursor-agent': {
-    handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId'],
+    handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes'],
     Component: CursorAgentFields,
   },
   'approval-gate': {
-    handledKeys: ['subject', 'approverPool', 'gatedStepId', 'deadlineMs'],
+    handledKeys: ['subject', 'approverPool', 'gatedStepId', 'deadlineMs', 'notifyApprovers'],
     Component: ApprovalGateFields,
+  },
+  branch: {
+    handledKeys: ['condition', 'whenTrue', 'whenFalse'],
+    Component: BranchFields,
   },
   'apex-action': {
     handledKeys: ['operation', 'parameters'],

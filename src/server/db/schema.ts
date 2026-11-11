@@ -398,6 +398,15 @@ export const appUsers = pgTable('app_users', {
   generationSoundId: text('generation_sound_id').notNull().default('chime'),
 });
 
+/** A user's Azure DevOps refresh token, encrypted. Used to open Playbook pull requests as the author. */
+export const userAdoCredentials = pgTable('user_ado_credentials', {
+  userId: text('user_id').primaryKey().references(() => appUsers.oid, { onDelete: 'cascade' }),
+  encryptedRefreshToken: jsonb('encrypted_refresh_token')
+    .$type<{ algorithm: 'aes-256-gcm'; iv: string; ciphertext: string; authTag: string }>()
+    .notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
 /**
  * One-to-one personal profile content keyed by Azure AD object ID.
  * Optional bio and avatar metadata live here — not on app_users (RBAC identity cache).

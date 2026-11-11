@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  PlaybookDryRunIssue,
   PlaybookDryRunResult,
   PlaybookGraph,
   PlaybookLayoutPositions,
@@ -8,17 +9,44 @@ import type {
   PlaybookVersionLayout,
 } from '../../shared/types/playbook';
 import { PlaybookApiError } from './usePlaybookDefinitions';
+import { useDebouncedValue } from './useDebouncedValue';
 
 async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { credentials: 'include', ...init });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
+    const { error, nodeId } = body as { error?: string; nodeId?: unknown };
     throw new PlaybookApiError(
-      (body as { error?: string }).error ?? `Request failed: ${response.status}`,
+      error ?? `Request failed: ${response.status}`,
       response.status,
+      typeof nodeId === 'string' && nodeId ? nodeId : undefined,
     );
   }
   return response.json() as Promise<T>;
+}
+
+/**
+ * Every problem in the graph on screen, including edits not saved yet. The check runs on the
+ * server so the canvas and publish cannot disagree about what is wrong.
+ */
+export function usePlaybookGraphIssues(
+  project: string | undefined,
+  graph: PlaybookGraph,
+  enabled: boolean,
+) {
+  const settled = useDebouncedValue(graph, 400);
+  return useQuery<{ issues: PlaybookDryRunIssue[] }>({
+    queryKey: ['playbook-graph-issues', project, JSON.stringify(settled)],
+    queryFn: () =>
+      apiRequest('/api/playbooks/graph/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project, graph: settled }),
+      }),
+    enabled: Boolean(project && enabled && settled.nodes.length > 0),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
 }
 
 export function usePlaybookStepPalette(project: string | undefined, enabled: boolean) {

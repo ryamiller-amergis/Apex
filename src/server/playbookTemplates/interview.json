@@ -8,6 +8,7 @@
       {
         "id": "interview",
         "stepType": "interview",
+        "title": "Run the requirements interview",
         "config": {
           "mode": "human_led",
           "profileKey": "${input.interviewProfileKey}"

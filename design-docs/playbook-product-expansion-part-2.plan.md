@@ -1,10 +1,9 @@
 ---
 name: Playbook Product Expansion — Part 2
-overview: After the runtime foundation, adds template reuse, unattended triggers, deterministic action nodes and connectors, parallel joins and bounded loops, and an authoring recommender. SkillOpt is Part 3.
+overview: After the runtime foundation, adds template reuse, unattended triggers, deterministic action nodes and connectors, parallel joins and bounded loops, and an authoring recommender.
 status: proposed
 part: 2
 requires: design-docs/playbook-product-expansion.plan.md
-continues_in: design-docs/playbook-product-expansion-part-3.plan.md
 scope:
   - Source-controlled Playbook template catalog
   - Schedules, Apex events, signed webhooks, and Azure DevOps triggers
@@ -18,7 +17,6 @@ out_of_scope:
   - User-forked step types
   - Free-drawn graph cycles
   - A public connector marketplace
-  - SkillOpt (Part 3)
 ---
 
 # Playbook Product Expansion — Part 2: Composition and automation
@@ -42,7 +40,7 @@ ordered so each one has somewhere to stand.
 | 5 | Author assistance | Chunks 1 and 3 for the recommender. | Recommend an existing step type. |
 
 Chunks 1 and 2 may proceed in parallel once Part 1 is done. Chunk 3 should finish before chunk 4.
-Chunk 5 starts after chunk 3. SkillOpt is not in this plan.
+Chunk 5 starts after chunk 3.
 
 ## Product outcome
 
@@ -733,4 +731,4 @@ the trigger scheduler and needs explicit approval when that wave is implemented.
 
 Do not infer these during the wave that depends on them. Waves 1 through 4 can start without
 decisions 5 through 7. Decision 1 is the only one that blocks a template choice, and the interview
-template can ship either way. The SkillOpt skill and transcript decision moved to Part 3.
+template can ship either way.
