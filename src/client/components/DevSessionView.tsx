@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useChatThread } from '../hooks/useChatThreads';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { applyPastedFiles } from '../hooks/clipboardFiles';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import {
   useDevSession,
   useDevDiff,
@@ -14,7 +16,7 @@ import {
   useCompleteMerge,
   useAbortMerge,
 } from '../hooks/useDevWorkbench';
-import type { ChatMessage } from '../../shared/types/chat';
+import type { ChatAttachment, ChatMessage } from '../../shared/types/chat';
 import type { ConflictedFile } from '../../shared/types/devWorkbench';
 import { parseAgentMessage, type ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
@@ -708,6 +710,13 @@ export const DevSessionView: React.FC = () => {
     retryReason,
     showTypingIndicator,
   } = chatSession;
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const { data: diff, refetch: refetchDiff } = useDevDiff(threadId);
 
   const [input, setInput] = useState('');
@@ -716,6 +725,7 @@ export const DevSessionView: React.FC = () => {
   const dragging = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const prevStatusRef = useRef<string | undefined>(status);
 
   const onResizeStart = useCallback((e: React.MouseEvent) => {
@@ -788,18 +798,28 @@ export const DevSessionView: React.FC = () => {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
 
-  const doSend = useCallback(async (text: string) => {
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
+  const doSend = useCallback(async (text: string, messageAttachments: ChatAttachment[] = []) => {
     const trimmed = text.trim();
-    if (!trimmed || isRunning || !threadId) return;
+    if ((!trimmed && messageAttachments.length === 0) || isRunning || !threadId) return;
+    const message = trimmed || 'Please use the attached files as additional context.';
     setInput('');
-    await chatSession.send(trimmed);
+    const sent = await chatSession.send(
+      message,
+      messageAttachments.length > 0 ? { attachments: messageAttachments } : undefined,
+    );
+    if (sent && messageAttachments.length > 0) clearAttachments();
     refetchDiff();
-  }, [isRunning, threadId, chatSession, refetchDiff]);
+  }, [isRunning, threadId, chatSession, clearAttachments, refetchDiff]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      doSend(input);
+      void doSend(input, attachments);
     }
   };
 
@@ -922,7 +942,30 @@ export const DevSessionView: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className={styles['input-area']}>
+        <div className={styles.composeStack}>
+          {attachments.length > 0 && (
+            <div className={styles.attachmentList} {...{ 'data-testid': 'dev-session-attachments' }}>
+              {attachments.map((attachment) => (
+                <span key={attachment.id} className={styles.attachmentChip}>
+                  <span className={styles.attachmentName}>{attachment.name}</span>
+                  <button
+                    type="button"
+                    className={styles.attachmentRemove}
+                    onClick={() => removeAttachment(attachment.id)}
+                    aria-label={`Remove ${attachment.name}`}
+                    disabled={isRunning}
+                    {...{ 'data-testid': `dev-session-attachment-remove-${attachment.id}` }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {attachmentError && (
+            <div className={styles.attachmentError} role="alert">{attachmentError}</div>
+          )}
+          <div className={styles['input-area']}>
           <textarea
             ref={textareaRef}
             className={styles.textarea}
@@ -936,10 +979,34 @@ export const DevSessionView: React.FC = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={(event) => {
+              if (isSettingUp || isFailed || isConflict || isRunning || status === 'closed') return;
+              applyPastedFiles(event, (files) => { void addFiles(files); });
+            }}
             disabled={isSettingUp || isFailed || isConflict || isRunning || status === 'closed'}
             rows={1}
             {...{ 'data-testid': 'dev-session-compose-message' }}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(event) => { void handleAttachmentChange(event); }}
+            disabled={isSettingUp || isFailed || isConflict || isRunning || status === 'closed'}
+            {...{ 'data-testid': 'dev-session-file-input' }}
+          />
+          <button
+            className={styles['attach-btn']}
+            onClick={() => fileInputRef.current?.click()}
+            type="button"
+            aria-label="Attach files"
+            title="Attach files or paste a screenshot (Ctrl+V)"
+            disabled={isSettingUp || isFailed || isConflict || isRunning || status === 'closed'}
+            {...{ 'data-testid': 'dev-session-attach' }}
+          >
+            Attach
+          </button>
           {isRunning ? (
             <button
               className={styles['stop-btn']}
@@ -952,14 +1019,15 @@ export const DevSessionView: React.FC = () => {
           ) : (
             <button
               className={styles['send-btn']}
-              onClick={() => doSend(input)}
-              disabled={isSettingUp || isFailed || isConflict || !input.trim() || status === 'closed'}
+              onClick={() => void doSend(input, attachments)}
+              disabled={isSettingUp || isFailed || isConflict || (!input.trim() && attachments.length === 0) || status === 'closed'}
               type="button"
               {...{ 'data-testid': 'dev-session-send-btn' }}
             >
               Send ↑
             </button>
           )}
+          </div>
         </div>
       </div>
 

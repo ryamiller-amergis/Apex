@@ -33,6 +33,7 @@ import {
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
@@ -364,10 +365,18 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId, { locked: readOnly });
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const {
     messages,
     streamingText,
@@ -504,12 +513,24 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     textareaRef.current?.focus();
   }, []);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const handleSend = useCallback(async () => {
+    if (readOnly) return;
     const text = input.trim();
-    if (!text) return;
+    const outgoing = [...attachments];
+    if (!text && outgoing.length === 0) return;
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    await session.send(text);
-  }, [input, session]);
+    const sent = await session.send(
+      message,
+      outgoing.length > 0 ? { attachments: outgoing } : undefined,
+    );
+    if (sent && outgoing.length > 0) clearAttachments();
+  }, [attachments, clearAttachments, input, readOnly, session]);
 
   const visibleMessages = messages.filter((m) => m.role !== 'tool' && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
@@ -602,6 +623,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
             disabled={isRunning || isSending || isCreating || !threadId}
             isRunning={isRunning}
             isSending={isSending}
+            allowEmptySend
             placeholder={
               isCreating ? 'Starting assistant…' :
               isRunning ? 'Agent is thinking…' :
@@ -610,6 +632,22 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
             testIdPrefix="design-doc-assistant"
             {...{ 'data-testid': 'design-doc-assistant-composer' }}
             textareaRef={textareaRef}
+            attachments={attachments}
+            attachmentError={attachmentError}
+            onRemoveAttachment={removeAttachment}
+            onAttachClick={() => fileInputRef.current?.click()}
+            onPasteFiles={(files) => { void addFiles(files); }}
+            fileInput={(
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => { void handleAttachmentChange(event); }}
+                disabled={isRunning || isSending || isCreating || !threadId}
+                {...{ 'data-testid': 'design-doc-assistant-file-input' }}
+              />
+            )}
           />
         ) : (
           <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
