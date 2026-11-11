@@ -980,7 +980,8 @@ to add the `aws-access-key-id` / `aws-secret-access-key` secrets and the
 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env. Leave them null and no grading
 credentials are set; a run that carries an `llm-rubric` test then fails its Promptfoo
 step. The model id and region come on each run's specification, resolved by App Service.
-`infra/scripts/dev-aiv2-tf.sh` reuses the visual worker's key for DEV.
+The pipeline's `infra/scripts/dev-tf-secrets.sh` and `prd-tf-secrets.sh` (and the manual
+`dev-aiv2-tf.sh`) set them from that environment's visual worker key.
 
 **Split interactive cutover (DEV/PROD):**
 
