@@ -1,6 +1,9 @@
 terraform {
   required_version = ">= 1.0"
 
+  # Settings come from backend/<env>.hcl: terraform init -backend-config=backend/dev.hcl
+  backend "azurerm" {}
+
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
@@ -25,16 +28,6 @@ provider "azurerm" {
   features {}
 
   # Prod subscription users often lack subscription-level provider register permission.
-  skip_provider_registration = true
-}
-
-# Prod workers log in as mi-apex-insights-reader-dev, which lives in MSS-DevTest.
-# This alias reads that identity during a prod plan. It does not create a second one.
-provider "azurerm" {
-  alias           = "insights_reader"
-  subscription_id = var.ai_runs_insights_reader_subscription_id
-  features {}
-
   skip_provider_registration = true
 }
 
