@@ -387,6 +387,9 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
             ...(input.snapshot.cloudAgent.userTokenInstance
               ? { userTokenInstance: input.snapshot.cloudAgent.userTokenInstance }
               : {}),
+            ...(input.snapshot.cloudAgent.pullRequestAuthorId
+              ? { pullRequestAuthorId: input.snapshot.cloudAgent.pullRequestAuthorId }
+              : {}),
             ...(input.snapshot.cloudAgent.delivery
               ? { delivery: input.snapshot.cloudAgent.delivery }
               : {}),
