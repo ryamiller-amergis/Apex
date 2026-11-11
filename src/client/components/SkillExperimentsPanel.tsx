@@ -180,7 +180,6 @@ const StartForm: React.FC<{ project: string; onStarted: (id: string) => void }> 
   return (
     <form
       className={styles.panel}
-      data-testid="skill-experiment-start-form"
       onSubmit={(e) => {
         e.preventDefault();
         if (!selected) return;
@@ -479,7 +478,7 @@ export const SkillExperimentsPanel: React.FC<{ project: string }> = ({ project }
         judge score both. A candidate that wins goes to an approval Playbook; approval opens a pull request.
       </p>
       <BudgetEditor project={project} />
-      {/* data-testid-exempt — the form root carries skill-experiment-start-form */}
+      {/* data-testid-exempt — the form root carries skill-experiments-start */}
       <StartForm project={project} onStarted={setSelectedId} />
       {error && <p className={styles.error}>{error.message}</p>}
       {action.error && <p className={styles.error}>{action.error.message}</p>}
