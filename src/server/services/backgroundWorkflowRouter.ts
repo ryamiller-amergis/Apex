@@ -55,6 +55,40 @@ const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 /** Every class this router handles is document work; visual has its own path. */
 const V2_WORKLOAD_LANE = 'document' as const;
 
+/** The commit the V2 worker opens. Narrower than a full grounding row. */
+interface DocumentRepositoryPin {
+  groundedSha: string;
+  repository: string;
+  provider: 'ado' | 'github' | 'azure_devops';
+}
+
+function pinFromGrounding(grounding: RunGrounding): DocumentRepositoryPin {
+  return {
+    groundedSha: grounding.groundedSha,
+    repository: grounding.repository,
+    provider: grounding.provider,
+  };
+}
+
+/**
+ * A Playbook step whose policy asks for repository reads. Scratch-only dispatch
+ * otherwise omits the commit, and the worker then has no pinned-repo tools.
+ */
+function pinForPlaybookReads(
+  policy: PlaybookAgentRunPolicy | undefined,
+  prepared: PreparedBackgroundWorkflowWorker,
+): DocumentRepositoryPin | undefined {
+  if (policy?.localAgent.customTools !== 'native-read-only') return undefined;
+  const groundedSha = prepared.groundedSha?.trim();
+  const repository = prepared.repository?.repo?.trim();
+  if (!groundedSha || !repository || !prepared.repository) return undefined;
+  return {
+    groundedSha,
+    repository,
+    provider: prepared.repository.provider === 'github' ? 'github' : 'azure_devops',
+  };
+}
+
 /** Generation workflows that reuse the interview's shared SHA checkout (no full clone). */
 const SHARED_READ_WORKFLOW_CLASSES: ReadonlySet<BackgroundWorkflowClass> = new Set([
   'prd',
@@ -101,6 +135,8 @@ export interface PreparedBackgroundWorkflowWorker {
   /** No Skill was frozen because the mirror was still fetching the pinned commit. */
   skillRepositorySyncing?: boolean;
   projectId: string;
+  /** Pinned commit of the project repository, when the thread has one. */
+  groundedSha?: string;
   /** Kickoff files from the saved thread. When absent, V2 reads the workspace copies. */
   scratchInputs?: AiRunV2DocumentScratchInput[];
 }
@@ -660,7 +696,7 @@ export function createBackgroundWorkflowRouter(
 
     const dispatch = async (
       snapshot: ExecutionSnapshot,
-      targetGrounding?: RunGrounding,
+      targetGrounding?: DocumentRepositoryPin,
     ): Promise<string> => {
       const deadlineMs = hardLimitMs();
       const timeoutAt = new Date(now() + deadlineMs).toISOString();
@@ -785,7 +821,10 @@ export function createBackgroundWorkflowRouter(
       };
       let dispatchedRunId: string;
       try {
-        dispatchedRunId = await dispatch(snapshot);
+        dispatchedRunId = await dispatch(
+          snapshot,
+          pinForPlaybookReads(input.playbookAgentPolicy, prepared),
+        );
       } catch (error) {
         return recover(
           input,
@@ -855,7 +894,7 @@ export function createBackgroundWorkflowRouter(
       };
       let v2RunId: string;
       try {
-        v2RunId = await dispatch(v2Snapshot, prepared.targetGrounding);
+        v2RunId = await dispatch(v2Snapshot, pinFromGrounding(prepared.targetGrounding));
       } catch (error) {
         return recover(
           input,
@@ -1016,7 +1055,7 @@ export function createBackgroundWorkflowRouter(
     };
     let dispatchedRunId: string;
     try {
-      dispatchedRunId = await dispatch(snapshot, prepared.targetGrounding);
+      dispatchedRunId = await dispatch(snapshot, pinFromGrounding(prepared.targetGrounding));
     } catch (error) {
       return recover(
         input,

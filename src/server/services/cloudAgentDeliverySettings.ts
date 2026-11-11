@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { projectCloudAgentDelivery } from '../db/schema';
 import { parseReviewerList } from './implementationDelivery';
+import { getSkillConfig } from './projectSettingsService';
 
 export interface CloudAgentDelivery {
   /** Branch the work is cut from and the pull request merges into. Null uses the skill branch. */
@@ -39,6 +40,19 @@ export async function getCloudAgentDelivery(
     .where(eq(projectCloudAgentDelivery.settingsId, settingsId))
     .limit(1);
   return fromRow(rows[0]);
+}
+
+export const CLOUD_AGENT_SETUP_REASON =
+  'Set the cloud agent merge branch and required reviewers in Project Settings first.';
+
+/**
+ * Why this project cannot use a Playbook Cloud agent step yet, or null when it can.
+ * A Playbook PR needs a branch to merge into and people to review it.
+ */
+export async function cloudAgentPlaybookSetupGap(project: string): Promise<string | null> {
+  const config = await getSkillConfig(project);
+  const delivery = await getCloudAgentDelivery(config?.id);
+  return delivery.targetBranch && delivery.requiredReviewers.length ? null : CLOUD_AGENT_SETUP_REASON;
 }
 
 export async function listCloudAgentDelivery(): Promise<Map<string, CloudAgentDelivery>> {

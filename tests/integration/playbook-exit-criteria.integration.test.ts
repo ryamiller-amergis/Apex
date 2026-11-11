@@ -27,6 +27,7 @@ const createThread = jest.fn(async () => ({
 }));
 jest.mock('../../src/server/services/chatAgentService', () => ({
   createThread: (...a: unknown[]) => createThread(...(a as [])),
+  getThread: async () => null,
   hydrateThread: async () => true,
   isOutputWorkspaceReadable: () => true,
   readOutputValidationScorecard: () => null,

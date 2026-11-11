@@ -5,6 +5,7 @@
 import express, { Request, Response } from 'express';
 import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { forwardAsyncErrors } from '../utils/forwardAsyncErrors';
 import {
   PlaybookTriggerValidationError,
   createPlaybookTrigger,
@@ -24,7 +25,7 @@ import { db } from '../db/drizzle';
 import { playbookTriggerReceipts, playbookTriggerSubscriptions } from '../db/schema';
 import { and, eq } from 'drizzle-orm';
 
-const router = express.Router();
+const router = forwardAsyncErrors(express.Router());
 
 router.get(
   '/',

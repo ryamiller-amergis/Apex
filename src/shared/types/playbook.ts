@@ -131,9 +131,18 @@ export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview' 
  * exist, and what each one requires, is FEAT-004's contract — naming the three Phase 0 types in this
  * union would put the vocabulary in two places and make adding a fourth a shared-types change.
  */
+/** Flow steps and connectors say what they are on the canvas, so they do not need a title. */
+export const PLAYBOOK_UNTITLED_STEP_TYPES: readonly string[] = ['branch', 'join', 'foreach', 'until', 'connector'];
+
+export function playbookStepNeedsTitle(stepType: string): boolean {
+  return !PLAYBOOK_UNTITLED_STEP_TYPES.includes(stepType);
+}
+
 export interface PlaybookGraphNode {
   id: string;
   stepType: string;
+  /** What the author calls this step. Required to publish every step except flow steps. */
+  title?: string;
   /**
    * Immutable contract version stamped when a draft is published.
    *
@@ -185,6 +194,8 @@ export interface PlaybookStepTypePaletteItem {
   canSuspend: boolean;
   /** False for step types only Apex places (interview, build); existing graphs still render them. */
   addable: boolean;
+  /** Set when this project cannot use the step yet. The library shows it and refuses to add it. */
+  unavailableReason?: string;
 }
 
 /** A Skill an Agent task step can run, from `GET /api/playbooks/skills`. */
@@ -203,7 +214,10 @@ export interface PlaybookSkillOption {
 export type PlaybookDryRunIssueKind = 'graph' | 'stub' | 'branch' | 'capability';
 
 export interface PlaybookDryRunIssue {
+  /** The step or connector the problem is on. Empty when it belongs to the whole graph. */
   nodeId: string;
+  /** Set when the problem is on one connection between two steps. */
+  edge?: { from: string; to: string };
   kind: PlaybookDryRunIssueKind;
   message: string;
 }
@@ -293,6 +307,8 @@ export interface PlaybookStepRun {
   /** The node id within the pinned version's graph. */
   stepId: string;
   stepType: string;
+  /** The node's title in the pinned version, when the author gave it one. */
+  title?: string;
   status: PlaybookStepRunStatus;
   /** Null for `approval-gate` and `notify` steps, which correlate to no agent run. */
   agentRunId: string | null;
@@ -512,8 +528,10 @@ export type PlaybookStepTypeDescriptor =
 // what actually validates a stored node config; these interfaces mirror it and nothing more.
 
 export interface CursorAgentStepConfig {
-  /** Repo-relative Skill path. Loaded before the agent run is enqueued. */
-  skillPath: string;
+  /** Repo-relative Skill path. Loaded before the agent run is enqueued. Blank runs the built-in default. */
+  skillPath?: string;
+  /** Results the agent must choose from. The choice becomes the step's `outcome` for branches. */
+  outcomes?: string[];
   prompt: string;
   model?: string;
   /** Server-owned capability profile; only profiles resolved as read-only may be published. */
@@ -545,6 +563,8 @@ export interface ApprovalGateStepConfig {
   approverPool?: ReviewerDocumentType;
   /** Graph step whose resolved input snapshot the approver reviews. */
   gatedStepId?: string;
+  /** Send each approver an Apex notification (and Teams bot message) when the gate opens. */
+  notifyApprovers?: boolean;
 }
 
 export interface NotifyStepConfig {
@@ -613,13 +633,20 @@ export interface IngestArtifactStepConfig {
   reportMd?: string;
 }
 
-export type PlaybookBranchOperator = 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte';
+/** `exists` and `missing` ignore `value`. `contains` is a case-insensitive text match. */
+export type PlaybookBranchOperator =
+  | 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'exists' | 'missing';
+
+/** Lowercase words, digits, spaces, and hyphens, so the agent's answer compares exactly. */
+export const PLAYBOOK_OUTCOME_PATTERN = /^[a-z0-9][a-z0-9 -]{0,39}$/;
+export const PLAYBOOK_MAX_OUTCOMES = 8;
 
 export interface PlaybookBranchCondition {
   sourceStepId: string;
   field: string;
   operator: PlaybookBranchOperator;
-  value: unknown;
+  /** Unused by `exists` and `missing`. */
+  value?: unknown;
 }
 
 export interface BranchStepConfig {

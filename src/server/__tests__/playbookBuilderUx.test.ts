@@ -145,6 +145,25 @@ describe('runEventActivityEntries', () => {
       ['message', 'Agent', 'The affected request fails in production.'],
     ]);
   });
+
+  it('joins streamed reply and thinking chunks into one line each until a tool call', () => {
+    const row = (eventId: string, event: Record<string, unknown>) => ({ eventId, detail: null, event, at: `t${eventId}` });
+    const entries = runEventActivityEntries([
+      row('1', { type: 'thinking', text: 'Check the logs' }),
+      row('2', { type: 'thinking', text: 'if' }),
+      row('3', { type: 'thinking', text: ' needed' }),
+      row('4', { type: 'thinking', text: '.' }),
+      row('5', { type: 'tool_call', toolName: 'Shell', input: { command: 'az account show' } }),
+      row('6', { type: 'token', text: 'The req' }),
+      row('7', { type: 'token', text: 'uest fails' }),
+      row('8', { type: 'token', text: ' in prod.' }),
+    ]);
+    expect(entries.map((entry) => [entry.id, entry.kind, entry.detail])).toEqual([
+      ['1', 'thinking', 'Check the logs if needed.'],
+      ['5', 'tool', 'az account show'],
+      ['6', 'message', 'The request fails in prod.'],
+    ]);
+  });
 });
 
 describe('threadActivityEntries', () => {

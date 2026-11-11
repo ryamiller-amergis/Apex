@@ -3,7 +3,13 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
-import { appUsers, playbookRuns, playbookStepRuns } from '../../db/schema';
+import {
+  appUsers,
+  playbookDefinitionVersions,
+  playbookDefinitions,
+  playbookRuns,
+  playbookStepRuns,
+} from '../../db/schema';
 import type { CloudAgentStepConfig, PlaybookGraph } from '../../../shared/types/playbook';
 import { AzureDevOpsService } from '../azureDevOps';
 import {
@@ -82,6 +88,17 @@ async function inferWorkItemId(context: PlaybookStepExecutionContext): Promise<n
   return positiveInteger((run?.runInput as Record<string, unknown> | null)?.workItemId);
 }
 
+/** The person who created the Playbook. Its pull requests open under their name. */
+async function playbookAuthorId(runId: string): Promise<string | null> {
+  const [row] = await db.select({ createdBy: playbookDefinitions.createdBy })
+    .from(playbookRuns)
+    .innerJoin(playbookDefinitionVersions, eq(playbookDefinitionVersions.id, playbookRuns.definitionVersionId))
+    .innerJoin(playbookDefinitions, eq(playbookDefinitions.id, playbookDefinitionVersions.definitionId))
+    .where(eq(playbookRuns.id, runId))
+    .limit(1);
+  return row?.createdBy ?? null;
+}
+
 export async function executeCloudAgentStep(
   context: PlaybookStepExecutionContext,
 ): Promise<PlaybookStepOutcome> {
@@ -114,12 +131,14 @@ export async function executeCloudAgentStep(
       where: eq(appUsers.oid, context.initiatorUserId),
       columns: { email: true },
     });
+    const authorId = await playbookAuthorId(context.runId);
     const started = await startCloudAgentRun({
       userId: context.initiatorUserId,
       project: context.project,
       workItemId,
       ...(config.model?.trim() ? { model: config.model.trim() } : {}),
       isSuperAdmin: Boolean(user?.email && isSuperAdminEmail(user.email)),
+      ...(authorId ? { pullRequestAuthorId: authorId } : {}),
       item: {
         workItemType: workItemType!,
         state: state!,

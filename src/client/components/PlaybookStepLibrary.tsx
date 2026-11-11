@@ -57,6 +57,10 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
     () => items.filter((item) => item.addable !== false).map((item) => stepMeta(item.stepType)),
     [items],
   );
+  const unavailable = useMemo(
+    () => new Map(items.flatMap((item) => (item.unavailableReason ? [[item.stepType, item.unavailableReason]] as const : []))),
+    [items],
+  );
   const popular = useMemo(() => rankPopular(steps, usage), [steps, usage]);
   const trimmed = query.trim();
   const results = useMemo(
@@ -73,8 +77,8 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
   );
 
   const dragProps = (meta: PlaybookStepMeta) => ({
-    draggable: canAuthor,
-    disabled: !canAuthor,
+    draggable: canAuthor && !unavailable.has(meta.stepType),
+    disabled: !canAuthor || unavailable.has(meta.stepType),
     onDragStart: (event: React.DragEvent) => {
       event.dataTransfer.setData('application/playbook-step-type', meta.stepType);
       event.dataTransfer.setData('application/playbook-step-label', meta.title);
@@ -104,7 +108,7 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
               key={meta.stepType}
               type="button"
               className={styles.railItem}
-              title={`${meta.title} — ${meta.description}`}
+              title={`${meta.title} — ${unavailable.get(meta.stepType) ?? meta.description}`}
               aria-label={`Add ${meta.title}`}
               {...{ 'data-group': meta.group, 'data-testid': `playbook-palette-rail-${meta.stepType}` }}
               {...dragProps(meta)}
@@ -157,7 +161,7 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
                     key={meta.stepType}
                     type="button"
                     className={styles.popularTile}
-                    title={meta.description}
+                    title={unavailable.get(meta.stepType) ?? meta.description}
                     {...{ 'data-group': meta.group, 'data-testid': `playbook-palette-top-${meta.stepType}` }}
                     {...dragProps(meta)}
                   >
@@ -188,6 +192,7 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
                       <button
                         type="button"
                         className={styles.stepRow}
+                        title={unavailable.get(meta.stepType)}
                         {...{ 'data-group': meta.group, 'data-testid': `playbook-palette-${meta.stepType}` }}
                         {...dragProps(meta)}
                       >
@@ -196,7 +201,9 @@ export const PlaybookStepLibrary: React.FC<PlaybookStepLibraryProps> = ({
                         </span>
                         <span className={styles.stepText}>
                           <span className={styles.stepTitle}>{meta.title}</span>
-                          <span className={styles.stepDescription}>{meta.description}</span>
+                          <span className={styles.stepDescription}>
+                            {unavailable.get(meta.stepType) ?? meta.description}
+                          </span>
                         </span>
                       </button>
                     </li>

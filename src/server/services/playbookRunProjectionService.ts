@@ -19,6 +19,7 @@ import { playbookRuns } from '../db/schema';
 import { suspendReasonForStepType } from './playbookSteps/registry';
 import { listPendingGateRows } from './playbookGateService';
 import type {
+  PlaybookGraph,
   PlaybookRunDetail,
   PlaybookRunListResult,
   PlaybookRunSummary,
@@ -36,6 +37,8 @@ type RunRow = typeof playbookRuns.$inferSelect & {
     versionNumber: number;
     definitionId: string;
     definition: { name: string };
+    /** Loaded only for one run, to name its steps. */
+    graph?: PlaybookGraph | null;
   };
   steps?: Array<Record<string, unknown>>;
 };
@@ -151,7 +154,7 @@ export async function getRun(project: string, runId: string): Promise<PlaybookRu
     where: and(eq(playbookRuns.id, runId), eq(playbookRuns.project, project)),
     with: {
       definitionVersion: {
-        columns: { id: true, versionNumber: true, definitionId: true },
+        columns: { id: true, versionNumber: true, definitionId: true, graph: true },
         with: { definition: { columns: { name: true } } },
       },
       steps: true,
@@ -161,9 +164,20 @@ export async function getRun(project: string, runId: string): Promise<PlaybookRu
   if (!row) return null;
 
   const run = row as unknown as RunRow;
+  const graph = run.definitionVersion.graph;
+  const titles = new Map(
+    (graph?.nodes ?? [])
+      .filter((node) => typeof node.title === 'string' && node.title.trim())
+      .map((node) => [node.id, node.title!.trim()]),
+  );
   // Ordered here rather than in the query so the relational load stays a single round trip.
   const steps = (run.steps ?? [])
     .map(toStepRun)
+    .map((step) => {
+      // A loop copy (`work#2`) shares its node's title.
+      const title = titles.get(step.stepId.split('#')[0]);
+      return title ? { ...step, title } : step;
+    })
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   return {

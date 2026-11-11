@@ -3,7 +3,7 @@
  * input. An approval in between only pauses the run; it does not hide earlier outputs.
  */
 import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
-import { stepMeta } from '../components/playbookStepCatalog';
+import { stepMeta, SUPERSEDED_OUTPUT_FIELDS } from '../components/playbookStepCatalog';
 
 export interface PlaybookBindingOption {
   token: string;
@@ -15,6 +15,7 @@ export interface PlaybookBindingOption {
 }
 
 const OUTPUT_FIELD_LABELS: Record<string, string> = {
+  output: 'Output',
   reportMd: 'Report',
   scorecard: 'Scorecard',
   agentRunId: 'Agent run id',
@@ -59,8 +60,78 @@ function outputFields(item: PlaybookStepTypePaletteItem | undefined): string[] {
   return Object.keys(properties ?? {});
 }
 
+function offeredOutputFields(item: PlaybookStepTypePaletteItem | undefined): string[] {
+  const superseded = SUPERSEDED_OUTPUT_FIELDS[item?.stepType ?? ''] ?? [];
+  return outputFields(item).filter((field) => !superseded.includes(field));
+}
+
 function stepLabel(node: PlaybookGraphNode): string {
-  return `${stepMeta(node.stepType).title} (${node.id})`;
+  const authored = node.title?.trim();
+  return authored ? `${authored} (${node.id})` : `${stepMeta(node.stepType).title} (${node.id})`;
+}
+
+export type PlaybookComparableKind = 'choice' | 'text' | 'number' | 'boolean';
+
+export interface PlaybookComparableField {
+  field: string;
+  label: string;
+  kind: PlaybookComparableKind;
+  /** The allowed values when `kind` is `choice`. */
+  choices: readonly string[];
+  /** The step may finish without this field, so a branch can ask whether it has a value. */
+  optional: boolean;
+}
+
+interface OutputPropertySchema {
+  type?: string | string[];
+  enum?: unknown[];
+}
+
+/**
+ * Output fields of a step a branch can test: text, a fixed list, a number, or yes/no.
+ * An agent's `outcome` becomes a list of the outcomes that step declares, and is left out when it
+ * declares none, because the agent is never asked to pick one.
+ */
+export function comparableOutputFields(
+  item: PlaybookStepTypePaletteItem | undefined,
+  node?: Pick<PlaybookGraphNode, 'config'>,
+): PlaybookComparableField[] {
+  const outputSchema = item?.outputJsonSchema as
+    | { properties?: Record<string, OutputPropertySchema>; required?: string[] }
+    | undefined;
+  const properties = outputSchema?.properties ?? {};
+  const required = new Set(outputSchema?.required ?? []);
+  const declaredOutcomes = Array.isArray(node?.config?.outcomes) ? node.config.outcomes.map(String) : [];
+  const fields: PlaybookComparableField[] = [];
+  for (const field of offeredOutputFields(item)) {
+    const schema = properties[field] ?? {};
+    const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+    const type = types.find((candidate) => candidate !== 'null');
+    const optional = !required.has(field) || types.includes('null');
+    if (field === 'outcome') {
+      if (declaredOutcomes.length === 0) continue;
+      fields.push({ field, label: fieldLabel(field), kind: 'choice', choices: declaredOutcomes, optional });
+      continue;
+    }
+    const kind: PlaybookComparableKind | null = Array.isArray(schema.enum)
+      ? 'choice'
+      : type === 'boolean'
+        ? 'boolean'
+        : type === 'number' || type === 'integer'
+          ? 'number'
+          : type === 'string'
+            ? 'text'
+            : null;
+    if (!kind) continue;
+    fields.push({
+      field,
+      label: fieldLabel(field),
+      kind,
+      choices: Array.isArray(schema.enum) ? schema.enum.map(String) : [],
+      optional,
+    });
+  }
+  return fields;
 }
 
 export function availableBindings(
@@ -72,7 +143,7 @@ export function availableBindings(
   for (const node of allNodes) {
     if (!priorNodeIds.includes(node.id)) continue;
     const item = paletteItems.find((candidate) => candidate.stepType === node.stepType);
-    for (const field of outputFields(item)) {
+    for (const field of offeredOutputFields(item)) {
       options.push({
         token: `\${steps.${node.id}.${field}}`,
         stepId: node.id,

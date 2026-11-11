@@ -132,6 +132,11 @@ export interface ExecutionSnapshot {
      */
     userTokenInstance?: string;
     /**
+     * Set by Playbook runs: Apex, not Cursor, opens the pull request, using this
+     * user's saved Azure DevOps token, so the Playbook author is its creator.
+     */
+    pullRequestAuthorId?: string;
+    /**
      * First time the run was seen finished with a pushed branch but no
      * autoCreatePR url. Bounds how long the run waits for that url.
      */
