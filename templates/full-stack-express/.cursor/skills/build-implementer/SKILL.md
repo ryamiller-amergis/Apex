@@ -49,6 +49,7 @@ The per-task envelope supplies these inputs. Read the repository files before th
 | IMP-R05 | Review the diff against the frozen standards contract (`design-system`, `coding rules`, `code map`), `.cursor/skills/api-contract/SKILL.md` (for endpoints), and `.cursor/skills/ui-standards/SKILL.md` (for screens).        | Standards review            |
 | IMP-R06 | Never put a hard-coded secret, bearer token, connection string, or personal identity value in code, tests, commit messages, or evidence output. Use synthetic `example.test` values.                                          | Redaction & evidence check  |
 | IMP-R07 | Implement the complete feature end-to-end in this session — including database migrations, Zod contracts, API routes, and UI screens. Never stop after red tests or write a `plan.json` escalation file.                      | Verification evidence check |
+| IMP-R08 | **Replace starter chrome & seed the requested feature**: When the task builds or changes the home page (`/`), replace starter overview widgets (`HomeDashboardPage.tsx`) so the home page *is* the requested product workflow, update `brandConfig` in `apps/web/src/theme/overrides.ts` to match the project/app identity, keep `navItems` in `apps/web/src/app/App.tsx` limited to `Home`, `Profile`, and routes the user requested, and seed 3–5 realistic domain records into the new feature's store/API on first load so it renders populated immediately. | Standards review |
 
 ## Runtime
 

@@ -97,6 +97,12 @@ export function userFacingBuildEvent(message: string): string {
   if (/^Task [\w-]+ finished and is waiting to merge\.?$/i.test(message)) {
     return 'The feature passed its checks.';
   }
+  if (/^Started fast revision \d+\.?$/i.test(message)) {
+    return 'Applying your requested change to the live preview.';
+  }
+  if (/^Requested revision \d+\.?$/i.test(message)) {
+    return 'Applying your requested change.';
+  }
   return message.replace(/\bbuild-feature\b/g, 'the feature');
 }
 

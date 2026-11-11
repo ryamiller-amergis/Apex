@@ -528,14 +528,6 @@ function createDefaultBuildRevisionDeps(): BuildRevisionServiceDeps {
       actorUserId,
       approvedLogoCandidateId,
     }) {
-      const { classifyBuildRevisionFastEdit } =
-        await import('./build/buildRevisionFastEditClassifier');
-      if (
-        classifyBuildRevisionFastEdit(redactedFeedback).route !== 'fast_edit'
-      ) {
-        return null;
-      }
-
       const outcome = await db.transaction(async (tx) => {
         if (approvedLogoCandidateId) {
           const [approvedLogo] = await tx
@@ -868,7 +860,7 @@ export function createBuildRevisionService(
         };
       }
 
-      if (!input.hasAttachments && deps.requestFastRevision) {
+      if (deps.requestFastRevision) {
         const fastRevision = await deps.requestFastRevision({
           run: precheckRun,
           redactedFeedback,
@@ -876,7 +868,11 @@ export function createBuildRevisionService(
           approvedLogoCandidateId: input.approvedLogoCandidateId,
         });
         if (fastRevision) {
-          if (precheckRun.chatThreadId && !fastRevision.resumed) {
+          if (
+            precheckRun.chatThreadId &&
+            !input.hasAttachments &&
+            !fastRevision.resumed
+          ) {
             await deps.appendAssistantReply?.(
               precheckRun.chatThreadId,
               `Working on revision ${fastRevision.revisionNumber} now. The preview will update when the change is ready.`

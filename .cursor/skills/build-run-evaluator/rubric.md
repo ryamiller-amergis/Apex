@@ -57,10 +57,10 @@ Score:
 1. Apex acknowledges the request immediately, reaches confirmation with minimal effort, and starts the build without avoidable ceremony.
 2. User-visible progress is timely, concise, and expressed as product outcomes rather than internal agent or repository mechanics.
 3. A useful interactive preview appears as early as safely possible, with a clear path to inspect, share, accept, or publish it.
-4. Follow-up feedback preserves earlier decisions and produces an incremental preview without restarting intake or requiring the request to be restated.
+4. Follow-up feedback (including screenshot-grounded or visual UI revisions) starts immediately with zero confirmation, renders chronologically below the completed original build card, streams live step-by-step revision progress, and updates the preview through the fast-edit studio path without reopening `/build-intake` or stalling in `"Preparing your build."`
 5. Non-technical users can complete the flow without handling infrastructure, code, branches, models, test commands, or deployment details; experts can inspect those details when wanted.
 
-Deduct for silent waits, technical jargon, repeated confirmation, preview appearing only after all internal work could have been staged earlier, lost context between revisions, or separate build/deploy/share steps that feel disconnected.
+Deduct for silent waits, technical jargon, repeated confirmation, follow-up revisions that re-enter `/build-intake` (`"Does this match what you want? a. Confirm b. Change it"`), revision messages rendered above the original build card, visual updates that bypass `fast_edit` or stall in `intake`/`planning`, preview appearing only after all internal work could have been staged earlier, lost context between revisions, or separate build/deploy/share steps that feel disconnected.
 
 Use requester turns, question count, time to confirmation, time to build start, time to first preview, post-confirmation interventions, feedback-to-preview time, and preview availability. Mark unavailable metrics explicitly.
 
@@ -94,9 +94,10 @@ Score:
 2. Red/green commits and named tests are genuine, commands match evidence, and required checks pass.
 3. UI work includes useful visual and accessibility evidence; non-UI work is not burdened with irrelevant visual work.
 4. End-user visual polish, tailored domain data (never `Item 1` / `Todo 1` / `project-name`), centered layout geometry (`AppShell` `maxWidth <= 960` and `alignSelf: 'center'`), and working interactive journeys (charts, notifications, grounded AI insights) are verified.
-5. The final diff is coherent, preserves existing behavior, and reaches the expected final-check, deployment, preview, or acceptance state.
+5. **Product fit for the prompt (no template scope leakage & seeded primary feature)**: the rendered application owns the home page and navigation for the requested domain, removes or replaces unrelated starter dashboard widgets/nav tabs that were not requested, sets the app identity to the project/requested brand, and seeds 3–5 realistic starter records into the requested feature so it is immediately populated on first load.
+6. The final diff is coherent, preserves existing behavior, and reaches the expected final-check, deployment, preview, or acceptance state.
 
-Deduct for implementation-detail-only tests, evidence assembled after the fact, identical red/green commits, skipped gates, weak deferrals, generic placeholder sample data, uncentered layout geometry, broken interactive journeys, unrelated changes, or a passing evidence block that conflicts with actual records.
+Deduct for implementation-detail-only tests, evidence assembled after the fact, identical red/green commits, skipped gates, weak deferrals, generic placeholder sample data, uncentered layout geometry, broken interactive journeys, **unrequested starter template widgets/industries/nav tabs left on screen ("scope leakage")**, **an empty (`0 items`) primary requested feature on first load**, unrelated changes, or a passing evidence block that conflicts with actual records.
 
 ### 6. Template fit and managed full-stack defaults — 10%
 
@@ -128,6 +129,8 @@ Apply the first matching cap after calculating the raw score:
 - Cap at `49` when a terminal run has a failed or pending active acceptance criterion, business rule, definition-of-done item, or risk decision.
 - Cap at `49` when the delivered change materially misses the approved user outcome.
 - Cap at `74` when a user-facing UI or mixed build reaches terminal success without a usable preview.
+- Cap at `74` when a follow-up revision (`revision >= 2`) re-enters `/build-intake` confirmation, stalls in an unstarted `intake`/`planning` state, or renders revision messages out of chronological order above the original build card.
+- Cap at `79` when a user-facing UI build ships with unrequested starter-template industry content, unrequested primary nav modules, or an unseeded (`0 items`) primary requested feature on first load (high visual craft, low product fit).
 - Cap at `74` when required quality commands, source diff, or final-check result cannot be verified.
 - Cap at `89` when the run succeeded only after an avoidable relaunch or repair attempt.
 

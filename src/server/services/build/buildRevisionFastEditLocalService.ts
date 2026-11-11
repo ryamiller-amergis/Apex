@@ -349,7 +349,16 @@ export const defaultBuildRevisionFastEditService =
     classify: classifyBuildRevisionFastEdit,
     beginStudio: (input) =>
       defaultBuildEditablePreviewSessionService.beginRevision(input),
-    prepareWorkspace,
+    async prepareWorkspace(target) {
+      await appendBuildEvent({
+        buildRunId: target.buildRunId,
+        buildRevisionId: target.buildRevisionId,
+        eventType: 'revision.fast_edit_editing',
+        message: 'Inspecting UI components and applying your visual update.',
+        detail: { revisionNumber: target.revisionNumber },
+      });
+      return prepareWorkspace(target);
+    },
     async restoreWorkspace({ workspacePath, recovery }) {
       for (const changeSet of recovery.orderedChangeSets) {
         const resolved = await localBuildRevisionFastEditArtifactStore.resolve(
@@ -459,8 +468,16 @@ export const defaultBuildRevisionFastEditService =
     artifactStore: localBuildRevisionFastEditArtifactStore,
     applyDraft: (input) =>
       defaultBuildEditablePreviewSessionService.applyDraftChangeSet(input),
-    runChecks: (input) =>
-      defaultBuildEditablePreviewSessionService.runDraftChecks(input),
+    async runChecks(input) {
+      await appendBuildEvent({
+        buildRunId: input.buildRunId,
+        buildRevisionId: input.draftRevisionId,
+        eventType: 'revision.fast_edit_checking',
+        message: 'Preview updated — running quick checks.',
+        detail: { workspaceVersion: input.workspaceVersion },
+      });
+      return defaultBuildEditablePreviewSessionService.runDraftChecks(input);
+    },
     checkpoint,
     markValidated,
     async markRetryStarted({ buildRunId }) {

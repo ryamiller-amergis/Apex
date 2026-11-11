@@ -380,10 +380,19 @@ describe('buildRevisionService (TBI-026, PBI-030..032 / VT-13..17, VT-28..32)', 
     expect(h.feedbackTurns).toHaveLength(0);
   });
 
-  it('keeps screenshot-grounded revisions in intake so the agent can inspect the image', async () => {
+  it('routes screenshot-grounded revisions to the fast lane without reopening intake', async () => {
     const h = createRevisionHarness();
     h.seed();
-    h.deps.requestFastRevision = jest.fn();
+    h.deps.requestFastRevision = jest.fn(async () => ({
+      buildId: 'run-1',
+      revisionNumber: 2,
+      status: 'building' as const,
+      revisionsUsed: 1,
+      revisionsLimit: 5,
+      interviewId: 'iv-1',
+      chatThreadId: 'thread-1',
+      resumed: false,
+    }));
     const service = createBuildRevisionService(h.deps);
 
     await expect(
@@ -399,9 +408,13 @@ describe('buildRevisionService (TBI-026, PBI-030..032 / VT-13..17, VT-28..32)', 
           isSuperAdmin: false,
         },
       })
-    ).resolves.toMatchObject({ status: 'intake', revisionNumber: 2 });
+    ).resolves.toMatchObject({ status: 'building', revisionNumber: 2 });
 
-    expect(h.deps.requestFastRevision).not.toHaveBeenCalled();
+    expect(h.deps.requestFastRevision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        redactedFeedback: 'Match the spacing in the pasted screenshot.',
+      })
+    );
     expect(h.feedbackTurns).toHaveLength(0);
     expect(h.kickoffSends).toHaveLength(0);
   });

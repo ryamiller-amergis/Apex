@@ -2,6 +2,7 @@
  * buildPreviewArtifactService tests (sandbox preview bundles).
  */
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -29,24 +30,28 @@ describe('buildPreviewArtifactService', () => {
   });
 
   it('stores a tar.gz bundle, verifies the token, and rejects traversal paths', async () => {
-    const tmp = await fs.mkdtemp(path.join(process.cwd(), 'preview-tar-'));
-    const dist = path.join(tmp, 'dist');
-    await fs.mkdir(dist, { recursive: true });
-    await fs.writeFile(path.join(dist, 'index.html'), '<!doctype html><title>Preview</title>', 'utf8');
-    const archivePath = path.join(tmp, 'bundle.tar.gz');
-    await execFileAsync('tar', ['-czf', archivePath, '-C', dist, '.'], { windowsHide: true });
-    const archive = await fs.readFile(archivePath);
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'preview-tar-'));
+    try {
+      const dist = path.join(tmp, 'dist');
+      await fs.mkdir(dist, { recursive: true });
+      await fs.writeFile(path.join(dist, 'index.html'), '<!doctype html><title>Preview</title>', 'utf8');
+      const archivePath = path.join(tmp, 'bundle.tar.gz');
+      await execFileAsync('tar', ['-czf', archivePath, '-C', dist, '.'], { windowsHide: true });
+      const archive = await fs.readFile(archivePath);
 
-    const { token, previewUrl } = await storePreviewArchive({
-      buildRunId,
-      revisionNumber: 1,
-      commit: 'a'.repeat(40),
-      archive,
-    });
+      const { token, previewUrl } = await storePreviewArchive({
+        buildRunId,
+        revisionNumber: 1,
+        commit: 'a'.repeat(40),
+        archive,
+      });
 
-    expect(previewUrl).toBe(buildPreviewPublicUrl(buildRunId, token));
-    const manifest = await verifyPreviewToken(buildRunId, token);
-    expect(manifest?.revisionNumber).toBe(1);
-    expect(await resolvePreviewAssetPath(buildRunId, token, '../index.html')).toBeNull();
+      expect(previewUrl).toBe(buildPreviewPublicUrl(buildRunId, token));
+      const manifest = await verifyPreviewToken(buildRunId, token);
+      expect(manifest?.revisionNumber).toBe(1);
+      expect(await resolvePreviewAssetPath(buildRunId, token, '../index.html')).toBeNull();
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 });

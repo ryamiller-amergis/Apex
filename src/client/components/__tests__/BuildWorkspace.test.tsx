@@ -927,10 +927,15 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     expect(refetchChatThread).toHaveBeenCalled();
   });
 
-  it('pastes a screenshot into revision chat and sends it without saving a file first', async () => {
+  it('pastes a screenshot into revision composer and submits revision directly without triggering an intake confirmation turn', async () => {
     const send = jest.fn().mockResolvedValue(true);
     mockUseAgentChat.mockReturnValue({
-      messages: [],
+      messages: [
+        { id: 'm1', role: 'user', text: 'Build a todo list', ts: '2026-11-04T04:09:50.000Z' },
+        { id: 'm2', role: 'agent', text: 'Here is the plan.\n\n[[build-intake:confirm]]\nDoes this match?', ts: '2026-11-04T04:10:00.000Z' },
+        { id: 'm3', role: 'user', text: 'Match the spacing shown here', ts: '2026-11-04T05:00:01.000Z' },
+        { id: 'm4', role: 'agent', text: 'Does this match what you want? a. Confirm b. Change it', ts: '2026-11-04T05:00:10.000Z' },
+      ],
       streamingText: '',
       isRunning: false,
       isSending: false,
@@ -946,7 +951,34 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     });
     mockUseBuild.mockReturnValue({
       data: baseDetail({
-        build: { ...baseDetail().build, status: 'preview_ready' },
+        build: {
+          ...baseDetail().build,
+          status: 'preview_ready',
+          currentRevisionNumber: 2,
+        },
+        revisions: [
+          ...baseDetail().revisions,
+          {
+            number: 2,
+            createdAt: '2026-11-04T05:00:00.000Z',
+            classification: 'small',
+            deploymentStatus: 'not_started',
+            previewUrl: 'http://127.0.0.1:32780/',
+            feedback: 'Match the spacing shown here',
+          },
+        ],
+        revision: {
+          attemptId: 'attempt-2',
+          revisionNumber: 2,
+          status: 'edit',
+          route: 'fast_edit',
+          requestedAt: '2026-11-04T05:00:00.000Z',
+          previewUpdatedAt: null,
+          checksCompletedAt: null,
+          checkSummary: null,
+          error: null,
+          workspaceVersion: 1,
+        },
       }),
       isLoading: false,
       refetch: jest.fn(),
@@ -961,6 +993,15 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
         />
       </MemoryRouter>
     );
+
+    // Follow-up revision messages do not appear above "The original build finished"
+    expect(screen.getAllByTestId('build-workspace-user-msg')).toHaveLength(1);
+    expect(screen.getByTestId('build-workspace-user-msg')).toHaveTextContent(
+      'Build a todo list'
+    );
+    expect(
+      screen.getByTestId('build-workspace-revision-2-headline')
+    ).toHaveTextContent('Applying your visual update to the preview…');
 
     const input = screen.getByTestId('build-workspace-composer-input');
     const screenshot = new File([new Uint8Array([137, 80, 78, 71])], '', {
@@ -988,25 +1029,12 @@ describe('BuildWorkspace (Brainstorm-style unified build UX)', () => {
     fireEvent.click(screen.getByTestId('build-workspace-composer-send'));
 
     await waitFor(() =>
-      expect(send).toHaveBeenCalledWith(
-        'Match the spacing shown here',
-        expect.objectContaining({
-          attachments: [
-            expect.objectContaining({
-              type: 'image/png',
-              encoding: 'base64',
-            }),
-          ],
-        })
-      )
+      expect(revisionMutateAsync).toHaveBeenCalledWith({
+        feedback: 'Match the spacing shown here',
+        hasAttachments: true,
+      })
     );
-    expect(revisionMutateAsync).toHaveBeenCalledWith({
-      feedback: 'Match the spacing shown here',
-      hasAttachments: true,
-    });
-    expect(
-      revisionMutateAsync.mock.invocationCallOrder[0]
-    ).toBeLessThan(send.mock.invocationCallOrder[0]);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('starts an exact-revision local preview from the preview panel', async () => {

@@ -108,7 +108,8 @@ Record requester-effort signals:
 - number of technical questions or choices exposed to the requester;
 - time from confirmation to build start;
 - user interventions required after confirmation;
-- feedback rounds and whether each round preserved prior context.
+- feedback rounds and whether each round preserved prior context;
+- whether any follow-up revision (`revision >= 2`) re-entered `/build-intake` confirmation, rendered above the original build card, bypassed `fast_edit` due to screenshot attachments, or stalled in an unstarted `intake`/`planning` state.
 
 ### Execution contract
 
@@ -203,15 +204,25 @@ For the target template, inspect:
 Check:
 
 - request → brief → requirements → prompt → tests → output traceability;
-- whether end-user visual polish meets the product-quality bar: centered layout geometry (`AppShell` main container capped at `<= 960px` with `alignSelf: 'center'`), brand overrides in `overrides.ts`, and clear hierarchy (`PageHeader`, `StatGrid`, `DataChartCard`, `NotificationCenter`, `ContentSurface`);
-- whether seeded data is tailored to the requested domain (never shipping `Item 1`, `Todo 1`, `project-name`, or `My App`);
-- whether interactive journeys (charts with timeframe filters, notifications with unread counts and mark-as-read, and AI skill insights grounded in database + third-party connector feeds) work end-to-end;
+- **two-part user-perspective verdict (Visual Craft & Component Quality vs. Product Fit for the Prompt)**:
+  1. **Visual Craft & Component Quality (0–10)**: whether the rendered UI looks like a finished product — centered layout geometry (`AppShell` main container capped at `<= 960px` with `alignSelf: 'center'`), WCAG AA brand overrides in `overrides.ts`, clear hierarchy (`PageHeader`, `StatGrid`, `DataChartCard`, `NotificationCenter`, `ContentSurface`), and responsive light/dark styling;
+  2. **Product Fit for the Prompt (0–10)**: whether the delivered app actually *is* the product the requester asked for, with zero unrequested industry/demo chrome leaking from the starter template:
+     - **Domain & brand coherence**: the header, page title, KPI cards, charts, and copy all speak the requester's domain and project name (for example, an ATS or todo workspace), never a leftover starter brand or unrelated industry (such as "Northstar Ops", warehouse fulfillment batches, or dock alerts when the user asked for a todo list);
+     - **Navigation hygiene**: primary navigation (`apps/web/src/app/App.tsx`) exposes only routes relevant to the requested application plus essential account frame (`Home` and `Profile`), never pre-mounted demo tabs (`Notifications`, `AI Insights`, `Settings`) that the requester did not ask for;
+     - **Home-page ownership**: when the user asks to build a feature on the home page, the home route (`/`) is replaced by or centered around that feature rather than wedging the feature into the middle of pre-existing starter KPI cards and charts;
+     - **Alive on first load**: the requested feature itself is seeded with 3–5 realistic domain records on first load (both in the database/API and preview store) so the user never lands on `Active: 0 / Total: 0` ("No matching items") while unrequested demo widgets show fake numbers;
+- whether seeded data is tailored to the requested domain (never shipping `Item 1`, `Todo 1`, `project-name`, `My App`, or leftover starter industry copy);
+- whether interactive journeys (charts with timeframe filters, notifications with unread counts and mark-as-read, and AI skill insights grounded in database + third-party connector feeds, when requested) work end-to-end;
 - whether the requester could remain in plain product language from request through refinement;
 - whether Apex chose sensible full-stack defaults instead of asking for technical implementation choices;
 - whether the UI distinguished “build now” from “discuss first” intent without adding ceremony;
 - whether progress messages explained visible outcomes rather than internal task mechanics;
 - whether an interactive preview appeared as early as safely possible and remained easy to revisit;
-- whether feedback could target a visible element or behavior and produce an incremental revision;
+- **Conversational Revision & Fast-Edit UX Contract (`revision >= 2`)**:
+  - **Zero-confirmation revisions**: once the original build reaches preview, follow-up revision requests (including requests with pasted screenshots) never re-enter `/build-intake` or ask `"Does this match what you want? a. Confirm b. Change it"` — they transition immediately to active execution (`building`);
+  - **Chronological thread ordering**: only `Revision 1` intake turns appear above `"The original build finished. Each change you asked for is shown below."`; all `Revision 2+` requests and their output appear chronologically below the original build card inside `BuildRevisionSections`, never duplicated above the original build card;
+  - **Fast-edit studio execution for visual updates**: visual, layout, sizing, alignment, spacing, copy, and component updates (with or without screenshots) execute through `buildRevisionFastEditService` (`classify` → `edit` → `apply` → `checking` → `ready`) against the warm Studio preview rather than stalling in `intake`/`planning` or running a full cloud build;
+  - **Live step-by-step revision output**: the active `Revision N` card displays concrete stage headlines (`"Applying your visual update to the preview…"`, `"Preview updated — running quick checks…"`, `"The preview was updated with this change."`) and opens its live updates drawer while running so the user sees output happen in real time;
 - whether version history, rollback, and prior decisions made experimentation safe;
 - whether acceptance, publishing, pull-request creation, and sharing felt like one coherent finish;
 - duplicated or conflicting instructions across the generated prompt, implementer skill, repository rules, and template docs;
@@ -345,6 +356,13 @@ The JSON report must use this top-level shape:
     "raw": null,
     "capped": null,
     "verdict": "efficient | targeted-tuning | material-waste | redesign-needed | not-scorable",
+    "userPerspective": {
+      "visualCraftScoreOutOf10": null,
+      "productFitScoreOutOf10": null,
+      "unrequestedTemplateScopeLeaked": false,
+      "requestedFeatureSeededOnFirstLoad": null,
+      "summary": "string"
+    },
     "dimensions": []
   },
   "measurements": {

@@ -332,6 +332,8 @@ function formatExperienceConcept(concept: BuildExperienceConcept): string[] {
     `- Signature interaction: ${concept.signatureInteraction}`,
     `- Realistic content: ${concept.contentGuidance}`,
     '- Do not ship:',
+    '  - Leftover starter dashboard widgets, unrelated industry copy, or unrequested navigation tabs when the user asked for a focused home-page feature.',
+    "  - An unseeded (`0 items`) primary feature on first load — always seed 3–5 realistic domain records into the new feature's store/API so the first render is populated.",
     ...concept.antiGeneric.map((line) => `  - ${line}`),
   ];
 }

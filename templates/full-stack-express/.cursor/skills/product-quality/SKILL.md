@@ -32,6 +32,7 @@ Read these before editing. Stop if any path is missing.
 | PQ-R05 | Use `NotificationCenter` and `NotificationList` for in-app alerts with an unread count badge, category filter buttons, mark-as-read actions, and loading/empty/error states.                                            | component     |
 | PQ-R06 | Ground AI skill insights (`POST /api/v1/insights/analyze`) in both database records and configurable third-party connector feeds, returning structured findings, explicit source citations, and recommended actions.    | api           |
 | PQ-R07 | Verify rendered layout geometry and interactive states at both phone (`375px`) and desktop (`1280px`) widths with zero console, page, or 5xx errors.                                                                    | accessibility |
+| PQ-R08 | **Product fit & scope discipline (no starter leakage)**: When the user asks to build a feature on the home page (`/`), make the home page *be* that feature (replace starter overview KPIs/charts that belong to another industry), set `brandConfig` (`apps/web/src/theme/overrides.ts`) and the header `appName` to the requested application/project identity, keep `navItems` (`apps/web/src/app/App.tsx`) limited to `Home`, `Profile`, and routes the user actually asked for, and seed 3–5 realistic starter records into the new feature's store/database on first load so the user never lands on an empty `0 items` state. | component |
 
 ## Review checklist
 

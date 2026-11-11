@@ -198,7 +198,7 @@ export const BuildSandboxPreview: React.FC<BuildSandboxPreviewProps> = ({
         <div className={styles.sandboxViewport}>
           {showIframe ? (
             <iframe
-              key={reloadNonce}
+              key={`${reloadNonce}:${revisionProgress?.workspaceVersion ?? 0}:${revisionProgress?.previewUpdatedAt ?? ''}`}
               className={styles.previewFrame}
               src={livePreviewUrl ?? undefined}
               title="Build preview"

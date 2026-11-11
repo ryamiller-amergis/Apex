@@ -21,6 +21,7 @@ import type {
   BuildEventView,
   BuildRevisionSummary,
 } from '../../shared/types/buildView';
+import type { BuildRevisionFastEditProgress } from '../../shared/types/buildRevision';
 import { friendlyToolActivityLabel } from '../../shared/utils/chatProgressCopy';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import {
@@ -32,6 +33,7 @@ import { useChatAttachments } from '../hooks/useChatAttachments';
 import {
   BuildApiError,
   isBuildLive,
+  isFastEditLive,
   useAcceptBuild,
   useBuild,
   useBuildEvents,
@@ -293,6 +295,45 @@ function pastRevisionHeadline(revision: BuildRevisionSummary): string {
   return 'A later revision replaced this one.';
 }
 
+function currentRevisionHeadline(input: {
+  revisionNumber: number;
+  currentHeadline: string;
+  fastEditProgress?: BuildRevisionFastEditProgress | null;
+}): string {
+  const { revisionNumber, currentHeadline, fastEditProgress } = input;
+  if (fastEditProgress && fastEditProgress.revisionNumber === revisionNumber) {
+    switch (fastEditProgress.status) {
+      case 'classify':
+      case 'edit':
+        return 'Applying your visual update to the preview…';
+      case 'apply':
+      case 'checking':
+        return 'Preview updated — running quick checks…';
+      case 'ready':
+        return 'The preview was updated with this change.';
+      case 'escalate':
+        return 'Applying this change with the full build agent…';
+      case 'rollback':
+        return 'Rolling back the preview to the last validated revision…';
+      case 'failed':
+        return (
+          fastEditProgress.error?.message ??
+          'The preview update needs attention.'
+        );
+      case 'superseded':
+        break;
+      default: {
+        const unhandled: never = fastEditProgress.status;
+        return unhandled;
+      }
+    }
+  }
+  if (/^Preparing your build\.?$/i.test(currentHeadline)) {
+    return 'Applying your requested change…';
+  }
+  return currentHeadline;
+}
+
 /** One section per requested change, below the original build's details. */
 export function BuildRevisionSections({
   revisions,
@@ -300,12 +341,14 @@ export function BuildRevisionSections({
   currentRevisionNumber,
   currentHeadline,
   showSpinner,
+  fastEditProgress,
 }: {
   revisions: readonly BuildRevisionSummary[];
   events: readonly BuildEventView[];
   currentRevisionNumber: number;
   currentHeadline: string;
   showSpinner: boolean;
+  fastEditProgress?: BuildRevisionFastEditProgress | null;
 }) {
   const queued = events.filter((ev) => ev.kind === 'revision.queued').length;
   const started = events.filter(
@@ -322,6 +365,13 @@ export function BuildRevisionSections({
         const revisionEvents = events.filter(
           (ev) => ev.revisionNumber === revision.number
         );
+        const headline = isCurrent
+          ? currentRevisionHeadline({
+              revisionNumber: revision.number,
+              currentHeadline,
+              fastEditProgress,
+            })
+          : pastRevisionHeadline(revision);
         return (
           <article
             key={revision.number}
@@ -345,7 +395,7 @@ export function BuildRevisionSections({
                     'data-testid': `build-workspace-revision-${revision.number}-headline`,
                   }}
                 >
-                  {isCurrent ? currentHeadline : pastRevisionHeadline(revision)}
+                  {headline}
                 </span>
               </p>
               {revision.browserVerification && (
@@ -396,7 +446,10 @@ export function BuildRevisionSections({
                 </div>
               )}
               {revisionEvents.length > 0 && (
-                <details className={styles.traceDrawer}>
+                <details
+                  className={styles.traceDrawer}
+                  open={isCurrent && showSpinner ? true : undefined}
+                >
                   <summary className={styles.traceSummary}>
                     {`Revision ${revision.number} details · ${revisionEvents.length} ${revisionEvents.length === 1 ? 'update' : 'updates'}`}
                   </summary>
@@ -740,7 +793,8 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const [logoError, setLogoError] = useState<string | null>(null);
   const [localPreviewStarted, setLocalPreviewStarted] = useState(false);
   const [optimisticPrompt, setOptimisticPrompt] = useState<string | null>(null);
-  const [optimisticStartingBuild, setOptimisticStartingBuild] = useState(false);
+  const [optimisticConfirmedRevision, setOptimisticConfirmedRevision] =
+    useState<number | null>(null);
   const {
     attachments,
     attachmentError,
@@ -834,9 +888,52 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     return () => window.clearInterval(timer);
   }, [buildStatus, chatThreadId, refetchChatThread]);
 
+  const currentRevisionNumber = detail?.build.currentRevisionNumber ?? 1;
+  const hasRevisionSections = currentRevisionNumber > 1;
+  const optimisticStartingBuild =
+    optimisticConfirmedRevision !== null &&
+    optimisticConfirmedRevision === currentRevisionNumber &&
+    buildStatus === 'intake';
+
+  const initialIntakeMessages = useMemo(() => {
+    const allMessages = chatSession.messages ?? [];
+    const followUpRevisions = (detail?.revisions ?? []).filter(
+      (rev) => rev.number > 1
+    );
+    if (followUpRevisions.length === 0) return allMessages;
+
+    const followUpFeedback = new Set(
+      followUpRevisions
+        .map((rev) => rev.feedback?.trim())
+        .filter((text): text is string => Boolean(text))
+    );
+    const earliestFollowUpMs = Math.min(
+      ...followUpRevisions
+        .map((rev) => Date.parse(rev.createdAt))
+        .filter((ms) => !Number.isNaN(ms))
+    );
+
+    const cutoffIdx = allMessages.findIndex((msg) => {
+      if (
+        msg.role === 'user' &&
+        followUpFeedback.has(requesterText(msg.text))
+      ) {
+        return true;
+      }
+      const msgMs = Date.parse(msg.ts);
+      return (
+        Number.isFinite(earliestFollowUpMs) &&
+        !Number.isNaN(msgMs) &&
+        msgMs >= earliestFollowUpMs - 2_000
+      );
+    });
+
+    return cutoffIdx >= 0 ? allMessages.slice(0, cutoffIdx) : allMessages;
+  }, [chatSession.messages, detail?.revisions]);
+
   const { turns: rawTurns, pendingActivity } = useMemo(
-    () => groupChatMessagesIntoTurns(chatSession.messages ?? []),
-    [chatSession.messages]
+    () => groupChatMessagesIntoTurns(initialIntakeMessages),
+    [initialIntakeMessages]
   );
 
   const turns = useMemo<GroupedChatTurn[]>(() => {
@@ -890,15 +987,16 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       (chatThreadQuery.data?.status === 'running' ||
         Boolean(chatThreadQuery.data?.activeRunId)));
   const isTurnStreaming =
-    isStartingFirstTurn ||
-    chatSession.isRunning ||
-    chatSession.isSending ||
-    chatSession.isPreparing ||
-    chatSession.isAwaitingAgentResponse ||
-    Boolean(streamingText) ||
-    pendingActivity.length > 0;
+    !hasRevisionSections &&
+    (isStartingFirstTurn ||
+      chatSession.isRunning ||
+      chatSession.isSending ||
+      chatSession.isPreparing ||
+      chatSession.isAwaitingAgentResponse ||
+      Boolean(streamingText) ||
+      pendingActivity.length > 0);
   // The optimistic flag bridges the gap between "Confirm" and the first status
-  // change. A successful confirm never clears it, so it must not outlive intake.
+  // change on that exact revision, so it never outlives intake or leaks to a later revision.
   const optimisticStartPending =
     optimisticStartingBuild && buildStatus === 'intake';
   const intakeBusy =
@@ -911,8 +1009,6 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
   const live = isBuildLive(effectiveBuildStatus);
   const tasks = detail?.currentRevision?.tasks ?? [];
   const events = eventsQuery.data?.events ?? [];
-  const currentRevisionNumber = detail?.build.currentRevisionNumber ?? 1;
-  const hasRevisionSections = currentRevisionNumber > 1;
   const originalBuildEvents = events.filter(
     (ev) =>
       (ev.revisionNumber == null || ev.revisionNumber <= 1) &&
@@ -987,14 +1083,14 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
       return;
     }
     setActionError(null);
-    setOptimisticStartingBuild(true);
+    setOptimisticConfirmedRevision(currentRevisionNumber);
     try {
       await confirmIntakeMutation.mutateAsync({});
       await buildQuery.refetch();
       await eventsQuery.refetch();
       void refetchChatThread();
     } catch (err) {
-      setOptimisticStartingBuild(false);
+      setOptimisticConfirmedRevision(null);
       setActionError(
         err instanceof Error ? err.message : 'Could not start planning.'
       );
@@ -1003,6 +1099,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     buildId,
     buildQuery,
     confirmIntakeMutation,
+    currentRevisionNumber,
     detail?.logoReview?.approvedCandidateId,
     eventsQuery,
     generateLogoMutation,
@@ -1143,19 +1240,6 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
           feedback: text,
           ...(outgoingAttachments.length > 0 ? { hasAttachments: true } : {}),
         });
-        if (outgoingAttachments.length > 0) {
-          if (!chatThreadId) {
-            throw new Error('This build has no collaborator chat thread.');
-          }
-          const sent = await chatSession.send(text, {
-            model: selectedModel,
-            attachments: outgoingAttachments,
-          });
-          if (!sent) {
-            setDraft(draft);
-            return;
-          }
-        }
         if (outgoingAttachments.length > 0) clearAttachments();
         if (rememberForProject && buildId) {
           await fetch(
@@ -1168,7 +1252,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
             }
           );
         }
-        await buildQuery.refetch();
+        await Promise.all([buildQuery.refetch(), eventsQuery.refetch()]);
         void refetchChatThread();
       } catch (err) {
         setDraft(text);
@@ -1190,6 +1274,7 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
     clearAttachments,
     draft,
     effectiveRepo,
+    eventsQuery,
     generateLogoMutation,
     handleConfirmAndBuild,
     isNewMode,
@@ -1831,8 +1916,9 @@ export const BuildWorkspace: React.FC<BuildWorkspaceProps> = ({
                   events={events}
                   currentRevisionNumber={currentRevisionNumber}
                   currentHeadline={progress.headline}
+                  fastEditProgress={fastEditProgress}
                   showSpinner={
-                    live &&
+                    (live || isFastEditLive(fastEditProgress ?? undefined)) &&
                     !isTurnStreaming &&
                     !progress.stale &&
                     !progress.failed
