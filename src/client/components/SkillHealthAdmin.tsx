@@ -189,52 +189,54 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, showFeedback, feedback
 
       {showFeedback && <SkillFeedbackSummary feedback={feedback} />}
 
-      <section className={styles.card}>
+      <section className={`${styles.card} ${styles.wideCard}`}>
         <h4 className={styles.cardTitle}>SKILL.md versions</h4>
-        <table className={styles.versionTable} data-testid="skill-health-versions">
-          <thead>
-            <tr>
-              <th scope="col">Version</th>
-              <th scope="col">Used</th>
-              <th scope="col">Docs</th>
-              <th scope="col">Avg score</th>
-              <th scope="col">Pass rate</th>
-              <th scope="col">Accepted</th>
-              {showFeedback && <th scope="col">Feedback</th>}
-              {showFeedback && <th scope="col">Human avg</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {skill.versions.map((version) => (
-              <tr
-                key={version.skillSha256 ?? 'unversioned'}
-                data-testid={`skill-health-version-${version.skillSha256?.slice(0, 8) ?? 'unversioned'}`}
-              >
-                <td>
-                  {version.skillSha256 ? (
-                    <span className={styles.skillPath} title={version.skillSha256}>
-                      {version.skillSha256.slice(0, 8)}
-                    </span>
-                  ) : (
-                    <span className={styles.muted}>Unversioned</span>
-                  )}
-                </td>
-                <td>
-                  {version.firstSeen.slice(0, 10)} – {version.lastSeen.slice(0, 10)}
-                </td>
-                <td>
-                  {version.documents}
-                  {!version.sufficientSample && <span className={styles.muted}> (too few)</span>}
-                </td>
-                <td>{withRange(number(version.averageScore), version.scoreInterval, (v) => v.toFixed(1))}</td>
-                <td>{withRange(percent(version.passRate), version.passRateInterval, (v) => percent(v))}</td>
-                <td>{percent(version.acceptanceRate)}</td>
-                {showFeedback && <td>{version.humanEvents}</td>}
-                {showFeedback && <td>{number(version.humanAverageScore)}</td>}
+        <div className={styles.tableScroll}>
+          <table className={styles.versionTable} data-testid="skill-health-versions">
+            <thead>
+              <tr>
+                <th scope="col">Version</th>
+                <th scope="col">Used</th>
+                <th scope="col">Docs</th>
+                <th scope="col">Avg score</th>
+                <th scope="col">Pass rate</th>
+                <th scope="col">Accepted</th>
+                {showFeedback && <th scope="col">Feedback</th>}
+                {showFeedback && <th scope="col">Human avg</th>}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {skill.versions.map((version) => (
+                <tr
+                  key={version.skillSha256 ?? 'unversioned'}
+                  data-testid={`skill-health-version-${version.skillSha256?.slice(0, 8) ?? 'unversioned'}`}
+                >
+                  <td>
+                    {version.skillSha256 ? (
+                      <span className={styles.skillPath} title={version.skillSha256}>
+                        {version.skillSha256.slice(0, 8)}
+                      </span>
+                    ) : (
+                      <span className={styles.muted}>Unversioned</span>
+                    )}
+                  </td>
+                  <td>
+                    {version.firstSeen.slice(0, 10)} – {version.lastSeen.slice(0, 10)}
+                  </td>
+                  <td>
+                    {version.documents}
+                    {!version.sufficientSample && <span className={styles.muted}> (too few)</span>}
+                  </td>
+                  <td>{withRange(number(version.averageScore), version.scoreInterval, (v) => v.toFixed(1))}</td>
+                  <td>{withRange(percent(version.passRate), version.passRateInterval, (v) => percent(v))}</td>
+                  <td>{percent(version.acceptanceRate)}</td>
+                  {showFeedback && <td>{version.humanEvents}</td>}
+                  {showFeedback && <td>{number(version.humanAverageScore)}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className={styles.card} data-testid="skill-health-efficiency">
@@ -262,30 +264,32 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, showFeedback, feedback
           </div>
         </div>
         {skill.models.length > 0 && (
-          <table className={styles.versionTable} data-testid="skill-health-models">
-            <thead>
-              <tr>
-                <th scope="col">Model</th>
-                <th scope="col">Effort</th>
-                <th scope="col">Docs</th>
-                <th scope="col">Avg score</th>
-                <th scope="col">Accepted</th>
-                <th scope="col">Cost / doc</th>
-              </tr>
-            </thead>
-            <tbody>
-              {skill.models.map((row) => (
-                <tr key={`${row.model ?? ''}|${row.effort ?? ''}`}>
-                  <td>{row.model ?? <span className={styles.muted}>Not recorded</span>}</td>
-                  <td>{row.effort ?? '—'}</td>
-                  <td>{row.documents}</td>
-                  <td>{number(row.averageScore)}</td>
-                  <td>{percent(row.acceptanceRate)}</td>
-                  <td>{money(row.costPerDocument)}</td>
+          <div className={styles.tableScroll}>
+            <table className={styles.versionTable} data-testid="skill-health-models">
+              <thead>
+                <tr>
+                  <th scope="col">Model</th>
+                  <th scope="col">Effort</th>
+                  <th scope="col">Docs</th>
+                  <th scope="col">Avg score</th>
+                  <th scope="col">Accepted</th>
+                  <th scope="col">Cost / doc</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {skill.models.map((row) => (
+                  <tr key={`${row.model ?? ''}|${row.effort ?? ''}`}>
+                    <td>{row.model ?? <span className={styles.muted}>Not recorded</span>}</td>
+                    <td>{row.effort ?? '—'}</td>
+                    <td>{row.documents}</td>
+                    <td>{number(row.averageScore)}</td>
+                    <td>{percent(row.acceptanceRate)}</td>
+                    <td>{money(row.costPerDocument)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 

@@ -76,10 +76,22 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
   padding: 16px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-secondary);
+}
+
+/* Spanning two tracks when only one fits would add an implicit column and overflow the page. */
+@media (min-width: 1200px) {
+  .wideCard {
+    grid-column: span 2;
+  }
+}
+
+.tableScroll {
+  overflow-x: auto;
 }
 
 .cardHeader {
