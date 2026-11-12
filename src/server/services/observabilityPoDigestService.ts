@@ -1,38 +1,404 @@
 /**
  * Product Owner Observability Digest Service & Twice-Daily Scheduler (06:00 AM & 06:00 PM).
  *
- * Synthesizes platform telemetry across Today, 1d, 7d, 14d, 30d, and 60d windows
- * into the six Product Owner core signals defined in `.cursor/skills/observability-po-digest/SKILL.md`:
- *  1. Top users
- *  2. Most common exceptions
- *  3. Retention dropped per module
- *  4. AI summary of why there could be drops
- *  5. Top modules
- *  6. AI summary of how we can drive adoption
+ * Queries PostgreSQL (`trace_events`, `trace_path_rollups`, `app_users`) via Drizzle
+ * across Today, 1d, 7d, 14d, 30d, and 60d trend windows, and executes the
+ * `.cursor/skills/observability-po-digest/SKILL.md` skill with the selected model
+ * (e.g. `composer-2.5`) and reasoning effort (`low`, `medium`, `high`).
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { desc, eq, gte, sql } from 'drizzle-orm';
+import { db as defaultDb } from '../db/drizzle';
+import {
+  appGroupMembers,
+  appGroups,
+  appRoles,
+  appUserRoles,
+  appUsers,
+  traceEvents,
+  tracePathRollups,
+} from '../db/schema';
 import type { EffortLevel } from '../../shared/types/effort';
 import {
   OBSERVABILITY_PO_DEFAULT_EFFORT,
   OBSERVABILITY_PO_DEFAULT_MODEL,
   OBSERVABILITY_PO_SCHEDULE_HOURS,
-  OBSERVABILITY_TREND_WINDOWS,
+  OBSERVABILITY_PO_SKILL_PATH,
+  OBSERVABILITY_TREND_WINDOW_LABELS,
   type GenerateObservabilityPoDigestRequest,
+  type ObservabilityAdoptionSummary,
   type ObservabilityDigestSlot,
+  type ObservabilityDropReasonsSummary,
   type ObservabilityPoDigestResponse,
   type ObservabilityPoDigestSnapshot,
   type ObservabilityTrendWindow,
 } from '../../shared/types/observability';
 import {
+  WINDOW_BASELINE_LABELS,
+  aggregateTelemetryFromDatabaseRows,
   buildDefaultScheduleSummary,
+  buildDefaultSeedTelemetryRows,
+  buildDigestSnapshotFromAggregates,
   computeSlotTimestamps,
   isObservabilityTrendWindow,
   normalizeObservabilityEffort,
   normalizeObservabilityModel,
   synthesizePoDigestSnapshot,
+  type RawDigestRollupRow,
+  type RawDigestTraceEventRow,
+  type RawDigestUserRow,
 } from '../../shared/utils/observabilityPoDigest';
+import { buildCursorModelSelection } from './agentEffortResolver';
+import { OBSERVABILITY_RETENTION_DAYS } from './observabilityOperationsService';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export { isObservabilityTrendWindow, synthesizePoDigestSnapshot };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_DIGEST_EVENT_ROWS = 10_000;
+
+export interface ObservabilityPoSkillAiSynthesisResult {
+  headline?: string;
+  dropReasonsSummary?: ObservabilityDropReasonsSummary;
+  adoptionRecommendations?: ObservabilityAdoptionSummary;
+}
+
+export interface ObservabilityPoAiProvider {
+  synthesizeDigest(input: {
+    skillMarkdown: string;
+    prompt: string;
+    model: string;
+    effort: EffortLevel;
+    project: string;
+    window: ObservabilityTrendWindow;
+  }): Promise<ObservabilityPoSkillAiSynthesisResult | null>;
+}
+
+export interface ObservabilityPoTelemetrySource {
+  loadTelemetry(
+    project: string,
+    now: Date,
+  ): Promise<{
+    events: RawDigestTraceEventRow[];
+    rollups: RawDigestRollupRow[];
+    users: RawDigestUserRow[];
+    fromLiveDatabase: boolean;
+  }>;
+}
+
+let aiProviderOverride: ObservabilityPoAiProvider | null = null;
+let telemetrySourceOverride: ObservabilityPoTelemetrySource | null = null;
+
+export function setObservabilityPoAiProviderForTests(
+  provider: ObservabilityPoAiProvider | null,
+): void {
+  aiProviderOverride = provider;
+}
+
+export function setObservabilityPoTelemetrySourceForTests(
+  source: ObservabilityPoTelemetrySource | null,
+): void {
+  telemetrySourceOverride = source;
+}
+
+export function loadObservabilityPoSkillMarkdown(): string {
+  const fullPath = path.join(process.cwd(), OBSERVABILITY_PO_SKILL_PATH);
+  try {
+    return fs.readFileSync(fullPath, 'utf8');
+  } catch {
+    return `# Observability Product Owner Digest (${OBSERVABILITY_PO_SKILL_PATH})`;
+  }
+}
+
+function extractJsonObject(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim();
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fence ? fence[1]!.trim() : trimmed;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(candidate.slice(start, end + 1));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function buildObservabilityPoSkillPrompt(input: {
+  skillMarkdown: string;
+  project: string;
+  window: ObservabilityTrendWindow;
+  model: string;
+  effort: EffortLevel;
+  slot: ObservabilityDigestSlot;
+  aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
+}): string {
+  const { skillMarkdown, project, window, model, effort, slot, aggregated } = input;
+  const windowLabel = OBSERVABILITY_TREND_WINDOW_LABELS[window];
+  const baselineLabel = WINDOW_BASELINE_LABELS[window];
+
+  return [
+    skillMarkdown,
+    '',
+    '## Live PostgreSQL Telemetry Rollup Input',
+    '',
+    `- **Project:** ${project}`,
+    `- **Trend Window:** ${window} (${windowLabel} — ${baselineLabel})`,
+    `- **Schedule Slot:** ${slot}`,
+    `- **Model:** ${model}`,
+    `- **Reasoning Effort:** ${effort}`,
+    '',
+    '### Aggregated Telemetry Signals from PostgreSQL (`trace_events`, `trace_path_rollups`, `app_users`)',
+    '```json',
+    JSON.stringify(
+      {
+        kpis: aggregated.kpis,
+        topUsers: aggregated.topUsers,
+        commonExceptions: aggregated.commonExceptions,
+        moduleRetentionDrops: aggregated.moduleRetentionDrops,
+        topModules: aggregated.topModules,
+      },
+      null,
+      2,
+    ),
+    '```',
+    '',
+    'Return ONLY a valid JSON object containing `headline`, `dropReasonsSummary` (`headline`, `narrative`, `findings`), and `adoptionRecommendations` (`headline`, `narrative`, `recommendations`).',
+  ].join('\n');
+}
+
+function defaultCursorSkillAiProvider(): ObservabilityPoAiProvider {
+  return {
+    async synthesizeDigest({ prompt, model, effort }) {
+      const apiKey = process.env.CURSOR_API_KEY?.trim();
+      if (
+        !apiKey ||
+        process.env.NODE_ENV === 'test' ||
+        process.env.E2E_MODE === 'true'
+      ) {
+        return null;
+      }
+
+      let agent: { [Symbol.asyncDispose]?: () => Promise<void> } | null = null;
+      try {
+        const { Agent } = await import('@cursor/sdk');
+        const created = await Agent.create({
+          apiKey,
+          model: buildCursorModelSelection(model, effort),
+        });
+        agent = created;
+        const run = await created.send(prompt);
+        let text = '';
+        if (run.supports('stream')) {
+          for await (const event of run.stream()) {
+            if (event.type === 'assistant') {
+              for (const block of event.message.content) {
+                if (block.type === 'text') {
+                  text += block.text;
+                }
+              }
+            }
+          }
+        } else {
+          const finished = await run.wait();
+          text = typeof finished === 'object' && finished ? JSON.stringify(finished) : '';
+        }
+
+        const parsed = extractJsonObject(text);
+        if (!parsed) return null;
+
+        const dropReasons = parsed.dropReasonsSummary as
+          | ObservabilityDropReasonsSummary
+          | undefined;
+        const adoption = parsed.adoptionRecommendations as
+          | ObservabilityAdoptionSummary
+          | undefined;
+
+        return {
+          headline: typeof parsed.headline === 'string' ? parsed.headline : undefined,
+          dropReasonsSummary:
+            dropReasons &&
+            typeof dropReasons.headline === 'string' &&
+            Array.isArray(dropReasons.findings)
+              ? dropReasons
+              : undefined,
+          adoptionRecommendations:
+            adoption &&
+            typeof adoption.headline === 'string' &&
+            Array.isArray(adoption.recommendations)
+              ? adoption
+              : undefined,
+        };
+      } catch (err) {
+        console.warn(
+          '[observabilityPoDigest] live Cursor SDK skill synthesis fell back to deterministic telemetry synthesis:',
+          err instanceof Error ? err.message : String(err),
+        );
+        return null;
+      } finally {
+        await agent?.[Symbol.asyncDispose]?.().catch(() => {});
+      }
+    },
+  };
+}
+
+/**
+ * Query PostgreSQL `trace_events`, `trace_path_rollups`, and `app_users` via Drizzle.
+ * Never selects raw `trace_events.details` — only `details->>'message'` is projected.
+ */
+export async function queryDatabaseTelemetryForPoDigest(
+  project: string,
+  now = new Date(),
+): Promise<{
+  events: RawDigestTraceEventRow[];
+  rollups: RawDigestRollupRow[];
+  users: RawDigestUserRow[];
+  fromLiveDatabase: boolean;
+}> {
+  if (telemetrySourceOverride) {
+    return telemetrySourceOverride.loadTelemetry(project, now);
+  }
+
+  const hasDatabaseUrl = Boolean(
+    process.env.DATABASE_URL?.trim() || process.env.TEST_DATABASE_URL?.trim(),
+  );
+  if (!hasDatabaseUrl && process.env.NODE_ENV === 'test') {
+    const seed = buildDefaultSeedTelemetryRows(now);
+    return {
+      ...seed,
+      fromLiveDatabase: false,
+    };
+  }
+
+  const cutoffMs = now.getTime() - OBSERVABILITY_RETENTION_DAYS * DAY_MS;
+  const cutoffIso = new Date(cutoffMs).toISOString();
+  const cutoffDay = cutoffIso.slice(0, 10);
+
+  try {
+    const [rawEvents, rawRollups, rawUsers, rawGroupMembers, rawUserRoles] = await Promise.all([
+      defaultDb
+        .select({
+          id: traceEvents.id,
+          eventType: traceEvents.eventType,
+          occurredAt: traceEvents.occurredAt,
+          actorUserId: traceEvents.actorUserId,
+          projectId: traceEvents.projectId,
+          sessionId: traceEvents.sessionId,
+          routeTemplate: traceEvents.routeTemplate,
+          httpMethod: traceEvents.httpMethod,
+          statusCode: traceEvents.statusCode,
+          durationMs: traceEvents.durationMs,
+          severity: traceEvents.severity,
+          message: sql<string | null>`(${traceEvents.details} ->> 'message')`,
+        })
+        .from(traceEvents)
+        .where(gte(traceEvents.occurredAt, cutoffIso))
+        .orderBy(desc(traceEvents.occurredAt))
+        .limit(MAX_DIGEST_EVENT_ROWS),
+      defaultDb
+        .select({
+          fromRoute: tracePathRollups.fromRoute,
+          toRoute: tracePathRollups.toRoute,
+          day: tracePathRollups.day,
+          transitionCount: tracePathRollups.transitionCount,
+          distinctActorCount: tracePathRollups.distinctActorCount,
+        })
+        .from(tracePathRollups)
+        .where(gte(tracePathRollups.day, cutoffDay)),
+      defaultDb
+        .select({
+          oid: appUsers.oid,
+          displayName: appUsers.displayName,
+          email: appUsers.email,
+        })
+        .from(appUsers),
+      defaultDb
+        .select({
+          userId: appGroupMembers.userId,
+          groupName: appGroups.name,
+        })
+        .from(appGroupMembers)
+        .innerJoin(appGroups, eq(appGroupMembers.groupId, appGroups.id)),
+      defaultDb
+        .select({
+          userId: appUserRoles.userId,
+          roleName: appRoles.name,
+        })
+        .from(appUserRoles)
+        .innerJoin(appRoles, eq(appUserRoles.roleId, appRoles.id)),
+    ]);
+
+    const roleByUserId = new Map<string, string>();
+    for (const gm of rawGroupMembers) {
+      if (gm.userId && gm.groupName && !roleByUserId.has(gm.userId)) {
+        roleByUserId.set(gm.userId, gm.groupName.replace(/-/g, ' '));
+      }
+    }
+    for (const ur of rawUserRoles) {
+      if (ur.userId && ur.roleName && !roleByUserId.has(ur.userId)) {
+        roleByUserId.set(ur.userId, ur.roleName);
+      }
+    }
+
+    const users: RawDigestUserRow[] = rawUsers.map((u) => ({
+      oid: u.oid,
+      displayName: u.displayName,
+      email: u.email,
+      role: roleByUserId.get(u.oid) ?? null,
+    }));
+
+    // Filter to matching project or global/null projectId rows when present;
+    // if none match the specific project string, use all platform trace_events rows.
+    const projectScopedEvents = rawEvents.filter(
+      (e) =>
+        !e.projectId ||
+        e.projectId.toLowerCase() === project.toLowerCase() ||
+        project.toLowerCase() === 'apex',
+    );
+    const selectedEvents =
+      projectScopedEvents.length > 0 ? projectScopedEvents : rawEvents;
+
+    if (selectedEvents.length > 0 || rawRollups.length > 0) {
+      return {
+        events: selectedEvents.map((e) => ({
+          id: String(e.id),
+          eventType: String(e.eventType),
+          occurredAt: String(e.occurredAt),
+          actorUserId: e.actorUserId ?? null,
+          projectId: e.projectId ?? null,
+          sessionId: e.sessionId ?? null,
+          routeTemplate: e.routeTemplate ?? null,
+          httpMethod: e.httpMethod ?? null,
+          statusCode: typeof e.statusCode === 'number' ? e.statusCode : null,
+          durationMs: typeof e.durationMs === 'number' ? e.durationMs : null,
+          severity: e.severity ?? null,
+          message: e.message ?? null,
+        })),
+        rollups: rawRollups.map((r) => ({
+          fromRoute: String(r.fromRoute),
+          toRoute: String(r.toRoute),
+          day: String(r.day),
+          transitionCount: Number(r.transitionCount) || 0,
+          distinctActorCount: Number(r.distinctActorCount) || 0,
+        })),
+        users,
+        fromLiveDatabase: true,
+      };
+    }
+  } catch {
+    // Database connection unavailable in isolated unit tests without Postgres.
+  }
+
+  const seed = buildDefaultSeedTelemetryRows(now);
+  return {
+    ...seed,
+    fromLiveDatabase: false,
+  };
+}
 
 interface StoredProjectDigestState {
   configuredModel: string;
@@ -52,61 +418,69 @@ function ensureProjectState(project: string, now = new Date()): StoredProjectDig
   const { lastMorningIso, lastEveningIso } = computeSlotTimestamps(now);
   const configuredModel = OBSERVABILITY_PO_DEFAULT_MODEL;
   const configuredEffort = OBSERVABILITY_PO_DEFAULT_EFFORT;
-  const snapshotsByWindow = new Map<ObservabilityTrendWindow, ObservabilityPoDigestSnapshot>();
-
-  const morningSnap = synthesizePoDigestSnapshot({
-    project,
-    window: '7d',
-    model: configuredModel,
-    effort: configuredEffort,
-    slot: 'morning_6am',
-    now: new Date(lastMorningIso),
-  });
-
-  const eveningSnap = synthesizePoDigestSnapshot({
-    project,
-    window: '7d',
-    model: configuredModel,
-    effort: configuredEffort,
-    slot: 'evening_6pm',
-    now: new Date(lastEveningIso),
-  });
-
-  const latestSlot: ObservabilityDigestSlot =
-    new Date(lastEveningIso) >= new Date(lastMorningIso) ? 'evening_6pm' : 'morning_6am';
-  const latestNow =
-    new Date(lastEveningIso) >= new Date(lastMorningIso)
-      ? new Date(lastEveningIso)
-      : new Date(lastMorningIso);
-
-  for (const w of OBSERVABILITY_TREND_WINDOWS) {
-    snapshotsByWindow.set(
-      w,
-      synthesizePoDigestSnapshot({
-        project,
-        window: w,
-        model: configuredModel,
-        effort: configuredEffort,
-        slot: latestSlot,
-        now: latestNow,
-      }),
-    );
-  }
-
-  const history = [eveningSnap, morningSnap].sort(
-    (a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime(),
-  );
 
   const created: StoredProjectDigestState = {
     configuredModel,
     configuredEffort,
     morningLastRunAt: lastMorningIso,
     eveningLastRunAt: lastEveningIso,
-    snapshotsByWindow,
-    history,
+    snapshotsByWindow: new Map(),
+    history: [],
   };
   stateByProject.set(project, created);
   return created;
+}
+
+async function computeDigestSnapshotFromDatabaseAndSkill(options: {
+  project: string;
+  window: ObservabilityTrendWindow;
+  model: string;
+  effort: EffortLevel;
+  slot: ObservabilityDigestSlot;
+  now?: Date;
+}): Promise<ObservabilityPoDigestSnapshot> {
+  const now = options.now ?? new Date();
+  const telemetry = await queryDatabaseTelemetryForPoDigest(options.project, now);
+
+  const aggregated = aggregateTelemetryFromDatabaseRows({
+    events: telemetry.events,
+    rollups: telemetry.rollups,
+    users: telemetry.users,
+    window: options.window,
+    now,
+  });
+
+  const skillMarkdown = loadObservabilityPoSkillMarkdown();
+  const prompt = buildObservabilityPoSkillPrompt({
+    skillMarkdown,
+    project: options.project,
+    window: options.window,
+    model: options.model,
+    effort: options.effort,
+    slot: options.slot,
+    aggregated,
+  });
+
+  const provider = aiProviderOverride ?? defaultCursorSkillAiProvider();
+  const aiSynthesis = await provider.synthesizeDigest({
+    skillMarkdown,
+    prompt,
+    model: options.model,
+    effort: options.effort,
+    project: options.project,
+    window: options.window,
+  });
+
+  return buildDigestSnapshotFromAggregates({
+    project: options.project,
+    window: options.window,
+    model: options.model,
+    effort: options.effort,
+    slot: options.slot,
+    aggregated,
+    aiSynthesis: aiSynthesis ?? undefined,
+    now,
+  });
 }
 
 export async function getObservabilityPoDigest(options: {
@@ -114,11 +488,13 @@ export async function getObservabilityPoDigest(options: {
   window?: ObservabilityTrendWindow;
   model?: string;
   effort?: EffortLevel;
+  now?: Date;
 }): Promise<ObservabilityPoDigestResponse> {
+  const now = options.now ?? new Date();
   const project = options.project.trim() || 'Apex';
   const window: ObservabilityTrendWindow =
     options.window && isObservabilityTrendWindow(options.window) ? options.window : '7d';
-  const state = ensureProjectState(project);
+  const state = ensureProjectState(project, now);
 
   const requestedModel = options.model
     ? normalizeObservabilityModel(options.model)
@@ -127,20 +503,24 @@ export async function getObservabilityPoDigest(options: {
     ? normalizeObservabilityEffort(options.effort)
     : state.configuredEffort;
 
-  let digest = state.snapshotsByWindow.get(window);
-  if (
-    !digest ||
-    digest.model !== requestedModel ||
-    digest.effort !== requestedEffort
-  ) {
-    digest = synthesizePoDigestSnapshot({
-      project,
-      window,
-      model: requestedModel,
-      effort: requestedEffort,
-      slot: digest?.slot ?? 'morning_6am',
-    });
-    state.snapshotsByWindow.set(window, digest);
+  const lastSlot: ObservabilityDigestSlot =
+    state.history[0]?.slot ??
+    (new Date(state.eveningLastRunAt ?? 0) >= new Date(state.morningLastRunAt ?? 0)
+      ? 'evening_6pm'
+      : 'morning_6am');
+
+  const digest = await computeDigestSnapshotFromDatabaseAndSkill({
+    project,
+    window,
+    model: requestedModel,
+    effort: requestedEffort,
+    slot: lastSlot,
+    now,
+  });
+
+  state.snapshotsByWindow.set(window, digest);
+  if (state.history.length === 0) {
+    state.history = [digest];
   }
 
   return {
@@ -150,6 +530,7 @@ export async function getObservabilityPoDigest(options: {
       state.configuredEffort,
       state.morningLastRunAt,
       state.eveningLastRunAt,
+      now,
     ),
     history: state.history.slice(0, 8).map((item) => ({
       id: item.id,
@@ -187,21 +568,16 @@ export async function generateObservabilityPoDigest(
     state.eveningLastRunAt = now.toISOString();
   }
 
-  for (const w of OBSERVABILITY_TREND_WINDOWS) {
-    state.snapshotsByWindow.set(
-      w,
-      synthesizePoDigestSnapshot({
-        project,
-        window: w,
-        model,
-        effort,
-        slot,
-        now,
-      }),
-    );
-  }
+  const activeDigest = await computeDigestSnapshotFromDatabaseAndSkill({
+    project,
+    window,
+    model,
+    effort,
+    slot,
+    now,
+  });
 
-  const activeDigest = state.snapshotsByWindow.get(window)!;
+  state.snapshotsByWindow.set(window, activeDigest);
   state.history = [activeDigest, ...state.history].slice(0, 12);
 
   return {
@@ -227,6 +603,8 @@ export async function generateObservabilityPoDigest(
 
 export function resetObservabilityPoDigestForTests(): void {
   stateByProject.clear();
+  aiProviderOverride = null;
+  telemetrySourceOverride = null;
 }
 
 /**
