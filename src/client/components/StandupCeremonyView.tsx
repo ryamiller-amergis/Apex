@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useChatThread } from '../hooks/useChatThreads';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useAppShell } from '../hooks/useAppShell';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import { AgentComposer } from './agentChat';
@@ -187,6 +188,7 @@ export const StandupCeremonyView: React.FC = () => {
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const threadId = session?.threadId ?? null;
   const { data: thread } = useChatThread(threadId);
@@ -214,6 +216,13 @@ export const StandupCeremonyView: React.FC = () => {
     status: streamStatus,
     showTypingIndicator,
   } = chatSession;
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
   useEffect(() => {
@@ -241,12 +250,24 @@ export const StandupCeremonyView: React.FC = () => {
     setPanelLoading(false);
   }, [selectedProject, selectedAreaPath]);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const handleSend = useCallback(async () => {
-    if (!input.trim() || !threadId) return;
+    const text = input.trim();
+    const outgoing = [...attachments];
+    if ((!text && outgoing.length === 0) || !threadId) return;
     if (speech.isListening) speech.stop();
-    await chatSession.send(input.trim());
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
-  }, [input, threadId, chatSession, speech]);
+    const sent = await chatSession.send(
+      message,
+      outgoing.length > 0 ? { attachments: outgoing } : undefined,
+    );
+    if (sent && outgoing.length > 0) clearAttachments();
+  }, [attachments, chatSession, clearAttachments, input, speech, threadId]);
 
   const handleSubmit = useCallback(async () => {
     if (!session) return;
@@ -396,10 +417,27 @@ export const StandupCeremonyView: React.FC = () => {
               onSend={handleSend}
               disabled={isRunning}
               isRunning={isRunning}
+              allowEmptySend
               placeholder="Type your response… (Enter to send, Shift+Enter for new line)"
               testIdPrefix="standup"
               {...{ 'data-testid': 'standup-composer' }}
               rows={2}
+              attachments={attachments}
+              attachmentError={attachmentError}
+              onRemoveAttachment={removeAttachment}
+              onAttachClick={() => fileInputRef.current?.click()}
+              onPasteFiles={(files) => { void addFiles(files); }}
+              fileInput={(
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => { void handleAttachmentChange(event); }}
+                  disabled={isRunning}
+                  {...{ 'data-testid': 'standup-file-input' }}
+                />
+              )}
               speech={{
                 isListening: speech.isListening,
                 isSpeechSupported: speech.isSpeechSupported,
