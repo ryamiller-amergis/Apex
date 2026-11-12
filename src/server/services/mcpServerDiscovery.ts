@@ -203,6 +203,8 @@ export interface RemoteMcpCredential {
   secretNames: string[];
   toolNames: string[];
   authMode: McpServerAuthMode;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
   oauth?: RemoteMcpOAuth;
 }
 
@@ -210,11 +212,33 @@ const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/;
 const SECRET_NAME = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 const PLACEHOLDER = /\$\{([A-Za-z][A-Za-z0-9_]{0,40})\}/g;
 
+function normalizeOAuthClientId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > 200 || /[\r\n]/.test(trimmed)) {
+    throw new McpServerError(400, 'The OAuth Client ID is invalid', 'CREDENTIAL_REQUIRED');
+  }
+  return trimmed;
+}
+
+function normalizeOAuthClientSecret(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > 4000 || /[\r\n]/.test(trimmed)) {
+    throw new McpServerError(400, 'The OAuth Client Secret is invalid', 'CREDENTIAL_REQUIRED');
+  }
+  return trimmed;
+}
+
 export function buildRemoteMcpCredential(input: {
   headers?: Record<string, string>;
   secrets?: Array<{ name: string; value: string }>;
   toolNames?: string[];
   authMode?: McpServerAuthMode;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
 }): RemoteMcpCredential {
   if (
     input.headers !== undefined &&
@@ -261,7 +285,18 @@ export function buildRemoteMcpCredential(input: {
   if (names.some((name) => !name || name.length > 80 || /\s/.test(name))) {
     throw new McpServerError(400, 'A tool name is invalid', 'OPERATIONS_REQUIRED');
   }
-  return { kind: 'remote-mcp', headers, secrets, secretNames, toolNames: names, authMode };
+  const oauthClientId = normalizeOAuthClientId(input.oauthClientId);
+  const oauthClientSecret = normalizeOAuthClientSecret(input.oauthClientSecret);
+  return {
+    kind: 'remote-mcp',
+    headers,
+    secrets,
+    secretNames,
+    toolNames: names,
+    authMode,
+    ...(oauthClientId ? { oauthClientId } : {}),
+    ...(oauthClientSecret ? { oauthClientSecret } : {}),
+  };
 }
 
 function assertHeaderPlaceholders(
@@ -294,6 +329,8 @@ export function publicRemoteConfig(stored: RemoteMcpCredential): {
   secretNames: string[];
   missingSecretNames: string[];
   oauthConnected: boolean;
+  oauthClientId?: string;
+  hasOAuthClientSecret?: boolean;
 } {
   return {
     headers: publicRemoteHeaders(stored.headers),
@@ -302,6 +339,8 @@ export function publicRemoteConfig(stored: RemoteMcpCredential): {
     secretNames: stored.secretNames,
     missingSecretNames: stored.secretNames.filter((name) => !stored.secrets[name]),
     oauthConnected: Boolean(stored.oauth?.accessToken || stored.oauth?.refreshToken),
+    ...(stored.oauthClientId ? { oauthClientId: stored.oauthClientId } : {}),
+    ...(stored.oauthClientSecret ? { hasOAuthClientSecret: true } : {}),
   };
 }
 
@@ -313,9 +352,17 @@ export function mergeRemoteMcpConfig(
     authMode?: McpServerAuthMode;
     secrets?: Array<{ name: string; value: string }>;
     secretNames?: string[];
+    oauthClientId?: string;
+    oauthClientSecret?: string;
   },
 ): RemoteMcpCredential {
   const authMode = patch.authMode ?? stored.authMode;
+  const oauthClientId = patch.oauthClientId !== undefined
+    ? normalizeOAuthClientId(patch.oauthClientId)
+    : stored.oauthClientId;
+  const oauthClientSecret = patch.oauthClientSecret !== undefined
+    ? normalizeOAuthClientSecret(patch.oauthClientSecret)
+    : stored.oauthClientSecret;
   let secretNames = patch.secretNames
     ? patch.secretNames.map((name) => name.trim())
     : [...stored.secretNames];
@@ -353,6 +400,10 @@ export function mergeRemoteMcpConfig(
   if (toolNames.length > 50 || toolNames.some((name) => !name.trim() || name.length > 80 || /\s/.test(name))) {
     throw new McpServerError(400, 'A tool name is invalid', 'OPERATIONS_REQUIRED');
   }
+  const clientChanged = patch.oauthClientId !== undefined && oauthClientId !== stored.oauthClientId;
+  const keptOAuth = (patch.authMode !== undefined && patch.authMode !== stored.authMode) || clientChanged
+    ? undefined
+    : stored.oauth;
   return {
     ...stored,
     headers,
@@ -360,7 +411,14 @@ export function mergeRemoteMcpConfig(
     secretNames,
     toolNames: toolNames.map((name) => name.trim()),
     authMode,
-    oauth: patch.authMode !== undefined && patch.authMode !== stored.authMode ? undefined : stored.oauth,
+    oauthClientId,
+    oauthClientSecret: oauthClientId ? oauthClientSecret : undefined,
+    oauth: keptOAuth
+      ? {
+          ...keptOAuth,
+          ...(oauthClientId && oauthClientSecret ? { clientSecret: oauthClientSecret } : {}),
+        }
+      : undefined,
   };
 }
 
@@ -407,6 +465,12 @@ export function parseRemoteMcpCredential(value: string): RemoteMcpCredential | n
       secretNames,
       toolNames: Array.isArray(parsed.toolNames) ? parsed.toolNames : [],
       authMode,
+      ...(typeof parsed.oauthClientId === 'string' && parsed.oauthClientId.trim()
+        ? { oauthClientId: parsed.oauthClientId.trim() }
+        : {}),
+      ...(typeof parsed.oauthClientSecret === 'string' && parsed.oauthClientSecret.trim()
+        ? { oauthClientSecret: parsed.oauthClientSecret.trim() }
+        : {}),
       oauth: parsed.oauth && typeof parsed.oauth === 'object' ? parsed.oauth : undefined,
     };
   } catch {

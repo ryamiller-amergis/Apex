@@ -40,7 +40,7 @@ import {
   discoverMcpOAuth,
   ensureFreshOAuthCredential,
   exchangeAuthorizationCode,
-  registerOAuthClient,
+  resolveOAuthClient,
   type OAuthFetch,
 } from './mcpServerOAuth';
 import { getMcpServerFetchStub } from './mcpServerFetchStub';
@@ -382,6 +382,8 @@ export async function createMcpServer(
       secrets: input.secrets,
       toolNames: input.toolNames,
       authMode: input.authMode,
+      oauthClientId: input.oauthClientId,
+      oauthClientSecret: input.oauthClientSecret,
     })
     : null;
   const credential = remote ? encodeRemoteMcpCredential(remote) : assertCredential(input.credential);
@@ -500,6 +502,8 @@ export async function updateMcpServer(
     || patch.secretNames !== undefined
     || patch.headers !== undefined
     || patch.authMode !== undefined
+    || patch.oauthClientId !== undefined
+    || patch.oauthClientSecret !== undefined
     || patch.mcpUrl !== undefined;
   const policyPatch = patch.toolNames !== undefined;
   if (reconnectPatch || policyPatch) {
@@ -573,13 +577,28 @@ export async function beginMcpServerOAuth(input: {
     throw new McpServerError(400, 'This server has no editable configuration', 'CREDENTIAL_REQUIRED');
   }
   const discovered = await discoverMcpOAuth(existing.baseUrl, input.fetchImpl);
+  const configuredClientId = remote.oauthClientId
+    || remote.secrets.OAUTH_CLIENT_ID
+    || remote.secrets.CLIENT_ID;
+  const configuredClientSecret = remote.oauthClientSecret
+    || remote.secrets.OAUTH_CLIENT_SECRET
+    || remote.secrets.CLIENT_SECRET;
   const reusable = remote.oauth
     && remote.oauth.redirectUri === input.redirectUri
     && remote.oauth.resource === discovered.resource
-    && remote.oauth.tokenEndpoint === discovered.tokenEndpoint;
+    && remote.oauth.tokenEndpoint === discovered.tokenEndpoint
+    && (!configuredClientId || remote.oauth.clientId === configuredClientId);
   const client = reusable
-    ? { clientId: remote.oauth!.clientId, clientSecret: remote.oauth!.clientSecret }
-    : await registerOAuthClient(discovered, input.redirectUri, input.fetchImpl);
+    ? {
+        clientId: remote.oauth!.clientId,
+        clientSecret: configuredClientSecret ?? remote.oauth!.clientSecret,
+      }
+    : await resolveOAuthClient(
+        discovered,
+        input.redirectUri,
+        { clientId: configuredClientId, clientSecret: configuredClientSecret },
+        input.fetchImpl,
+      );
   const pkce = createPkcePair();
   const state = randomUUID();
   const nextRemote: RemoteMcpCredential = {
