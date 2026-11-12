@@ -26,8 +26,22 @@ const searchInputSchema: Record<string, SDKJsonValue> = {
       type: 'integer',
       description: 'Maximum number of matching files',
     },
+    path: {
+      type: 'string',
+      description: 'Optional repository-relative path or mounted source prefix (e.g. sources/<sourceId>) to scope the search',
+    },
   },
 };
+
+function firstStringArg(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
 
 /**
  * Exposes the authorized repository reader through Cursor's in-process,
@@ -67,19 +81,24 @@ export function createNativeReadTools(
     tools.search_repo_code = {
       description: 'Search code in the authorized pinned repository checkout.',
       inputSchema: searchInputSchema,
-      execute: async ({ query, limit }) => ({
-        content: [{
-          type: 'text',
-          text: JSON.stringify(
-            await repoReader.searchCode(
-              String(query ?? ''),
-              typeof limit === 'number' ? limit : undefined,
+      execute: async (rawArgs) => {
+        const args = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
+        const scopedPath = firstStringArg(args, ['path', 'repoPath', 'repo_path']);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify(
+              await repoReader.searchCode(
+                String(args.query ?? ''),
+                typeof args.limit === 'number' ? args.limit : undefined,
+                ...(scopedPath ? [scopedPath] : []),
+              ),
+              null,
+              2,
             ),
-            null,
-            2,
-          ),
-        }],
-      }),
+          }],
+        };
+      },
     };
   }
   return tools;

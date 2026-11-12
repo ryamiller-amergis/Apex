@@ -75,20 +75,30 @@ export class LocalCheckoutReader implements RepoReader {
     );
   }
 
-  async searchCode(query: string, limit?: number): Promise<RepoSearchResult[]> {
+  async searchCode(query: string, limit?: number, scopedPath?: string): Promise<RepoSearchResult[]> {
     return this.measured(async () => {
       if (!query.trim()) return [];
       return this.controlled(async () => {
         const root = await this.resolveCheckoutRoot();
         const maxResults = boundedSearchLimit(limit);
+        const normalizedScope = scopedPath?.trim()
+          ? this.validateRequestedPath(scopedPath).portablePath
+          : '';
+        const scopeSegments = normalizedScope ? normalizedScope.split('/') : [];
+        const scopedSourceId =
+          scopeSegments[0] === 'sources' && scopeSegments[1] ? scopeSegments[1] : null;
+        const scopedInnerPath =
+          scopedSourceId ? scopeSegments.slice(2).join('/') : normalizedScope;
+
         const hasGitRoot = await fs.stat(path.join(root, '.git')).then(() => true, () => false);
         const combined: RepoCodeSearchResult[] = [];
         const searchedRealpaths = new Set<string>();
-        if (hasGitRoot) {
+        if (hasGitRoot && !scopedSourceId && scopeSegments[0] !== 'sources') {
           searchedRealpaths.add(root);
+          const pathspec = scopedInnerPath || '.';
           try {
             const output = await git(
-              safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
+              safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', pathspec]),
               {
                 cwd: root,
                 timeout: 10_000,
@@ -98,14 +108,20 @@ export class LocalCheckoutReader implements RepoReader {
             combined.push(...this.shapeSearchResults(output, maxResults));
           } catch (error) {
             if (!(error instanceof Error && /exit code 1$/i.test(error.message))) {
-              throw error;
+              if (!normalizedScope) throw error;
             }
           }
         }
+        if (normalizedScope && !scopedSourceId && scopeSegments[0] !== 'sources') {
+          return combined;
+        }
         // Mounted git repos under `sources/<id>` (e.g. Brainstorm sources).
         const sourcesDir = path.join(root, 'sources');
-        const entries = await fs.readdir(sourcesDir).catch(() => [] as string[]);
+        const entries = scopedSourceId
+          ? [scopedSourceId]
+          : await fs.readdir(sourcesDir).catch(() => [] as string[]);
         if (entries.length === 0) return combined;
+        const sourcePathspec = scopedSourceId && scopedInnerPath ? scopedInnerPath : '.';
         for (const entry of entries) {
           if (combined.length >= maxResults) break;
           const sourceRoot = await fs.realpath(path.join(sourcesDir, entry)).catch(() => null);
@@ -115,7 +131,7 @@ export class LocalCheckoutReader implements RepoReader {
           searchedRealpaths.add(sourceRoot);
           try {
             const sourceOut = await git(
-              safeArgs(sourceRoot, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', '.']),
+              safeArgs(sourceRoot, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', sourcePathspec]),
               {
                 cwd: sourceRoot,
                 timeout: 10_000,

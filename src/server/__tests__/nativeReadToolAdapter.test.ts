@@ -95,7 +95,7 @@ describe('native read custom-tool adapter', () => {
       limit: 7,
     });
 
-    // Assert
+    //Assert
     expect(repoReader.searchCode).toHaveBeenCalledWith('needle', 7);
     expect(result).toEqual({
       content: [{
@@ -103,5 +103,28 @@ describe('native read custom-tool adapter', () => {
         text: JSON.stringify(await repoReader.searchCode.mock.results[0].value, null, 2),
       }],
     });
+  });
+
+  it('forwards optional scoped path (or repoPath / repo_path aliases) to searchCode', async () => {
+    const repoReader = reader();
+    const tools = createNativeReadTools(repoReader);
+
+    await execute(tools.search_repo_code, {
+      query: 'needle',
+      limit: 5,
+      path: 'sources/src-1',
+    });
+    await execute(tools.search_repo_code, {
+      query: 'needle',
+      repoPath: 'sources/src-2/src',
+    });
+    await execute(tools.search_repo_code, {
+      query: 'needle',
+      repo_path: 'sources/src-3',
+    });
+
+    expect(repoReader.searchCode).toHaveBeenNthCalledWith(1, 'needle', 5, 'sources/src-1');
+    expect(repoReader.searchCode).toHaveBeenNthCalledWith(2, 'needle', undefined, 'sources/src-2/src');
+    expect(repoReader.searchCode).toHaveBeenNthCalledWith(3, 'needle', undefined, 'sources/src-3');
   });
 });

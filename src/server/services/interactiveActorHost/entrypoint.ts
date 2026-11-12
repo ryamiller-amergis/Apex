@@ -48,6 +48,7 @@ import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
 import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
+import { boundedSearchLimit } from '../repoReader';
 import { BareRepoReader } from '../repoRead/bareRepoReader';
 import {
   RepoServiceReader,
@@ -182,7 +183,7 @@ async function openLocalBareMirrorReader(
   return null;
 }
 
-function createBrainstormWorkspaceReader(input: {
+export function createBrainstormWorkspaceReader(input: {
   destination: string;
   primaryReader: RepoReader;
   remotePrimaryReader: RepoReader | null;
@@ -274,19 +275,47 @@ function createBrainstormWorkspaceReader(input: {
       }
       return localReader.listDir(dirPath);
     },
-    async searchCode(query: string, limit?: number) {
+    async searchCode(query: string, limit?: number, scopedPath?: string) {
+      const parsedScope = scopedPath?.trim() ? parseBrainstormSourcePath(scopedPath) : null;
+      if (parsedScope) {
+        const innerScope = parsedScope.innerPath || undefined;
+        if (await hasLocalSourceCheckout(parsedScope.sourceId)) {
+          return localReader.searchCode(query, limit, scopedPath).catch(() => []);
+        }
+        const remote = await remoteReaderForSource(parsedScope.sourceId);
+        if (!remote) return [];
+        const hits = await remote
+          .searchCode(query, limit, ...(innerScope ? [innerScope] : []))
+          .catch(() => []);
+        const byScopedPath = new Map<string, (typeof hits)[number]>();
+        for (const hit of hits) {
+          const prefixedPath = `sources/${parsedScope.sourceId}/${hit.path.replace(/^\/+/, '')}`;
+          if (!byScopedPath.has(prefixedPath)) {
+            byScopedPath.set(prefixedPath, { ...hit, path: prefixedPath });
+          }
+        }
+        return [...byScopedPath.values()];
+      }
+
+      const maxResults = boundedSearchLimit(limit);
+      const nonSourceScope = scopedPath?.trim() || undefined;
       const primaryResults = await input.primaryReader
-        .searchCode(query, limit)
+        .searchCode(query, limit, ...(nonSourceScope ? [nonSourceScope] : []))
         .catch(() => []);
+      if (nonSourceScope && nonSourceScope.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') !== 'sources') {
+        return primaryResults;
+      }
       const localResults =
         input.primaryReader === localReader
           ? []
-          : await localReader.searchCode(query, limit).catch(() => []);
+          : await localReader.searchCode(query, limit, 'sources').catch(() => []);
       const byPath = new Map<string, (typeof primaryResults)[number]>();
       for (const item of [...primaryResults, ...localResults]) {
+        if (byPath.size >= maxResults) break;
         if (!byPath.has(item.path)) byPath.set(item.path, item);
       }
       for (const root of readRoots) {
+        if (byPath.size >= maxResults) break;
         if (await hasLocalSourceCheckout(root.sourceId)) continue;
         if (
           grounding &&
@@ -297,8 +326,9 @@ function createBrainstormWorkspaceReader(input: {
         }
         const remote = await remoteReaderForSource(root.sourceId);
         if (!remote) continue;
-        const hits = await remote.searchCode(query, limit).catch(() => []);
+        const hits = await remote.searchCode(query, maxResults - byPath.size).catch(() => []);
         for (const hit of hits) {
+          if (byPath.size >= maxResults) break;
           const prefixedPath = `sources/${root.sourceId}/${hit.path.replace(/^\/+/, '')}`;
           if (!byPath.has(prefixedPath)) {
             byPath.set(prefixedPath, { ...hit, path: prefixedPath });

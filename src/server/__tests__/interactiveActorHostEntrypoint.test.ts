@@ -331,4 +331,99 @@ describe('interactive actor host dispatch endpoint', () => {
   it('outlasts the retried bootstrap read so a slow start is not failed early', () => {
     expect(INTERACTIVE_ACTOR_INVOKE_TIMEOUT_MS).toBeGreaterThan(retriedCallbackBudgetMs(12_000));
   });
+
+  it('scopes createBrainstormWorkspaceReader.searchCode to a single mounted source when path is provided', async () => {
+    const fs = await import('fs');
+    const os = await import('os');
+    const path = await import('path');
+    const { execFileSync } = await import('child_process');
+    const { createBrainstormWorkspaceReader } = await import(
+      '../services/interactiveActorHost/entrypoint'
+    );
+
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-brainstorm-ws-'));
+    const initGitRepo = (dir: string, fileName: string, content: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, fileName), content);
+      execFileSync('git', ['init'], { cwd: dir });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      execFileSync('git', ['add', '.'], { cwd: dir });
+      execFileSync('git', ['commit', '-m', 'init'], { cwd: dir });
+    };
+
+    try {
+      initGitRepo(path.join(workspace, 'sources', 'src-amego'), 'amego.ts', 'export const targetToken = "amego";\n');
+      initGitRepo(path.join(workspace, 'sources', 'src-maxview'), 'maxview.ts', 'export const targetToken = "maxview";\n');
+
+      const primaryReader = {
+        identity: { provider: 'github' as const, project: 'Apex', repo: 'Apex', sha: 'a'.repeat(40) },
+        readFile: jest.fn(),
+        listDir: jest.fn(),
+        searchCode: jest.fn().mockResolvedValue([
+          {
+            path: '/primary.ts',
+            fileName: 'primary.ts',
+            repository: 'Apex',
+            project: 'Apex',
+            matches: [{ lineNumber: 1, snippet: 'targetToken' }],
+          },
+        ]),
+      };
+
+      const reader = createBrainstormWorkspaceReader({
+        destination: workspace,
+        primaryReader,
+        remotePrimaryReader: null,
+        bootstrap: {
+          specification: {
+            grounding: { provider: 'github', project: 'Apex', repository: 'Apex', sha: 'a'.repeat(40), profileId: 'p1' },
+            brainstorm: {
+              sources: {
+                readRoots: [
+                  {
+                    kind: 'project-repository',
+                    sourceId: 'src-amego',
+                    displayName: 'Amego',
+                    provider: 'ado',
+                    project: 'Amego',
+                    repository: 'Amego',
+                    commitSha: 'b'.repeat(40),
+                    workspacePath: path.join(workspace, 'sources', 'src-amego'),
+                  },
+                  {
+                    kind: 'project-repository',
+                    sourceId: 'src-maxview',
+                    displayName: 'MaxView',
+                    provider: 'ado',
+                    project: 'MaxView',
+                    repository: 'MaxView',
+                    commitSha: 'c'.repeat(40),
+                    workspacePath: path.join(workspace, 'sources', 'src-maxview'),
+                  },
+                ],
+                mcpServers: [],
+                unavailableSources: [],
+                instructions: '',
+              },
+            },
+          },
+        } as unknown as import('../../shared/types/aiRunIngest').InteractiveActorBootstrap,
+      });
+
+      const scoped = await reader.searchCode('targetToken', 10, 'sources/src-amego');
+      expect(primaryReader.searchCode).not.toHaveBeenCalled();
+      expect(scoped).toEqual([
+        expect.objectContaining({
+          path: '/sources/src-amego/amego.ts',
+        }),
+      ]);
+
+      const unscoped = await reader.searchCode('targetToken', 2);
+      expect(primaryReader.searchCode).toHaveBeenCalledWith('targetToken', 2);
+      expect(unscoped).toHaveLength(2);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

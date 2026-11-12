@@ -90,8 +90,12 @@ export class RepoServiceReader implements RepoReader {
     return body.entries;
   }
 
-  async searchCode(query: string, limit?: number): Promise<RepoSearchResult[]> {
-    const body = await this.request('search', { query, limit });
+  async searchCode(query: string, limit?: number, scopedPath?: string): Promise<RepoSearchResult[]> {
+    const body = await this.request('search', {
+      query,
+      limit,
+      ...(scopedPath?.trim() ? { path: scopedPath.trim() } : {}),
+    });
     if (!body.ok || body.operation !== 'search') {
       throw unavailable();
     }

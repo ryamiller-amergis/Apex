@@ -124,10 +124,13 @@ export class BareRepoReader implements RepoReader {
     );
   }
 
-  async searchCode(query: string, limit?: number): Promise<RepoSearchResult[]> {
+  async searchCode(query: string, limit?: number, scopedPath?: string): Promise<RepoSearchResult[]> {
     return this.measured('searchCode', async () => {
       if (!query.trim()) return [];
       return this.controlled(async () => {
+        const pathspec = scopedPath?.trim()
+          ? validateRepoRelativePath(scopedPath).portablePath || '.'
+          : '.';
         let output: string;
         try {
           output = await git(
@@ -142,7 +145,7 @@ export class BareRepoReader implements RepoReader {
               query,
               this.identity.sha,
               '--',
-              '.',
+              pathspec,
             ]),
             {
               cwd: this.mirrorPath,
