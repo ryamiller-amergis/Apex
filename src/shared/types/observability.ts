@@ -604,6 +604,40 @@ export interface ObservabilityAdoptionSummary {
   recommendations: ObservabilityAdoptionPlay[];
 }
 
+export type ObservabilityDynamicSectionTone = 'default' | 'accent' | 'warning' | 'danger';
+export type ObservabilityDynamicSectionDisplayType =
+  | 'insights'
+  | 'table'
+  | 'ranked_list'
+  | 'metrics'
+  | 'markdown';
+
+export interface ObservabilityDynamicSkillSectionItem {
+  id?: string;
+  title: string;
+  subtitle?: string;
+  detail?: string;
+  meta?: string;
+  badge?: string;
+  metricLabel?: string;
+  metricValue?: string | number;
+  deltaPct?: number;
+  windowComparison?: ObservabilityWindowComparisonMap;
+}
+
+export interface ObservabilityDynamicSkillSection {
+  id: string;
+  number?: number;
+  title: string;
+  subtitle?: string;
+  badge?: string;
+  tone?: ObservabilityDynamicSectionTone;
+  displayType?: ObservabilityDynamicSectionDisplayType;
+  headline?: string;
+  narrative?: string;
+  items?: ObservabilityDynamicSkillSectionItem[];
+}
+
 export interface ObservabilityScheduleSlotStatus {
   slot: 'morning_6am' | 'evening_6pm';
   label: string;
@@ -653,6 +687,8 @@ export interface ObservabilityPoDigestSnapshot {
   dropReasonsSummary: ObservabilityDropReasonsSummary;
   topModules: ObservabilityTopModuleItem[];
   adoptionRecommendations: ObservabilityAdoptionSummary;
+  customSections?: ObservabilityDynamicSkillSection[];
+  sections?: ObservabilityDynamicSkillSection[];
 }
 
 export interface ObservabilityPoDigestResponse {

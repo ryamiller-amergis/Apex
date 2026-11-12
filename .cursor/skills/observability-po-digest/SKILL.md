@@ -39,6 +39,10 @@ Every digest MUST evaluate and populate all six core signals for the requested t
    - Provide an executive headline, strategic narrative, and prioritized actionable plays (`recommendations`) to grow module adoption and recover dropped cohorts.
    - Each recommendation must specify target module, expected impact (`high`, `medium`, `low`), concrete action steps, and measurable target outcome (e.g., guided walkthroughs, error remediation, in-app nudges).
 
+### Dynamic Extensibility (Adding 7th, 8th, … Sections in `SKILL.md`)
+
+Product Owners can add additional numbered signals (e.g., `7. **Cross-module journey bottlenecks**`) or `###` subsections under `## Six Core Product Owner Signals`, `## Product Owner Signals`, or `## Additional Product Owner Signals`. The backend parser and AI synthesizer automatically detect every extra section defined in this file and emit a corresponding entry in `customSections` so the Observability page renders a numbered visual card without any React or TypeScript code changes.
+
 ---
 
 ## Supported Trend Windows
@@ -182,7 +186,33 @@ Write the structured JSON digest to `.ai-pilot/output/observability-po-digest.js
         "impact": "high | medium | low"
       }
     ]
-  }
+  },
+  "customSections": [
+    {
+      "id": "string",
+      "number": 7,
+      "title": "Title of any additional signal defined in SKILL.md",
+      "subtitle": "Optional subtitle",
+      "badge": "Optional badge",
+      "tone": "default | accent | warning | danger",
+      "displayType": "insights | table | ranked_list | metrics | markdown",
+      "headline": "Executive takeaway for this dynamic section",
+      "narrative": "Detailed synthesis grounded in PostgreSQL telemetry",
+      "items": [
+        {
+          "id": "string",
+          "title": "string",
+          "subtitle": "string",
+          "detail": "string",
+          "meta": "string",
+          "badge": "string",
+          "metricLabel": "string",
+          "metricValue": 0,
+          "deltaPct": 0
+        }
+      ]
+    }
+  ]
 }
 ```
 

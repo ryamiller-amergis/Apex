@@ -7,6 +7,7 @@ import {
   OBSERVABILITY_TREND_WINDOW_LABELS,
   type ObservabilityAdoptionSummary,
   type ObservabilityDropReasonsSummary,
+  type ObservabilityDynamicSkillSection,
   type ObservabilityExceptionItem,
   type ObservabilityModuleRetentionDropItem,
   type ObservabilityScheduleSummary,
@@ -462,6 +463,16 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
                 effort={digest.effort}
                 data-testid="observability-signal-drive-adoption"
               />
+
+              {(digest.customSections ?? digest.sections ?? []).map((customSec, idx) => (
+                <DynamicSkillSectionCard
+                  key={customSec.id || `custom-sec-${idx}`}
+                  section={customSec}
+                  fallbackNumber={7 + idx}
+                  activeWindow={selectedWindow}
+                  data-testid={`observability-signal-custom-${customSec.id}`}
+                />
+              ))}
             </div>
           </>
         )}
@@ -871,5 +882,243 @@ const DriveAdoptionAiSignalCard: React.FC<DriveAdoptionAiSignalCardProps> = ({
     </div>
   </section>
 );
+
+function dynamicToneBadgeClass(tone: ObservabilityDynamicSkillSection['tone']): string {
+  if (tone === 'danger' || tone === 'warning') {
+    return `${styles.badge} ${styles.badgeError}`;
+  }
+  if (tone === 'accent') {
+    return `${styles.badge} ${styles.badgeApi}`;
+  }
+  return `${styles.badge} ${styles.badgeUi}`;
+}
+
+interface DynamicSkillSectionCardProps {
+  section: ObservabilityDynamicSkillSection;
+  fallbackNumber: number;
+  activeWindow: ObservabilityTrendWindow;
+  'data-testid': string;
+}
+
+const DynamicSkillSectionCard: React.FC<DynamicSkillSectionCardProps> = ({
+  section,
+  fallbackNumber,
+  activeWindow,
+  'data-testid': testId,
+}) => {
+  const headingId = `po-signal-custom-${section.id}-heading`;
+  const displayType = section.displayType ?? 'insights';
+  const items = useMemo(() => section.items ?? [], [section.items]);
+  const cardClass =
+    section.tone === 'accent' ? styles.poSignalCardAccent : styles.poSignalCard;
+
+  const maxNumericMetric = useMemo(() => {
+    const nums = items
+      .map((item) => (typeof item.metricValue === 'number' ? item.metricValue : 0))
+      .filter((n) => n > 0);
+    return nums.length > 0 ? Math.max(...nums) : 1;
+  }, [items]);
+
+  return (
+    <section className={cardClass} aria-labelledby={headingId} data-testid={testId}>
+      <div className={styles.poSignalHeader}>
+        <div>
+          <h3 id={headingId} className={styles.poSignalTitle}>
+            <span className={styles.poSignalNumber}>{section.number ?? fallbackNumber}</span>
+            {section.title}
+          </h3>
+          {section.subtitle && (
+            <p className={styles.poSignalSubtitle}>{section.subtitle}</p>
+          )}
+        </div>
+        {section.badge && (
+          <span className={dynamicToneBadgeClass(section.tone)}>{section.badge}</span>
+        )}
+      </div>
+
+      {(section.headline || section.narrative) && (
+        <div className={styles.poNarrativeBox}>
+          {section.headline && (
+            <p className={styles.poNarrativeHeadline}>{section.headline}</p>
+          )}
+          {section.narrative && (
+            <p className={styles.poNarrativeCopy}>{section.narrative}</p>
+          )}
+        </div>
+      )}
+
+      {displayType === 'table' && items.length > 0 && (
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th scope="col">Signal Item</th>
+                <th scope="col">Metric</th>
+                <th scope="col">Detail</th>
+                <th scope="col">Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => {
+                const delta =
+                  typeof item.deltaPct === 'number' ? formatDelta(item.deltaPct) : null;
+                return (
+                  <tr key={item.id ?? `${section.id}-row-${idx}`}>
+                    <td>
+                      <strong>{item.title}</strong>
+                      {item.subtitle && <div className={styles.cardSub}>{item.subtitle}</div>}
+                    </td>
+                    <td>
+                      {item.metricValue !== undefined ? (
+                        <strong>
+                          {typeof item.metricValue === 'number'
+                            ? item.metricValue.toLocaleString()
+                            : item.metricValue}
+                        </strong>
+                      ) : (
+                        '—'
+                      )}
+                      {item.metricLabel && (
+                        <div className={styles.cardSub}>{item.metricLabel}</div>
+                      )}
+                      {item.windowComparison && (
+                        <WindowComparisonStrip
+                          values={item.windowComparison}
+                          activeWindow={activeWindow}
+                        />
+                      )}
+                    </td>
+                    <td>{item.detail ?? item.meta ?? '—'}</td>
+                    <td>
+                      {delta ? (
+                        <span
+                          className={
+                            delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative
+                          }
+                        >
+                          {delta.text}
+                        </span>
+                      ) : (
+                        item.badge ?? '—'
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {displayType === 'metrics' && items.length > 0 && (
+        <div className={styles.grid}>
+          {items.map((item, idx) => {
+            const delta =
+              typeof item.deltaPct === 'number' ? formatDelta(item.deltaPct) : null;
+            return (
+              <article key={item.id ?? `${section.id}-metric-${idx}`} className={styles.card}>
+                <div className={styles.cardLabel}>{item.metricLabel ?? item.title}</div>
+                <div className={styles.cardValue}>
+                  {item.metricValue !== undefined
+                    ? typeof item.metricValue === 'number'
+                      ? item.metricValue.toLocaleString()
+                      : item.metricValue
+                    : item.badge ?? '—'}
+                </div>
+                <div className={styles.cardSub}>
+                  {delta && (
+                    <span
+                      className={
+                        delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative
+                      }
+                    >
+                      {delta.text}{' '}
+                    </span>
+                  )}
+                  {item.detail ?? item.subtitle ?? ''}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {(displayType === 'insights' ||
+        displayType === 'ranked_list' ||
+        displayType === 'markdown') &&
+        items.length > 0 && (
+          <div className={styles.poInsightList}>
+            {items.map((item, idx) => {
+              const delta =
+                typeof item.deltaPct === 'number' ? formatDelta(item.deltaPct) : null;
+              const numericVal =
+                typeof item.metricValue === 'number' ? item.metricValue : null;
+              const barPct =
+                numericVal !== null
+                  ? Math.min(100, Math.round((numericVal / maxNumericMetric) * 100))
+                  : null;
+              return (
+                <article
+                  key={item.id ?? `${section.id}-item-${idx}`}
+                  className={styles.poInsightItem}
+                >
+                  <div className={styles.poInsightTop}>
+                    <span className={styles.poInsightItemTitle}>{item.title}</span>
+                    <div className={styles.poWindowCompareStrip}>
+                      {item.metricValue !== undefined && (
+                        <strong>
+                          {item.metricLabel ? `${item.metricLabel}: ` : ''}
+                          {typeof item.metricValue === 'number'
+                            ? item.metricValue.toLocaleString()
+                            : item.metricValue}
+                        </strong>
+                      )}
+                      {delta && (
+                        <span
+                          className={
+                            delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative
+                          }
+                        >
+                          {delta.text}
+                        </span>
+                      )}
+                      {item.badge && (
+                        <span className={dynamicToneBadgeClass(section.tone)}>
+                          {item.badge}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {item.subtitle && (
+                    <div className={styles.cardSub}>{item.subtitle}</div>
+                  )}
+                  {item.detail && (
+                    <p className={styles.poInsightDetail}>{item.detail}</p>
+                  )}
+                  {displayType === 'ranked_list' && barPct !== null && (
+                    <div className={styles.progress}>
+                      <div
+                        className={styles.progressFill}
+                        style={{ width: `${barPct}%` }}
+                      />
+                    </div>
+                  )}
+                  {item.meta && (
+                    <div className={styles.poInsightMeta}>{item.meta}</div>
+                  )}
+                  {item.windowComparison && (
+                    <WindowComparisonStrip
+                      values={item.windowComparison}
+                      activeWindow={activeWindow}
+                    />
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+    </section>
+  );
+};
 
 export default ObservabilityWorkspace;

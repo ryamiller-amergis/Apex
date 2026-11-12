@@ -7,8 +7,10 @@ import {
   observabilityPoDigestScheduler,
   resetObservabilityPoDigestForTests,
   setObservabilityPoAiProviderForTests,
+  setObservabilityPoSkillMarkdownForTests,
   setObservabilityPoTelemetrySourceForTests,
 } from '../services/observabilityPoDigestService';
+import { parseSkillSectionsFromMarkdown } from '../../shared/utils/observabilityPoDigest';
 import {
   OBSERVABILITY_PO_SKILL_PATH,
   OBSERVABILITY_TREND_WINDOWS,
@@ -271,5 +273,59 @@ describe('observabilityPoDigestService & scheduler', () => {
     });
     expect(afterEvening.schedule.eveningSlot.lastRunAt).toBe(eveningTime.toISOString());
     expect(typeof buildObservabilityPoSkillPrompt).toBe('function');
+  });
+
+  it('dynamically parses and synthesizes 7th and 8th sections added to SKILL.md without code changes', async () => {
+    const baseMarkdown = loadObservabilityPoSkillMarkdown();
+    const extendedSkillMarkdown = [
+      baseMarkdown,
+      '',
+      '7. **Cross-module journey drop-offs** (`journeyDropoffs`)',
+      '   - Rank route transitions with the highest session abandonment rate in a ranked leaderboard.',
+      '',
+      '### 8. API Latency & Slow Routes (`apiLatencyTable`)',
+      '- Present a table of slowest API routes and their p95 latency impact on user retention.',
+    ].join('\n');
+
+    const parsed = parseSkillSectionsFromMarkdown(extendedSkillMarkdown);
+    expect(parsed.customSignals).toHaveLength(2);
+    expect(parsed.customSignals[0]).toMatchObject({
+      id: 'journeydropoffs',
+      number: 7,
+      title: 'Cross-module journey drop-offs',
+      isCoreSignal: false,
+    });
+    expect(parsed.customSignals[1]).toMatchObject({
+      id: 'apilatencytable',
+      number: 8,
+      title: 'API Latency & Slow Routes',
+      isCoreSignal: false,
+    });
+
+    setObservabilityPoSkillMarkdownForTests(extendedSkillMarkdown);
+
+    const res = await getObservabilityPoDigest({
+      project: 'Apex',
+      window: '14d',
+      model: 'composer-2.5',
+      effort: 'high',
+    });
+
+    expect(res.digest.customSections).toHaveLength(2);
+    expect(res.digest.customSections?.[0]).toMatchObject({
+      id: 'journeydropoffs',
+      number: 7,
+      title: 'Cross-module journey drop-offs',
+      displayType: 'ranked_list',
+    });
+    expect(res.digest.customSections?.[0]?.items?.length).toBeGreaterThan(0);
+
+    expect(res.digest.customSections?.[1]).toMatchObject({
+      id: 'apilatencytable',
+      number: 8,
+      title: 'API Latency & Slow Routes',
+      displayType: 'table',
+    });
+    expect(res.digest.customSections?.[1]?.items?.length).toBeGreaterThan(0);
   });
 });

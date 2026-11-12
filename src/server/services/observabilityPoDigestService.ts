@@ -30,6 +30,7 @@ import {
   type ObservabilityAdoptionSummary,
   type ObservabilityDigestSlot,
   type ObservabilityDropReasonsSummary,
+  type ObservabilityDynamicSkillSection,
   type ObservabilityPoDigestResponse,
   type ObservabilityPoDigestSnapshot,
   type ObservabilityTrendWindow,
@@ -44,6 +45,7 @@ import {
   isObservabilityTrendWindow,
   normalizeObservabilityEffort,
   normalizeObservabilityModel,
+  parseSkillSectionsFromMarkdown,
   synthesizePoDigestSnapshot,
   type RawDigestRollupRow,
   type RawDigestTraceEventRow,
@@ -62,6 +64,8 @@ export interface ObservabilityPoSkillAiSynthesisResult {
   headline?: string;
   dropReasonsSummary?: ObservabilityDropReasonsSummary;
   adoptionRecommendations?: ObservabilityAdoptionSummary;
+  customSections?: ObservabilityDynamicSkillSection[];
+  sections?: ObservabilityDynamicSkillSection[];
 }
 
 export interface ObservabilityPoAiProvider {
@@ -89,6 +93,7 @@ export interface ObservabilityPoTelemetrySource {
 
 let aiProviderOverride: ObservabilityPoAiProvider | null = null;
 let telemetrySourceOverride: ObservabilityPoTelemetrySource | null = null;
+let skillMarkdownOverride: string | null = null;
 
 export function setObservabilityPoAiProviderForTests(
   provider: ObservabilityPoAiProvider | null,
@@ -102,7 +107,16 @@ export function setObservabilityPoTelemetrySourceForTests(
   telemetrySourceOverride = source;
 }
 
+export function setObservabilityPoSkillMarkdownForTests(
+  markdown: string | null,
+): void {
+  skillMarkdownOverride = markdown;
+}
+
 export function loadObservabilityPoSkillMarkdown(): string {
+  if (skillMarkdownOverride !== null) {
+    return skillMarkdownOverride;
+  }
   const fullPath = path.join(process.cwd(), OBSERVABILITY_PO_SKILL_PATH);
   try {
     return fs.readFileSync(fullPath, 'utf8');
@@ -140,6 +154,7 @@ export function buildObservabilityPoSkillPrompt(input: {
   const { skillMarkdown, project, window, model, effort, slot, aggregated } = input;
   const windowLabel = OBSERVABILITY_TREND_WINDOW_LABELS[window];
   const baselineLabel = WINDOW_BASELINE_LABELS[window];
+  const parsedSections = parseSkillSectionsFromMarkdown(skillMarkdown);
 
   return [
     skillMarkdown,
@@ -151,6 +166,16 @@ export function buildObservabilityPoSkillPrompt(input: {
     `- **Schedule Slot:** ${slot}`,
     `- **Model:** ${model}`,
     `- **Reasoning Effort:** ${effort}`,
+    ...(parsedSections.customSignals.length > 0
+      ? [
+          '',
+          '### Dynamic Additional Skill Sections to Synthesize (`customSections`)',
+          ...parsedSections.customSignals.map(
+            (sig) =>
+              `- **#${sig.number} ${sig.title}** (\`id: "${sig.id}"\`): ${sig.instructions || 'Synthesize from telemetry rollup.'}`,
+          ),
+        ]
+      : []),
     '',
     '### Aggregated Telemetry Signals from PostgreSQL (`trace_events`, `trace_path_rollups`, `app_users`)',
     '```json',
@@ -167,7 +192,7 @@ export function buildObservabilityPoSkillPrompt(input: {
     ),
     '```',
     '',
-    'Return ONLY a valid JSON object containing `headline`, `dropReasonsSummary` (`headline`, `narrative`, `findings`), and `adoptionRecommendations` (`headline`, `narrative`, `recommendations`).',
+    'Return ONLY a valid JSON object containing `headline`, `dropReasonsSummary` (`headline`, `narrative`, `findings`), `adoptionRecommendations` (`headline`, `narrative`, `recommendations`), and `customSections` (array of dynamic sections for any sections beyond the 6 core signals).',
   ].join('\n');
 }
 
@@ -217,6 +242,11 @@ function defaultCursorSkillAiProvider(): ObservabilityPoAiProvider {
         const adoption = parsed.adoptionRecommendations as
           | ObservabilityAdoptionSummary
           | undefined;
+        const rawCustomSections = Array.isArray(parsed.customSections)
+          ? (parsed.customSections as ObservabilityDynamicSkillSection[])
+          : Array.isArray(parsed.sections)
+            ? (parsed.sections as ObservabilityDynamicSkillSection[])
+            : undefined;
 
         return {
           headline: typeof parsed.headline === 'string' ? parsed.headline : undefined,
@@ -232,6 +262,8 @@ function defaultCursorSkillAiProvider(): ObservabilityPoAiProvider {
             Array.isArray(adoption.recommendations)
               ? adoption
               : undefined,
+          customSections: rawCustomSections,
+          sections: rawCustomSections,
         };
       } catch (err) {
         console.warn(
@@ -478,6 +510,7 @@ async function computeDigestSnapshotFromDatabaseAndSkill(options: {
     effort: options.effort,
     slot: options.slot,
     aggregated,
+    skillMarkdown,
     aiSynthesis: aiSynthesis ?? undefined,
     now,
   });
@@ -605,6 +638,7 @@ export function resetObservabilityPoDigestForTests(): void {
   stateByProject.clear();
   aiProviderOverride = null;
   telemetrySourceOverride = null;
+  skillMarkdownOverride = null;
 }
 
 /**

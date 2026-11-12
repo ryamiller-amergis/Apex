@@ -162,4 +162,85 @@ describe('ObservabilityWorkspace (Product Owner Digest)', () => {
     await user.click(screen.getByTestId('observability-po-retry'));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
+
+  it('automatically renders dynamic 7th and 8th skill sections from SKILL.md without component code changes', () => {
+    const baseResponse = digestState('7d', 'composer-2.5', 'high');
+    const withCustomSections: ObservabilityPoDigestResponse = {
+      ...baseResponse,
+      digest: {
+        ...baseResponse.digest,
+        customSections: [
+          {
+            id: 'journey-dropoffs',
+            number: 7,
+            title: 'Cross-module journey drop-offs',
+            subtitle: 'Dynamic skill signal · Composer 2.5',
+            badge: 'Dynamic Skill Signal',
+            tone: 'warning',
+            displayType: 'ranked_list',
+            headline: 'Top workflow exit edges across Last 7 days',
+            narrative: 'Synthesized from trace_path_rollups and trace_events.',
+            items: [
+              {
+                id: 'jd-1',
+                title: 'UI Lab (/ui-lab)',
+                subtitle: '16 active users',
+                detail: 'Users exit after first draft without promoting to PRD.',
+                meta: 'Skill focus: journey drop-offs',
+                badge: '25% exit',
+                metricLabel: 'Exits',
+                metricValue: 12,
+                deltaPct: 8.5,
+              },
+            ],
+          },
+          {
+            id: 'api-latency-table',
+            number: 8,
+            title: 'API Latency & Slow Routes',
+            subtitle: 'p95 route duration table',
+            badge: 'Latency Watch',
+            tone: 'accent',
+            displayType: 'table',
+            headline: 'Slowest routes correlated with session abandonment',
+            items: [
+              {
+                id: 'lat-1',
+                title: 'Design Prototypes (/backlog/design-prototypes/:id)',
+                subtitle: 'Bedrock stream endpoint',
+                detail: 'p95 1,420ms during regeneration',
+                metricLabel: 'p95 ms',
+                metricValue: 1420,
+                deltaPct: 14.2,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    mockUseObservabilityPoDigest.mockReturnValue({
+      data: withCustomSections,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    const card7 = screen.getByTestId('observability-signal-custom-journey-dropoffs');
+    expect(card7).toBeInTheDocument();
+    expect(card7).toHaveTextContent('7');
+    expect(card7).toHaveTextContent('Cross-module journey drop-offs');
+    expect(card7).toHaveTextContent('Top workflow exit edges across Last 7 days');
+    expect(card7).toHaveTextContent('UI Lab (/ui-lab)');
+
+    const card8 = screen.getByTestId('observability-signal-custom-api-latency-table');
+    expect(card8).toBeInTheDocument();
+    expect(card8).toHaveTextContent('8');
+    expect(card8).toHaveTextContent('API Latency & Slow Routes');
+    expect(card8).toHaveTextContent('Design Prototypes (/backlog/design-prototypes/:id)');
+    expect(card8).toHaveTextContent('1,420');
+  });
 });

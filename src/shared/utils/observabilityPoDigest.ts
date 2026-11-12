@@ -19,6 +19,10 @@ import {
   type ObservabilityDigestSlot,
   type ObservabilityDropReasonFinding,
   type ObservabilityDropReasonsSummary,
+  type ObservabilityDynamicSectionDisplayType,
+  type ObservabilityDynamicSectionTone,
+  type ObservabilityDynamicSkillSection,
+  type ObservabilityDynamicSkillSectionItem,
   type ObservabilityExceptionItem,
   type ObservabilityModuleRetentionDropItem,
   type ObservabilityPoDigestResponse,
@@ -862,6 +866,390 @@ export function synthesizeSummariesFromTelemetry(options: {
   return { dropReasonsSummary, adoptionRecommendations };
 }
 
+export interface ParsedSkillSignalDefinition {
+  id: string;
+  number: number;
+  title: string;
+  keyHint?: string;
+  instructions: string;
+  isCoreSignal: boolean;
+}
+
+const CORE_SIGNAL_KEYS = new Set([
+  'topusers',
+  'commonexceptions',
+  'moduleretentiondrops',
+  'dropreasonssummary',
+  'topmodules',
+  'adoptionrecommendations',
+]);
+
+const CORE_SIGNAL_TITLES = new Set([
+  'top users',
+  'most common exceptions',
+  'retention dropped per module',
+  'ai summary of why there could be drops',
+  'top modules',
+  'ai summary of how we can drive adoption',
+]);
+
+const RESERVED_HEADING_PREFIXES = [
+  'observability product owner digest',
+  'six core product owner signals',
+  'product owner signals',
+  'additional product owner signals',
+  'dynamic extensibility',
+  'supported trend windows',
+  'input context',
+  'output contract',
+  'guardrails',
+];
+
+function slugifySectionId(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'custom-signal'
+  );
+}
+
+function isCoreSignalMatch(title: string, keyHint?: string): boolean {
+  if (keyHint && CORE_SIGNAL_KEYS.has(keyHint.toLowerCase().replace(/[^a-z0-9]/g, ''))) {
+    return true;
+  }
+  const normalizedTitle = title
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  return CORE_SIGNAL_TITLES.has(normalizedTitle);
+}
+
+const GUARDRAIL_ITEM_TITLES = new Set([
+  'privacy & redaction',
+  'evidence-grounded',
+  'actionable product language',
+]);
+
+function isReservedHeading(headingText: string): boolean {
+  const normalized = headingText.trim().toLowerCase().replace(/\s+/g, ' ');
+  return RESERVED_HEADING_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+/**
+ * Parse `.cursor/skills/observability-po-digest/SKILL.md` to extract all defined signals,
+ * including any 7th, 8th, ... numbered signals or custom `###` / `##` sections added to the skill file.
+ */
+export function parseSkillSectionsFromMarkdown(skillMarkdown: string): {
+  allSignals: ParsedSkillSignalDefinition[];
+  customSignals: ParsedSkillSignalDefinition[];
+} {
+  if (!skillMarkdown || !skillMarkdown.trim()) {
+    return { allSignals: [], customSignals: [] };
+  }
+
+  // Strip YAML frontmatter and fenced code blocks so JSON schema examples are ignored
+  const withoutFrontmatter = skillMarkdown
+    .replace(/\r\n/g, '\n')
+    .replace(/^---\n[\s\S]*?\n---\n?/, '');
+  const withoutCodeBlocks = withoutFrontmatter.replace(/```[\s\S]*?```/g, '');
+
+  const lines = withoutCodeBlocks.split('\n');
+  const rawEntries: Array<{
+    explicitNumber?: number;
+    title: string;
+    keyHint?: string;
+    instructionLines: string[];
+  }> = [];
+
+  let currentMajorHeading = '';
+  let activeEntry: {
+    explicitNumber?: number;
+    title: string;
+    keyHint?: string;
+    instructionLines: string[];
+  } | null = null;
+
+  const flushActive = () => {
+    if (activeEntry && activeEntry.title.trim()) {
+      rawEntries.push(activeEntry);
+    }
+    activeEntry = null;
+  };
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed === '---') continue;
+
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1]!.length;
+      const rawHeadingText = headingMatch[2]!.trim();
+      flushActive();
+
+      if (level <= 2) {
+        currentMajorHeading = rawHeadingText.toLowerCase();
+      }
+
+      if (isReservedHeading(rawHeadingText)) {
+        continue;
+      }
+
+      // A custom ## or ### heading defines a dynamic signal section
+      const numberedHeading = rawHeadingText.match(
+        /^(?:(\d+)[.)]\s+)?(?:\*\*(.+?)\*\*|(.+?))(?:\s*\(`?([A-Za-z0-9_-]+)`?\))?\s*$/,
+      );
+      const parsedNum = numberedHeading?.[1] ? Number(numberedHeading[1]) : undefined;
+      const cleanTitle = (numberedHeading?.[2] ?? numberedHeading?.[3] ?? rawHeadingText)
+        .replace(/\*\*/g, '')
+        .trim();
+      const keyHint = numberedHeading?.[4]?.trim();
+
+      activeEntry = {
+        explicitNumber: parsedNum,
+        title: cleanTitle,
+        keyHint,
+        instructionLines: [],
+      };
+      continue;
+    }
+
+    // Skip numbered items inside Input Context, Output Contract, or Supported Trend Windows
+    const inSkippedMajorSection =
+      currentMajorHeading.startsWith('input context') ||
+      currentMajorHeading.startsWith('output contract') ||
+      currentMajorHeading.startsWith('supported trend windows');
+
+    const numberedItemMatch = rawLine.match(
+      /^(\d+)[.)]\s+(?:\*\*(.+?)\*\*|([^\n(`]+?))(?:\s*\(`?([A-Za-z0-9_-]+)`?\))?(?:\s*[-—:]\s*(.*))?$/,
+    );
+    if (!inSkippedMajorSection && numberedItemMatch) {
+      flushActive();
+      const explicitNumber = Number(numberedItemMatch[1]);
+      const cleanTitle = (numberedItemMatch[2] ?? numberedItemMatch[3] ?? '')
+        .replace(/\*\*/g, '')
+        .trim();
+      if (GUARDRAIL_ITEM_TITLES.has(cleanTitle.toLowerCase())) {
+        continue;
+      }
+      const keyHint = numberedItemMatch[4]?.trim();
+      const trailingText = numberedItemMatch[5]?.trim();
+      activeEntry = {
+        explicitNumber,
+        title: cleanTitle,
+        keyHint,
+        instructionLines: trailingText ? [trailingText] : [],
+      };
+      continue;
+    }
+
+    if (activeEntry) {
+      const cleanedBullet = trimmed.replace(/^[-*]\s+/, '').trim();
+      if (cleanedBullet) {
+        activeEntry.instructionLines.push(cleanedBullet);
+      }
+    }
+  }
+
+  flushActive();
+
+  let nextCustomNumber = 7;
+  const allSignals: ParsedSkillSignalDefinition[] = rawEntries.map((entry, idx) => {
+    const isCore = isCoreSignalMatch(entry.title, entry.keyHint);
+    const number =
+      entry.explicitNumber ??
+      (isCore ? idx + 1 : nextCustomNumber++);
+    if (!isCore && number >= nextCustomNumber) {
+      nextCustomNumber = number + 1;
+    }
+    const id = slugifySectionId(entry.keyHint || entry.title);
+    return {
+      id,
+      number,
+      title: entry.title,
+      keyHint: entry.keyHint,
+      instructions: entry.instructionLines.join(' '),
+      isCoreSignal: isCore,
+    };
+  });
+
+  const customSignals = allSignals.filter((sig) => !sig.isCoreSignal);
+  return { allSignals, customSignals };
+}
+
+function inferDynamicDisplayType(
+  signal: ParsedSkillSignalDefinition,
+): ObservabilityDynamicSectionDisplayType {
+  const combined = `${signal.title} ${signal.instructions}`.toLowerCase();
+  if (/\bdisplaytype\s*:\s*table\b|\btable\b/.test(combined)) return 'table';
+  if (/\bdisplaytype\s*:\s*ranked_list\b|\b(ranked|leaderboard)\b/.test(combined)) {
+    return 'ranked_list';
+  }
+  if (/\bdisplaytype\s*:\s*metrics\b|\b(kpi|scorecard|metrics)\b/.test(combined)) {
+    return 'metrics';
+  }
+  if (/\bdisplaytype\s*:\s*markdown\b/.test(combined)) return 'markdown';
+  return 'insights';
+}
+
+function inferDynamicTone(signal: ParsedSkillSignalDefinition): ObservabilityDynamicSectionTone {
+  const combined = `${signal.title} ${signal.instructions}`.toLowerCase();
+  if (/\b(danger|critical|outage|breach)\b/.test(combined)) return 'danger';
+  if (/\b(warning|latency|slow|timeout|error|drop|bottleneck|friction|churn)\b/.test(combined)) {
+    return 'warning';
+  }
+  if (/\b(ai|recommend|growth|adopt|opportunity|forecast|insight)\b/.test(combined)) {
+    return 'accent';
+  }
+  return 'default';
+}
+
+/**
+ * Synthesize structured `ObservabilityDynamicSkillSection` cards for any custom
+ * signals defined in `.cursor/skills/observability-po-digest/SKILL.md` beyond the 6 core signals.
+ */
+export function synthesizeDynamicSectionsFromTelemetry(options: {
+  customSignals: ParsedSkillSignalDefinition[];
+  window: ObservabilityTrendWindow;
+  model: string;
+  effort: EffortLevel;
+  aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
+  aiCustomSections?: ObservabilityDynamicSkillSection[];
+}): ObservabilityDynamicSkillSection[] {
+  const { customSignals, window, model, effort, aggregated, aiCustomSections = [] } = options;
+  const windowLabel = OBSERVABILITY_TREND_WINDOW_LABELS[window];
+  const effortName = effortLabel(effort);
+
+  const byIdOrTitle = new Map<string, ObservabilityDynamicSkillSection>();
+  for (const aiSec of aiCustomSections) {
+    if (!aiSec || typeof aiSec.title !== 'string' || !aiSec.title.trim()) continue;
+    const normalizedId = slugifySectionId(aiSec.id || aiSec.title);
+    byIdOrTitle.set(normalizedId, {
+      ...aiSec,
+      id: normalizedId,
+      title: aiSec.title.trim(),
+    });
+    byIdOrTitle.set(slugifySectionId(aiSec.title), {
+      ...aiSec,
+      id: normalizedId,
+      title: aiSec.title.trim(),
+    });
+  }
+
+  const synthesized: ObservabilityDynamicSkillSection[] = [];
+  const usedIds = new Set<string>();
+
+  for (const sig of customSignals) {
+    const existingAi =
+      byIdOrTitle.get(sig.id) ?? byIdOrTitle.get(slugifySectionId(sig.title));
+    if (existingAi) {
+      usedIds.add(existingAi.id);
+      synthesized.push({
+        ...existingAi,
+        id: sig.id,
+        number: existingAi.number ?? sig.number,
+        title: existingAi.title || sig.title,
+        subtitle:
+          existingAi.subtitle ??
+          `Skill-defined signal (${windowLabel} · ${model} · ${effortName} effort)`,
+        badge: existingAi.badge ?? 'Skill Signal',
+        tone: existingAi.tone ?? inferDynamicTone(sig),
+        displayType: existingAi.displayType ?? inferDynamicDisplayType(sig),
+      });
+      continue;
+    }
+
+    const displayType = inferDynamicDisplayType(sig);
+    const tone = inferDynamicTone(sig);
+    const topMods = aggregated.topModules.slice(0, 3);
+    const topUsers = aggregated.topUsers.slice(0, 3);
+
+    const items: ObservabilityDynamicSkillSectionItem[] =
+      topMods.length > 0
+        ? topMods.map((mod, idx) => {
+            const matchingExc = aggregated.commonExceptions.find(
+              (e) => e.module === mod.module,
+            );
+            const matchingUser = topUsers[idx];
+            return {
+              id: `${sig.id}-item-${idx + 1}`,
+              title: `${mod.module} (${mod.routeTemplate})`,
+              subtitle: matchingUser
+                ? `Lead actor: ${matchingUser.displayName} (${matchingUser.role})`
+                : `${mod.activeUsers} active user(s) in ${windowLabel}`,
+              detail: matchingExc
+                ? `Observed ${matchingExc.count} exception(s) (${matchingExc.signature}) alongside ${mod.interactions} interactions (${mod.retentionPct}% cohort retention).`
+                : `${mod.interactions} interactions (${mod.sharePct}% platform share) with ${mod.retentionPct}% cohort retention across ${windowLabel}.`,
+              meta: sig.instructions
+                ? `Skill focus: ${sig.instructions.slice(0, 140)}`
+                : `Evaluated across ${windowLabel} (${WINDOW_BASELINE_LABELS[window]})`,
+              badge: `${mod.sharePct}% share`,
+              metricLabel: 'Interactions',
+              metricValue: mod.interactions,
+              deltaPct: mod.deltaPct,
+              windowComparison: mod.windowComparison,
+            };
+          })
+        : [
+            {
+              id: `${sig.id}-item-1`,
+              title: `${sig.title} — ${windowLabel} Snapshot`,
+              subtitle: `${aggregated.kpis.activeUsers} active users`,
+              detail:
+                sig.instructions ||
+                `Synthesized from PostgreSQL telemetry for ${windowLabel}.`,
+              meta: `${model} · ${effortName} effort`,
+              badge: windowLabel,
+              metricLabel: 'Active Users',
+              metricValue: aggregated.kpis.activeUsers,
+              deltaPct: aggregated.kpis.activeUsersDeltaPct,
+            },
+          ];
+
+    usedIds.add(sig.id);
+    synthesized.push({
+      id: sig.id,
+      number: sig.number,
+      title: sig.title,
+      subtitle: `${
+        sig.instructions
+          ? sig.instructions.slice(0, 110)
+          : `Dynamic skill signal for ${windowLabel}`
+      } · ${model} (${effortName} effort)`,
+      badge: 'Dynamic Skill Signal',
+      tone,
+      displayType,
+      headline: `${sig.title} (${windowLabel}): ${aggregated.kpis.activeUsers} active users and ${aggregated.topModules.reduce((s, m) => s + m.interactions, 0)} interactions evaluated via ${OBSERVABILITY_PO_SKILL_PATH} (${model} · ${effortName}).`,
+      narrative:
+        sig.instructions ||
+        `Automatically synthesized from PostgreSQL trace_events, trace_path_rollups, and app_users for section "${sig.title}" defined in ${OBSERVABILITY_PO_SKILL_PATH}.`,
+      items,
+    });
+  }
+
+  // Append any additional AI-returned custom sections that were not in customSignals
+  let extraNum =
+    synthesized.reduce((max, s) => Math.max(max, s.number ?? 6), 6) + 1;
+  for (const aiSec of aiCustomSections) {
+    if (!aiSec || typeof aiSec.title !== 'string' || !aiSec.title.trim()) continue;
+    const normalizedId = slugifySectionId(aiSec.id || aiSec.title);
+    if (usedIds.has(normalizedId)) continue;
+    usedIds.add(normalizedId);
+    synthesized.push({
+      ...aiSec,
+      id: normalizedId,
+      number: aiSec.number ?? extraNum++,
+      title: aiSec.title.trim(),
+      badge: aiSec.badge ?? 'Skill Signal',
+      tone: aiSec.tone ?? 'accent',
+      displayType: aiSec.displayType ?? 'insights',
+    });
+  }
+
+  return synthesized;
+}
+
 /**
  * Default seed-based baseline rows used when generating a fallback response on the client
  * or when the database has no rows in unit fallback mode.
@@ -1069,10 +1457,13 @@ export function buildDigestSnapshotFromAggregates(options: {
   effort: EffortLevel;
   slot: ObservabilityDigestSlot;
   aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
+  skillMarkdown?: string;
   aiSynthesis?: {
     headline?: string;
     dropReasonsSummary?: ObservabilityDropReasonsSummary;
     adoptionRecommendations?: ObservabilityAdoptionSummary;
+    customSections?: ObservabilityDynamicSkillSection[];
+    sections?: ObservabilityDynamicSkillSection[];
   };
   now?: Date;
 }): ObservabilityPoDigestSnapshot {
@@ -1095,6 +1486,18 @@ export function buildDigestSnapshotFromAggregates(options: {
     options.aiSynthesis?.dropReasonsSummary ?? fallbackAi.dropReasonsSummary;
   const adoptionRecommendations =
     options.aiSynthesis?.adoptionRecommendations ?? fallbackAi.adoptionRecommendations;
+
+  const parsedSkill = parseSkillSectionsFromMarkdown(options.skillMarkdown ?? '');
+  const aiProvidedSections =
+    options.aiSynthesis?.customSections ?? options.aiSynthesis?.sections ?? [];
+  const customSections = synthesizeDynamicSectionsFromTelemetry({
+    customSignals: parsedSkill.customSignals,
+    window,
+    model,
+    effort,
+    aggregated,
+    aiCustomSections: aiProvidedSections,
+  });
 
   const slotBadge =
     slot === 'morning_6am'
@@ -1124,6 +1527,8 @@ export function buildDigestSnapshotFromAggregates(options: {
     dropReasonsSummary,
     topModules: aggregated.topModules,
     adoptionRecommendations,
+    customSections,
+    sections: customSections,
   };
 }
 
@@ -1133,6 +1538,7 @@ export function synthesizePoDigestSnapshot(options: {
   model: string;
   effort: EffortLevel;
   slot: ObservabilityDigestSlot;
+  skillMarkdown?: string;
   now?: Date;
 }): ObservabilityPoDigestSnapshot {
   const now = options.now ?? new Date();
