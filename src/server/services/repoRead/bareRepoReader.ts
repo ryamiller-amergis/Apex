@@ -1,5 +1,3 @@
-import { cpus } from 'node:os';
-
 import type {
   RepoCodeSearchResult,
   RepoDirEntry,
@@ -13,8 +11,10 @@ import { git, safeArgs } from '../../utils/asyncGit';
 import { createGroundingTelemetry } from '../groundingTelemetry';
 import {
   boundedSearchLimit,
+  buildGitGrepPatternArgs,
   MAX_REPO_DIRECTORY_ENTRIES,
   RepoReaderError,
+  runSerializedSearch,
 } from '../repoReader';
 import { trackEvent } from '../telemetry';
 import { validateRepoRelativePath } from './pathGuard';
@@ -49,9 +49,10 @@ export function resolveSearchTimeoutMs(): number {
   );
 }
 
-// Blob inflation parallelizes well. Clamped because the App Service instance
-// also serves requests, and unbounded threads starve them.
-const SEARCH_THREADS = Math.max(2, Math.min(8, cpus().length || 2));
+// Blob inflation parallelizes well, but in 2-vCPU containers os.cpus().length
+// reports the underlying Kubernetes node's cores (8-32), which causes OOMs when
+// multiple greps inflate large packfiles. Cap at 2 threads per serialized grep.
+const SEARCH_THREADS = 2;
 
 const SEARCH_TIMEOUT_MESSAGE =
   'Repository search timed out. Narrow the query or scope it to a directory.';
@@ -131,27 +132,30 @@ export class BareRepoReader implements RepoReader {
         const pathspec = scopedPath?.trim()
           ? validateRepoRelativePath(scopedPath).portablePath || '.'
           : '.';
+        const patternArgs = buildGitGrepPatternArgs(query);
         let output: string;
         try {
-          output = await git(
-            safeArgs(this.mirrorPath, [
-              'grep',
-              '-n',
-              '-I',
-              '--full-name',
-              '-F',
-              `--threads=${SEARCH_THREADS}`,
-              '-e',
-              query,
-              this.identity.sha,
-              '--',
-              pathspec,
-            ]),
-            {
-              cwd: this.mirrorPath,
-              timeout: resolveSearchTimeoutMs(),
-              maxBuffer: 2 * 1024 * 1024,
-            },
+          output = await runSerializedSearch(() =>
+            git(
+              safeArgs(this.mirrorPath, [
+                'grep',
+                '-n',
+                '-I',
+                '--full-name',
+                '-m',
+                '5',
+                `--threads=${SEARCH_THREADS}`,
+                ...patternArgs,
+                this.identity.sha,
+                '--',
+                pathspec,
+              ]),
+              {
+                cwd: this.mirrorPath,
+                timeout: resolveSearchTimeoutMs(),
+                maxBuffer: 256 * 1024,
+              },
+            ),
           );
         } catch (error) {
           if (error instanceof Error && /exit code 1$/i.test(error.message)) {

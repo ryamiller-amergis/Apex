@@ -122,9 +122,19 @@ describe('native read custom-tool adapter', () => {
       query: 'needle',
       repo_path: 'sources/src-3',
     });
+    await execute(tools.search_repo_code, {
+      query: 'ATS applicant tracking core module',
+      repositoryPath: 'sources/src-4',
+    });
 
     expect(repoReader.searchCode).toHaveBeenNthCalledWith(1, 'needle', 5, 'sources/src-1');
     expect(repoReader.searchCode).toHaveBeenNthCalledWith(2, 'needle', undefined, 'sources/src-2/src');
     expect(repoReader.searchCode).toHaveBeenNthCalledWith(3, 'needle', undefined, 'sources/src-3');
+    expect(repoReader.searchCode).toHaveBeenNthCalledWith(
+      4,
+      'ATS applicant tracking core module',
+      undefined,
+      'sources/src-4',
+    );
   });
 });

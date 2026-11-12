@@ -1156,7 +1156,7 @@ export function createInteractiveSessionActor(
     try {
       await publishStartupPhase(
         'setup',
-        specification.grounding?.sha
+        specification.grounding?.sha && specification.workflowClass !== 'brainstorm'
           ? INTERACTIVE_LOADING_CODE_DETAIL
           : INTERACTIVE_STARTING_DETAIL,
       );
@@ -1291,7 +1291,7 @@ export function createInteractiveSessionActor(
             await cached.releaseWorkspace?.().catch(() => {});
           }
         }
-        if (specification.grounding?.sha) {
+        if (specification.grounding?.sha && specification.workflowClass !== 'brainstorm') {
           await publishStartupPhase('setup', INTERACTIVE_STARTING_DETAIL);
         }
         const knownAgentId =

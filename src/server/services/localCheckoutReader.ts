@@ -12,8 +12,10 @@ import { git, safeArgs } from '../utils/asyncGit';
 import { createGroundingTelemetry } from './groundingTelemetry';
 import {
   boundedSearchLimit,
+  buildGitGrepPatternArgs,
   MAX_REPO_DIRECTORY_ENTRIES,
   RepoReaderError,
+  runSerializedSearch,
 } from './repoReader';
 import { trackEvent } from './telemetry';
 
@@ -91,19 +93,33 @@ export class LocalCheckoutReader implements RepoReader {
           scopedSourceId ? scopeSegments.slice(2).join('/') : normalizedScope;
 
         const hasGitRoot = await fs.stat(path.join(root, '.git')).then(() => true, () => false);
+        const patternArgs = buildGitGrepPatternArgs(query);
         const combined: RepoCodeSearchResult[] = [];
         const searchedRealpaths = new Set<string>();
         if (hasGitRoot && !scopedSourceId && scopeSegments[0] !== 'sources') {
           searchedRealpaths.add(root);
           const pathspec = scopedInnerPath || '.';
           try {
-            const output = await git(
-              safeArgs(root, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', pathspec]),
-              {
-                cwd: root,
-                timeout: 10_000,
-                maxBuffer: 2 * 1024 * 1024,
-              },
+            const output = await runSerializedSearch(() =>
+              git(
+                safeArgs(root, [
+                  'grep',
+                  '-n',
+                  '-I',
+                  '--full-name',
+                  '-m',
+                  '5',
+                  '--threads=2',
+                  ...patternArgs,
+                  '--',
+                  pathspec,
+                ]),
+                {
+                  cwd: root,
+                  timeout: 10_000,
+                  maxBuffer: 256 * 1024,
+                },
+              ),
             );
             combined.push(...this.shapeSearchResults(output, maxResults));
           } catch (error) {
@@ -130,13 +146,26 @@ export class LocalCheckoutReader implements RepoReader {
           if (!sourceHasGit) continue;
           searchedRealpaths.add(sourceRoot);
           try {
-            const sourceOut = await git(
-              safeArgs(sourceRoot, ['grep', '-n', '-I', '--full-name', '-F', '-e', query, '--', sourcePathspec]),
-              {
-                cwd: sourceRoot,
-                timeout: 10_000,
-                maxBuffer: 2 * 1024 * 1024,
-              },
+            const sourceOut = await runSerializedSearch(() =>
+              git(
+                safeArgs(sourceRoot, [
+                  'grep',
+                  '-n',
+                  '-I',
+                  '--full-name',
+                  '-m',
+                  '5',
+                  '--threads=2',
+                  ...patternArgs,
+                  '--',
+                  sourcePathspec,
+                ]),
+                {
+                  cwd: sourceRoot,
+                  timeout: 10_000,
+                  maxBuffer: 256 * 1024,
+                },
+              ),
             );
             const shaped = this.shapeSearchResults(
               sourceOut,

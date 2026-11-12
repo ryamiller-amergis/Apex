@@ -419,6 +419,23 @@ describe('interactive actor host dispatch endpoint', () => {
         }),
       ]);
 
+      // Also scopes when the model passes the source displayName or repository name
+      const scopedByName = await reader.searchCode('targetToken', 10, 'Amego');
+      expect(scopedByName).toEqual([
+        expect.objectContaining({
+          path: '/sources/src-amego/amego.ts',
+        }),
+      ]);
+
+      // Infers the target source when scopedPath is omitted but the query names one source
+      const inferredFromQuery = await reader.searchCode('MaxView applicant tracking targetToken', 10);
+      expect(primaryReader.searchCode).not.toHaveBeenCalled();
+      expect(inferredFromQuery).toEqual([
+        expect.objectContaining({
+          path: '/sources/src-maxview/maxview.ts',
+        }),
+      ]);
+
       const unscoped = await reader.searchCode('targetToken', 2);
       expect(primaryReader.searchCode).toHaveBeenCalledWith('targetToken', 2);
       expect(unscoped).toHaveLength(2);

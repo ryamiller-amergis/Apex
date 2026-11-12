@@ -154,7 +154,7 @@ export function formatSourcesContext(sources: FrozenBrainstormTurn['sources']): 
     lines.push(
       `- Ready repository "${root.displayName}" (commit ${root.commitSha.slice(0, 12)}): `
         + `mounted read-only at \`sources/${root.sourceId}\`. `
-        + 'Use `search_repo_code`, `list_repo_dir`, and `get_skill_file` on `sources/...` paths (do not use `shell`, `grep`, or `glob`, which cannot traverse the mounted directory junction).',
+        + `Use \`search_repo_code\` (with \`path: "sources/${root.sourceId}"\`), \`list_repo_dir\`, and \`get_skill_file\` on \`sources/${root.sourceId}\` paths (do not use \`shell\`, \`grep\`, or \`glob\`, which cannot traverse the mounted directory junction).`,
     );
   }
   for (const server of sources.mcpServers) {

@@ -13,6 +13,23 @@ const pathInputSchema: Record<string, SDKJsonValue> = {
   },
 };
 
+const SEARCH_SCOPE_KEYS = [
+  'path',
+  'repoPath',
+  'repo_path',
+  'repositoryPath',
+  'repository_path',
+  'sourcePath',
+  'source_path',
+  'target_directory',
+  'targetDirectory',
+  'directory',
+  'dir',
+  'source',
+  'sourceId',
+  'source_id',
+] as const;
+
 const searchInputSchema: Record<string, SDKJsonValue> = {
   type: 'object',
   additionalProperties: false,
@@ -30,13 +47,35 @@ const searchInputSchema: Record<string, SDKJsonValue> = {
       type: 'string',
       description: 'Optional repository-relative path or mounted source prefix (e.g. sources/<sourceId>) to scope the search',
     },
+    repoPath: {
+      type: 'string',
+      description: 'Alias for path (e.g. sources/<sourceId>)',
+    },
+    repo_path: {
+      type: 'string',
+      description: 'Alias for path (e.g. sources/<sourceId>)',
+    },
+    repositoryPath: {
+      type: 'string',
+      description: 'Alias for path (e.g. sources/<sourceId>)',
+    },
+    repository_path: {
+      type: 'string',
+      description: 'Alias for path (e.g. sources/<sourceId>)',
+    },
   },
 };
 
-function firstStringArg(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  for (const key of keys) {
+function resolveScopedSearchPath(record: Record<string, unknown>): string | undefined {
+  for (const key of SEARCH_SCOPE_KEYS) {
     const value = record[key];
     if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'query') continue;
+    if (typeof value === 'string' && /^\/?sources\//i.test(value.trim())) {
       return value.trim();
     }
   }
@@ -83,7 +122,7 @@ export function createNativeReadTools(
       inputSchema: searchInputSchema,
       execute: async (rawArgs) => {
         const args = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
-        const scopedPath = firstStringArg(args, ['path', 'repoPath', 'repo_path']);
+        const scopedPath = resolveScopedSearchPath(args);
         return {
           content: [{
             type: 'text',
