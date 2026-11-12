@@ -12,6 +12,7 @@ import {
 } from '../../shared/types/observability';
 import { getObservabilityCaptureService } from './observabilityCaptureService';
 import { isObservabilityCaptureEnabled } from './observabilityCaptureFlagSnapshot';
+import { observabilityPoDigestScheduler } from './observabilityPoDigestService';
 import { trackEvent } from './telemetry';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
@@ -312,11 +313,14 @@ export function runRetentionCycle(): Promise<RetentionCycleResult> {
 }
 
 export function startObservabilityOperations(): void {
-  getOperations().start({ e2eMode: process.env.E2E_MODE === 'true' });
+  const e2eMode = process.env.E2E_MODE === 'true';
+  getOperations().start({ e2eMode });
+  observabilityPoDigestScheduler.start({ e2eMode });
 }
 
 export function stopObservabilityOperations(): void {
   getOperations().stop();
+  observabilityPoDigestScheduler.stop();
 }
 
 export function resetObservabilityOperationsForTests(): void {
