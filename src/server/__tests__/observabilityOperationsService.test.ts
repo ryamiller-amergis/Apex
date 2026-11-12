@@ -110,7 +110,7 @@ describe('observabilityOperationsService', () => {
   });
 
   describe('runRetentionCycle', () => {
-    it('VT-01 / DoD-0 / BR-006 deletes only strictly expired raw events using a 30-day predicate and never targets rollups', async () => {
+    it('VT-01 / DoD-0 / BR-006 deletes only strictly expired raw events using a 120-day predicate and never targets rollups', async () => {
       const db = createMockDb({ deleteCounts: [2] });
       const ops = createObservabilityOperationsService({ db });
 
@@ -119,7 +119,7 @@ describe('observabilityOperationsService', () => {
       expect(result).toEqual({ skipped: false, deletedCount: 2 });
       const texts = db.execute.mock.calls.map(([query]) => sqlText(query));
       expect(texts.some((t) => t.includes(OBSERVABILITY_RETENTION_LOCK_KEY))).toBe(true);
-      expect(texts.some((t) => /occurred_at\s*<\s*NOW\(\)\s*-\s*INTERVAL '30 days'/i.test(t))).toBe(true);
+      expect(texts.some((t) => /occurred_at\s*<\s*NOW\(\)\s*-\s*INTERVAL '120 days'/i.test(t))).toBe(true);
       expect(texts.every((t) => !/trace_path_rollups/i.test(t))).toBe(true);
       expect(trackEvent).toHaveBeenCalledWith('observability.retention.started');
       expect(trackEvent).toHaveBeenCalledWith(
