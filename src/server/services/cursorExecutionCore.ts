@@ -432,6 +432,10 @@ export function createCursorRunEventEnvelope(input: {
 
 const TOOL_TARGET_KEYS = [
   'path',
+  'repoPath',
+  'repo_path',
+  'repositoryPath',
+  'repository_path',
   'file_path',
   'file',
   'target_file',

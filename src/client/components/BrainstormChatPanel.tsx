@@ -645,6 +645,7 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
       const sent = await chat.send(text, {
         model: selectedModel,
         mode: composerMode,
+        ...(replySettled ? { ignoreStaleStreamBusy: true } : {}),
         ...(outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {}),
       });
       if (sent) {

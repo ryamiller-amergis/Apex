@@ -936,4 +936,43 @@ describe('useAgentChatSession', () => {
     rerender();
     expect(result.current.isAwaitingAgentResponse).toBe(false);
   });
+
+  it('allows a follow-up send when ignoreStaleStreamBusy is true even if the stream is still busy', async () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'First turn', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_2 }),
+    );
+    expect(result.current.isInteractionBusy).toBe(true);
+
+    let sentWithoutFlag = true;
+    await act(async () => {
+      sentWithoutFlag = await result.current.send('Follow-up after attaching source');
+    });
+    expect(sentWithoutFlag).toBe(false);
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    let sentWithFlag = false;
+    await act(async () => {
+      sentWithFlag = await result.current.send('Follow-up after attaching source', {
+        ignoreStaleStreamBusy: true,
+      });
+    });
+    expect(sentWithFlag).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          turnId: TURN_ID_2,
+          text: 'Follow-up after attaching source',
+        }),
+      }),
+    );
+  });
 });
