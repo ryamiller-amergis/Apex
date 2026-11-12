@@ -563,7 +563,16 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
       try {
         opened = await deps.ledger.openTurn({ sessionId: session.id, project: session.project, turnId, text });
       } catch (err) {
-        throw translateAdmissionError(err);
+        if (err instanceof BrainstormLedgerConflict) {
+          await deps.ledger.reconcileStreamingRows(session.id, session.chatThreadId).catch(() => {});
+          try {
+            opened = await deps.ledger.openTurn({ sessionId: session.id, project: session.project, turnId, text });
+          } catch (retryErr) {
+            throw translateAdmissionError(retryErr);
+          }
+        } else {
+          throw translateAdmissionError(err);
+        }
       }
       // A repeat of a turn whose row already closed without a run must not attach a new run to it.
       if (opened.existing && !opened.assistant.runId && opened.assistant.status !== 'streaming') {
