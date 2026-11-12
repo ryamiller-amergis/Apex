@@ -1,7 +1,7 @@
 /**
- * Platform Admin — Skill-Driven Product Owner Observability E2E Spec.
+ * Platform Admin — Skill-Driven Product Owner Observability E2E Spec (PostgreSQL-backed).
  *
- * Validates:
+ * Validates against real PostgreSQL `trace_events`, `trace_path_rollups`, and `app_users` rows:
  * 1. Twice-daily scheduled digest status (6:00 AM & 6:00 PM) + skill provenance.
  * 2. All 6 core Product Owner signals:
  *    - Top users
@@ -13,17 +13,12 @@
  * 3. Multi-window trend selector across Today, Last day, Last 7 days,
  *    Last 14 days, Last 30 days, and Last 60 days.
  * 4. Explicit selection of Composer 2.5 (composer-2.5) and Effort Level,
- *    on-demand digest generation, and verification of rendered Composer 2.5 summary.
+ *    on-demand digest generation against the real Express/PostgreSQL endpoint,
+ *    and verification of the rendered Composer 2.5 summary.
  */
 import type { Page } from '@playwright/test';
-import { test, expect } from '../support/fixtures';
+import { test, expect, SeedApi } from '../support/fixtures';
 import { stubAdoProjects, suppressSseStreams } from '../support/api-stubs';
-import {
-  buildFallbackPoDigestResponse,
-  isObservabilityTrendWindow,
-  normalizeObservabilityEffort,
-  normalizeObservabilityModel,
-} from '../../../src/shared/utils/observabilityPoDigest';
 import type { ObservabilityTrendWindow } from '../../../src/shared/types/observability';
 
 test.use({
@@ -31,7 +26,7 @@ test.use({
   video: { mode: 'on', size: { width: 1440, height: 900 } },
 });
 
-async function stubSuperAdminObservabilityEnv(
+async function prepareBrowserMocksForExternalApis(
   page: Page,
   capturedGenerateRequests: Array<Record<string, unknown>>,
 ): Promise<void> {
@@ -41,43 +36,6 @@ async function stubSuperAdminObservabilityEnv(
   await page.addInitScript(() => {
     window.localStorage.setItem('selectedProject', 'Apex');
     window.localStorage.setItem('selectedAreaPath', 'Apex');
-  });
-
-  await page.route('**/api/me/permissions*', async (route) => {
-    const response = await route.fetch();
-    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        ...data,
-        isSuperAdmin: true,
-        betaAnnouncementDismissed: true,
-        changelogUnread: false,
-        showChangelogOnLogin: false,
-        whatsNew: {
-          status: 'seeded',
-          currentVersion: '1.12.0',
-          lastSeenVersion: '1.12.0',
-          unread: false,
-          showOnLogin: false,
-          seeded: true,
-        },
-      }),
-    });
-  });
-
-  await page.route('**/api/feature-flags/evaluate*', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        flags: {
-          'observability-viewer': true,
-          'beta-to-prod-announcement': false,
-        },
-      }),
-    });
   });
 
   await page.route('**/api/available-models', async (route) => {
@@ -95,147 +53,47 @@ async function stubSuperAdminObservabilityEnv(
     });
   });
 
-  let persistedModel = 'claude-sonnet-4-6';
-  let persistedEffort: 'low' | 'medium' | 'high' = 'medium';
-  let persistedSlot: 'morning_6am' | 'evening_6pm' | 'on_demand' = 'morning_6am';
-
-  await page.route('**/api/platform-admin/**', async (route) => {
-    const req = route.request();
-    const url = new URL(req.url());
-    const { pathname, searchParams } = url;
-
-    if (pathname === '/api/platform-admin/projects') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          projects: [{ id: 'apex', name: 'Apex', description: 'Apex Platform' }],
-        }),
-      });
-      return;
-    }
-
-    if (pathname === '/api/platform-admin/assignments') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ assignments: [] }),
-      });
-      return;
-    }
-
-    if (pathname === '/api/platform-admin/menu-settings') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ configs: [] }),
-      });
-      return;
-    }
-
-    if (pathname === '/api/platform-admin/users') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          users: [
-            {
-              userId: '11111111-1111-4111-8111-111111111111',
-              displayName: 'Ada Lovelace',
-              email: 'ada@example.com',
-            },
-          ],
-        }),
-      });
-      return;
-    }
-
-    if (pathname === '/api/platform-admin/groups') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ groups: [] }),
-      });
-      return;
-    }
-
-    if (pathname === '/api/platform-admin/access-requests') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ requests: [] }),
-      });
-      return;
-    }
-
-    if (pathname === '/api/platform-admin/observability/po-digest' && req.method() === 'GET') {
-      const project = searchParams.get('project') ?? 'Apex';
-      const rawWindow = searchParams.get('window') ?? '7d';
-      const window: ObservabilityTrendWindow = isObservabilityTrendWindow(rawWindow)
-        ? rawWindow
-        : '7d';
-      const model = normalizeObservabilityModel(searchParams.get('model') ?? persistedModel);
-      const effort = normalizeObservabilityEffort(searchParams.get('effort') ?? persistedEffort);
-      const payload = buildFallbackPoDigestResponse({
-        project,
-        window,
-        model,
-        effort,
-        slot: persistedSlot,
-      });
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(payload),
-      });
-      return;
-    }
-
-    if (
-      pathname === '/api/platform-admin/observability/po-digest/generate' &&
-      req.method() === 'POST'
-    ) {
-      const body = (req.postDataJSON() ?? {}) as Record<string, unknown>;
-      capturedGenerateRequests.push(body);
-      const project = typeof body.project === 'string' ? body.project : 'Apex';
-      const window: ObservabilityTrendWindow = isObservabilityTrendWindow(body.window)
-        ? body.window
-        : '7d';
-      persistedModel = normalizeObservabilityModel(
-        typeof body.model === 'string' ? body.model : persistedModel,
-      );
-      persistedEffort = normalizeObservabilityEffort(body.effort ?? persistedEffort);
-      persistedSlot = 'on_demand';
-      const payload = buildFallbackPoDigestResponse({
-        project,
-        window,
-        model: persistedModel,
-        effort: persistedEffort,
-        slot: persistedSlot,
-      });
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(payload),
-      });
-      return;
-    }
-
+  await page.route('**/api/platform-admin/projects', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([]),
+      body: JSON.stringify({
+        projects: [{ id: 'apex', name: 'Apex', description: 'Apex Platform' }],
+      }),
     });
+  });
+
+  page.on('request', (req) => {
+    if (
+      req.url().includes('/api/platform-admin/observability/po-digest/generate') &&
+      req.method() === 'POST'
+    ) {
+      const payload = (req.postDataJSON() ?? {}) as Record<string, unknown>;
+      capturedGenerateRequests.push(payload);
+    }
   });
 }
 
 test.describe('Platform Admin — Product Owner Observability Digest', () => {
-  test('validates 6 PO signals, multi-window trends, 6 AM & 6 PM schedule, and Composer 2.5 model selection', async ({
+  test.afterEach(async ({ e2eApi }) => {
+    await SeedApi.reset(e2eApi);
+  });
+
+  test('validates 6 PO signals from real PostgreSQL rows, multi-window trends, 6 AM & 6 PM schedule, and Composer 2.5 model selection', async ({
     page,
     loginAsPersona,
+    e2eApi,
   }) => {
+    // Seed real PostgreSQL `app_users`, `trace_events`, `trace_path_rollups`, and `observability-viewer` flag
+    const seeded = await SeedApi.seedObservabilityTelemetry(e2eApi, {
+      project: 'Apex',
+      superAdminEmail: 'po-dev@localhost',
+    });
+    expect(seeded.ok).toBe(true);
+    expect(seeded.eventsInserted).toBeGreaterThan(0);
+
     const capturedGenerateRequests: Array<Record<string, unknown>> = [];
-    await stubSuperAdminObservabilityEnv(page, capturedGenerateRequests);
+    await prepareBrowserMocksForExternalApis(page, capturedGenerateRequests);
 
     await loginAsPersona('product-owner');
     await page.goto('/platform-admin');
@@ -257,7 +115,7 @@ test.describe('Platform Admin — Product Owner Observability Digest', () => {
       '.cursor/skills/observability-po-digest/SKILL.md',
     );
 
-    // 2. Verify all 6 core Product Owner observability sections are visible
+    // 2. Verify all 6 core Product Owner observability sections are populated from PostgreSQL
     const topUsersCard = page.getByTestId('observability-signal-top-users');
     const exceptionsCard = page.getByTestId('observability-signal-common-exceptions');
     const retentionDropsCard = page.getByTestId('observability-signal-retention-drops');
@@ -266,13 +124,15 @@ test.describe('Platform Admin — Product Owner Observability Digest', () => {
     const driveAdoptionCard = page.getByTestId('observability-signal-drive-adoption');
 
     await expect(topUsersCard).toContainText('Top users');
+    await expect(topUsersCard).toContainText('Ada Lovelace');
     await expect(exceptionsCard).toContainText('Most common exceptions');
+    await expect(exceptionsCard).toContainText('BedrockPrototypeStreamTimeout');
     await expect(retentionDropsCard).toContainText('Retention dropped per module');
     await expect(dropReasonsCard).toContainText('AI summary of why there could be drops');
     await expect(topModulesCard).toContainText('Top modules');
     await expect(driveAdoptionCard).toContainText('AI summary of how we can drive adoption');
 
-    // 3. Verify all 6 requested trend windows update the digest view
+    // 3. Verify all 6 requested trend windows query PostgreSQL and update the digest view
     const trendWindows: Array<{ key: ObservabilityTrendWindow; label: string }> = [
       { key: 'today', label: 'Today' },
       { key: '1d', label: 'Last day' },
@@ -306,7 +166,7 @@ test.describe('Platform Admin — Product Owner Observability Digest', () => {
     await effortSelect.selectOption('high');
     await expect(effortSelect).toHaveValue('high');
 
-    // Select Last 30 days window and trigger on-demand skill digest generation
+    // Select Last 30 days window and trigger on-demand skill digest generation against PostgreSQL
     await page.getByTestId('observability-window-30d').click();
     await page.getByTestId('observability-generate-digest').click();
 

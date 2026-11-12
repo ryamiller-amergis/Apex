@@ -18,6 +18,7 @@ import {
   appRoles,
   appUserProjectRoles,
   appUserRoles,
+  appUsers,
   brainstormSessions,
   chatThreads,
   featureFlagRules,
@@ -38,16 +39,22 @@ import {
   projectSkillWorkflowSettings,
   reviewComments,
   testCases,
+  traceEvents,
+  tracePathRollups,
 } from '../db/schema';
 import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
 import { clerkTicketFetchStub, setMcpServerFetchStub } from '../services/mcpServerFetchStub';
 import type { ValidationScorecard } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
+import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
 import { legacyWorkflowFields } from '../../shared/constants/projectSkillWorkflows';
 import { saveWorkflowSettings } from '../services/projectSkillWorkflowSettings';
 import { brainstormArtifactStore } from '../services/brainstormArtifactVersionStore';
 import type { BrainstormArtifactType } from '../../shared/types/brainstormArtifact';
+import { buildDefaultSeedTelemetryRows } from '../../shared/utils/observabilityPoDigest';
+import { resetObservabilityPoDigestForTests } from '../services/observabilityPoDigestService';
+import { clearE2eSuperAdminEmails, grantE2eSuperAdminEmail } from '../utils/superAdmin';
 
 const router = express.Router();
 
@@ -170,6 +177,10 @@ router.post('/reset', async (_req, res) => {
     await db
       .delete(projectSkillSettings)
       .where(like(projectSkillSettings.friendlyName, `${E2E_PREFIX}%`));
+
+    await db.delete(traceEvents).where(like(traceEvents.traceId, 'e2e0b5%'));
+    clearE2eSuperAdminEmails();
+    resetObservabilityPoDigestForTests();
 
     res.json({ ok: true });
   } catch (err: unknown) {
@@ -1341,6 +1352,134 @@ router.post('/seed/mcp-servers-access', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/mcp-servers-access failed: ${message}` });
+  }
+});
+
+// Seed real PostgreSQL `app_users`, `trace_events`, `trace_path_rollups`, and
+// enable `observability-viewer` + Super Admin access for E2E Observability specs.
+router.post('/seed/observability-telemetry', async (req, res) => {
+  try {
+    const {
+      project = 'Apex',
+      superAdminEmail = 'po-dev@localhost',
+    } = (req.body ?? {}) as {
+      project?: string;
+      superAdminEmail?: string;
+    };
+
+    grantE2eSuperAdminEmail(superAdminEmail);
+    resetObservabilityPoDigestForTests();
+
+    // Ensure observability-viewer feature flag is enabled for everyone
+    const [existingFlag] = await db
+      .select()
+      .from(featureFlags)
+      .where(eq(featureFlags.key, 'observability-viewer'))
+      .limit(1);
+
+    let flagId: string;
+    if (existingFlag) {
+      flagId = existingFlag.id;
+      await db
+        .update(featureFlags)
+        .set({ enabled: true, lifecycle: 'active', updatedAt: new Date().toISOString() })
+        .where(eq(featureFlags.id, flagId));
+    } else {
+      const [created] = await db
+        .insert(featureFlags)
+        .values({
+          key: 'observability-viewer',
+          description: 'Super Admin Observability workspace',
+          enabled: true,
+          lifecycle: 'active',
+          createdBy: 'e2e',
+        })
+        .returning();
+      flagId = created.id;
+    }
+
+    await db.delete(featureFlagRules).where(eq(featureFlagRules.flagId, flagId));
+    await db.insert(featureFlagRules).values({
+      flagId,
+      type: 'everyone',
+      value: null,
+      createdBy: 'e2e',
+    });
+
+    // Clean any previous E2E observability trace_events
+    await db.delete(traceEvents).where(like(traceEvents.traceId, 'e2e0b5%'));
+
+    const seedRows = buildDefaultSeedTelemetryRows(new Date());
+
+    // Upsert app_users so FK actor_user_id -> app_users.oid is satisfied
+    for (const u of seedRows.users) {
+      await db
+        .insert(appUsers)
+        .values({
+          oid: u.oid,
+          displayName: u.displayName ?? u.oid,
+          email: u.email ?? `${u.oid}@example.com`,
+          showChangelogOnLogin: false,
+          dismissedBetaProdAnnouncement: true,
+        })
+        .onConflictDoUpdate({
+          target: appUsers.oid,
+          set: {
+            displayName: u.displayName ?? u.oid,
+            email: u.email ?? `${u.oid}@example.com`,
+            showChangelogOnLogin: false,
+            dismissedBetaProdAnnouncement: true,
+          },
+        });
+    }
+
+    const traceValues = seedRows.events.map((ev, index) => ({
+      eventType: (ev.eventType as TraceEventType) ?? 'ui_action',
+      occurredAt: ev.occurredAt,
+      actorUserId: ev.actorUserId,
+      projectId: project,
+      traceId: `e2e0b5${String(index + 1).padStart(26, '0')}`,
+      sessionId: ev.sessionId,
+      routeTemplate: ev.routeTemplate,
+      httpMethod: ev.httpMethod,
+      statusCode: ev.statusCode,
+      durationMs: ev.durationMs,
+      severity: ev.severity,
+      details: (ev.message ? { message: ev.message } : {}) as SafeTraceDetails,
+    }));
+
+    if (traceValues.length > 0) {
+      await db.insert(traceEvents).values(traceValues);
+    }
+
+    for (const r of seedRows.rollups) {
+      await db
+        .insert(tracePathRollups)
+        .values({
+          fromRoute: r.fromRoute,
+          toRoute: r.toRoute,
+          day: r.day,
+          transitionCount: r.transitionCount,
+          distinctActorCount: r.distinctActorCount,
+        })
+        .onConflictDoUpdate({
+          target: [tracePathRollups.fromRoute, tracePathRollups.toRoute, tracePathRollups.day],
+          set: {
+            transitionCount: r.transitionCount,
+            distinctActorCount: r.distinctActorCount,
+          },
+        });
+    }
+
+    res.json({
+      ok: true,
+      eventsInserted: traceValues.length,
+      rollupsUpserted: seedRows.rollups.length,
+      usersUpserted: seedRows.users.length,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/observability-telemetry failed: ${message}` });
   }
 });
 
