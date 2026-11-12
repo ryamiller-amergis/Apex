@@ -301,6 +301,7 @@
   display: flex;
   gap: 0;
   border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
 }
 
 .tab {
@@ -651,6 +652,295 @@
 
 .staleGrid {
   opacity: 0.55;
+}
+
+/* ── Product Owner Observability Digest Styles ── */
+
+.poSection {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.poControlBar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.poWindowGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.poWindowPills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.poAiControls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.poScheduleStrip {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.poScheduleCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.poScheduleTitle {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.poScheduleMain {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.poScheduleSub {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.poHeadlineBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.poHeadlineText {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.poProvenanceBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--accent-color);
+}
+
+.poKpiRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.poSignalGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.poSignalCard {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.poSignalCardAccent {
+  background: var(--bg-secondary);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 40%, var(--border-color));
+  border-radius: 8px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.poSignalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.poSignalNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+.poSignalTitle {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+}
+
+.poSignalSubtitle {
+  margin: 3px 0 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.poDeltaPositive {
+  color: var(--success-color);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+.poDeltaNegative {
+  color: var(--error-color);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+.poNarrativeBox {
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.poNarrativeHeadline {
+  margin: 0 0 6px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.poNarrativeCopy {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.poInsightList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.poInsightItem {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.poInsightTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.poInsightItemTitle {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.poInsightDetail {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+  line-height: 1.45;
+}
+
+.poInsightMeta {
+  font-size: 0.6875rem;
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.poWindowCompareStrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+}
+
+.poWindowMiniChip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.poWindowMiniChipActive {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-primary));
+  border: 1px solid var(--accent-color);
+  color: var(--accent-color);
+  font-weight: 700;
+}
+
+@media (max-width: 1100px) {
+  .poScheduleStrip,
+  .poKpiRow,
+  .poSignalGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
