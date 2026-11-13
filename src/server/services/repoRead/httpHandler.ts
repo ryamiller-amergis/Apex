@@ -90,7 +90,11 @@ async function executeOperation(
       return {
         ok: true,
         operation: 'search',
-        results: await reader.searchCode(parsed.query ?? '', parsed.limit),
+        results: await reader.searchCode(
+          parsed.query ?? '',
+          parsed.limit,
+          ...(parsed.path ? [parsed.path] : []),
+        ),
       };
     default: {
       const exhaustive: never = operation;

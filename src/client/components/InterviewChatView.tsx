@@ -8,6 +8,7 @@ import { useStartChat, useChatThread, useSkillList, useSkillRepos } from '../hoo
 import { useProjectSkillConfig, useGlobalDefaultModel, useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { applyPastedFiles } from '../hooks/clipboardFiles';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useProjectRepositoryReadiness } from '../hooks/useProjectRepositoryReadiness';
 import {
@@ -842,6 +843,9 @@ const NewInterviewCompose: React.FC = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={(event) => {
+              applyPastedFiles(event, (files) => { void addFiles(files); });
+            }}
             placeholder="Describe what you'd like to explore in this interview… (Enter to send, Shift+Enter for new line)"
             rows={3}
             disabled={isSending}
@@ -874,7 +878,7 @@ const NewInterviewCompose: React.FC = () => {
               onClick={() => fileInputRef.current?.click()}
               type="button"
               aria-label="Attach files"
-              title="Attach files for context"
+              title="Attach files or paste a screenshot (Ctrl+V)"
               disabled={isSending}
               {...{ 'data-testid': 'interview-compose-attach' }}
             >
@@ -2289,6 +2293,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             attachmentError={attachmentError}
             onRemoveAttachment={removeAttachment}
             onAttachClick={isBuildIntake ? undefined : () => fileInputRef.current?.click()}
+            onPasteFiles={isBuildIntake ? undefined : (files) => { void addFiles(files); }}
             speech={isBuildIntake ? undefined : {
               isListening: speech.isListening,
               isSpeechSupported: speech.isSpeechSupported,

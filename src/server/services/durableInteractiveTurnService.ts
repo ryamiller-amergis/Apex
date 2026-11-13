@@ -36,6 +36,7 @@ import type {
 import { mcpServerChatInstructions } from '../../shared/types/mcpServers';
 import type { GroundingProfileId } from '../../shared/types/repoReader';
 import type { RepoReader } from '../../shared/types/repoReader';
+import { promptWithAttachments } from './attachmentPrompt';
 import { callerGroundingService } from './callerGroundingService';
 import { runGroundingService } from './runGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
@@ -841,27 +842,6 @@ function answersSoFar(
     ...entries,
     '',
   ];
-}
-
-function promptWithAttachments(
-  text: string,
-  attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'],
-): string {
-  const messageText =
-    text.trim() || 'Please use the uploaded files as additional context.';
-  if (attachments.length === 0) return messageText;
-  return [
-    messageText,
-    '',
-    '# Uploaded context files for this turn',
-    'The user attached these files. Read them before responding when relevant.',
-    ...attachments.map((attachment) => {
-      const imageHint = attachment.contentType.startsWith('image/')
-        ? ' [IMAGE]'
-        : '';
-      return `- ${attachment.name} (${attachment.contentType}, ${attachment.sizeBytes} bytes): \`${attachment.materializedPath}\`${imageHint}`;
-    }),
-  ].join('\n');
 }
 
 function currentPrompt(

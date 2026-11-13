@@ -679,6 +679,91 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it('re-acquires the Agent with the updated checkout reader when Brainstorm sources are attached mid-session without deleting the thread workspace', async () => {
+    const disposeWorkspace = jest.fn(async () => {});
+    const disposeFirstAgent = jest.fn(async () => {});
+    const materializeWorkspace = jest.fn(async (_bootstrap, destination: string) => ({
+      workspacePath: destination,
+      dispose: disposeWorkspace,
+    }));
+    const uploadAttemptArtifacts = jest.fn(async () => ({
+      container: 'artifacts',
+      key: 'runs/r/attempts/1/manifest.json',
+    }));
+    let acquireCount = 0;
+    const acquireDurableAgent = jest.fn(async (_bootstrap, checkout, options) => {
+      acquireCount += 1;
+      const handle = makeAgentHandle({
+        tokens: ['ok'],
+        agentId: 'agent-1',
+        workspaceRef: checkout.workspacePath,
+      });
+      if (acquireCount === 1) {
+        handle.dispose = disposeFirstAgent;
+      }
+      return {
+        mode: options.resumeAgentId ? ('resumed' as const) : ('recreated' as const),
+        handle,
+      };
+    });
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace,
+      uploadAttemptArtifacts,
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const first = makeDurableBootstrap({
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
+    const second = makeDurableBootstrap({
+      attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      dispatchMessageId: 'dispatch-durable-2',
+      runId: 'run-durable-2',
+      cursorAgentId: 'agent-1',
+      specification: {
+        ...first.specification,
+        workflowClass: 'brainstorm',
+        brainstorm: {
+          sessionId: '6235c06e-fe38-4ba2-a39f-8815bd5b66de',
+          creatorContext: { displayName: 'Ryan', roles: [], groups: [], bio: null },
+          sourceLimits: { workspaceMaxBytes: 1_000_000, maxConcurrentClones: 3, inactivityMs: 60_000 },
+          sources: {
+            readRoots: [
+              {
+                kind: 'project-repository',
+                sourceId: '3c0076d1-02bf-4914-bbd1-cdbc37b854f1',
+                displayName: 'Amego',
+                provider: 'ado',
+                project: 'Amego',
+                repository: 'Amego',
+                commitSha: 'f'.repeat(40),
+                workspacePath: '/tmp/amego',
+              },
+            ],
+            mcpServers: [],
+            unavailableSources: [],
+            instructions: '',
+          },
+          artifact: { type: null, version: 0, markdown: '' },
+          intent: { kind: 'chat' },
+        },
+      },
+    });
+
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: first });
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: second });
+
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: 'agent-1' });
+    expect(disposeFirstAgent).toHaveBeenCalledTimes(1);
+    // The thread workspace must stay intact so the newly mounted sources are not deleted.
+    expect(disposeWorkspace).not.toHaveBeenCalled();
+  });
+
   it('sends each turn its own tool proxy URLs when the warm Agent is reused', async () => {
     const handle = makeAgentHandle({ tokens: ['ok'], agentId: 'agent-1' });
     const send = jest.spyOn(handle, 'send');

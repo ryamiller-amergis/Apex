@@ -464,4 +464,16 @@ export const SeedApi = {
   ): Promise<void> {
     await post(request, '/seed/menu-settings', { project, enabledViews });
   },
+
+  async seedObservabilityTelemetry(
+    request: APIRequestContext,
+    opts?: { project?: string; superAdminEmail?: string },
+  ): Promise<{
+    ok: boolean;
+    eventsInserted: number;
+    rollupsUpserted: number;
+    usersUpserted: number;
+  }> {
+    return post(request, '/seed/observability-telemetry', opts ?? {});
+  },
 };

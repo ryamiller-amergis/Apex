@@ -42,6 +42,7 @@ import { AnnotationLayer } from './AnnotationLayer';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { ReviewCommentSidebar } from './ReviewCommentSidebar';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
+import { applyPastedFiles } from '../hooks/clipboardFiles';
 import { useChatAttachments, formatAttachmentSize } from '../hooks/useChatAttachments';
 import { useSpeechInput } from '../hooks/useSpeechInput';
 import {
@@ -289,6 +290,9 @@ const NewAdrCompose: React.FC = () => {
             className={styles.composeTextarea}
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onPaste={(event) => {
+              applyPastedFiles(event, (files) => { void addFiles(files); });
+            }}
             placeholder="Describe what is being built or refactored, the decision to resolve, and known constraints."
             rows={5}
             {...{ 'data-testid': 'adr-compose-message' }}
@@ -339,7 +343,7 @@ const NewAdrCompose: React.FC = () => {
               onClick={() => fileInputRef.current?.click()}
               type="button"
               aria-label="Attach files"
-              title="Attach files for context"
+              title="Attach files or paste a screenshot (Ctrl+V)"
               disabled={pending}
               {...{ 'data-testid': 'adr-compose-attach' }}
             >
@@ -1210,6 +1214,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           attachmentError={attachmentError}
           onRemoveAttachment={removeAttachment}
           onAttachClick={() => fileInputRef.current?.click()}
+          onPasteFiles={(files) => { void addFiles(files); }}
           speech={{
             isListening: speech.isListening,
             isSpeechSupported: speech.isSpeechSupported,

@@ -26,6 +26,7 @@ import type {
   SseErrorCode,
 } from '../../shared/types/chat';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
+import { buildPromptWithAttachments } from './attachmentPrompt';
 import {
   recordCursorChatUsage,
   estimateTokens,
@@ -583,31 +584,6 @@ async function writeMessageAttachments(
     });
   }
   return results;
-}
-
-function buildPromptWithAttachments(
-  text: string,
-  attachments: ChatAttachmentMeta[]
-): string {
-  if (attachments.length === 0) return text;
-
-  const messageText =
-    text.trim() || 'Please use the uploaded files as additional context.';
-  const attachmentLines = attachments.map((attachment) => {
-    const isImage = attachment.type.startsWith('image/');
-    const hint = isImage
-      ? ' [IMAGE -- use the Read tool to view this file]'
-      : '';
-    return `- ${attachment.name} (${attachment.type || 'text/plain'}, ${attachment.size} bytes): \`${attachment.path}\`${hint}`;
-  });
-
-  return [
-    messageText,
-    '',
-    '# Uploaded context files for this turn',
-    'The user attached these files. They have been written into the local sandbox workspace; read them before responding when they are relevant.',
-    ...attachmentLines,
-  ].join('\n');
 }
 
 /**

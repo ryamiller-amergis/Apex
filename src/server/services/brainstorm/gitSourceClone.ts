@@ -249,6 +249,20 @@ export async function cloneCachedCommit(input: {
   const hasWorkingTreeGit = await fs.stat(path.join(input.cacheDir, '.git')).then(() => true, () => false);
   const isBareRepo = !hasWorkingTreeGit && await fs.stat(path.join(input.cacheDir, 'HEAD')).then(() => true, () => false);
   if (!hasWorkingTreeGit && !isBareRepo && input.identity && Boolean(process.env.REPO_READ_SERVICE_URL?.trim()) && !process.env.JEST_WORKER_ID) {
+    if (isCloudBundleStorageConfigured()) {
+      try {
+        const { resolveGitRemote } = await import('../repoCacheService');
+        const remote = resolveGitRemote(input.identity.provider, input.identity.project, input.identity.repository);
+        await requestRepoReadBundlePublish({
+          url: remote.url,
+          sha: input.sha,
+          identity: input.identity,
+          signal: input.signal,
+        });
+      } catch {
+        // Best-effort bundle publish; repo-read HTTP remains the fallback.
+      }
+    }
     await clearRemoteSourceDestination(input.destination);
     return;
   }
