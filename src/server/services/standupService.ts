@@ -1,4 +1,4 @@
-import { eq, and, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/drizzle';
 import {
@@ -7,8 +7,6 @@ import {
   standupParticipants,
   standupFollowups,
   standupActionProposals,
-  appGroupMembers,
-  appUsers,
   chatMessages,
   projectSkillWorkflowSettings,
 } from '../db/schema';
@@ -19,12 +17,19 @@ import { sendTeamsNotification } from './teamsBotService';
 import {
   normalizeDeliveryModel,
   normalizeGoalSource,
+  normalizeRosterMode,
   recomputeSessionTeamPulse,
 } from './standupDeliveryPolicyService';
-import { collectAndSaveParticipantBrief } from './standupEvidenceCollectorService';
+import {
+  collectAndSaveParticipantBrief,
+  resolveStandupRoster,
+} from './standupEvidenceCollectorService';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import type {
   StandupActionProposalInput,
+  StandupApprovalAction,
+  StandupItemDecision,
+  StandupRejectedItemRecord,
   StandupStructuredUpdate,
 } from '../../shared/types/standup';
 
@@ -42,32 +47,6 @@ const standupSkillSettings = {
     },
   },
 };
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Fetch unique members across one or more groups, deduped by userId. */
-async function getMembersForGroups(
-  groupIds: string[],
-): Promise<Array<{ userId: string; displayName: string | null; email: string | null }>> {
-  if (groupIds.length === 0) return [];
-  const rows = await db
-    .select({
-      userId: appGroupMembers.userId,
-      displayName: appUsers.displayName,
-      email: appUsers.email,
-    })
-    .from(appGroupMembers)
-    .innerJoin(appUsers, eq(appGroupMembers.userId, appUsers.oid))
-    .where(inArray(appGroupMembers.groupId, groupIds));
-
-  // Dedupe — a user may belong to multiple selected groups
-  const seen = new Set<string>();
-  return rows.filter((r) => {
-    if (seen.has(r.userId)) return false;
-    seen.add(r.userId);
-    return true;
-  });
-}
 
 // ── Reminders ─────────────────────────────────────────────────────────────────
 
@@ -158,7 +137,6 @@ export async function generateDailySessions(): Promise<number> {
     const nowMin = nowInTz.getMinutes();
     if (nowHour < schedHour || (nowHour === schedHour && nowMin < schedMin)) continue;
 
-    // Resolve which group IDs to use (prefer new groupIds array, fall back to legacy groupId)
     const resolvedGroupIds: string[] =
       Array.isArray(config.groupIds) && config.groupIds.length > 0
         ? (config.groupIds as string[])
@@ -166,10 +144,14 @@ export async function generateDailySessions(): Promise<number> {
         ? [config.groupId]
         : [];
 
-    const members = await getMembersForGroups(resolvedGroupIds);
+    const members = await resolveStandupRoster({
+      project: config.project,
+      areaPath: config.areaPath,
+      rosterMode: normalizeRosterMode(config.rosterMode),
+      groupIds: resolvedGroupIds,
+    });
     if (members.length === 0) continue;
 
-    // Resolve skill path + repo/branch from the project skill settings (if any).
     let standupSkillPath: string | undefined;
     let skillRepo = '';
     let skillBranch: string | undefined;
@@ -187,7 +169,6 @@ export async function generateDailySessions(): Promise<number> {
     const deliveryModel = normalizeDeliveryModel(config.deliveryModel);
     const goalSource = normalizeGoalSource(config.goalSource);
 
-    // Create session
     const sessionId = uuidv4();
     await db.insert(standupSessions).values({
       id: sessionId,
@@ -196,7 +177,6 @@ export async function generateDailySessions(): Promise<number> {
       status: 'collecting',
     });
 
-    // Create participant rows + threads
     for (const member of members) {
       const participantId = uuidv4();
       const kickoff: ChatThreadKickoff = {
@@ -231,7 +211,6 @@ export async function generateDailySessions(): Promise<number> {
         console.warn('[standup] Brief pre-computation failed:', (err as Error).message),
       );
 
-      // Send in-app notification
       await createNotification(member.userId, {
         type: 'system',
         title: 'Daily Standup Ready',
@@ -239,7 +218,6 @@ export async function generateDailySessions(): Promise<number> {
         link: '/standup',
       });
 
-      // Send Teams notification
       await sendTeamsNotification(member.userId, {
         id: participantId,
         userId: member.userId,
@@ -251,6 +229,10 @@ export async function generateDailySessions(): Promise<number> {
         createdAt: new Date().toISOString(),
       }).catch((err) => console.warn('[standup] Teams notification failed:', (err as Error).message));
     }
+
+    await recomputeSessionTeamPulse(sessionId).catch((err) =>
+      console.warn('[standup] Initial team pulse synthesis skipped:', (err as Error).message),
+    );
 
     sessionsCreated++;
     console.log(`[standup] Created session ${sessionId} for config ${config.id} with ${members.length} participants`);
@@ -292,8 +274,15 @@ export async function triggerSessionForConfig(
       ? [config.groupId]
       : [];
 
-  const members = await getMembersForGroups(resolvedGroupIds);
-  if (members.length === 0) throw new Error('No members in the configured standup groups');
+  const members = await resolveStandupRoster({
+    project: config.project,
+    areaPath: config.areaPath,
+    rosterMode: normalizeRosterMode(config.rosterMode),
+    groupIds: resolvedGroupIds,
+  });
+  if (members.length === 0) {
+    throw new Error('No participants found via configured roster discovery or groups');
+  }
 
   let standupSkillPath: string | undefined;
   let skillRepo = '';
@@ -375,17 +364,16 @@ export async function triggerSessionForConfig(
     );
   }
 
+  await recomputeSessionTeamPulse(sessionId).catch((err) =>
+    console.warn('[standup] Initial team pulse synthesis skipped:', (err as Error).message),
+  );
+
   console.log(`[standup] Manually triggered session ${sessionId} for config ${configId} with ${members.length} participants`);
   return { sessionId, alreadyExisted: false };
 }
 
 // ── Session Deletion ──────────────────────────────────────────────────────────
 
-/**
- * Delete a standup session and all associated chat threads (participant,
- * facilitator, and follow-up). Lets admins clear today's session so a fresh
- * one can be triggered via Run Now.
- */
 export async function deleteStandupSession(sessionId: string): Promise<void> {
   const session = await db.query.standupSessions.findFirst({
     where: eq(standupSessions.id, sessionId),
@@ -417,29 +405,69 @@ export async function deleteStandupSession(sessionId: string): Promise<void> {
 
 // ── Structured Update Extraction ──────────────────────────────────────────────
 
+const VALID_APPROVAL_ACTIONS = new Set<StandupApprovalAction>([
+  'approved',
+  'approved_with_edits',
+  'rejected_rewritten',
+]);
+
 function sanitizeStructuredUpdate(
   raw?: StandupStructuredUpdate | null,
 ): StandupStructuredUpdate | null {
   if (!raw || typeof raw !== 'object') return null;
-  const normalized: StandupStructuredUpdate = {
+
+  let itemDecisions: Record<string, StandupItemDecision> | undefined;
+  if (raw.itemDecisions && typeof raw.itemDecisions === 'object') {
+    const cleanDecisions: Record<string, StandupItemDecision> = {};
+    for (const [k, v] of Object.entries(raw.itemDecisions)) {
+      if (v === 'approved' || v === 'rejected') {
+        cleanDecisions[k] = v;
+      }
+    }
+    if (Object.keys(cleanDecisions).length > 0) {
+      itemDecisions = cleanDecisions;
+    }
+  }
+
+  let rejectedItems: StandupRejectedItemRecord[] | undefined;
+  if (Array.isArray(raw.rejectedItems) && raw.rejectedItems.length > 0) {
+    const cleanRejected = raw.rejectedItems
+      .filter(
+        (item): item is StandupRejectedItemRecord =>
+          Boolean(item && typeof item.id === 'string' && typeof item.summary === 'string'),
+      )
+      .map((item) => ({
+        id: item.id,
+        summary: item.summary,
+        ...(typeof item.reason === 'string' && item.reason.trim()
+          ? { reason: item.reason.trim() }
+          : {}),
+      }));
+    if (cleanRejected.length > 0) rejectedItems = cleanRejected;
+  }
+
+  const approvalAction =
+    typeof raw.approvalAction === 'string' &&
+    VALID_APPROVAL_ACTIONS.has(raw.approvalAction as StandupApprovalAction)
+      ? (raw.approvalAction as StandupApprovalAction)
+      : undefined;
+
+  return {
     yesterday: typeof raw.yesterday === 'string' ? raw.yesterday : undefined,
     today: typeof raw.today === 'string' ? raw.today : undefined,
     blockers: typeof raw.blockers === 'string' ? raw.blockers : undefined,
     atRisk: typeof raw.atRisk === 'string' ? raw.atRisk : undefined,
     handoffs: typeof raw.handoffs === 'string' ? raw.handoffs : undefined,
     capacity: typeof raw.capacity === 'string' ? raw.capacity : undefined,
+    ...(typeof raw.userCorrections === 'string' && raw.userCorrections.trim()
+      ? { userCorrections: raw.userCorrections.trim() }
+      : {}),
+    ...(itemDecisions ? { itemDecisions } : {}),
+    ...(rejectedItems ? { rejectedItems } : {}),
+    ...(approvalAction ? { approvalAction } : {}),
   };
-  const hasAny = Object.values(normalized).some(
-    (v) => typeof v === 'string' && v.trim().length > 0,
-  );
-  return hasAny ? normalized : normalized;
 }
 
-/**
- * Scans agent messages in a thread from newest to oldest and extracts the first
- * JSON code block that looks like { yesterday, today, blockers, atRisk, handoffs,
- * capacity }. Returns null if none is found.
- */
 async function extractStructuredUpdate(
   threadId: string,
 ): Promise<StandupStructuredUpdate | null> {
@@ -608,15 +636,12 @@ export async function completeSession(
     console.warn('[standup] Team pulse synthesis on completion skipped:', (err as Error).message),
   );
 
-  // Resolve the session's project so follow-up threads carry the right context.
   const session = await db.query.standupSessions.findFirst({
     where: eq(standupSessions.id, sessionId),
     with: { config: true },
   });
   const project = session?.config.project ?? '';
 
-  // For each follow-up, spin up a joint discussion thread and notify the
-  // involved members so the right people can continue the conversation.
   const followups = await db
     .select()
     .from(standupFollowups)

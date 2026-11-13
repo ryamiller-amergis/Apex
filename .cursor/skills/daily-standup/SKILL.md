@@ -1,6 +1,6 @@
-# Daily Standup Procedure (Delivery Pulse)
+# Daily Standup Procedure (SDLC-Aware & Multi-Day Delivery Pulse)
 
-This skill drives the interactive coach in an AI-facilitated daily standup ceremony. Follow the session's configured **Delivery Model** (`flow`, `sprint`, `milestone`, `support`, or `custom`), **Team Goal**, and **Delivery Policy** rather than assuming every team uses target dates or sprints.
+This skill drives the interactive coach in an AI-facilitated daily standup ceremony. Follow the session's configured **Delivery Model** (`flow`, `sprint`, `milestone`, `support`, or `custom`), **Team Goal**, **Multi-Day Arc**, and **SDLC Process Callouts** rather than assuming every team uses target dates or sprints.
 
 ## Prerequisites
 
@@ -15,10 +15,10 @@ The agent has access to:
 Adapt queries, risk checks, and questions to `deliveryModel` and `enableTargetDateChecks` from `# Session context`:
 
 1. **`flow` (Flow / Kanban — Default)**:
-   - Focus on flow aging (items unchanged past `staleDaysThreshold`), WIP limits (`wipLimitPerPerson`), PR review wait or merged-PR state lag, untouched commitments from last standup, and blockers.
+   - Focus on flow aging (items unchanged past `staleDaysThreshold`), WIP limits (`wipLimitPerPerson`), PR review wait or merged-PR state lag, multi-day carryover streaks, and blockers.
    - **Do NOT** ask for missing target dates or release tags unless `enableTargetDateChecks: true`.
 2. **`sprint` (Sprint / Iteration)**:
-   - Focus on active iteration scope, sprint goal progress, commitment carryover, PR review wait, and blockers.
+   - Focus on active iteration scope, sprint goal progress, multi-day carryover streaks, PR review wait, and blockers.
    - **Do NOT** require per-item target dates unless `enableTargetDateChecks: true`.
 3. **`milestone` (Milestone / Release)**:
    - Cross-reference upcoming release epics (`ReleaseVersion` tag) and `Release:*` tags on work items.
@@ -29,13 +29,26 @@ Adapt queries, risk checks, and questions to `deliveryModel` and `enableTargetDa
 5. **`custom`**:
    - Enforce whichever thresholds (`staleDaysThreshold`, `wipLimitPerPerson`, `slaHoursHighPriority`, `enableTargetDateChecks`) are enabled in the session context.
 
+## SDLC & Engineering Domain Intelligence
+
+Inspect `# Pre-Computed Participant Brief` for code artifact and pipeline timeline findings across engineering domains (`Database / SQL`, `Infra / Terraform`, `Backend / API`, `Frontend / UI`, `QA & Testing`, `Security & Auth`, `Prod Support`):
+
+1. **SQL / Schema Migrations (`migrations/**`, `*.sql`)**:
+   - When a participant's active or recently merged PR modifies SQL or schema files, ask them to confirm `-- Down Migration` reversibility, migration sequence ordering, and whether a database rollout step is needed for the release.
+2. **Terraform / IaC Pipeline Verification (`*.tf`, `*.tfvars`, `infra/**`, `*.bicep`)**:
+   - When an IaC PR's build failed, never ran, or skipped/omitted a `terraform` / `iac` / `plan` / `validate` pipeline stage, call out the exact pipeline gap and confirm it will be validated before merge or promotion.
+3. **QA & Release Build Health (`red_build_in_qa`, `missing_tests`)**:
+   - Flag items sitting in `Ready for Test`, `UIT`, `UAT`, or `Ready for Release` while a linked build is failing or a PR remains unmerged, and check whether source changes (`src/server/**`, `src/client/**`) included automated test updates.
+4. **Multi-Day Continuity & User Corrections**:
+   - Reference multi-day carryover streaks (items planned across 2+ standups without completion) to offer splitting or unblocking help, and record any explicit `userCorrections` where the member clarifies work that ADO or Git missed.
+
 ## Procedure (Exception-First, 60–90 Seconds)
 
-### 1. Ground in Pre-Computed Brief & Work Item Context
+### 1. Start From Pre-Drafted Brief & Work Item Context
 
-If `# Pre-Computed Participant Brief` is present in the session prompt, start from it immediately instead of asking the participant to recite yesterday's work from scratch.
+If `# Pre-Computed Participant Brief` is present in the session prompt, present the pre-drafted items, recommended focus, and multi-day arc immediately instead of asking the participant to recite yesterday's work from scratch.
 
-When querying Azure DevOps, filter by `memberEmail` (ADO `uniqueName`) — never use `@Me` (which resolves to the service account):
+When querying Azure DevOps directly, filter by `memberEmail` (ADO `uniqueName`) — never use `@Me` (which resolves to the service account):
 
 ```sql
 SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State],
@@ -49,35 +62,22 @@ WHERE [System.AssignedTo] = '<memberEmail>'
 ORDER BY [System.ChangedDate] DESC
 ```
 
-### 2. Verify Since Last Standup & Exceptions
+### 2. Verify Draft, Exceptions, SDLC Alerts & Corrections
 
-Present pre-detected accomplishments and ask **only** about detected exceptions:
-- **Stale interim state**: Item sitting in `Active`, `In PR`, or `Ready for Test` longer than `staleDaysThreshold`.
-- **PR vs. work-item mismatch**: Merged PR while the linked work item is still `New`, `Active`, or `In PR`.
-- **Untouched commitment**: An item planned in the prior standup's `today` list with no recorded ADO or PR progress.
-- **Model-specific risks**:
-  - `flow`: Active items exceeding `wipLimitPerPerson`.
-  - `sprint`: Active work outside the current iteration or threatening the sprint goal.
-  - `milestone` (or `enableTargetDateChecks: true`): Missing target dates on release items or near-due items in early states.
-  - `support`: High-priority bugs/incidents exceeding `slaHoursHighPriority`.
+Ask the participant what to approve, reject, or correct, focusing only on exceptions:
+- **Stale interim state** or **multi-day carryover streak**
+- **PR merged while work-item state lags**
+- **SQL migration**, **IaC pipeline stage**, or **red QA build** alerts
+- **Model-specific risks** (`wipLimitPerPerson`, sprint mismatch, `slaHoursHighPriority`, or `milestone` target-date gaps)
 
 Always **confirm** with the participant before calling `update_work_item`.
 
-### 3. Confirm Focus Today, Handoffs & Capacity
+### 3. Confirm Focus Today, Handoffs, Blockers & Capacity
 
-- Confirm which items they are focusing on today (anchoring to `teamGoal` when configured).
-- Capture **handoffs** (who work moves to next, offering `assignedTo` updates after confirmation).
-- Capture **capacity / availability** (idle bandwidth to help teammates, waiting on external dependencies, or upcoming PTO / partial days).
+- Confirm today's priority focus (anchoring to `teamGoal` when configured).
+- Capture **handoffs** (who work moves to next), **blockers** (pipeline/build failure, person/review wait, external dependency, or production incident), and **capacity / availability** (idle bandwidth or PTO).
 
-### 4. Blockers & Impediments
-
-Distinguish blocker categories clearly so the Team Pulse huddle can act on them first:
-- **Pipeline / build failures** (which pipeline/branch failed)
-- **Waiting on a person / review** (specific teammate or PR)
-- **External dependency** (design assets, environment, access, vendor)
-- **Production incident** (capture owner and root-cause follow-up)
-
-### 5. Wrap-Up & Structured Output
+### 4. Wrap-Up & Structured Output
 
 Keep the exchange brief (1–2 turns when everything is clear). Confirm any requested ADO writes first, then emit the structured update JSON block:
 
@@ -86,9 +86,10 @@ Keep the exchange brief (1–2 turns when everything is clear). Confirm any requ
   "yesterday": "Completed #101, merged PR !42",
   "today": "Finishing #104 toward team goal",
   "blockers": "Build pipeline failing on main",
-  "atRisk": "#104 unchanged in Active for 4 days",
+  "atRisk": "#104 carried across 3 standups",
   "handoffs": "#101 ready for QA review",
-  "capacity": "Available to review PRs this afternoon"
+  "capacity": "Available to review PRs this afternoon",
+  "userCorrections": "Also paired on auth hotfix not yet linked in ADO"
 }
 ```
 

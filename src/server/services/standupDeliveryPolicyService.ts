@@ -5,46 +5,62 @@ import {
   standupActionProposals,
   standupSessions,
 } from '../db/schema';
-import type {
-  ParticipantPreparedBrief,
-  StandupActionProposal,
-  StandupTeamPulse,
+import {
+  STANDUP_WORK_DOMAIN_LABELS,
+  type ParticipantPreparedBrief,
+  type StandupActionProposal,
+  type StandupTeamPulse,
 } from '../../shared/types/standup';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import {
-  evaluateCalendarItemHealth,
+  classifyDomainsFromEvidence,
   evaluateParticipantBrief,
+  evaluateSdlcCallouts,
   extractWorkItemIds,
   normalizeDeliveryModel,
   normalizeGoalSource,
+  normalizeRosterMode,
+  reconcileDraftedUpdate,
   resolveStandupPolicy,
   synthesizeTeamPulse,
-  type EvaluateCalendarHealthOptions,
   type EvaluateParticipantBriefInput,
+  type EvaluateSdlcCalloutsInput,
+  type EvidenceBuildStageRecord,
+  type EvidenceBuildSummary,
   type EvidencePipelineFailure,
   type EvidencePullRequest,
   type EvidenceWorkItem,
+  type PriorParticipantSessionRecord,
+  type ReconcileDraftedUpdateInput,
   type SynthesizeTeamPulseInput,
 } from '../../shared/utils/standupDeliveryPolicy';
 
 export {
-  evaluateCalendarItemHealth,
+  classifyDomainsFromEvidence,
   evaluateParticipantBrief,
+  evaluateSdlcCallouts,
   extractWorkItemIds,
   normalizeDeliveryModel,
   normalizeGoalSource,
+  normalizeRosterMode,
+  reconcileDraftedUpdate,
   resolveStandupPolicy,
   synthesizeTeamPulse,
-  type EvaluateCalendarHealthOptions,
   type EvaluateParticipantBriefInput,
+  type EvaluateSdlcCalloutsInput,
+  type EvidenceBuildStageRecord,
+  type EvidenceBuildSummary,
   type EvidencePipelineFailure,
   type EvidencePullRequest,
   type EvidenceWorkItem,
+  type PriorParticipantSessionRecord,
+  type ReconcileDraftedUpdateInput,
   type SynthesizeTeamPulseInput,
 };
 
 /**
  * Formats a compact markdown digest of a participant's pre-computed brief
+ * (including multi-day arc, domains, SDLC callouts, and pre-drafted items)
  * for injection into the AI standup coach system prompt.
  */
 export function formatPreparedBriefForPrompt(
@@ -54,6 +70,22 @@ export function formatPreparedBriefForPrompt(
     `Delivery Model: ${brief.deliveryModel}`,
     `Team Goal: ${brief.teamGoal ?? '(none set)'}`,
   ];
+
+  if (brief.workDomains && brief.workDomains.length > 0) {
+    lines.push(
+      `Engineering Areas: ${brief.workDomains
+        .map((d) => STANDUP_WORK_DOMAIN_LABELS[d] ?? d)
+        .join(', ')}`,
+    );
+  }
+
+  if (brief.multiDayArc) {
+    lines.push(`Multi-Day Arc: ${brief.multiDayArc.summary}`);
+  }
+
+  if (brief.recommendedFocus) {
+    lines.push(`Recommended Focus Today: ${brief.recommendedFocus}`);
+  }
 
   if (brief.accomplishedSinceLast.length > 0) {
     lines.push('', 'Accomplished Since Last Standup:');
@@ -70,7 +102,18 @@ export function formatPreparedBriefForPrompt(
   if (brief.priorCommitments.length > 0) {
     lines.push('', 'Prior Standup Commitments:');
     for (const commitment of brief.priorCommitments) {
-      lines.push(`- [${commitment.status.toUpperCase()}] ${commitment.summary} — ${commitment.note}`);
+      lines.push(
+        `- [${commitment.status.toUpperCase()}] ${commitment.summary} — ${commitment.note}`,
+      );
+    }
+  }
+
+  if (brief.sdlcCallouts && brief.sdlcCallouts.length > 0) {
+    lines.push('', 'SDLC & Release Process Callouts:');
+    for (const callout of brief.sdlcCallouts) {
+      lines.push(
+        `- [${callout.severity.toUpperCase()}] (${callout.category}) ${callout.detail} → ${callout.recommendation}`,
+      );
     }
   }
 
@@ -84,8 +127,11 @@ export function formatPreparedBriefForPrompt(
   if (brief.suggestedToday.length > 0) {
     lines.push('', 'Suggested Focus Items Today:');
     for (const item of brief.suggestedToday.slice(0, 6)) {
-      const flags = item.riskFlags.length > 0 ? ` (${item.riskFlags.join(', ')})` : '';
-      lines.push(`- #${item.workItemId} · ${item.workItemType} — ${item.title} [${item.state}]${flags}`);
+      const flags =
+        item.riskFlags.length > 0 ? ` (${item.riskFlags.join(', ')})` : '';
+      lines.push(
+        `- #${item.workItemId} · ${item.workItemType} — ${item.title} [${item.state}]${flags}`,
+      );
     }
   }
 
@@ -166,7 +212,9 @@ export async function recomputeSessionTeamPulse(
   return pulse;
 }
 
-export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): string {
+export function buildStandupParticipantPrompt(
+  kickoff: ChatThreadKickoff,
+): string {
   const deliveryModel = kickoff.standupDeliveryModel ?? 'flow';
   const teamGoal = kickoff.standupTeamGoal?.trim() || null;
   const policy = kickoff.standupPolicy ?? {};
@@ -189,16 +237,16 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
       : null;
 
   const modelSummaryByMode: Record<string, string> = {
-    flow: `Flow / Kanban — focus on flow aging (> ${staleDays}d in interim state), WIP overload${wipLimit ? ` (limit ${wipLimit})` : ''}, PR merge/review lag, carryover, and blockers. Do NOT ask for sprints or target dates unless target-date checks are enabled.`,
-    sprint: `Sprint / Iteration — focus on current iteration scope, sprint goal progress, commitment carryover, PR review wait, and blockers.${enableTargetDateChecks ? '' : ' Do NOT require per-item target dates.'}`,
+    flow: `Flow / Kanban — focus on flow aging (> ${staleDays}d in interim state), WIP overload${wipLimit ? ` (limit ${wipLimit})` : ''}, PR merge/review lag, multi-day carryover streaks, and blockers. Do NOT ask for sprints or target dates unless target-date checks are enabled.`,
+    sprint: `Sprint / Iteration — focus on current iteration scope, sprint goal progress, multi-day carryover streaks, PR review wait, and blockers.${enableTargetDateChecks ? '' : ' Do NOT require per-item target dates.'}`,
     milestone: `Milestone / Release — focus on upcoming release epics, Release:* tags, target-date readiness, missing target dates on release-relevant items, and blockers.`,
     support: `Support / Operations — focus on incident priority, bug SLA age${slaHours ? ` (> ${slaHours}h)` : ''}, root-cause communication, and handoffs.${enableTargetDateChecks ? '' : ' Do NOT require per-item target dates.'}`,
     custom: `Custom Delivery Policy — stale threshold ${staleDays}d, target-date checks ${enableTargetDateChecks ? 'enabled' : 'disabled'}${wipLimit ? `, WIP limit ${wipLimit}` : ''}${slaHours ? `, SLA ${slaHours}h` : ''}.`,
   };
 
   const parts: string[] = [
-    `# Standup Ceremony — Participant Coach`,
-    `You are coaching a team member through a concise, exception-first daily standup tailored to their team's configured Delivery Model.`,
+    `# Standup Ceremony — Participant Coach (SDLC & Multi-Day Aware)`,
+    `You are coaching a team member through a concise, exception-first daily standup tailored to their team's configured Delivery Model, multi-day progress arc, and SDLC artifacts.`,
     ``,
     `# Session context`,
     `  project:                "${kickoff.project}"`,
@@ -211,9 +259,13 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
     `  enableTargetDateChecks: ${enableTargetDateChecks}`,
     `  threadId:               (use the threadId from .ai-pilot/session.json)`,
     ``,
-    `# Delivery Model Policy`,
+    `# Delivery Model & SDLC Verification Policy`,
     `- ${modelSummaryByMode[deliveryModel] ?? modelSummaryByMode.flow}`,
-    ...(teamGoal ? [`- Anchor today's plan and risks to the active Team Goal: "${teamGoal}".`] : []),
+    ...(teamGoal
+      ? [`- Anchor today's focus and risks to the active Team Goal: "${teamGoal}".`]
+      : []),
+    `- **SDLC Artifact Checks**: Proactively verify SQL migrations (\`migrations/**\`, \`*.sql\` — confirm rollback & release DB steps), Terraform/IaC changes (\`*.tf\`, \`infra/**\` — confirm a passing \`terraform\`/\`iac\`/\`plan\`/\`validate\` pipeline stage ran), red builds on \`Ready for Test\`/\`UAT\` items, and source PRs missing automated tests.`,
+    `- **Multi-Day Continuity & Corrections**: Respect multi-day carryover streaks across prior standups and capture any corrections when the user clarifies something ADO/PRs missed.`,
     ``,
     `# Available MCP tools`,
     `- \`query_work_items\` — query ADO work items via WIQL. Filter by assignee using their email (ADO uniqueName). Do NOT use @Me (that resolves to the service account, not the member).`,
@@ -228,8 +280,12 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
     `- Always CONFIRM with the user before making any write to ADO or the Work Board (state, assignee, target date, tag, parent).`,
     `- All ADO writes are attributed to the logged-in user via their token. Board writes use the standup thread user.`,
     ...(enableTargetDateChecks
-      ? [`- Target-date checks are ENABLED: flag missing target dates on active/release-targeted items and call out items within 7 days of their target date that are still in New, Active, or In PR.`]
-      : [`- Target-date checks are DISABLED for this ${deliveryModel} team: do NOT pester the participant about missing target dates or release tags.`]),
+      ? [
+          `- Target-date checks are ENABLED: flag missing target dates on active/release-targeted items and call out items within 7 days of their target date that are still in New, Active, or In PR.`,
+        ]
+      : [
+          `- Target-date checks are DISABLED for this ${deliveryModel} team: do NOT pester the participant about missing target dates or release tags.`,
+        ]),
     `- For ADO projects, prefer existing team states (e.g. New → Active → In PR → merged to test → Ready for Test → UIT → UAT → Ready for Release → Closed; verify exact state on the work item before updating).`,
     `- For Work Board projects, use board statuses: idea → ready → in-progress → review → done.`,
     ``,
@@ -270,14 +326,14 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
       `This project uses the **Apex Work Board**. Prefer board MCP tools over ADO WIQL.`,
       ``,
       `1. **Ground in their board items**: Call \`query_board_items\` for project "${kickoff.project}" (filter by owner when you know their OID; otherwise query all open statuses and match by owner email/name).${deliveryModel === 'milestone' ? ' Also call `list_board_releases` for upcoming releases.' : ''}`,
-      `2. **Verify Yesterday & Exceptions**: Start with what changed since last standup and any stale items (> ${staleDays}d) or untouched prior commitments. Offer \`update_board_item\` after confirmation.`,
+      `2. **Verify Pre-Drafted Update & Exceptions**: Present the pre-drafted items, multi-day carryover streaks, and any stale items (> ${staleDays}d). Ask what to approve, reject, or correct.`,
       `3. **Confirm Today**: Confirm focus items${teamGoal ? ` toward "${teamGoal}"` : ''}, handoffs (ownerId changes), and capacity/PTO.`,
-      `4. **Blockers & risks**: Capture blockers; offer \`add_board_item_comment\` to leave notes.`,
+      `4. **Blockers & SDLC risks**: Capture blockers; offer \`add_board_item_comment\` to leave notes.`,
       `5. **Wrap up**: Summarize briefly and confirm any final board updates.`,
       ``,
       `When the user is done, produce a structured summary in this JSON format (in a code block):`,
       '```json',
-      `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "..." }`,
+      `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "...", "userCorrections": "..." }`,
       '```',
       `Leave a field as an empty string if it doesn't apply.`,
     );
@@ -288,7 +344,7 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
     parts.push(
       `Follow this concise, exception-first standup procedure (aim for 1-2 turns when everything is on track):`,
       ``,
-      `1. **Ground in their work items**: Query active work items assigned to '${kickoff.standupUserEmail ?? ''}' and items they changed since yesterday.`,
+      `1. **Start from Pre-Drafted Evidence**: Present the pre-computed accomplishments, today's recommended focus, and multi-day arc (querying ADO via WIQL only if no brief is present or fresh verification is needed):`,
       `   - WIQL for member items: SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.AssignedTo], [Microsoft.VSTS.Scheduling.TargetDate], [System.IterationPath], [System.Tags] FROM WorkItems WHERE [System.AssignedTo] = '${kickoff.standupUserEmail ?? ''}' AND [System.State] <> 'Closed' AND [System.State] <> 'Done' AND [System.State] <> 'Removed' ORDER BY ${orderClause}`,
       `   - WIQL for yesterday: SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.ChangedDate], [System.AssignedTo], [Microsoft.VSTS.Scheduling.TargetDate], [System.Tags] FROM WorkItems WHERE [System.ChangedBy] = '${kickoff.standupUserEmail ?? ''}' AND [System.ChangedDate] >= @Today - 1 AND [System.ChangedDate] < @Today ORDER BY [System.ChangedDate] DESC`,
       ...(deliveryModel === 'milestone'
@@ -296,12 +352,12 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
             `   - WIQL for releases: SELECT [System.Id], [System.Title], [Microsoft.VSTS.Scheduling.TargetDate], [System.State] FROM WorkItems WHERE [System.WorkItemType] = 'Epic' AND [System.Tags] CONTAINS 'ReleaseVersion' AND [System.State] <> 'Closed' AND [System.State] <> 'Done' ORDER BY [Microsoft.VSTS.Scheduling.TargetDate] ASC`,
           ]
         : []),
-      `2. **Present Brief & Verify Exceptions First**: Show yesterday's detected activity and ask only about exceptions: stale interim states (> ${staleDays}d), PR merged while state lags, untouched commitments from last standup${wipLimit ? `, WIP above ${wipLimit}` : ''}${slaHours ? `, high-priority bugs exceeding ${slaHours}h SLA` : ''}${enableTargetDateChecks ? `, or missing/at-risk target dates` : ''}.`,
+      `2. **Verify Exceptions, SDLC Alerts & Corrections**: Ask the member to confirm or correct the draft, focusing on: stale interim states (> ${staleDays}d), PR merged while state lags, multi-day carryover streaks, SQL migration readiness, IaC/Terraform pipeline verification${wipLimit ? `, WIP above ${wipLimit}` : ''}${slaHours ? `, high-priority bugs exceeding ${slaHours}h SLA` : ''}${enableTargetDateChecks ? `, or missing/at-risk target dates` : ''}.`,
       `3. **Today, Handoffs & Capacity**: Confirm today's focus items${teamGoal ? ` relative to Team Goal "${teamGoal}"` : ''}, capture handoffs (who work moves to next), and note capacity/PTO.`,
       `4. **Blockers**: Ask for blockers (pipeline/build failure, person/review wait, external dependency, or production incident).`,
       `5. **Wrap up**: Confirm any requested ADO updates before writing, then emit the structured JSON summary:`,
       '```json',
-      `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "..." }`,
+      `{ "yesterday": "...", "today": "...", "blockers": "...", "atRisk": "...", "handoffs": "...", "capacity": "...", "userCorrections": "..." }`,
       '```',
       `Leave a field as an empty string if it doesn't apply. This JSON is extracted as the structured_update.`,
     );
@@ -310,7 +366,9 @@ export function buildStandupParticipantPrompt(kickoff: ChatThreadKickoff): strin
   return parts.join('\n');
 }
 
-export function buildStandupFacilitatorPrompt(kickoff: ChatThreadKickoff): string {
+export function buildStandupFacilitatorPrompt(
+  kickoff: ChatThreadKickoff,
+): string {
   const deliveryModel = kickoff.standupDeliveryModel ?? 'flow';
   const teamGoal = kickoff.standupTeamGoal?.trim() || null;
   const policy = kickoff.standupPolicy ?? {};
@@ -320,8 +378,8 @@ export function buildStandupFacilitatorPrompt(kickoff: ChatThreadKickoff): strin
       : deliveryModel === 'milestone';
 
   const parts: string[] = [
-    `# Standup Ceremony — Team Pulse Facilitator`,
-    `You are the standup facilitator. Synthesize all participants' updates into a 5-minute exception-ordered Team Pulse summary aligned with the team's Delivery Model.`,
+    `# Standup Ceremony — SDLC & Multi-Day Team Pulse Facilitator`,
+    `You are the standup facilitator. Synthesize all participants' confirmed updates, user corrections, AI-drafted ADO briefs, PR file changes, and pipeline stage timelines into an actionable 5-minute Team Pulse summary.`,
     ``,
     `# Session context`,
     `  sessionId:              "${kickoff.standupSessionId}"`,
@@ -330,27 +388,33 @@ export function buildStandupFacilitatorPrompt(kickoff: ChatThreadKickoff): strin
     `  enableTargetDateChecks: ${enableTargetDateChecks}`,
     ``,
     `# Available MCP tools`,
-    `- \`get_standup_session\` — read all participants' structured updates, prepared briefs, proposals, and transcripts`,
+    `- \`get_standup_session\` — read all participants' structured updates (including \`userCorrections\` and \`rejectedItems\`), \`preparedBrief\` (PR files, pipeline timelines, multi-day carryover streaks, SDLC callouts), synthesized \`teamPulse\`, proposals, and transcripts`,
     `- \`create_standup_followup\` — create a follow-up item for involved participants`,
     `- \`complete_standup_session\` — finalize the session (persist summary + decisions, create follow-up threads, notify members)`,
     `- \`query_work_items\` — check ADO work item details if needed`,
     `- \`query_board_items\` / \`list_board_releases\` — Work Board alternatives when the project uses the board`,
     ``,
     `# Procedure`,
-    `1. Call \`get_standup_session\` with the sessionId to load all participant updates, prepared briefs, and staged proposals.`,
-    `2. Analyze updates for cross-cutting patterns and call \`create_standup_followup\` where teammates need to coordinate:`,
+    `1. Call \`get_standup_session\` with the sessionId to load all participant updates, \`userCorrections\`, \`preparedBrief\` SDLC signals, and \`teamPulse\`.`,
+    `2. Inspect SDLC & multi-day patterns and call \`create_standup_followup\` where coordination is required:`,
+    `   - **SDLC & Release Process Risks** — highlight \`.sql\` / \`migrations/**\` schema changes requiring rollback/release verification, \`.tf\` / \`infra/**\` IaC PRs whose pipeline did NOT pass a \`terraform\`/\`iac\`/\`plan\`/\`validate\` stage (failed, skipped, or missing), \`Ready for Test\`/\`UAT\` items with red builds or open PRs, and source PRs lacking tests.`,
     `   - **Blockers & incidents** — pipeline/build failures, shared environment outages, external dependencies, or production incidents.`,
-    `   - **Commitment carryover & flow bottlenecks** — untouched prior commitments, stale items, or WIP/SLA bottlenecks.`,
+    `   - **Multi-day carryover streaks & flow bottlenecks** — items carried across multiple standups without completion, plus any explicit \`userCorrections\` where a participant corrected ADO drift.`,
     ...(enableTargetDateChecks
-      ? [`   - **Milestone & target-date risks** — release-relevant items that are overdue, due within 7 days in early states, or missing target dates.`]
-      : [`   - **Model-aligned delivery risks (${deliveryModel})** — aging work, sprint scope drift, or support SLA risks (do NOT invent missing-target-date warnings when target-date checks are disabled).`]),
+      ? [
+          `   - **Milestone & target-date risks** — release-relevant items that are overdue, due within 7 days in early states, or missing target dates.`,
+        ]
+      : [
+          `   - **Model-aligned delivery risks (${deliveryModel})** — aging work, sprint scope drift, or support SLA risks (do NOT invent missing-target-date warnings when target-date checks are disabled).`,
+        ]),
     `   - **Handoffs, PR reviews & capacity** — pair teammates handing off work or waiting on reviews, and match available capacity to blocked/unowned items.`,
-    `3. Compose a concise markdown summary ordered for a 5-minute live huddle:`,
+    `3. Compose a crisp markdown summary ordered for a 5-minute live huddle:`,
     `   1. **Team Goal & Overall Health**${teamGoal ? ` ("${teamGoal}")` : ''}`,
-    `   2. **Blockers & Decisions Needed**`,
-    `   3. **At-Risk Work & Commitment Carryover**`,
-    `   4. **Handoffs, Reviews & Team Capacity**`,
-    `   5. **Completed Highlights & Follow-ups Created**`,
+    `   2. **SDLC & Release Process Callouts** (SQL migrations, Terraform/IaC pipeline stage verification, QA build health)`,
+    `   3. **Blockers & Decisions Needed**`,
+    `   4. **Engineering Area Breakdown** (categorize work across Database/SQL, Infra/Terraform, Backend/API, Frontend/UI, QA & Testing, Security & Auth, Prod Support)`,
+    `   5. **Individual Standup Narratives** (concise per-person multi-day summary for every participant, distinguishing Confirmed updates + user corrections vs AI-Drafted from ADO)`,
+    `   6. **Handoffs, Capacity & Follow-ups Created**`,
     `4. Call \`complete_standup_session\` exactly once with the sessionId, your markdown summary, and optional \`decisionsNeeded\` list. This MUST be your final action.`,
     ``,
     `Also output the final summary as your last message.`,

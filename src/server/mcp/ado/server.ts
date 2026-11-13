@@ -1272,6 +1272,23 @@ export function createAdoMcpServer(options?: {
           )
         );
 
+        const { synthesizeTeamPulse } =
+          await import('../../services/standupDeliveryPolicyService');
+        const teamPulse =
+          session.teamPulse ??
+          synthesizeTeamPulse({
+            deliveryModel: session.config.deliveryModel,
+            teamGoal: session.config.teamGoal,
+            participants: participantData.map((p) => ({
+              userId: p.userId,
+              displayName: p.displayName,
+              status: p.status,
+              structuredUpdate: p.structuredUpdate as never,
+              preparedBrief: p.preparedBrief as never,
+            })),
+            proposals: (session.proposals ?? []) as never,
+          });
+
         return {
           content: [
             {
@@ -1286,7 +1303,9 @@ export function createAdoMcpServer(options?: {
                   deliveryModel: session.config.deliveryModel,
                   goalSource: session.config.goalSource,
                   teamGoal: session.config.teamGoal,
+                  rosterMode: session.config.rosterMode,
                   policy: session.config.policy,
+                  teamPulse,
                   proposals: session.proposals ?? [],
                   participants: participantData,
                 },

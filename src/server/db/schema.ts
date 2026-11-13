@@ -58,6 +58,7 @@ import type {
   StandupDeliveryPolicy,
   StandupGoalSource,
   StandupProposalType,
+  StandupRosterMode,
   StandupStructuredUpdate,
   StandupTeamPulse,
 } from '../../shared/types/standup';
@@ -1811,6 +1812,7 @@ export const standupConfigs = pgTable('standup_configs', {
   deliveryModel: text('delivery_model').$type<StandupDeliveryModel>().notNull().default('flow'),
   goalSource: text('goal_source').$type<StandupGoalSource>().notNull().default('none'),
   teamGoal: text('team_goal'),
+  rosterMode: text('roster_mode').$type<StandupRosterMode>().notNull().default('ado_and_groups'),
   policy: jsonb('policy').$type<Partial<StandupDeliveryPolicy>>().notNull().default({}),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

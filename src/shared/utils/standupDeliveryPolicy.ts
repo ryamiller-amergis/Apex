@@ -1,17 +1,29 @@
 import {
   STANDUP_DELIVERY_MODELS,
   STANDUP_GOAL_SOURCES,
-  type CalendarItemHealth,
+  STANDUP_ROSTER_MODES,
+  STANDUP_WORK_DOMAINS,
+  STANDUP_WORK_DOMAIN_LABELS,
+  type ParticipantCarryoverStreak,
   type ParticipantDetectedException,
+  type ParticipantMultiDayArc,
   type ParticipantPreparedBrief,
+  type ParticipantStandupNarrative,
   type StandupActionProposal,
-  type StandupConfidence,
+  type StandupApprovalAction,
+  type StandupAreaBreakdownEntry,
   type StandupDeliveryModel,
   type StandupDeliveryPolicy,
+  type StandupDraftedItem,
   type StandupGoalSource,
+  type StandupItemDecision,
   type StandupOverallHealth,
+  type StandupRejectedItemRecord,
+  type StandupRosterMode,
+  type StandupSdlcCallout,
   type StandupStructuredUpdate,
   type StandupTeamPulse,
+  type StandupWorkDomain,
 } from '../types/standup';
 
 export interface EvidenceWorkItem {
@@ -30,6 +42,26 @@ export interface EvidenceWorkItem {
   priority?: number;
 }
 
+export interface EvidenceBuildStageRecord {
+  name: string;
+  type: string;
+  state?: string;
+  result?: string;
+}
+
+export interface EvidenceBuildSummary {
+  buildId: string | number;
+  buildNumber: string;
+  definitionName: string;
+  branch?: string;
+  status?: string;
+  result?: string;
+  finishedAt?: string;
+  prId?: number;
+  linkedWorkItemIds?: number[];
+  stagesAndJobs?: EvidenceBuildStageRecord[];
+}
+
 export interface EvidencePullRequest {
   prId: number;
   title: string;
@@ -39,6 +71,10 @@ export interface EvidencePullRequest {
   linkedWorkItemIds: number[];
   hasApproval?: boolean;
   repositoryName?: string;
+  sourceBranch?: string;
+  targetBranch?: string;
+  changedFiles?: string[];
+  builds?: EvidenceBuildSummary[];
   url?: string;
 }
 
@@ -52,18 +88,35 @@ export interface EvidencePipelineFailure {
   prId?: number;
 }
 
+export interface PriorParticipantSessionRecord {
+  sessionDate: string;
+  structuredUpdate: StandupStructuredUpdate | null;
+}
+
 export interface EvaluateParticipantBriefInput {
   now?: Date | string;
   deliveryModel?: StandupDeliveryModel | string | null;
   teamGoal?: string | null;
   policy?: Partial<StandupDeliveryPolicy> | null;
   expectedIterationPath?: string | null;
+  ownerDisplayName?: string | null;
   activeWorkItems: EvidenceWorkItem[];
   changedSinceLastWorkItems?: EvidenceWorkItem[];
   pullRequests?: EvidencePullRequest[];
+  builds?: EvidenceBuildSummary[];
   pipelineFailures?: EvidencePipelineFailure[];
   priorStructuredUpdate?: StandupStructuredUpdate | null;
+  priorHistory?: PriorParticipantSessionRecord[];
   openFollowups?: Array<{ id: string; title: string; sessionDate: string }>;
+}
+
+export interface EvaluateSdlcCalloutsInput {
+  ownerDisplayName?: string | null;
+  activeWorkItems: EvidenceWorkItem[];
+  changedSinceLastWorkItems?: EvidenceWorkItem[];
+  pullRequests?: EvidencePullRequest[];
+  builds?: EvidenceBuildSummary[];
+  pipelineFailures?: EvidencePipelineFailure[];
 }
 
 export interface SynthesizeTeamPulseInput {
@@ -81,13 +134,17 @@ export interface SynthesizeTeamPulseInput {
   decisionsNeeded?: string[];
 }
 
-export interface EvaluateCalendarHealthOptions {
-  now?: Date | string;
-  deliveryModel?: StandupDeliveryModel | string | null;
-  policy?: Partial<StandupDeliveryPolicy> | null;
-  expectedIterationPath?: string | null;
-  teamPulse?: StandupTeamPulse | null;
-  proposals?: StandupActionProposal[];
+export interface ReconcileDraftedUpdateInput {
+  draftedItems: StandupDraftedItem[];
+  itemDecisions: Record<string, StandupItemDecision>;
+  rejectionReasons?: Record<string, string>;
+  userCorrections?: string;
+  manualYesterday?: string;
+  manualToday?: string;
+  manualBlockers?: string;
+  atRisk?: string;
+  handoffs?: string;
+  capacity?: string;
 }
 
 const TERMINAL_STATES = new Set([
@@ -127,6 +184,15 @@ const WIP_ACTIVE_STATES = new Set([
   'in pull request',
 ]);
 
+const QA_OR_RELEASE_STATES = new Set([
+  'merged to test',
+  'ready for test',
+  'in test',
+  'uit',
+  'uat',
+  'ready for release',
+]);
+
 const ADVANCED_PROGRESS_STATES = new Set([
   'merged to test',
   'ready for test',
@@ -154,6 +220,15 @@ export function normalizeGoalSource(
     return source as StandupGoalSource;
   }
   return 'none';
+}
+
+export function normalizeRosterMode(
+  mode?: string | null,
+): StandupRosterMode {
+  if (mode && (STANDUP_ROSTER_MODES as readonly string[]).includes(mode)) {
+    return mode as StandupRosterMode;
+  }
+  return 'ado_and_groups';
 }
 
 export function resolveStandupPolicy(
@@ -242,7 +317,9 @@ function formatYmd(date: Date): string {
 }
 
 function addDaysYmd(base: Date, days: number): string {
-  const next = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
+  const next = new Date(
+    Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()),
+  );
   next.setUTCDate(next.getUTCDate() + days);
   return formatYmd(next);
 }
@@ -289,6 +366,444 @@ function parseCommitmentSegments(todayText: string): string[] {
   return segments.length > 0 ? segments : [todayText.trim()].filter(Boolean);
 }
 
+// ── Engineering Domain Categorization ─────────────────────────────────────────
+
+function classifyPathDomains(filePath: string): StandupWorkDomain[] {
+  const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const lower = normalized.toLowerCase();
+  const matched = new Set<StandupWorkDomain>();
+
+  if (
+    /(^|\/)migrations\//.test(lower) ||
+    lower.endsWith('.sql') ||
+    /(^|\/)[^/]*schema[^/]*\.(ts|js|sql)$/.test(lower) ||
+    lower.includes('/drizzle')
+  ) {
+    matched.add('database');
+  }
+
+  if (
+    /\.(tf|tfvars|bicep)$/.test(lower) ||
+    /(^|\/)infra\//.test(lower) ||
+    /(^|\/)\.github\/workflows\//.test(lower) ||
+    /azure-pipelines/i.test(lower) ||
+    /(^|\/)dockerfile/i.test(lower)
+  ) {
+    matched.add('iac');
+  }
+
+  if (
+    /(^|\/)(tests|__tests__|e2e)\//.test(lower) ||
+    /\.(test|spec)\.(ts|tsx|js|jsx|mjs)$/.test(lower) ||
+    lower.includes('playwright')
+  ) {
+    matched.add('qa');
+  }
+
+  if (
+    /(^|\/)(auth|rbac|security|oauth|sso)/.test(lower) ||
+    /(auth|rbac|permission|security)\.(ts|tsx|js)$/.test(lower)
+  ) {
+    matched.add('security');
+  }
+
+  if (
+    !matched.has('qa') &&
+    (/(^|\/)src\/client\//.test(lower) || /\.(tsx|css|scss)$/.test(lower))
+  ) {
+    matched.add('frontend');
+  }
+
+  if (
+    !matched.has('qa') &&
+    !matched.has('database') &&
+    (/(^|\/)src\/server\//.test(lower) || /(^|\/)(routes|services|controllers)\//.test(lower))
+  ) {
+    matched.add('backend');
+  }
+
+  return Array.from(matched);
+}
+
+function classifyWorkItemDomain(item: EvidenceWorkItem): StandupWorkDomain {
+  const text = `${item.title} ${item.tags ?? ''} ${item.workItemType}`.toLowerCase();
+  if (
+    /\b(prod[- ]?support|incident|sev[- ]?[12]|outage|hotfix)\b/.test(text) ||
+    (item.workItemType.trim().toLowerCase() === 'bug' && item.priority === 1)
+  ) {
+    return 'prod_support';
+  }
+  if (/\b(sql|migration|postgres|database|schema|ddl)\b/.test(text)) {
+    return 'database';
+  }
+  if (/\b(terraform|bicep|iac|infra|infrastructure|dockerfile|github actions|pipeline)\b/.test(text)) {
+    return 'iac';
+  }
+  if (
+    item.workItemType.trim().toLowerCase() === 'test case' ||
+    /\b(qa|e2e|playwright|regression|test suite)\b/.test(text)
+  ) {
+    return 'qa';
+  }
+  if (/\b(rbac|sso|oauth|auth|security|cve|permission)\b/.test(text)) {
+    return 'security';
+  }
+  if (/\b(ui|ux|css|modal|component|react|frontend|view|drawer)\b/.test(text)) {
+    return 'frontend';
+  }
+  if (/\b(api|endpoint|service|worker|webhook|backend|queue|mcp)\b/.test(text)) {
+    return 'backend';
+  }
+  return 'general';
+}
+
+export function classifyDomainsFromEvidence(
+  workItems: EvidenceWorkItem[],
+  pullRequests: EvidencePullRequest[] = [],
+): StandupWorkDomain[] {
+  const domains = new Set<StandupWorkDomain>();
+
+  for (const pr of pullRequests) {
+    for (const file of pr.changedFiles ?? []) {
+      for (const d of classifyPathDomains(file)) {
+        domains.add(d);
+      }
+    }
+    if ((pr.changedFiles ?? []).length === 0 && pr.title) {
+      const inferred = classifyWorkItemDomain({
+        id: pr.prId,
+        title: pr.title,
+        workItemType: 'PullRequest',
+        state: pr.status,
+      });
+      if (inferred !== 'general') domains.add(inferred);
+    }
+  }
+
+  for (const item of workItems) {
+    const d = classifyWorkItemDomain(item);
+    if (d !== 'general') {
+      domains.add(d);
+    }
+  }
+
+  if (domains.size === 0 && (workItems.length > 0 || pullRequests.length > 0)) {
+    domains.add('general');
+  }
+
+  return STANDUP_WORK_DOMAINS.filter((d) => domains.has(d));
+}
+
+// ── SDLC Process & Release Risk Evaluators ───────────────────────────────────
+
+const SQL_PATH_RE = /(^|\/)migrations\/|\.sql$/i;
+const IAC_PATH_RE = /\.(tf|tfvars|bicep)$|(^|\/)infra\//i;
+const TEST_PATH_RE = /(^|\/)(__tests__|tests|e2e)\/|\.(test|spec)\.(ts|tsx|js|jsx|mjs)$/i;
+const APP_SOURCE_PATH_RE = /(^|\/)src\/(server|client|shared)\/.*\.(ts|tsx|js|jsx)$/i;
+const IAC_STAGE_NAME_RE = /terraform|iac|bicep|infra|tf[-_ ]?(plan|validate|check|lint)|\bplan\b|\bvalidate\b/i;
+
+function normalizeBranch(branch?: string | null): string {
+  if (!branch) return '';
+  return branch.replace(/^refs\/heads\//i, '').trim().toLowerCase();
+}
+
+export function evaluateSdlcCallouts(
+  input: EvaluateSdlcCalloutsInput,
+): StandupSdlcCallout[] {
+  const callouts: StandupSdlcCallout[] = [];
+  const allItems = [
+    ...input.activeWorkItems,
+    ...(input.changedSinceLastWorkItems ?? []),
+  ];
+  const itemById = new Map<number, EvidenceWorkItem>();
+  for (const item of allItems) {
+    if (!itemById.has(item.id)) itemById.set(item.id, item);
+  }
+
+  const prs = (input.pullRequests ?? []).filter((pr) => pr.status !== 'abandoned');
+  const allBuilds: EvidenceBuildSummary[] = [...(input.builds ?? [])];
+  for (const pr of prs) {
+    for (const b of pr.builds ?? []) {
+      if (!allBuilds.some((existing) => String(existing.buildId) === String(b.buildId))) {
+        allBuilds.push({ ...b, prId: b.prId ?? pr.prId });
+      }
+    }
+  }
+
+  for (const pr of prs) {
+    const files = (pr.changedFiles ?? []).map((f) => f.replace(/\\/g, '/').replace(/^\/+/, ''));
+    const wiIds = pr.linkedWorkItemIds ?? [];
+    const wiLabel = wiIds.length > 0 ? ` (${wiIds.map((id) => `#${id}`).join(', ')})` : '';
+    const linkedItems = wiIds.map((id) => itemById.get(id)).filter((i): i is EvidenceWorkItem => Boolean(i));
+
+    // 1. SQL / Migration check
+    const sqlFiles = files.filter((f) => SQL_PATH_RE.test(f));
+    if (sqlFiles.length > 0) {
+      const hasReleaseContext = linkedItems.some(
+        (item) =>
+          Boolean(item.tags && /release:/i.test(item.tags)) ||
+          QA_OR_RELEASE_STATES.has(item.state.trim().toLowerCase()),
+      );
+      callouts.push({
+        id: `sdlc-sql-pr-${pr.prId}`,
+        category: 'sql_migration',
+        severity: hasReleaseContext ? 'critical' : 'warning',
+        domain: 'database',
+        title: `SQL / Schema Change Detected (PR !${pr.prId})`,
+        detail: `SQL / Schema Change Detected: PR !${pr.prId}${wiLabel} modifies ${sqlFiles.join(', ')} — verify migration rollback, execution order, and release DB step are accounted for.`,
+        recommendation:
+          'Confirm -- Down Migration reversibility, migration sequence order, and target environment DB execution before release sign-off.',
+        ownerDisplayName: input.ownerDisplayName ?? undefined,
+        workItemIds: wiIds,
+        prIds: [pr.prId],
+        filePaths: sqlFiles,
+      });
+    }
+
+    // 2. Terraform / IaC pipeline stage accuracy check
+    const iacFiles = files.filter((f) => IAC_PATH_RE.test(f));
+    if (iacFiles.length > 0) {
+      const prBranch = normalizeBranch(pr.sourceBranch);
+      const matchingBuilds = allBuilds.filter(
+        (b) =>
+          b.prId === pr.prId ||
+          (prBranch && normalizeBranch(b.branch) === prBranch),
+      );
+
+      let failureReason: string | null = null;
+      let buildLabel = 'CI';
+
+      if (matchingBuilds.length === 0) {
+        failureReason = 'no pipeline build ran for the latest PR iteration';
+      } else {
+        const latestBuild = matchingBuilds[0];
+        buildLabel = `${latestBuild.definitionName} #${latestBuild.buildNumber}`;
+        const buildRes = (latestBuild.result ?? '').toLowerCase();
+
+        if (buildRes === 'failed' || buildRes === 'canceled') {
+          failureReason = `build ended with result "${latestBuild.result}"`;
+        } else {
+          const stages = latestBuild.stagesAndJobs ?? [];
+          const iacStages = stages.filter((s) => IAC_STAGE_NAME_RE.test(s.name));
+          if (iacStages.length === 0) {
+            failureReason = 'no Terraform/IaC validate or plan stage ran in pipeline timeline';
+          } else {
+            const failedStage = iacStages.find((s) =>
+              ['failed', 'canceled'].includes((s.result ?? '').toLowerCase()),
+            );
+            const succeededStage = iacStages.find(
+              (s) => (s.result ?? '').toLowerCase() === 'succeeded',
+            );
+            if (failedStage) {
+              failureReason = `stage "${failedStage.name}" ${failedStage.result}`;
+            } else if (!succeededStage) {
+              const firstStage = iacStages[0];
+              failureReason = `stage "${firstStage.name}" was ${firstStage.result ?? firstStage.state ?? 'skipped'}`;
+            }
+          }
+        }
+      }
+
+      if (failureReason) {
+        callouts.push({
+          id: `sdlc-iac-pr-${pr.prId}`,
+          category: 'iac_pipeline',
+          severity: 'critical',
+          domain: 'iac',
+          title: `IaC Pipeline Verification Alert (PR !${pr.prId})`,
+          detail: `IaC Pipeline Verification Alert: PR !${pr.prId}${wiLabel} modifies ${iacFiles.join(', ')}, but pipeline ${buildLabel} did not complete a passing Terraform/IaC validation stage (${failureReason}).`,
+          recommendation:
+            'Re-run or fix the Terraform/IaC validate & plan pipeline stage and confirm plan output before merging or promoting.',
+          ownerDisplayName: input.ownerDisplayName ?? undefined,
+          workItemIds: wiIds,
+          prIds: [pr.prId],
+          filePaths: iacFiles,
+        });
+      }
+    }
+
+    // 3. Source modifications without test file updates
+    const appSourceFiles = files.filter(
+      (f) => APP_SOURCE_PATH_RE.test(f) && !TEST_PATH_RE.test(f) && !f.endsWith('.d.ts'),
+    );
+    const testFiles = files.filter((f) => TEST_PATH_RE.test(f));
+    if (appSourceFiles.length > 0 && testFiles.length === 0) {
+      const domain =
+        classifyPathDomains(appSourceFiles[0]).find((d) => d !== 'qa') ?? 'backend';
+      callouts.push({
+        id: `sdlc-missing-tests-pr-${pr.prId}`,
+        category: 'missing_tests',
+        severity: 'warning',
+        domain,
+        title: `Source Changes Without Test Updates (PR !${pr.prId})`,
+        detail: `PR !${pr.prId}${wiLabel} modifies ${appSourceFiles.length} source file(s) (${appSourceFiles.slice(0, 2).join(', ')}) with zero unit or E2E test file changes.`,
+        recommendation:
+          'Verify automated unit or E2E test coverage for modified paths before moving linked items to QA.',
+        ownerDisplayName: input.ownerDisplayName ?? undefined,
+        workItemIds: wiIds,
+        prIds: [pr.prId],
+        filePaths: appSourceFiles.slice(0, 5),
+      });
+    }
+
+    // 4. PR merged while work item state lags
+    if (pr.status === 'completed') {
+      for (const item of linkedItems) {
+        if (EARLY_EXECUTION_STATES.has(item.state.trim().toLowerCase())) {
+          callouts.push({
+            id: `sdlc-pr-drift-${pr.prId}-${item.id}`,
+            category: 'pr_state_drift',
+            severity: 'warning',
+            domain: classifyWorkItemDomain(item),
+            title: `Merged PR With Lagging Work Item State (#${item.id})`,
+            detail: `PR !${pr.prId} merged, while #${item.id} (${item.title}) is still [${item.state}].`,
+            recommendation: `Confirm pipeline deployment and advance #${item.id} to Ready for Test.`,
+            ownerDisplayName: input.ownerDisplayName ?? undefined,
+            workItemIds: [item.id],
+            prIds: [pr.prId],
+          });
+        }
+      }
+    }
+  }
+
+  // 5. Work item in QA / Release state while build is failing or PR is still unmerged
+  const failedItemIds = new Map<number, string>();
+  for (const pf of input.pipelineFailures ?? []) {
+    for (const id of pf.linkedWorkItemIds ?? []) {
+      failedItemIds.set(
+        id,
+        `pipeline "${pf.definitionName}" build ${pf.buildNumber} failed`,
+      );
+    }
+  }
+  for (const b of allBuilds) {
+    if ((b.result ?? '').toLowerCase() === 'failed') {
+      const linked = new Set<number>(b.linkedWorkItemIds ?? []);
+      if (b.prId) {
+        const matchingPr = prs.find((p) => p.prId === b.prId);
+        for (const id of matchingPr?.linkedWorkItemIds ?? []) linked.add(id);
+      }
+      for (const id of linked) {
+        failedItemIds.set(
+          id,
+          `pipeline "${b.definitionName}" build ${b.buildNumber} failed`,
+        );
+      }
+    }
+  }
+
+  for (const item of input.activeWorkItems) {
+    const stateNorm = item.state.trim().toLowerCase();
+    if (!QA_OR_RELEASE_STATES.has(stateNorm)) continue;
+
+    const openPr = prs.find(
+      (p) => p.status === 'active' && p.linkedWorkItemIds.includes(item.id),
+    );
+    const failedBuildDesc = failedItemIds.get(item.id);
+
+    if (failedBuildDesc || openPr) {
+      const problem = failedBuildDesc
+        ? failedBuildDesc
+        : `PR !${openPr!.prId} is still open/unmerged`;
+      callouts.push({
+        id: `sdlc-red-qa-${item.id}`,
+        category: 'red_build_in_qa',
+        severity: 'critical',
+        domain: 'qa',
+        title: `QA / Release Item With Unhealthy Build or Open PR (#${item.id})`,
+        detail: `#${item.id} (${item.title}) is in [${item.state}], but ${problem}.`,
+        recommendation: `Verify build health or regress #${item.id} to Active/In PR before QA testing proceeds.`,
+        ownerDisplayName: input.ownerDisplayName ?? undefined,
+        workItemIds: [item.id],
+        prIds: openPr ? [openPr.prId] : undefined,
+      });
+    }
+  }
+
+  return callouts;
+}
+
+// ── Multi-Day History & Carryover Streak Evaluation ──────────────────────────
+
+function computeMultiDayArc(params: {
+  history: PriorParticipantSessionRecord[];
+  activeById: Map<number, EvidenceWorkItem>;
+  changedById: Map<number, EvidenceWorkItem>;
+  mergedPrWorkItemIds: Set<number>;
+}): ParticipantMultiDayArc {
+  const { history, activeById, changedById, mergedPrWorkItemIds } = params;
+  const sessionsAnalyzed = history.length;
+
+  if (sessionsAnalyzed === 0) {
+    return {
+      sessionsAnalyzed: 0,
+      summary: 'First tracked standup in recent window — drafted from current ADO, PR, and pipeline activity.',
+      carryoverStreaks: [],
+    };
+  }
+
+  // Count how many prior standup sessions planned each work item ID in `today`
+  const plannedDaysByItem = new Map<number, number>();
+  let completedMentions = 0;
+
+  for (const record of history) {
+    const update = record.structuredUpdate;
+    if (!update) continue;
+    const todayIds = extractWorkItemIds(update.today);
+    for (const id of todayIds) {
+      plannedDaysByItem.set(id, (plannedDaysByItem.get(id) ?? 0) + 1);
+    }
+    if (update.yesterday?.trim()) {
+      const yIds = extractWorkItemIds(update.yesterday);
+      completedMentions += Math.max(yIds.length, 1);
+    }
+  }
+
+  const carryoverStreaks: ParticipantCarryoverStreak[] = [];
+  for (const [id, daysPlanned] of plannedDaysByItem.entries()) {
+    const item = activeById.get(id) ?? changedById.get(id);
+    const stateNorm = (item?.state ?? '').trim().toLowerCase();
+    const isCompleted =
+      ADVANCED_PROGRESS_STATES.has(stateNorm) ||
+      TERMINAL_STATES.has(stateNorm) ||
+      mergedPrWorkItemIds.has(id);
+
+    // If still in an early execution state (or untouched across >= 2 sessions, or untouched from immediately prior session)
+    if (!isCompleted && (daysPlanned >= 2 || !changedById.has(id))) {
+      carryoverStreaks.push({
+        workItemId: id,
+        title: item?.title ?? `Work Item #${id}`,
+        daysCarried: daysPlanned,
+      });
+    }
+  }
+
+  carryoverStreaks.sort((a, b) => b.daysCarried - a.daysCarried || a.workItemId - b.workItemId);
+
+  const recentCorrection = history[0]?.structuredUpdate?.userCorrections?.trim();
+  const streakNote =
+    carryoverStreaks.length > 0
+      ? `carrying ${carryoverStreaks
+          .slice(0, 2)
+          .map((s) => `#${s.workItemId} (${s.daysCarried}d)`)
+          .join(', ')}`
+      : 'zero multi-day carryovers';
+
+  const summary =
+    `Across ${sessionsAnalyzed} prior standup${sessionsAnalyzed === 1 ? '' : 's'}: ` +
+    `${completedMentions} progress update${completedMentions === 1 ? '' : 's'} logged, ${streakNote}` +
+    (recentCorrection ? ` · Last note: "${recentCorrection}"` : '.');
+
+  return {
+    sessionsAnalyzed,
+    summary,
+    carryoverStreaks,
+  };
+}
+
+// ── Participant Prepared Brief Evaluation ────────────────────────────────────
+
 export function evaluateParticipantBrief(
   input: EvaluateParticipantBriefInput,
 ): ParticipantPreparedBrief {
@@ -297,9 +812,19 @@ export function evaluateParticipantBrief(
   const policy = resolveStandupPolicy(deliveryModel, input.policy);
   const changedItems = input.changedSinceLastWorkItems ?? [];
   const prs = policy.enablePrEvidence ? (input.pullRequests ?? []) : [];
+  const builds = policy.enablePipelineEvidence ? (input.builds ?? []) : [];
   const pipelineFailures = policy.enablePipelineEvidence
     ? (input.pipelineFailures ?? [])
     : [];
+
+  // Normalize prior history (prefer multi-day `priorHistory`, fallback to single `priorStructuredUpdate`)
+  const history: PriorParticipantSessionRecord[] =
+    input.priorHistory && input.priorHistory.length > 0
+      ? input.priorHistory
+      : input.priorStructuredUpdate
+      ? [{ sessionDate: 'prior', structuredUpdate: input.priorStructuredUpdate }]
+      : [];
+  const latestPriorUpdate = history[0]?.structuredUpdate ?? input.priorStructuredUpdate ?? null;
 
   const activeById = new Map<number, EvidenceWorkItem>();
   for (const item of input.activeWorkItems) {
@@ -341,8 +866,8 @@ export function evaluateParticipantBrief(
   const priorCommitments: ParticipantPreparedBrief['priorCommitments'] = [];
   const carryoverWorkItemIds = new Set<number>();
 
-  if (policy.enableCommitmentMemory && input.priorStructuredUpdate?.today?.trim()) {
-    const segments = parseCommitmentSegments(input.priorStructuredUpdate.today);
+  if (policy.enableCommitmentMemory && latestPriorUpdate?.today?.trim()) {
+    const segments = parseCommitmentSegments(latestPriorUpdate.today);
     segments.forEach((segment, idx) => {
       const ids = extractWorkItemIds(segment);
       let status: 'completed' | 'progressed' | 'untouched' = 'untouched';
@@ -387,6 +912,17 @@ export function evaluateParticipantBrief(
         });
       }
     });
+  }
+
+  const multiDayArc = computeMultiDayArc({
+    history: policy.enableCommitmentMemory ? history : [],
+    activeById,
+    changedById,
+    mergedPrWorkItemIds,
+  });
+
+  for (const streak of multiDayArc.carryoverStreaks) {
+    carryoverWorkItemIds.add(streak.workItemId);
   }
 
   // PR evidence checks
@@ -434,8 +970,11 @@ export function evaluateParticipantBrief(
     }
   }
 
-  // Pipeline failure checks
+  // Pipeline failure checks (both explicit pipelineFailures and failed builds)
+  const seenBuildFailures = new Set<string>();
   for (const failure of pipelineFailures) {
+    const key = String(failure.buildId);
+    seenBuildFailures.add(key);
     detectedExceptions.push({
       id: `pipeline-fail-${failure.buildId}`,
       kind: 'pipeline_failure',
@@ -445,8 +984,22 @@ export function evaluateParticipantBrief(
       prId: failure.prId,
     });
   }
+  for (const b of builds) {
+    const key = String(b.buildId);
+    if (!seenBuildFailures.has(key) && (b.result ?? '').toLowerCase() === 'failed') {
+      seenBuildFailures.add(key);
+      detectedExceptions.push({
+        id: `pipeline-fail-${b.buildId}`,
+        kind: 'pipeline_failure',
+        severity: 'critical',
+        message: `Pipeline "${b.definitionName}" build ${b.buildNumber} failed${b.branch ? ` on ${b.branch}` : ''}.`,
+        workItemId: b.linkedWorkItemIds?.[0],
+        prId: b.prId,
+      });
+    }
+  }
 
-  // WIP check (Flow or custom policy with wipLimitPerPerson)
+  // WIP check
   const nonTerminalActive = input.activeWorkItems.filter(
     (item) => !TERMINAL_STATES.has(item.state.trim().toLowerCase()),
   );
@@ -464,7 +1017,9 @@ export function evaluateParticipantBrief(
     });
   }
 
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
   const riskFlagsByItemId = new Map<number, string[]>();
   const addRiskFlag = (id: number, flag: string) => {
     const existing = riskFlagsByItemId.get(id) ?? [];
@@ -475,25 +1030,30 @@ export function evaluateParticipantBrief(
   };
 
   for (const id of carryoverWorkItemIds) {
-    addRiskFlag(id, 'Carryover');
+    const streak = multiDayArc.carryoverStreaks.find((s) => s.workItemId === id);
+    addRiskFlag(
+      id,
+      streak && streak.daysCarried >= 2 ? `Carryover ${streak.daysCarried}d` : 'Carryover',
+    );
   }
 
   // Per-item checks
   for (const item of nonTerminalActive) {
     const stateNorm = item.state.trim().toLowerCase();
 
-    // Stale interim state check
     if (INTERIM_ACTIVE_STATES.has(stateNorm) && item.changedDate) {
       const changed = toDate(item.changedDate);
       if (changed) {
-        const staleDays = (now.getTime() - changed.getTime()) / (1000 * 60 * 60 * 24);
+        const staleDays =
+          (now.getTime() - changed.getTime()) / (1000 * 60 * 60 * 24);
         if (staleDays >= policy.staleDaysThreshold) {
           const roundedDays = Math.floor(staleDays);
           addRiskFlag(item.id, `Stale ${roundedDays}d`);
           detectedExceptions.push({
             id: `stale-${item.id}`,
             kind: 'stale_state',
-            severity: roundedDays >= policy.staleDaysThreshold * 2 ? 'critical' : 'warning',
+            severity:
+              roundedDays >= policy.staleDaysThreshold * 2 ? 'critical' : 'warning',
             message: `#${item.id} (${item.title}) has stayed in [${item.state}] for ${roundedDays} days.`,
             workItemId: item.id,
             workItemTitle: item.title,
@@ -513,7 +1073,6 @@ export function evaluateParticipantBrief(
       }
     }
 
-    // Sprint iteration check
     if (
       deliveryModel === 'sprint' &&
       input.expectedIterationPath &&
@@ -523,7 +1082,6 @@ export function evaluateParticipantBrief(
       addRiskFlag(item.id, 'Outside sprint');
     }
 
-    // Support SLA check
     if (policy.slaHoursHighPriority != null) {
       const isHighPriSupportItem =
         item.workItemType.trim().toLowerCase() === 'bug' ||
@@ -531,7 +1089,8 @@ export function evaluateParticipantBrief(
       if (isHighPriSupportItem) {
         const anchorDate = toDate(item.createdDate) ?? toDate(item.changedDate);
         if (anchorDate) {
-          const ageHours = (now.getTime() - anchorDate.getTime()) / (1000 * 60 * 60);
+          const ageHours =
+            (now.getTime() - anchorDate.getTime()) / (1000 * 60 * 60);
           if (ageHours > policy.slaHoursHighPriority) {
             addRiskFlag(item.id, `SLA > ${policy.slaHoursHighPriority}h`);
             detectedExceptions.push({
@@ -547,14 +1106,19 @@ export function evaluateParticipantBrief(
       }
     }
 
-    // Target-date checks ONLY when enabled (Milestone default, or explicitly toggled)
     if (policy.enableTargetDateChecks) {
       const itemDateStr = effectiveItemDate(item);
-      const dateFieldName = usesTargetDateField(item.workItemType) ? 'targetDate' : 'dueDate';
+      const dateFieldName = usesTargetDateField(item.workItemType)
+        ? 'targetDate'
+        : 'dueDate';
       const isReleaseTagged = Boolean(item.tags && /release:/i.test(item.tags));
 
       if (!itemDateStr) {
-        if (isReleaseTagged || WIP_ACTIVE_STATES.has(stateNorm) || usesTargetDateField(item.workItemType)) {
+        if (
+          isReleaseTagged ||
+          WIP_ACTIVE_STATES.has(stateNorm) ||
+          usesTargetDateField(item.workItemType)
+        ) {
           const proposedDate = addDaysYmd(todayUtc, 7);
           addRiskFlag(item.id, 'Missing target date');
           detectedExceptions.push({
@@ -610,7 +1174,9 @@ export function evaluateParticipantBrief(
     }
   }
 
-  const suggestedToday: ParticipantPreparedBrief['suggestedToday'] = [...nonTerminalActive]
+  const suggestedToday: ParticipantPreparedBrief['suggestedToday'] = [
+    ...nonTerminalActive,
+  ]
     .sort((a, b) => {
       const aFlags = (riskFlagsByItemId.get(a.id) ?? []).length;
       const bFlags = (riskFlagsByItemId.get(b.id) ?? []).length;
@@ -631,6 +1197,122 @@ export function evaluateParticipantBrief(
       riskFlags: riskFlagsByItemId.get(item.id) ?? [],
     }));
 
+  const workDomains = classifyDomainsFromEvidence(
+    [...nonTerminalActive, ...changedItems],
+    prs,
+  );
+
+  const sdlcCallouts = evaluateSdlcCallouts({
+    ownerDisplayName: input.ownerDisplayName ?? null,
+    activeWorkItems: nonTerminalActive,
+    changedSinceLastWorkItems: changedItems,
+    pullRequests: prs,
+    builds,
+    pipelineFailures,
+  });
+
+  // Pre-drafted items for 1-click Approve / Reject UX
+  const draftedItems: StandupDraftedItem[] = [];
+  accomplishedSinceLast.forEach((acc, idx) => {
+    const wi = acc.workItemId
+      ? changedById.get(acc.workItemId) ?? activeById.get(acc.workItemId)
+      : undefined;
+    const pr = acc.prId ? prs.find((p) => p.prId === acc.prId) : undefined;
+    const domain =
+      pr && (pr.changedFiles ?? []).length > 0
+        ? classifyDomainsFromEvidence([], [pr])[0]
+        : wi
+        ? classifyWorkItemDomain(wi)
+        : 'general';
+    draftedItems.push({
+      id: acc.prId
+        ? `draft-yesterday-pr-${acc.prId}`
+        : acc.workItemId
+        ? `draft-yesterday-wi-${acc.workItemId}`
+        : `draft-yesterday-${idx}`,
+      bucket: 'yesterday',
+      summary: acc.prId
+        ? `Merged PR !${acc.prId}: ${acc.title}${acc.workItemId ? ` (#${acc.workItemId})` : ''}`
+        : `#${acc.workItemId} ${acc.title}${acc.state ? ` [${acc.state}]` : ''}`,
+      workItemId: acc.workItemId,
+      prId: acc.prId,
+      domain,
+      evidence: acc.evidence,
+    });
+  });
+
+  suggestedToday.slice(0, 5).forEach((item) => {
+    const fullItem = activeById.get(item.workItemId);
+    const domain = fullItem ? classifyWorkItemDomain(fullItem) : 'general';
+    const flagSuffix =
+      item.riskFlags.length > 0 ? ` (${item.riskFlags.join(', ')})` : '';
+    draftedItems.push({
+      id: `draft-today-wi-${item.workItemId}`,
+      bucket: 'today',
+      summary: `#${item.workItemId} ${item.title} [${item.state}]${flagSuffix}`,
+      workItemId: item.workItemId,
+      domain,
+      evidence: item.iterationPath
+        ? `Assigned in ${item.iterationPath}`
+        : 'Assigned in ADO',
+    });
+  });
+
+  for (const callout of sdlcCallouts) {
+    if (callout.severity === 'critical' || callout.category === 'sql_migration') {
+      draftedItems.push({
+        id: `draft-blocker-${callout.id}`,
+        bucket: 'blocker',
+        summary: callout.detail,
+        workItemId: callout.workItemIds[0],
+        prId: callout.prIds?.[0],
+        domain: callout.domain,
+        evidence: `SDLC ${callout.category}`,
+      });
+    }
+  }
+
+  for (const ex of detectedExceptions) {
+    if (
+      ex.kind === 'pipeline_failure' ||
+      ex.kind === 'sla_breach' ||
+      ex.kind === 'pr_waiting_review'
+    ) {
+      draftedItems.push({
+        id: `draft-blocker-${ex.id}`,
+        bucket: 'blocker',
+        summary: ex.message,
+        workItemId: ex.workItemId,
+        prId: ex.prId,
+        domain: ex.kind === 'pipeline_failure' ? 'iac' : 'general',
+        evidence: ex.kind,
+      });
+    }
+  }
+
+  // Recommended focus synthesis
+  const criticalSdlc = sdlcCallouts.find((c) => c.severity === 'critical');
+  const criticalEx = detectedExceptions.find((e) => e.severity === 'critical');
+  const topStreak = multiDayArc.carryoverStreaks.find((s) => s.daysCarried >= 2);
+  const topToday = suggestedToday[0];
+
+  let recommendedFocus: string;
+  if (criticalSdlc) {
+    recommendedFocus = `${criticalSdlc.title} — ${criticalSdlc.recommendation}`;
+  } else if (criticalEx) {
+    recommendedFocus = `Resolve critical impediment first: ${criticalEx.message}`;
+  } else if (topStreak) {
+    recommendedFocus = `Close out multi-day carryover #${topStreak.workItemId} (${topStreak.title}, carried ${topStreak.daysCarried} standups) before starting net-new work.`;
+  } else if (topToday) {
+    recommendedFocus = input.teamGoal
+      ? `Advance #${topToday.workItemId} (${topToday.title}) toward Team Goal: "${input.teamGoal}".`
+      : `Progress #${topToday.workItemId} (${topToday.title}) [${topToday.state}] and keep active WIP moving cleanly.`;
+  } else {
+    recommendedFocus = input.teamGoal
+      ? `Pick up the next highest-priority item supporting "${input.teamGoal}".`
+      : 'Confirm current priority assignment or pull the next ready item.';
+  }
+
   return {
     generatedAt: now.toISOString(),
     deliveryModel,
@@ -640,8 +1322,85 @@ export function evaluateParticipantBrief(
     suggestedToday,
     detectedExceptions,
     openFollowups: input.openFollowups ?? [],
+    draftedItems,
+    recommendedFocus,
+    multiDayArc,
+    workDomains,
+    sdlcCallouts,
   };
 }
+
+// ── Reconcile Pre-Drafted Standup Decisions & User Corrections ───────────────
+
+export function reconcileDraftedUpdate(
+  input: ReconcileDraftedUpdateInput,
+): StandupStructuredUpdate {
+  const { draftedItems, itemDecisions, rejectionReasons } = input;
+  const approvedByBucket: Record<'yesterday' | 'today' | 'blocker', string[]> = {
+    yesterday: [],
+    today: [],
+    blocker: [],
+  };
+  const rejectedItems: StandupRejectedItemRecord[] = [];
+  const normalizedDecisions: Record<string, StandupItemDecision> = {};
+
+  for (const item of draftedItems) {
+    const decision: StandupItemDecision =
+      itemDecisions[item.id] === 'rejected' ? 'rejected' : 'approved';
+    normalizedDecisions[item.id] = decision;
+    if (decision === 'approved') {
+      approvedByBucket[item.bucket].push(item.summary);
+    } else {
+      const reason = rejectionReasons?.[item.id]?.trim();
+      rejectedItems.push({
+        id: item.id,
+        summary: item.summary,
+        ...(reason ? { reason } : {}),
+      });
+    }
+  }
+
+  const trimmedCorrections = input.userCorrections?.trim() || '';
+  const manualYesterday = input.manualYesterday?.trim() ?? '';
+  const manualToday = input.manualToday?.trim() ?? '';
+  const manualBlockers = input.manualBlockers?.trim() ?? '';
+
+  const yesterdayBase =
+    manualYesterday || approvedByBucket.yesterday.join('; ');
+  let todayBase = manualToday || approvedByBucket.today.join('; ');
+  if (trimmedCorrections && !todayBase.includes(trimmedCorrections)) {
+    todayBase = todayBase
+      ? `${todayBase} (Correction/Note: ${trimmedCorrections})`
+      : trimmedCorrections;
+  }
+  const blockersBase =
+    manualBlockers || approvedByBucket.blocker.join('; ');
+
+  let approvalAction: StandupApprovalAction = 'approved';
+  if (
+    draftedItems.length > 0 &&
+    rejectedItems.length === draftedItems.length
+  ) {
+    approvalAction = 'rejected_rewritten';
+  } else if (rejectedItems.length > 0 || Boolean(trimmedCorrections)) {
+    approvalAction = 'approved_with_edits';
+  }
+
+  return {
+    yesterday: yesterdayBase,
+    today: todayBase,
+    blockers: blockersBase,
+    atRisk: input.atRisk?.trim() ?? '',
+    handoffs: input.handoffs?.trim() ?? '',
+    capacity: input.capacity?.trim() ?? '',
+    itemDecisions: normalizedDecisions,
+    ...(rejectedItems.length > 0 ? { rejectedItems } : {}),
+    ...(trimmedCorrections ? { userCorrections: trimmedCorrections } : {}),
+    approvalAction,
+  };
+}
+
+// ── Team Pulse Synthesis (SDLC Callouts, Area Breakdown & Narratives) ────────
 
 function classifyBlockerType(
   text: string,
@@ -650,7 +1409,7 @@ function classifyBlockerType(
   if (/prod(uction)?\b|incident|outage|sev[- ]?[12]|sla\b/.test(lower)) {
     return 'incident';
   }
-  if (/pipeline|build|ci\b|deploy|test runner/.test(lower)) {
+  if (/pipeline|build|ci\b|deploy|terraform|iac|test runner/.test(lower)) {
     return 'pipeline';
   }
   if (/figma|vendor|access|firewall|external|another team|environment/.test(lower)) {
@@ -676,6 +1435,19 @@ function isNoneLike(text?: string | null): boolean {
   );
 }
 
+function inferDomainsFromUpdateText(update?: StandupStructuredUpdate | null): StandupWorkDomain[] {
+  if (!update) return ['general'];
+  const combined = `${update.yesterday ?? ''} ${update.today ?? ''} ${update.blockers ?? ''} ${update.userCorrections ?? ''}`;
+  if (!combined.trim()) return ['general'];
+  const domain = classifyWorkItemDomain({
+    id: 0,
+    title: combined,
+    workItemType: 'Task',
+    state: 'Active',
+  });
+  return [domain];
+}
+
 export function synthesizeTeamPulse(
   input: SynthesizeTeamPulseInput,
 ): StandupTeamPulse {
@@ -690,17 +1462,176 @@ export function synthesizeTeamPulse(
   const handoffsAndReviews: StandupTeamPulse['handoffsAndReviews'] = [];
   const capacityNotes: StandupTeamPulse['capacityNotes'] = [];
   const decisionsSet = new Set<string>(input.decisionsNeeded ?? []);
+  const sdlcCalloutMap = new Map<string, StandupSdlcCallout>();
+  const individualNarratives: ParticipantStandupNarrative[] = [];
+
+  const areaAccumulator = new Map<
+    StandupWorkDomain,
+    {
+      activeItemIds: Set<number>;
+      fallbackCount: number;
+      contributors: Set<string>;
+      focusCandidates: string[];
+      riskCount: number;
+    }
+  >();
+
+  const ensureArea = (domain: StandupWorkDomain) => {
+    let entry = areaAccumulator.get(domain);
+    if (!entry) {
+      entry = {
+        activeItemIds: new Set<number>(),
+        fallbackCount: 0,
+        contributors: new Set<string>(),
+        focusCandidates: [],
+        riskCount: 0,
+      };
+      areaAccumulator.set(domain, entry);
+    }
+    return entry;
+  };
 
   let submittedCount = 0;
 
   for (const participant of input.participants) {
     const label = participant.displayName?.trim() || participant.userId;
-    if (participant.status === 'submitted') {
+    const isSubmitted = participant.status === 'submitted';
+    if (isSubmitted) {
       submittedCount += 1;
     }
 
     const update = participant.structuredUpdate;
     const brief = participant.preparedBrief;
+    const participantDomains =
+      brief?.workDomains && brief.workDomains.length > 0
+        ? brief.workDomains
+        : inferDomainsFromUpdateText(update);
+
+    // Individual standup narrative (for BOTH confirmed and unsubmitted AI-drafted participants)
+    const carryoverStreakCount = brief?.multiDayArc?.carryoverStreaks?.length ?? 0;
+    const untouchedCount =
+      brief?.priorCommitments?.filter((c) => c.status === 'untouched').length ?? 0;
+    const carryoverCount = Math.max(carryoverStreakCount, untouchedCount);
+
+    const draftedYesterday =
+      brief?.draftedItems
+        ?.filter((i) => i.bucket === 'yesterday')
+        .map((i) => i.summary)
+        .join('; ') ||
+      brief?.accomplishedSinceLast
+        ?.slice(0, 3)
+        .map((a) => (a.workItemId ? `#${a.workItemId} ${a.title}` : a.title))
+        .join('; ') ||
+      'No ADO or PR changes recorded since last standup.';
+
+    const draftedToday =
+      brief?.recommendedFocus ||
+      brief?.draftedItems
+        ?.filter((i) => i.bucket === 'today')
+        .slice(0, 3)
+        .map((i) => i.summary)
+        .join('; ') ||
+      'Pending standup confirmation.';
+
+    const draftedBlockers =
+      brief?.draftedItems
+        ?.filter((i) => i.bucket === 'blocker')
+        .map((i) => i.summary)
+        .join('; ') || 'None detected';
+
+    if (isSubmitted && update) {
+      individualNarratives.push({
+        userId: participant.userId,
+        displayName: label,
+        status: 'confirmed',
+        domains: participantDomains,
+        arcSummary:
+          brief?.multiDayArc?.summary ??
+          'Confirmed update recorded for today.',
+        yesterdaySummary:
+          update.yesterday?.trim() || 'No updates reported for yesterday.',
+        todayFocus:
+          update.today?.trim() || draftedToday,
+        blockersSummary: !isNoneLike(update.blockers)
+          ? update.blockers!.trim()
+          : 'None',
+        ...(update.userCorrections?.trim()
+          ? { userCorrections: update.userCorrections.trim() }
+          : {}),
+        carryoverCount,
+      });
+    } else {
+      individualNarratives.push({
+        userId: participant.userId,
+        displayName: label,
+        status: 'ai_drafted',
+        domains: participantDomains,
+        arcSummary:
+          brief?.multiDayArc?.summary ??
+          'AI-drafted from live ADO, PR, and pipeline activity (awaiting confirmation).',
+        yesterdaySummary: draftedYesterday,
+        todayFocus: draftedToday,
+        blockersSummary: draftedBlockers,
+        carryoverCount,
+      });
+    }
+
+    // Populate area breakdown from participant domains & items
+    for (const domain of participantDomains) {
+      const area = ensureArea(domain);
+      area.contributors.add(label);
+    }
+    for (const item of brief?.suggestedToday ?? []) {
+      const itemDomain = classifyWorkItemDomain({
+        id: item.workItemId,
+        title: item.title,
+        workItemType: item.workItemType,
+        state: item.state,
+      });
+      const area = ensureArea(
+        itemDomain === 'general' && participantDomains[0]
+          ? participantDomains[0]
+          : itemDomain,
+      );
+      area.contributors.add(label);
+      area.activeItemIds.add(item.workItemId);
+      if (area.focusCandidates.length < 2) {
+        area.focusCandidates.push(`#${item.workItemId} ${item.title}`);
+      }
+      if (item.riskFlags.length > 0) {
+        area.riskCount += 1;
+      }
+    }
+    if ((brief?.suggestedToday?.length ?? 0) === 0 && update?.today?.trim()) {
+      const primaryDomain = participantDomains[0] ?? 'general';
+      const area = ensureArea(primaryDomain);
+      const ids = extractWorkItemIds(update.today);
+      if (ids.length > 0) {
+        ids.forEach((id) => area.activeItemIds.add(id));
+      } else {
+        area.fallbackCount += 1;
+      }
+      if (area.focusCandidates.length < 2) {
+        area.focusCandidates.push(update.today.trim());
+      }
+    }
+
+    // Roll up SDLC callouts from participant brief
+    for (const callout of brief?.sdlcCallouts ?? []) {
+      const enrichedCallout: StandupSdlcCallout = {
+        ...callout,
+        ownerDisplayName: callout.ownerDisplayName ?? label,
+      };
+      sdlcCalloutMap.set(callout.id, enrichedCallout);
+      const area = ensureArea(callout.domain);
+      area.contributors.add(label);
+      callout.workItemIds.forEach((id) => area.activeItemIds.add(id));
+      area.riskCount += 1;
+      area.focusCandidates.unshift(callout.title);
+      if (callout.severity === 'critical') {
+        decisionsSet.add(`${callout.title}: ${callout.recommendation}`);
+      }
+    }
 
     if (update?.yesterday && !isNoneLike(update.yesterday)) {
       completedHighlights.push({
@@ -735,11 +1666,37 @@ export function synthesizeTeamPulse(
         workItemIds: extractWorkItemIds(blockerText),
       });
       if (blockerType === 'incident' || blockerType === 'external') {
-        decisionsSet.add(`Resolve ${blockerType} blocker reported by ${label}: ${blockerText}`);
+        decisionsSet.add(
+          `Resolve ${blockerType} blocker reported by ${label}: ${blockerText}`,
+        );
       }
     }
 
     if (brief) {
+      for (const streak of brief.multiDayArc?.carryoverStreaks ?? []) {
+        if (streak.daysCarried >= 2) {
+          const existingCarry = carryoverAlerts.find(
+            (c) => c.userId === participant.userId,
+          );
+          const msg = `#${streak.workItemId} (${streak.title}) carried across ${streak.daysCarried} standups without completion.`;
+          if (existingCarry) {
+            if (!existingCarry.workItemIds.includes(streak.workItemId)) {
+              existingCarry.workItemIds.push(streak.workItemId);
+            }
+            if (!existingCarry.summary.includes(`#${streak.workItemId}`)) {
+              existingCarry.summary = `${existingCarry.summary}; ${msg}`;
+            }
+          } else {
+            carryoverAlerts.push({
+              userId: participant.userId,
+              displayName: label,
+              summary: msg,
+              workItemIds: [streak.workItemId],
+            });
+          }
+        }
+      }
+
       for (const ex of brief.detectedExceptions) {
         if (ex.kind === 'pipeline_failure') {
           const alreadyListed = blockers.some((b) => b.summary === ex.message);
@@ -752,11 +1709,15 @@ export function synthesizeTeamPulse(
             });
           }
         } else if (ex.kind === 'untouched_commitment') {
-          const existingCarry = carryoverAlerts.find((c) => c.userId === participant.userId);
+          const existingCarry = carryoverAlerts.find(
+            (c) => c.userId === participant.userId,
+          );
           const ids = ex.workItemId ? [ex.workItemId] : [];
           if (existingCarry) {
             for (const id of ids) {
-              if (!existingCarry.workItemIds.includes(id)) existingCarry.workItemIds.push(id);
+              if (!existingCarry.workItemIds.includes(id)) {
+                existingCarry.workItemIds.push(id);
+              }
             }
           } else {
             carryoverAlerts.push({
@@ -776,7 +1737,9 @@ export function synthesizeTeamPulse(
         ) {
           const existing = atRiskMap.get(ex.workItemId);
           const confidence: 'at_risk' | 'uncertain' =
-            ex.severity === 'critical' || ex.kind === 'target_date_at_risk' || ex.kind === 'sla_breach'
+            ex.severity === 'critical' ||
+            ex.kind === 'target_date_at_risk' ||
+            ex.kind === 'sla_breach'
               ? 'at_risk'
               : 'uncertain';
           if (existing) {
@@ -854,24 +1817,57 @@ export function synthesizeTeamPulse(
     }
   }
 
-  const pendingProposals = (input.proposals ?? []).filter((p) => p.status === 'pending');
+  const pendingProposals = (input.proposals ?? []).filter(
+    (p) => p.status === 'pending',
+  );
   if (pendingProposals.length > 0) {
     decisionsSet.add(
       `Confirm or dismiss ${pendingProposals.length} staged ADO update proposal${pendingProposals.length === 1 ? '' : 's'}.`,
     );
   }
 
+  const sdlcCallouts = Array.from(sdlcCalloutMap.values()).sort((a, b) => {
+    const rank = { critical: 0, warning: 1, info: 2 };
+    return rank[a.severity] - rank[b.severity];
+  });
+
+  const areaBreakdown: StandupAreaBreakdownEntry[] = STANDUP_WORK_DOMAINS.filter(
+    (domain) => areaAccumulator.has(domain),
+  ).map((domain) => {
+    const entry = areaAccumulator.get(domain)!;
+    const count = entry.activeItemIds.size + entry.fallbackCount;
+    return {
+      domain,
+      label: STANDUP_WORK_DOMAIN_LABELS[domain],
+      activeItemCount: Math.max(count, entry.contributors.size > 0 ? 1 : 0),
+      contributors: Array.from(entry.contributors),
+      keyFocus:
+        entry.focusCandidates[0] ??
+        `Active ${STANDUP_WORK_DOMAIN_LABELS[domain]} work in flight`,
+      riskCount: entry.riskCount,
+    };
+  });
+
   const atRiskItems = Array.from(atRiskMap.values());
   const hasCriticalBlocker = blockers.some(
     (b) => b.blockerType === 'incident' || b.blockerType === 'pipeline',
   );
-  const highRiskCount = atRiskItems.filter((item) => item.confidence === 'at_risk').length;
+  const hasCriticalSdlc = sdlcCallouts.some((c) => c.severity === 'critical');
+  const highRiskCount = atRiskItems.filter(
+    (item) => item.confidence === 'at_risk',
+  ).length;
 
   let overallHealth: StandupOverallHealth = 'on_track';
-  if (hasCriticalBlocker || blockers.length >= 2 || highRiskCount >= 2) {
+  if (
+    hasCriticalBlocker ||
+    hasCriticalSdlc ||
+    blockers.length >= 2 ||
+    highRiskCount >= 2
+  ) {
     overallHealth = 'at_risk';
   } else if (
     blockers.length > 0 ||
+    sdlcCallouts.length > 0 ||
     atRiskItems.length > 0 ||
     carryoverAlerts.length > 0
   ) {
@@ -881,9 +1877,9 @@ export function synthesizeTeamPulse(
   const totalParticipants = input.participants.length;
   const goalPrefix = teamGoal ? `Goal "${teamGoal}": ` : '';
   const goalProgressSummary =
-    `${goalPrefix}${submittedCount}/${totalParticipants} updates submitted · ` +
+    `${goalPrefix}${submittedCount}/${totalParticipants} updates confirmed · ` +
+    `${sdlcCallouts.length} SDLC callout${sdlcCallouts.length === 1 ? '' : 's'} · ` +
     `${blockers.length} blocker${blockers.length === 1 ? '' : 's'} · ` +
-    `${atRiskItems.length} at-risk/watch item${atRiskItems.length === 1 ? '' : 's'} · ` +
     `${carryoverAlerts.length} carryover alert${carryoverAlerts.length === 1 ? '' : 's'}.`;
 
   return {
@@ -899,292 +1895,8 @@ export function synthesizeTeamPulse(
     handoffsAndReviews,
     capacityNotes,
     decisionsNeeded: Array.from(decisionsSet),
-  };
-}
-
-export function evaluateCalendarItemHealth(
-  workItems: EvidenceWorkItem[],
-  options: EvaluateCalendarHealthOptions = {},
-): {
-  itemHealthById: Record<number, CalendarItemHealth>;
-  counts: {
-    onTrack: number;
-    uncertain: number;
-    atRisk: number;
-    blockedOrStale: number;
-    missingTargetDate: number;
-    pendingProposals: number;
-  };
-  overallHealth: StandupOverallHealth;
-} {
-  const now = toDate(options.now) ?? new Date();
-  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const deliveryModel = normalizeDeliveryModel(options.deliveryModel);
-  const policy = resolveStandupPolicy(deliveryModel, options.policy);
-  const pendingProposals = (options.proposals ?? []).filter((p) => p.status === 'pending');
-
-  // Index pulse signals by work item ID
-  const blockerReasonsByItem = new Map<number, string[]>();
-  const pulseAtRiskByItem = new Map<
-    number,
-    { confidence: 'at_risk' | 'uncertain'; reasons: string[] }
-  >();
-  const carryoverItemIds = new Set<number>();
-
-  if (options.teamPulse) {
-    for (const blocker of options.teamPulse.blockers) {
-      for (const id of blocker.workItemIds) {
-        const list = blockerReasonsByItem.get(id) ?? [];
-        list.push(`Standup blocker: ${blocker.summary}`);
-        blockerReasonsByItem.set(id, list);
-      }
-    }
-    for (const risk of options.teamPulse.atRiskItems) {
-      pulseAtRiskByItem.set(risk.workItemId, {
-        confidence: risk.confidence,
-        reasons: [...risk.reasons],
-      });
-    }
-    for (const carry of options.teamPulse.carryoverAlerts) {
-      for (const id of carry.workItemIds) {
-        carryoverItemIds.add(id);
-      }
-    }
-  }
-
-  const proposalsByItem = new Map<number, StandupActionProposal[]>();
-  for (const proposal of pendingProposals) {
-    const list = proposalsByItem.get(proposal.workItemId) ?? [];
-    list.push(proposal);
-    proposalsByItem.set(proposal.workItemId, list);
-  }
-
-  // Count active WIP per assignee when wipLimitPerPerson is configured
-  const wipCountByAssignee = new Map<string, number>();
-  if (policy.wipLimitPerPerson != null) {
-    for (const item of workItems) {
-      const stateNorm = (item.state ?? '').trim().toLowerCase();
-      if (item.assignedTo && WIP_ACTIVE_STATES.has(stateNorm)) {
-        wipCountByAssignee.set(
-          item.assignedTo,
-          (wipCountByAssignee.get(item.assignedTo) ?? 0) + 1,
-        );
-      }
-    }
-  }
-
-  const itemHealthById: Record<number, CalendarItemHealth> = {};
-  let onTrack = 0;
-  let uncertain = 0;
-  let atRisk = 0;
-  let blockedOrStale = 0;
-  let missingTargetDate = 0;
-
-  const promoteConfidence = (
-    current: StandupConfidence,
-    next: StandupConfidence,
-  ): StandupConfidence => {
-    const rank: Record<StandupConfidence, number> = {
-      on_track: 0,
-      uncertain: 1,
-      at_risk: 2,
-    };
-    return rank[next] > rank[current] ? next : current;
-  };
-
-  for (const item of workItems) {
-    const stateNorm = (item.state ?? '').trim().toLowerCase();
-    if (TERMINAL_STATES.has(stateNorm)) {
-      itemHealthById[item.id] = {
-        workItemId: item.id,
-        confidence: 'on_track',
-        reasons: [],
-        isBlockedOrStale: false,
-        carryover: false,
-      };
-      onTrack += 1;
-      continue;
-    }
-
-    let confidence: StandupConfidence = 'on_track';
-    const reasons: string[] = [];
-    let isBlockedOrStale = false;
-    const carryover = carryoverItemIds.has(item.id);
-
-    const addReason = (reason: string) => {
-      if (!reasons.includes(reason)) reasons.push(reason);
-    };
-
-    if (stateNorm === 'blocked') {
-      confidence = promoteConfidence(confidence, 'at_risk');
-      isBlockedOrStale = true;
-      addReason('Work item state is Blocked');
-    }
-
-    const blockerReasons = blockerReasonsByItem.get(item.id);
-    if (blockerReasons && blockerReasons.length > 0) {
-      confidence = promoteConfidence(confidence, 'at_risk');
-      isBlockedOrStale = true;
-      blockerReasons.forEach(addReason);
-    }
-
-    if (carryover) {
-      confidence = promoteConfidence(confidence, 'uncertain');
-      addReason('Untouched commitment carried over from prior standup');
-    }
-
-    const pulseRisk = pulseAtRiskByItem.get(item.id);
-    if (pulseRisk) {
-      confidence = promoteConfidence(confidence, pulseRisk.confidence);
-      pulseRisk.reasons.forEach(addReason);
-    }
-
-    // Stale state evaluation
-    if (INTERIM_ACTIVE_STATES.has(stateNorm) && item.changedDate) {
-      const changed = toDate(item.changedDate);
-      if (changed) {
-        const staleDays = (now.getTime() - changed.getTime()) / (1000 * 60 * 60 * 24);
-        if (staleDays >= policy.staleDaysThreshold) {
-          const roundedDays = Math.floor(staleDays);
-          isBlockedOrStale = true;
-          confidence = promoteConfidence(
-            confidence,
-            roundedDays >= policy.staleDaysThreshold * 2 ? 'at_risk' : 'uncertain',
-          );
-          addReason(
-            `Unchanged in ${item.state} for ${roundedDays}d (threshold: ${policy.staleDaysThreshold}d)`,
-          );
-        }
-      }
-    }
-
-    // WIP overload in Flow / custom policy
-    if (policy.wipLimitPerPerson != null && item.assignedTo && WIP_ACTIVE_STATES.has(stateNorm)) {
-      const assigneeWip = wipCountByAssignee.get(item.assignedTo) ?? 0;
-      if (assigneeWip > policy.wipLimitPerPerson) {
-        confidence = promoteConfidence(confidence, 'uncertain');
-        addReason(
-          `${item.assignedTo} has ${assigneeWip} items in progress (WIP limit: ${policy.wipLimitPerPerson})`,
-        );
-      }
-    }
-
-    // Sprint iteration mismatch
-    if (
-      deliveryModel === 'sprint' &&
-      options.expectedIterationPath &&
-      item.iterationPath &&
-      item.iterationPath !== options.expectedIterationPath
-    ) {
-      confidence = promoteConfidence(confidence, 'uncertain');
-      addReason(
-        `Iteration "${item.iterationPath}" is outside active sprint "${options.expectedIterationPath}"`,
-      );
-    }
-
-    // Support SLA breach
-    if (policy.slaHoursHighPriority != null) {
-      const isSupportBug =
-        item.workItemType.trim().toLowerCase() === 'bug' ||
-        (typeof item.priority === 'number' && item.priority <= 2);
-      if (isSupportBug) {
-        const anchor = toDate(item.createdDate) ?? toDate(item.changedDate);
-        if (anchor) {
-          const ageHours = (now.getTime() - anchor.getTime()) / (1000 * 60 * 60);
-          if (ageHours > policy.slaHoursHighPriority) {
-            confidence = promoteConfidence(confidence, 'at_risk');
-            isBlockedOrStale = true;
-            addReason(
-              `Open ${Math.round(ageHours)}h, exceeding ${policy.slaHoursHighPriority}h support SLA`,
-            );
-          }
-        }
-      }
-    }
-
-    // Target-date checks ONLY when enabled (Milestone default, or explicitly toggled)
-    if (policy.enableTargetDateChecks) {
-      const itemDateStr = effectiveItemDate(item);
-      const isReleaseTagged = Boolean(item.tags && /release:/i.test(item.tags));
-      if (!itemDateStr) {
-        missingTargetDate += 1;
-        confidence = promoteConfidence(
-          confidence,
-          isReleaseTagged || usesTargetDateField(item.workItemType) ? 'at_risk' : 'uncertain',
-        );
-        addReason('Missing target/due date under Milestone policy');
-      } else {
-        const deadlineUtc = parseYmdUtc(itemDateStr);
-        if (deadlineUtc) {
-          const daysUntil = Math.floor(
-            (deadlineUtc.getTime() - todayUtc.getTime()) / (1000 * 60 * 60 * 24),
-          );
-          if (daysUntil < 0) {
-            confidence = promoteConfidence(confidence, 'at_risk');
-            addReason(
-              `${Math.abs(daysUntil)}d past target date (${itemDateStr.slice(0, 10)}) while in ${item.state}`,
-            );
-          } else if (daysUntil <= 7 && EARLY_EXECUTION_STATES.has(stateNorm)) {
-            confidence = promoteConfidence(confidence, 'at_risk');
-            addReason(
-              `Due in ${daysUntil}d (${itemDateStr.slice(0, 10)}) while still in ${item.state}`,
-            );
-          }
-        }
-      }
-    }
-
-    // Pending proposals on this work item
-    const itemProposals = proposalsByItem.get(item.id);
-    if (itemProposals && itemProposals.length > 0) {
-      for (const prop of itemProposals) {
-        confidence = promoteConfidence(
-          confidence,
-          prop.confidence === 'at_risk' ? 'at_risk' : 'uncertain',
-        );
-        addReason(
-          `Pending proposal: set ${prop.fieldName} to "${prop.proposedValue}" (${prop.reason})`,
-        );
-      }
-    }
-
-    itemHealthById[item.id] = {
-      workItemId: item.id,
-      confidence,
-      reasons,
-      isBlockedOrStale,
-      carryover,
-    };
-
-    if (confidence === 'at_risk') {
-      atRisk += 1;
-    } else if (confidence === 'uncertain') {
-      uncertain += 1;
-    } else {
-      onTrack += 1;
-    }
-    if (isBlockedOrStale) {
-      blockedOrStale += 1;
-    }
-  }
-
-  let overallHealth: StandupOverallHealth = options.teamPulse?.overallHealth ?? 'on_track';
-  if (atRisk >= 2 || (blockedOrStale >= 2 && atRisk >= 1)) {
-    overallHealth = 'at_risk';
-  } else if (overallHealth === 'on_track' && (atRisk > 0 || uncertain > 0 || blockedOrStale > 0)) {
-    overallHealth = 'watch';
-  }
-
-  return {
-    itemHealthById,
-    counts: {
-      onTrack,
-      uncertain,
-      atRisk,
-      blockedOrStale,
-      missingTargetDate,
-      pendingProposals: pendingProposals.length,
-    },
-    overallHealth,
+    sdlcCallouts,
+    areaBreakdown,
+    individualNarratives,
   };
 }

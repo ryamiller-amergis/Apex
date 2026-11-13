@@ -31,6 +31,58 @@ export const STANDUP_GOAL_SOURCES: readonly StandupGoalSource[] = [
   'saved_query',
 ] as const;
 
+export type StandupRosterMode = 'ado_and_groups' | 'ado_active' | 'groups_only';
+
+export const STANDUP_ROSTER_MODES: readonly StandupRosterMode[] = [
+  'ado_and_groups',
+  'ado_active',
+  'groups_only',
+] as const;
+
+export const STANDUP_ROSTER_MODE_LABELS: Record<StandupRosterMode, string> = {
+  ado_and_groups: 'ADO Work Items + Groups (Auto-discover)',
+  ado_active: 'Active ADO Assignees Only',
+  groups_only: 'Selected Groups Only',
+};
+
+export const STANDUP_ROSTER_MODE_SHORT_LABELS: Record<StandupRosterMode, string> = {
+  ado_and_groups: 'ADO + Groups',
+  ado_active: 'ADO Active Only',
+  groups_only: 'Groups Only',
+};
+
+export type StandupWorkDomain =
+  | 'database'
+  | 'iac'
+  | 'backend'
+  | 'frontend'
+  | 'qa'
+  | 'security'
+  | 'prod_support'
+  | 'general';
+
+export const STANDUP_WORK_DOMAINS: readonly StandupWorkDomain[] = [
+  'database',
+  'iac',
+  'prod_support',
+  'security',
+  'backend',
+  'frontend',
+  'qa',
+  'general',
+] as const;
+
+export const STANDUP_WORK_DOMAIN_LABELS: Record<StandupWorkDomain, string> = {
+  database: 'Database / SQL',
+  iac: 'Infra / Terraform',
+  backend: 'Backend / API',
+  frontend: 'Frontend / UI',
+  qa: 'QA & Testing',
+  security: 'Security & Auth',
+  prod_support: 'Prod Support',
+  general: 'General',
+};
+
 export interface StandupDeliveryPolicy {
   staleDaysThreshold: number;
   prReviewWaitHours: number;
@@ -43,6 +95,19 @@ export interface StandupDeliveryPolicy {
   stateVocabulary?: string[];
 }
 
+export type StandupItemDecision = 'approved' | 'rejected';
+
+export type StandupApprovalAction =
+  | 'approved'
+  | 'approved_with_edits'
+  | 'rejected_rewritten';
+
+export interface StandupRejectedItemRecord {
+  id: string;
+  summary: string;
+  reason?: string;
+}
+
 export interface StandupStructuredUpdate {
   yesterday?: string;
   today?: string;
@@ -50,6 +115,10 @@ export interface StandupStructuredUpdate {
   atRisk?: string;
   handoffs?: string;
   capacity?: string;
+  itemDecisions?: Record<string, StandupItemDecision>;
+  rejectedItems?: StandupRejectedItemRecord[];
+  userCorrections?: string;
+  approvalAction?: StandupApprovalAction;
 }
 
 export type StandupProposalType = 'target_date' | 'state' | 'assigned_to';
@@ -86,6 +155,72 @@ export interface ParticipantDetectedException {
   proposedAction?: StandupProposedAction;
 }
 
+export interface StandupDraftedItem {
+  id: string;
+  bucket: 'yesterday' | 'today' | 'blocker';
+  summary: string;
+  workItemId?: number;
+  prId?: number;
+  domain?: StandupWorkDomain;
+  evidence: string;
+}
+
+export interface ParticipantCarryoverStreak {
+  workItemId: number;
+  title: string;
+  daysCarried: number;
+}
+
+export interface ParticipantMultiDayArc {
+  sessionsAnalyzed: number;
+  summary: string;
+  carryoverStreaks: ParticipantCarryoverStreak[];
+}
+
+export type StandupSdlcCalloutCategory =
+  | 'sql_migration'
+  | 'iac_pipeline'
+  | 'release_readiness'
+  | 'missing_tests'
+  | 'red_build_in_qa'
+  | 'pr_state_drift';
+
+export interface StandupSdlcCallout {
+  id: string;
+  category: StandupSdlcCalloutCategory;
+  severity: 'critical' | 'warning' | 'info';
+  domain: StandupWorkDomain;
+  title: string;
+  detail: string;
+  recommendation: string;
+  ownerDisplayName?: string;
+  workItemIds: number[];
+  prIds?: number[];
+  filePaths?: string[];
+}
+
+export interface StandupAreaBreakdownEntry {
+  domain: StandupWorkDomain;
+  label: string;
+  activeItemCount: number;
+  contributors: string[];
+  keyFocus: string;
+  riskCount: number;
+}
+
+export interface ParticipantStandupNarrative {
+  userId: string;
+  displayName: string;
+  status: 'confirmed' | 'ai_drafted';
+  domains: StandupWorkDomain[];
+  arcSummary: string;
+  yesterdaySummary: string;
+  todayFocus: string;
+  blockersSummary: string;
+  userCorrections?: string;
+  carryoverCount: number;
+}
+
 export interface ParticipantPreparedBrief {
   generatedAt: string;
   deliveryModel: StandupDeliveryModel;
@@ -119,6 +254,11 @@ export interface ParticipantPreparedBrief {
     title: string;
     sessionDate: string;
   }>;
+  draftedItems?: StandupDraftedItem[];
+  recommendedFocus?: string;
+  multiDayArc?: ParticipantMultiDayArc;
+  workDomains?: StandupWorkDomain[];
+  sdlcCallouts?: StandupSdlcCallout[];
 }
 
 export interface StandupTeamPulse {
@@ -168,6 +308,9 @@ export interface StandupTeamPulse {
     note: string;
   }>;
   decisionsNeeded: string[];
+  sdlcCallouts?: StandupSdlcCallout[];
+  areaBreakdown?: StandupAreaBreakdownEntry[];
+  individualNarratives?: ParticipantStandupNarrative[];
 }
 
 export interface StandupActionProposal {
@@ -200,37 +343,11 @@ export interface StandupActionProposalInput {
   confidence?: StandupConfidence;
 }
 
-export interface CalendarItemHealth {
-  workItemId: number;
-  confidence: StandupConfidence;
-  reasons: string[];
-  isBlockedOrStale: boolean;
-  carryover: boolean;
-}
-
-export interface CalendarDeliveryPulseResponse {
-  project: string;
-  deliveryModel: StandupDeliveryModel;
-  teamGoal: string | null;
-  goalSource: StandupGoalSource;
-  enableTargetDateChecks: boolean;
-  staleDaysThreshold?: number;
-  wipLimitPerPerson?: number | null;
-  slaHoursHighPriority?: number | null;
-  latestSessionId: string | null;
-  latestSessionDate: string | null;
-  overallHealth: StandupOverallHealth;
-  counts: {
-    onTrack: number;
-    uncertain: number;
-    atRisk: number;
-    blockedOrStale: number;
-    missingTargetDate: number;
-    pendingProposals: number;
-  };
-  itemHealthById: Record<number, CalendarItemHealth>;
-  proposals: StandupActionProposal[];
-  teamPulse: StandupTeamPulse | null;
+export interface StandupRosterMember {
+  userId: string;
+  displayName: string | null;
+  email: string | null;
+  source: 'ado' | 'group' | 'both';
 }
 
 export interface MyStandupSessionResponse {
@@ -247,6 +364,7 @@ export interface MyStandupSessionResponse {
     deliveryModel: StandupDeliveryModel;
     goalSource: StandupGoalSource;
     teamGoal: string | null;
+    rosterMode?: StandupRosterMode;
     policy: StandupDeliveryPolicy;
   };
   preparedBrief: ParticipantPreparedBrief | null;

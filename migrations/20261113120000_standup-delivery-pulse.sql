@@ -3,6 +3,7 @@ ALTER TABLE standup_configs
   ADD COLUMN IF NOT EXISTS delivery_model TEXT NOT NULL DEFAULT 'flow',
   ADD COLUMN IF NOT EXISTS goal_source TEXT NOT NULL DEFAULT 'none',
   ADD COLUMN IF NOT EXISTS team_goal TEXT,
+  ADD COLUMN IF NOT EXISTS roster_mode TEXT NOT NULL DEFAULT 'ado_and_groups',
   ADD COLUMN IF NOT EXISTS policy JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 ALTER TABLE standup_sessions
@@ -49,6 +50,7 @@ ALTER TABLE standup_sessions
 
 ALTER TABLE standup_configs
   DROP COLUMN IF EXISTS policy,
+  DROP COLUMN IF EXISTS roster_mode,
   DROP COLUMN IF EXISTS team_goal,
   DROP COLUMN IF EXISTS goal_source,
   DROP COLUMN IF EXISTS delivery_model;
