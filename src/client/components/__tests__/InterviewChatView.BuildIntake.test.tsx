@@ -113,6 +113,7 @@ jest.mock('../../hooks/useSpeechOutput', () => ({
 
 jest.mock('../../hooks/useFeatureFlags', () => ({
   useFeatureFlags: jest.fn(),
+  useFeatureFlag: () => false,
 }));
 
 jest.mock('../../hooks/useBuilds', () => ({
