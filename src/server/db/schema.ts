@@ -1638,6 +1638,80 @@ export const releaseEpicOrders = pgTable(
   ],
 );
 
+// ── Project Release Target Platforms ──────────────────────────────────────────
+
+export const projectReleasePlatforms = pgTable(
+  'project_release_platforms',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    project: text('project').notNull(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    color: text('color').notNull().default('blue'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('uq_project_release_platforms_project_slug').on(t.project, t.slug),
+    index('idx_project_release_platforms_project_sort').on(t.project, t.sortOrder),
+  ],
+);
+
+export const releaseEpicPlatforms = pgTable(
+  'release_epic_platforms',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    project: text('project').notNull(),
+    adoEpicId: integer('ado_epic_id').notNull(),
+    platformId: uuid('platform_id')
+      .notNull()
+      .references(() => projectReleasePlatforms.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('uq_release_epic_platforms_scope').on(t.project, t.adoEpicId, t.platformId),
+    index('idx_release_epic_platforms_project').on(t.project, t.adoEpicId),
+  ],
+);
+
+export const releaseWorkItemPlatforms = pgTable(
+  'release_work_item_platforms',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    project: text('project').notNull(),
+    workItemId: integer('work_item_id').notNull(),
+    platformId: uuid('platform_id')
+      .notNull()
+      .references(() => projectReleasePlatforms.id, { onDelete: 'cascade' }),
+    updatedBy: text('updated_by'),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('uq_release_work_item_platforms_scope').on(t.project, t.workItemId, t.platformId),
+    index('idx_release_work_item_platforms_project').on(t.project, t.workItemId),
+  ],
+);
+
+export const projectReleasePlatformsRelations = relations(projectReleasePlatforms, ({ many }) => ({
+  epicAssignments: many(releaseEpicPlatforms),
+  workItemAssignments: many(releaseWorkItemPlatforms),
+}));
+
+export const releaseEpicPlatformsRelations = relations(releaseEpicPlatforms, ({ one }) => ({
+  platform: one(projectReleasePlatforms, {
+    fields: [releaseEpicPlatforms.platformId],
+    references: [projectReleasePlatforms.id],
+  }),
+}));
+
+export const releaseWorkItemPlatformsRelations = relations(releaseWorkItemPlatforms, ({ one }) => ({
+  platform: one(projectReleasePlatforms, {
+    fields: [releaseWorkItemPlatforms.platformId],
+    references: [projectReleasePlatforms.id],
+  }),
+}));
+
 // ── Project Menu Settings ─────────────────────────────────────────────────────
 
 export const projectMenuSettings = pgTable('project_menu_settings', {

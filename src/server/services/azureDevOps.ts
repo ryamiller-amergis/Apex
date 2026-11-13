@@ -2768,6 +2768,12 @@ export class AzureDevOpsService {
         let greenItems = 0;
         let amberItems = 0;
         let redItems = 0;
+        let childItemsSummary: Array<{
+          id: number;
+          state: string;
+          workItemType: string;
+          tags: string;
+        }> = [];
 
         if (childrenResponse.ok) {
           const childrenData = await childrenResponse.json() as any;
@@ -2776,12 +2782,24 @@ export class AzureDevOpsService {
             .map((rel: any) => rel.target.id) || [];
 
           if (childIds.length > 0) {
-            const childWorkItems = await this.getWorkItemsInBatches(witApi, childIds, ['System.State', 'System.WorkItemType', 'System.Id']);
+            const childWorkItems = await this.getWorkItemsInBatches(witApi, childIds, [
+              'System.State',
+              'System.WorkItemType',
+              'System.Id',
+              'System.Tags',
+            ]);
             const actualChildren = childWorkItems.filter((child) => child.id !== wi.id);
             totalItems = actualChildren.length;
             
             const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
             const amberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
+
+            childItemsSummary = actualChildren.map((child) => ({
+              id: child.id!,
+              state: child.fields?.['System.State'] || '',
+              workItemType: child.fields?.['System.WorkItemType'] || '',
+              tags: child.fields?.['System.Tags'] || '',
+            }));
 
             actualChildren.forEach((child) => {
               const state = child.fields?.['System.State'];
@@ -2806,12 +2824,14 @@ export class AzureDevOpsService {
           startDate: extractDate(wi.fields['Microsoft.VSTS.Scheduling.StartDate']),
           targetDate: extractDate(wi.fields['Microsoft.VSTS.Scheduling.TargetDate']),
           description: wi.fields['System.Description'] || '',
+          tags: wi.fields['System.Tags'] || '',
           progress,
           totalItems,
           completedItems,
           greenItems,
           amberItems,
           redItems,
+          childItemsSummary,
         });
       }
 

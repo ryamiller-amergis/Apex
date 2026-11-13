@@ -36,13 +36,13 @@ describe('resolveAccessibleRoute', () => {
       expect(result).toBe('/calendar');
     });
 
-    it('skips calendar and returns /planning when only planning is accessible', () => {
+    it('skips calendar and returns /planning/roadmap when only planning is accessible', () => {
       const result = resolveAccessibleRoute({
         ...base,
         can: (k) => k === 'planning:view',
         enabledViews: ['planning'],
       });
-      expect(result).toBe('/planning/dev-stats');
+      expect(result).toBe('/planning/roadmap');
     });
 
     it('returns /backlog over later modules when calendar/planning lack menu access', () => {

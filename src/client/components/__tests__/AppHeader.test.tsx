@@ -18,7 +18,7 @@ jest.mock('../../hooks/useBreakpoint', () => ({
 
 const baseProps = {
   currentView: 'home' as const,
-  planningTab: 'dev-stats',
+  planningTab: 'roadmap',
   theme: 'light' as const,
   user: { name: 'Test User', email: 'test.user@example.com' },
   hasUnreadChangelog: false,

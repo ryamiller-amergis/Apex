@@ -49,21 +49,6 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
   planning: {
     pageEntries: [
       {
-        component: 'src/client/components/DevStats.tsx',
-        routePattern: '/planning/dev-stats',
-        suggestedRoute: '/planning/dev-stats',
-      },
-      {
-        component: 'src/client/components/QAMetrics.tsx',
-        routePattern: '/planning/qa',
-        suggestedRoute: '/planning/qa',
-      },
-      {
-        component: 'src/client/components/AIAnalysis.tsx',
-        routePattern: '/planning/ai-analysis',
-        suggestedRoute: '/planning/ai-analysis',
-      },
-      {
         component: 'src/client/components/RoadmapView.tsx',
         routePattern: '/planning/roadmap',
         suggestedRoute: '/planning/roadmap',

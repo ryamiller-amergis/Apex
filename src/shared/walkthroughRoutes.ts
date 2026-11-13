@@ -13,15 +13,6 @@ const ROUTE_ENTRIES: readonly WalkthroughRouteCatalogEntry[] = Object.freeze([
   Object.freeze({ route: '/home', label: 'Home' }),
   Object.freeze({ route: '/calendar', label: 'Calendar' }),
   Object.freeze({ route: '/planning', label: 'Planning' }),
-  Object.freeze({
-    route: '/planning/dev-stats',
-    label: 'Planning — Developer stats',
-  }),
-  Object.freeze({ route: '/planning/qa', label: 'Planning — QA metrics' }),
-  Object.freeze({
-    route: '/planning/ai-analysis',
-    label: 'Planning — AI analysis',
-  }),
   Object.freeze({ route: '/planning/roadmap', label: 'Planning — Roadmap' }),
   Object.freeze({ route: '/planning/releases', label: 'Planning — Releases' }),
   Object.freeze({ route: '/cloud-cost', label: 'Cloud cost' }),

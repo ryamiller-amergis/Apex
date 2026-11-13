@@ -50,6 +50,15 @@ import {
   pruneStaleOrders,
 } from '../services/releaseOrderService';
 import { assignWorkItemsToRelease, renameRelease } from '../services/releaseManagementService';
+import {
+  createProjectReleasePlatform,
+  deleteProjectReleasePlatform,
+  getProjectReleasePlatformsState,
+  reorderProjectReleasePlatforms,
+  setReleaseEpicPlatforms,
+  setReleaseWorkItemPlatforms,
+  ReleasePlatformValidationError,
+} from '../services/releasePlatformService';
 import { chatThreads as chatThreadsSchema, devSessions } from '../db/schema';
 import {
   createOrReuseSession,
@@ -1317,6 +1326,177 @@ router.post('/admin/trigger-feature-check', async (req: Request, res: Response) 
 });
 
 // ============= RELEASE MANAGEMENT ROUTES =============
+
+function handleReleasePlatformError(res: Response, error: unknown, fallbackMessage: string) {
+  if (error instanceof ReleasePlatformValidationError) {
+    if (error.code === 'DUPLICATE_PLATFORM') {
+      return res.status(409).json({ error: error.message });
+    }
+    if (error.code === 'NOT_FOUND') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message });
+  }
+  console.error(fallbackMessage, error);
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+// GET /api/releases/platforms - Fetch configured target platforms & assignments for a project
+router.get('/releases/platforms', async (req: Request, res: Response) => {
+  try {
+    const { project } = req.query as { project?: string };
+    if (!project || typeof project !== 'string' || !project.trim()) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+    const state = await getProjectReleasePlatformsState(project);
+    return res.json(state);
+  } catch (error) {
+    return handleReleasePlatformError(res, error, 'Failed to load release platforms');
+  }
+});
+
+// POST /api/releases/platforms - Create a target platform for a project (BA/admin only)
+router.post(
+  '/releases/platforms',
+  requireGroupMembership('BA'),
+  async (req: Request, res: Response) => {
+    try {
+      const { project, name, color } = req.body as {
+        project?: string;
+        name?: string;
+        color?: string;
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'name is required' });
+      }
+      const createdBy = getProfileOid(req) ?? 'unknown';
+      const platform = await createProjectReleasePlatform({
+        project,
+        name,
+        color,
+        createdBy,
+      });
+      return res.status(201).json(platform);
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to create release platform');
+    }
+  },
+);
+
+// PUT /api/releases/platforms/order - Reorder target platforms for a project (BA/admin only)
+router.put(
+  '/releases/platforms/order',
+  requireGroupMembership('BA'),
+  async (req: Request, res: Response) => {
+    try {
+      const { project, platformIds } = req.body as {
+        project?: string;
+        platformIds?: string[];
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!Array.isArray(platformIds) || platformIds.length === 0) {
+        return res.status(400).json({ error: 'platformIds must be a non-empty array' });
+      }
+      const platforms = await reorderProjectReleasePlatforms(project, platformIds);
+      return res.json({ platforms });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to reorder release platforms');
+    }
+  },
+);
+
+// DELETE /api/releases/platforms/:platformId - Delete a target platform for a project (BA/admin only)
+router.delete(
+  '/releases/platforms/:platformId',
+  requireGroupMembership('BA'),
+  async (req: Request, res: Response) => {
+    try {
+      const { platformId } = req.params;
+      const project =
+        (typeof req.query.project === 'string' && req.query.project) ||
+        (typeof req.body?.project === 'string' && req.body.project) ||
+        '';
+      if (!project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      await deleteProjectReleasePlatform(project, platformId);
+      return res.json({ success: true, deletedPlatformId: platformId });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to delete release platform');
+    }
+  },
+);
+
+// PUT /api/releases/work-items/:workItemId/platforms - Assign explicit platforms to a work item (BA/admin only)
+router.put(
+  '/releases/work-items/:workItemId/platforms',
+  requireGroupMembership('BA'),
+  async (req: Request, res: Response) => {
+    try {
+      const workItemId = parseInt(req.params.workItemId, 10);
+      if (isNaN(workItemId) || workItemId <= 0) {
+        return res.status(400).json({ error: 'Invalid work item ID' });
+      }
+      const { project, platformIds } = req.body as {
+        project?: string;
+        platformIds?: string[];
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!Array.isArray(platformIds)) {
+        return res.status(400).json({ error: 'platformIds must be an array' });
+      }
+      const updatedBy = getProfileOid(req) ?? 'unknown';
+      const savedIds = await setReleaseWorkItemPlatforms({
+        project,
+        workItemId,
+        platformIds,
+        updatedBy,
+      });
+      return res.json({ success: true, workItemId, platformIds: savedIds });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to update work item platforms');
+    }
+  },
+);
+
+// PUT /api/releases/:epicId/platforms - Assign explicit platforms to a release epic (BA/admin only)
+router.put(
+  '/releases/:epicId/platforms',
+  requireGroupMembership('BA'),
+  async (req: Request, res: Response) => {
+    try {
+      const epicId = parseInt(req.params.epicId, 10);
+      if (isNaN(epicId) || epicId <= 0) {
+        return res.status(400).json({ error: 'Invalid epic ID' });
+      }
+      const { project, platformIds } = req.body as {
+        project?: string;
+        platformIds?: string[];
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!Array.isArray(platformIds)) {
+        return res.status(400).json({ error: 'platformIds must be an array' });
+      }
+      const savedIds = await setReleaseEpicPlatforms({
+        project,
+        adoEpicId: epicId,
+        platformIds,
+      });
+      return res.json({ success: true, epicId, platformIds: savedIds });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to update release epic platforms');
+    }
+  },
+);
 
 // GET /api/releases/epics - Get all release Epics with progress, sorted by Apex manual order
 router.get('/releases/epics', async (req: Request, res: Response) => {
