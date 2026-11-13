@@ -142,8 +142,14 @@ afterAll(async () => {
   if (scratch) await scratch.drop();
 });
 
+/**
+ * Stages from the seeds migration. Later migrations add stages and make a
+ * version 2 of every stage the active one, so tests on the seeds read version 1.
+ */
+const SEEDED_STAGES = ['interview_phase_1', 'interview_phase_2', 'interview_phase_3', 'prd_human_review'];
+
 describe('VT-08 — seeded evaluation definitions', () => {
-  it('DoD-0 has four active orchestrated_workflow stages with the shared rubric parts', async () => {
+  it('DoD-0 seeds four orchestrated_workflow stages with the shared rubric parts', async () => {
     const rows = await query<{
       stage_key: string;
       criteria_count: number;
@@ -161,15 +167,11 @@ describe('VT-08 — seeded evaluation definitions', () => {
               promptfoo_suite_ref AS suite_ref,
               judge_output_schema IS NOT NULL AS has_schema
        FROM workflow_evaluation_definitions
-       WHERE process_key = 'orchestrated_workflow' AND active = true
+       WHERE process_key = 'orchestrated_workflow' AND version = 1 AND stage_key = ANY($1)
        ORDER BY stage_key`,
+      [SEEDED_STAGES],
     );
-    expect(rows.map((row) => row.stage_key)).toEqual([
-      'interview_phase_1',
-      'interview_phase_2',
-      'interview_phase_3',
-      'prd_human_review',
-    ]);
+    expect(rows.map((row) => row.stage_key)).toEqual(SEEDED_STAGES);
     for (const row of rows) {
       expect(Number(row.criteria_count)).toBe(5);
       expect(Number(row.reason_count)).toBe(7);
@@ -421,7 +423,12 @@ describe('VT-09 / VT-10 / VT-11 / VT-12 — definition versioning guards', () =>
       `SELECT count(*)::text AS count FROM workflow_evaluation_definitions`,
     );
     expect(after.count).toBe(before.count);
-    expect(Number(after.count)).toBe(4);
+    const [seeded] = await query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM workflow_evaluation_definitions
+       WHERE version = 1 AND stage_key = ANY($1)`,
+      [SEEDED_STAGES],
+    );
+    expect(Number(seeded.count)).toBe(4);
   });
 
   it('VT-12 rejects a rubric edit and allows an active-flag change', async () => {
@@ -440,22 +447,26 @@ describe('VT-09 / VT-10 / VT-11 / VT-12 — definition versioning guards', () =>
     );
     expect(unchanged.rubric).toEqual(before.rubric);
 
+    const [current] = await query<{ id: string }>(
+      `SELECT id FROM workflow_evaluation_definitions
+       WHERE stage_key = 'interview_phase_2' AND active = true`,
+    );
     await query(
       `UPDATE workflow_evaluation_definitions SET active = false WHERE id = $1`,
-      [before.id],
+      [current.id],
     );
     const [inactive] = await query<{ active: boolean }>(
       `SELECT active FROM workflow_evaluation_definitions WHERE id = $1`,
-      [before.id],
+      [current.id],
     );
     expect(inactive.active).toBe(false);
     await query(
       `UPDATE workflow_evaluation_definitions SET active = true WHERE id = $1`,
-      [before.id],
+      [current.id],
     );
   });
 
-  it('VT-11 keeps version 1 for an event after a version 2 row becomes the active one', async () => {
+  it('VT-11 keeps version 1 for an event after a newer row becomes the active one', async () => {
     const subjectId = '00000000-0000-4000-8000-000000000301';
     const versionOneId = await definitionId('interview_phase_1');
     const eventId = await insertEvent({
@@ -467,27 +478,32 @@ describe('VT-09 / VT-10 / VT-11 / VT-12 — definition versioning guards', () =>
       interviewId: subjectId,
     });
 
+    const [latest] = await query<{ version: number }>(
+      `SELECT max(version) AS version FROM workflow_evaluation_definitions
+       WHERE stage_key = 'interview_phase_1'`,
+    );
+    const nextVersion = Number(latest.version) + 1;
     await query(
-      `UPDATE workflow_evaluation_definitions SET active = false WHERE id = $1`,
-      [versionOneId],
+      `UPDATE workflow_evaluation_definitions SET active = false
+       WHERE stage_key = 'interview_phase_1' AND active = true`,
     );
     await query(
       `INSERT INTO workflow_evaluation_definitions (
          process_key, stage_key, evaluator_key, benchmark_key, version,
          rubric, promptfoo_suite_ref, judge_output_schema, active
        )
-       SELECT process_key, stage_key, evaluator_key, benchmark_key, 2,
+       SELECT process_key, stage_key, evaluator_key, benchmark_key, $2,
               rubric, promptfoo_suite_ref, judge_output_schema, true
        FROM workflow_evaluation_definitions
        WHERE id = $1`,
-      [versionOneId],
+      [versionOneId, nextVersion],
     );
 
     const active = await query<{ version: number }>(
       `SELECT version FROM workflow_evaluation_definitions
        WHERE stage_key = 'interview_phase_1' AND active = true`,
     );
-    expect(active).toEqual([{ version: 2 }]);
+    expect(active).toEqual([{ version: nextVersion }]);
     const kept = await query<{ id: string }>(
       `SELECT id FROM workflow_evaluation_definitions WHERE id = $1 AND version = 1`,
       [versionOneId],
@@ -569,6 +585,7 @@ describe('VT-02 / VT-06 — rollback and untouched prds and interviews', () => {
     const [count] = await query<{ count: string }>(
       `SELECT count(*)::text AS count FROM workflow_evaluation_definitions WHERE active = true`,
     );
-    expect(count.count).toBe('4');
+    // Six human-review stages, each with version 2 active after the blind-judge migration.
+    expect(count.count).toBe('6');
   }, MIGRATE_TIMEOUT);
 });
