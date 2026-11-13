@@ -56,9 +56,6 @@ import './App.css';
 const ScrumCalendar = lazy(() => import('./components/ScrumCalendar').then(m => ({ default: m.ScrumCalendar })));
 const UnscheduledList = lazy(() => import('./components/UnscheduledList').then(m => ({ default: m.UnscheduledList })));
 const DetailsPanel = lazy(() => import('./components/DetailsPanel').then(m => ({ default: m.DetailsPanel })));
-const CycleTimeAnalytics = lazy(() => import('./components/CycleTimeAnalytics').then(m => ({ default: m.CycleTimeAnalytics })));
-const DevStats = lazy(() => import('./components/DevStats').then(m => ({ default: m.DevStats })));
-const QAMetrics = lazy(() => import('./components/QAMetrics').then(m => ({ default: m.QAMetrics })));
 const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ default: m.RoadmapView })));
 const BoardReleaseRoadmap = lazy(() =>
   import('./components/BoardReleaseRoadmap').then((m) => ({ default: m.BoardReleaseRoadmap })),
@@ -66,12 +63,8 @@ const BoardReleaseRoadmap = lazy(() =>
 const BoardReleaseView = lazy(() =>
   import('./components/BoardReleaseView').then((m) => ({ default: m.BoardReleaseView })),
 );
-const BoardPlanningStats = lazy(() =>
-  import('./components/BoardPlanningStats').then((m) => ({ default: m.BoardPlanningStats })),
-);
 const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
-const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
 const AiCostAnalytics = lazy(() => import('./components/AiCostAnalytics').then(m => ({ default: m.AiCostAnalytics })));
 const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'));
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
@@ -149,19 +142,15 @@ const ProdSupportPage = lazy(() =>
 );
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
-const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+const PLANNING_TABS: readonly PlanningTab[] = ['roadmap', 'releases'];
 
 /** Tabs visible in the tab bar, in display order — used for permission-aware default/fallback. */
-const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['roadmap', 'releases'];
 
 // data-testid-exempt — TypeScript Record<PlanningTab, …> generic, not JSX
 const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
-  'cycle-time':  'planning:view',
-  'dev-stats':   'planning:devstats',
-  'qa':          'planning:qa',
-  'ai-analysis': 'planning:ai-analysis',
-  'roadmap':     'planning:roadmap',
-  'releases':    'planning:releases',
+  'roadmap':  'planning:roadmap',
+  'releases': 'planning:releases',
 };
 
 const isPlanningTab = (value: string | undefined): value is PlanningTab => (
@@ -638,10 +627,12 @@ function App() {
         navigate(fallback);
       } else if (!isSuperAdmin && !can(PLANNING_TAB_PERMISSIONS[planningTab])) {
         const firstAccessible = VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
-        navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
+        navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback, { replace: true });
+      } else if (!isPlanningTab(planningTabSegment)) {
+        navigate(`/planning/${planningTab}`, { replace: true });
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search, holdLinkedProjectRoute]);
+  }, [currentView, planningTab, planningTabSegment, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search, holdLinkedProjectRoute]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -1792,47 +1783,7 @@ function App() {
                   onNavigate={(tab) => navigate(`/planning/${tab}`)}
                 />
                 <div className="planning-content">
-                  {planningTab === 'cycle-time' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="cycle-time" />
-                        ) : (
-                          <CycleTimeAnalytics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'dev-stats' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="dev-stats" />
-                        ) : (
-                          <DevStats workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'qa' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="qa" />
-                        ) : (
-                          <QAMetrics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'ai-analysis' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="ai-analysis" />
-                        ) : (
-                          <AIAnalysis workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'roadmap' ? (
+                  {planningTab === 'roadmap' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
                         {usesBoardWorkItems ? (

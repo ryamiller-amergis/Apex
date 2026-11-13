@@ -66,9 +66,7 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `design-module:regenerate` | design-module | admin |
 | `design-module:view` | design-module | admin, member, viewer |
 | `planning:view` | planning | admin, member, viewer |
-| `planning:devstats` | planning | admin, member |
 | `planning:qa` | planning | admin, member |
-| `planning:ai-analysis` | planning | admin, member |
 | `planning:roadmap` | planning | admin, member |
 | `planning:releases` | planning | admin, member |
 | `playbooks:view` | playbooks | platform admin, and Playbooks is enabled for the project |
