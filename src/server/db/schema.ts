@@ -741,6 +741,18 @@ export const interviewDesignModuleLinks = pgTable('interview_design_module_links
   interviewIdx: index('idx_interview_design_module_links_interview_id').on(t.interviewId),
 }));
 
+/** Read-only Brainstorm catalog repositories mounted on an Interview's Technical turns. */
+export const interviewReferenceRepositories = pgTable('interview_reference_repositories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  catalogRepositoryId: uuid('catalog_repository_id').notNull().references(() => brainstormRepositories.id, { onDelete: 'cascade' }),
+  linkedBy: text('linked_by').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewRepoUq: unique('uq_interview_reference_repositories_interview_repo').on(t.interviewId, t.catalogRepositoryId),
+  interviewIdx: index('idx_interview_reference_repositories_interview_id').on(t.interviewId),
+}));
+
 function briefSectionsCheck(sections: AnyPgColumn) {
   return sql`
     jsonb_typeof(${sections}) = 'object'
@@ -1138,6 +1150,7 @@ export const interviewsRelations = relations(interviews, ({ one, many }) => ({
   prds: many(prds),
   adrLinks: many(interviewAdrLinks),
   designModuleLinks: many(interviewDesignModuleLinks),
+  referenceRepositoryLinks: many(interviewReferenceRepositories),
   playbookRun: one(playbookRuns, {
     fields: [interviews.playbookRunId],
     references: [playbookRuns.id],
@@ -1173,6 +1186,17 @@ export const interviewDesignModuleLinksRelations = relations(interviewDesignModu
   designModule: one(designModules, {
     fields: [interviewDesignModuleLinks.designModuleId],
     references: [designModules.id],
+  }),
+}));
+
+export const interviewReferenceRepositoriesRelations = relations(interviewReferenceRepositories, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewReferenceRepositories.interviewId],
+    references: [interviews.id],
+  }),
+  catalogRepository: one(brainstormRepositories, {
+    fields: [interviewReferenceRepositories.catalogRepositoryId],
+    references: [brainstormRepositories.id],
   }),
 }));
 

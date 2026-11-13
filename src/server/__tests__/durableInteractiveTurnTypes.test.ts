@@ -192,6 +192,33 @@ describe('durable interactive turn contracts', () => {
       expect(isDurableInteractiveTurnSpecification({ ...validSpecification, brainstorm })).toBe(false);
     });
 
+    it('accepts reference sources only on an interview turn', () => {
+      const referenceSources = {
+        readRoots: [{
+          sourceId: '10000000-0000-4000-8000-00000000000a',
+          kind: 'project-repository',
+          displayName: 'MaxView',
+          workspacePath: '/home/data/ai-pilot/workspaces/brainstorm-repo-mirrors/x',
+          commitSha: 'b'.repeat(40),
+          provider: 'ado',
+          project: 'MaxView',
+          repository: 'maxview-api',
+        }],
+        unavailableSources: [],
+        mcpServers: [],
+        instructions: '# Reference repositories',
+      };
+      expect(isDurableInteractiveTurnSpecification({
+        ...validSpecification, workflowClass: 'interview', referenceSources,
+      })).toBe(true);
+      expect(isDurableInteractiveTurnSpecification({
+        ...validSpecification, referenceSources,
+      })).toBe(false);
+      expect(isDurableInteractiveTurnSpecification({
+        ...validSpecification, workflowClass: 'interview', referenceSources: { ...referenceSources, instructions: '' },
+      })).toBe(false);
+    });
+
     it.each([
       ['sessionId', { ...brainstorm, sessionId: 'session-1' }],
       ['creatorContext', { ...brainstorm, creatorContext: undefined }],

@@ -83,6 +83,9 @@ import {
   wrapGuidedInterviewPrompt,
 } from './guidedInterviewState';
 import { getSkillFile } from './skillCatalogFacade';
+import { loadInterviewReferenceSources } from './interviewLinkService';
+import { INTERVIEW_REFERENCE_REPOSITORIES_FLAG } from '../../shared/types/interviewLinks';
+import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
 
@@ -278,6 +281,10 @@ type ServiceDependencies = Readonly<{
   ) => Promise<boolean>;
   /** Raw `context.md` for the application brief when the grounded read had none. */
   loadInterviewContext: (thread: ChatThread) => Promise<string | null>;
+  /** Linked Brainstorm catalog repositories for an Interview thread, or null when none apply. */
+  loadReferenceSources: (
+    input: Readonly<{ threadId: string; userId: string; project: string }>,
+  ) => Promise<BrainstormTurnSources | null>;
   trackEvent: typeof trackEvent;
   now: () => Date;
 }>;
@@ -1381,6 +1388,25 @@ async function defaultIsGuidedInterviewEnabled(
   }
 }
 
+async function defaultLoadReferenceSources(
+  input: Readonly<{ threadId: string; userId: string; project: string }>,
+): Promise<BrainstormTurnSources | null> {
+  const enabled = await isFeatureEnabled(INTERVIEW_REFERENCE_REPOSITORIES_FLAG, {
+    userId: input.userId,
+    project: input.project,
+  }).catch(() => false);
+  // @feature-flag:interview-reference-repos start winner=enabled
+  if (!enabled) {
+    // @feature-flag:interview-reference-repos disabled-start
+    return null;
+    // @feature-flag:interview-reference-repos disabled-end
+  }
+  // @feature-flag:interview-reference-repos enabled-start
+  return loadInterviewReferenceSources(input.threadId);
+  // @feature-flag:interview-reference-repos enabled-end
+  // @feature-flag:interview-reference-repos end
+}
+
 async function defaultHasPinnedGrounding(thread: ChatThread): Promise<boolean> {
   const rows = await runGroundingService.getGroundings({
     runType: 'chat',
@@ -1472,6 +1498,7 @@ function defaultDependencies(): ServiceDependencies {
     isGuidedInterviewEnabled: defaultIsGuidedInterviewEnabled,
     isBackgroundGroundingEnabled: defaultIsBackgroundGroundingEnabled,
     loadInterviewContext: defaultLoadInterviewContext,
+    loadReferenceSources: defaultLoadReferenceSources,
     trackEvent,
     now: () => new Date(),
   };
@@ -1545,6 +1572,16 @@ export function createDurableInteractiveTurnService(
           })
         : Promise.resolve('disabled' as const);
       const guidedInterviewLookup = resolveGuidedInterview(thread, input, deps);
+      const referenceSourcesLookup =
+        input.workflowClass === 'interview'
+          ? deps
+              .loadReferenceSources({
+                threadId: thread.id,
+                userId: input.userId,
+                project: thread.kickoff.project,
+              })
+              .catch(() => null)
+          : Promise.resolve(null);
       // @feature-flag:interview-background-grounding start winner=enabled
       const backgroundGroundingLookup = guidedInterviewLookup.then(
         (guided) =>
@@ -1618,6 +1655,14 @@ export function createDurableInteractiveTurnService(
       const guidedInterview = await guidedInterviewLookup;
       // Discovery and Delivery carry the application brief instead of AGENTS.md.
       const productPhaseInterview = guidedInterview?.phase === 'product';
+      // Discovery and Delivery close repository tools, so they get no reference repositories either.
+      const referenceSources = productPhaseInterview
+        ? null
+        : await referenceSourcesLookup;
+      const turnInternalContext =
+        [input.internalContext?.trim(), referenceSources?.instructions]
+          .filter(Boolean)
+          .join('\n\n') || undefined;
       const groundInBackground = await backgroundGroundingLookup;
       // Discovery and Delivery cannot read the repository, so their turns go
       // out on the branch-tip skill and brief while the thread's pin is prepared
@@ -1815,7 +1860,7 @@ export function createDurableInteractiveTurnService(
         immutableAttachments,
         resolvedSessionInstructions,
         input.turnSkill ? 'turn' : 'session',
-        input.internalContext,
+        turnInternalContext,
       );
       // A live or resumed agent already holds the thread skill from its first
       // turn. Resending it every turn makes step-by-step skills (interviews)
@@ -1838,7 +1883,7 @@ export function createDurableInteractiveTurnService(
                 : answersSoFar(transcript, input.workflowClass)),
             ],
             'session',
-            input.internalContext,
+            turnInternalContext,
             skill,
           )
         : firstTurnPrompt;
@@ -1890,6 +1935,7 @@ export function createDurableInteractiveTurnService(
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
         ...(input.brainstorm ? { brainstorm: input.brainstorm } : {}),
+        ...(referenceSources ? { referenceSources } : {}),
       };
       const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({
