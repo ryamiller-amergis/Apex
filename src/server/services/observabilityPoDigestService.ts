@@ -31,6 +31,7 @@ import {
   type ObservabilityDigestSlot,
   type ObservabilityDropReasonsSummary,
   type ObservabilityDynamicSkillSection,
+  type ObservabilityDynamicSkillSectionItem,
   type ObservabilityPoDigestResponse,
   type ObservabilityPoDigestSnapshot,
   type ObservabilityTrendWindow,
@@ -42,6 +43,7 @@ import {
   buildDefaultSeedTelemetryRows,
   buildDigestSnapshotFromAggregates,
   computeSlotTimestamps,
+  extractTrackedSuggestions,
   isObservabilityTrendWindow,
   normalizeObservabilityEffort,
   normalizeObservabilityModel,
@@ -150,8 +152,10 @@ export function buildObservabilityPoSkillPrompt(input: {
   effort: EffortLevel;
   slot: ObservabilityDigestSlot;
   aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
+  previousSuggestions?: ObservabilityDynamicSkillSectionItem[];
 }): string {
   const { skillMarkdown, project, window, model, effort, slot, aggregated } = input;
+  const previousSuggestions = input.previousSuggestions ?? [];
   const windowLabel = OBSERVABILITY_TREND_WINDOW_LABELS[window];
   const baselineLabel = WINDOW_BASELINE_LABELS[window];
   const parsedSections = parseSkillSectionsFromMarkdown(skillMarkdown);
@@ -191,6 +195,29 @@ export function buildObservabilityPoSkillPrompt(input: {
       2,
     ),
     '```',
+    ...(previousSuggestions.length > 0
+      ? [
+          '',
+          '### Previously Tracked Suggestions (`suggestionTracker`)',
+          'Keep each `id` unchanged. Update `stage` and `progressPct` only when the telemetry above supports it, and say why in `meta`. Add new suggestions with new ids.',
+          '```json',
+          JSON.stringify(
+            previousSuggestions.map((item) => ({
+              id: item.id,
+              title: item.title,
+              module: item.module,
+              category: item.category,
+              stage: item.stage,
+              progressPct: item.progressPct,
+              firstSuggestedAt: item.firstSuggestedAt,
+              lastUpdatedAt: item.lastUpdatedAt,
+            })),
+            null,
+            2,
+          ),
+          '```',
+        ]
+      : []),
     '',
     'Return ONLY a valid JSON object containing `headline`, `dropReasonsSummary` (`headline`, `narrative`, `findings`), `adoptionRecommendations` (`headline`, `narrative`, `recommendations`), and `customSections` (array of dynamic sections for any sections beyond the 6 core signals).',
   ].join('\n');
@@ -439,6 +466,7 @@ interface StoredProjectDigestState {
   eveningLastRunAt: string | null;
   snapshotsByWindow: Map<ObservabilityTrendWindow, ObservabilityPoDigestSnapshot>;
   history: ObservabilityPoDigestSnapshot[];
+  trackedSuggestions: ObservabilityDynamicSkillSectionItem[];
 }
 
 const stateByProject = new Map<string, StoredProjectDigestState>();
@@ -458,6 +486,7 @@ function ensureProjectState(project: string, now = new Date()): StoredProjectDig
     eveningLastRunAt: lastEveningIso,
     snapshotsByWindow: new Map(),
     history: [],
+    trackedSuggestions: [],
   };
   stateByProject.set(project, created);
   return created;
@@ -469,9 +498,11 @@ async function computeDigestSnapshotFromDatabaseAndSkill(options: {
   model: string;
   effort: EffortLevel;
   slot: ObservabilityDigestSlot;
+  state: StoredProjectDigestState;
   now?: Date;
 }): Promise<ObservabilityPoDigestSnapshot> {
   const now = options.now ?? new Date();
+  const previousSuggestions = options.state.trackedSuggestions;
   const telemetry = await queryDatabaseTelemetryForPoDigest(options.project, now);
 
   const aggregated = aggregateTelemetryFromDatabaseRows({
@@ -491,6 +522,7 @@ async function computeDigestSnapshotFromDatabaseAndSkill(options: {
     effort: options.effort,
     slot: options.slot,
     aggregated,
+    previousSuggestions,
   });
 
   const provider = aiProviderOverride ?? defaultCursorSkillAiProvider();
@@ -503,7 +535,7 @@ async function computeDigestSnapshotFromDatabaseAndSkill(options: {
     window: options.window,
   });
 
-  return buildDigestSnapshotFromAggregates({
+  const snapshot = buildDigestSnapshotFromAggregates({
     project: options.project,
     window: options.window,
     model: options.model,
@@ -512,8 +544,14 @@ async function computeDigestSnapshotFromDatabaseAndSkill(options: {
     aggregated,
     skillMarkdown,
     aiSynthesis: aiSynthesis ?? undefined,
+    previousSuggestions,
     now,
   });
+  const tracked = extractTrackedSuggestions(snapshot);
+  if (tracked.length > 0) {
+    options.state.trackedSuggestions = tracked;
+  }
+  return snapshot;
 }
 
 export async function getObservabilityPoDigest(options: {
@@ -548,6 +586,7 @@ export async function getObservabilityPoDigest(options: {
     model: requestedModel,
     effort: requestedEffort,
     slot: lastSlot,
+    state,
     now,
   });
 
@@ -607,6 +646,7 @@ export async function generateObservabilityPoDigest(
     model,
     effort,
     slot,
+    state,
     now,
   });
 

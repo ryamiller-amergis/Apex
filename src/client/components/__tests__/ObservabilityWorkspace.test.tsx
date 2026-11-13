@@ -243,4 +243,68 @@ describe('ObservabilityWorkspace (Product Owner Digest)', () => {
     expect(card8).toHaveTextContent('Design Prototypes (/backlog/design-prototypes/:id)');
     expect(card8).toHaveTextContent('1,420');
   });
+
+  it('renders the suggestion tracker with stage, progress, and category filters', async () => {
+    const user = userEvent.setup();
+    const baseResponse = digestState();
+    mockUseObservabilityPoDigest.mockReturnValue({
+      data: {
+        ...baseResponse,
+        digest: {
+          ...baseResponse.digest,
+          customSections: [
+            {
+              id: 'suggestiontracker',
+              number: 7,
+              title: 'Product innovation & suggestion tracker',
+              tone: 'accent',
+              displayType: 'tracker',
+              headline: '2 tracked suggestions, 2 still open',
+              items: [
+                {
+                  id: 'new-credentialing-orchestrator',
+                  title: 'Credentialing & onboarding orchestrator',
+                  category: 'new_module',
+                  stage: 'in_progress',
+                  progressPct: 55,
+                  firstSuggestedAt: '2026-11-01T06:00:00.000Z',
+                  lastUpdatedAt: '2026-11-10T06:00:00.000Z',
+                },
+                {
+                  id: 'consolidate-cloud-cost',
+                  title: 'Review Cloud Cost for consolidation or retirement',
+                  module: 'Cloud Cost',
+                  category: 'consolidate',
+                  stage: 'proposed',
+                  progressPct: 10,
+                  firstSuggestedAt: '2026-11-10T06:00:00.000Z',
+                },
+              ],
+            },
+          ],
+        },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    const card = screen.getByTestId('observability-signal-custom-suggestiontracker');
+    const first = within(card).getByTestId('observability-suggestion-new-credentialing-orchestrator');
+    expect(first).toHaveTextContent('In progress');
+    expect(first).toHaveTextContent('New module idea');
+    expect(first).toHaveTextContent('Tracking since 2026-11-01');
+    expect(within(first).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '55');
+
+    await user.click(within(card).getByRole('button', { name: 'Consolidate / retire' }));
+    expect(
+      within(card).queryByTestId('observability-suggestion-new-credentialing-orchestrator'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).getByTestId('observability-suggestion-consolidate-cloud-cost'),
+    ).toHaveTextContent('Module: Cloud Cost');
+  });
 });

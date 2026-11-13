@@ -3,11 +3,18 @@ import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
 import {
   OBSERVABILITY_PO_DEFAULT_EFFORT,
   OBSERVABILITY_PO_SKILL_PATH,
+  OBSERVABILITY_SUGGESTION_CATEGORIES,
+  OBSERVABILITY_SUGGESTION_CATEGORY_LABELS,
+  OBSERVABILITY_SUGGESTION_STAGES,
+  OBSERVABILITY_SUGGESTION_STAGE_LABELS,
   OBSERVABILITY_TREND_WINDOWS,
   OBSERVABILITY_TREND_WINDOW_LABELS,
   type ObservabilityAdoptionSummary,
   type ObservabilityDropReasonsSummary,
   type ObservabilityDynamicSkillSection,
+  type ObservabilityDynamicSkillSectionItem,
+  type ObservabilitySuggestionCategory,
+  type ObservabilitySuggestionStage,
   type ObservabilityExceptionItem,
   type ObservabilityModuleRetentionDropItem,
   type ObservabilityScheduleSummary,
@@ -893,6 +900,138 @@ function dynamicToneBadgeClass(tone: ObservabilityDynamicSkillSection['tone']): 
   return `${styles.badge} ${styles.badgeUi}`;
 }
 
+function suggestionStageBadgeClass(stage: ObservabilitySuggestionStage | undefined): string {
+  if (stage === 'shipped' || stage === 'measured') {
+    return `${styles.badge} ${styles.badgeApi}`;
+  }
+  if (stage === 'dropped') {
+    return `${styles.badge} ${styles.badgeAgent}`;
+  }
+  return `${styles.badge} ${styles.badgeUi}`;
+}
+
+function formatShortDate(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+}
+
+type SuggestionCategoryFilter = 'all' | ObservabilitySuggestionCategory;
+
+interface SuggestionTrackerListProps {
+  sectionId: string;
+  items: ObservabilityDynamicSkillSectionItem[];
+}
+
+const SuggestionTrackerList: React.FC<SuggestionTrackerListProps> = ({ sectionId, items }) => {
+  const [categoryFilter, setCategoryFilter] = useState<SuggestionCategoryFilter>('all');
+
+  const stageCounts = useMemo(
+    () =>
+      OBSERVABILITY_SUGGESTION_STAGES.map((stage) => ({
+        stage,
+        count: items.filter((item) => (item.stage ?? 'proposed') === stage).length,
+      })).filter((entry) => entry.count > 0),
+    [items],
+  );
+
+  const visibleItems = useMemo(
+    () =>
+      categoryFilter === 'all'
+        ? items
+        : items.filter((item) => item.category === categoryFilter),
+    [items, categoryFilter],
+  );
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className={styles.poTracker} data-testid={`observability-suggestion-tracker-${sectionId}`}>
+      <div className={styles.poTrackerToolbar}>
+        <div className={styles.poTrackerFilters} role="group" aria-label="Filter suggestions">
+          {(['all', ...OBSERVABILITY_SUGGESTION_CATEGORIES] as const).map((category) => (
+            <button
+              key={category}
+              type="button"
+              className={
+                categoryFilter === category ? `${styles.chip} ${styles.chipActive}` : styles.chip
+              }
+              aria-pressed={categoryFilter === category}
+              onClick={() => setCategoryFilter(category)}
+            >
+              {category === 'all' ? 'All' : OBSERVABILITY_SUGGESTION_CATEGORY_LABELS[category]}
+            </button>
+          ))}
+        </div>
+        <div className={styles.poTrackerStageSummary} aria-label="Suggestions by stage">
+          {stageCounts.map(({ stage, count }) => (
+            <span key={stage} className={suggestionStageBadgeClass(stage)}>
+              {OBSERVABILITY_SUGGESTION_STAGE_LABELS[stage]}: {count}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.poInsightList}>
+        {visibleItems.map((item, idx) => {
+          const stage = item.stage ?? 'proposed';
+          const progressPct = Math.max(0, Math.min(100, item.progressPct ?? 0));
+          const since = formatShortDate(item.firstSuggestedAt);
+          const updated = formatShortDate(item.lastUpdatedAt);
+          return (
+            <article
+              key={item.id ?? `${sectionId}-suggestion-${idx}`}
+              className={styles.poInsightItem}
+              data-testid={`observability-suggestion-${item.id ?? idx}`}
+            >
+              <div className={styles.poInsightTop}>
+                <span className={styles.poInsightItemTitle}>{item.title}</span>
+                <div className={styles.poWindowCompareStrip}>
+                  {item.category && (
+                    <span className={styles.poWindowMiniChip}>
+                      {OBSERVABILITY_SUGGESTION_CATEGORY_LABELS[item.category]}
+                    </span>
+                  )}
+                  <span className={suggestionStageBadgeClass(stage)}>
+                    {OBSERVABILITY_SUGGESTION_STAGE_LABELS[stage]}
+                  </span>
+                </div>
+              </div>
+              {item.subtitle && <div className={styles.cardSub}>{item.subtitle}</div>}
+              {item.detail && <p className={styles.poInsightDetail}>{item.detail}</p>}
+              <div
+                className={styles.progress}
+                role="progressbar"
+                aria-label={`${item.title} progress`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressPct}
+              >
+                <div
+                  className={
+                    stage === 'dropped'
+                      ? `${styles.progressFill} ${styles.progressWarn}`
+                      : styles.progressFill
+                  }
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+              <div className={styles.poTrackerFooter}>
+                <span>{progressPct}% complete</span>
+                {since && <span>Tracking since {since}</span>}
+                {updated && updated !== since && <span>Updated {updated}</span>}
+                {item.module && <span>Module: {item.module}</span>}
+              </div>
+              {item.meta && <div className={styles.poInsightMeta}>{item.meta}</div>}
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 interface DynamicSkillSectionCardProps {
   section: ObservabilityDynamicSkillSection;
   fallbackNumber: number;
@@ -945,6 +1084,10 @@ const DynamicSkillSectionCard: React.FC<DynamicSkillSectionCardProps> = ({
             <p className={styles.poNarrativeCopy}>{section.narrative}</p>
           )}
         </div>
+      )}
+
+      {displayType === 'tracker' && (
+        <SuggestionTrackerList sectionId={section.id} items={items} />
       )}
 
       {displayType === 'table' && items.length > 0 && (

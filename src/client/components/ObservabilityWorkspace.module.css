@@ -910,6 +910,37 @@
   font-weight: 600;
 }
 
+.poTracker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.poTrackerToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.poTrackerFilters,
+.poTrackerStageSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.poTrackerFooter {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
 .poWindowCompareStrip {
   display: flex;
   align-items: center;

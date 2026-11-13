@@ -610,7 +610,63 @@ export type ObservabilityDynamicSectionDisplayType =
   | 'table'
   | 'ranked_list'
   | 'metrics'
-  | 'markdown';
+  | 'markdown'
+  | 'tracker';
+
+/** Section id of the skill's suggestion tracker (`suggestionTracker` in SKILL.md). */
+export const OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID = 'suggestiontracker';
+
+export const OBSERVABILITY_SUGGESTION_CATEGORIES = [
+  'enhance',
+  'consolidate',
+  'new_module',
+] as const;
+export type ObservabilitySuggestionCategory =
+  (typeof OBSERVABILITY_SUGGESTION_CATEGORIES)[number];
+
+export const OBSERVABILITY_SUGGESTION_CATEGORY_LABELS: Record<
+  ObservabilitySuggestionCategory,
+  string
+> = {
+  enhance: 'Enhance module',
+  consolidate: 'Consolidate / retire',
+  new_module: 'New module idea',
+};
+
+export const OBSERVABILITY_SUGGESTION_STAGES = [
+  'proposed',
+  'planned',
+  'in_progress',
+  'shipped',
+  'measured',
+  'dropped',
+] as const;
+export type ObservabilitySuggestionStage = (typeof OBSERVABILITY_SUGGESTION_STAGES)[number];
+
+export const OBSERVABILITY_SUGGESTION_STAGE_LABELS: Record<
+  ObservabilitySuggestionStage,
+  string
+> = {
+  proposed: 'Proposed',
+  planned: 'Planned',
+  in_progress: 'In progress',
+  shipped: 'Shipped',
+  measured: 'Impact measured',
+  dropped: 'Dropped',
+};
+
+/** Default progress for each stage when the skill does not return `progressPct`. */
+export const OBSERVABILITY_SUGGESTION_STAGE_PROGRESS: Record<
+  ObservabilitySuggestionStage,
+  number
+> = {
+  proposed: 10,
+  planned: 30,
+  in_progress: 55,
+  shipped: 80,
+  measured: 100,
+  dropped: 0,
+};
 
 export interface ObservabilityDynamicSkillSectionItem {
   id?: string;
@@ -623,6 +679,13 @@ export interface ObservabilityDynamicSkillSectionItem {
   metricValue?: string | number;
   deltaPct?: number;
   windowComparison?: ObservabilityWindowComparisonMap;
+  /** Suggestion tracker fields (`displayType: tracker`). */
+  module?: string;
+  category?: ObservabilitySuggestionCategory;
+  stage?: ObservabilitySuggestionStage;
+  progressPct?: number;
+  firstSuggestedAt?: string;
+  lastUpdatedAt?: string;
 }
 
 export interface ObservabilityDynamicSkillSection {

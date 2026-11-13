@@ -275,29 +275,34 @@ describe('observabilityPoDigestService & scheduler', () => {
     expect(typeof buildObservabilityPoSkillPrompt).toBe('function');
   });
 
-  it('dynamically parses and synthesizes 7th and 8th sections added to SKILL.md without code changes', async () => {
+  it('dynamically parses and synthesizes 8th and 9th sections added to SKILL.md without code changes', async () => {
     const baseMarkdown = loadObservabilityPoSkillMarkdown();
     const extendedSkillMarkdown = [
       baseMarkdown,
       '',
-      '7. **Cross-module journey drop-offs** (`journeyDropoffs`)',
+      '8. **Cross-module journey drop-offs** (`journeyDropoffs`)',
       '   - Rank route transitions with the highest session abandonment rate in a ranked leaderboard.',
       '',
-      '### 8. API Latency & Slow Routes (`apiLatencyTable`)',
+      '### 9. API Latency & Slow Routes (`apiLatencyTable`)',
       '- Present a table of slowest API routes and their p95 latency impact on user retention.',
     ].join('\n');
 
     const parsed = parseSkillSectionsFromMarkdown(extendedSkillMarkdown);
-    expect(parsed.customSignals).toHaveLength(2);
+    expect(parsed.customSignals).toHaveLength(3);
     expect(parsed.customSignals[0]).toMatchObject({
-      id: 'journeydropoffs',
+      id: 'suggestiontracker',
       number: 7,
-      title: 'Cross-module journey drop-offs',
       isCoreSignal: false,
     });
     expect(parsed.customSignals[1]).toMatchObject({
-      id: 'apilatencytable',
+      id: 'journeydropoffs',
       number: 8,
+      title: 'Cross-module journey drop-offs',
+      isCoreSignal: false,
+    });
+    expect(parsed.customSignals[2]).toMatchObject({
+      id: 'apilatencytable',
+      number: 9,
       title: 'API Latency & Slow Routes',
       isCoreSignal: false,
     });
@@ -311,21 +316,114 @@ describe('observabilityPoDigestService & scheduler', () => {
       effort: 'high',
     });
 
-    expect(res.digest.customSections).toHaveLength(2);
-    expect(res.digest.customSections?.[0]).toMatchObject({
+    expect(res.digest.customSections).toHaveLength(3);
+    expect(res.digest.customSections?.[1]).toMatchObject({
       id: 'journeydropoffs',
-      number: 7,
+      number: 8,
       title: 'Cross-module journey drop-offs',
       displayType: 'ranked_list',
     });
-    expect(res.digest.customSections?.[0]?.items?.length).toBeGreaterThan(0);
+    expect(res.digest.customSections?.[1]?.items?.length).toBeGreaterThan(0);
 
-    expect(res.digest.customSections?.[1]).toMatchObject({
+    expect(res.digest.customSections?.[2]).toMatchObject({
       id: 'apilatencytable',
-      number: 8,
+      number: 9,
       title: 'API Latency & Slow Routes',
       displayType: 'table',
     });
-    expect(res.digest.customSections?.[1]?.items?.length).toBeGreaterThan(0);
+    expect(res.digest.customSections?.[2]?.items?.length).toBeGreaterThan(0);
+  });
+
+  it('builds the suggestion tracker from telemetry when the AI skill is unavailable', async () => {
+    const res = await getObservabilityPoDigest({ project: 'Apex', window: '7d' });
+
+    const tracker = res.digest.customSections?.find((sec) => sec.id === 'suggestiontracker');
+    expect(tracker).toMatchObject({
+      number: 7,
+      title: 'Product innovation & suggestion tracker',
+      displayType: 'tracker',
+    });
+    const categories = new Set(tracker?.items?.map((item) => item.category));
+    expect(categories).toEqual(new Set(['enhance', 'consolidate', 'new_module']));
+    for (const item of tracker?.items ?? []) {
+      expect(item).toMatchObject({ stage: 'proposed', progressPct: 10, badge: 'Proposed' });
+      expect(item.firstSuggestedAt).toEqual(expect.any(String));
+    }
+  });
+
+  it('carries suggestion ids, stages, and first-suggested dates forward between digests', async () => {
+    const firstRun = new Date('2026-11-10T06:00:00.000Z');
+    const secondRun = new Date('2026-11-12T06:00:00.000Z');
+    const synthesizeDigest = jest
+      .fn()
+      .mockResolvedValueOnce({
+        customSections: [
+          {
+            id: 'suggestionTracker',
+            title: 'Product innovation & suggestion tracker',
+            items: [
+              {
+                id: 'credentialing-orchestrator',
+                title: 'Credentialing & onboarding orchestrator',
+                category: 'new_module',
+                stage: 'proposed',
+              },
+              {
+                id: 'merge-cost-views',
+                title: 'Merge Cloud Cost into AI Cost Analytics',
+                module: 'Cloud Cost',
+                category: 'consolidate',
+                stage: 'proposed',
+              },
+            ],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        customSections: [
+          {
+            id: 'suggestionTracker',
+            title: 'Product innovation & suggestion tracker',
+            items: [
+              {
+                id: 'credentialing-orchestrator',
+                title: 'Credentialing & onboarding orchestrator',
+                category: 'new_module',
+                stage: 'in_progress',
+                meta: 'New /credentialing routes appeared in telemetry',
+              },
+            ],
+          },
+        ],
+      });
+    setObservabilityPoAiProviderForTests({ synthesizeDigest });
+
+    await generateObservabilityPoDigest({ project: 'Apex', window: '7d' }, firstRun);
+    const second = await generateObservabilityPoDigest(
+      { project: 'Apex', window: '7d' },
+      secondRun,
+    );
+
+    const secondPrompt = synthesizeDigest.mock.calls[1]?.[0]?.prompt as string;
+    expect(secondPrompt).toContain('Previously Tracked Suggestions');
+    expect(secondPrompt).toContain('credentialing-orchestrator');
+
+    const items =
+      second.digest.customSections?.find((sec) => sec.id === 'suggestiontracker')?.items ?? [];
+    expect(items.map((item) => item.id)).toEqual([
+      'credentialing-orchestrator',
+      'merge-cost-views',
+    ]);
+    expect(items[0]).toMatchObject({
+      stage: 'in_progress',
+      progressPct: 55,
+      badge: 'In progress',
+      firstSuggestedAt: firstRun.toISOString(),
+      lastUpdatedAt: secondRun.toISOString(),
+    });
+    expect(items[1]).toMatchObject({
+      stage: 'proposed',
+      firstSuggestedAt: firstRun.toISOString(),
+    });
   });
 });

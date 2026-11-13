@@ -12,6 +12,11 @@ import {
   OBSERVABILITY_PO_DEFAULT_MODEL,
   OBSERVABILITY_PO_SCHEDULE_HOURS,
   OBSERVABILITY_PO_SKILL_PATH,
+  OBSERVABILITY_SUGGESTION_CATEGORIES,
+  OBSERVABILITY_SUGGESTION_STAGES,
+  OBSERVABILITY_SUGGESTION_STAGE_LABELS,
+  OBSERVABILITY_SUGGESTION_STAGE_PROGRESS,
+  OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID,
   OBSERVABILITY_TREND_WINDOWS,
   OBSERVABILITY_TREND_WINDOW_LABELS,
   type ObservabilityAdoptionPlay,
@@ -28,6 +33,8 @@ import {
   type ObservabilityPoDigestResponse,
   type ObservabilityPoDigestSnapshot,
   type ObservabilityScheduleSummary,
+  type ObservabilitySuggestionCategory,
+  type ObservabilitySuggestionStage,
   type ObservabilityTopModuleItem,
   type ObservabilityTopUserItem,
   type ObservabilityTrendDirection,
@@ -903,6 +910,8 @@ const RESERVED_HEADING_PREFIXES = [
   'input context',
   'output contract',
   'guardrails',
+  'organization context',
+  'suggestion progress rules',
 ];
 
 function slugifySectionId(value: string): string {
@@ -1082,6 +1091,12 @@ function inferDynamicDisplayType(
   signal: ParsedSkillSignalDefinition,
 ): ObservabilityDynamicSectionDisplayType {
   const combined = `${signal.title} ${signal.instructions}`.toLowerCase();
+  if (
+    signal.id === OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID ||
+    /\bdisplaytype\s*:\s*tracker\b/.test(combined)
+  ) {
+    return 'tracker';
+  }
   if (/\bdisplaytype\s*:\s*table\b|\btable\b/.test(combined)) return 'table';
   if (/\bdisplaytype\s*:\s*ranked_list\b|\b(ranked|leaderboard)\b/.test(combined)) {
     return 'ranked_list';
@@ -1105,6 +1120,202 @@ function inferDynamicTone(signal: ParsedSkillSignalDefinition): ObservabilityDyn
   return 'default';
 }
 
+const MAX_TRACKED_SUGGESTIONS = 12;
+
+const CLOSED_SUGGESTION_STAGES = new Set<ObservabilitySuggestionStage>(['measured', 'dropped']);
+
+/**
+ * New-module ideas used when the AI skill is unavailable. Grounded in Amergis'
+ * public service lines (Commercial, Government, and Education staffing; locum
+ * tenens; Amergis Connect) so the fallback still proposes organization-specific
+ * AI-orchestrated flows.
+ */
+const AMERGIS_NEW_MODULE_IDEAS: Array<{ id: string; title: string; detail: string }> = [
+  {
+    id: 'new-credentialing-orchestrator',
+    title: 'Credentialing & onboarding orchestrator',
+    detail:
+      'An AI flow that tracks each clinician’s licenses, certifications, and compliance documents, then nudges the recruiter before a start date slips. Gives Apex a measurable view of the "onboard 20% faster" promise.',
+  },
+  {
+    id: 'new-open-order-fill-assistant',
+    title: 'Open-order fill-rate assistant',
+    detail:
+      'A morning brief across Commercial, Government, and Education orders that ranks unfilled shifts by risk and drafts recruiter outreach, so teams start the day on the orders most likely to go unfilled.',
+  },
+  {
+    id: 'new-school-year-staffing-planner',
+    title: 'School-year staffing planner',
+    detail:
+      'Forecasts district demand for school nurses, SLPs, paraprofessionals, and behavior technicians ahead of each term and turns the forecast into a recruiting plan for the Education division.',
+  },
+  {
+    id: 'new-client-review-builder',
+    title: 'Client quarterly review builder',
+    detail:
+      'Drafts client quarterly business reviews from fill, spend, and time-to-start data so account managers spend their time on the conversation instead of the slides.',
+  },
+];
+
+function isSuggestionStage(value: unknown): value is ObservabilitySuggestionStage {
+  return (
+    typeof value === 'string' &&
+    (OBSERVABILITY_SUGGESTION_STAGES as readonly string[]).includes(value)
+  );
+}
+
+function isSuggestionCategory(value: unknown): value is ObservabilitySuggestionCategory {
+  return (
+    typeof value === 'string' &&
+    (OBSERVABILITY_SUGGESTION_CATEGORIES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Merge this run's suggestions with the previous run's so each suggestion keeps
+ * its id, first-suggested date, and stage. Open suggestions the skill did not
+ * return are carried forward rather than dropped.
+ */
+export function mergeTrackedSuggestions(options: {
+  items: ObservabilityDynamicSkillSectionItem[];
+  previous?: ObservabilityDynamicSkillSectionItem[];
+  now?: Date;
+}): ObservabilityDynamicSkillSectionItem[] {
+  const nowIso = (options.now ?? new Date()).toISOString();
+  const previousById = new Map<string, ObservabilityDynamicSkillSectionItem>();
+  for (const prev of options.previous ?? []) {
+    if (prev.id) previousById.set(prev.id, prev);
+  }
+
+  const merged: ObservabilityDynamicSkillSectionItem[] = [];
+  const seen = new Set<string>();
+
+  for (const item of options.items) {
+    if (!item || typeof item.title !== 'string' || !item.title.trim()) continue;
+    const id = slugifySectionId(item.id || item.title);
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const prev = previousById.get(id);
+    const stage: ObservabilitySuggestionStage = isSuggestionStage(item.stage)
+      ? item.stage
+      : isSuggestionStage(prev?.stage)
+        ? prev.stage
+        : 'proposed';
+    const rawPct =
+      typeof item.progressPct === 'number' && Number.isFinite(item.progressPct)
+        ? item.progressPct
+        : stage === prev?.stage && typeof prev?.progressPct === 'number'
+          ? prev.progressPct
+          : OBSERVABILITY_SUGGESTION_STAGE_PROGRESS[stage];
+    const progressPct = Math.max(0, Math.min(100, Math.round(rawPct)));
+    const stageChanged = Boolean(prev && prev.stage !== stage);
+
+    merged.push({
+      ...item,
+      id,
+      title: item.title.trim(),
+      category: isSuggestionCategory(item.category)
+        ? item.category
+        : isSuggestionCategory(prev?.category)
+          ? prev.category
+          : 'enhance',
+      stage,
+      progressPct,
+      firstSuggestedAt: prev?.firstSuggestedAt ?? item.firstSuggestedAt ?? nowIso,
+      lastUpdatedAt: stageChanged
+        ? nowIso
+        : (prev?.lastUpdatedAt ?? item.lastUpdatedAt ?? nowIso),
+      badge: OBSERVABILITY_SUGGESTION_STAGE_LABELS[stage],
+      metricLabel: 'Progress',
+      metricValue: `${progressPct}%`,
+    });
+  }
+
+  for (const prev of options.previous ?? []) {
+    if (!prev.id || seen.has(prev.id)) continue;
+    if (isSuggestionStage(prev.stage) && CLOSED_SUGGESTION_STAGES.has(prev.stage)) continue;
+    seen.add(prev.id);
+    merged.push(prev);
+  }
+
+  return merged.slice(0, MAX_TRACKED_SUGGESTIONS);
+}
+
+/**
+ * Telemetry-grounded suggestions used when the AI skill is unavailable: one
+ * enhancement for the busiest module, one consolidation candidate for the
+ * least-used module, and new-module ideas for the organization.
+ */
+export function buildSuggestionTrackerFallbackItems(options: {
+  aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
+  window: ObservabilityTrendWindow;
+  previous?: ObservabilityDynamicSkillSectionItem[];
+}): ObservabilityDynamicSkillSectionItem[] {
+  const { aggregated, window } = options;
+  const windowLabel = OBSERVABILITY_TREND_WINDOW_LABELS[window];
+  const modules = [...aggregated.topModules].sort((a, b) => b.interactions - a.interactions);
+  const items: ObservabilityDynamicSkillSectionItem[] = [];
+
+  const busiest = modules[0];
+  if (busiest) {
+    items.push({
+      id: `enhance-${slugifySectionId(busiest.module)}`,
+      title: `Chain ${busiest.module} into an AI-orchestrated next step`,
+      subtitle: `${busiest.interactions.toLocaleString()} interactions · ${busiest.sharePct}% share · ${busiest.retentionPct}% retention (${windowLabel})`,
+      detail: `${busiest.module} is where people already spend their time. Hand its output straight to the next Apex step (a Playbook, skill pill, or work-item draft) so teams stop re-keying the same information between modules.`,
+      meta: 'Evidence: highest interaction volume in the window',
+      module: busiest.module,
+      category: 'enhance',
+      deltaPct: busiest.deltaPct,
+    });
+  }
+
+  const quietest = modules.length >= 3 ? modules[modules.length - 1] : undefined;
+  if (quietest && quietest.module !== busiest?.module) {
+    items.push({
+      id: `consolidate-${slugifySectionId(quietest.module)}`,
+      title: `Review ${quietest.module} for consolidation or retirement`,
+      subtitle: `${quietest.activeUsers} active user(s) · ${quietest.sharePct}% share (${windowLabel})`,
+      detail: `${quietest.module} draws the smallest share of activity. Confirm who still relies on it, then fold the useful parts into a busier module or retire it to simplify navigation.`,
+      meta: 'Evidence: lowest interaction share in the window',
+      module: quietest.module,
+      category: 'consolidate',
+      deltaPct: quietest.deltaPct,
+    });
+  }
+
+  const previousIds = new Set((options.previous ?? []).map((p) => p.id));
+  const ideas = [
+    ...AMERGIS_NEW_MODULE_IDEAS.filter((idea) => previousIds.has(idea.id)),
+    ...AMERGIS_NEW_MODULE_IDEAS.filter((idea) => !previousIds.has(idea.id)),
+  ].slice(0, 2);
+  for (const idea of ideas) {
+    items.push({
+      id: idea.id,
+      title: idea.title,
+      subtitle: 'New module idea for Amergis teams',
+      detail: idea.detail,
+      meta: 'Source: Amergis public service lines (amergis.com)',
+      category: 'new_module',
+    });
+  }
+
+  return items;
+}
+
+/** Suggestion tracker items from a digest snapshot, used as the next run's baseline. */
+export function extractTrackedSuggestions(
+  snapshot: Pick<ObservabilityPoDigestSnapshot, 'customSections' | 'sections'> | undefined,
+): ObservabilityDynamicSkillSectionItem[] {
+  const sections = snapshot?.customSections ?? snapshot?.sections ?? [];
+  const tracker = sections.find(
+    (sec) =>
+      sec.id === OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID || sec.displayType === 'tracker',
+  );
+  return tracker?.items ?? [];
+}
+
 /**
  * Synthesize structured `ObservabilityDynamicSkillSection` cards for any custom
  * signals defined in `.cursor/skills/observability-po-digest/SKILL.md` beyond the 6 core signals.
@@ -1116,8 +1327,19 @@ export function synthesizeDynamicSectionsFromTelemetry(options: {
   effort: EffortLevel;
   aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
   aiCustomSections?: ObservabilityDynamicSkillSection[];
+  previousSuggestions?: ObservabilityDynamicSkillSectionItem[];
+  now?: Date;
 }): ObservabilityDynamicSkillSection[] {
-  const { customSignals, window, model, effort, aggregated, aiCustomSections = [] } = options;
+  const {
+    customSignals,
+    window,
+    model,
+    effort,
+    aggregated,
+    aiCustomSections = [],
+    previousSuggestions,
+    now,
+  } = options;
   const windowLabel = OBSERVABILITY_TREND_WINDOW_LABELS[window];
   const effortName = effortLabel(effort);
 
@@ -1143,6 +1365,49 @@ export function synthesizeDynamicSectionsFromTelemetry(options: {
   for (const sig of customSignals) {
     const existingAi =
       byIdOrTitle.get(sig.id) ?? byIdOrTitle.get(slugifySectionId(sig.title));
+
+    if (inferDynamicDisplayType(sig) === 'tracker') {
+      const aiItems = existingAi?.items ?? [];
+      const sourceItems =
+        aiItems.length > 0
+          ? aiItems
+          : buildSuggestionTrackerFallbackItems({
+              aggregated,
+              window,
+              previous: previousSuggestions,
+            });
+      const items = mergeTrackedSuggestions({
+        items: sourceItems,
+        previous: previousSuggestions,
+        now,
+      });
+      const openCount = items.filter(
+        (item) => item.stage && !CLOSED_SUGGESTION_STAGES.has(item.stage),
+      ).length;
+      if (existingAi) usedIds.add(existingAi.id);
+      usedIds.add(sig.id);
+      synthesized.push({
+        ...existingAi,
+        id: sig.id,
+        number: existingAi?.number ?? sig.number,
+        title: existingAi?.title || sig.title,
+        subtitle:
+          existingAi?.subtitle ??
+          `Enhance, consolidate, or create modules · ${windowLabel} · ${model} (${effortName} effort)`,
+        badge: existingAi?.badge ?? `${openCount} open`,
+        tone: existingAi?.tone ?? 'accent',
+        displayType: 'tracker',
+        headline:
+          existingAi?.headline ??
+          `${items.length} tracked suggestion(s), ${openCount} still open, grounded in ${windowLabel} module usage.`,
+        narrative:
+          existingAi?.narrative ??
+          'Suggestions carry forward between digests so you can see which ideas moved from proposed to shipped and whether usage changed afterwards.',
+        items,
+      });
+      continue;
+    }
+
     if (existingAi) {
       usedIds.add(existingAi.id);
       synthesized.push({
@@ -1465,6 +1730,7 @@ export function buildDigestSnapshotFromAggregates(options: {
     customSections?: ObservabilityDynamicSkillSection[];
     sections?: ObservabilityDynamicSkillSection[];
   };
+  previousSuggestions?: ObservabilityDynamicSkillSectionItem[];
   now?: Date;
 }): ObservabilityPoDigestSnapshot {
   const { project, window, model, effort, slot, aggregated } = options;
@@ -1497,6 +1763,8 @@ export function buildDigestSnapshotFromAggregates(options: {
     effort,
     aggregated,
     aiCustomSections: aiProvidedSections,
+    previousSuggestions: options.previousSuggestions,
+    now,
   });
 
   const slotBadge =
