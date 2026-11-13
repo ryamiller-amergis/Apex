@@ -1223,6 +1223,7 @@ export function createAdoMcpServer(options?: {
           where: eq(standupSessions.id, sessionId),
           with: {
             participants: true,
+            proposals: true,
             config: true,
           },
         });
@@ -1244,6 +1245,7 @@ export function createAdoMcpServer(options?: {
               threadId: string | null;
               status: string;
               structuredUpdate: unknown;
+              preparedBrief?: unknown;
             }) => {
               const user = await db.query.appUsers.findFirst({
                 where: eq(appUsers.oid, p.userId),
@@ -1263,6 +1265,7 @@ export function createAdoMcpServer(options?: {
                 email: user?.email,
                 status: p.status,
                 structuredUpdate: p.structuredUpdate,
+                preparedBrief: p.preparedBrief ?? null,
                 transcript,
               };
             }
@@ -1280,6 +1283,11 @@ export function createAdoMcpServer(options?: {
                   status: session.status,
                   project: session.config.project,
                   areaPath: session.config.areaPath,
+                  deliveryModel: session.config.deliveryModel,
+                  goalSource: session.config.goalSource,
+                  teamGoal: session.config.teamGoal,
+                  policy: session.config.policy,
+                  proposals: session.proposals ?? [],
                   participants: participantData,
                 },
                 null,
@@ -1367,12 +1375,16 @@ export function createAdoMcpServer(options?: {
       summaryMarkdown: z
         .string()
         .describe('The final markdown summary of the standup'),
+      decisionsNeeded: z
+        .array(z.string())
+        .optional()
+        .describe('Optional list of decisions needed during the live huddle'),
     },
-    async ({ sessionId, summaryMarkdown }) => {
+    async ({ sessionId, summaryMarkdown, decisionsNeeded }) => {
       try {
         const { completeSession } =
           await import('../../services/standupService');
-        await completeSession(sessionId, summaryMarkdown);
+        await completeSession(sessionId, summaryMarkdown, decisionsNeeded);
         console.log(`[MCP] complete_standup_session: completed ${sessionId}`);
         return {
           content: [

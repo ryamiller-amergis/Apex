@@ -6,6 +6,7 @@ import {
   standupSessions,
   standupParticipants,
   standupFollowups,
+  standupActionProposals,
   appGroupMembers,
   appUsers,
   chatMessages,
@@ -15,7 +16,17 @@ import { createThread } from './chatAgentService';
 import { deleteThread } from './chatThreadRepository';
 import { createNotification } from './notificationService';
 import { sendTeamsNotification } from './teamsBotService';
+import {
+  normalizeDeliveryModel,
+  normalizeGoalSource,
+  recomputeSessionTeamPulse,
+} from './standupDeliveryPolicyService';
+import { collectAndSaveParticipantBrief } from './standupEvidenceCollectorService';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
+import type {
+  StandupActionProposalInput,
+  StandupStructuredUpdate,
+} from '../../shared/types/standup';
 
 // The standup skill path lives on project_skill_workflow_settings. The parent
 // row only still has the repo and branch.
@@ -159,7 +170,6 @@ export async function generateDailySessions(): Promise<number> {
     if (members.length === 0) continue;
 
     // Resolve skill path + repo/branch from the project skill settings (if any).
-    // repo/branch are needed so the participant agent can get_skill a custom standup skill.
     let standupSkillPath: string | undefined;
     let skillRepo = '';
     let skillBranch: string | undefined;
@@ -173,6 +183,9 @@ export async function generateDailySessions(): Promise<number> {
       skillRepo = skillSettings.skillRepo;
       skillBranch = skillSettings.skillBranch;
     }
+
+    const deliveryModel = normalizeDeliveryModel(config.deliveryModel);
+    const goalSource = normalizeGoalSource(config.goalSource);
 
     // Create session
     const sessionId = uuidv4();
@@ -197,11 +210,13 @@ export async function generateDailySessions(): Promise<number> {
         standupSkillPath,
         standupUserDisplayName: member.displayName ?? undefined,
         standupUserEmail: member.email ?? undefined,
+        standupDeliveryModel: deliveryModel,
+        standupGoalSource: goalSource,
+        standupTeamGoal: config.teamGoal ?? null,
+        standupPolicy: config.policy ?? undefined,
         skillSettingsId: config.skillSettingsId,
       };
 
-      // createThread auto-sends a hidden "Begin." kickoff, so the agent greets
-      // the member with the standup questions as soon as they open the thread.
       const thread = await createThread(member.userId, kickoff);
 
       await db.insert(standupParticipants).values({
@@ -211,6 +226,10 @@ export async function generateDailySessions(): Promise<number> {
         threadId: thread.id,
         status: 'notified',
       });
+
+      await collectAndSaveParticipantBrief(participantId).catch((err) =>
+        console.warn('[standup] Brief pre-computation failed:', (err as Error).message),
+      );
 
       // Send in-app notification
       await createNotification(member.userId, {
@@ -290,6 +309,9 @@ export async function triggerSessionForConfig(
     skillBranch = skillSettings.skillBranch;
   }
 
+  const deliveryModel = normalizeDeliveryModel(config.deliveryModel);
+  const goalSource = normalizeGoalSource(config.goalSource);
+
   const sessionId = uuidv4();
   await db.insert(standupSessions).values({
     id: sessionId,
@@ -311,6 +333,10 @@ export async function triggerSessionForConfig(
       standupSkillPath,
       standupUserDisplayName: member.displayName ?? undefined,
       standupUserEmail: member.email ?? undefined,
+      standupDeliveryModel: deliveryModel,
+      standupGoalSource: goalSource,
+      standupTeamGoal: config.teamGoal ?? null,
+      standupPolicy: config.policy ?? undefined,
       skillSettingsId: config.skillSettingsId,
     };
 
@@ -323,6 +349,10 @@ export async function triggerSessionForConfig(
       threadId: thread.id,
       status: 'notified',
     });
+
+    await collectAndSaveParticipantBrief(participantId).catch((err) =>
+      console.warn('[standup] Brief pre-computation failed:', (err as Error).message),
+    );
 
     await createNotification(member.userId, {
       type: 'system',
@@ -387,25 +417,32 @@ export async function deleteStandupSession(sessionId: string): Promise<void> {
 
 // ── Structured Update Extraction ──────────────────────────────────────────────
 
-type StructuredUpdate = {
-  yesterday?: string;
-  today?: string;
-  blockers?: string;
-  atRisk?: string;
-  handoffs?: string;
-  capacity?: string;
-};
+function sanitizeStructuredUpdate(
+  raw?: StandupStructuredUpdate | null,
+): StandupStructuredUpdate | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const normalized: StandupStructuredUpdate = {
+    yesterday: typeof raw.yesterday === 'string' ? raw.yesterday : undefined,
+    today: typeof raw.today === 'string' ? raw.today : undefined,
+    blockers: typeof raw.blockers === 'string' ? raw.blockers : undefined,
+    atRisk: typeof raw.atRisk === 'string' ? raw.atRisk : undefined,
+    handoffs: typeof raw.handoffs === 'string' ? raw.handoffs : undefined,
+    capacity: typeof raw.capacity === 'string' ? raw.capacity : undefined,
+  };
+  const hasAny = Object.values(normalized).some(
+    (v) => typeof v === 'string' && v.trim().length > 0,
+  );
+  return hasAny ? normalized : normalized;
+}
 
 /**
  * Scans agent messages in a thread from newest to oldest and extracts the first
  * JSON code block that looks like { yesterday, today, blockers, atRisk, handoffs,
- * capacity }. The participant prompt instructs the agent to emit exactly this
- * structure at the end of the standup. Returns null if none is found (e.g. the
- * user submitted early).
+ * capacity }. Returns null if none is found.
  */
 async function extractStructuredUpdate(
   threadId: string,
-): Promise<StructuredUpdate | null> {
+): Promise<StandupStructuredUpdate | null> {
   const messages = await db
     .select({ role: chatMessages.role, text: chatMessages.text })
     .from(chatMessages)
@@ -415,7 +452,6 @@ async function extractStructuredUpdate(
   for (const msg of messages) {
     if (msg.role !== 'agent') continue;
 
-    // Match ```json ... ``` blocks (including ``` json with a space)
     const jsonBlockMatch = msg.text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
     if (!jsonBlockMatch) continue;
 
@@ -426,14 +462,7 @@ async function extractStructuredUpdate(
         parsed !== null &&
         ('yesterday' in parsed || 'today' in parsed || 'blockers' in parsed)
       ) {
-        return {
-          yesterday: typeof parsed.yesterday === 'string' ? parsed.yesterday : undefined,
-          today: typeof parsed.today === 'string' ? parsed.today : undefined,
-          blockers: typeof parsed.blockers === 'string' ? parsed.blockers : undefined,
-          atRisk: typeof parsed.atRisk === 'string' ? parsed.atRisk : undefined,
-          handoffs: typeof parsed.handoffs === 'string' ? parsed.handoffs : undefined,
-          capacity: typeof parsed.capacity === 'string' ? parsed.capacity : undefined,
-        };
+        return sanitizeStructuredUpdate(parsed);
       }
     } catch {
       // Malformed JSON in this block — try the next agent message
@@ -445,16 +474,24 @@ async function extractStructuredUpdate(
 
 // ── Participant Submission ─────────────────────────────────────────────────────
 
-export async function submitParticipant(participantId: string): Promise<void> {
-  // Load the participant first to get their threadId for parsing
+export interface SubmitParticipantOptions {
+  structuredUpdate?: StandupStructuredUpdate | null;
+  proposals?: StandupActionProposalInput[];
+}
+
+export async function submitParticipant(
+  participantId: string,
+  options?: SubmitParticipantOptions,
+): Promise<void> {
   const participant = await db.query.standupParticipants.findFirst({
     where: eq(standupParticipants.id, participantId),
   });
   if (!participant) return;
 
-  // Parse the structured update from the agent conversation transcript
-  let structuredUpdate: StructuredUpdate | null = null;
-  if (participant.threadId) {
+  let structuredUpdate: StandupStructuredUpdate | null = null;
+  if (options?.structuredUpdate) {
+    structuredUpdate = sanitizeStructuredUpdate(options.structuredUpdate);
+  } else if (participant.threadId) {
     structuredUpdate = await extractStructuredUpdate(participant.threadId);
     if (structuredUpdate) {
       console.log(`[standup] Extracted structured update for participant ${participantId}`);
@@ -472,6 +509,34 @@ export async function submitParticipant(participantId: string): Promise<void> {
       ...(structuredUpdate ? { structuredUpdate } : {}),
     })
     .where(eq(standupParticipants.id, participantId));
+
+  if (options?.proposals && options.proposals.length > 0) {
+    const sessionRow = await db.query.standupSessions.findFirst({
+      where: eq(standupSessions.id, participant.sessionId),
+      with: { config: true },
+    });
+    const project = sessionRow?.config?.project ?? '';
+    await db.insert(standupActionProposals).values(
+      options.proposals.map((proposal) => ({
+        sessionId: participant.sessionId,
+        participantId: participant.id,
+        project,
+        workItemId: proposal.workItemId,
+        workItemTitle: proposal.workItemTitle,
+        proposalType: proposal.proposalType,
+        fieldName: proposal.fieldName,
+        currentValue: proposal.currentValue ?? null,
+        proposedValue: proposal.proposedValue,
+        reason: proposal.reason,
+        confidence: proposal.confidence ?? 'at_risk',
+        status: 'pending' as const,
+      })),
+    );
+  }
+
+  await recomputeSessionTeamPulse(participant.sessionId).catch((err) =>
+    console.warn('[standup] Team pulse recompute skipped:', (err as Error).message),
+  );
 
   const allParticipants = await db
     .select({ status: standupParticipants.status })
@@ -506,15 +571,13 @@ export async function runFacilitator(sessionId: string): Promise<void> {
     repo: '',
     mode: 'standup-facilitator',
     standupSessionId: sessionId,
+    standupDeliveryModel: normalizeDeliveryModel(session.config.deliveryModel),
+    standupGoalSource: normalizeGoalSource(session.config.goalSource),
+    standupTeamGoal: session.config.teamGoal ?? null,
+    standupPolicy: session.config.policy ?? undefined,
     skillSettingsId: session.config.skillSettingsId,
   };
 
-  // Use a system user ID for the facilitator thread. createThread auto-sends a
-  // hidden "Begin." kickoff, so the facilitator agent starts analyzing the
-  // session immediately: it reads all updates via get_standup_session, records
-  // cross-cutting follow-ups via create_standup_followup, and finally calls
-  // complete_standup_session, which transitions the session to completed,
-  // persists the summary, spins up joint follow-up threads, and notifies members.
   const facilitatorThread = await createThread('system-standup-facilitator', kickoff);
 
   await db
@@ -524,14 +587,26 @@ export async function runFacilitator(sessionId: string): Promise<void> {
 }
 
 /**
- * Mark session as completed and notify participants of follow-ups.
+ * Mark session as completed, synthesize Team Pulse, and notify participants of follow-ups.
  */
-export async function completeSession(sessionId: string, summaryMarkdown?: string): Promise<void> {
+export async function completeSession(
+  sessionId: string,
+  summaryMarkdown?: string,
+  decisionsNeeded?: string[],
+): Promise<void> {
   const now = new Date().toISOString();
   await db
     .update(standupSessions)
-    .set({ status: 'completed', completedAt: now, summaryMarkdown: summaryMarkdown ?? null })
+    .set({
+      status: 'completed',
+      completedAt: now,
+      summaryMarkdown: summaryMarkdown ?? null,
+    })
     .where(eq(standupSessions.id, sessionId));
+
+  await recomputeSessionTeamPulse(sessionId, decisionsNeeded).catch((err) =>
+    console.warn('[standup] Team pulse synthesis on completion skipped:', (err as Error).message),
+  );
 
   // Resolve the session's project so follow-up threads carry the right context.
   const session = await db.query.standupSessions.findFirst({
@@ -550,8 +625,6 @@ export async function completeSession(sessionId: string, summaryMarkdown?: strin
   for (const followup of followups) {
     const userIds = followup.participantUserIds as string[];
 
-    // Create a joint follow-up thread (owned by the first involved member, or
-    // the system user if none) unless one already exists.
     let followupThreadId = followup.followupThreadId;
     if (!followupThreadId) {
       const owner = userIds[0] ?? 'system-standup-facilitator';
