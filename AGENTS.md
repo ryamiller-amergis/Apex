@@ -39,6 +39,7 @@ Apex is an internal product-building and project-management platform. It central
 | User Profile | — | — | `profileService.ts`, `avatarResolverService.ts` | `ProfilePage.tsx`, `AvatarEditor.tsx`, `UserMenu.tsx` |
 | Brainstorm | — | `.cursor/skills/brainstorm/SKILL.md` | `brainstormSessionService.ts`, `brainstormOrchestrationService.ts`, `brainstormTurnLedger.ts`, `brainstormAccessPolicy.ts`, `brainstormArtifactVersionStore.ts`, `brainstormArtifactMcp.ts`, `brainstormHandoffEngine.ts`, `brainstormRepositoryCatalog.ts` | `BrainstormHomeEntry.tsx`, `BrainstormSessionsPage.tsx`, `BrainstormWorkspace.tsx`, `BrainstormChatPanel.tsx`, `BrainstormArtifactPanel.tsx`, `BrainstormNextActionsPanel.tsx`, `BrainstormRepositoryAdmin.tsx` |
 | Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md`, `design-docs/reusable-playbook-interview-step.md` | `.cursor/skills/interview-orchestrator/SKILL.md`, `.cursor/skills/interview-requirements-review/SKILL.md`, `.cursor/skills/interview-brief-draft/SKILL.md` | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
+| Observability (Product Owner Digest) | — | `.cursor/skills/observability-po-digest/SKILL.md` | `observabilityPoDigestService.ts`, `observabilityQueryService.ts` | `ObservabilityWorkspace.tsx`, `PlatformAdmin.tsx` |
 
 ## Key Terminology
 

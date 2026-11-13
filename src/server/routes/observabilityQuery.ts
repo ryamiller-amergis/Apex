@@ -3,9 +3,18 @@
  * Mounted under /api/platform-admin after requireSuperAdmin.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { OBSERVABILITY_VIEWER_FLAG } from '../../shared/types/observability';
+import { isEffortLevel, type EffortLevel } from '../../shared/types/effort';
+import {
+  OBSERVABILITY_VIEWER_FLAG,
+  type ObservabilityTrendWindow,
+} from '../../shared/types/observability';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getJourneyAggregationService } from '../services/journeyAggregationService';
+import {
+  generateObservabilityPoDigest,
+  getObservabilityPoDigest,
+  isObservabilityTrendWindow,
+} from '../services/observabilityPoDigestService';
 import * as observabilityQueryService from '../services/observabilityQueryService';
 import {
   ObservabilityQueryError,
@@ -143,6 +152,72 @@ router.get('/health', async (_req: Request, res: Response): Promise<void> => {
     res.status(200).json(snapshot);
   } catch (err) {
     sendQueryError('health', err, res);
+  }
+});
+
+function parseOptionalTrendWindow(raw: unknown): ObservabilityTrendWindow | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const trimmed = raw.trim();
+  if (!isObservabilityTrendWindow(trimmed)) {
+    throw new ObservabilityQueryError('OBSERVABILITY_INVALID_QUERY', 'Unsupported trend window');
+  }
+  return trimmed;
+}
+
+function parseOptionalEffort(raw: unknown): EffortLevel | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const trimmed = raw.trim();
+  if (!isEffortLevel(trimmed)) {
+    throw new ObservabilityQueryError('OBSERVABILITY_INVALID_QUERY', 'Invalid effort level');
+  }
+  return trimmed;
+}
+
+router.get('/po-digest', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const query = queryRecord(req.query);
+    const project = parseProjectParam(query);
+    const window = parseOptionalTrendWindow(query.window);
+    const model = typeof query.model === 'string' && query.model.trim() ? query.model.trim() : undefined;
+    const effort = parseOptionalEffort(query.effort);
+    const response = await getObservabilityPoDigest({
+      project,
+      window,
+      model,
+      effort,
+    });
+    res.status(200).json(response);
+  } catch (err) {
+    sendQueryError('po-digest', err, res);
+  }
+});
+
+router.post('/po-digest/generate', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const query = queryRecord(req.query);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const project =
+      typeof body.project === 'string' && body.project.trim()
+        ? body.project.trim()
+        : parseProjectParam(query);
+    const window = parseOptionalTrendWindow(body.window ?? query.window);
+    const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined;
+    const effort = parseOptionalEffort(body.effort);
+    const slot =
+      body.slot === 'morning_6am' || body.slot === 'evening_6pm' || body.slot === 'on_demand'
+        ? body.slot
+        : 'on_demand';
+
+    const response = await generateObservabilityPoDigest({
+      project,
+      window,
+      model,
+      effort,
+      slot,
+    });
+    res.status(200).json(response);
+  } catch (err) {
+    sendQueryError('po-digest-generate', err, res);
   }
 });
 

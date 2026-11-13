@@ -1,412 +1,246 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { CaptureHealthResponse, TraceEventPage, TraceEventView } from '../../../shared/types/observability';
+import type { ObservabilityPoDigestResponse } from '../../../shared/types/observability';
+import { buildFallbackPoDigestResponse } from '../../../shared/utils/observabilityPoDigest';
 import { ObservabilityWorkspace } from '../ObservabilityWorkspace';
 
-const ACTOR = '11111111-1111-4111-8111-111111111111';
-const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
-const SESSION = '22222222-2222-4222-8222-222222222222';
-
-const mockUseObservabilityTrail = jest.fn();
-const mockUseObservabilityHealth = jest.fn();
-const mockUseSessionTimeline = jest.fn();
+const mockUseObservabilityPoDigest = jest.fn();
+const mockUseGenerateObservabilityPoDigest = jest.fn();
+const mockUseAvailableModels = jest.fn();
 
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({ selectedProject: 'Apex', isSuperAdmin: true }),
 }));
 
 jest.mock('../../hooks/useObservabilityQueries', () => ({
-  useObservabilityTrail: (...args: unknown[]) => mockUseObservabilityTrail(...args),
-  useObservabilityHealth: (...args: unknown[]) => mockUseObservabilityHealth(...args),
+  useObservabilityPoDigest: (...args: unknown[]) => mockUseObservabilityPoDigest(...args),
+  useGenerateObservabilityPoDigest: (...args: unknown[]) =>
+    mockUseGenerateObservabilityPoDigest(...args),
 }));
 
-jest.mock('../../hooks/useSessionTimeline', () => ({
-  useSessionTimeline: (...args: unknown[]) => mockUseSessionTimeline(...args),
+jest.mock('../../hooks/useProjectSkillConfig', () => ({
+  useAvailableModels: () => mockUseAvailableModels(),
 }));
 
-jest.mock('../../hooks/usePlatformAdmin', () => ({
-  usePlatformAdminUsers: () => ({
-    data: [
-      {
-        userId: '11111111-1111-4111-8111-111111111111',
-        displayName: 'Ada Lovelace',
-        email: 'ada@example.com',
-      },
-      {
-        userId: '33333333-3333-4333-8333-333333333333',
-        displayName: 'Grace Hopper',
-        email: 'grace@example.com',
-      },
-    ],
-    isLoading: false,
-    isError: false,
-  }),
-}));
-
-jest.mock('../InteractiveJourneyMapPage', () => ({
-  __esModule: true,
-  default: ({
-    onOpenTrail,
-  }: {
-    onOpenTrail?: (handoff: { fromRoute: string; toRoute: string; from: string; to: string }) => void;
-  }) => (
-    <div>
-      <div data-testid="journey-map-page">Journey Map</div>
-      <button
-        type="button"
-        data-testid="journey-map-open-trail"
-        onClick={() => onOpenTrail?.({
-          fromRoute: '/home',
-          toRoute: '/calendar',
-          from: '2026-08-01',
-          to: '2026-08-17',
-        })}
-      >
-        Open Full Trail
-      </button>
-    </div>
-  ),
-}));
-
-function event(overrides: Partial<TraceEventView> = {}): TraceEventView {
-  return {
-    id: 'evt-1',
-    eventType: 'api_request',
-    occurredAt: '2026-08-17T17:30:00.000Z',
-    actorId: ACTOR,
-    projectId: 'Apex',
-    traceId: TRACE,
-    sessionId: SESSION,
-    routeTemplate: '/api/timecards',
-    method: 'POST',
-    statusCode: 201,
-    durationMs: 142,
-    severity: 'info',
-    trigger: 'human',
-    diagnosticSummary: 'POST /api/timecards — 201 (142ms)',
-    ...overrides,
-  };
+function digestState(
+  window: 'today' | '1d' | '7d' | '14d' | '30d' | '60d' = '7d',
+  model = 'composer-2.5',
+  effort: 'low' | 'medium' | 'high' = 'medium',
+): ObservabilityPoDigestResponse {
+  return buildFallbackPoDigestResponse({
+    project: 'Apex',
+    window,
+    model,
+    effort,
+    now: new Date('2026-11-12T12:00:00.000Z'),
+  });
 }
 
-function trailPage(items: TraceEventView[], nextCursor: string | null = null, capReached = false): TraceEventPage {
-  return { items, nextCursor, capReached };
-}
+describe('ObservabilityWorkspace (Product Owner Digest)', () => {
+  const mutateMock = jest.fn();
 
-function health(overrides: Partial<CaptureHealthResponse> = {}): CaptureHealthResponse {
-  return {
-    capturedAt: '2026-08-17T18:00:00.000Z',
-    instanceId: 'instance-1',
-    captureEnabled: true,
-    pipeline: {
-      scope: 'instance',
-      droppedEvents: 142,
-      droppedEventsPerSecond: 0.3,
-      bufferDepth: 8700,
-      bufferCapacity: 10_000,
-      flushErrorCount: 3,
-      latestFlushError: null,
-      ingestedEventsPerSecond: 80.2,
-    },
-    store: {
-      scope: 'database',
-      approximateStoreBytes: 13_314_088_960,
-      oldestRetainedEventAt: '2026-08-01T00:00:00.000Z',
-    },
-    ...overrides,
-  };
-}
-
-function queryState(overrides: Record<string, unknown> = {}) {
-  return {
-    data: undefined,
-    isLoading: false,
-    isFetching: false,
-    isError: false,
-    error: null,
-    refetch: jest.fn(),
-    dataUpdatedAt: Date.parse('2026-08-17T18:00:00.000Z'),
-    ...overrides,
-  };
-}
-
-function renderWorkspace() {
-  return render(<ObservabilityWorkspace project="Apex" />);
-}
-
-async function selectActor(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByTestId('observability-actor-input'));
-  await user.click(screen.getByTestId(`observability-actor-option-${ACTOR}`));
-  await waitFor(() => expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR));
-}
-
-async function applyFilters(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByTestId('observability-apply-filters'));
-}
-
-describe('ObservabilityWorkspace', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseObservabilityTrail.mockReturnValue(queryState());
-    mockUseObservabilityHealth.mockReturnValue(queryState());
-    mockUseSessionTimeline.mockReturnValue({
+    mockUseAvailableModels.mockReturnValue({
+      data: [
+        { id: 'composer-2.5', displayName: 'Composer 2.5' },
+        { id: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+    mockUseObservabilityPoDigest.mockImplementation(
+      (_project: string, window: 'today' | '1d' | '7d' | '14d' | '30d' | '60d', model: string, effort: 'low' | 'medium' | 'high') => ({
+        data: digestState(window, model, effort),
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+      }),
+    );
+    mockUseGenerateObservabilityPoDigest.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+    });
+  });
+
+  it('renders all 6 Product Owner core signals and twice-daily 6 AM / 6 PM schedule status', () => {
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    expect(screen.getByTestId('observability-workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('observability-schedule-6am')).toHaveTextContent('6:00 AM Daily');
+    expect(screen.getByTestId('observability-schedule-6pm')).toHaveTextContent('6:00 PM Daily');
+
+    // Six core PO signals
+    expect(screen.getByTestId('observability-signal-top-users')).toHaveTextContent('Top users');
+    expect(screen.getByTestId('observability-signal-common-exceptions')).toHaveTextContent(
+      'Most common exceptions',
+    );
+    expect(screen.getByTestId('observability-signal-retention-drops')).toHaveTextContent(
+      'Retention dropped per module',
+    );
+    expect(screen.getByTestId('observability-signal-drop-reasons')).toHaveTextContent(
+      'AI summary of why there could be drops',
+    );
+    expect(screen.getByTestId('observability-signal-top-modules')).toHaveTextContent('Top modules');
+    expect(screen.getByTestId('observability-signal-drive-adoption')).toHaveTextContent(
+      'AI summary of how we can drive adoption',
+    );
+  });
+
+  it('supports switching across Today, Last day, Last 7 days, Last 14 days, Last 30 days, and Last 60 days', async () => {
+    const user = userEvent.setup();
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    const windows: Array<{ key: string; label: string }> = [
+      { key: 'today', label: 'Today' },
+      { key: '1d', label: 'Last day' },
+      { key: '7d', label: 'Last 7 days' },
+      { key: '14d', label: 'Last 14 days' },
+      { key: '30d', label: 'Last 30 days' },
+      { key: '60d', label: 'Last 60 days' },
+    ];
+
+    for (const w of windows) {
+      const btn = screen.getByTestId(`observability-window-${w.key}`);
+      expect(btn).toHaveTextContent(w.label);
+      await user.click(btn);
+      expect(btn).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('observability-active-model-badge')).toHaveTextContent(w.label);
+    }
+  });
+
+  it('allows selecting Composer 2.5 and effort level and triggers on-demand digest generation', async () => {
+    const user = userEvent.setup();
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    const modelSelect = screen.getByTestId('observability-model-select');
+    const effortSelect = screen.getByTestId('observability-effort-select');
+
+    await user.selectOptions(modelSelect, 'claude-sonnet-4-6');
+    expect(modelSelect).toHaveValue('claude-sonnet-4-6');
+
+    await user.selectOptions(modelSelect, 'composer-2.5');
+    expect(modelSelect).toHaveValue('composer-2.5');
+    expect(within(modelSelect).getByRole('option', { name: 'Composer 2.5' })).toBeInTheDocument();
+
+    await user.selectOptions(effortSelect, 'high');
+    expect(effortSelect).toHaveValue('high');
+
+    await user.click(screen.getByTestId('observability-window-30d'));
+    await user.click(screen.getByTestId('observability-generate-digest'));
+
+    await waitFor(() => {
+      expect(mutateMock).toHaveBeenCalledWith({
+        project: 'Apex',
+        window: '30d',
+        model: 'composer-2.5',
+        effort: 'high',
+        slot: 'on_demand',
+      });
+    });
+
+    expect(screen.getByTestId('observability-active-model-badge')).toHaveTextContent(
+      'Composer 2.5 (composer-2.5) · High · Last 30 days',
+    );
+  });
+
+  it('displays an accessible error banner with retry when the digest query fails', async () => {
+    const user = userEvent.setup();
+    const refetch = jest.fn();
+    mockUseObservabilityPoDigest.mockReturnValue({
       data: undefined,
-      isLoading: true,
-      isFetching: false,
+      isLoading: false,
+      isError: true,
+      error: { message: 'HTTP 503' },
+      refetch,
+    });
+
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    expect(screen.getByTestId('observability-po-error')).toHaveTextContent('HTTP 503');
+    await user.click(screen.getByTestId('observability-po-retry'));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('automatically renders dynamic 7th and 8th skill sections from SKILL.md without component code changes', () => {
+    const baseResponse = digestState('7d', 'composer-2.5', 'high');
+    const withCustomSections: ObservabilityPoDigestResponse = {
+      ...baseResponse,
+      digest: {
+        ...baseResponse.digest,
+        customSections: [
+          {
+            id: 'journey-dropoffs',
+            number: 7,
+            title: 'Cross-module journey drop-offs',
+            subtitle: 'Dynamic skill signal · Composer 2.5',
+            badge: 'Dynamic Skill Signal',
+            tone: 'warning',
+            displayType: 'ranked_list',
+            headline: 'Top workflow exit edges across Last 7 days',
+            narrative: 'Synthesized from trace_path_rollups and trace_events.',
+            items: [
+              {
+                id: 'jd-1',
+                title: 'UI Lab (/ui-lab)',
+                subtitle: '16 active users',
+                detail: 'Users exit after first draft without promoting to PRD.',
+                meta: 'Skill focus: journey drop-offs',
+                badge: '25% exit',
+                metricLabel: 'Exits',
+                metricValue: 12,
+                deltaPct: 8.5,
+              },
+            ],
+          },
+          {
+            id: 'api-latency-table',
+            number: 8,
+            title: 'API Latency & Slow Routes',
+            subtitle: 'p95 route duration table',
+            badge: 'Latency Watch',
+            tone: 'accent',
+            displayType: 'table',
+            headline: 'Slowest routes correlated with session abandonment',
+            items: [
+              {
+                id: 'lat-1',
+                title: 'Design Prototypes (/backlog/design-prototypes/:id)',
+                subtitle: 'Bedrock stream endpoint',
+                detail: 'p95 1,420ms during regeneration',
+                metricLabel: 'p95 ms',
+                metricValue: 1420,
+                deltaPct: 14.2,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    mockUseObservabilityPoDigest.mockReturnValue({
+      data: withCustomSections,
+      isLoading: false,
       isError: false,
       error: null,
       refetch: jest.fn(),
-      fetchNextPage: jest.fn(),
     });
-  });
 
-  it('PBI-003 AC-0 / TC-PBI-003-001 loads shared filters and all sub-view entry points', () => {
-    renderWorkspace();
-    expect(screen.getByTestId('observability-workspace')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-filter-form')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-tab-trail')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-tab-timeline')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-tab-journey')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-tab-health')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-cap-badge')).toHaveTextContent('500-row cap');
-  });
+    render(<ObservabilityWorkspace project="Apex" />);
 
-  it('PBI-003 AC-3 / TC-PBI-003-008 is read-only with no mutation actions', () => {
-    renderWorkspace();
-    expect(screen.queryByRole('button', { name: /save|delete|edit|export|reset/i })).not.toBeInTheDocument();
-  });
+    const card7 = screen.getByTestId('observability-signal-custom-journey-dropoffs');
+    expect(card7).toBeInTheDocument();
+    expect(card7).toHaveTextContent('7');
+    expect(card7).toHaveTextContent('Cross-module journey drop-offs');
+    expect(card7).toHaveTextContent('Top workflow exit edges across Last 7 days');
+    expect(card7).toHaveTextContent('UI Lab (/ui-lab)');
 
-  it('PBI-003 AC-0 / TC-PBI-003-009 keeps shared filters when switching sub-views', async () => {
-    const user = userEvent.setup();
-    renderWorkspace();
-    await selectActor(user);
-    await user.click(screen.getByTestId('observability-tab-health'));
-    expect(screen.getByTestId('observability-health-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
-    await user.click(screen.getByTestId('observability-tab-trail'));
-    expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
-  });
-
-  it('PBI-003 AC-2 / TC-PBI-003-010 shows an accessible empty trail state before search', () => {
-    renderWorkspace();
-    expect(screen.getByTestId('observability-trail-empty')).toHaveTextContent(/search a user activity trail/i);
-  });
-
-  it('PBI-004 AC-3 / TC-PBI-004-004 blocks missing actor and malformed trace ID without querying', async () => {
-    const user = userEvent.setup();
-    renderWorkspace();
-    await user.type(screen.getByTestId('observability-trace-id'), 'ZZ-NOT-VALID!!');
-    await applyFilters(user);
-    await waitFor(() => {
-      expect(screen.getByTestId('observability-validation-summary')).toHaveTextContent(/validation error/i);
-    });
-    expect(screen.getByText(/actor is required/i)).toBeInTheDocument();
-    expect(screen.getByText(/malformed trace id/i)).toBeInTheDocument();
-    const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
-    const lastCall = calls[calls.length - 1];
-    expect(lastCall?.[1]).toBeNull();
-  });
-
-  it('lists known users by display name and submits the matching UUID', async () => {
-    const user = userEvent.setup();
-    renderWorkspace();
-    await user.click(screen.getByTestId('observability-actor-input'));
-    const option = screen.getByTestId(`observability-actor-option-${ACTOR}`);
-    expect(option).toHaveTextContent('Ada Lovelace');
-    expect(option).not.toHaveTextContent(ACTOR);
-    await user.click(option);
-    await waitFor(() => expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR));
-    await applyFilters(user);
-    await waitFor(() => {
-      const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
-      const lastCall = calls[calls.length - 1];
-      expect((lastCall?.[1] as { actorId: string } | null)?.actorId).toBe(ACTOR);
-    });
-  });
-
-  it('filters the user dropdown as the operator types', async () => {
-    const user = userEvent.setup();
-    renderWorkspace();
-    const search = screen.getByTestId('observability-actor-input');
-    await user.click(search);
-    expect(screen.getByTestId(`observability-actor-option-${ACTOR}`)).toBeInTheDocument();
-    expect(screen.getByTestId('observability-actor-option-33333333-3333-4333-8333-333333333333')).toBeInTheDocument();
-    await user.type(search, 'grace');
-    expect(screen.queryByTestId(`observability-actor-option-${ACTOR}`)).not.toBeInTheDocument();
-    expect(screen.getByTestId('observability-actor-option-33333333-3333-4333-8333-333333333333')).toHaveTextContent('Grace Hopper');
-  });
-
-  it('PBI-004 AC-0 / TC-PBI-004-001 shows chronological trail rows with trace and session links', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityTrail.mockReturnValue(queryState({
-      data: trailPage([
-        event({ id: 'evt-ui', eventType: 'ui_action', occurredAt: '2026-08-17T17:29:00.000Z', diagnosticSummary: null }),
-        event({ id: 'evt-api', eventType: 'api_request', occurredAt: '2026-08-17T17:30:00.000Z' }),
-        event({ id: 'evt-err', eventType: 'error', occurredAt: '2026-08-17T17:31:00.000Z', diagnosticSummary: 'ValidationError' }),
-      ]),
-    }));
-    renderWorkspace();
-    await selectActor(user);
-    await applyFilters(user);
-    const table = await screen.findByTestId('observability-trail-table');
-    expect(within(table).getByText('UI Action')).toBeInTheDocument();
-    expect(within(table).getByText('API Call')).toBeInTheDocument();
-    expect(within(table).getByText('Error')).toBeInTheDocument();
-    expect(within(table).getAllByText(ACTOR).length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId(`observability-trace-link-${TRACE}`).length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId(`observability-session-link-${SESSION}`).length).toBeGreaterThan(0);
-    expect(table.textContent).not.toMatch(/@example\.com/);
-  });
-
-  it('PBI-004 AC-1 / TC-PBI-004-002 shows a recoverable trail error without stale rows', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityTrail.mockReturnValue(queryState({
-      isError: true,
-      error: { message: 'HTTP 503' },
-    }));
-    renderWorkspace();
-    await selectActor(user);
-    await applyFilters(user);
-    expect(await screen.findByTestId('observability-trail-error')).toHaveTextContent(/unavailable/i);
-    expect(screen.getByTestId('observability-trail-retry')).toBeInTheDocument();
-    expect(screen.queryByTestId('observability-trail-table')).not.toBeInTheDocument();
-    expect(screen.getByTestId('observability-filter-form')).toBeInTheDocument();
-  });
-
-  it('PBI-003 AC-1 / TC-PBI-003-002 isolates a trail error from other views and shared filters', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityTrail.mockReturnValue(queryState({
-      isError: true,
-      error: { message: 'HTTP 503' },
-    }));
-    renderWorkspace();
-    await selectActor(user);
-    await applyFilters(user);
-    await user.click(screen.getByTestId('observability-tab-health'));
-    expect(screen.getByTestId('observability-health-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
-    expect(screen.queryByTestId('observability-trail-error')).not.toBeInTheDocument();
-  });
-
-  it('PBI-004 AC-2 / TC-PBI-004-003 presents 50-row pagination and the 500-row cap', async () => {
-    const user = userEvent.setup();
-    const items = Array.from({ length: 50 }, (_, index) => event({ id: `evt-${index}` }));
-    mockUseObservabilityTrail.mockReturnValue(queryState({
-      data: trailPage(items, 'cursor-2', true),
-    }));
-    renderWorkspace();
-    await selectActor(user);
-    await applyFilters(user);
-    expect(await screen.findByTestId('observability-trail-pagination-info')).toHaveTextContent(/cap reached/i);
-    expect(screen.getByTestId('observability-trail-next')).toBeDisabled();
-    expect(screen.getAllByRole('row')).toHaveLength(51);
-  });
-
-  it('keeps event chips visible and queries errors without resetting the trail search', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityTrail.mockImplementation((
-      _project: unknown,
-      filters: { eventType?: string | null } | null,
-    ) => {
-      if (filters?.eventType === 'error') {
-        return queryState({ data: trailPage([]) });
-      }
-      return queryState({
-        data: trailPage([
-          event({ id: 'evt-api', eventType: 'api_request' }),
-          event({ id: 'evt-err', eventType: 'error', diagnosticSummary: 'ValidationError' }),
-        ]),
-      });
-    });
-    renderWorkspace();
-    await selectActor(user);
-    await applyFilters(user);
-    expect(await screen.findByTestId('observability-trail-table')).toBeInTheDocument();
-    await user.click(screen.getByTestId('observability-trail-chip-error'));
-    const calls = mockUseObservabilityTrail.mock.calls as unknown[][];
-    const lastCall = calls[calls.length - 1];
-    expect((lastCall?.[1] as { eventType: string | null } | null)?.eventType).toBe('error');
-    expect(screen.getByTestId('observability-trail-chip-error')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('observability-trail-empty')).toHaveTextContent(/no error events/i);
-    expect(screen.queryByText(/search a user activity trail/i)).not.toBeInTheDocument();
-    expect(screen.getByTestId('observability-actor')).toHaveValue(ACTOR);
-    await user.click(screen.getByTestId('observability-trail-chip-all'));
-    expect(screen.getByTestId('observability-trail-table')).toBeInTheDocument();
-  });
-
-  it('PBI-004 AC-0 / TC-PBI-004-010 opens Timeline from a session link', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityTrail.mockReturnValue(queryState({ data: trailPage([event()]) }));
-    renderWorkspace();
-    await selectActor(user);
-    await applyFilters(user);
-    await user.click(await screen.findByTestId(`observability-session-link-${SESSION}`));
-    expect(screen.getByTestId('observability-timeline-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('session-timeline-page')).toBeInTheDocument();
-    expect(screen.queryByTestId('observability-timeline-empty')).not.toBeInTheDocument();
-  });
-
-  it('PBI-005 AC-0 / TC-PBI-005-001 shows required Capture Health metrics', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityHealth.mockReturnValue(queryState({ data: health() }));
-    renderWorkspace();
-    await user.click(screen.getByTestId('observability-tab-health'));
-    expect(screen.getByTestId('observability-health-dropped')).toHaveTextContent('142');
-    expect(screen.getByTestId('observability-health-buffer')).toHaveTextContent('8,700');
-    expect(screen.getByTestId('observability-health-throughput')).toHaveTextContent('80.2');
-    expect(screen.getByTestId('observability-health-flush')).toHaveTextContent('3');
-    expect(screen.getByTestId('observability-health-store')).toHaveTextContent('GB');
-    expect(screen.getByTestId('observability-health-oldest')).toHaveTextContent('2026-08-01');
-    expect(screen.getByTestId('observability-health-grid').textContent).not.toMatch(/authorization|stack trace|request body/i);
-  });
-
-  it('PBI-005 AC-1 / TC-PBI-005-002 shows an accessible stale-or-error health state', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityHealth.mockReturnValue(queryState({
-      isError: true,
-      error: { message: 'HTTP 502' },
-    }));
-    renderWorkspace();
-    await user.click(screen.getByTestId('observability-tab-health'));
-    expect(screen.getByTestId('observability-health-error')).toHaveTextContent(/failed/i);
-    expect(screen.getByTestId('observability-health-retry')).toBeInTheDocument();
-    expect(screen.getByTestId('observability-filter-form')).toBeInTheDocument();
-  });
-
-  it('PBI-005 AC-2 shows buffer-at-capacity and 30-day retention warnings', async () => {
-    const user = userEvent.setup();
-    mockUseObservabilityHealth.mockReturnValue(queryState({
-      data: health({
-        pipeline: {
-          scope: 'instance',
-          droppedEvents: 10,
-          droppedEventsPerSecond: 1,
-          bufferDepth: 10_000,
-          bufferCapacity: 10_000,
-          flushErrorCount: 0,
-          latestFlushError: null,
-          ingestedEventsPerSecond: 1,
-        },
-        store: {
-          scope: 'database',
-          approximateStoreBytes: 1,
-          oldestRetainedEventAt: '2026-07-18T00:00:00.000Z',
-        },
-      }),
-    }));
-    renderWorkspace();
-    await user.click(screen.getByTestId('observability-tab-health'));
-    expect(screen.getByTestId('observability-health-buffer-warning')).toHaveTextContent(/at capacity/i);
-    expect(screen.getByTestId('observability-health-retention-warning')).toHaveTextContent(/30-day/i);
-  });
-
-  it('PBI-007 AC-0 / TBI-011 DoD-1 mounts Journey Map and pivots to a filtered Trail', async () => {
-    const user = userEvent.setup();
-    renderWorkspace();
-    await user.click(screen.getByTestId('observability-tab-journey'));
-    expect(await screen.findByTestId('journey-map-page')).toBeInTheDocument();
-    await user.click(screen.getByTestId('journey-map-open-trail'));
-    await waitFor(() => expect(screen.getByTestId('observability-trail-panel')).toBeInTheDocument());
-    expect(screen.getByTestId('observability-trail-empty')).toHaveTextContent('/home');
-    expect(screen.getByTestId('observability-trail-empty')).toHaveTextContent('/calendar');
+    const card8 = screen.getByTestId('observability-signal-custom-api-latency-table');
+    expect(card8).toBeInTheDocument();
+    expect(card8).toHaveTextContent('8');
+    expect(card8).toHaveTextContent('API Latency & Slow Routes');
+    expect(card8).toHaveTextContent('Design Prototypes (/backlog/design-prototypes/:id)');
+    expect(card8).toHaveTextContent('1,420');
   });
 });

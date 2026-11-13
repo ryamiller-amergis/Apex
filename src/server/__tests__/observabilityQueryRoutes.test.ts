@@ -118,6 +118,7 @@ const ENDPOINTS = [
 
 function buildApp(options?: { authenticated?: boolean }) {
   const app = express();
+  app.use(express.json());
   app.use((req, res, next) => {
     if (options?.authenticated === false) {
       res.status(401).json({ error: 'Not authenticated' });
@@ -293,5 +294,33 @@ describe('observability query routes', () => {
     expect(res.body).toEqual({ error: 'Internal server error' });
     expect(JSON.stringify(res.body)).not.toMatch(/agent_run|trace_events|SELECT/);
     spy.mockRestore();
+  });
+
+  it('serves GET and POST /po-digest endpoints with model, effort, and trend window validation', async () => {
+    const app = buildApp();
+
+    const getRes = await request(app).get(
+      '/api/platform-admin/observability/po-digest?project=Apex&window=30d&model=composer-2.5&effort=high',
+    );
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.digest.window).toBe('30d');
+    expect(getRes.body.digest.model).toBe('composer-2.5');
+    expect(getRes.body.digest.effort).toBe('high');
+    expect(getRes.body.schedule.morningSlot.scheduledTimeLabel).toContain('6:00 AM');
+    expect(getRes.body.schedule.eveningSlot.scheduledTimeLabel).toContain('6:00 PM');
+
+    const postRes = await request(app)
+      .post('/api/platform-admin/observability/po-digest/generate?project=Apex')
+      .send({ project: 'Apex', window: '60d', model: 'composer-2.5', effort: 'high' });
+    expect(postRes.status).toBe(200);
+    expect(postRes.body.digest.slot).toBe('on_demand');
+    expect(postRes.body.digest.window).toBe('60d');
+    expect(postRes.body.digest.model).toBe('composer-2.5');
+
+    const badWindow = await request(app).get(
+      '/api/platform-admin/observability/po-digest?project=Apex&window=invalid',
+    );
+    expect(badWindow.status).toBe(400);
+    expect(badWindow.body.code).toBe('OBSERVABILITY_INVALID_QUERY');
   });
 });

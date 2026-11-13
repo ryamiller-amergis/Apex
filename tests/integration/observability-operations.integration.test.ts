@@ -45,8 +45,8 @@ describe('Observability retention and capture health integration', () => {
     await db.execute(sql`
       INSERT INTO trace_events (event_type, occurred_at, trace_id, details)
       VALUES
-        ('api_request', NOW() - INTERVAL '31 days', ${TRACE_EXPIRED}, '{}'::jsonb),
-        ('api_request', NOW() - INTERVAL '30 days' + INTERVAL '1 minute', ${TRACE_BOUNDARY}, '{}'::jsonb),
+        ('api_request', NOW() - INTERVAL '121 days', ${TRACE_EXPIRED}, '{}'::jsonb),
+        ('api_request', NOW() - INTERVAL '120 days' + INTERVAL '1 minute', ${TRACE_BOUNDARY}, '{}'::jsonb),
         ('api_request', NOW() - INTERVAL '1 day', ${TRACE_RECENT}, '{}'::jsonb)
     `);
     await db.insert(tracePathRollups).values({
