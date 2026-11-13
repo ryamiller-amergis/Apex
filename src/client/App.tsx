@@ -60,9 +60,6 @@ const CycleTimeAnalytics = lazy(() => import('./components/CycleTimeAnalytics').
 const DevStats = lazy(() => import('./components/DevStats').then(m => ({ default: m.DevStats })));
 const QAMetrics = lazy(() => import('./components/QAMetrics').then(m => ({ default: m.QAMetrics })));
 const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ default: m.RoadmapView })));
-const BoardReleaseRoadmap = lazy(() =>
-  import('./components/BoardReleaseRoadmap').then((m) => ({ default: m.BoardReleaseRoadmap })),
-);
 const BoardReleaseView = lazy(() =>
   import('./components/BoardReleaseView').then((m) => ({ default: m.BoardReleaseView })),
 );
@@ -1835,11 +1832,14 @@ function App() {
                   ) : planningTab === 'roadmap' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardReleaseRoadmap project={selectedProject} />
-                        ) : (
-                          <RoadmapView workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
+                        <RoadmapView
+                          workItems={workItems}
+                          project={selectedProject}
+                          areaPath={selectedAreaPath}
+                          usesBoardWorkItems={usesBoardWorkItems}
+                          onSelectItem={setSelectedItem}
+                          onUpdateField={handleFieldUpdate}
+                        />
                       </Suspense>
                     </ErrorBoundary>
                   ) : planningTab === 'releases' ? (

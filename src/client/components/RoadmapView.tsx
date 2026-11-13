@@ -1,868 +1,1684 @@
-import React, { useState, useEffect } from 'react';
-import { WorkItem } from '../types/workitem';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  RoadmapItem,
-  TimelineColumn,
+  ROADMAP_CHANGE_REASONS,
+  ROADMAP_HORIZONS,
+  type CreateRoadmapAdhocIdeaInput,
+  type RoadmapChangeEventKind,
+  type RoadmapHorizon,
+  type RoadmapPromoteTarget,
+  type UpdateRoadmapAdhocIdeaInput,
+  type UpsertRoadmapOverlayInput,
+} from '../../shared/types/roadmap';
+import type { WorkItem } from '../types/workitem';
+import {
+  useCreateRoadmapIdea,
+  useDeleteRoadmapIdea,
+  useEpicChildrenMap,
+  useProjectRoadmap,
+  usePromoteRoadmapIdea,
+  useUpdateRoadmapIdea,
+  useUpdateRoadmapSettings,
+  useUpsertRoadmapOverlay,
+} from '../hooks/useProjectRoadmap';
+import {
+  buildWorkbenchItems,
+  calculateRoadmapDriftKpis,
+  computeTimelineBarGeometry,
+  computeTodayMarkerPercent,
+  extractYmdDate,
+  formatShortDate,
   generateMonthlyTimeline,
   generateQuarterlyTimeline,
-  isDateInColumn,
-  calculateCompletionPercentage,
-  calculateSegmentedCounts,
-  calculateHealthStatus,
-  calculateTimeElapsed,
-  calculateDaysRemaining,
   getHealthStatusColor,
-  getHealthStatusLabel
+  getHealthStatusLabel,
+  getHorizonLabel,
+  getOriginLabel,
+  getScheduleSourceLabel,
+  shiftIsoDate,
+  type RoadmapWorkbenchItem,
 } from '../utils/roadmapUtils';
-import './RoadmapView.css';
+import { RoadmapInspectorPanel } from './RoadmapInspectorPanel';
+import { RoadmapNewIdeaModal } from './RoadmapNewIdeaModal';
+import styles from './RoadmapView.module.css';
 
-interface RoadmapViewProps {
+export interface RoadmapViewProps {
   workItems: WorkItem[];
   project: string;
   areaPath: string;
+  usesBoardWorkItems?: boolean;
   onSelectItem?: (workItem: WorkItem) => void;
+  onUpdateField?: (id: number, field: string, value: unknown) => void;
 }
 
+type RoadmapViewMode = 'horizons' | 'timeline' | 'sheet' | 'history';
 type TimelineGranularity = 'monthly' | 'quarterly';
+type TimelineGroupBy = 'hierarchy' | 'horizon' | 'owner' | 'health';
 
-const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath, onSelectItem }) => {
-  const [granularity, setGranularity] = useState<TimelineGranularity>('monthly');
+const STATUS_FILTER_OPTIONS = [
+  'New',
+  'Active',
+  'In Progress',
+  'In Design',
+  'Done',
+  'Closed',
+] as const;
+
+const HORIZON_CAPTIONS: Record<RoadmapHorizon, string> = {
+  now: 'Active execution & immediate focus',
+  next: 'Committed next horizon',
+  later: 'Strategic / >60d horizon',
+  unplanned: 'Undated & awaiting horizon placement',
+};
+
+const EVENT_KIND_LABELS: Record<RoadmapChangeEventKind, string> = {
+  idea_created: 'Idea Created',
+  baseline_locked: 'Baseline Locked',
+  date_changed: 'Target Moved',
+  horizon_changed: 'Horizon Moved',
+  idea_promoted: 'Idea Promoted',
+};
+
+export const RoadmapView: React.FC<RoadmapViewProps> = ({
+  workItems,
+  project,
+  areaPath,
+  usesBoardWorkItems = false,
+  onSelectItem,
+  onUpdateField,
+}) => {
+  const [viewMode, setViewMode] = useState<RoadmapViewMode>('horizons');
+  const [granularity, setGranularity] =
+    useState<TimelineGranularity>('monthly');
   const [timelineMonths, setTimelineMonths] = useState<number>(6);
-  const [roadmapItems, setRoadmapItems] = useState<RoadmapItem[]>([]);
-  const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
-  const [childrenCache, setChildrenCache] = useState<Map<number, WorkItem[]>>(new Map());
-  const [loadingChildren, setLoadingChildren] = useState<Set<number>>(new Set());
+  const [groupBy, setGroupBy] = useState<TimelineGroupBy>('hierarchy');
+  const [showBaselineGhosts, setShowBaselineGhosts] = useState<boolean>(true);
+  const [showAdhocIdeas, setShowAdhocIdeas] = useState<boolean>(true);
   const [showInfoPanel, setShowInfoPanel] = useState<boolean>(false);
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(['New', 'In Progress', 'In Design']));
+  const [isNewIdeaOpen, setIsNewIdeaOpen] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [historySearch, setHistorySearch] = useState<string>('');
+  const [historyReasonFilter, setHistoryReasonFilter] = useState<string>('all');
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(
+    () => new Set(['New', 'Active', 'In Progress', 'In Design']),
+  );
+  const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
+  const [expandedEpicIds, setExpandedEpicIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
-  // Generate timeline columns based on granularity and time range
-  const timelineColumns: TimelineColumn[] = React.useMemo(() => {
+  const epicIdsForFetch = workItems
+    .filter(
+      (wi) => wi.workItemType === 'Epic' && !wi.tags?.includes('ReleaseVersion'),
+    )
+    .map((wi) => wi.id);
+
+  const roadmapQuery = useProjectRoadmap(project);
+  const updateSettingsMutation = useUpdateRoadmapSettings(project);
+  const upsertOverlayMutation = useUpsertRoadmapOverlay(project);
+  const createIdeaMutation = useCreateRoadmapIdea(project);
+  const updateIdeaMutation = useUpdateRoadmapIdea(project);
+  const deleteIdeaMutation = useDeleteRoadmapIdea(project);
+  const promoteIdeaMutation = usePromoteRoadmapIdea(project);
+  const { childrenByEpicId } = useEpicChildrenMap(
+    project,
+    areaPath,
+    epicIdsForFetch,
+    !usesBoardWorkItems,
+  );
+
+  const overlays = useMemo(
+    () => roadmapQuery.data?.overlays ?? [],
+    [roadmapQuery.data?.overlays],
+  );
+  const ideas = useMemo(
+    () => roadmapQuery.data?.ideas ?? [],
+    [roadmapQuery.data?.ideas],
+  );
+  const events = useMemo(
+    () => roadmapQuery.data?.events ?? [],
+    [roadmapQuery.data?.events],
+  );
+  const syncDatesToAdo = roadmapQuery.data?.settings.syncDatesToAdo ?? false;
+
+  const timelineColumns = useMemo(() => {
     const now = new Date();
-    const startDate = new Date(now);
-    startDate.setMonth(startDate.getMonth() - 1); // Start from last month
-    
-    const endDate = new Date(now);
-    endDate.setMonth(endDate.getMonth() + timelineMonths);
-
-    if (granularity === 'quarterly') {
-      return generateQuarterlyTimeline(startDate, endDate);
-    } else {
-      return generateMonthlyTimeline(startDate, endDate);
-    }
+    const startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endDate = new Date(
+      now.getFullYear(),
+      now.getMonth() + timelineMonths,
+      0,
+    );
+    return granularity === 'quarterly'
+      ? generateQuarterlyTimeline(startDate, endDate)
+      : generateMonthlyTimeline(startDate, endDate);
   }, [granularity, timelineMonths]);
 
-  // Fetch children for a roadmap item
-  const fetchChildren = async (item: RoadmapItem) => {
-    if (childrenCache.has(item.id)) {
-      return childrenCache.get(item.id)!;
+  const todayMarkerPct = useMemo(
+    () => computeTodayMarkerPercent(timelineColumns),
+    [timelineColumns],
+  );
+
+  const workbenchItems = useMemo(
+    () =>
+      buildWorkbenchItems({
+        workItems,
+        overlays,
+        ideas,
+        childrenByEpicId,
+        selectedStatuses,
+        showAdhocIdeas,
+        searchQuery,
+        usesBoardWorkItems,
+      }),
+    [
+      childrenByEpicId,
+      ideas,
+      overlays,
+      searchQuery,
+      selectedStatuses,
+      showAdhocIdeas,
+      usesBoardWorkItems,
+      workItems,
+    ],
+  );
+
+  const selectedItem = useMemo(
+    () =>
+      selectedItemKey
+        ? (workbenchItems.find((item) => item.key === selectedItemKey) ?? null)
+        : null,
+    [selectedItemKey, workbenchItems],
+  );
+
+  const itemsByHorizon = useMemo(() => {
+    const grouped: Record<RoadmapHorizon, RoadmapWorkbenchItem[]> = {
+      now: [],
+      next: [],
+      later: [],
+      unplanned: [],
+    };
+    for (const item of workbenchItems) {
+      grouped[item.horizon].push(item);
     }
+    return grouped;
+  }, [workbenchItems]);
 
-    setLoadingChildren(prev => new Set(prev).add(item.id));
+  const datedTimelineItems = useMemo(
+    () => workbenchItems.filter((item) => Boolean(item.effectiveTargetDate)),
+    [workbenchItems],
+  );
 
-    try {
-      const endpoint = item.workItemType === 'Epic' 
-        ? `/api/epics/${item.id}/children`
-        : `/api/features/${item.id}/children`;
+  const unscheduledTimelineItems = useMemo(
+    () => workbenchItems.filter((item) => !item.effectiveTargetDate),
+    [workbenchItems],
+  );
 
-      const response = await fetch(
-        `${endpoint}?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch children for ${item.workItemType} ${item.id}`);
+  const swimlaneGroups = useMemo(() => {
+    if (groupBy === 'hierarchy') {
+      return [{ label: '', items: datedTimelineItems }];
+    }
+    const groupsMap = new Map<string, RoadmapWorkbenchItem[]>();
+    for (const item of datedTimelineItems) {
+      let groupKey: string;
+      if (groupBy === 'horizon') {
+        groupKey = getHorizonLabel(item.horizon);
+      } else if (groupBy === 'owner') {
+        groupKey = item.ownerLabel;
+      } else {
+        groupKey = getHealthStatusLabel(item.healthStatus);
       }
+      const list = groupsMap.get(groupKey) ?? [];
+      list.push(item);
+      groupsMap.set(groupKey, list);
+    }
+    return Array.from(groupsMap.entries()).map(([label, items]) => ({
+      label,
+      items,
+    }));
+  }, [datedTimelineItems, groupBy]);
 
-      const children: WorkItem[] = await response.json();
-      
-      setChildrenCache(prev => new Map(prev).set(item.id, children));
-      setLoadingChildren(prev => {
-        const next = new Set(prev);
-        next.delete(item.id);
-        return next;
-      });
+  const driftKpis = useMemo(
+    () => calculateRoadmapDriftKpis(workbenchItems, events),
+    [events, workbenchItems],
+  );
 
-      // If this is an Epic, also fetch children for all Features to calculate their completion
-      if (item.workItemType === 'Epic') {
-        const features = children.filter(child => child.workItemType === 'Feature');
-        features.forEach(feature => {
-          if (!childrenCache.has(feature.id)) {
-            fetchChildren({
-              id: feature.id,
-              title: feature.title,
-              workItemType: feature.workItemType,
-              targetDate: feature.targetDate || '',
-              assignedTo: feature.assignedTo,
-              state: feature.state,
-              createdDate: feature.createdDate,
-              completionPercentage: 0,
-              childCount: 0,
-              completedCount: 0,
-              greenCount: 0,
-              amberCount: 0,
-              redCount: 0,
-              healthStatus: 'on-track',
-              daysRemaining: 0,
-              timeElapsedPercentage: 0,
-              children: []
-            } as RoadmapItem);
-          }
+  const filteredEvents = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    return events.filter((ev) => {
+      if (historyReasonFilter !== 'all' && ev.reason !== historyReasonFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        ev.itemTitle.toLowerCase().includes(q) ||
+        ev.actorName.toLowerCase().includes(q) ||
+        ev.reason.toLowerCase().includes(q) ||
+        (ev.note ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [events, historyReasonFilter, historySearch]);
+
+  const toggleStatusFilter = useCallback((status: string) => {
+    setSelectedStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) {
+        next.delete(status);
+      } else {
+        next.add(status);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleExpandedEpic = useCallback((epicId: number) => {
+    setExpandedEpicIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(epicId)) {
+        next.delete(epicId);
+      } else {
+        next.add(epicId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSaveOverlay = useCallback(
+    async (workItemId: number, payload: UpsertRoadmapOverlayInput) => {
+      setMutationError(null);
+      try {
+        const result = await upsertOverlayMutation.mutateAsync({
+          workItemId,
+          ...payload,
+          areaPath,
+        });
+        if (
+          result.syncedToAdo &&
+          onUpdateField &&
+          payload.plannedTargetDate !== undefined
+        ) {
+          onUpdateField(workItemId, 'targetDate', payload.plannedTargetDate);
+        }
+      } catch (err) {
+        setMutationError(
+          err instanceof Error ? err.message : 'Failed to save roadmap changes',
+        );
+      }
+    },
+    [areaPath, onUpdateField, upsertOverlayMutation],
+  );
+
+  const handleSaveIdea = useCallback(
+    async (ideaId: string, payload: UpdateRoadmapAdhocIdeaInput) => {
+      setMutationError(null);
+      try {
+        await updateIdeaMutation.mutateAsync({ ideaId, ...payload });
+      } catch (err) {
+        setMutationError(
+          err instanceof Error ? err.message : 'Failed to update idea',
+        );
+      }
+    },
+    [updateIdeaMutation],
+  );
+
+  const handleCreateIdea = useCallback(
+    async (input: CreateRoadmapAdhocIdeaInput) => {
+      setMutationError(null);
+      try {
+        const created = await createIdeaMutation.mutateAsync(input);
+        setIsNewIdeaOpen(false);
+        setSelectedItemKey(`idea-${created.idea.id}`);
+      } catch (err) {
+        setMutationError(
+          err instanceof Error ? err.message : 'Failed to create idea',
+        );
+        throw err;
+      }
+    },
+    [createIdeaMutation],
+  );
+
+  const handlePromoteIdea = useCallback(
+    async (ideaId: string, target: RoadmapPromoteTarget) => {
+      setMutationError(null);
+      try {
+        await promoteIdeaMutation.mutateAsync({
+          ideaId,
+          target,
+          areaPath,
+        });
+      } catch (err) {
+        setMutationError(
+          err instanceof Error ? err.message : 'Failed to promote idea',
+        );
+      }
+    },
+    [areaPath, promoteIdeaMutation],
+  );
+
+  const handleArchiveIdea = useCallback(
+    async (ideaId: string) => {
+      setMutationError(null);
+      try {
+        await deleteIdeaMutation.mutateAsync(ideaId);
+        setSelectedItemKey((prev) =>
+          prev === `idea-${ideaId}` ? null : prev,
+        );
+      } catch (err) {
+        setMutationError(
+          err instanceof Error ? err.message : 'Failed to archive idea',
+        );
+      }
+    },
+    [deleteIdeaMutation],
+  );
+
+  const handleQuickMoveHorizon = useCallback(
+    async (item: RoadmapWorkbenchItem, targetHorizon: RoadmapHorizon) => {
+      if (item.horizon === targetHorizon) return;
+      if (item.kind === 'work-item' && item.workItemId !== undefined) {
+        await handleSaveOverlay(item.workItemId, {
+          workItemType: item.workItemType,
+          horizon: targetHorizon,
+          itemTitle: item.title,
+          itemOrigin: item.origin === 'board' ? 'board' : 'ado',
+          reason: 'Horizon Re-prioritized',
+          note: `Moved from ${getHorizonLabel(item.horizon)} to ${getHorizonLabel(targetHorizon)}`,
+        });
+      } else if (item.kind === 'adhoc-idea' && item.ideaId) {
+        await handleSaveIdea(item.ideaId, {
+          horizon: targetHorizon,
+          reason: 'Horizon Re-prioritized',
+          note: `Moved from ${getHorizonLabel(item.horizon)} to ${getHorizonLabel(targetHorizon)}`,
         });
       }
+    },
+    [handleSaveIdea, handleSaveOverlay],
+  );
 
-      return children;
-    } catch (error) {
-      console.error(`Error fetching children for ${item.workItemType} ${item.id}:`, error);
-      setLoadingChildren(prev => {
-        const next = new Set(prev);
-        next.delete(item.id);
-        return next;
+  const handleQuickShiftDays = useCallback(
+    async (item: RoadmapWorkbenchItem, days: number) => {
+      const nextTarget = shiftIsoDate(item.effectiveTargetDate, { days });
+      const reason = item.baselineTargetDate
+        ? 'Estimate Refined'
+        : 'Initial Baseline';
+      if (item.kind === 'work-item' && item.workItemId !== undefined) {
+        await handleSaveOverlay(item.workItemId, {
+          workItemType: item.workItemType,
+          plannedTargetDate: nextTarget,
+          itemTitle: item.title,
+          itemOrigin: item.origin === 'board' ? 'board' : 'ado',
+          reason,
+          note: `Quick-shifted target date by +${days}d`,
+        });
+      } else if (item.kind === 'adhoc-idea' && item.ideaId) {
+        await handleSaveIdea(item.ideaId, {
+          plannedTargetDate: nextTarget,
+          reason,
+          note: `Quick-shifted target date by +${days}d`,
+        });
+      }
+    },
+    [handleSaveIdea, handleSaveOverlay],
+  );
+
+  const handleToggleAdoSync = useCallback(async () => {
+    setMutationError(null);
+    try {
+      await updateSettingsMutation.mutateAsync({
+        syncDatesToAdo: !syncDatesToAdo,
       });
-      return [];
+    } catch (err) {
+      setMutationError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update Azure DevOps sync preference',
+      );
     }
-  };
+  }, [syncDatesToAdo, updateSettingsMutation]);
 
-  // Prepare roadmap items when work items change
-  useEffect(() => {
-    // Only show Epics with target dates in the main view (exclude ReleaseVersion epics)
-    const epicsWithTargetDates = workItems.filter(item => {
-      const hasTargetDate = !!item.targetDate;
-      const isEpic = item.workItemType === 'Epic';
-      const matchesStatus = selectedStatuses.size === 0 || selectedStatuses.has(item.state);
-      const notReleaseVersion = !item.tags?.includes('ReleaseVersion');
-      
-      return hasTargetDate && isEpic && matchesStatus && notReleaseVersion;
-    });
-
-    const items = epicsWithTargetDates.map(item => {
-      const completionPercentage = 0;
-      const timeElapsedPercentage = calculateTimeElapsed(item.createdDate, item.targetDate!);
-      const daysRemaining = calculateDaysRemaining(item.targetDate!);
-      
-      return {
-        id: item.id,
-        title: item.title,
-        workItemType: item.workItemType,
-        targetDate: item.targetDate!,
-        assignedTo: item.assignedTo,
-        state: item.state,
-        createdDate: item.createdDate,
-        completionPercentage,
-        childCount: 0,
-        completedCount: 0,
-        greenCount: 0,
-        amberCount: 0,
-        redCount: 0,
-        healthStatus: calculateHealthStatus(completionPercentage, timeElapsedPercentage, daysRemaining, 0) as 'on-track' | 'in-progress' | 'behind' | 'ahead',
-        daysRemaining,
-        timeElapsedPercentage,
-        children: []
-      };
-    }).sort((a, b) => new Date(a.targetDate).getTime() - new Date(b.targetDate).getTime());
-    
-    // Update children cache with fresh work item data
-    const updatedCache = new Map(childrenCache);
-    let cacheUpdated = false;
-    
-    updatedCache.forEach((children, parentId) => {
-      const updatedChildren = children.map(cachedChild => {
-        const freshChild = workItems.find(wi => wi.id === cachedChild.id);
-        if (freshChild && (
-          freshChild.targetDate !== cachedChild.targetDate ||
-          freshChild.state !== cachedChild.state ||
-          freshChild.title !== cachedChild.title
-        )) {
-          cacheUpdated = true;
-          return freshChild;
-        }
-        return cachedChild;
-      });
-      updatedCache.set(parentId, updatedChildren);
-    });
-    
-    if (cacheUpdated) {
-      setChildrenCache(updatedCache);
-    }
-    
-    // Immediately apply cached children data to prevent percentage flicker on refresh
-    const itemsWithCachedData = items.map(item => {
-      const children = updatedCache.get(item.id);
-      if (children) {
-        return updateItemWithChildren(item, children);
-      }
-      return item;
-    });
-    
-    setRoadmapItems(itemsWithCachedData);
-    
-    // Fetch children for Epics that don't have cached data
-    items.forEach(item => {
-      if (!updatedCache.has(item.id)) {
-        fetchChildren(item);
-      }
-    });
-  }, [workItems, selectedStatuses]);
-
-  // Update roadmap items with completion data from children
-  useEffect(() => {
-    if (roadmapItems.length === 0) return;
-    
-    const updatedItems = roadmapItems.map((item) => {
-      const children = childrenCache.get(item.id);
-      if (children) {
-        return updateItemWithChildren(item, children);
-      }
-      return item;
-    });
-    
-    // Only update if there's actually a change
-    const hasChanges = updatedItems.some((item, index) => 
-      item.completionPercentage !== roadmapItems[index].completionPercentage ||
-      item.childCount !== roadmapItems[index].childCount
-    );
-    
-    if (hasChanges) {
-      setRoadmapItems(updatedItems);
-    }
-  }, [childrenCache]);
-
-  const updateItemWithChildren = (item: RoadmapItem, children: WorkItem[]): RoadmapItem => {
-    const completionPercentage = calculateCompletionPercentage(children);
-    
-    // Filter out "Removed" items from calculations
-    const activeChildren = children.filter(child => child.state !== 'Removed');
-
-    // Segmented counts (green/amber/red) matching Release tab state classifications
-    const { greenCount, amberCount, redCount } = calculateSegmentedCounts(children);
-
-    const daysRemaining = calculateDaysRemaining(item.targetDate);
-    
-    // Calculate remaining work - count in-progress items as 0.5 remaining since they're already half done
-    const inProgressStates = ['In Progress', 'In Pull Request', 'Ready For Test', 'In Test'];
-    const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-    const inProgressCount = activeChildren.filter(child => inProgressStates.includes(child.state)).length;
-    const notStartedCount = activeChildren.filter(child => 
-      !greenStates.includes(child.state) && !inProgressStates.includes(child.state)
-    ).length;
-    const remainingItems = (inProgressCount * 0.5) + notStartedCount;
-    
-    // Find earliest created date from children or use item's date
-    const createdDates = activeChildren.map(c => new Date(c.createdDate).getTime()).filter(d => !isNaN(d));
-    const earliestCreated = createdDates.length > 0 ? new Date(Math.min(...createdDates)) : new Date(item.targetDate);
-    
-    const actualTimeElapsed = calculateTimeElapsed(earliestCreated.toISOString(), item.targetDate);
-    const healthStatus = calculateHealthStatus(completionPercentage, actualTimeElapsed, daysRemaining, remainingItems);
-
-    return {
-      ...item,
-      completionPercentage,
-      childCount: activeChildren.length,
-      completedCount: greenCount,
-      greenCount,
-      amberCount,
-      redCount,
-      healthStatus,
-      daysRemaining,
-      timeElapsedPercentage: actualTimeElapsed,
-      children
-    };
-  };
-
-  const toggleExpanded = async (itemId: number) => {
-    // First check if it's a top-level roadmap item
-    let item = roadmapItems.find(i => i.id === itemId);
-    
-    // If not found, it might be a Feature child, search through children cache
-    if (!item) {
-      for (const children of childrenCache.values()) {
-        const foundChild = children.find(c => c.id === itemId);
-        if (foundChild) {
-          // Convert WorkItem to RoadmapItem structure for fetchChildren
-          item = {
-            id: foundChild.id,
-            title: foundChild.title,
-            workItemType: foundChild.workItemType,
-            targetDate: foundChild.targetDate || '',
-            assignedTo: foundChild.assignedTo,
-            state: foundChild.state,
-            createdDate: foundChild.createdDate,
-            completionPercentage: 0,
-            childCount: 0,
-            completedCount: 0,
-            greenCount: 0,
-            amberCount: 0,
-            redCount: 0,
-            healthStatus: 'on-track',
-            daysRemaining: 0,
-            timeElapsedPercentage: 0,
-            children: []
-          } as RoadmapItem;
-          break;
-        }
-      }
-    }
-    
-    if (!item) return;
-
-    if (expandedItems.has(itemId)) {
-      setExpandedItems(prev => {
-        const next = new Set(prev);
-        next.delete(itemId);
-        return next;
-      });
-    } else {
-      if (!childrenCache.has(itemId)) {
-        await fetchChildren(item);
-      }
-      setExpandedItems(prev => new Set(prev).add(itemId));
-    }
-  };
-
-  const formatDate = (dateString: string): string => {
-    // Parse as local date to avoid timezone issues
-    const [year, month, day] = dateString.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
-  const unscheduledItems = roadmapItems.filter(item => !item.targetDate || item.targetDate === '');
+  const isMutating =
+    upsertOverlayMutation.isPending ||
+    updateIdeaMutation.isPending ||
+    deleteIdeaMutation.isPending;
 
   return (
-    <div className="roadmap-view">
-      <div className="roadmap-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <h2>Roadmap</h2>
-          <div 
-            className="info-icon"
-            onClick={() => setShowInfoPanel(!showInfoPanel)}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-              <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
-            </svg>
+    <div className={styles.workbench} data-testid="roadmap-workbench">
+      {/* ── Top Header ─────────────────────────────────────────────── */}
+      <div className={styles.topBar}>
+        <div className={styles.titleGroup}>
+          <div className={styles.titleRow}>
+            <h2 className={styles.heading}>Living Roadmap</h2>
+            <span className={styles.projectPill}>{project}</span>
           </div>
+          <p className={styles.subtitle}>
+            Process-agnostic horizon planning, optional Apex target dates with
+            locked baselines, sandbox ideas, and an immutable drift ledger.
+          </p>
         </div>
-        <div className="roadmap-controls">
-          <div className="control-group">
-            <label>Timeline:</label>
-            <select 
-              value={granularity} 
-              onChange={(e) => setGranularity(e.target.value as TimelineGranularity)}
-            >
-              <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
-            </select>
-          </div>
 
-          <div className="control-group">
-            <label>Months Ahead:</label>
-            <select 
-              value={timelineMonths} 
-              onChange={(e) => setTimelineMonths(parseInt(e.target.value))}
+        <div className={styles.headerActions}>
+          {!usesBoardWorkItems && (
+            <button
+              type="button"
+              className={`${styles.togglePill} ${
+                syncDatesToAdo ? styles.togglePillActive : ''
+              }`}
+              aria-pressed={syncDatesToAdo}
+              onClick={() => void handleToggleAdoSync()}
+              disabled={updateSettingsMutation.isPending}
+              data-testid="roadmap-sync-ado-toggle"
+              title="When enabled, Apex planned target date edits also write Microsoft.VSTS.Scheduling.TargetDate and System.History to Azure DevOps"
             >
-              <option value="3">3 Months</option>
-              <option value="6">6 Months</option>
-              <option value="12">12 Months</option>
-            </select>
-          </div>
+              {syncDatesToAdo
+                ? 'ADO TargetDate Sync: ON'
+                : 'ADO TargetDate Sync: OFF'}
+            </button>
+          )}
 
-          <div className="control-group">
-            <label>Status Filter:</label>
-            <div className="status-checkboxes">
-              {['New', 'In Progress', 'In Design', 'Done', 'Removed'].map(status => (
-                <label key={status} className="status-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={selectedStatuses.has(status)}
-                    onChange={(e) => {
-                      const newStatuses = new Set(selectedStatuses);
-                      if (e.target.checked) {
-                        newStatuses.add(status);
-                      } else {
-                        newStatuses.delete(status);
-                      }
-                      setSelectedStatuses(newStatuses);
-                    }}
-                  />
-                  <span>{status}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+          <button
+            type="button"
+            className={styles.infoToggleBtn}
+            aria-expanded={showInfoPanel}
+            onClick={() => setShowInfoPanel((prev) => !prev)}
+            data-testid="roadmap-how-it-works-btn"
+          >
+            How It Works
+          </button>
+
+          <button
+            type="button"
+            className={styles.primaryBtn}
+            onClick={() => setIsNewIdeaOpen(true)}
+            data-testid="roadmap-new-idea-btn"
+          >
+            + New Ad-hoc Idea
+          </button>
         </div>
       </div>
 
       {showInfoPanel && (
-        <div className="roadmap-info-panel">
-          <div className="info-section">
-            <h3>Status Indicators</h3>
-            <div className="status-explanations">
-              <div className="status-item">
-                <span className="status-badge" style={{ backgroundColor: getHealthStatusColor('on-track') }}>On Track</span>
-                <p>Completed work aligns with the timeline. Less than 75% of time has elapsed, or completion percentage is on pace with time elapsed.</p>
-              </div>
-              <div className="status-item">
-                <span className="status-badge" style={{ backgroundColor: getHealthStatusColor('ahead') }}>Ahead</span>
-                <p>Exceptional progress! Completion percentage significantly exceeds time elapsed (more than 20% faster than expected).</p>
-              </div>
-              <div className="status-item">
-                <span className="status-badge" style={{ backgroundColor: getHealthStatusColor('in-progress') }}>In Progress</span>
-                <p>Work is actively happening but pacing slightly behind the ideal timeline. Items in this state are being worked on and have time remaining, but may need attention to stay on schedule.</p>
-              </div>
-              <div className="status-item">
-                <span className="status-badge" style={{ backgroundColor: getHealthStatusColor('behind') }}>Behind</span>
-                <p>Work is overdue. The target date has passed but work is not yet completed.</p>
-              </div>
-            </div>
+        <div className={styles.infoDrawer}>
+          <div className={styles.infoCard}>
+            <h3 className={styles.infoCardTitle}>
+              Zero ADO TargetDate Required
+            </h3>
+            <p className={styles.infoCardText}>
+              Epics without Azure DevOps target dates appear immediately in{' '}
+              <strong>Now / Next / Later / Unplanned</strong> horizons. Dates
+              resolve in 4 tiers: Apex Plan → ADO TargetDate → Inferred Child
+              Dates → Horizon Only.
+            </p>
           </div>
-
-          <div className="info-section">
-            <h3>Percentages</h3>
-            <p>Percentages represent the completion rate of child items within each roadmap item:</p>
-            <ul>
-              <li><strong>Epics:</strong> Features are counted as complete when marked as "Done" or "Closed"</li>
-              <li><strong>Features:</strong> Child items (PBIs/TBIs/Bugs) are counted as complete when marked as "Ready For Release", "UAT - Test Done", "Done", or "Closed"</li>
-              <li><strong>In-Progress Items:</strong> Items actively being worked on count as 50% toward completion</li>
-              <li><strong>Progress Bar:</strong> Visual representation of completion percentage</li>
-            </ul>
+          <div className={styles.infoCard}>
+            <h3 className={styles.infoCardTitle}>
+              Locked Baselines &amp; Slip Ghosts
+            </h3>
+            <p className={styles.infoCardText}>
+              Setting an Apex target date automatically locks the original
+              baseline. Subsequent shifts preserve the baseline ghost bar and
+              record the reason and slip delta in PostgreSQL.
+            </p>
           </div>
-
-          <div className="info-section">
-            <h3>Planning Horizon</h3>
-            <p>Items beyond 60 days in the future are not flagged as "At Risk" even if work hasn't started, following Agile best practices for forward planning.</p>
+          <div className={styles.infoCard}>
+            <h3 className={styles.infoCardTitle}>
+              Sandbox Ideas → Formal Delivery
+            </h3>
+            <p className={styles.infoCardText}>
+              Capture early PO/BA ideas directly on the roadmap instead of side
+              Excel sheets, then promote them into Apex Feature Requests or ADO
+              Epics with full audit history intact.
+            </p>
           </div>
         </div>
       )}
 
-      <div className="roadmap-legend">
+      {mutationError && (
+        <div className={styles.bannerError} role="alert">
+          {mutationError}
+        </div>
+      )}
 
-        <div className="legend-item">
-          <span className="legend-dot" style={{ backgroundColor: getHealthStatusColor('on-track') }}></span>
-          <span>On Track</span>
+      {/* ── Mode Switcher & Search / Idea Filter ───────────────────── */}
+      <div className={styles.modeAndFilterBar}>
+        <div className={styles.modeTabs} role="tablist" aria-label="Roadmap views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'horizons'}
+            className={`${styles.modeTab} ${
+              viewMode === 'horizons' ? styles.modeTabActive : ''
+            }`}
+            onClick={() => setViewMode('horizons')}
+            data-testid="roadmap-mode-horizons"
+          >
+            Horizon Board
+            <span className={styles.modeCount}>{workbenchItems.length}</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'timeline'}
+            className={`${styles.modeTab} ${
+              viewMode === 'timeline' ? styles.modeTabActive : ''
+            }`}
+            onClick={() => setViewMode('timeline')}
+            data-testid="roadmap-mode-timeline"
+          >
+            Living Timeline
+            <span className={styles.modeCount}>
+              {datedTimelineItems.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'sheet'}
+            className={`${styles.modeTab} ${
+              viewMode === 'sheet' ? styles.modeTabActive : ''
+            }`}
+            onClick={() => setViewMode('sheet')}
+            data-testid="roadmap-mode-sheet"
+          >
+            Planning Sheet
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'history'}
+            className={`${styles.modeTab} ${
+              viewMode === 'history' ? styles.modeTabActive : ''
+            }`}
+            onClick={() => setViewMode('history')}
+            data-testid="roadmap-mode-history"
+          >
+            Drift &amp; History
+            <span className={styles.modeCount}>{events.length}</span>
+          </button>
         </div>
-        <div className="legend-item">
-          <span className="legend-dot" style={{ backgroundColor: getHealthStatusColor('ahead') }}></span>
-          <span>Ahead</span>
-        </div>
-        <div className="legend-item">
-          <span className="legend-dot" style={{ backgroundColor: getHealthStatusColor('in-progress') }}></span>
-          <span>In Progress</span>
-        </div>
-        <div className="legend-item">
-          <span className="legend-dot" style={{ backgroundColor: getHealthStatusColor('behind') }}></span>
-          <span>Behind</span>
+
+        <div className={styles.toolbarControls}>
+          <input
+            type="search"
+            aria-label="Search roadmap items"
+            className={styles.searchInput}
+            placeholder="Search epics, owners, or ideas…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            data-testid="roadmap-search-input"
+          />
+
+          <button
+            type="button"
+            className={`${styles.togglePill} ${
+              showAdhocIdeas ? styles.togglePillActive : ''
+            }`}
+            aria-pressed={showAdhocIdeas}
+            onClick={() => setShowAdhocIdeas((prev) => !prev)}
+            data-testid="roadmap-toggle-adhoc"
+          >
+            {showAdhocIdeas ? '✓ Show Ad-hoc Ideas' : 'Show Ad-hoc Ideas'}
+          </button>
         </div>
       </div>
 
-      <div className="roadmap-timeline" style={{ '--timeline-columns': timelineColumns.length } as React.CSSProperties}>
-        <div className="timeline-header">
-          <div className="timeline-label-column">Work Items</div>
-          {timelineColumns.map((column, index) => (
-            <div 
-              key={index} 
-              className={`timeline-column-header ${column.isCurrentPeriod ? 'current-period' : ''}`}
-            >
-              {column.label}
-            </div>
-          ))}
+      {viewMode !== 'history' && (
+        <div className={styles.filterRow}>
+          <div className={styles.statusPills}>
+            <span className={styles.filterLabel}>Epic States:</span>
+            {STATUS_FILTER_OPTIONS.map((status) => {
+              const active = selectedStatuses.has(status);
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  aria-pressed={active}
+                  className={`${styles.statusPill} ${
+                    active ? styles.statusPillSelected : ''
+                  }`}
+                  onClick={() => toggleStatusFilter(status)}
+                  data-testid={`roadmap-status-filter-${status.toLowerCase().replace(/\s+/g, '-')}`}
+                >
+                  {status}
+                </button>
+              );
+            })}
+          </div>
         </div>
+      )}
 
-        <div className="timeline-body">
-          {roadmapItems.map((item) => {
-            const isExpanded = expandedItems.has(item.id);
-            const isLoading = loadingChildren.has(item.id);
-            const children = childrenCache.get(item.id);
+      {/* ── Main Content + Inline Roadmap Inspector Split ──────────── */}
+      <div
+        className={`${styles.workspaceSplit} ${
+          selectedItem ? styles.workspaceSplitWithInspector : ''
+        }`}
+      >
+        <div>
+          {/* ── VIEW 1: HORIZON BOARD ──────────────────────────────── */}
+          {viewMode === 'horizons' && (
+            <div className={styles.horizonGrid}>
+              {ROADMAP_HORIZONS.map((horizon) => {
+                const colItems = itemsByHorizon[horizon];
+                return (
+                  <section
+                    key={horizon}
+                    className={styles.horizonColumn}
+                    aria-label={`${getHorizonLabel(horizon)} horizon`}
+                    data-testid={`roadmap-horizon-col-${horizon}`}
+                  >
+                    <div className={styles.horizonColHeader}>
+                      <div className={styles.horizonTitleGroup}>
+                        <h3 className={styles.horizonName}>
+                          {getHorizonLabel(horizon)}
+                        </h3>
+                        <span className={styles.horizonCaption}>
+                          {HORIZON_CAPTIONS[horizon]}
+                        </span>
+                      </div>
+                      <span className={styles.countBadge}>
+                        {colItems.length}
+                      </span>
+                    </div>
 
-            return (
-              <div key={item.id} className="timeline-row-group">
-                <div className="timeline-row">
-                  <div className="timeline-label-column">
-                    <div className="roadmap-item-label">
-                      <button 
-                        className="expand-button"
-                        onClick={() => toggleExpanded(item.id)}
-                        disabled={isLoading}
-                        style={{ visibility: (children && children.length > 0) || isLoading ? 'visible' : 'hidden' }}
-                      >
-                        {isLoading ? '⏳' : isExpanded ? '▼' : '▶'}
-                      </button>
-                      <span className="work-item-type-badge" data-type={item.workItemType.toLowerCase()}>
-                        {item.workItemType}
-                      </span>
-                      <span 
-                        className="work-item-title clickable" 
-                        onClick={() => {
-                          const workItem = workItems.find(w => w.id === item.id);
-                          if (workItem && onSelectItem) onSelectItem(workItem);
-                        }}
-                        title="Click to view details"
-                      >
-                        {item.title}
-                      </span>
-                      {item.assignedTo && (
-                        <span className="work-item-assignee">({item.assignedTo})</span>
+                    <div className={styles.horizonCardList}>
+                      {colItems.length === 0 ? (
+                        <div className={styles.emptyColumn}>
+                          No items in {getHorizonLabel(horizon)}
+                        </div>
+                      ) : (
+                        colItems.map((item) => {
+                          const isSelected = selectedItem?.key === item.key;
+                          const quickTargets = (
+                            ['now', 'next', 'later'] as RoadmapHorizon[]
+                          ).filter((h) => h !== item.horizon);
+
+                          return (
+                            <article
+                              key={item.key}
+                              className={`${styles.itemCard} ${
+                                isSelected ? styles.itemCardSelected : ''
+                              }`}
+                              data-testid={
+                                item.kind === 'work-item'
+                                  ? `roadmap-card-wi-${item.workItemId}`
+                                  : `roadmap-card-idea-${item.ideaId}`
+                              }
+                            >
+                              <div className={styles.cardTopRow}>
+                                <div className={styles.badgeRow}>
+                                  <span
+                                    className={`${styles.originBadge} ${
+                                      item.origin === 'adhoc'
+                                        ? styles.originAdhoc
+                                        : ''
+                                    }`}
+                                  >
+                                    {getOriginLabel(item.origin)}
+                                    {item.workItemId
+                                      ? ` #${item.workItemId}`
+                                      : ''}
+                                  </span>
+
+                                  {item.isCompleted && (
+                                    <span className={styles.doneBadge}>
+                                      Done
+                                    </span>
+                                  )}
+
+                                  {item.effortSize && (
+                                    <span className={styles.effortBadge}>
+                                      {item.effortSize}
+                                    </span>
+                                  )}
+
+                                  {item.promotedFeatureRequestId && (
+                                    <span className={styles.promotedBadge}>
+                                      Promoted · Feature Request
+                                    </span>
+                                  )}
+
+                                  {item.promotedAdoWorkItemId && (
+                                    <span className={styles.promotedBadge}>
+                                      Promoted · Epic #
+                                      {item.promotedAdoWorkItemId}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                className={styles.cardTitleBtn}
+                                onClick={() => setSelectedItemKey(item.key)}
+                                data-testid={`roadmap-card-title-${item.key}`}
+                              >
+                                {item.title}
+                              </button>
+
+                              <div className={styles.cardMetaRow}>
+                                <span>{item.ownerLabel}</span>
+                                <span>{item.state}</span>
+                              </div>
+
+                              <div className={styles.cardMetaRow}>
+                                <span
+                                  className={`${styles.sourcePill} ${
+                                    item.scheduleSource === 'apex-plan'
+                                      ? styles.sourcePillApex
+                                      : ''
+                                  }`}
+                                >
+                                  {getScheduleSourceLabel(item.scheduleSource)}
+                                  {item.effectiveTargetDate
+                                    ? ` · ${formatShortDate(item.effectiveTargetDate)}`
+                                    : ''}
+                                </span>
+
+                                {item.slipDays !== null && item.slipDays > 0 && (
+                                  <span
+                                    className={`${styles.slipBadge} ${styles.slipLate}`}
+                                  >
+                                    +{item.slipDays}d
+                                  </span>
+                                )}
+                                {item.slipDays === 0 &&
+                                  item.baselineTargetDate && (
+                                    <span
+                                      className={`${styles.slipBadge} ${styles.slipOnTime}`}
+                                    >
+                                      On baseline
+                                    </span>
+                                  )}
+                              </div>
+
+                              {item.kind === 'work-item' &&
+                                item.weightedProgress.totalCount > 0 && (
+                                  <div className={styles.progressWrap}>
+                                    <div
+                                      className={styles.progressTrack}
+                                      role="progressbar"
+                                      aria-valuemin={0}
+                                      aria-valuemax={100}
+                                      aria-valuenow={item.completionPercentage}
+                                      aria-label={`${item.title} weighted progress`}
+                                    >
+                                      <div
+                                        className={styles.segDone}
+                                        style={{
+                                          width: `${item.weightedProgress.donePct}%`,
+                                        }}
+                                        title={`Done: ${item.weightedProgress.doneCount}`}
+                                      />
+                                      <div
+                                        className={styles.segUat}
+                                        style={{
+                                          width: `${item.weightedProgress.uatPct}%`,
+                                        }}
+                                        title={`UAT: ${item.weightedProgress.uatCount}`}
+                                      />
+                                      <div
+                                        className={styles.segInProgress}
+                                        style={{
+                                          width: `${item.weightedProgress.inProgressPct}%`,
+                                        }}
+                                        title={`In Progress: ${item.weightedProgress.inProgressCount}`}
+                                      />
+                                      <div
+                                        className={styles.segTodo}
+                                        style={{
+                                          width: `${item.weightedProgress.todoPct}%`,
+                                        }}
+                                        title={`Todo: ${item.weightedProgress.todoCount}`}
+                                      />
+                                    </div>
+                                    <div className={styles.progressMeta}>
+                                      <span>
+                                        {item.completionPercentage}% weighted
+                                      </span>
+                                      <span>
+                                        {item.weightedProgress.doneCount}/
+                                        {item.weightedProgress.totalCount} done
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+
+                              {item.notes && (
+                                <p className={styles.cardNotesPreview}>
+                                  {item.notes}
+                                </p>
+                              )}
+
+                              <div className={styles.quickActionsRow}>
+                                {quickTargets.slice(0, 2).map((targetH) => (
+                                  <button
+                                    key={targetH}
+                                    type="button"
+                                    className={styles.miniActionBtn}
+                                    disabled={isMutating}
+                                    onClick={() =>
+                                      void handleQuickMoveHorizon(item, targetH)
+                                    }
+                                    data-testid={`roadmap-card-move-${item.key}-${targetH}`}
+                                  >
+                                    → {getHorizonLabel(targetH)}
+                                  </button>
+                                ))}
+                                <button
+                                  type="button"
+                                  className={styles.miniActionBtn}
+                                  onClick={() => setSelectedItemKey(item.key)}
+                                  data-testid={`roadmap-card-inspect-${item.key}`}
+                                >
+                                  Inspect
+                                </button>
+                              </div>
+                            </article>
+                          );
+                        })
+                      )}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── VIEW 2: LIVING TIMELINE (GANTT + GHOSTS + TRAY) ─────── */}
+          {viewMode === 'timeline' && (
+            <div className={styles.timelineShell}>
+              <div className={styles.timelineToolbar}>
+                <div className={styles.inlineControlGroup}>
+                  <label
+                    htmlFor="roadmap-timeline-granularity"
+                    className={styles.controlField}
+                  >
+                    <span>Scale:</span>
+                    <select
+                      id="roadmap-timeline-granularity"
+                      className={styles.selectInput}
+                      value={granularity}
+                      onChange={(e) =>
+                        setGranularity(e.target.value as TimelineGranularity)
+                      }
+                      data-testid="roadmap-timeline-granularity"
+                    >
+                      <option value="monthly">Monthly</option>
+                      <option value="quarterly">Quarterly</option>
+                    </select>
+                  </label>
+
+                  <label
+                    htmlFor="roadmap-timeline-months"
+                    className={styles.controlField}
+                  >
+                    <span>Window:</span>
+                    <select
+                      id="roadmap-timeline-months"
+                      className={styles.selectInput}
+                      value={timelineMonths}
+                      onChange={(e) =>
+                        setTimelineMonths(Number(e.target.value))
+                      }
+                      data-testid="roadmap-timeline-months"
+                    >
+                      <option value={3}>3 Months</option>
+                      <option value={6}>6 Months</option>
+                      <option value={12}>12 Months</option>
+                    </select>
+                  </label>
+
+                  <label
+                    htmlFor="roadmap-timeline-groupby"
+                    className={styles.controlField}
+                  >
+                    <span>Group By:</span>
+                    <select
+                      id="roadmap-timeline-groupby"
+                      className={styles.selectInput}
+                      value={groupBy}
+                      onChange={(e) =>
+                        setGroupBy(e.target.value as TimelineGroupBy)
+                      }
+                      data-testid="roadmap-timeline-groupby"
+                    >
+                      <option value="hierarchy">Hierarchy</option>
+                      <option value="horizon">Horizon</option>
+                      <option value="owner">Owner</option>
+                      <option value="health">Health</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className={styles.inlineControlGroup}>
+                  <button
+                    type="button"
+                    className={`${styles.togglePill} ${
+                      showBaselineGhosts ? styles.togglePillActive : ''
+                    }`}
+                    aria-pressed={showBaselineGhosts}
+                    onClick={() => setShowBaselineGhosts((prev) => !prev)}
+                    data-testid="roadmap-toggle-ghosts"
+                  >
+                    {showBaselineGhosts
+                      ? '✓ Baseline Ghosts'
+                      : 'Baseline Ghosts'}
+                  </button>
+                </div>
+              </div>
+
+              <div
+                className={styles.ganttCard}
+                style={
+                  {
+                    '--col-count': timelineColumns.length,
+                  } as React.CSSProperties
+                }
+              >
+                <div className={styles.ganttMinWidth}>
+                  <div className={styles.ganttHeaderRow}>
+                    <div className={styles.ganttLabelHeader}>
+                      Roadmap Item ({datedTimelineItems.length} scheduled)
+                    </div>
+                    <div className={styles.ganttColumnsHeader}>
+                      {timelineColumns.map((col) => (
+                        <div
+                          key={col.label}
+                          className={`${styles.ganttColCell} ${
+                            col.isCurrentPeriod
+                              ? styles.ganttColCellCurrent
+                              : ''
+                          }`}
+                        >
+                          {col.label}
+                        </div>
+                      ))}
+                      {todayMarkerPct !== null && (
+                        <div
+                          className={styles.todayMarkerTag}
+                          style={{ left: `${todayMarkerPct}%` }}
+                          data-testid="roadmap-today-marker"
+                        >
+                          Today
+                        </div>
                       )}
                     </div>
                   </div>
 
-                  {timelineColumns.map((column, colIndex) => {
-                    const isItemInColumn = isDateInColumn(item.targetDate, column);
-                    
-                    return (
-                      <div key={colIndex} className={`timeline-cell ${column.isCurrentPeriod ? 'current-period' : ''}`}>
-                        {isItemInColumn && (
-                          <div 
-                            className="roadmap-card"
-                            style={{ borderLeftColor: getHealthStatusColor(item.healthStatus) }}
-                          >
-                            <div className="roadmap-card-header">
-                              <span className="target-date">{formatDate(item.targetDate)}</span>
-                              <span 
-                                className="health-badge"
-                                style={{ 
-                                  backgroundColor: getHealthStatusColor(item.healthStatus),
-                                  color: 'white'
-                                }}
-                              >
-                                {getHealthStatusLabel(item.healthStatus)}
-                              </span>
-                            </div>
-                            
-                            <div className="progress-section">
-                              <div className="progress-bar-container">
-                                {item.childCount > 0 && (
-                                  <>
-                                    <div
-                                      className="progress-bar-segment segment-green"
-                                      style={{ width: `${(item.greenCount / item.childCount) * 100}%` }}
-                                      title={`Ready / Done: ${item.greenCount}`}
-                                    ></div>
-                                    <div
-                                      className="progress-bar-segment segment-amber"
-                                      style={{ width: `${(item.amberCount / item.childCount) * 100}%` }}
-                                      title={`UAT Ready for Test: ${item.amberCount}`}
-                                    ></div>
-                                    <div
-                                      className="progress-bar-segment segment-red"
-                                      style={{ width: `${(item.redCount / item.childCount) * 100}%` }}
-                                      title={`Other: ${item.redCount}`}
-                                    ></div>
-                                  </>
-                                )}
-                              </div>
-                              <div className="progress-stats">
-                                <span className="completion-percentage">
-                                  {item.childCount > 0 ? Math.round((item.greenCount / item.childCount) * 100) : 0}%
-                                </span>
-                                <span className="completion-count">
-                                  {item.greenCount}/{item.childCount} items
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="days-remaining">
-                              {item.state === 'Done' || item.state === 'Closed' 
-                                ? 'Completed'
-                                : item.daysRemaining >= 0 
-                                  ? `${item.daysRemaining} days remaining`
-                                  : `${Math.abs(item.daysRemaining)} days overdue`
-                              }
-                            </div>
+                  {datedTimelineItems.length === 0 ? (
+                    <div className={styles.emptyColumn}>
+                      No dated items fall on the timeline yet. Select an Epic or
+                      Idea below in the Unscheduled Backlog Tray to assign a
+                      target date.
+                    </div>
+                  ) : (
+                    swimlaneGroups.map((group) => (
+                      <React.Fragment key={group.label || 'default'}>
+                        {group.label && (
+                          <div className={styles.swimlaneGroupHeader}>
+                            {group.label} ({group.items.length})
                           </div>
                         )}
-                      </div>
-                    );
-                  })}
-                </div>
+                        {group.items.map((item) => {
+                          const barGeometry = computeTimelineBarGeometry(
+                            item.effectiveStartDate,
+                            item.effectiveTargetDate,
+                            timelineColumns,
+                          );
+                          const hasSlippedBaseline =
+                            showBaselineGhosts &&
+                            Boolean(item.baselineTargetDate) &&
+                            item.baselineTargetDate !==
+                              item.effectiveTargetDate;
+                          const ghostGeometry = hasSlippedBaseline
+                            ? computeTimelineBarGeometry(
+                                item.effectiveStartDate,
+                                item.baselineTargetDate,
+                                timelineColumns,
+                              )
+                            : null;
+                          const isExpanded =
+                            item.workItemId !== undefined &&
+                            expandedEpicIds.has(item.workItemId);
+                          const hasChildren = item.children.length > 0;
 
-                {isExpanded && children && (
-                  <div className="timeline-children">
-                    {children.filter(child => selectedStatuses.size === 0 || selectedStatuses.has(child.state)).map(child => {
-                      const isChildExpanded = expandedItems.has(child.id);
-                      const isChildLoading = loadingChildren.has(child.id);
-                      const grandChildren = childrenCache.get(child.id);
-                      const isFeature = child.workItemType === 'Feature';
+                          return (
+                            <React.Fragment key={item.key}>
+                              <div
+                                className={styles.ganttRow}
+                                data-testid={`roadmap-timeline-row-${item.key}`}
+                              >
+                                <div className={styles.ganttRowLabel}>
+                                  {groupBy === 'hierarchy' &&
+                                  item.workItemId !== undefined &&
+                                  hasChildren ? (
+                                    <button
+                                      type="button"
+                                      className={styles.expandBtn}
+                                      aria-expanded={isExpanded}
+                                      aria-label={`Toggle children for ${item.title}`}
+                                      onClick={() =>
+                                        toggleExpandedEpic(item.workItemId!)
+                                      }
+                                      data-testid={`roadmap-timeline-expand-${item.key}`}
+                                    >
+                                      {isExpanded ? '▼' : '▶'}
+                                    </button>
+                                  ) : (
+                                    <span className={styles.expandSpacer} />
+                                  )}
 
-                      return (
-                        <React.Fragment key={child.id}>
-                          <div className="timeline-row child-row">
-                            <div className="timeline-label-column">
-                              <div className="roadmap-item-label child-label">
-                                <span className="child-indent">└─</span>
-                                {isFeature && (
-                                  <button 
-                                    className="expand-button"
-                                    onClick={() => toggleExpanded(child.id)}
-                                    disabled={isChildLoading}
-                                  >
-                                    {isChildLoading ? '⏳' : isChildExpanded ? '▼' : '▶'}
-                                  </button>
-                                )}
-                                <span className="work-item-type-badge small" data-type={child.workItemType.toLowerCase()}>
-                                  {child.workItemType === 'Product Backlog Item' ? 'PBI' : 
-                                   child.workItemType === 'Technical Backlog Item' ? 'TBI' : 
-                                   child.workItemType === 'Feature' ? 'Feature' :
-                                   child.workItemType === 'Bug' ? 'Bug' :
-                                   child.workItemType}
-                                </span>
-                                <span 
-                                  className="work-item-title clickable" 
-                                  onClick={() => onSelectItem && onSelectItem(child)}
-                                  title="Click to view details"
-                                >
-                                  {child.title}
-                                </span>
-                                {child.assignedTo && (
-                                  <span className="work-item-assignee">({child.assignedTo})</span>
-                                )}
-                                <span className="work-item-state" data-state={child.state.toLowerCase().replace(/\s+/g, '-')}>
-                                  {child.state}
-                                </span>
-                                {isFeature && grandChildren && (
-                                  <div className="feature-progress-inline">
-                                    <span className="feature-completion-text">
-                                      {(() => {
-                                        // Filter out "Removed" items from percentage calculation
-                                        const activeGrandChildren = grandChildren.filter(gc => gc.state !== 'Removed');
-                                        const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                        const completedCount = activeGrandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                        const percentage = activeGrandChildren.length > 0 ? Math.round((completedCount / activeGrandChildren.length) * 100) : 0;
-                                        return `${percentage}% (${completedCount}/${activeGrandChildren.length})`;
-                                      })()}
+                                  <div className={styles.ganttTitleBlock}>
+                                    <button
+                                      type="button"
+                                      className={styles.ganttTitleBtn}
+                                      onClick={() =>
+                                        setSelectedItemKey(item.key)
+                                      }
+                                      title={item.title}
+                                      data-testid={`roadmap-timeline-title-${item.key}`}
+                                    >
+                                      {item.title}
+                                    </button>
+                                    <span className={styles.ganttSubMeta}>
+                                      {getOriginLabel(item.origin)} ·{' '}
+                                      {getHorizonLabel(item.horizon)} ·{' '}
+                                      {item.ownerLabel}
                                     </span>
                                   </div>
-                                )}
-                              </div>
-                            </div>
-                            {timelineColumns.map((column, colIndex) => {
-                              const isFeatureInColumn = child.targetDate && isDateInColumn(child.targetDate, column);
-                              
-                              return (
-                                <div key={colIndex} className={`timeline-cell ${column.isCurrentPeriod ? 'current-period' : ''}`}>
-                                  {isFeature && isFeatureInColumn && (
-                                    <div 
-                                      className="roadmap-card feature-card"
-                                      style={{ 
-                                        borderLeftColor: (() => {
-                                          if (!grandChildren || grandChildren.length === 0) {
-                                            const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                            const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                            const healthStatus = calculateHealthStatus(0, timeElapsed, daysRemaining);
-                                            return getHealthStatusColor(healthStatus);
-                                          }
-                                          const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                          const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                          const percentage = grandChildren.length > 0 ? Math.round((completedCount / grandChildren.length) * 100) : 0;
-                                          const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                          const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                          const healthStatus = calculateHealthStatus(percentage, timeElapsed, daysRemaining);
-                                          return getHealthStatusColor(healthStatus);
-                                        })()
-                                      }}
-                                    >
-                                      <div className="roadmap-card-header">
-                                        <span className="target-date">{child.targetDate ? formatDate(child.targetDate) : ''}</span>
-                                        <span 
-                                          className="health-badge"
-                                          style={{ 
-                                            backgroundColor: (() => {
-                                              if (!grandChildren || grandChildren.length === 0) {
-                                                const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                                const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                                const healthStatus = calculateHealthStatus(0, timeElapsed, daysRemaining);
-                                                return getHealthStatusColor(healthStatus);
-                                              }
-                                              const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                              const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                              const percentage = grandChildren.length > 0 ? Math.round((completedCount / grandChildren.length) * 100) : 0;
-                                              const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                              const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                              const healthStatus = calculateHealthStatus(percentage, timeElapsed, daysRemaining);
-                                              return getHealthStatusColor(healthStatus);
-                                            })(),
-                                            color: 'white'
-                                          }}
-                                        >
-                                          {(() => {
-                                            if (!grandChildren || grandChildren.length === 0) {
-                                              const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                              const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                              const healthStatus = calculateHealthStatus(0, timeElapsed, daysRemaining);
-                                              return getHealthStatusLabel(healthStatus);
-                                            }
-                                            const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                            const completedCount = grandChildren.filter(gc => completedStates.includes(gc.state)).length;
-                                            const percentage = grandChildren.length > 0 ? Math.round((completedCount / grandChildren.length) * 100) : 0;
-                                            const daysRemaining = calculateDaysRemaining(child.targetDate!);
-                                            const timeElapsed = calculateTimeElapsed(child.createdDate, child.targetDate!);
-                                            const healthStatus = calculateHealthStatus(percentage, timeElapsed, daysRemaining);
-                                            return getHealthStatusLabel(healthStatus);
-                                          })()}
-                                        </span>
-                                      </div>
-                                      
-                                      {(() => {
-                                        const activeGC = grandChildren
-                                          ? grandChildren.filter(gc => gc.state !== 'Removed')
-                                          : [];
-                                        const gcGreenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-                                        const gcAmberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
-                                        const gcGreen = activeGC.filter(gc => gcGreenStates.includes(gc.state)).length;
-                                        const gcAmber = activeGC.filter(gc => gcAmberStates.includes(gc.state)).length;
-                                        const gcRed = activeGC.length - gcGreen - gcAmber;
-                                        const gcTotal = activeGC.length;
-                                        const gcGreenPct = gcTotal > 0 ? Math.round((gcGreen / gcTotal) * 100) : 0;
-                                        return (
-                                          <div className="progress-section">
-                                            <div className="progress-bar-container">
-                                              {gcTotal > 0 && (
-                                                <>
-                                                  <div
-                                                    className="progress-bar-segment segment-green"
-                                                    style={{ width: `${(gcGreen / gcTotal) * 100}%` }}
-                                                    title={`Ready / Done: ${gcGreen}`}
-                                                  ></div>
-                                                  <div
-                                                    className="progress-bar-segment segment-amber"
-                                                    style={{ width: `${(gcAmber / gcTotal) * 100}%` }}
-                                                    title={`UAT Ready for Test: ${gcAmber}`}
-                                                  ></div>
-                                                  <div
-                                                    className="progress-bar-segment segment-red"
-                                                    style={{ width: `${(gcRed / gcTotal) * 100}%` }}
-                                                    title={`Other: ${gcRed}`}
-                                                  ></div>
-                                                </>
-                                              )}
-                                            </div>
-                                            <div className="progress-stats">
-                                              <span className="completion-percentage">{gcGreenPct}%</span>
-                                              <span className="completion-count">{gcGreen}/{gcTotal} items</span>
-                                            </div>
-                                          </div>
-                                        );
-                                      })()}
+                                </div>
 
-                                      <div className="days-remaining">
-                                        {child.state === 'Done' || child.state === 'Closed' 
-                                          ? 'Completed'
-                                          : child.targetDate && (() => {
-                                              const daysRemaining = calculateDaysRemaining(child.targetDate);
-                                              return daysRemaining >= 0 
-                                                ? `${daysRemaining} days remaining`
-                                                : `${Math.abs(daysRemaining)} days overdue`;
-                                            })()
-                                        }
-                                      </div>
-                                    </div>
+                                <div className={styles.ganttTrack}>
+                                  {timelineColumns.map((col) => (
+                                    <div
+                                      key={col.label}
+                                      className={`${styles.ganttGridBgCell} ${
+                                        col.isCurrentPeriod
+                                          ? styles.ganttGridBgCellCurrent
+                                          : ''
+                                      }`}
+                                    />
+                                  ))}
+
+                                  {todayMarkerPct !== null && (
+                                    <div
+                                      className={styles.todayMarkerLine}
+                                      style={{ left: `${todayMarkerPct}%` }}
+                                    />
+                                  )}
+
+                                  {ghostGeometry && (
+                                    <div
+                                      className={styles.baselineGhostBar}
+                                      style={{
+                                        left: `${ghostGeometry.leftPct}%`,
+                                        width: `${ghostGeometry.widthPct}%`,
+                                      }}
+                                      title={`Original Baseline: ${formatShortDate(item.baselineTargetDate)}`}
+                                      data-testid="roadmap-baseline-ghost"
+                                    />
+                                  )}
+
+                                  {barGeometry && (
+                                    <button
+                                      type="button"
+                                      className={`${styles.spanBarBtn} ${
+                                        !ghostGeometry
+                                          ? styles.spanBarCentered
+                                          : ''
+                                      }`}
+                                      style={{
+                                        left: `${barGeometry.leftPct}%`,
+                                        width: `${barGeometry.widthPct}%`,
+                                        borderColor: getHealthStatusColor(
+                                          item.healthStatus,
+                                        ),
+                                      }}
+                                      onClick={() =>
+                                        setSelectedItemKey(item.key)
+                                      }
+                                      title={`${item.title} → ${formatShortDate(item.effectiveTargetDate)}`}
+                                      data-testid={`roadmap-timeline-bar-${item.key}`}
+                                    >
+                                      <span>
+                                        {formatShortDate(
+                                          item.effectiveTargetDate,
+                                        )}
+                                      </span>
+                                      {item.slipDays !== null &&
+                                        item.slipDays > 0 && (
+                                          <span
+                                            className={`${styles.slipBadge} ${styles.slipLate}`}
+                                          >
+                                            +{item.slipDays}d
+                                          </span>
+                                        )}
+                                    </button>
                                   )}
                                 </div>
-                              );
-                            })}
-                          </div>
-                          
-                          {isFeature && isChildExpanded && grandChildren && (
-                            <div className="timeline-children nested">
-                              {grandChildren.map(grandChild => {
-                                const isPBIorTBI = grandChild.workItemType === 'Product Backlog Item' || 
-                                                    grandChild.workItemType === 'Technical Backlog Item' ||
-                                                    grandChild.workItemType === 'Bug';
-                                
-                                return (
-                                  <div key={grandChild.id} className="timeline-row child-row nested-child">
-                                    <div className="timeline-label-column">
-                                      <div className="roadmap-item-label child-label">
-                                        <span className="child-indent">  └─</span>
-                                        <span className="work-item-type-badge small" data-type={grandChild.workItemType.toLowerCase()}>
-                                          {grandChild.workItemType === 'Product Backlog Item' ? 'PBI' : 
-                                           grandChild.workItemType === 'Technical Backlog Item' ? 'TBI' : 
-                                           grandChild.workItemType === 'Bug' ? 'Bug' :
-                                           grandChild.workItemType}
+                              </div>
+
+                              {groupBy === 'hierarchy' &&
+                                isExpanded &&
+                                item.children.map((child) => {
+                                  const childDate =
+                                    extractYmdDate(child.targetDate) ??
+                                    extractYmdDate(child.dueDate);
+                                  const childGeom = computeTimelineBarGeometry(
+                                    extractYmdDate(child.createdDate) ??
+                                      childDate,
+                                    childDate,
+                                    timelineColumns,
+                                  );
+
+                                  return (
+                                    <div
+                                      key={`child-${child.id}`}
+                                      className={`${styles.ganttRow} ${styles.ganttChildRow}`}
+                                    >
+                                      <div className={styles.ganttRowLabel}>
+                                        <span className={styles.expandSpacer}>
+                                          └
                                         </span>
-                                        <span 
-                                          className="work-item-title clickable" 
-                                          onClick={() => onSelectItem && onSelectItem(grandChild)}
-                                          title="Click to view details"
-                                        >
-                                          {grandChild.title}
-                                        </span>
-                                        {grandChild.assignedTo && (
-                                          <span className="work-item-assignee">({grandChild.assignedTo})</span>
+                                        <div className={styles.ganttTitleBlock}>
+                                          <button
+                                            type="button"
+                                            className={styles.ganttTitleBtn}
+                                            onClick={() =>
+                                              onSelectItem?.(child)
+                                            }
+                                            data-testid={`roadmap-timeline-child-title-${child.id}`}
+                                          >
+                                            {child.title}
+                                          </button>
+                                          <span className={styles.ganttSubMeta}>
+                                            {child.workItemType} · {child.state}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      <div className={styles.ganttTrack}>
+                                        {timelineColumns.map((col) => (
+                                          <div
+                                            key={col.label}
+                                            className={`${styles.ganttGridBgCell} ${
+                                              col.isCurrentPeriod
+                                                ? styles.ganttGridBgCellCurrent
+                                                : ''
+                                            }`}
+                                          />
+                                        ))}
+                                        {todayMarkerPct !== null && (
+                                          <div
+                                            className={styles.todayMarkerLine}
+                                            style={{
+                                              left: `${todayMarkerPct}%`,
+                                            }}
+                                          />
                                         )}
-                                        <span className="work-item-state" data-state={grandChild.state.toLowerCase().replace(/\s+/g, '-')}>
-                                          {grandChild.state}
-                                        </span>
+                                        {childGeom && (
+                                          <button
+                                            type="button"
+                                            className={`${styles.spanBarBtn} ${styles.spanBarChild}`}
+                                            style={{
+                                              left: `${childGeom.leftPct}%`,
+                                              width: `${childGeom.widthPct}%`,
+                                            }}
+                                            onClick={() =>
+                                              onSelectItem?.(child)
+                                            }
+                                            data-testid={`roadmap-timeline-child-bar-${child.id}`}
+                                          >
+                                            <span>
+                                              {formatShortDate(childDate)}
+                                            </span>
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
-                                    {timelineColumns.map((column, colIndex) => {
-                                      // For PBI/TBI, check dueDate; for Bug, check targetDate
-                                      const isPBIorTBIType = grandChild.workItemType === 'Product Backlog Item' || 
-                                                              grandChild.workItemType === 'Technical Backlog Item';
-                                      const dateToCheck = isPBIorTBIType ? grandChild.dueDate : grandChild.targetDate;
-                                      const isItemInColumn = dateToCheck && isDateInColumn(dateToCheck, column);
-                                      
-                                      return (
-                                        <div key={colIndex} className={`timeline-cell ${column.isCurrentPeriod ? 'current-period' : ''}`}>
-                                          {isPBIorTBI && isItemInColumn && (
-                                            <div 
-                                              className="roadmap-card pbi-card"
-                                              style={{ 
-                                                borderLeftColor: (() => {
-                                                  const completedStates = ['UAT - Test Done', 'Done', 'Closed'];
-                                                  const isCompleted = completedStates.includes(grandChild.state);
-                                                  const percentage = isCompleted ? 100 : 0;
-                                                  const daysRemaining = calculateDaysRemaining(dateToCheck!);
-                                                  const timeElapsed = calculateTimeElapsed(grandChild.createdDate, dateToCheck!);
-                                                  const healthStatus = calculateHealthStatus(percentage, timeElapsed, daysRemaining);
-                                                  return getHealthStatusColor(healthStatus);
-                                                })()
-                                              }}
-                                            >
-                                              <div className="roadmap-card-header">
-                                                <span className="target-date">{formatDate(dateToCheck)}</span>
-                                              </div>
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
+                                  );
+                                })}
+                            </React.Fragment>
+                          );
+                        })}
+                      </React.Fragment>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* ── Unscheduled Backlog Tray ────────────────────────── */}
+              <section
+                className={styles.unscheduledTray}
+                aria-label="Unscheduled Backlog Tray"
+                data-testid="roadmap-unscheduled-tray"
+              >
+                <div className={styles.trayHeader}>
+                  <h3 className={styles.trayTitle}>
+                    Unscheduled Backlog Tray ({unscheduledTimelineItems.length})
+                  </h3>
+                  <span className={styles.subtitle}>
+                    Undated Epics &amp; Draft Ideas tracked by horizon — inspect
+                    any item to lock a planned target date
+                  </span>
+                </div>
+
+                {unscheduledTimelineItems.length === 0 ? (
+                  <div className={styles.infoCardText}>
+                    Every visible roadmap item currently has an effective target
+                    date.
+                  </div>
+                ) : (
+                  <div className={styles.trayGrid}>
+                    {unscheduledTimelineItems.map((item) => (
+                      <div key={item.key} className={styles.trayCard}>
+                        <div className={styles.ganttTitleBlock}>
+                          <button
+                            type="button"
+                            className={styles.ganttTitleBtn}
+                            onClick={() => setSelectedItemKey(item.key)}
+                            data-testid={`roadmap-tray-title-${item.key}`}
+                          >
+                            {item.title}
+                          </button>
+                          <span className={styles.ganttSubMeta}>
+                            {getOriginLabel(item.origin)} ·{' '}
+                            {getHorizonLabel(item.horizon)} · {item.ownerLabel}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className={styles.miniActionBtn}
+                          onClick={() => setSelectedItemKey(item.key)}
+                          data-testid={`roadmap-tray-schedule-${item.key}`}
+                        >
+                          Schedule
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
+              </section>
+            </div>
+          )}
+
+          {/* ── VIEW 3: PLANNING SHEET (EXCEL-STYLE GRID) ───────────── */}
+          {viewMode === 'sheet' && (
+            <div className={styles.tableCard}>
+              <table
+                className={styles.sheetTable}
+                data-testid="roadmap-sheet-table"
+              >
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Origin</th>
+                    <th>Horizon</th>
+                    <th>Schedule Source</th>
+                    <th>Owner</th>
+                    <th>Progress / Size</th>
+                    <th>Baseline Date</th>
+                    <th>Current Target</th>
+                    <th>Slip</th>
+                    <th>Quick Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workbenchItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={10}>
+                        No roadmap items match the active filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    workbenchItems.map((item) => {
+                      const isSelected = selectedItem?.key === item.key;
+                      return (
+                        <tr
+                          key={item.key}
+                          className={isSelected ? styles.sheetRowSelected : ''}
+                        >
+                          <td>
+                            <div className={styles.badgeRow}>
+                              <button
+                                type="button"
+                                className={styles.cardTitleBtn}
+                                onClick={() => setSelectedItemKey(item.key)}
+                                data-testid={`roadmap-sheet-title-${item.key}`}
+                              >
+                                {item.title}
+                              </button>
+                              {item.promotedFeatureRequestId && (
+                                <span className={styles.promotedBadge}>
+                                  Promoted
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              className={`${styles.originBadge} ${
+                                item.origin === 'adhoc'
+                                  ? styles.originAdhoc
+                                  : ''
+                              }`}
+                            >
+                              {getOriginLabel(item.origin)}
+                              {item.workItemId ? ` #${item.workItemId}` : ''}
+                            </span>
+                          </td>
+                          <td>{getHorizonLabel(item.horizon)}</td>
+                          <td>
+                            <span className={styles.sourcePill}>
+                              {getScheduleSourceLabel(item.scheduleSource)}
+                            </span>
+                          </td>
+                          <td>{item.ownerLabel}</td>
+                          <td>
+                            {item.kind === 'adhoc-idea'
+                              ? `Effort: ${item.effortSize ?? 'M'} (${item.confidence ?? 'low'})`
+                              : item.weightedProgress.totalCount > 0
+                                ? `${item.completionPercentage}% (${item.weightedProgress.doneCount}/${item.weightedProgress.totalCount})`
+                                : item.state}
+                          </td>
+                          <td>{formatShortDate(item.baselineTargetDate)}</td>
+                          <td>{formatShortDate(item.effectiveTargetDate)}</td>
+                          <td>
+                            {item.slipDays !== null && item.slipDays > 0 ? (
+                              <span
+                                className={`${styles.slipBadge} ${styles.slipLate}`}
+                              >
+                                +{item.slipDays}d
+                              </span>
+                            ) : item.slipDays === 0 &&
+                              item.baselineTargetDate ? (
+                              <span
+                                className={`${styles.slipBadge} ${styles.slipOnTime}`}
+                              >
+                                0d
+                              </span>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td>
+                            <div className={styles.badgeRow}>
+                              <button
+                                type="button"
+                                className={styles.miniActionBtn}
+                                disabled={isMutating}
+                                onClick={() =>
+                                  void handleQuickShiftDays(item, 7)
+                                }
+                                data-testid={`roadmap-sheet-shift-1w-${item.key}`}
+                              >
+                                +1w
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.miniActionBtn}
+                                disabled={isMutating}
+                                onClick={() =>
+                                  void handleQuickShiftDays(item, 14)
+                                }
+                                data-testid={`roadmap-sheet-shift-2w-${item.key}`}
+                              >
+                                +2w
+                              </button>
+                              {item.horizon !== 'now' && (
+                                <button
+                                  type="button"
+                                  className={styles.miniActionBtn}
+                                  disabled={isMutating}
+                                  onClick={() =>
+                                    void handleQuickMoveHorizon(item, 'now')
+                                  }
+                                  data-testid={`roadmap-sheet-move-now-${item.key}`}
+                                >
+                                  → Now
+                                </button>
+                              )}
+                              {item.kind === 'adhoc-idea' &&
+                                item.ideaId &&
+                                !item.promotedFeatureRequestId && (
+                                  <button
+                                    type="button"
+                                    className={styles.miniActionBtn}
+                                    disabled={promoteIdeaMutation.isPending}
+                                    onClick={() =>
+                                      void handlePromoteIdea(
+                                        item.ideaId!,
+                                        'feature-request',
+                                      )
+                                    }
+                                    data-testid={`roadmap-sheet-promote-${item.key}`}
+                                  >
+                                    Promote
+                                  </button>
+                                )}
+                              <button
+                                type="button"
+                                className={styles.miniActionBtn}
+                                onClick={() => setSelectedItemKey(item.key)}
+                                data-testid={`roadmap-sheet-inspect-${item.key}`}
+                              >
+                                Inspect
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── VIEW 4: DRIFT & HISTORY LEDGER ──────────────────────── */}
+          {viewMode === 'history' && (
+            <div className={styles.ledgerShell}>
+              <div
+                className={styles.kpiStrip}
+                data-testid="roadmap-history-kpis"
+              >
+                <div className={styles.kpiCard}>
+                  <span className={styles.kpiLabel}>Active Now / Next</span>
+                  <span className={styles.kpiValue}>
+                    {driftKpis.activeNowNextCount}
+                  </span>
+                  <span className={styles.kpiSub}>
+                    Committed active &amp; next-horizon items
+                  </span>
+                </div>
+
+                <div className={styles.kpiCard}>
+                  <span className={styles.kpiLabel}>Baseline Adherence</span>
+                  <span className={styles.kpiValue}>
+                    {driftKpis.baselineAdherencePct}%
+                  </span>
+                  <span className={styles.kpiSub}>
+                    Dated items holding original baseline
+                  </span>
+                </div>
+
+                <div className={styles.kpiCard}>
+                  <span className={styles.kpiLabel}>Avg Slip Days</span>
+                  <span className={styles.kpiValue}>
+                    {driftKpis.avgSlipDays}d
+                  </span>
+                  <span className={styles.kpiSub}>
+                    Mean slip across delayed baseline items
+                  </span>
+                </div>
+
+                <div className={styles.kpiCard}>
+                  <span className={styles.kpiLabel}>Audited Moves</span>
+                  <span className={styles.kpiValue}>
+                    {driftKpis.auditedMovesCount}
+                  </span>
+                  <span className={styles.kpiSub}>
+                    Immutable PostgreSQL ledger entries
+                  </span>
+                </div>
               </div>
-            );
-          })}
+
+              <div className={styles.timelineToolbar}>
+                <div className={styles.inlineControlGroup}>
+                  <input
+                    type="search"
+                    aria-label="Search history ledger"
+                    className={styles.searchInput}
+                    placeholder="Filter history by item, actor, or note…"
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    data-testid="roadmap-history-search"
+                  />
+
+                  <label
+                    htmlFor="roadmap-history-reason"
+                    className={styles.controlField}
+                  >
+                    <span>Reason:</span>
+                    <select
+                      id="roadmap-history-reason"
+                      className={styles.selectInput}
+                      value={historyReasonFilter}
+                      onChange={(e) => setHistoryReasonFilter(e.target.value)}
+                      data-testid="roadmap-history-reason-filter"
+                    >
+                      <option value="all">All Reasons</option>
+                      {ROADMAP_CHANGE_REASONS.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className={styles.tableCard}>
+                <table
+                  className={styles.sheetTable}
+                  data-testid="roadmap-history-table"
+                >
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>Item</th>
+                      <th>Origin</th>
+                      <th>Event</th>
+                      <th>Change</th>
+                      <th>Delta</th>
+                      <th>Reason</th>
+                      <th>Note</th>
+                      <th>Actor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredEvents.length === 0 ? (
+                      <tr>
+                        <td colSpan={9}>
+                          No roadmap history events match the current filter.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredEvents.map((ev) => (
+                        <tr key={ev.id} data-event-kind={ev.eventKind}>
+                          <td>
+                            {new Date(ev.createdAt).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })}
+                          </td>
+                          <td>
+                            <strong>{ev.itemTitle}</strong>
+                          </td>
+                          <td>{getOriginLabel(ev.itemOrigin)}</td>
+                          <td>
+                            <span className={styles.sourcePill}>
+                              {EVENT_KIND_LABELS[ev.eventKind]} ({ev.eventKind})
+                            </span>
+                          </td>
+                          <td>
+                            {ev.eventKind === 'horizon_changed' &&
+                              `${ev.fromHorizon ?? 'auto'} → ${ev.toHorizon ?? 'auto'}`}
+                            {ev.eventKind === 'baseline_locked' &&
+                              `Baseline → ${formatShortDate(ev.newTargetDate)}`}
+                            {ev.eventKind === 'date_changed' &&
+                              `${formatShortDate(ev.oldTargetDate)} → ${formatShortDate(ev.newTargetDate)}`}
+                            {ev.eventKind === 'idea_created' &&
+                              `Created in ${ev.toHorizon ?? 'later'}${
+                                ev.newTargetDate
+                                  ? ` (${formatShortDate(ev.newTargetDate)})`
+                                  : ''
+                              }`}
+                            {ev.eventKind === 'idea_promoted' &&
+                              'Promoted from Draft Idea'}
+                          </td>
+                          <td>
+                            {ev.deltaDays !== null && ev.deltaDays > 0 ? (
+                              <span
+                                className={`${styles.slipBadge} ${styles.slipLate}`}
+                              >
+                                +{ev.deltaDays}d
+                              </span>
+                            ) : ev.deltaDays !== null ? (
+                              `${ev.deltaDays}d`
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          <td>{ev.reason}</td>
+                          <td>{ev.note ?? '—'}</td>
+                          <td>{ev.actorName}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* ── Inline Roadmap Inspector ──────────────────────────────── */}
+        {selectedItem && (
+          // data-testid-exempt — RoadmapInspectorPanel owns data-testid="roadmap-inspector"
+          <RoadmapInspectorPanel
+            key={`${selectedItem.key}-${selectedItem.effectiveTargetDate ?? ''}-${selectedItem.horizon}-${selectedItem.promotedFeatureRequestId ?? ''}`}
+            item={selectedItem}
+            events={events}
+            isSaving={isMutating}
+            isPromoting={promoteIdeaMutation.isPending}
+            usesBoardWorkItems={usesBoardWorkItems}
+            errorMessage={mutationError}
+            onClose={() => setSelectedItemKey(null)}
+            onSaveOverlay={handleSaveOverlay}
+            onSaveIdea={handleSaveIdea}
+            onPromoteIdea={handlePromoteIdea}
+            onArchiveIdea={handleArchiveIdea}
+            onOpenWorkItemDetails={onSelectItem}
+          />
+        )}
       </div>
 
-      {unscheduledItems.length > 0 && (
-        <div className="unscheduled-section">
-          <h3>Unscheduled Items</h3>
-          <div className="unscheduled-list">
-            {unscheduledItems.map(item => (
-              <div key={item.id} className="unscheduled-item">
-                <span className="work-item-type-badge" data-type={item.workItemType.toLowerCase()}>
-                  {item.workItemType}
-                </span>
-                <span className="work-item-title">{item.title}</span>
-                {item.assignedTo && (
-                  <span className="work-item-assignee">({item.assignedTo})</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ── New Ad-hoc Idea Modal ───────────────────────────────────── */}
+      {/* data-testid-exempt — RoadmapNewIdeaModal owns data-testid="roadmap-new-idea-modal" */}
+      <RoadmapNewIdeaModal
+        isOpen={isNewIdeaOpen}
+        isSubmitting={createIdeaMutation.isPending}
+        errorMessage={mutationError}
+        onClose={() => setIsNewIdeaOpen(false)}
+        onCreate={handleCreateIdea}
+      />
     </div>
   );
 };
-
-export { RoadmapView };
-
-
