@@ -1420,7 +1420,7 @@ async function defaultLoadLinkedContext(
   input: Readonly<{ threadId: string; userId: string }>,
 ): Promise<string | null> {
   // Dynamic import: the materializer reaches designModuleService, which imports
-  // chatAgentService, which imports this module.
+  // the legacy chat service, which imports this module.
   const { renderLinkedContextForInterviewThread } = await import(
     './linkedContextMaterializerService'
   );
