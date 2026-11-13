@@ -101,12 +101,16 @@ export const INTERACTIVE_LOADING_CODE_DETAIL = 'Preparing project repository…'
 /** Shown once the Agent is ready and the prompt is going to the model. */
 export const INTERACTIVE_THINKING_DETAIL = 'Thinking…';
 
-/**
- * Thread-scoped durable workspace keyed by the pinned grounding SHA. A stable
- * path lets consecutive turns on one thread reuse the warm Cursor Agent, while
- * a SHA change yields a new path and therefore a fresh Agent. Hosts may
- * override the root with `AI_RUNS_INTERACTIVE_ATTEMPT_ROOT`.
- */
+export function brainstormSourceIdsSignature(
+  bootstrap: Pick<InteractiveActorBootstrap, 'specification'>,
+): string {
+  const roots = bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
+  if (roots.length === 0) return '';
+  return roots
+    .map((root) => `${root.sourceId}:${root.commitSha.toLowerCase()}`)
+    .sort()
+    .join(',');
+}
 export function resolveInteractiveThreadWorkspacePath(
   threadId: string,
   groundingSha: string | null,
@@ -324,6 +328,8 @@ export interface InteractiveSessionActor {
 interface CachedAgentEntry {
   handle: InteractiveCursorAgentHandle;
   lastUsedAt: number;
+  /** Signature of mounted Brainstorm source IDs + SHAs when the Agent's customTools were built. */
+  brainstormSourcesSignature?: string;
   /** Removes the thread workspace the cached Agent runs in. */
   releaseWorkspace?: () => Promise<void>;
 }
@@ -1150,7 +1156,7 @@ export function createInteractiveSessionActor(
     try {
       await publishStartupPhase(
         'setup',
-        specification.grounding?.sha
+        specification.grounding?.sha && specification.workflowClass !== 'brainstorm'
           ? INTERACTIVE_LOADING_CODE_DETAIL
           : INTERACTIVE_STARTING_DETAIL,
       );
@@ -1230,12 +1236,14 @@ export function createInteractiveSessionActor(
       }, firstEventMs);
 
       const cached = agentCache.get(threadId);
+      const currentSourcesSignature = brainstormSourceIdsSignature(bootstrap);
       const cacheCompatible =
         cached &&
         cached.handle.model === specification.model &&
         cached.handle.workspaceRef === checkout.workspacePath &&
         (cached.handle.interviewPhase ?? null) ===
-          (specification.guidedInterview?.phase ?? null);
+          (specification.guidedInterview?.phase ?? null) &&
+        (cached.brainstormSourcesSignature ?? '') === currentSourcesSignature;
 
       const startAcquisition = (
         resumeAgentId: string | null,
@@ -1273,8 +1281,17 @@ export function createInteractiveSessionActor(
         acquisitionMode = 'warm';
         agentAcquireMs = 0;
       } else {
-        if (cached) await disposeAgentEntry(threadId);
-        if (specification.grounding?.sha) {
+        // When only the attached Brainstorm sources changed on the same workspace,
+        // dispose the warm handle without deleting the thread workspace we just
+        // materialized so `Agent.resume` rebinds customTools to the updated checkout.
+        if (cached) {
+          agentCache.delete(threadId);
+          await disposeAgentHandle(threadId, cached.handle);
+          if (cached.handle.workspaceRef !== checkout.workspacePath) {
+            await cached.releaseWorkspace?.().catch(() => {});
+          }
+        }
+        if (specification.grounding?.sha && specification.workflowClass !== 'brainstorm') {
           await publishStartupPhase('setup', INTERACTIVE_STARTING_DETAIL);
         }
         const knownAgentId =
@@ -1699,6 +1716,7 @@ export function createInteractiveSessionActor(
         agentCache.set(threadId, {
           handle: agentHandle,
           lastUsedAt: now(),
+          brainstormSourcesSignature: currentSourcesSignature,
           releaseWorkspace: checkout.dispose,
         });
         retainAgent = true;

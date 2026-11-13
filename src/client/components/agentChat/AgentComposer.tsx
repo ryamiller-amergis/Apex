@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { applyPastedFiles } from '../../hooks/clipboardFiles';
 import { formatAttachmentSize } from '../../hooks/useChatAttachments';
 import styles from './agentChat.module.css';
 
@@ -428,32 +429,8 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
 
   const handlePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     onPaste?.(event);
-    if (event.defaultPrevented || !onPasteFiles) return;
-    const clipboard = event.clipboardData;
-    if (!clipboard) return;
-    const extracted: File[] = [];
-    if (clipboard.items && clipboard.items.length > 0) {
-      for (let i = 0; i < clipboard.items.length; i += 1) {
-        const item = clipboard.items[i];
-        if (item.kind === 'file') {
-          const file = item.getAsFile();
-          if (file) {
-            const hasExt = /\.[a-z0-9]+$/i.test(file.name);
-            const fallbackExt = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
-            const named = !file.name || file.name === 'image.png' || !hasExt
-              ? new File([file], `screenshot-${Date.now()}-${i + 1}.${fallbackExt}`, { type: file.type || 'image/png' })
-              : file;
-            extracted.push(named);
-          }
-        }
-      }
-    } else if (clipboard.files && clipboard.files.length > 0) {
-      extracted.push(...Array.from(clipboard.files));
-    }
-    if (extracted.length > 0) {
-      event.preventDefault();
-      onPasteFiles(extracted);
-    }
+    if (!onPasteFiles) return;
+    applyPastedFiles(event, onPasteFiles);
   }, [onPaste, onPasteFiles]);
 
   const resolvedPlaceholder = placeholder

@@ -20,6 +20,7 @@ import { credentialsForCloneUrl, redactCloneFailure } from './brainstorm/cloneCr
 import {
   hasPublishedSourceBundle,
   publishSourceBundleIfConfigured,
+  requestRepoReadBundlePublish,
   resolveTemporarySha,
 } from './brainstorm/gitSourceClone';
 import {
@@ -297,6 +298,19 @@ async function runClone(claimed: typeof brainstormRepositories.$inferSelect): Pr
               parsed.provider === 'github'
                 ? parsed.repository.split('/').pop() || parsed.repository
                 : parsed.repository;
+            const bundleIdentity = {
+              provider: parsed.provider,
+              project: parsed.project,
+              repository: parsed.repository,
+            };
+            if (useCloudBundle && !bundleReady) {
+              void requestRepoReadBundlePublish({
+                url: claimed.cloneUrl,
+                sha,
+                identity: bundleIdentity,
+                signal: AbortSignal.timeout(120_000),
+              }).catch(() => {});
+            }
             void new RepoServiceReader({
               identity: {
                 provider: parsed.provider,

@@ -952,6 +952,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   attachmentError={attachmentError}
                   onRemoveAttachment={removeAttachment}
                   onAttachClick={openFilePicker}
+                  onPasteFiles={(files) => { void addFiles(files); }}
                   speech={{
                     isListening: speech.isListening,
                     isSpeechSupported: speech.isSpeechSupported,
@@ -1099,6 +1100,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 attachmentError={attachmentError}
                 onRemoveAttachment={removeAttachment}
                 onAttachClick={openFilePicker}
+                onPasteFiles={(files) => { void addFiles(files); }}
                 speech={{
                   isListening: speech.isListening,
                   isSpeechSupported: speech.isSpeechSupported,
@@ -1395,6 +1397,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             attachmentError={attachmentError}
             onRemoveAttachment={removeAttachment}
             onAttachClick={openFilePicker}
+            onPasteFiles={(files) => { void addFiles(files); }}
             speech={{
               isListening: speech.isListening,
               isSpeechSupported: speech.isSpeechSupported,

@@ -189,8 +189,9 @@ describe('BrainstormChatPanel (VT-29)', () => {
     expect(screen.getByTestId('brainstorm-composer-send')).toBeDisabled();
   });
 
-  it('lets the creator send again after the reply is saved, even if the stream still looks busy', () => {
-    chatHook.mockReturnValue(chat({ status: 'running', isInteractionBusy: true, isRunning: true }));
+  it('lets the creator send again after the reply is saved, even if the stream still looks busy', async () => {
+    const send = jest.fn().mockResolvedValue(true);
+    chatHook.mockReturnValue(chat({ status: 'running', isInteractionBusy: true, isRunning: true, send }));
     messagesHook.mockReturnValue(messages([
       msg({ id: 'u-1', role: 'user', content: 'hello' }),
       msg({ id: 'a-1', role: 'assistant', status: 'completed', content: 'Hello, Ryan.' }),
@@ -200,7 +201,16 @@ describe('BrainstormChatPanel (VT-29)', () => {
     fireEvent.change(screen.getByTestId('brainstorm-composer-input'), {
       target: { value: 'What repos can you see?' },
     });
-    expect(screen.getByTestId('brainstorm-composer-send')).toBeEnabled();
+    const sendButton = screen.getByTestId('brainstorm-composer-send');
+    expect(sendButton).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(sendButton);
+    });
+    expect(send).toHaveBeenCalledWith('What repos can you see?', {
+      model: 'm',
+      mode: 'explore',
+      ignoreStaleStreamBusy: true,
+    });
   });
 
   it('collapses the thought process and steps on a completed reply so the user can expand and scroll', () => {

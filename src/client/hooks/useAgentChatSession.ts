@@ -101,6 +101,12 @@ export interface SendOptions {
    * awaited reply still blocks.
    */
   duringPreparation?: boolean;
+  /**
+   * Allow sending when a caller-owned ledger already confirms the prior turn
+   * is settled (e.g. Brainstorm's `brainstorm_messages` ledger) even if the
+   * WebSocket stream has not yet emitted its terminal frame.
+   */
+  ignoreStaleStreamBusy?: boolean;
 }
 
 export interface AgentChatSession {
@@ -459,7 +465,10 @@ export function useAgentChatSession(
         !isRunning &&
         !isSending &&
         !isAwaitingAgentResponse;
-      if (isInteractionBusy && !preparationOnly) return false;
+      const staleStreamOnly =
+        opts.ignoreStaleStreamBusy === true &&
+        !isSending;
+      if (isInteractionBusy && !preparationOnly && !staleStreamOnly) return false;
 
       // beforeSend hook (e.g. syncToken)
       if (beforeSend) {

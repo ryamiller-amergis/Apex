@@ -48,6 +48,7 @@ import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
 import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
+import { boundedSearchLimit } from '../repoReader';
 import { BareRepoReader } from '../repoRead/bareRepoReader';
 import {
   RepoServiceReader,
@@ -116,17 +117,71 @@ type ReaderCheckout = WarmThreadCheckout & { reader: RepoReader };
 
 function parseBrainstormSourcePath(
   requestedPath: string,
+  readRoots: ReadonlyArray<{
+    sourceId: string;
+    displayName: string;
+    repository: string;
+  }> = [],
 ): { sourceId: string; innerPath: string } | null {
-  const trimmed = requestedPath.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!trimmed.startsWith('sources/')) return null;
-  const rest = trimmed.slice('sources/'.length);
-  const slash = rest.indexOf('/');
-  if (slash === -1) {
-    return rest ? { sourceId: rest, innerPath: '' } : null;
+  const trimmed = requestedPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!trimmed || trimmed === 'sources') return null;
+
+  const withoutPrefix = trimmed.startsWith('sources/')
+    ? trimmed.slice('sources/'.length)
+    : trimmed;
+  const slash = withoutPrefix.indexOf('/');
+  const head = slash === -1 ? withoutPrefix : withoutPrefix.slice(0, slash);
+  const innerPath = slash === -1 ? '' : withoutPrefix.slice(slash + 1);
+  if (!head) return null;
+
+  if (readRoots.length > 0) {
+    const headLower = head.toLowerCase();
+    const matched = readRoots.find((root) => {
+      const bareRepo = (root.repository.split('/').pop() || root.repository).toLowerCase();
+      return (
+        root.sourceId.toLowerCase() === headLower ||
+        root.displayName.trim().toLowerCase() === headLower ||
+        root.repository.trim().toLowerCase() === headLower ||
+        bareRepo === headLower
+      );
+    });
+    if (matched) {
+      return { sourceId: matched.sourceId, innerPath };
+    }
   }
-  const sourceId = rest.slice(0, slash);
-  const innerPath = rest.slice(slash + 1);
-  return sourceId ? { sourceId, innerPath } : null;
+
+  if (trimmed.startsWith('sources/')) {
+    return { sourceId: head, innerPath };
+  }
+  return null;
+}
+
+function inferBrainstormSourceFromQuery(
+  query: string,
+  readRoots: ReadonlyArray<{
+    sourceId: string;
+    displayName: string;
+    repository: string;
+  }>,
+): string | null {
+  const matches: string[] = [];
+  for (const root of readRoots) {
+    const candidates = new Set(
+      [
+        root.displayName.trim(),
+        root.repository.trim(),
+        root.repository.split('/').pop()?.trim() ?? '',
+      ].filter((name) => name.length >= 3),
+    );
+    for (const candidate of candidates) {
+      const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b${escaped}\\b`, 'i').test(query)) {
+        matches.push(root.sourceId);
+        break;
+      }
+    }
+  }
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 function safeCacheSlug(value: string): string {
@@ -182,11 +237,17 @@ async function openLocalBareMirrorReader(
   return null;
 }
 
-function createBrainstormWorkspaceReader(input: {
+export function createBrainstormWorkspaceReader(input: {
   destination: string;
   primaryReader: RepoReader;
   remotePrimaryReader: RepoReader | null;
   bootstrap: InteractiveActorBootstrap;
+  openBareSourceReader?: (root: {
+    provider: 'github' | 'ado';
+    project: string;
+    repository: string;
+    commitSha: string;
+  }) => Promise<RepoReader | null>;
 }): RepoReader {
   const readRoots = input.bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
   if (readRoots.length === 0) return input.primaryReader;
@@ -210,6 +271,10 @@ function createBrainstormWorkspaceReader(input: {
   const remoteReaderForSource = async (sourceId: string): Promise<RepoReader | null> => {
     const root = readRoots.find((item) => item.sourceId === sourceId);
     if (!root) return null;
+    if (input.openBareSourceReader) {
+      const bareReader = await input.openBareSourceReader(root).catch(() => null);
+      if (bareReader) return bareReader;
+    }
     if (
       input.remotePrimaryReader &&
       grounding &&
@@ -223,30 +288,32 @@ function createBrainstormWorkspaceReader(input: {
       repo: root.repository,
       sha: root.commitSha,
     };
+    const localBare = await openLocalBareMirrorReader(identity);
+    if (localBare) return localBare;
     if (serviceUrl) {
       return new RepoServiceReader({
         identity,
         baseUrl: serviceUrl,
       });
     }
-    return openLocalBareMirrorReader(identity);
+    return null;
   };
 
   return {
     identity: input.primaryReader.identity,
     async readFile(filePath: string): Promise<string> {
-      const parsed = parseBrainstormSourcePath(filePath);
+      const parsed = parseBrainstormSourcePath(filePath, readRoots);
       if (!parsed) {
         return input.primaryReader.readFile(filePath);
       }
       if (await hasLocalSourceCheckout(parsed.sourceId)) {
-        return localReader.readFile(filePath);
+        return localReader.readFile(`sources/${parsed.sourceId}/${parsed.innerPath}`);
       }
       const remote = await remoteReaderForSource(parsed.sourceId);
       if (remote) {
         return remote.readFile(parsed.innerPath);
       }
-      return localReader.readFile(filePath);
+      return localReader.readFile(`sources/${parsed.sourceId}/${parsed.innerPath}`);
     },
     async listDir(dirPath: string) {
       const normalized = dirPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -257,12 +324,15 @@ function createBrainstormWorkspaceReader(input: {
           isFolder: true,
         }));
       }
-      const parsed = parseBrainstormSourcePath(dirPath);
+      const parsed = parseBrainstormSourcePath(dirPath, readRoots);
       if (!parsed) {
         return input.primaryReader.listDir(dirPath);
       }
+      const canonicalDir = parsed.innerPath
+        ? `sources/${parsed.sourceId}/${parsed.innerPath}`
+        : `sources/${parsed.sourceId}`;
       if (await hasLocalSourceCheckout(parsed.sourceId)) {
-        return localReader.listDir(dirPath);
+        return localReader.listDir(canonicalDir);
       }
       const remote = await remoteReaderForSource(parsed.sourceId);
       if (remote) {
@@ -272,33 +342,86 @@ function createBrainstormWorkspaceReader(input: {
           path: `/sources/${parsed.sourceId}/${entry.path.replace(/^\/+/, '')}`,
         }));
       }
-      return localReader.listDir(dirPath);
+      return localReader.listDir(canonicalDir);
     },
-    async searchCode(query: string, limit?: number) {
-      const primaryResults = await input.primaryReader
-        .searchCode(query, limit)
-        .catch(() => []);
-      const localResults =
-        input.primaryReader === localReader
-          ? []
-          : await localReader.searchCode(query, limit).catch(() => []);
-      const byPath = new Map<string, (typeof primaryResults)[number]>();
-      for (const item of [...primaryResults, ...localResults]) {
-        if (!byPath.has(item.path)) byPath.set(item.path, item);
+    async searchCode(query: string, limit?: number, scopedPath?: string) {
+      const explicitScope = scopedPath?.trim()
+        ? parseBrainstormSourcePath(scopedPath, readRoots)
+        : null;
+      const inferredSourceId =
+        !explicitScope && !scopedPath?.trim()
+          ? inferBrainstormSourceFromQuery(query, readRoots)
+          : null;
+      const parsedScope =
+        explicitScope ??
+        (inferredSourceId ? { sourceId: inferredSourceId, innerPath: '' } : null);
+
+      if (parsedScope) {
+        const innerScope = parsedScope.innerPath || undefined;
+        const canonicalScope = innerScope
+          ? `sources/${parsedScope.sourceId}/${innerScope}`
+          : `sources/${parsedScope.sourceId}`;
+        if (await hasLocalSourceCheckout(parsedScope.sourceId)) {
+          return localReader.searchCode(query, limit, canonicalScope).catch(() => []);
+        }
+        const remote = await remoteReaderForSource(parsedScope.sourceId);
+        if (!remote) return [];
+        const hits = await remote
+          .searchCode(query, limit, ...(innerScope ? [innerScope] : []))
+          .catch(() => []);
+        const byScopedPath = new Map<string, (typeof hits)[number]>();
+        for (const hit of hits) {
+          const prefixedPath = `sources/${parsedScope.sourceId}/${hit.path.replace(/^\/+/, '')}`;
+          if (!byScopedPath.has(prefixedPath)) {
+            byScopedPath.set(prefixedPath, { ...hit, path: prefixedPath });
+          }
+        }
+        return [...byScopedPath.values()];
       }
+
+      const maxResults = boundedSearchLimit(limit);
+      const nonSourceScope = scopedPath?.trim() || undefined;
+      if (nonSourceScope && nonSourceScope.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') !== 'sources') {
+        return input.primaryReader
+          .searchCode(query, limit, nonSourceScope)
+          .catch(() => []);
+      }
+
+      const byPath = new Map<string, Awaited<ReturnType<RepoReader['searchCode']>>[number]>();
+      const primaryShaInRoots = Boolean(
+        grounding &&
+          readRoots.some(
+            (root) => root.commitSha.toLowerCase() === grounding.sha.toLowerCase(),
+          ),
+      );
+      if (!primaryShaInRoots && !nonSourceScope) {
+        const primaryResults = await input.primaryReader
+          .searchCode(query, maxResults)
+          .catch(() => []);
+        for (const item of primaryResults) {
+          if (byPath.size >= maxResults) break;
+          if (!byPath.has(item.path)) byPath.set(item.path, item);
+        }
+      }
+
       for (const root of readRoots) {
-        if (await hasLocalSourceCheckout(root.sourceId)) continue;
-        if (
-          grounding &&
-          grounding.sha.toLowerCase() === root.commitSha.toLowerCase() &&
-          primaryResults.length > 0
-        ) {
+        if (byPath.size >= maxResults) break;
+        const remaining = maxResults - byPath.size;
+        if (await hasLocalSourceCheckout(root.sourceId)) {
+          const localHits = await localReader
+            .searchCode(query, remaining, `sources/${root.sourceId}`)
+            .catch(() => []);
+          for (const hit of localHits) {
+            if (byPath.size >= maxResults) break;
+            if (!byPath.has(hit.path)) byPath.set(hit.path, hit);
+          }
           continue;
         }
         const remote = await remoteReaderForSource(root.sourceId);
         if (!remote) continue;
-        const hits = await remote.searchCode(query, limit).catch(() => []);
+        const hits = await remote.searchCode(query, remaining).catch(() => []);
         for (const hit of hits) {
+          if (byPath.size >= maxResults) break;
           const prefixedPath = `sources/${root.sourceId}/${hit.path.replace(/^\/+/, '')}`;
           if (!byPath.has(prefixedPath)) {
             byPath.set(prefixedPath, { ...hit, path: prefixedPath });
@@ -627,33 +750,50 @@ export async function main(): Promise<void> {
       ),
     materializeWorkspace: async (bootstrap, destination, signal, options) => {
       const grounding = bootstrap.specification.grounding;
-      const checkout = grounding
-        ? await checkoutWithDiskReclaim({
-            repositoryCheckout,
-            grounding,
-            destination,
-            signal,
-            reclaimDisk: options?.reclaimDisk,
-            log: (result, retried) =>
-              console.log(
-                JSON.stringify({
-                  event: 'InteractiveRepositoryCheckout',
-                  runId: bootstrap.runId,
-                  status: result.status,
-                  detail: result.status === 'ready' ? result.source : result.reason,
-                  durationMs: result.durationMs,
-                  ...(retried ? { retriedAfterReclaim: true } : {}),
-                }),
-              ),
-          })
-        : null;
+      const isBrainstorm = bootstrap.specification.workflowClass === 'brainstorm';
+      await fs.mkdir(destination, { recursive: true });
+      const checkout =
+        grounding && !isBrainstorm
+          ? await checkoutWithDiskReclaim({
+              repositoryCheckout,
+              grounding,
+              destination,
+              signal,
+              reclaimDisk: options?.reclaimDisk,
+              log: (result, retried) =>
+                console.log(
+                  JSON.stringify({
+                    event: 'InteractiveRepositoryCheckout',
+                    runId: bootstrap.runId,
+                    status: result.status,
+                    detail: result.status === 'ready' ? result.source : result.reason,
+                    durationMs: result.durationMs,
+                    ...(retried ? { retriedAfterReclaim: true } : {}),
+                  }),
+                ),
+            })
+          : null;
+
+      const openBareReaderForGrounding = async (
+        target: NonNullable<typeof grounding>,
+      ): Promise<RepoReader | null> => {
+        const bare = await repositoryCheckout.ensureBare(target, signal);
+        if (bare.status !== 'ready') return null;
+        return new BareRepoReader({
+          identity: bare.identity,
+          mirrorPath: bare.mirrorPath,
+        });
+      };
+
       const reader =
         checkout?.status === 'ready'
           ? new LocalCheckoutReader({
               checkoutPath: destination,
               identity: checkout.identity,
             })
-          : await openPinnedReaderForBootstrap(bootstrap);
+          : isBrainstorm
+            ? null
+            : await openPinnedReaderForBootstrap(bootstrap);
       // Turn outputs from a prior turn on this thread must not be re-uploaded.
       await fs
         .rm(path.join(destination, '.ai-pilot', 'output'), {
@@ -678,8 +818,10 @@ export async function main(): Promise<void> {
           { recursive: true, force: true },
         )
         .catch(() => {});
-      // The repository is already on disk (worktree) or read remotely through
-      // `reader`; only attachments are written here.
+      // For Brainstorm turns, local directory clones on the same machine are
+      // linked immediately, while cloud Blob bundles are read directly from
+      // bare repositories (`ensureBare` + `BareRepoReader`) without unpacking
+      // multi-GB working trees into `destination/sources/` before the turn starts.
       await mountBrainstormSources({
         sources: bootstrap.specification.brainstorm?.sources,
         destination,
@@ -687,9 +829,38 @@ export async function main(): Promise<void> {
         runGit: async (args, cwd) => {
           await defaultRunGit(cwd ? ['-C', cwd, ...args] : args, { signal });
         },
-        checkout: (grounding, sourceDestination, sourceSignal) =>
-          repositoryCheckout.checkout(grounding, sourceDestination, sourceSignal),
+        checkout: isBrainstorm
+          ? async () => ({ status: 'deferred' })
+          : (sourceGrounding, sourceDestination, sourceSignal) =>
+              repositoryCheckout.checkout(
+                sourceGrounding,
+                sourceDestination,
+                sourceSignal,
+              ),
       });
+      if (isBrainstorm) {
+        const rootsToWarm = bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
+        void (async () => {
+          if (grounding && !signal.aborted) {
+            await repositoryCheckout.ensureBare(grounding, signal).catch(() => {});
+          }
+          for (const root of rootsToWarm) {
+            if (signal.aborted) break;
+            await repositoryCheckout
+              .ensureBare(
+                {
+                  provider: root.provider,
+                  project: root.project,
+                  repository: root.repository,
+                  sha: root.commitSha,
+                  profileId: 'brainstorm-source',
+                },
+                signal,
+              )
+              .catch(() => {});
+          }
+        })();
+      }
       await materializeInteractiveWorkspace({
         reader: null,
         destination,
@@ -704,17 +875,64 @@ export async function main(): Promise<void> {
         },
         signal,
       });
-      const baseReader =
-        reader ??
-        new LocalCheckoutReader({
+
+      let resolvedPrimaryReader: RepoReader | null = reader;
+      const resolveBrainstormPrimaryReader = async (): Promise<RepoReader> => {
+        if (resolvedPrimaryReader) return resolvedPrimaryReader;
+        if (grounding) {
+          const bare = await openBareReaderForGrounding(grounding).catch(() => null);
+          if (bare) {
+            resolvedPrimaryReader = bare;
+            return bare;
+          }
+        }
+        const pinned = await openPinnedReaderForBootstrap(bootstrap).catch(() => null);
+        if (pinned) {
+          resolvedPrimaryReader = pinned;
+          return pinned;
+        }
+        resolvedPrimaryReader = new LocalCheckoutReader({
           checkoutPath: destination,
           identity: {
-            provider: 'ado',
+            provider: grounding?.provider ?? 'ado',
             project: bootstrap.specification.projectId,
-            repo: 'empty',
-            sha: 'none',
+            repo: grounding?.repository ?? 'empty',
+            sha: grounding?.sha ?? 'none',
           },
         });
+        return resolvedPrimaryReader;
+      };
+
+      const baseReader: RepoReader =
+        reader ??
+        (isBrainstorm
+          ? {
+              identity: {
+                provider: grounding?.provider ?? 'ado',
+                project: bootstrap.specification.projectId,
+                repo: grounding?.repository ?? 'empty',
+                sha: grounding?.sha ?? 'none',
+              },
+              readFile: async (filePath) =>
+                (await resolveBrainstormPrimaryReader()).readFile(filePath),
+              listDir: async (dirPath) =>
+                (await resolveBrainstormPrimaryReader()).listDir(dirPath),
+              searchCode: async (query, limit, scopedPath) =>
+                (await resolveBrainstormPrimaryReader()).searchCode(
+                  query,
+                  limit,
+                  scopedPath,
+                ),
+            }
+          : new LocalCheckoutReader({
+              checkoutPath: destination,
+              identity: {
+                provider: 'ado',
+                project: bootstrap.specification.projectId,
+                repo: 'empty',
+                sha: 'none',
+              },
+            }));
       return {
         workspacePath: destination,
         reader: createBrainstormWorkspaceReader({
@@ -722,6 +940,14 @@ export async function main(): Promise<void> {
           primaryReader: baseReader,
           remotePrimaryReader: checkout?.status === 'ready' ? null : reader,
           bootstrap,
+          openBareSourceReader: (root) =>
+            openBareReaderForGrounding({
+              provider: root.provider,
+              project: root.project,
+              repository: root.repository,
+              sha: root.commitSha,
+              profileId: 'brainstorm-source',
+            }),
         }),
         dispose: () => repositoryCheckout.release(destination),
       } as ReaderCheckout;

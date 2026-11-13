@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { InterviewAgentMessage } from './InterviewChatView';
 import { AgentComposer } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
@@ -33,10 +34,18 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const dragStartXRef = useRef(0);
   const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
   const queryClient = useQueryClient();
   const session = useAgentChatSession(threadId);
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
   const wasRunning = useRef(false);
 
@@ -104,6 +113,11 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
     };
   }, [isDragging]);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const sendText = useCallback(async (messageText: string) => {
     const text = messageText.trim();
     if (!text) return;
@@ -112,10 +126,16 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text) return;
+    const outgoing = [...attachments];
+    if (!text && outgoing.length === 0) return;
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    await sendText(text);
-  }, [input, sendText]);
+    const sent = await session.send(
+      message,
+      outgoing.length > 0 ? { attachments: outgoing } : undefined,
+    );
+    if (sent && outgoing.length > 0) clearAttachments();
+  }, [attachments, clearAttachments, input, session]);
 
   if (!open) return null;
   const visibleMessages = messages.filter((message) =>
@@ -209,9 +229,26 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
           disabled={!threadId || isCreating || isRunning || isSending}
           isRunning={isRunning}
           isSending={isSending}
+          allowEmptySend
           placeholder={isRunning ? 'Assistant is investigating…' : 'Ask about refinements or trade-offs…'}
           testIdPrefix="adr-assistant"
           textareaRef={textareaRef}
+          attachments={attachments}
+          attachmentError={attachmentError}
+          onRemoveAttachment={removeAttachment}
+          onAttachClick={() => fileInputRef.current?.click()}
+          onPasteFiles={(files) => { void addFiles(files); }}
+          fileInput={(
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => { void handleAttachmentChange(event); }}
+              disabled={!threadId || isCreating || isRunning || isSending}
+              {...{ 'data-testid': 'adr-assistant-file-input' }}
+            />
+          )}
           {...{ 'data-testid': 'adr-assistant-composer' }}
         />
       </div>
