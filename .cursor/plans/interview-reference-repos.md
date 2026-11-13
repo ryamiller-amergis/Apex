@@ -1,5 +1,5 @@
 # Interview reference repositories
-Updated: 2026-11-13. Repo(s): Apex. Branch: uncommitted on feature/skill-health-v0 (move to its own branch before PR).
+Updated: 2026-11-13. Repo(s): Apex. Branch: feature/interview-reference-repos. PR: https://github.com/ryamiller-amergis/Apex/pull/290
 
 ## Goal
 An interview (e.g. amergisconnect-ats) can attach read-only reference repos (MatterWorx, MaxView) from the project's Brainstorm repository catalog. The interview stays grounded on the project repo; on Technical-phase turns the agent can list/read the reference repos under `sources/<catalogRepoId>/...`. No foreign code lands in the ATS repo.
@@ -38,9 +38,8 @@ An interview (e.g. amergisconnect-ats) can attach read-only reference repos (Mat
 - [x] Tests: interviewLinkService, durableInteractiveTurnTypes, durableInteractiveTurnPrompt, interactiveActorHostEntrypoint (all pass); tsc server+client clean; eslint 0 errors
 
 ## Next
-1. Run `npm run migrate:local:up`, enable the flag for a test project, add a catalog repo on the Brainstorm card, link it to an interview, and walk a Technical turn end to end.
-2. Move changes to a dedicated branch and open a PR.
-3. Decide on follow-ups: kickoff picker, handoff carry-over, legacy in-process path.
+1. User is testing PR #290 in dev: run migrations, enable the flag for the project, add catalog repos on the Brainstorm card, link them to an interview, and walk a Technical turn end to end.
+2. Decide on follow-ups: kickoff picker, handoff carry-over, legacy in-process path.
 
 ## Mistakes to avoid (learned in earlier chats)
 - Linked Design Modules do NOT bring other repos; they only render globs into a context doc.
