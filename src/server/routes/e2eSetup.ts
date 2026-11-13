@@ -23,6 +23,7 @@ import {
   chatThreads,
   featureFlagRules,
   featureFlags,
+  featureRequests,
   mcpServers,
   designDocs,
   designPrototypes,
@@ -38,6 +39,9 @@ import {
   projectSkillSettings,
   projectSkillWorkflowSettings,
   reviewComments,
+  roadmapAdhocIdeas,
+  roadmapChangeEvents,
+  roadmapPlanOverlays,
   testCases,
   traceEvents,
   tracePathRollups,
@@ -177,6 +181,32 @@ router.post('/reset', async (_req, res) => {
     await db
       .delete(projectSkillSettings)
       .where(like(projectSkillSettings.friendlyName, `${E2E_PREFIX}%`));
+
+    const e2eRoadmapEvents = await db
+      .select({ workItemId: roadmapChangeEvents.workItemId })
+      .from(roadmapChangeEvents)
+      .where(like(roadmapChangeEvents.itemTitle, `${E2E_PREFIX}%`));
+    const e2eOverlayIds = [
+      ...new Set(
+        e2eRoadmapEvents
+          .map((r) => r.workItemId)
+          .filter((id): id is number => typeof id === 'number'),
+      ),
+    ];
+    if (e2eOverlayIds.length > 0) {
+      await db
+        .delete(roadmapPlanOverlays)
+        .where(inArray(roadmapPlanOverlays.workItemId, e2eOverlayIds));
+    }
+    await db
+      .delete(roadmapChangeEvents)
+      .where(like(roadmapChangeEvents.itemTitle, `${E2E_PREFIX}%`));
+    await db
+      .delete(roadmapAdhocIdeas)
+      .where(like(roadmapAdhocIdeas.title, `${E2E_PREFIX}%`));
+    await db
+      .delete(featureRequests)
+      .where(like(featureRequests.title, `${E2E_PREFIX}%`));
 
     await db.delete(traceEvents).where(like(traceEvents.traceId, 'e2e0b5%'));
     clearE2eSuperAdminEmails();

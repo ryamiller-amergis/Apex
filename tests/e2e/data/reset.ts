@@ -35,6 +35,10 @@ async function main(): Promise<void> {
     documentApproverAssignments,
     chatThreads,
     projectSkillSettings,
+    featureRequests,
+    roadmapAdhocIdeas,
+    roadmapChangeEvents,
+    roadmapPlanOverlays,
   } = await import('../../../src/server/db/schema');
   const { like, inArray } = await import('drizzle-orm');
 
@@ -108,12 +112,46 @@ async function main(): Promise<void> {
     .where(like(projectSkillSettings.friendlyName, '[E2E]%'))
     .returning({ id: projectSkillSettings.id });
 
+  const e2eRoadmapEvents = await db
+    .select({ workItemId: roadmapChangeEvents.workItemId })
+    .from(roadmapChangeEvents)
+    .where(like(roadmapChangeEvents.itemTitle, '[E2E]%'));
+  const e2eOverlayWorkItemIds = [
+    ...new Set(
+      e2eRoadmapEvents
+        .map((r) => r.workItemId)
+        .filter((id): id is number => typeof id === 'number'),
+    ),
+  ];
+  let deletedRoadmapOverlays = 0;
+  if (e2eOverlayWorkItemIds.length > 0) {
+    const rows = await db
+      .delete(roadmapPlanOverlays)
+      .where(inArray(roadmapPlanOverlays.workItemId, e2eOverlayWorkItemIds))
+      .returning({ id: roadmapPlanOverlays.id });
+    deletedRoadmapOverlays = rows.length;
+  }
+  const deletedRoadmapEvents = await db
+    .delete(roadmapChangeEvents)
+    .where(like(roadmapChangeEvents.itemTitle, '[E2E]%'))
+    .returning({ id: roadmapChangeEvents.id });
+  const deletedRoadmapIdeas = await db
+    .delete(roadmapAdhocIdeas)
+    .where(like(roadmapAdhocIdeas.title, '[E2E]%'))
+    .returning({ id: roadmapAdhocIdeas.id });
+  const deletedFeatureRequests = await db
+    .delete(featureRequests)
+    .where(like(featureRequests.title, '[E2E]%'))
+    .returning({ id: featureRequests.id });
+
   console.log(
     `[E2E reset] Removed: ${deletedComments.length} comments, ` +
       `${deletedNotifs.length} notifications, ${deletedAssignments} assignments, ` +
       `${deletedPrds.length} PRDs, ${deletedDocs.length} design docs, ` +
       `${deletedProtos.length} prototypes, ${deletedInterviews.length} interviews, ` +
-      `${deletedThreads} threads, ${deletedSettings.length} project settings.`,
+      `${deletedThreads} threads, ${deletedSettings.length} project settings, ` +
+      `${deletedRoadmapOverlays} roadmap overlays, ${deletedRoadmapIdeas.length} roadmap ideas, ` +
+      `${deletedRoadmapEvents.length} roadmap events, ${deletedFeatureRequests.length} feature requests.`,
   );
 
   process.exit(0);
