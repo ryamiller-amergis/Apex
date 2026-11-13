@@ -1,6 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { WorkItem } from '../types/workitem';
 import { WorkItemCard } from './WorkItemCard';
+import { useAppShell } from '../hooks/useAppShell';
+import { useCalendarDeliveryPulse } from '../hooks/useStandupDeliveryPulse';
+import type { CalendarItemHealth } from '../../shared/types/standup';
 import {
   clearDraggedCalendarItem,
   clearDraggedWorkItem,
@@ -45,6 +48,9 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
   });
   const [isResizing, setIsResizing] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
+
+  const { selectedProject } = useAppShell();
+  const { pulse } = useCalendarDeliveryPulse(selectedProject, allWorkItems);
 
   // Get unique iteration values
   const iterationOptions = useMemo(() => {
@@ -428,6 +434,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                       workItem={item}
                       onClick={() => onSelectItem(item)}
                       scheduledDate={item.dueDate || item.targetDate}
+                      itemHealth={pulse.itemHealthById[item.id]}
                      {...{ 'data-testid': `unscheduled-list-draggable-work-item-${item.id}` }} />
                   </div>
                 ))
@@ -442,6 +449,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                       workItem={item}
                       onClick={() => onSelectItem(item)}
                       scheduledDate={item.dueDate || item.targetDate}
+                      itemHealth={pulse.itemHealthById[item.id]}
                      {...{ 'data-testid': `unscheduled-list-draggable-work-item-${item.id}` }} />
                   </div>
                 ))
@@ -456,6 +464,7 @@ export const UnscheduledList: React.FC<UnscheduledListProps> = ({
                 expandedItems={expandedItems}
                 onToggleExpanded={toggleExpanded}
                 onSelectItem={onSelectItem}
+                itemHealthById={pulse.itemHealthById}
               />
             )}
           </div>
@@ -470,6 +479,7 @@ interface HierarchicalItemListProps {
   expandedItems: Set<number>;
   onToggleExpanded: (itemId: number) => void;
   onSelectItem: (item: WorkItem) => void;
+  itemHealthById: Record<number, CalendarItemHealth>;
 }
 
 const HierarchicalItemList: React.FC<HierarchicalItemListProps> = ({
@@ -477,6 +487,7 @@ const HierarchicalItemList: React.FC<HierarchicalItemListProps> = ({
   expandedItems,
   onToggleExpanded,
   onSelectItem,
+  itemHealthById,
 }) => {
   const renderItem = (hierarchicalItem: HierarchicalItem): React.ReactNode => {
     const { item, children, level } = hierarchicalItem;
@@ -504,6 +515,7 @@ const HierarchicalItemList: React.FC<HierarchicalItemListProps> = ({
             <DraggableWorkItem
               workItem={item}
               onClick={() => onSelectItem(item)}
+              itemHealth={itemHealthById[item.id]}
              {...{ 'data-testid': `unscheduled-list-draggable-work-item-${item.id}` }} />
           </div>
         </div>
@@ -523,12 +535,14 @@ interface DraggableWorkItemProps {
   workItem: WorkItem;
   onClick: () => void;
   scheduledDate?: string;
+  itemHealth?: CalendarItemHealth | null;
 }
 
 const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
   workItem,
   onClick,
   scheduledDate,
+  itemHealth,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -553,6 +567,7 @@ const DraggableWorkItem: React.FC<DraggableWorkItemProps> = ({
         workItem={workItem}
         onClick={onClick}
         isDragging={isDragging}
+        itemHealth={itemHealth}
        {...{ 'data-testid': `unscheduled-list-work-item-card-${workItem.id}` }} />
       {scheduledDate && (
         <div className="scheduled-badge">

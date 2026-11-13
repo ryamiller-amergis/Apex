@@ -1,17 +1,23 @@
 import React from 'react';
 import { WorkItem } from '../types/workitem';
+import type { CalendarItemHealth } from '../../shared/types/standup';
+import { WorkItemConfidenceBadge } from './CalendarDeliveryPulseBar';
 import './WorkItemCard.css';
 
 interface WorkItemCardProps {
   workItem: WorkItem;
   onClick: () => void;
   isDragging?: boolean;
+  itemHealth?: CalendarItemHealth | null;
+  'data-testid'?: string;
 }
 
 export const WorkItemCard: React.FC<WorkItemCardProps> = ({
   workItem,
   onClick,
   isDragging = false,
+  itemHealth,
+  'data-testid': testId,
 }) => {
   const isEpic = workItem.workItemType === 'Epic';
   const isFeature = workItem.workItemType === 'Feature';
@@ -33,6 +39,7 @@ export const WorkItemCard: React.FC<WorkItemCardProps> = ({
     <div
       className={`work-item-card ${isDragging ? 'dragging' : ''} ${isEpic ? 'epic-card' : ''} ${isFeature ? 'feature-card' : ''}`}
       onClick={onClick}
+      data-testid={testId ?? `work-item-card-${workItem.id}`}
       style={{
         opacity: isDragging ? 0.5 : 1,
         cursor: 'pointer',
@@ -48,8 +55,12 @@ export const WorkItemCard: React.FC<WorkItemCardProps> = ({
           {isTBI && <span className="type-icon">🔧</span>}
           <span className="id-number">#{workItem.id}</span>
         </div>
-        <div className="work-item-state">
-          {workItem.state}
+        <div className="work-item-state" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <WorkItemConfidenceBadge
+            health={itemHealth}
+            data-testid={`work-item-confidence-${workItem.id}`}
+          />
+          <span>{workItem.state}</span>
         </div>
       </div>
       <div className="work-item-title">

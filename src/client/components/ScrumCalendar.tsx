@@ -5,6 +5,18 @@ import { format, parse, startOfWeek, getDay } from 'date-fns';
 import enUSLocale from 'date-fns/locale/en-US';
 import { WorkItem } from '../types/workitem';
 import { getAssigneeColor, getEpicColor } from '../utils/assigneeColors';
+import { useAppShell } from '../hooks/useAppShell';
+import {
+  useApplyStandupProposal,
+  useCalendarDeliveryPulse,
+  useDismissStandupProposal,
+} from '../hooks/useStandupDeliveryPulse';
+import {
+  CalendarDeliveryPulseBar,
+  WorkItemConfidenceBadge,
+  type CalendarPulseRiskFilter,
+} from './CalendarDeliveryPulseBar';
+import type { StandupActionProposal } from '../../shared/types/standup';
 import {
   clearAllDraggedWorkItems,
   getDraggedCalendarItem,
@@ -63,8 +75,58 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
   const [selectedIteration, setSelectedIteration] = useState<string>('');
   const [isUnscheduledCollapsed, setIsUnscheduledCollapsed] = useState<boolean>(false);
   const [isOverdueExpanded, setIsOverdueExpanded] = useState<boolean>(false);
+  const [pulseRiskFilter, setPulseRiskFilter] = useState<CalendarPulseRiskFilter>('all');
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const eventsRef = useRef<CalendarEvent[]>([]);
+
+  const { selectedProject, can } = useAppShell();
+  const allWorkItems = useMemo(
+    () => [...workItems, ...unscheduledItems],
+    [workItems, unscheduledItems],
+  );
+  const { pulse } = useCalendarDeliveryPulse(selectedProject, allWorkItems);
+  const applyProposalMutation = useApplyStandupProposal();
+  const dismissProposalMutation = useDismissStandupProposal();
+
+  const pendingProposalItemIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const p of pulse.proposals) {
+      if (p.status === 'pending') ids.add(p.workItemId);
+    }
+    return ids;
+  }, [pulse.proposals]);
+
+  const matchesPulseFilter = useCallback(
+    (item: WorkItem): boolean => {
+      if (pulseRiskFilter === 'all') return true;
+      const health = pulse.itemHealthById[item.id];
+      if (pulseRiskFilter === 'at_risk') {
+        return health?.confidence === 'at_risk' || health?.confidence === 'uncertain';
+      }
+      if (pulseRiskFilter === 'blocked_or_stale') {
+        return Boolean(health?.isBlockedOrStale);
+      }
+      if (pulseRiskFilter === 'proposals') {
+        return pendingProposalItemIds.has(item.id);
+      }
+      return true;
+    },
+    [pulseRiskFilter, pulse.itemHealthById, pendingProposalItemIds],
+  );
+
+  const handleApplyProposal = useCallback(
+    async (proposal: StandupActionProposal) => {
+      await applyProposalMutation.mutateAsync({ proposal });
+    },
+    [applyProposalMutation],
+  );
+
+  const handleDismissProposal = useCallback(
+    async (proposalId: string) => {
+      await dismissProposalMutation.mutateAsync({ proposalId });
+    },
+    [dismissProposalMutation],
+  );
 
   // Get unique assigned to values
   const assignedToOptions = useMemo(() => {
@@ -125,9 +187,12 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
       if (selectedIteration && item.iterationPath !== selectedIteration) {
         return false;
       }
+      if (!matchesPulseFilter(item)) {
+        return false;
+      }
       return true;
     });
-  }, [workItems, selectedAssignedTo, selectedWorkItemType, selectedState, selectedIteration]);
+  }, [workItems, selectedAssignedTo, selectedWorkItemType, selectedState, selectedIteration, matchesPulseFilter]);
 
   const events: CalendarEvent[] = useMemo(() => {
     return filteredWorkItems
@@ -180,27 +245,29 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
 
   // Filter unscheduled items for agenda view based on selected filters
   const filteredUnscheduledItems = useMemo(() => {
-    // Only show unscheduled items when a specific person is selected
-    if (!selectedAssignedTo) return [];
+    // In default 'all' mode, only show unscheduled items when a specific person is selected.
+    // When a Delivery Pulse risk filter is active, surface matching unscheduled items across the team.
+    if (pulseRiskFilter === 'all' && !selectedAssignedTo) return [];
     
     return unscheduledItems.filter((item) => {
-      // Exclude Epics and Features from agenda view
-      if (item.workItemType === 'Epic' || item.workItemType === 'Feature') return false;
+      // Exclude Epics and Features in default mode unless a risk filter is active
+      if (pulseRiskFilter === 'all' && (item.workItemType === 'Epic' || item.workItemType === 'Feature')) return false;
       
       // Exclude Done, Closed, and Removed items
       if (item.state === 'Done' || item.state === 'Closed' || item.state === 'Removed') return false;
       
-      // Must match the selected person
-      if (item.assignedTo !== selectedAssignedTo) return false;
+      // Must match the selected person when set
+      if (selectedAssignedTo && item.assignedTo !== selectedAssignedTo) return false;
       
       // Apply other filters if they are set
       if (selectedWorkItemType && item.workItemType !== selectedWorkItemType) return false;
       if (selectedState && item.state !== selectedState) return false;
       if (selectedIteration && item.iterationPath !== selectedIteration) return false;
+      if (!matchesPulseFilter(item)) return false;
       
       return true;
     });
-  }, [unscheduledItems, selectedAssignedTo, selectedWorkItemType, selectedState, selectedIteration]);
+  }, [unscheduledItems, pulseRiskFilter, selectedAssignedTo, selectedWorkItemType, selectedState, selectedIteration, matchesPulseFilter]);
 
   const overdueItems = useMemo(() => {
     const now = new Date();
@@ -465,6 +532,10 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
             borderRadius: '3px',
             fontWeight: 500
           }}>{event.resource.state}</span>
+          <WorkItemConfidenceBadge
+            health={pulse.itemHealthById[event.resource.id]}
+            data-testid={`work-item-confidence-${event.resource.id}`}
+          />
           {event.resource.tags && event.resource.tags.split(';').map((tag, idx) => (
             <span key={idx} style={{ 
               marginLeft: '4px', 
@@ -546,6 +617,17 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
 
   return (
     <div className="scrum-calendar-container">
+      <CalendarDeliveryPulseBar
+        pulse={pulse}
+        activeFilter={pulseRiskFilter}
+        onFilterChange={setPulseRiskFilter}
+        canWriteWorkItems={can('workitems:write')}
+        onApplyProposal={handleApplyProposal}
+        onDismissProposal={handleDismissProposal}
+        isMutatingProposal={
+          applyProposalMutation.isPending || dismissProposalMutation.isPending
+        }
+      />
       {overdueItems.length > 0 && (
         <div className="overdue-panel">
           <button
@@ -738,6 +820,10 @@ export const ScrumCalendar: React.FC<ScrumCalendarProps> = ({
                       <span className="unscheduled-item-title">#{item.id}: {item.title}</span>
                     </div>
                     <div className="unscheduled-item-badges">
+                      <WorkItemConfidenceBadge
+                        health={pulse.itemHealthById[item.id]}
+                        data-testid={`work-item-confidence-${item.id}`}
+                      />
                       {isEpic && <span className="type-badge epic-badge">EPIC</span>}
                       {isFeature && <span className="type-badge feature-badge">FEATURE</span>}
                       <span className="status-badge">{item.state}</span>
