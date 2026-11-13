@@ -171,6 +171,11 @@ export type DurableInteractiveTurnSpecification = Readonly<{
   guidedInterview?: FrozenGuidedInterview;
   /** Present exactly when `workflowClass` is `brainstorm`. */
   brainstorm?: FrozenBrainstormTurn;
+  /**
+   * Read-only reference repositories for an `interview` turn, mounted under
+   * `sources/<id>` the same way as Brainstorm sources. Never set with `brainstorm`.
+   */
+  referenceSources?: BrainstormTurnSources;
 }>;
 
 export type InteractiveDispatchOutboxPayload = Readonly<{
@@ -583,7 +588,10 @@ export function isDurableInteractiveTurnSpecification(
       isGuidedInterview(value.guidedInterview)) &&
     (value.workflowClass === 'brainstorm'
       ? isFrozenBrainstormTurn(value.brainstorm)
-      : value.brainstorm === undefined)
+      : value.brainstorm === undefined) &&
+    (value.referenceSources === undefined ||
+      (value.workflowClass === 'interview' &&
+        isBrainstormTurnSources(value.referenceSources)))
   );
 }
 

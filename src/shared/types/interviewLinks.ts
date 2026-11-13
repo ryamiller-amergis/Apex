@@ -73,11 +73,45 @@ export interface LinkMutationResult {
   linkedContext: LinkedContextReadModel;
 }
 
+export const INTERVIEW_REFERENCE_REPOSITORIES_FLAG = 'interview-reference-repos' as const;
+
+export const REFERENCE_REPOSITORY_CAPACITY = 3 as const;
+
+/** A Brainstorm catalog repository mounted read-only on the Interview's Technical turns. */
+export interface LinkedReferenceRepository {
+  catalogRepositoryId: string;
+  displayName: string;
+  ready: boolean;
+  readinessText: string;
+  linkedBy: string;
+  linkedAt: string;
+}
+
+export interface ReferenceRepositoryCandidate {
+  catalogRepositoryId: string;
+  displayName: string;
+  ready: boolean;
+  readinessText: string;
+}
+
+export interface ReferenceRepositoriesReadModel {
+  interviewId: string;
+  links: LinkedReferenceRepository[];
+  /** Catalog repositories of the Interview's project that are not linked yet. */
+  candidates: ReferenceRepositoryCandidate[];
+  capacity: typeof REFERENCE_REPOSITORY_CAPACITY;
+}
+
+export interface AddReferenceRepositoryRequest {
+  catalogRepositoryId: string;
+}
+
 export type InterviewLinkErrorCode =
   | 'LINK_CAP_EXCEEDED'
   | 'LINK_DUPLICATE'
   | 'ADR_NOT_ACCEPTED'
   | 'ARTIFACT_CROSS_PROJECT'
+  | 'REPOSITORY_NOT_READY'
   | 'INTERVIEW_NOT_IN_PROGRESS'
   | 'ARTIFACT_NOT_FOUND'
   | 'INTERVIEW_NOT_FOUND'
