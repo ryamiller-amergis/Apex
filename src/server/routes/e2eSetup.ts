@@ -55,13 +55,17 @@ import type {
   StandupDeliveryModel,
   StandupDeliveryPolicy,
   StandupGoalSource,
+  StandupRosterMode,
   StandupStructuredUpdate,
 } from '../../shared/types/standup';
 import {
+  evaluateParticipantBrief,
   normalizeDeliveryModel,
   normalizeGoalSource,
+  normalizeRosterMode,
   recomputeSessionTeamPulse,
   resolveStandupPolicy,
+  type EvaluateParticipantBriefInput,
 } from '../services/standupDeliveryPolicyService';
 import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
 import { clerkTicketFetchStub, setMcpServerFetchStub } from '../services/mcpServerFetchStub';
@@ -1550,7 +1554,7 @@ router.post('/seed/observability-telemetry', async (req, res) => {
   }
 });
 
-// Seed deterministic Standup & Delivery Pulse config, session, participant, followups, and proposals.
+// Seed deterministic Standup & Delivery Pulse config, session, participants, followups, and proposals.
 router.post('/seed/standup-delivery-pulse', async (req, res) => {
   try {
     const {
@@ -1558,6 +1562,7 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       deliveryModel = 'flow',
       goalSource = 'manual',
       teamGoal = 'Keep flow cycle time under 3 days',
+      rosterMode = 'ado_and_groups',
       policy,
       sessionDate = new Date().toISOString().slice(0, 10),
       sessionStatus = 'collecting',
@@ -1565,7 +1570,9 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       participantUserId = 'dev-mock-oid-00000000-0000-0000-0000-000000000000',
       participantStatus = 'notified',
       preparedBrief,
+      participantEvidence,
       structuredUpdate,
+      additionalParticipants = [],
       proposals = [],
       followups = [],
       createSession = true,
@@ -1574,6 +1581,7 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       deliveryModel?: StandupDeliveryModel;
       goalSource?: StandupGoalSource;
       teamGoal?: string | null;
+      rosterMode?: StandupRosterMode;
       policy?: Partial<StandupDeliveryPolicy>;
       sessionDate?: string;
       sessionStatus?: 'collecting' | 'facilitating' | 'completed';
@@ -1581,7 +1589,15 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       participantUserId?: string;
       participantStatus?: 'notified' | 'submitted';
       preparedBrief?: ParticipantPreparedBrief | null;
+      participantEvidence?: Partial<EvaluateParticipantBriefInput>;
       structuredUpdate?: StandupStructuredUpdate | null;
+      additionalParticipants?: Array<{
+        userId: string;
+        status?: 'notified' | 'submitted';
+        preparedBrief?: ParticipantPreparedBrief | null;
+        participantEvidence?: Partial<EvaluateParticipantBriefInput>;
+        structuredUpdate?: StandupStructuredUpdate | null;
+      }>;
       proposals?: Array<
         StandupActionProposalInput & { status?: 'pending' | 'applied' | 'dismissed' }
       >;
@@ -1614,17 +1630,24 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       group = insertedGroup;
     }
 
-    await db
-      .insert(appGroupMembers)
-      .values({
-        groupId: group.id,
-        userId: participantUserId,
-        addedBy: E2E_ASSIGNED_BY,
-      })
-      .onConflictDoNothing();
+    const allParticipantUserIds = [
+      participantUserId,
+      ...additionalParticipants.map((ap) => ap.userId),
+    ];
+    for (const uid of allParticipantUserIds) {
+      await db
+        .insert(appGroupMembers)
+        .values({
+          groupId: group.id,
+          userId: uid,
+          addedBy: E2E_ASSIGNED_BY,
+        })
+        .onConflictDoNothing();
+    }
 
     const resolvedModel = normalizeDeliveryModel(deliveryModel);
     const resolvedGoalSource = normalizeGoalSource(goalSource);
+    const resolvedRosterMode = normalizeRosterMode(rosterMode);
     const resolvedPolicy = resolveStandupPolicy(resolvedModel, policy);
     const prefixedGoal = teamGoal ? e2eTitle(teamGoal) : null;
 
@@ -1637,6 +1660,7 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
         deliveryModel: resolvedModel,
         goalSource: resolvedGoalSource,
         teamGoal: prefixedGoal,
+        rosterMode: resolvedRosterMode,
         policy: resolvedPolicy,
         enabled: true,
       })
@@ -1653,6 +1677,26 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       });
       return;
     }
+
+    const buildBriefFromEvidence = (
+      ev?: Partial<EvaluateParticipantBriefInput>,
+    ): ParticipantPreparedBrief | null => {
+      if (!ev) return null;
+      return evaluateParticipantBrief({
+        deliveryModel: resolvedModel,
+        teamGoal: prefixedGoal,
+        policy: resolvedPolicy,
+        activeWorkItems: ev.activeWorkItems ?? [],
+        changedSinceLastWorkItems: ev.changedSinceLastWorkItems,
+        pullRequests: ev.pullRequests,
+        builds: ev.builds,
+        pipelineFailures: ev.pipelineFailures,
+        priorHistory: ev.priorHistory,
+        priorStructuredUpdate: ev.priorStructuredUpdate,
+        openFollowups: ev.openFollowups,
+        ownerDisplayName: ev.ownerDisplayName,
+      });
+    };
 
     const threadId = randomUUID();
     await db.insert(chatThreads).values({
@@ -1683,6 +1727,9 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       })
       .returning();
 
+    const primaryBrief =
+      preparedBrief ?? buildBriefFromEvidence(participantEvidence) ?? null;
+
     const [participant] = await db
       .insert(standupParticipants)
       .values({
@@ -1690,13 +1737,46 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
         userId: participantUserId,
         threadId,
         status: participantStatus,
-        preparedBrief: preparedBrief ?? null,
+        preparedBrief: primaryBrief,
         structuredUpdate: structuredUpdate ?? null,
         ...(participantStatus === 'submitted'
           ? { submittedAt: new Date().toISOString() }
           : {}),
       })
       .returning();
+
+    for (const extra of additionalParticipants) {
+      const extraThreadId = randomUUID();
+      await db.insert(chatThreads).values({
+        id: extraThreadId,
+        userId: extra.userId,
+        status: 'idle',
+        title: e2eTitle(`Standup ${sessionDate} ${extra.userId.slice(-6)}`),
+        kickoff: {
+          project,
+          repo: '',
+          mode: 'standup-participant',
+          standupDeliveryModel: resolvedModel,
+          standupTeamGoal: prefixedGoal,
+        },
+      });
+      const extraStatus = extra.status ?? 'notified';
+      const extraBrief =
+        extra.preparedBrief ??
+        buildBriefFromEvidence(extra.participantEvidence) ??
+        null;
+      await db.insert(standupParticipants).values({
+        sessionId: session.id,
+        userId: extra.userId,
+        threadId: extraThreadId,
+        status: extraStatus,
+        preparedBrief: extraBrief,
+        structuredUpdate: extra.structuredUpdate ?? null,
+        ...(extraStatus === 'submitted'
+          ? { submittedAt: new Date().toISOString() }
+          : {}),
+      });
+    }
 
     const insertedProposals = [];
     for (const p of proposals) {

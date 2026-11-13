@@ -46,10 +46,16 @@ afterAll(async () => {
 });
 
 describe('Standup Delivery Pulse migration up / down / up (AC-09)', () => {
-  it('adds Delivery Pulse columns and standup_action_proposals table, rolls back cleanly, and re-applies', async () => {
+  it('adds Delivery Pulse columns (including roster_mode) and standup_action_proposals table, rolls back cleanly, and re-applies', async () => {
     const configCols = await columnNames('standup_configs');
     expect(configCols).toEqual(
-      expect.arrayContaining(['delivery_model', 'goal_source', 'team_goal', 'policy']),
+      expect.arrayContaining([
+        'delivery_model',
+        'goal_source',
+        'team_goal',
+        'roster_mode',
+        'policy',
+      ]),
     );
 
     const sessionCols = await columnNames('standup_sessions');
@@ -86,12 +92,17 @@ describe('Standup Delivery Pulse migration up / down / up (AC-09)', () => {
        VALUES ('pulse-user-1', 'Pulse Tester', 'pulse@localhost')
        ON CONFLICT (oid) DO NOTHING`,
     );
-    const [cfg] = await query<{ id: string; delivery_model: string }>(
+    const [cfg] = await query<{
+      id: string;
+      delivery_model: string;
+      roster_mode: string;
+    }>(
       `INSERT INTO standup_configs (project, group_ids, team_goal)
        VALUES ('MaxView', '[]'::jsonb, 'Ship Delivery Pulse')
-       RETURNING id, delivery_model`,
+       RETURNING id, delivery_model, roster_mode`,
     );
     expect(cfg.delivery_model).toBe('flow');
+    expect(cfg.roster_mode).toBe('ado_and_groups');
 
     const [sess] = await query<{ id: string }>(
       `INSERT INTO standup_sessions (config_id, session_date, status, team_pulse)
@@ -131,6 +142,7 @@ describe('Standup Delivery Pulse migration up / down / up (AC-09)', () => {
     );
     expect(tablesAfterDown).toEqual([]);
     expect(await columnNames('standup_configs')).not.toContain('delivery_model');
+    expect(await columnNames('standup_configs')).not.toContain('roster_mode');
     expect(await columnNames('standup_sessions')).not.toContain('team_pulse');
     expect(await columnNames('standup_participants')).not.toContain('prepared_brief');
 
@@ -141,6 +153,7 @@ describe('Standup Delivery Pulse migration up / down / up (AC-09)', () => {
     await client.connect();
 
     expect(await columnNames('standup_configs')).toContain('delivery_model');
+    expect(await columnNames('standup_configs')).toContain('roster_mode');
     expect(await columnNames('standup_action_proposals')).toContain('proposed_value');
   }, MIGRATE_TIMEOUT);
 });

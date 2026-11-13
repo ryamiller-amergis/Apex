@@ -1,5 +1,5 @@
 /**
- * AC-01..AC-10: End-to-End Playwright coverage for Standup & Calendar Delivery Pulse.
+ * End-to-End Playwright coverage for Standup Delivery Pulse (SDLC-Aware, Multi-Day & Pre-Drafted).
  *
  * Runs offline against local Express + Vite + PostgreSQL using /e2e/seed/standup-delivery-pulse
  * and stubbed ADO endpoints — zero live external ADO or AI calls.
@@ -20,7 +20,7 @@ import {
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../../src/shared/types/menuSettings';
 import { StandupPulsePage } from '../pages/standup-pulse.page';
 
-test.describe('Standup & Calendar Delivery Pulse', () => {
+test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', () => {
   test.beforeEach(async ({ page, e2eApi }) => {
     await page.addInitScript((project) => {
       window.localStorage.setItem('selectedProject', project);
@@ -30,11 +30,7 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
     await suppressBetaAnnouncement(page);
     await stubAiChatStream(page);
     await stubAdoProjects(page);
-    await SeedApi.setMenuSettings(
-      e2eApi,
-      E2E_PROJECT,
-      DEFAULT_ENABLED_MENU_VIEWS.filter((v) => v !== 'work-board'),
-    );
+    await SeedApi.setMenuSettings(e2eApi, E2E_PROJECT, DEFAULT_ENABLED_MENU_VIEWS);
   });
 
   test.afterEach(async ({ e2eApi }) => {
@@ -42,7 +38,7 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
     await SeedApi.reset(e2eApi);
   });
 
-  test('1. Flow Mode Quick Standup: prefilled brief, carryover check, no target-date nagging, and 1-click submit (AC-01, AC-02, AC-03)', async ({
+  test('1. Approve / Reject & Inline Correction Journey (/standup): reviews multi-day arc, rejects inaccurate item, submits inline correction, and reflects in Team Pulse', async ({
     page,
     loginAsPersona,
     e2eApi,
@@ -54,63 +50,56 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
       teamGoal: 'Keep flow cycle time under 3 days',
       participantUserId: PERSONA_OIDS.developer,
       participantStatus: 'notified',
-      preparedBrief: {
-        generatedAt: new Date().toISOString(),
-        deliveryModel: 'flow',
-        teamGoal: '[E2E] Keep flow cycle time under 3 days',
-        accomplishedSinceLast: [
+      participantEvidence: {
+        ownerDisplayName: 'Dev User',
+        activeWorkItems: [
           {
-            workItemId: 5001,
-            title: 'Streamline webhook dispatcher',
-            workItemType: 'Product Backlog Item',
-            state: 'Ready for Test',
-            evidence: 'ADO update — state [Ready for Test]',
-          },
-          {
-            prId: 88,
-            workItemId: 5001,
-            title: 'feat: streamline webhook dispatcher',
-            evidence: 'Merged PR !88',
-          },
-        ],
-        priorCommitments: [
-          {
-            summary: '#5002 Idempotent retry worker',
-            workItemIds: [5002],
-            status: 'untouched',
-            note: 'No ADO state change or PR activity recorded since last standup',
-          },
-        ],
-        suggestedToday: [
-          {
-            workItemId: 5002,
+            id: 5002,
             title: 'Idempotent retry worker',
             workItemType: 'Task',
             state: 'Active',
-            targetDate: null,
-            iterationPath: null,
-            riskFlags: ['Carryover', 'Stale 4d'],
+            changedDate: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
           },
         ],
-        detectedExceptions: [
+        changedSinceLastWorkItems: [
           {
-            id: 'stale-5002',
-            kind: 'stale_state',
-            severity: 'warning',
-            message: '#5002 (Idempotent retry worker) has stayed in [Active] for 4 days.',
-            workItemId: 5002,
-            workItemTitle: 'Idempotent retry worker',
+            id: 5001,
+            title: 'Streamline webhook dispatcher',
+            workItemType: 'Product Backlog Item',
+            state: 'Ready for Test',
+            changedDate: new Date().toISOString(),
           },
           {
-            id: 'untouched-commitment-0',
-            kind: 'untouched_commitment',
-            severity: 'warning',
-            message:
-              'Prior commitment untouched: "#5002 Idempotent retry worker" has no recorded ADO or PR activity.',
-            workItemId: 5002,
+            id: 5099,
+            title: 'Misattributed legacy ticket',
+            workItemType: 'Bug',
+            state: 'Active',
+            changedDate: new Date().toISOString(),
           },
         ],
-        openFollowups: [],
+        priorHistory: [
+          {
+            sessionDate: '2026-11-12',
+            structuredUpdate: {
+              yesterday: 'Started #5001',
+              today: '#5002 Idempotent retry worker',
+            },
+          },
+          {
+            sessionDate: '2026-11-11',
+            structuredUpdate: {
+              yesterday: 'Scoped #5002',
+              today: '#5002 Idempotent retry worker',
+            },
+          },
+          {
+            sessionDate: '2026-11-10',
+            structuredUpdate: {
+              yesterday: 'Closed #4990',
+              today: '#5002 Idempotent retry worker',
+            },
+          },
+        ],
       },
     });
 
@@ -122,39 +111,56 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
     await expect(pulsePage.teamGoalBanner()).toContainText(
       'Keep flow cycle time under 3 days',
     );
-    await expect(page.getByTestId('standup-brief-accomplished')).toContainText(
-      'Streamline webhook dispatcher',
-    );
-    await expect(page.getByTestId('standup-brief-accomplished')).toContainText(
-      'Merged PR !88',
-    );
-    await expect(page.getByTestId('standup-commitment-status-0')).toHaveText(
-      'Carryover',
-    );
-    await expect(page.getByTestId('standup-exception-stale-5002')).toBeVisible();
-    // Flow mode does not show missing target date warnings
+    await expect(pulsePage.multiDayArcBanner()).toContainText('#5002 (3d)');
+    await expect(pulsePage.recommendedFocusBanner()).toContainText('#5002');
+    // Flow mode does not nag about missing target dates
     await expect(page.getByTestId('standup-brief-exceptions')).not.toContainText(
       /no target date/i,
     );
 
+    // Reject inaccurate item #5099
+    await page
+      .getByTestId('draft-item-reject-draft-yesterday-wi-5099')
+      .click();
+
+    // Enter inline user correction
+    await pulsePage
+      .correctionsInput()
+      .fill('Also paired with QA on webhook contract smoke tests');
+
+    // Submit standup
     await pulsePage.quickConfirmSubmitBtn().click();
 
     await expect(pulsePage.submittedBanner()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('standup-submitted-badge')).toHaveText(
       'Submitted',
     );
+
+    // Navigate to Team Pulse summary and verify rejected item is excluded & correction is displayed
+    await page.getByTestId('standup-view-team-pulse-btn').click();
+    const devNarrative = page.getByTestId(
+      `participant-narrative-${PERSONA_OIDS.developer}`,
+    );
+    await expect(devNarrative).toBeVisible({ timeout: 10_000 });
+    await expect(devNarrative).toContainText('#5001 Streamline webhook dispatcher');
+    await expect(devNarrative).not.toContainText('Misattributed legacy ticket');
+    await expect(
+      page.getByTestId(
+        `participant-narrative-correction-${PERSONA_OIDS.developer}`,
+      ),
+    ).toContainText('Also paired with QA on webhook contract smoke tests');
   });
 
-  test('2. Standup Management Delivery Model Config: configures Milestone model and Team Goal (AC-01, AC-04)', async ({
+  test('2. ADO Roster Auto-Discovery & Delivery Model Config (/standup-manage): configures ADO + Groups roster discovery without target dates and persists', async ({
     page,
     loginAsPersona,
     e2eApi,
   }) => {
     await SeedApi.seedAdminRole(e2eApi, { userId: PERSONA_OIDS.manager });
-    const seeded = await SeedApi.seedStandupDeliveryPulse(e2eApi, {
+    await SeedApi.seedStandupDeliveryPulse(e2eApi, {
       project: E2E_PROJECT,
       deliveryModel: 'flow',
-      teamGoal: 'Initial Flow Goal',
+      teamGoal: 'Initial Seed Config',
       createSession: false,
     });
 
@@ -172,42 +178,40 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
 
     await page.getByTestId('standup-new-config-btn').click();
     await page.getByTestId('standup-config-project').selectOption(E2E_PROJECT);
-    await page
-      .getByTestId(`standup-group-checkbox-${seeded.group.id}`)
-      .check();
 
-    // Verify default is Flow with target-date checks unchecked
-    await expect(page.getByTestId('standup-config-delivery-model')).toHaveValue('flow');
+    // Verify default Participant Discovery is 'ado_and_groups' and Flow has target-date checks unchecked
+    await expect(page.getByTestId('standup-config-roster-mode')).toHaveValue(
+      'ado_and_groups',
+    );
+    await expect(page.getByTestId('standup-config-delivery-model')).toHaveValue(
+      'flow',
+    );
     await expect(
       page.getByTestId('standup-policy-target-date-checks'),
     ).not.toBeChecked();
 
-    // Switch to Milestone — target-date checks auto-enable
-    await page
-      .getByTestId('standup-config-delivery-model')
-      .selectOption('milestone');
-    await expect(
-      page.getByTestId('standup-policy-target-date-checks'),
-    ).toBeChecked();
-
+    // Save config WITH ZERO groups selected (valid under ado_and_groups auto-discovery!)
     await page
       .getByTestId('standup-config-goal-source')
-      .selectOption('release_epic');
+      .selectOption('manual');
     await page
       .getByTestId('standup-config-team-goal')
-      .fill('[E2E] Ship Milestone Release v3.0');
+      .fill('[E2E] Auto-Discovered Flow Pulse Goal');
 
     await page.getByTestId('standup-config-save-btn').click();
 
     await expect(
-      page.getByText('[E2E] Ship Milestone Release v3.0'),
+      page.getByText('[E2E] Auto-Discovered Flow Pulse Goal'),
     ).toBeVisible({ timeout: 10_000 });
     await expect(
-      page.locator('[data-testid^="standup-config-card-model-"]').filter({ hasText: 'Milestone' }),
+      page
+        .locator('[data-testid^="standup-config-card-roster-"]')
+        .filter({ hasText: 'ADO + Groups' })
+        .first(),
     ).toBeVisible();
   });
 
-  test('3. 5-Minute Team Pulse Summary & Proposal Decision: loads without ?session= and confirms/dismisses proposals (AC-06, AC-08)', async ({
+  test('3. SDLC Facilitator Callouts, Area Breakdown & Per-Person Narratives (/standup-summary): surfaces SQL migration, IaC pipeline alert, areas, narratives, and proposals', async ({
     page,
     loginAsPersona,
     e2eApi,
@@ -215,46 +219,108 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
     const seeded = await SeedApi.seedStandupDeliveryPulse(e2eApi, {
       project: E2E_PROJECT,
       deliveryModel: 'flow',
-      teamGoal: 'Unblock payment webhooks',
+      teamGoal: 'Billing & Worker Infra Rollout',
       sessionStatus: 'completed',
       participantUserId: PERSONA_OIDS.developer,
       participantStatus: 'submitted',
       structuredUpdate: {
-        yesterday: 'Completed #6001 webhook signature check',
-        today: 'Working on #6002 retry queue',
+        yesterday: 'Drafted #6001 billing schema migration',
+        today: 'Verifying rollback script and API handler',
         blockers: 'Dev CI pipeline failing on #6002',
-        handoffs: '#6001 ready for QA sign-off',
-        capacity: 'Available to pair after lunch',
+        userCorrections: 'Confirmed DBA review scheduled for 3pm EST',
       },
-      preparedBrief: {
-        generatedAt: new Date().toISOString(),
-        deliveryModel: 'flow',
-        teamGoal: '[E2E] Unblock payment webhooks',
-        accomplishedSinceLast: [],
-        priorCommitments: [
+      participantEvidence: {
+        ownerDisplayName: 'Dev User',
+        activeWorkItems: [
           {
-            summary: '#6002 retry queue',
-            workItemIds: [6002],
-            status: 'untouched',
-            note: 'No ADO activity since yesterday',
+            id: 6001,
+            title: 'Billing ledger SQL migration & API',
+            workItemType: 'Product Backlog Item',
+            state: 'In PR',
+            tags: 'Release:v3.2',
+            changedDate: new Date().toISOString(),
           },
         ],
-        suggestedToday: [],
-        detectedExceptions: [
+        pullRequests: [
           {
-            id: 'carry-6002',
-            kind: 'untouched_commitment',
-            severity: 'warning',
-            message: 'Prior commitment untouched: #6002 retry queue',
-            workItemId: 6002,
+            prId: 401,
+            title: 'feat(billing): ledger migration & API',
+            status: 'active',
+            createdAt: new Date().toISOString(),
+            linkedWorkItemIds: [6001],
+            changedFiles: [
+              'migrations/20261115_billing.sql',
+              'src/server/services/billingService.ts',
+              'src/server/__tests__/billingService.test.ts',
+            ],
           },
         ],
-        openFollowups: [],
       },
+      additionalParticipants: [
+        {
+          userId: PERSONA_OIDS.qa,
+          status: 'notified',
+          structuredUpdate: null,
+          participantEvidence: {
+            ownerDisplayName: 'QA Dev User',
+            activeWorkItems: [
+              {
+                id: 6005,
+                title: 'Provision worker container autoscaling',
+                workItemType: 'Technical Backlog Item',
+                state: 'In PR',
+                changedDate: new Date().toISOString(),
+              },
+            ],
+            changedSinceLastWorkItems: [
+              {
+                id: 6004,
+                title: 'Update Terraform backend variables',
+                workItemType: 'Task',
+                state: 'Ready for Test',
+                changedDate: new Date().toISOString(),
+              },
+            ],
+            pullRequests: [
+              {
+                prId: 405,
+                title: 'infra: worker autoscaling terraform',
+                status: 'active',
+                createdAt: new Date().toISOString(),
+                linkedWorkItemIds: [6005],
+                changedFiles: ['infra/worker.tf'],
+                builds: [
+                  {
+                    buildId: 8801,
+                    buildNumber: '20261113.5',
+                    definitionName: 'Infra-Validate',
+                    status: 'completed',
+                    result: 'succeeded',
+                    stagesAndJobs: [
+                      {
+                        name: 'lint-check',
+                        type: 'Stage',
+                        state: 'completed',
+                        result: 'succeeded',
+                      },
+                      {
+                        name: 'terraform-plan',
+                        type: 'Stage',
+                        state: 'completed',
+                        result: 'skipped',
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
       proposals: [
         {
           workItemId: 6001,
-          workItemTitle: 'Webhook signature check',
+          workItemTitle: 'Billing ledger SQL migration & API',
           proposalType: 'state',
           fieldName: 'state',
           currentValue: 'In PR',
@@ -263,13 +329,13 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
           confidence: 'at_risk',
         },
         {
-          workItemId: 6002,
-          workItemTitle: 'Retry queue worker',
+          workItemId: 6005,
+          workItemTitle: 'Provision worker container autoscaling',
           proposalType: 'state',
           fieldName: 'state',
           currentValue: 'New',
           proposedValue: 'Active',
-          reason: 'Started implementation',
+          reason: 'Implementation in progress',
           confidence: 'uncertain',
         },
       ],
@@ -277,17 +343,53 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
 
     await loginAsPersona('developer');
     const pulsePage = new StandupPulsePage(page);
-    // Navigate directly to /standup-summary WITHOUT ?session= query param
     await pulsePage.gotoSummaryNoParams();
 
     await expect(pulsePage.pulseDeliveryModel()).toHaveText('Flow');
-    await expect(pulsePage.pulseTeamGoal()).toContainText('Unblock payment webhooks');
-    await expect(pulsePage.pulseOverallHealth()).toHaveText(/At Risk|Watch/);
-    await expect(pulsePage.pulseBlockersSection()).toContainText(
-      'Dev CI pipeline failing on #6002',
+    await expect(pulsePage.pulseTeamGoal()).toContainText(
+      'Billing & Worker Infra Rollout',
     );
-    await expect(pulsePage.pulseRisksSection()).toContainText('Carryover');
+    await expect(pulsePage.pulseOverallHealth()).toHaveText('At Risk');
 
+    // 1. SDLC Callouts: SQL migration + Terraform IaC skipped stage
+    await expect(pulsePage.pulseSdlcCalloutsSection()).toContainText(
+      'migrations/20261115_billing.sql',
+    );
+    await expect(pulsePage.pulseSdlcCalloutsSection()).toContainText(
+      'infra/worker.tf',
+    );
+    await expect(pulsePage.pulseSdlcCalloutsSection()).toContainText(
+      'stage "terraform-plan" was skipped',
+    );
+
+    // 2. Engineering Area Breakdown
+    await expect(pulsePage.pulseAreaBreakdownSection()).toContainText(
+      'Database / SQL',
+    );
+    await expect(pulsePage.pulseAreaBreakdownSection()).toContainText(
+      'Infra / Terraform',
+    );
+
+    // 3. Per-person multi-day narratives: Confirmed (with correction) AND AI-Drafted from ADO
+    await expect(
+      page.getByTestId(
+        `participant-narrative-status-${PERSONA_OIDS.developer}`,
+      ),
+    ).toHaveText('Confirmed');
+    await expect(
+      page.getByTestId(
+        `participant-narrative-correction-${PERSONA_OIDS.developer}`,
+      ),
+    ).toContainText('Confirmed DBA review scheduled for 3pm EST');
+
+    await expect(
+      page.getByTestId(`participant-narrative-status-${PERSONA_OIDS.qa}`),
+    ).toHaveText('AI-Drafted from ADO');
+    await expect(
+      page.getByTestId(`participant-narrative-${PERSONA_OIDS.qa}`),
+    ).toContainText('IaC Pipeline Verification Alert');
+
+    // 4. Confirmation-gated ADO proposals apply & dismiss
     const [firstProposal, secondProposal] = seeded.proposals;
     await page.getByTestId(`proposal-apply-btn-${firstProposal.id}`).click();
     await expect(
@@ -298,117 +400,5 @@ test.describe('Standup & Calendar Delivery Pulse', () => {
     await expect(
       page.getByTestId(`proposal-status-${secondProposal.id}`),
     ).toHaveText('dismissed');
-  });
-
-  test('4. Calendar Delivery Pulse & Confidence Filtering: filters At Risk items, shows Why at risk, and applies target-date proposal (AC-07, AC-08, AC-09)', async ({
-    page,
-    loginAsPersona,
-    e2eApi,
-  }) => {
-    const staleDate = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
-    const freshDate = new Date().toISOString();
-    const tomorrowYmd = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
-    const proposedYmd = new Date(Date.now() + 9 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
-
-    const seeded = await SeedApi.seedStandupDeliveryPulse(e2eApi, {
-      project: E2E_PROJECT,
-      deliveryModel: 'milestone',
-      goalSource: 'release_epic',
-      teamGoal: 'Release v2.8 Milestone Readiness',
-      sessionStatus: 'completed',
-      participantUserId: PERSONA_OIDS.developer,
-      participantStatus: 'submitted',
-      structuredUpdate: {
-        yesterday: 'Progressed #7002',
-        today: 'Unblocking #7001',
-        blockers: 'Waiting on schema sign-off for #7001',
-      },
-      proposals: [
-        {
-          workItemId: 7001,
-          workItemTitle: 'At-Risk Milestone PBI',
-          proposalType: 'target_date',
-          fieldName: 'dueDate',
-          currentValue: tomorrowYmd,
-          proposedValue: proposedYmd,
-          reason: 'Due in 2 days while still Active',
-          confidence: 'at_risk',
-        },
-      ],
-    });
-
-    await page.route('**/api/workitems*', (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            id: 7001,
-            title: 'At-Risk Milestone PBI',
-            state: 'Active',
-            workItemType: 'Product Backlog Item',
-            assignedTo: 'Dev User',
-            dueDate: tomorrowYmd,
-            areaPath: E2E_PROJECT,
-            iterationPath: E2E_PROJECT,
-            changedDate: staleDate,
-            createdDate: staleDate,
-          },
-          {
-            id: 7002,
-            title: 'Healthy Completed PBI',
-            state: 'Closed',
-            workItemType: 'Product Backlog Item',
-            assignedTo: 'Dev User',
-            dueDate: tomorrowYmd,
-            areaPath: E2E_PROJECT,
-            iterationPath: E2E_PROJECT,
-            changedDate: freshDate,
-            createdDate: freshDate,
-          },
-        ]),
-      });
-    });
-
-    await loginAsPersona('developer');
-    const pulsePage = new StandupPulsePage(page);
-    await pulsePage.gotoCalendar();
-
-    await expect(page.locator('.rbc-calendar')).toBeVisible();
-    await expect(page.getByTestId('unscheduled-list')).toBeVisible();
-    await expect(page.getByTestId('calendar-pulse-model')).toHaveText(
-      'Milestone Pulse',
-    );
-    await expect(page.getByTestId('calendar-pulse-goal')).toContainText(
-      'Release v2.8 Milestone Readiness',
-    );
-
-    // Filter to At Risk items
-    await page.getByTestId('calendar-pulse-filter-at-risk').click();
-    await expect(page.getByText(/At-Risk Milestone PBI/)).toBeVisible();
-    await expect(page.getByText(/Healthy Completed PBI/)).toHaveCount(0);
-
-    // Inspect "Why at risk?" popover on item #7001
-    const confidenceBadge = page.getByTestId('work-item-confidence-7001').first();
-    await expect(confidenceBadge).toBeVisible();
-    await confidenceBadge.click();
-    await expect(page.getByTestId('work-item-risk-reasons-7001')).toContainText(
-      /Standup blocker|Unchanged in Active|Due in/i,
-    );
-
-    // Open Pending Proposals drawer and Confirm & Apply target-date proposal
-    const proposal = seeded.proposals[0];
-    await page.getByTestId('calendar-pulse-filter-proposals').click();
-    await expect(pulsePage.calendarProposalsDrawer()).toBeVisible();
-    await page.getByTestId(`calendar-proposal-apply-${proposal.id}`).click();
-
-    await expect(
-      page.getByTestId(`calendar-proposal-card-${proposal.id}`),
-    ).toHaveCount(0, { timeout: 10_000 });
-    await expect(page.locator('.rbc-calendar')).toBeVisible();
   });
 });

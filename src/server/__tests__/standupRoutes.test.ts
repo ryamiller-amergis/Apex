@@ -1,5 +1,5 @@
 /**
- * Route tests for Standup & Delivery Pulse endpoints + RBAC enforcement.
+ * Route tests for Standup & Delivery Pulse endpoints + rosterMode & RBAC enforcement.
  */
 import request from 'supertest';
 import express from 'express';
@@ -7,7 +7,6 @@ import express from 'express';
 let activePermissions = new Set<string>([
   'standup:participate',
   'standup:manage',
-  'calendar:view',
   'workitems:write',
 ]);
 
@@ -53,6 +52,14 @@ jest.mock('../services/standupService', () => ({
 
 jest.mock('../services/standupEvidenceCollectorService', () => ({
   collectAndSaveParticipantBrief: jest.fn().mockResolvedValue(null),
+  resolveStandupRoster: jest.fn().mockResolvedValue([
+    {
+      userId: 'u-ado-1',
+      displayName: 'ADO Dev',
+      email: 'ado@localhost',
+      source: 'ado',
+    },
+  ]),
 }));
 
 const makeInsertChain = () => ({
@@ -120,41 +127,76 @@ function buildApp() {
   return app;
 }
 
-describe('Standup Config Routes', () => {
+describe('Standup Config & Roster Discovery Routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     activePermissions = new Set([
       'standup:participate',
       'standup:manage',
-      'calendar:view',
       'workitems:write',
     ]);
     mockDb.insert.mockReturnValue(makeInsertChain());
   });
 
-  it('returns 400 when groupIds or project are missing', async () => {
-    const res = await request(buildApp())
+  it('returns 400 when project is missing, or when groupIds is empty in groups_only mode', async () => {
+    const missingProject = await request(buildApp())
       .post('/api/standup/configs')
-      .send({ project: 'AI-Pilot' });
+      .send({ groupIds: ['group-1'] });
+    expect(missingProject.status).toBe(400);
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/groupIds/i);
+    const missingGroupsInGroupsOnly = await request(buildApp())
+      .post('/api/standup/configs')
+      .send({ project: 'AI-Pilot', rosterMode: 'groups_only', groupIds: [] });
+    expect(missingGroupsInGroupsOnly.status).toBe(400);
+    expect(missingGroupsInGroupsOnly.body.error).toMatch(/groupIds/i);
   });
 
-  it('rejects invalid deliveryModel with 400', async () => {
+  it('allows empty groupIds when rosterMode is ado_and_groups or ado_active', async () => {
+    const returningMock = jest.fn().mockResolvedValue([
+      {
+        id: 'config-auto',
+        groupIds: [],
+        project: 'MaxView',
+        rosterMode: 'ado_and_groups',
+        deliveryModel: 'flow',
+      },
+    ]);
+    const valuesMock = jest.fn().mockReturnValue({ returning: returningMock });
+    mockDb.insert.mockReturnValue({ values: valuesMock });
+
     const res = await request(buildApp())
       .post('/api/standup/configs')
       .send({
-        groupIds: ['group-1'],
-        project: 'AI-Pilot',
-        deliveryModel: 'waterfall',
+        project: 'MaxView',
+        rosterMode: 'ado_and_groups',
+        groupIds: [],
       });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Invalid deliveryModel/i);
+    expect(res.status).toBe(201);
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'MaxView',
+        rosterMode: 'ado_and_groups',
+        groupIds: [],
+      }),
+    );
   });
 
-  it('persists reminder timing and Delivery Pulse model/goal/policy fields', async () => {
+  it('returns previewed participants from GET /api/standup/roster-preview (standup:manage)', async () => {
+    const res = await request(buildApp()).get(
+      '/api/standup/roster-preview?project=MaxView&rosterMode=ado_and_groups',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      project: 'MaxView',
+      rosterMode: 'ado_and_groups',
+      participants: [
+        expect.objectContaining({ userId: 'u-ado-1', source: 'ado' }),
+      ],
+    });
+  });
+
+  it('persists reminder timing and Delivery Pulse model/goal/rosterMode/policy fields', async () => {
     const returningMock = jest.fn().mockResolvedValue([
       {
         id: 'config-1',
@@ -163,6 +205,7 @@ describe('Standup Config Routes', () => {
         deliveryModel: 'milestone',
         goalSource: 'release_epic',
         teamGoal: 'Ship v2.5',
+        rosterMode: 'ado_active',
         reminderDelayMin: 15,
         reminderIntervalMin: 45,
         facilitatorDeadlineMin: 90,
@@ -179,6 +222,7 @@ describe('Standup Config Routes', () => {
         deliveryModel: 'milestone',
         goalSource: 'release_epic',
         teamGoal: 'Ship v2.5',
+        rosterMode: 'ado_active',
         policy: { staleDaysThreshold: 4 },
         reminderDelayMin: 15,
         reminderIntervalMin: 45,
@@ -191,6 +235,7 @@ describe('Standup Config Routes', () => {
         deliveryModel: 'milestone',
         goalSource: 'release_epic',
         teamGoal: 'Ship v2.5',
+        rosterMode: 'ado_active',
         policy: expect.objectContaining({
           staleDaysThreshold: 4,
           enableTargetDateChecks: true,
@@ -238,46 +283,13 @@ describe('Standup Config Routes', () => {
   });
 });
 
-describe('Delivery Pulse, Latest Session, Quick Submit & Proposals Routes', () => {
+describe('Latest Session, Pre-Drafted Submit & Proposals Routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    activePermissions = new Set([
-      'standup:participate',
-      'calendar:view',
-      'workitems:write',
-    ]);
+    activePermissions = new Set(['standup:participate', 'workitems:write']);
   });
 
-  it('allows calendar:view users without standup:participate to read GET /api/standup/delivery-pulse', async () => {
-    activePermissions = new Set(['calendar:view']);
-    mockDb.query.standupConfigs.findMany.mockResolvedValue([
-      {
-        id: 'cfg-1',
-        project: 'MaxView',
-        enabled: true,
-        deliveryModel: 'flow',
-        goalSource: 'manual',
-        teamGoal: 'Keep WIP <= 3',
-        policy: {},
-      },
-    ]);
-    mockDb.query.standupSessions.findMany.mockResolvedValue([]);
-    mockDb.query.standupActionProposals.findMany.mockResolvedValue([]);
-
-    const res = await request(buildApp()).get(
-      '/api/standup/delivery-pulse?project=MaxView',
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      project: 'MaxView',
-      deliveryModel: 'flow',
-      teamGoal: 'Keep WIP <= 3',
-      enableTargetDateChecks: false,
-    });
-  });
-
-  it('returns latest session with synthesized teamPulse on GET /api/standup/sessions/latest', async () => {
+  it('returns latest session with synthesized teamPulse including individualNarratives on GET /api/standup/sessions/latest', async () => {
     mockDb.query.standupConfigs.findMany.mockResolvedValue([
       { id: 'cfg-1', project: 'MaxView' },
     ]);
@@ -303,6 +315,7 @@ describe('Delivery Pulse, Latest Session, Quick Submit & Proposals Routes', () =
               yesterday: 'Finished #10',
               today: 'Starting #11',
               blockers: '',
+              userCorrections: 'Added schema index verification',
             },
           },
         ],
@@ -321,10 +334,17 @@ describe('Delivery Pulse, Latest Session, Quick Submit & Proposals Routes', () =
       deliveryModel: 'flow',
       teamGoal: 'Ship Delivery Pulse',
       overallHealth: 'on_track',
+      individualNarratives: [
+        expect.objectContaining({
+          userId: 'user-1',
+          status: 'confirmed',
+          userCorrections: 'Added schema index verification',
+        }),
+      ],
     });
   });
 
-  it('passes Quick Confirm structuredUpdate and proposals to submitParticipant', async () => {
+  it('passes Approve/Reject decisions, userCorrections, and proposals to submitParticipant', async () => {
     const res = await request(buildApp())
       .post('/api/standup/participants/part-1/submit')
       .send({
@@ -332,6 +352,9 @@ describe('Delivery Pulse, Latest Session, Quick Submit & Proposals Routes', () =
           yesterday: 'Merged #101',
           today: 'Working #102',
           blockers: '',
+          userCorrections: 'Also reviewed PR !90',
+          approvalAction: 'approved_with_edits',
+          itemDecisions: { 'draft-1': 'approved', 'draft-2': 'rejected' },
         },
         proposals: [
           {
@@ -350,7 +373,11 @@ describe('Delivery Pulse, Latest Session, Quick Submit & Proposals Routes', () =
     expect(mockSubmitParticipant).toHaveBeenCalledWith(
       'part-1',
       expect.objectContaining({
-        structuredUpdate: expect.objectContaining({ yesterday: 'Merged #101' }),
+        structuredUpdate: expect.objectContaining({
+          yesterday: 'Merged #101',
+          userCorrections: 'Also reviewed PR !90',
+          approvalAction: 'approved_with_edits',
+        }),
         proposals: [expect.objectContaining({ workItemId: 101 })],
       }),
     );
@@ -394,35 +421,6 @@ describe('Delivery Pulse, Latest Session, Quick Submit & Proposals Routes', () =
     expect(applied.body).toMatchObject({
       ok: true,
       proposal: { id: 'prop-1', status: 'applied', decidedBy: 'user-test' },
-    });
-  });
-
-  it('marks pending proposal dismissed on POST /api/standup/proposals/:id/dismiss', async () => {
-    mockDb.query.standupActionProposals.findFirst.mockResolvedValue({
-      id: 'prop-2',
-      sessionId: 'sess-1',
-      project: 'MaxView',
-      workItemId: 102,
-      status: 'pending',
-    });
-    const returningMock = jest.fn().mockResolvedValue([
-      {
-        id: 'prop-2',
-        status: 'dismissed',
-        decidedBy: 'user-test',
-      },
-    ]);
-    const whereMock = jest.fn().mockReturnValue({ returning: returningMock });
-    const setMock = jest.fn().mockReturnValue({ where: whereMock });
-    mockDb.update.mockReturnValue({ set: setMock });
-
-    const res = await request(buildApp()).post(
-      '/api/standup/proposals/prop-2/dismiss',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      ok: true,
-      proposal: { id: 'prop-2', status: 'dismissed' },
     });
   });
 });

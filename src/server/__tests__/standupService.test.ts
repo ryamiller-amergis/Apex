@@ -56,6 +56,7 @@ import {
   generateDailySessions,
   submitParticipant,
 } from '../services/standupService';
+import { resolveStandupRoster } from '../services/standupEvidenceCollectorService';
 import { createNotification } from '../services/notificationService';
 import { sendTeamsNotification } from '../services/teamsBotService';
 import { createThread } from '../services/chatAgentService';
@@ -343,6 +344,10 @@ describe('submitParticipant Quick Confirm & proposal staging', () => {
         yesterday: 'Completed #501',
         today: 'Working on #502',
         blockers: '',
+        userCorrections: 'Clarified #503 moved to next sprint',
+        approvalAction: 'approved_with_edits',
+        itemDecisions: { 'd-1': 'approved', 'd-2': 'rejected' },
+        rejectedItems: [{ id: 'd-2', summary: '#503 Old task', reason: 'Moved' }],
       },
       proposals: [
         {
@@ -359,5 +364,34 @@ describe('submitParticipant Quick Confirm & proposal staging', () => {
 
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
     expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+
+  it('resolves group members in groups_only and ado_and_groups fallback when ADO is unconfigured in test', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        innerJoin: () => ({
+          where: jest.fn().mockResolvedValue([
+            { userId: 'u-1', displayName: 'Dev One', email: 'dev1@localhost' },
+            { userId: 'u-1', displayName: 'Dev One', email: 'dev1@localhost' },
+          ]),
+        }),
+      }),
+    });
+
+    const groupsOnly = await resolveStandupRoster({
+      project: 'MaxView',
+      rosterMode: 'groups_only',
+      groupIds: ['g-1'],
+    });
+    expect(groupsOnly).toEqual([
+      { userId: 'u-1', displayName: 'Dev One', email: 'dev1@localhost', source: 'group' },
+    ]);
+
+    const adoOnlyInTest = await resolveStandupRoster({
+      project: 'MaxView',
+      rosterMode: 'ado_active',
+      groupIds: [],
+    });
+    expect(adoOnlyInTest).toEqual([]);
   });
 });

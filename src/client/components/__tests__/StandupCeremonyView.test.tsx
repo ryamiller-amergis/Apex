@@ -85,6 +85,42 @@ const seededMySession = {
     generatedAt: '2026-11-13T12:00:00.000Z',
     deliveryModel: 'flow',
     teamGoal: 'Keep flow cycle time under 3 days',
+    workDomains: ['backend', 'database'],
+    multiDayArc: {
+      sessionsAnalyzed: 3,
+      summary: 'Across 3 prior standups: 2 progress updates logged, carrying #104 (3d).',
+      carryoverStreaks: [
+        { workItemId: 104, title: 'Retry queue worker', daysCarried: 3 },
+      ],
+    },
+    recommendedFocus:
+      'Close out multi-day carryover #104 (Retry queue worker, carried 3 standups) before starting net-new work.',
+    draftedItems: [
+      {
+        id: 'draft-yesterday-wi-101',
+        bucket: 'yesterday',
+        summary: '#101 API caching layer [Ready for Test]',
+        workItemId: 101,
+        domain: 'backend',
+        evidence: 'ADO update — state [Ready for Test]',
+      },
+      {
+        id: 'draft-yesterday-wi-199',
+        bucket: 'yesterday',
+        summary: '#199 Legacy ticket reassigned only [Active]',
+        workItemId: 199,
+        domain: 'general',
+        evidence: 'ADO update — state [Active]',
+      },
+      {
+        id: 'draft-today-wi-104',
+        bucket: 'today',
+        summary: '#104 Retry queue worker [Active] (Carryover 3d)',
+        workItemId: 104,
+        domain: 'database',
+        evidence: 'Assigned in ADO',
+      },
+    ],
     accomplishedSinceLast: [
       {
         workItemId: 101,
@@ -110,7 +146,7 @@ const seededMySession = {
         state: 'Active',
         targetDate: null,
         iterationPath: null,
-        riskFlags: ['Carryover', 'Stale 4d'],
+        riskFlags: ['Carryover 3d', 'Stale 4d'],
       },
     ],
     detectedExceptions: [
@@ -137,13 +173,16 @@ const seededMySession = {
   proposals: [],
 };
 
-describe('StandupCeremonyView Quick Confirm (AC-01, AC-02, AC-03)', () => {
+describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02, AC-03)', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('renders Quick Confirm brief, commitment carryover, opt-in proposal staging, and submits in one click', async () => {
-    let capturedSubmitBody: Record<string, unknown> | null = null;
+  it('renders multi-day arc, excludes rejected items, folds inline userCorrections, and stages proposals', async () => {
+    let capturedSubmitBody: {
+      structuredUpdate?: Record<string, string>;
+      proposals?: unknown[];
+    } = {};
 
     global.fetch = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/api/standup/my-session')) {
@@ -180,35 +219,45 @@ describe('StandupCeremonyView Quick Confirm (AC-01, AC-02, AC-03)', () => {
     expect(await screen.findByTestId('standup-delivery-model-badge')).toHaveTextContent(
       'Flow',
     );
-    expect(screen.getByTestId('standup-team-goal')).toHaveTextContent(
-      'Keep flow cycle time under 3 days',
+    expect(screen.getByTestId('standup-multi-day-arc')).toHaveTextContent(
+      'carrying #104 (3d)',
     );
-    expect(screen.getByTestId('standup-commitment-status-0')).toHaveTextContent(
-      'Carryover',
+    expect(screen.getByTestId('standup-recommended-focus')).toHaveTextContent(
+      'Close out multi-day carryover #104',
     );
 
-    // Stage the proposed state update
+    // Reject inaccurate item #199
+    fireEvent.click(screen.getByTestId('draft-item-reject-draft-yesterday-wi-199'));
+
+    // Add an inline user correction
+    fireEvent.change(screen.getByTestId('standup-corrections-input'), {
+      target: { value: 'Also fixed flaky auth integration test not tracked in ADO' },
+    });
+
+    // Stage proposed state update
     fireEvent.click(screen.getByTestId('standup-stage-proposal-lag-104'));
 
-    // Submit Quick Confirm
+    // Submit update
     fireEvent.click(screen.getByTestId('standup-quick-submit-btn'));
 
     await waitFor(() => {
       expect(screen.getByTestId('standup-submitted-banner')).toBeInTheDocument();
     });
 
-    expect(capturedSubmitBody).toMatchObject({
-      structuredUpdate: expect.objectContaining({
-        yesterday: expect.stringContaining('#101'),
-        today: expect.stringContaining('#104'),
+    expect(capturedSubmitBody.structuredUpdate?.yesterday).toContain('#101');
+    expect(capturedSubmitBody.structuredUpdate?.yesterday).not.toContain('#199');
+    expect(capturedSubmitBody.structuredUpdate?.userCorrections).toBe(
+      'Also fixed flaky auth integration test not tracked in ADO',
+    );
+    expect(capturedSubmitBody.structuredUpdate?.approvalAction).toBe(
+      'approved_with_edits',
+    );
+    expect(capturedSubmitBody.proposals).toEqual([
+      expect.objectContaining({
+        workItemId: 104,
+        proposalType: 'state',
+        proposedValue: 'Ready for Test',
       }),
-      proposals: [
-        expect.objectContaining({
-          workItemId: 104,
-          proposalType: 'state',
-          proposedValue: 'Ready for Test',
-        }),
-      ],
-    });
+    ]);
   });
 });

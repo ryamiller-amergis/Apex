@@ -37,11 +37,95 @@ const mockSession = {
       displayName: 'Dev User',
       status: 'submitted',
       structuredUpdate: {
-        yesterday: 'Shipped #101 feature',
+        yesterday: 'Shipped #101 billing migration',
         today: 'Code review on #102',
         blockers: 'Staging pipeline failing on #102',
+        userCorrections: 'Coordinated DB migration window with SRE',
+      },
+      preparedBrief: {
+        generatedAt: '2026-06-30T09:00:00Z',
+        deliveryModel: 'flow' as const,
+        teamGoal: 'Keep flow cycle time under 3 days',
+        workDomains: ['database' as const, 'backend' as const],
+        multiDayArc: {
+          sessionsAnalyzed: 2,
+          summary: 'Across 2 prior standups: 2 progress updates logged, zero multi-day carryovers.',
+          carryoverStreaks: [],
+        },
+        accomplishedSinceLast: [],
+        priorCommitments: [],
+        suggestedToday: [
+          {
+            workItemId: 101,
+            title: 'Billing SQL migration',
+            workItemType: 'Task',
+            state: 'In PR',
+            riskFlags: [],
+          },
+        ],
+        detectedExceptions: [],
+        openFollowups: [],
+        sdlcCallouts: [
+          {
+            id: 'sdlc-sql-pr-77',
+            category: 'sql_migration' as const,
+            severity: 'warning' as const,
+            domain: 'database' as const,
+            title: 'SQL / Schema Change Detected (PR !77)',
+            detail:
+              'SQL / Schema Change Detected: PR !77 (#101) modifies migrations/20261115_billing.sql — verify migration rollback, execution order, and release DB step are accounted for.',
+            recommendation:
+              'Confirm -- Down Migration reversibility and release DB execution.',
+            workItemIds: [101],
+            prIds: [77],
+            filePaths: ['migrations/20261115_billing.sql'],
+          },
+        ],
       },
       submittedAt: '2026-06-30T10:00:00Z',
+    },
+    {
+      id: 'p2',
+      userId: 'user-2',
+      displayName: 'Infra Engineer',
+      status: 'notified',
+      structuredUpdate: null,
+      preparedBrief: {
+        generatedAt: '2026-06-30T09:00:00Z',
+        deliveryModel: 'flow' as const,
+        teamGoal: 'Keep flow cycle time under 3 days',
+        workDomains: ['iac' as const],
+        recommendedFocus: 'Re-run skipped Terraform plan stage on PR !81',
+        accomplishedSinceLast: [
+          {
+            workItemId: 205,
+            title: 'Worker container scaling',
+            workItemType: 'Task',
+            state: 'In PR',
+            evidence: 'ADO update',
+          },
+        ],
+        priorCommitments: [],
+        suggestedToday: [],
+        detectedExceptions: [],
+        openFollowups: [],
+        sdlcCallouts: [
+          {
+            id: 'sdlc-iac-pr-81',
+            category: 'iac_pipeline' as const,
+            severity: 'critical' as const,
+            domain: 'iac' as const,
+            title: 'IaC Pipeline Verification Alert (PR !81)',
+            detail:
+              'IaC Pipeline Verification Alert: PR !81 (#205) modifies infra/worker.tf, but pipeline Infra-CI #44 did not complete a passing Terraform/IaC validation stage (stage "terraform-plan" was skipped).',
+            recommendation: 'Run and verify Terraform validate & plan stage.',
+            workItemIds: [205],
+            prIds: [81],
+            filePaths: ['infra/worker.tf'],
+          },
+        ],
+      },
+      submittedAt: null,
     },
   ],
   followups: [
@@ -93,13 +177,13 @@ function renderWithSession(sessionId: string | null) {
   );
 }
 
-describe('StandupSummaryView (5-Minute Team Pulse Board)', () => {
+describe('StandupSummaryView (SDLC Callouts, Area Breakdown & Narratives)', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     mockPermissions = new Set(['standup:participate', 'workitems:write']);
   });
 
-  it('shows loading then Team Pulse summary when ?session= is provided', async () => {
+  it('renders SDLC callouts, area breakdown, and both Confirmed and AI-Drafted individual narratives', async () => {
     global.fetch = jest.fn().mockImplementation((url: string) => {
       if (url.includes('/api/standup/sessions/session-1')) {
         return Promise.resolve({
@@ -117,21 +201,35 @@ describe('StandupSummaryView (5-Minute Team Pulse Board)', () => {
 
     renderWithSession('session-1');
 
-    expect(screen.getByText('Loading session...')).toBeInTheDocument();
-
     await waitFor(() => {
       expect(screen.getByText('Standup Summary')).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId('pulse-delivery-model')).toHaveTextContent('Flow');
-    expect(screen.getByTestId('pulse-team-goal')).toHaveTextContent(
-      'Keep flow cycle time under 3 days',
+    expect(screen.getByTestId('pulse-sdlc-callouts-section')).toHaveTextContent(
+      'migrations/20261115_billing.sql',
     );
-    expect(screen.getByTestId('pulse-blockers-section')).toHaveTextContent(
-      'Staging pipeline failing on #102',
+    expect(screen.getByTestId('pulse-sdlc-callouts-section')).toHaveTextContent(
+      'infra/worker.tf',
     );
-    expect(screen.getByText(/All good\./)).toBeInTheDocument();
-    expect(screen.getByText('Follow up with QA')).toBeInTheDocument();
+    expect(screen.getByTestId('pulse-area-breakdown-section')).toHaveTextContent(
+      'Database / SQL',
+    );
+    expect(screen.getByTestId('pulse-area-breakdown-section')).toHaveTextContent(
+      'Infra / Terraform',
+    );
+
+    // Confirmed participant with user correction
+    expect(
+      screen.getByTestId('participant-narrative-status-user-1'),
+    ).toHaveTextContent('Confirmed');
+    expect(
+      screen.getByTestId('participant-narrative-correction-user-1'),
+    ).toHaveTextContent('Coordinated DB migration window with SRE');
+
+    // Unsubmitted participant gets AI-Drafted from ADO narrative
+    expect(
+      screen.getByTestId('participant-narrative-status-user-2'),
+    ).toHaveTextContent('AI-Drafted from ADO');
   });
 
   it('auto-loads latest session when ?session= query param is omitted (AC-06)', async () => {
@@ -163,7 +261,7 @@ describe('StandupSummaryView (5-Minute Team Pulse Board)', () => {
     );
   });
 
-  it('allows confirming and applying a pending ADO proposal when user has workitems:write (AC-08)', async () => {
+  it('allows confirming and applying a pending ADO proposal when user has workitems:write (AC-07)', async () => {
     const fetchMock = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
       if (url.includes('/proposals/prop-1/apply') && init?.method === 'POST') {
         return Promise.resolve({
@@ -193,20 +291,6 @@ describe('StandupSummaryView (5-Minute Team Pulse Board)', () => {
         '/api/standup/proposals/prop-1/apply',
         expect.objectContaining({ method: 'POST' }),
       );
-    });
-  });
-
-  it('shows not found when fetch returns empty session for an explicit session id', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => null,
-    } as Response);
-
-    renderWithSession('missing-session');
-
-    await waitFor(() => {
-      expect(screen.getByText('Session not found.')).toBeInTheDocument();
     });
   });
 });

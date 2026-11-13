@@ -484,6 +484,7 @@ export const SeedApi = {
       deliveryModel?: 'flow' | 'sprint' | 'milestone' | 'support' | 'custom';
       goalSource?: 'none' | 'manual' | 'iteration' | 'release_epic' | 'saved_query';
       teamGoal?: string | null;
+      rosterMode?: 'ado_and_groups' | 'ado_active' | 'groups_only';
       policy?: Record<string, unknown>;
       sessionDate?: string;
       sessionStatus?: 'collecting' | 'facilitating' | 'completed';
@@ -491,6 +492,7 @@ export const SeedApi = {
       participantUserId?: string;
       participantStatus?: 'notified' | 'submitted';
       preparedBrief?: unknown;
+      participantEvidence?: Record<string, unknown>;
       structuredUpdate?: {
         yesterday?: string;
         today?: string;
@@ -498,7 +500,15 @@ export const SeedApi = {
         atRisk?: string;
         handoffs?: string;
         capacity?: string;
+        userCorrections?: string;
       } | null;
+      additionalParticipants?: Array<{
+        userId: string;
+        status?: 'notified' | 'submitted';
+        preparedBrief?: unknown;
+        participantEvidence?: Record<string, unknown>;
+        structuredUpdate?: Record<string, unknown> | null;
+      }>;
       proposals?: Array<{
         workItemId: number;
         workItemTitle: string;
@@ -519,7 +529,13 @@ export const SeedApi = {
     },
   ): Promise<{
     group: { id: string; name: string; project: string | null };
-    config: { id: string; project: string; deliveryModel: string; teamGoal: string | null };
+    config: {
+      id: string;
+      project: string;
+      deliveryModel: string;
+      rosterMode?: string;
+      teamGoal: string | null;
+    };
     session: { id: string; sessionDate: string; status: string } | null;
     participant: { id: string; sessionId: string; userId: string; status: string } | null;
     proposals: Array<{ id: string; workItemId: number; status: string }>;

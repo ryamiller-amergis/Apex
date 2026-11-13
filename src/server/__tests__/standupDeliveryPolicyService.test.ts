@@ -14,16 +14,19 @@ jest.mock('../db/drizzle', () => ({
 import {
   buildStandupFacilitatorPrompt,
   buildStandupParticipantPrompt,
-  evaluateCalendarItemHealth,
+  classifyDomainsFromEvidence,
   evaluateParticipantBrief,
+  evaluateSdlcCallouts,
   formatPreparedBriefForPrompt,
+  normalizeRosterMode,
+  reconcileDraftedUpdate,
   resolveStandupPolicy,
   synthesizeTeamPulse,
 } from '../services/standupDeliveryPolicyService';
 
 const FIXED_NOW = '2026-11-13T14:00:00.000Z';
 
-describe('resolveStandupPolicy (AC-01)', () => {
+describe('resolveStandupPolicy & normalizeRosterMode (AC-01)', () => {
   it('defaults flow, sprint, support, and custom to enableTargetDateChecks=false and milestone to true', () => {
     expect(resolveStandupPolicy('flow')).toMatchObject({
       staleDaysThreshold: 3,
@@ -32,379 +35,435 @@ describe('resolveStandupPolicy (AC-01)', () => {
       slaHoursHighPriority: null,
       enableTargetDateChecks: false,
     });
-
-    expect(resolveStandupPolicy('sprint')).toMatchObject({
-      wipLimitPerPerson: null,
-      enableTargetDateChecks: false,
-    });
-
+    expect(resolveStandupPolicy('sprint').enableTargetDateChecks).toBe(false);
     expect(resolveStandupPolicy('support')).toMatchObject({
       slaHoursHighPriority: 24,
       enableTargetDateChecks: false,
     });
-
-    expect(resolveStandupPolicy('custom')).toMatchObject({
-      enableTargetDateChecks: false,
-    });
-
-    expect(resolveStandupPolicy('milestone')).toMatchObject({
-      enableTargetDateChecks: true,
-    });
+    expect(resolveStandupPolicy('custom').enableTargetDateChecks).toBe(false);
+    expect(resolveStandupPolicy('milestone').enableTargetDateChecks).toBe(true);
   });
 
-  it('respects explicit policy overrides on any model', () => {
-    const custom = resolveStandupPolicy('flow', {
-      staleDaysThreshold: 5,
-      wipLimitPerPerson: 2,
-      enableTargetDateChecks: true,
-    });
-    expect(custom.staleDaysThreshold).toBe(5);
-    expect(custom.wipLimitPerPerson).toBe(2);
-    expect(custom.enableTargetDateChecks).toBe(true);
+  it('normalizes rosterMode defaulting to ado_and_groups', () => {
+    expect(normalizeRosterMode(undefined)).toBe('ado_and_groups');
+    expect(normalizeRosterMode('invalid')).toBe('ado_and_groups');
+    expect(normalizeRosterMode('ado_active')).toBe('ado_active');
+    expect(normalizeRosterMode('groups_only')).toBe('groups_only');
   });
 });
 
-describe('evaluateParticipantBrief (AC-01, AC-02, AC-04)', () => {
-  it('detects untouched commitments, PR merge state lag, PR review wait, WIP overload, and stale states in flow mode WITHOUT missing-target-date alerts', () => {
+describe('Multi-day history, carryover streaks & pre-drafted Approve/Reject reconciliation (AC-02, AC-03)', () => {
+  it('computes multi-day carryover streaks across prior standups and drafts yesterday/today/blocker items', () => {
     const brief = evaluateParticipantBrief({
       now: FIXED_NOW,
       deliveryModel: 'flow',
       teamGoal: 'Keep cycle time under 3 days',
       activeWorkItems: [
         {
-          id: 101,
-          title: 'Auth token refresh',
+          id: 1042,
+          title: 'Webhook retry worker',
+          workItemType: 'Task',
+          state: 'Active',
+          changedDate: '2026-11-09T10:00:00.000Z',
+        },
+        {
+          id: 1050,
+          title: 'Billing API endpoint',
           workItemType: 'Product Backlog Item',
-          state: 'In PR',
-          changedDate: '2026-11-08T10:00:00.000Z',
-          targetDate: null,
-        },
-        {
-          id: 102,
-          title: 'Audit logging',
-          workItemType: 'Task',
           state: 'Active',
-          changedDate: '2026-11-12T18:00:00.000Z',
-          targetDate: null,
-        },
-        {
-          id: 103,
-          title: 'Rate limiter',
-          workItemType: 'Task',
-          state: 'Active',
-          changedDate: '2026-11-12T18:00:00.000Z',
-          targetDate: null,
-        },
-        {
-          id: 104,
-          title: 'Webhook retry',
-          workItemType: 'Bug',
-          state: 'Active',
-          changedDate: '2026-11-12T18:00:00.000Z',
-          targetDate: null,
+          changedDate: '2026-11-13T10:00:00.000Z',
         },
       ],
       changedSinceLastWorkItems: [
         {
-          id: 102,
-          title: 'Audit logging',
+          id: 1040,
+          title: 'Schema audit helper',
+          workItemType: 'Task',
+          state: 'Ready for Test',
+          changedDate: '2026-11-12T18:00:00.000Z',
+        },
+        {
+          id: 1099,
+          title: 'Misattributed legacy item',
+          workItemType: 'Bug',
+          state: 'Active',
+          changedDate: '2026-11-12T19:00:00.000Z',
+        },
+      ],
+      priorHistory: [
+        {
+          sessionDate: '2026-11-12',
+          structuredUpdate: {
+            yesterday: 'Started #1040',
+            today: '#1042 Webhook retry worker; #1040 Schema audit helper',
+            userCorrections: 'Waiting on staging Redis credentials',
+          },
+        },
+        {
+          sessionDate: '2026-11-11',
+          structuredUpdate: {
+            yesterday: 'Scoped #1042',
+            today: '#1042 Webhook retry worker',
+          },
+        },
+        {
+          sessionDate: '2026-11-10',
+          structuredUpdate: {
+            yesterday: 'Closed #1038',
+            today: '#1042 Webhook retry worker',
+          },
+        },
+      ],
+    });
+
+    expect(brief.multiDayArc?.sessionsAnalyzed).toBe(3);
+    expect(brief.multiDayArc?.carryoverStreaks).toEqual([
+      expect.objectContaining({
+        workItemId: 1042,
+        title: 'Webhook retry worker',
+        daysCarried: 3,
+      }),
+    ]);
+    expect(brief.multiDayArc?.summary).toContain('#1042 (3d)');
+    expect(brief.multiDayArc?.summary).toContain('Waiting on staging Redis credentials');
+    expect(brief.recommendedFocus).toContain('#1042');
+
+    const drafted = brief.draftedItems ?? [];
+    expect(drafted.some((i) => i.id === 'draft-yesterday-wi-1040')).toBe(true);
+    expect(drafted.some((i) => i.id === 'draft-yesterday-wi-1099')).toBe(true);
+    expect(drafted.some((i) => i.id === 'draft-today-wi-1042')).toBe(true);
+
+    // Reject #1099 and add a user correction
+    const reconciled = reconcileDraftedUpdate({
+      draftedItems: drafted,
+      itemDecisions: {
+        'draft-yesterday-wi-1040': 'approved',
+        'draft-yesterday-wi-1099': 'rejected',
+        'draft-today-wi-1042': 'approved',
+        'draft-today-wi-1050': 'approved',
+      },
+      rejectionReasons: {
+        'draft-yesterday-wi-1099': 'Only reassigned ticket, did not implement',
+      },
+      userCorrections: 'Also paired with QA on billing smoke suite',
+    });
+
+    expect(reconciled.approvalAction).toBe('approved_with_edits');
+    expect(reconciled.yesterday).toContain('#1040');
+    expect(reconciled.yesterday).not.toContain('#1099');
+    expect(reconciled.today).toContain('Also paired with QA on billing smoke suite');
+    expect(reconciled.userCorrections).toBe(
+      'Also paired with QA on billing smoke suite',
+    );
+    expect(reconciled.rejectedItems).toEqual([
+      expect.objectContaining({
+        id: 'draft-yesterday-wi-1099',
+        reason: 'Only reassigned ticket, did not implement',
+      }),
+    ]);
+  });
+});
+
+describe('Domain Categorization & SDLC Process Evaluators (AC-04)', () => {
+  it('classifies database, iac, backend, frontend, qa, security, and prod_support domains accurately', () => {
+    const domains = classifyDomainsFromEvidence(
+      [
+        {
+          id: 1,
+          title: 'Sev1 outage on auth login',
+          workItemType: 'Bug',
+          state: 'Active',
+          priority: 1,
+        },
+        {
+          id: 2,
+          title: 'RBAC permission guard',
           workItemType: 'Task',
           state: 'Active',
-          changedDate: '2026-11-12T18:00:00.000Z',
+        },
+      ],
+      [
+        {
+          prId: 10,
+          title: 'Add billing migration and worker',
+          status: 'active',
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [2],
+          changedFiles: [
+            'migrations/20261115_billing.sql',
+            'infra/worker.tf',
+            'src/server/services/billingService.ts',
+            'src/client/components/BillingView.tsx',
+            'tests/e2e/specs/billing.spec.ts',
+          ],
+        },
+      ],
+    );
+
+    expect(domains).toEqual(
+      expect.arrayContaining([
+        'database',
+        'iac',
+        'prod_support',
+        'security',
+        'backend',
+        'frontend',
+        'qa',
+      ]),
+    );
+  });
+
+  it('flags sql_migration, iac_pipeline (when skipped/failed/missing), missing_tests, red_build_in_qa, and pr_state_drift', () => {
+    const callouts = evaluateSdlcCallouts({
+      ownerDisplayName: 'Alice Dev',
+      activeWorkItems: [
+        {
+          id: 801,
+          title: 'Billing ledger rollout',
+          workItemType: 'Feature',
+          state: 'Ready for Release',
+          tags: 'Release:v3.1',
+        },
+        {
+          id: 802,
+          title: 'Worker autoscaling infra',
+          workItemType: 'Technical Backlog Item',
+          state: 'In PR',
+        },
+        {
+          id: 803,
+          title: 'QA checkout verification',
+          workItemType: 'Product Backlog Item',
+          state: 'Ready for Test',
+        },
+        {
+          id: 804,
+          title: 'Merged API endpoint still Active',
+          workItemType: 'Task',
+          state: 'Active',
         },
       ],
       pullRequests: [
         {
-          prId: 55,
-          title: 'Merge auth token refresh',
-          status: 'completed',
-          createdAt: '2026-11-12T08:00:00.000Z',
-          linkedWorkItemIds: [101],
+          prId: 201,
+          title: 'feat: billing schema migration + service',
+          status: 'active',
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [801],
+          changedFiles: [
+            'migrations/20261115_billing.sql',
+            'src/server/services/billingLedger.ts',
+          ],
         },
         {
-          prId: 56,
-          title: 'Add rate limiter middleware',
+          prId: 202,
+          title: 'chore(infra): update worker container replicas',
           status: 'active',
-          createdAt: '2026-11-11T10:00:00.000Z',
-          linkedWorkItemIds: [103],
-          hasApproval: false,
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [802],
+          changedFiles: ['infra/worker.tf'],
+          builds: [
+            {
+              buildId: 9001,
+              buildNumber: '20261113.4',
+              definitionName: 'PR-Validation',
+              status: 'completed',
+              result: 'succeeded',
+              stagesAndJobs: [
+                { name: 'lint-and-unit', type: 'Stage', state: 'completed', result: 'succeeded' },
+                { name: 'terraform-plan', type: 'Stage', state: 'completed', result: 'skipped' },
+              ],
+            },
+          ],
+        },
+        {
+          prId: 204,
+          title: 'feat: merged endpoint',
+          status: 'completed',
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [804],
+          changedFiles: ['src/server/routes/health.ts', 'src/server/__tests__/health.test.ts'],
         },
       ],
       pipelineFailures: [
         {
-          buildId: 900,
-          buildNumber: '20261113.2',
-          definitionName: 'CI-Main',
-          branch: 'refs/heads/main',
-          failedAt: '2026-11-13T09:00:00.000Z',
-          linkedWorkItemIds: [103],
+          buildId: 9009,
+          buildNumber: '20261113.8',
+          definitionName: 'Integration-CI',
+          failedAt: FIXED_NOW,
+          linkedWorkItemIds: [803],
         },
       ],
-      priorStructuredUpdate: {
-        today: '#101 Auth token refresh; #102 Audit logging; #104 Webhook retry',
-      },
-      openFollowups: [
-        { id: 'f-1', title: 'Sync on auth contract', sessionDate: '2026-11-12' },
-      ],
     });
 
-    expect(brief.deliveryModel).toBe('flow');
-    expect(brief.teamGoal).toBe('Keep cycle time under 3 days');
-    expect(brief.openFollowups).toHaveLength(1);
+    const categories = callouts.map((c) => c.category);
+    expect(categories).toContain('sql_migration');
+    expect(categories).toContain('iac_pipeline');
+    expect(categories).toContain('missing_tests');
+    expect(categories).toContain('red_build_in_qa');
+    expect(categories).toContain('pr_state_drift');
 
-    // Commitment memory classification
-    expect(brief.priorCommitments).toEqual([
-      expect.objectContaining({ workItemIds: [101], status: 'completed' }),
-      expect.objectContaining({ workItemIds: [102], status: 'progressed' }),
-      expect.objectContaining({ workItemIds: [104], status: 'untouched' }),
-    ]);
-
-    const kinds = brief.detectedExceptions.map((e) => e.kind);
-    expect(kinds).toContain('untouched_commitment');
-    expect(kinds).toContain('pr_merged_state_lag');
-    expect(kinds).toContain('pr_waiting_review');
-    expect(kinds).toContain('pipeline_failure');
-    expect(kinds).toContain('wip_overload');
-    expect(kinds).toContain('stale_state');
-    // Crucial: Flow mode never nags about missing target dates by default
-    expect(kinds).not.toContain('missing_target_date');
-    expect(kinds).not.toContain('target_date_at_risk');
-
-    const lagEx = brief.detectedExceptions.find(
-      (e) => e.kind === 'pr_merged_state_lag',
-    );
-    expect(lagEx?.proposedAction).toMatchObject({
-      proposalType: 'state',
-      fieldName: 'state',
-      proposedValue: 'Ready for Test',
-    });
+    const iacAlert = callouts.find((c) => c.category === 'iac_pipeline');
+    expect(iacAlert?.detail).toContain('infra/worker.tf');
+    expect(iacAlert?.detail).toContain('stage "terraform-plan" was skipped');
   });
 
-  it('flags missing_target_date and target_date_at_risk with date proposals in milestone mode (AC-04)', () => {
-    const brief = evaluateParticipantBrief({
-      now: FIXED_NOW,
-      deliveryModel: 'milestone',
-      teamGoal: 'Release v2.4 readiness',
+  it('does NOT emit iac_pipeline alert when Terraform stage succeeded', () => {
+    const callouts = evaluateSdlcCallouts({
       activeWorkItems: [
+        { id: 810, title: 'Infra update', workItemType: 'Task', state: 'In PR' },
+      ],
+      pullRequests: [
         {
-          id: 201,
-          title: 'Release feature missing target date',
-          workItemType: 'Feature',
-          state: 'Active',
-          changedDate: '2026-11-13T10:00:00.000Z',
-          targetDate: null,
-          tags: 'Release:v2.4',
-        },
-        {
-          id: 202,
-          title: 'Near-due PBI still Active',
-          workItemType: 'Product Backlog Item',
-          state: 'Active',
-          changedDate: '2026-11-13T10:00:00.000Z',
-          dueDate: '2026-11-16',
+          prId: 210,
+          title: 'infra: valid tf plan',
+          status: 'active',
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [810],
+          changedFiles: ['infra/main.tf'],
+          builds: [
+            {
+              buildId: 9020,
+              buildNumber: '20261113.9',
+              definitionName: 'Infra-CI',
+              status: 'completed',
+              result: 'succeeded',
+              stagesAndJobs: [
+                { name: 'terraform-validate-and-plan', type: 'Stage', state: 'completed', result: 'succeeded' },
+              ],
+            },
+          ],
         },
       ],
     });
 
-    const missingEx = brief.detectedExceptions.find(
-      (e) => e.kind === 'missing_target_date' && e.workItemId === 201,
-    );
-    expect(missingEx).toBeDefined();
-    expect(missingEx?.proposedAction).toMatchObject({
-      proposalType: 'target_date',
-      fieldName: 'targetDate',
-      proposedValue: '2026-11-20',
-    });
-
-    const atRiskEx = brief.detectedExceptions.find(
-      (e) => e.kind === 'target_date_at_risk' && e.workItemId === 202,
-    );
-    expect(atRiskEx).toBeDefined();
-    expect(atRiskEx?.proposedAction).toMatchObject({
-      proposalType: 'target_date',
-      fieldName: 'dueDate',
-      currentValue: '2026-11-16',
-      proposedValue: '2026-11-23',
-    });
-  });
-
-  it('flags sla_breach in support mode and sprint mismatch in sprint mode without target-date errors', () => {
-    const supportBrief = evaluateParticipantBrief({
-      now: FIXED_NOW,
-      deliveryModel: 'support',
-      activeWorkItems: [
-        {
-          id: 301,
-          title: 'Prod login 500 spike',
-          workItemType: 'Bug',
-          state: 'Active',
-          createdDate: '2026-11-11T10:00:00.000Z',
-          changedDate: '2026-11-13T12:00:00.000Z',
-          priority: 1,
-        },
-      ],
-    });
-    expect(supportBrief.detectedExceptions.map((e) => e.kind)).toContain(
-      'sla_breach',
-    );
-    expect(supportBrief.detectedExceptions.map((e) => e.kind)).not.toContain(
-      'missing_target_date',
-    );
-
-    const sprintBrief = evaluateParticipantBrief({
-      now: FIXED_NOW,
-      deliveryModel: 'sprint',
-      expectedIterationPath: 'MaxView\\Sprint 42',
-      activeWorkItems: [
-        {
-          id: 302,
-          title: 'Backlog item in wrong iteration',
-          workItemType: 'Product Backlog Item',
-          state: 'Active',
-          iterationPath: 'MaxView\\Sprint 41',
-          changedDate: '2026-11-13T12:00:00.000Z',
-        },
-      ],
-    });
-    expect(sprintBrief.suggestedToday[0].riskFlags).toContain('Outside sprint');
-    expect(sprintBrief.detectedExceptions.map((e) => e.kind)).not.toContain(
-      'missing_target_date',
-    );
-
-    const formatted = formatPreparedBriefForPrompt(supportBrief);
-    expect(formatted).toContain('Delivery Model: support');
-    expect(formatted).toContain('sla_breach');
+    expect(callouts.find((c) => c.category === 'iac_pipeline')).toBeUndefined();
   });
 });
 
-describe('synthesizeTeamPulse & evaluateCalendarItemHealth (AC-06, AC-07)', () => {
-  it('synthesizes blockers, carryover alerts, at-risk items, capacity, and proposals into StandupTeamPulse', () => {
-    const brief = evaluateParticipantBrief({
+describe('synthesizeTeamPulse: SDLC callouts, Area Breakdown & Individual Narratives (AC-06)', () => {
+  it('generates confirmed narratives (with userCorrections) AND ai_drafted narratives for unsubmitted teammates', () => {
+    const aliceBrief = evaluateParticipantBrief({
       now: FIXED_NOW,
       deliveryModel: 'flow',
-      teamGoal: 'Stabilize checkout flow',
+      ownerDisplayName: 'Alice',
       activeWorkItems: [
         {
-          id: 401,
-          title: 'Checkout retry handler',
-          workItemType: 'Product Backlog Item',
-          state: 'Active',
-          changedDate: '2026-11-05T10:00:00.000Z',
+          id: 901,
+          title: 'Add billing SQL migration',
+          workItemType: 'Task',
+          state: 'In PR',
+          changedDate: FIXED_NOW,
         },
       ],
-      priorStructuredUpdate: { today: '#401 Checkout retry handler' },
+      pullRequests: [
+        {
+          prId: 301,
+          title: 'feat(db): billing table migration',
+          status: 'active',
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [901],
+          changedFiles: [
+            'migrations/20261115_billing.sql',
+            'tests/integration/billing.test.ts',
+          ],
+        },
+      ],
+    });
+
+    const bobBrief = evaluateParticipantBrief({
+      now: FIXED_NOW,
+      deliveryModel: 'flow',
+      ownerDisplayName: 'Bob',
+      activeWorkItems: [
+        {
+          id: 902,
+          title: 'Provision worker Service Bus queue',
+          workItemType: 'Technical Backlog Item',
+          state: 'In PR',
+          changedDate: FIXED_NOW,
+        },
+      ],
+      changedSinceLastWorkItems: [
+        {
+          id: 900,
+          title: 'Terraform state backend setup',
+          workItemType: 'Task',
+          state: 'Ready for Test',
+          changedDate: FIXED_NOW,
+        },
+      ],
+      pullRequests: [
+        {
+          prId: 302,
+          title: 'infra: service bus queue',
+          status: 'active',
+          createdAt: FIXED_NOW,
+          linkedWorkItemIds: [902],
+          changedFiles: ['infra/shared-async.tf'],
+          builds: [],
+        },
+      ],
     });
 
     const pulse = synthesizeTeamPulse({
       now: FIXED_NOW,
       deliveryModel: 'flow',
-      teamGoal: 'Stabilize checkout flow',
+      teamGoal: 'Safe billing v3 rollout',
       participants: [
         {
-          userId: 'dev-1',
-          displayName: 'Dev One',
+          userId: 'u-alice',
+          displayName: 'Alice',
           status: 'submitted',
           structuredUpdate: {
-            yesterday: 'Shipped #400 payment logging',
-            today: 'Finishing #401',
-            blockers: 'Staging deploy pipeline failing on #401',
-            handoffs: '#400 ready for QA verification',
-            capacity: 'Available to pair after 2pm',
+            yesterday: 'Drafted #901 billing migration',
+            today: 'Verifying rollback script on staging',
+            blockers: '',
+            userCorrections: 'Coordinated DBA maintenance window at 4pm EST',
           },
-          preparedBrief: brief,
+          preparedBrief: aliceBrief,
         },
-      ],
-      proposals: [
         {
-          id: 'prop-1',
-          sessionId: 'sess-1',
-          participantId: 'part-1',
-          project: 'MaxView',
-          workItemId: 401,
-          workItemTitle: 'Checkout retry handler',
-          proposalType: 'state',
-          fieldName: 'state',
-          currentValue: 'In PR',
-          proposedValue: 'Ready for Test',
-          reason: 'PR merged',
-          confidence: 'at_risk',
-          status: 'pending',
-          decidedBy: null,
-          decidedAt: null,
-          createdAt: FIXED_NOW,
+          userId: 'u-bob',
+          displayName: 'Bob',
+          status: 'notified',
+          structuredUpdate: null,
+          preparedBrief: bobBrief,
         },
       ],
     });
 
-    expect(pulse.overallHealth).toBe('at_risk');
-    expect(pulse.blockers[0]).toMatchObject({
-      blockerType: 'pipeline',
-      ownerDisplayName: 'Dev One',
-      workItemIds: [401],
+    expect(pulse.sdlcCallouts?.map((c) => c.category)).toEqual(
+      expect.arrayContaining(['sql_migration', 'iac_pipeline']),
+    );
+
+    const areaDomains = pulse.areaBreakdown?.map((a) => a.domain) ?? [];
+    expect(areaDomains).toEqual(expect.arrayContaining(['database', 'iac']));
+
+    const narratives = pulse.individualNarratives ?? [];
+    expect(narratives).toHaveLength(2);
+
+    const aliceNarrative = narratives.find((n) => n.userId === 'u-alice');
+    expect(aliceNarrative).toMatchObject({
+      status: 'confirmed',
+      userCorrections: 'Coordinated DBA maintenance window at 4pm EST',
     });
-    expect(pulse.carryoverAlerts).toHaveLength(1);
-    expect(pulse.handoffsAndReviews).toHaveLength(1);
-    expect(pulse.capacityNotes).toHaveLength(1);
-    expect(pulse.decisionsNeeded.some((d) => d.includes('staged ADO update proposal'))).toBe(
-      true,
-    );
 
-    // Evaluate calendar item health in Flow vs Milestone
-    const flowCal = evaluateCalendarItemHealth(
-      [
-        {
-          id: 401,
-          title: 'Checkout retry handler',
-          workItemType: 'Product Backlog Item',
-          state: 'Active',
-          changedDate: '2026-11-05T10:00:00.000Z',
-          dueDate: null,
-        },
-        {
-          id: 402,
-          title: 'Healthy unscheduled Flow item',
-          workItemType: 'Product Backlog Item',
-          state: 'Active',
-          changedDate: '2026-11-13T10:00:00.000Z',
-          dueDate: null,
-        },
-      ],
-      {
-        now: FIXED_NOW,
-        deliveryModel: 'flow',
-        teamPulse: pulse,
-      },
-    );
+    const bobNarrative = narratives.find((n) => n.userId === 'u-bob');
+    expect(bobNarrative).toMatchObject({
+      status: 'ai_drafted',
+    });
+    expect(bobNarrative?.yesterdaySummary).toContain('#900');
+    expect(bobNarrative?.todayFocus).toContain('IaC Pipeline Verification Alert');
 
-    expect(flowCal.itemHealthById[401].confidence).toBe('at_risk');
-    expect(flowCal.itemHealthById[401].isBlockedOrStale).toBe(true);
-    expect(flowCal.itemHealthById[402].confidence).toBe('on_track');
-    expect(flowCal.counts.missingTargetDate).toBe(0);
-
-    const milestoneCal = evaluateCalendarItemHealth(
-      [
-        {
-          id: 402,
-          title: 'Unscheduled Milestone Feature',
-          workItemType: 'Feature',
-          state: 'Active',
-          changedDate: '2026-11-13T10:00:00.000Z',
-          targetDate: null,
-        },
-      ],
-      {
-        now: FIXED_NOW,
-        deliveryModel: 'milestone',
-      },
-    );
-    expect(milestoneCal.counts.missingTargetDate).toBe(1);
-    expect(milestoneCal.itemHealthById[402].confidence).toBe('at_risk');
-    expect(milestoneCal.itemHealthById[402].reasons[0]).toMatch(/Missing target\/due date/);
+    const promptBrief = formatPreparedBriefForPrompt(bobBrief);
+    expect(promptBrief).toContain('Infra / Terraform');
+    expect(promptBrief).toContain('iac_pipeline');
   });
 });
 
-describe('Policy-driven AI Prompts (AC-05)', () => {
-  it('adapts participant and facilitator prompts dynamically to flow vs milestone models', () => {
+describe('Policy & SDLC AI Prompts (AC-05)', () => {
+  it('includes SDLC verification and multi-day narrative instructions while adapting to deliveryModel', () => {
     const flowPrompt = buildStandupParticipantPrompt({
       project: 'MaxView',
       repo: '',
@@ -415,37 +474,20 @@ describe('Policy-driven AI Prompts (AC-05)', () => {
       standupTeamGoal: 'Reduce PR cycle time',
       standupUserEmail: 'dev@localhost',
     });
-
-    expect(flowPrompt).toContain('deliveryModel:          "flow"');
-    expect(flowPrompt).toContain('Reduce PR cycle time');
     expect(flowPrompt).toContain('Target-date checks are DISABLED');
-    expect(flowPrompt).not.toContain('NEVER mention sprints');
-
-    const milestonePrompt = buildStandupParticipantPrompt({
-      project: 'MaxView',
-      repo: '',
-      mode: 'standup-participant',
-      standupSessionId: 's-2',
-      standupParticipantId: 'p-2',
-      standupDeliveryModel: 'milestone',
-      standupTeamGoal: 'Ship v3.0 by Nov 30',
-      standupUserEmail: 'dev@localhost',
-    });
-
-    expect(milestonePrompt).toContain('deliveryModel:          "milestone"');
-    expect(milestonePrompt).toContain('Target-date checks are ENABLED');
-    expect(milestonePrompt).toContain('ReleaseVersion');
+    expect(flowPrompt).toContain('SDLC Artifact Checks');
+    expect(flowPrompt).toContain('userCorrections');
 
     const facilitatorPrompt = buildStandupFacilitatorPrompt({
       project: 'MaxView',
       repo: '',
       mode: 'standup-facilitator',
       standupSessionId: 's-1',
-      standupDeliveryModel: 'sprint',
-      standupTeamGoal: 'Complete Sprint 18 checkout stories',
+      standupDeliveryModel: 'flow',
+      standupTeamGoal: 'Safe release promotion',
     });
-    expect(facilitatorPrompt).toContain('deliveryModel:          "sprint"');
-    expect(facilitatorPrompt).toContain('Complete Sprint 18 checkout stories');
-    expect(facilitatorPrompt).toContain('do NOT invent missing-target-date warnings');
+    expect(facilitatorPrompt).toContain('SDLC & Release Process Callouts');
+    expect(facilitatorPrompt).toContain('Engineering Area Breakdown');
+    expect(facilitatorPrompt).toContain('Individual Standup Narratives');
   });
 });

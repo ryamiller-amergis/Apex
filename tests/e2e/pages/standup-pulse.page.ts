@@ -3,7 +3,7 @@ import { dismissOverlays } from '../support/overlays';
 
 /**
  * Page object for Standup Ceremony (/standup), Team Pulse Summary (/standup-summary),
- * Standup Management (/standup-manage), and Calendar Delivery Pulse (/calendar).
+ * and Standup Management (/standup-manage).
  */
 export class StandupPulsePage {
   constructor(private readonly page: Page) {}
@@ -32,14 +32,6 @@ export class StandupPulsePage {
       .waitFor({ state: 'visible', timeout: 15_000 });
   }
 
-  async gotoCalendar(): Promise<void> {
-    await this.page.goto('/calendar');
-    await dismissOverlays(this.page);
-    await this.page
-      .getByTestId('calendar-delivery-pulse-bar')
-      .waitFor({ state: 'visible', timeout: 15_000 });
-  }
-
   // ── Standup Ceremony Locators & Actions ──────────────────────────────────
 
   deliveryModelBadge(): Locator {
@@ -48,6 +40,18 @@ export class StandupPulsePage {
 
   teamGoalBanner(): Locator {
     return this.page.getByTestId('standup-team-goal');
+  }
+
+  multiDayArcBanner(): Locator {
+    return this.page.getByTestId('standup-multi-day-arc');
+  }
+
+  recommendedFocusBanner(): Locator {
+    return this.page.getByTestId('standup-recommended-focus');
+  }
+
+  correctionsInput(): Locator {
+    return this.page.getByTestId('standup-corrections-input');
   }
 
   quickConfirmSubmitBtn(): Locator {
@@ -72,8 +76,20 @@ export class StandupPulsePage {
     return this.page.getByTestId('pulse-team-goal');
   }
 
+  pulseSdlcCalloutsSection(): Locator {
+    return this.page.getByTestId('pulse-sdlc-callouts-section');
+  }
+
   pulseBlockersSection(): Locator {
     return this.page.getByTestId('pulse-blockers-section');
+  }
+
+  pulseAreaBreakdownSection(): Locator {
+    return this.page.getByTestId('pulse-area-breakdown-section');
+  }
+
+  pulseIndividualNarrativesSection(): Locator {
+    return this.page.getByTestId('pulse-individual-narratives-section');
   }
 
   pulseRisksSection(): Locator {
@@ -82,15 +98,5 @@ export class StandupPulsePage {
 
   pulseProposalsSection(): Locator {
     return this.page.getByTestId('pulse-proposals-section');
-  }
-
-  // ── Calendar Delivery Pulse Locators ─────────────────────────────────────
-
-  calendarPulseBar(): Locator {
-    return this.page.getByTestId('calendar-delivery-pulse-bar');
-  }
-
-  calendarProposalsDrawer(): Locator {
-    return this.page.getByTestId('calendar-proposals-panel');
   }
 }
