@@ -221,6 +221,198 @@
   gap: 14px;
 }
 
+.arcFocusGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.arcBanner,
+.focusBanner {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.focusBanner {
+  border-left: 3px solid var(--accent-color);
+}
+
+.arcHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.arcLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-color);
+}
+
+.arcSummaryText {
+  font-size: 0.86rem;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.streakPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.domainPill {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.draftItemList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.draftItemRow {
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.draftItemApproved {
+  border-left: 3px solid var(--success-color);
+}
+
+.draftItemRejected {
+  border-left: 3px solid var(--error-color);
+  opacity: 0.78;
+}
+
+.draftItemTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.draftItemInfo {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+
+.draftSummaryText {
+  font-size: 0.87rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.draftSummaryRejected {
+  font-size: 0.87rem;
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.decisionToggle {
+  display: inline-flex;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.decisionBtn {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.decisionBtn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.decisionApproveActive {
+  background: var(--success-color);
+  color: var(--on-success);
+}
+
+.decisionRejectActive {
+  background: color-mix(in srgb, var(--error-color) 20%, var(--bg-tertiary));
+  color: var(--error-color);
+}
+
+.rejectReasonWrap {
+  padding-top: 4px;
+}
+
+.rejectReasonInput {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+.rejectReasonInput:focus {
+  outline: none;
+  background: var(--bg-secondary);
+  border-color: var(--accent-color);
+}
+
+.leftActionGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rejectAllBtn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 40%, var(--border-color));
+  background: var(--bg-secondary);
+  color: var(--error-color);
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.rejectAllBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-secondary));
+}
+
 .briefCard {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);

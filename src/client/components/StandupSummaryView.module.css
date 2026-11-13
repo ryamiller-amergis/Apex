@@ -207,7 +207,163 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
+}
+
+.fullWidthSection {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fullWidthSection h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.sdlcGrid,
+.narrativeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.sdlcCard,
+.areaCard,
+.narrativeCard {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sdlcCritical {
+  border-left: 4px solid var(--error-color);
+}
+
+.sdlcWarning {
+  border-left: 4px solid var(--warning-color);
+}
+
+.domainBadge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.filePathRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fileChip {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.76rem;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.recommendationText {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding-top: 4px;
+  border-top: 1px solid var(--border-color);
+}
+
+.areaStat {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.chipAtRiskSmall {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--error-color) 18%, var(--bg-secondary));
+  color: var(--error-color);
+}
+
+.areaContributors {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.narrativeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.narrativeIdentity,
+.narrativeBadges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.confirmedNarrativeBadge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--success-color);
+  color: var(--on-success);
+}
+
+.draftedNarrativeBadge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-secondary));
+  color: var(--accent-color);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+}
+
+.arcLine {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.narrativeBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+}
+
+.correctionBox {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-secondary));
+  border-left: 3px solid var(--accent-color);
+  color: var(--text-primary);
+  font-size: 0.84rem;
 }
 
 .pulseSection {

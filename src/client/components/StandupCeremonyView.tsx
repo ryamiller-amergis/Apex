@@ -23,9 +23,13 @@ import {
 import { AgentComposer } from './agentChat';
 import {
   STANDUP_DELIVERY_MODEL_LABELS,
+  STANDUP_WORK_DOMAIN_LABELS,
   type ParticipantPreparedBrief,
   type StandupActionProposalInput,
+  type StandupDraftedItem,
+  type StandupItemDecision,
 } from '../../shared/types/standup';
+import { reconcileDraftedUpdate } from '../../shared/utils/standupDeliveryPolicy';
 import type { WorkItem } from '../types/workitem';
 import styles from './StandupCeremonyView.module.css';
 
@@ -232,26 +236,71 @@ function processChildren(
   });
 }
 
-function defaultYesterdayFromBrief(brief: ParticipantPreparedBrief | null): string {
-  if (!brief || brief.accomplishedSinceLast.length === 0) return '';
-  return brief.accomplishedSinceLast
-    .map((item) => {
-      if (item.workItemId) {
-        return `#${item.workItemId} ${item.title}${item.state ? ` [${item.state}]` : ''}`;
-      }
-      if (item.prId) {
-        return `Merged PR !${item.prId} (${item.title})`;
-      }
-      return item.title;
-    })
-    .join('; ');
+function resolveDraftedItemsFromBrief(
+  brief: ParticipantPreparedBrief | null | undefined,
+): StandupDraftedItem[] {
+  if (!brief) return [];
+  if (Array.isArray(brief.draftedItems) && brief.draftedItems.length > 0) {
+    return brief.draftedItems;
+  }
+
+  const fallback: StandupDraftedItem[] = [];
+  brief.accomplishedSinceLast.forEach((acc, idx) => {
+    fallback.push({
+      id: acc.prId
+        ? `draft-yesterday-pr-${acc.prId}`
+        : acc.workItemId
+        ? `draft-yesterday-wi-${acc.workItemId}`
+        : `draft-yesterday-${idx}`,
+      bucket: 'yesterday',
+      summary: acc.prId
+        ? `Merged PR !${acc.prId}: ${acc.title}`
+        : `#${acc.workItemId} ${acc.title}${acc.state ? ` [${acc.state}]` : ''}`,
+      workItemId: acc.workItemId,
+      prId: acc.prId,
+      evidence: acc.evidence,
+    });
+  });
+
+  brief.suggestedToday.slice(0, 5).forEach((item) => {
+    fallback.push({
+      id: `draft-today-wi-${item.workItemId}`,
+      bucket: 'today',
+      summary: `#${item.workItemId} ${item.title} [${item.state}]`,
+      workItemId: item.workItemId,
+      evidence: 'Assigned in ADO',
+    });
+  });
+
+  brief.detectedExceptions
+    .filter(
+      (ex) =>
+        ex.kind === 'pipeline_failure' ||
+        ex.kind === 'sla_breach' ||
+        ex.kind === 'pr_waiting_review',
+    )
+    .forEach((ex) => {
+      fallback.push({
+        id: `draft-blocker-${ex.id}`,
+        bucket: 'blocker',
+        summary: ex.message,
+        workItemId: ex.workItemId,
+        prId: ex.prId,
+        evidence: ex.kind,
+      });
+    });
+
+  return fallback;
 }
 
-function defaultTodayFromBrief(brief: ParticipantPreparedBrief | null): string {
-  if (!brief || brief.suggestedToday.length === 0) return '';
-  return brief.suggestedToday
-    .slice(0, 3)
-    .map((item) => `#${item.workItemId} ${item.title}`)
+function summarizeBucket(
+  items: StandupDraftedItem[],
+  decisions: Record<string, StandupItemDecision>,
+  bucket: 'yesterday' | 'today' | 'blocker',
+): string {
+  return items
+    .filter((item) => item.bucket === bucket && decisions[item.id] !== 'rejected')
+    .map((item) => item.summary)
     .join('; ');
 }
 
@@ -262,12 +311,19 @@ export const StandupCeremonyView: React.FC = () => {
   const [input, setInput] = useState('');
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
+
+  const [itemDecisions, setItemDecisions] = useState<
+    Record<string, StandupItemDecision>
+  >({});
+  const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
+  const [userCorrections, setUserCorrections] = useState('');
+  const [manualOverrideMode, setManualOverrideMode] = useState(false);
+
   const [yesterdayDraft, setYesterdayDraft] = useState('');
   const [todayDraft, setTodayDraft] = useState('');
   const [blockersDraft, setBlockersDraft] = useState('');
   const [handoffsDraft, setHandoffsDraft] = useState('');
   const [capacityDraft, setCapacityDraft] = useState('');
-  const [selectedTodayIds, setSelectedTodayIds] = useState<number[]>([]);
   const [stagedExceptionIds, setStagedExceptionIds] = useState<string[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -285,6 +341,11 @@ export const StandupCeremonyView: React.FC = () => {
 
   const threadId = session?.threadId ?? null;
   const { data: thread } = useChatThread(threadId);
+
+  const draftedItems = useMemo(
+    () => resolveDraftedItemsFromBrief(session?.preparedBrief),
+    [session?.preparedBrief],
+  );
 
   const mdComponents = useMemo(
     () =>
@@ -315,22 +376,32 @@ export const StandupCeremonyView: React.FC = () => {
     if (initializedParticipantRef.current === session.participantId) return;
     initializedParticipantRef.current = session.participantId;
 
-    const brief = session.preparedBrief ?? null;
     const existing = session.structuredUpdate ?? null;
-
-    setYesterdayDraft(existing?.yesterday ?? defaultYesterdayFromBrief(brief));
-    setTodayDraft(existing?.today ?? defaultTodayFromBrief(brief));
-    setBlockersDraft(existing?.blockers ?? '');
+    const initialDecisions: Record<string, StandupItemDecision> = {};
+    for (const item of draftedItems) {
+      initialDecisions[item.id] =
+        existing?.itemDecisions?.[item.id] ?? 'approved';
+    }
+    setItemDecisions(initialDecisions);
+    setUserCorrections(existing?.userCorrections ?? '');
+    setYesterdayDraft(
+      existing?.yesterday ??
+        summarizeBucket(draftedItems, initialDecisions, 'yesterday'),
+    );
+    setTodayDraft(
+      existing?.today ?? summarizeBucket(draftedItems, initialDecisions, 'today'),
+    );
+    setBlockersDraft(
+      existing?.blockers ??
+        summarizeBucket(draftedItems, initialDecisions, 'blocker'),
+    );
     setHandoffsDraft(existing?.handoffs ?? '');
     setCapacityDraft(existing?.capacity ?? '');
-    setSelectedTodayIds(
-      brief ? brief.suggestedToday.slice(0, 3).map((item) => item.workItemId) : [],
-    );
     setStagedExceptionIds([]);
     if (session.threadId) {
       void syncToken(session.threadId);
     }
-  }, [session, syncToken]);
+  }, [session, draftedItems, syncToken]);
 
   const navigate = useNavigate();
 
@@ -401,32 +472,31 @@ export const StandupCeremonyView: React.FC = () => {
     if (sent && outgoing.length > 0) clearAttachments();
   }, [attachments, chatSession, clearAttachments, input, speech, threadId]);
 
-  const toggleTodayChip = useCallback(
-    (workItemId: number, title: string) => {
-      setSelectedTodayIds((prev) => {
-        const exists = prev.includes(workItemId);
-        const nextIds = exists
-          ? prev.filter((id) => id !== workItemId)
-          : [...prev, workItemId];
-
-        const token = `#${workItemId} ${title}`;
-        setTodayDraft((prevText) => {
-          if (exists) {
-            return prevText
-              .split(';')
-              .map((s) => s.trim())
-              .filter((s) => s && !s.startsWith(`#${workItemId}`))
-              .join('; ');
-          }
-          if (prevText.includes(`#${workItemId}`)) return prevText;
-          return prevText.trim() ? `${prevText.trim()}; ${token}` : token;
-        });
-
-        return nextIds;
+  const handleItemDecision = useCallback(
+    (itemId: string, decision: StandupItemDecision) => {
+      setManualOverrideMode(false);
+      setItemDecisions((prev) => {
+        const next = { ...prev, [itemId]: decision };
+        setYesterdayDraft(summarizeBucket(draftedItems, next, 'yesterday'));
+        setTodayDraft(summarizeBucket(draftedItems, next, 'today'));
+        setBlockersDraft(summarizeBucket(draftedItems, next, 'blocker'));
+        return next;
       });
     },
-    [],
+    [draftedItems],
   );
+
+  const handleRejectAllManual = useCallback(() => {
+    const rejectedAll: Record<string, StandupItemDecision> = {};
+    for (const item of draftedItems) {
+      rejectedAll[item.id] = 'rejected';
+    }
+    setItemDecisions(rejectedAll);
+    setManualOverrideMode(true);
+    setYesterdayDraft('');
+    setTodayDraft('');
+    setBlockersDraft('');
+  }, [draftedItems]);
 
   const toggleStagedException = useCallback((exceptionId: string) => {
     setStagedExceptionIds((prev) =>
@@ -446,7 +516,11 @@ export const StandupCeremonyView: React.FC = () => {
 
       if (brief) {
         for (const ex of brief.detectedExceptions) {
-          if (ex.severity === 'critical' || ex.kind === 'stale_state' || ex.kind === 'target_date_at_risk') {
+          if (
+            ex.severity === 'critical' ||
+            ex.kind === 'stale_state' ||
+            ex.kind === 'target_date_at_risk'
+          ) {
             riskMessages.push(ex.message);
           }
           if (
@@ -468,16 +542,22 @@ export const StandupCeremonyView: React.FC = () => {
         }
       }
 
+      const structuredUpdate = reconcileDraftedUpdate({
+        draftedItems,
+        itemDecisions,
+        rejectionReasons,
+        userCorrections,
+        manualYesterday: manualOverrideMode ? yesterdayDraft : yesterdayDraft,
+        manualToday: manualOverrideMode ? todayDraft : todayDraft,
+        manualBlockers: manualOverrideMode ? blockersDraft : blockersDraft,
+        atRisk: riskMessages.join('; '),
+        handoffs: handoffsDraft,
+        capacity: capacityDraft,
+      });
+
       await submitMutation.mutateAsync({
         participantId: session.participantId,
-        structuredUpdate: {
-          yesterday: yesterdayDraft.trim(),
-          today: todayDraft.trim(),
-          blockers: blockersDraft.trim(),
-          atRisk: riskMessages.join('; '),
-          handoffs: handoffsDraft.trim(),
-          capacity: capacityDraft.trim(),
-        },
+        structuredUpdate,
         proposals,
       });
       setLocalSubmitted(true);
@@ -487,12 +567,17 @@ export const StandupCeremonyView: React.FC = () => {
   }, [
     session,
     stagedExceptionIds,
-    submitMutation,
+    draftedItems,
+    itemDecisions,
+    rejectionReasons,
+    userCorrections,
+    manualOverrideMode,
     yesterdayDraft,
     todayDraft,
     blockersDraft,
     handoffsDraft,
     capacityDraft,
+    submitMutation,
   ]);
 
   const handleChatSubmit = useCallback(async () => {
@@ -513,16 +598,21 @@ export const StandupCeremonyView: React.FC = () => {
       const res = await refreshBriefMutation.mutateAsync({
         participantId: session.participantId,
       });
-      if (!yesterdayDraft.trim()) {
-        setYesterdayDraft(defaultYesterdayFromBrief(res.preparedBrief));
+      const nextItems = resolveDraftedItemsFromBrief(res.preparedBrief);
+      const nextDecisions: Record<string, StandupItemDecision> = {};
+      for (const item of nextItems) {
+        nextDecisions[item.id] = itemDecisions[item.id] ?? 'approved';
       }
-      if (!todayDraft.trim()) {
-        setTodayDraft(defaultTodayFromBrief(res.preparedBrief));
+      setItemDecisions(nextDecisions);
+      if (!manualOverrideMode) {
+        setYesterdayDraft(summarizeBucket(nextItems, nextDecisions, 'yesterday'));
+        setTodayDraft(summarizeBucket(nextItems, nextDecisions, 'today'));
+        setBlockersDraft(summarizeBucket(nextItems, nextDecisions, 'blocker'));
       }
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [session, refreshBriefMutation, yesterdayDraft, todayDraft]);
+  }, [session, refreshBriefMutation, itemDecisions, manualOverrideMode]);
 
   if (loading) {
     return (
@@ -559,7 +649,8 @@ export const StandupCeremonyView: React.FC = () => {
   const deliveryModel = session.config?.deliveryModel ?? 'flow';
   const deliveryModelLabel =
     STANDUP_DELIVERY_MODEL_LABELS[deliveryModel] ?? 'Flow';
-  const teamGoal = session.config?.teamGoal ?? session.preparedBrief?.teamGoal ?? null;
+  const teamGoal =
+    session.config?.teamGoal ?? session.preparedBrief?.teamGoal ?? null;
   const activeMode: 'quick' | 'chat' =
     modeOverride ?? (session.preparedBrief ? 'quick' : 'chat');
   const brief = session.preparedBrief;
@@ -576,6 +667,124 @@ export const StandupCeremonyView: React.FC = () => {
 
   const combinedError = error ?? (queryError ? queryError.message : null);
 
+  const yesterdayDraftItems = draftedItems.filter((i) => i.bucket === 'yesterday');
+  const todayDraftItems = draftedItems.filter((i) => i.bucket === 'today');
+  const blockerDraftItems = draftedItems.filter((i) => i.bucket === 'blocker');
+
+  const renderDraftBucket = (
+    title: string,
+    testId: string,
+    items: StandupDraftedItem[],
+    emptyText: string,
+  ) => (
+    <section className={styles.briefCard} data-testid={testId}>
+      <div className={styles.cardHeader}>
+        <h2>{title}</h2>
+      </div>
+      {items.length === 0 ? (
+        <p className={styles.cardHint}>{emptyText}</p>
+      ) : (
+        <ul className={styles.draftItemList}>
+          {items.map((item) => {
+            const decision = itemDecisions[item.id] ?? 'approved';
+            const isRejected = decision === 'rejected';
+            return (
+              <li
+                key={item.id}
+                className={`${styles.draftItemRow} ${
+                  isRejected ? styles.draftItemRejected : styles.draftItemApproved
+                }`}
+                data-testid={`draft-item-row-${item.id}`}
+              >
+                <div className={styles.draftItemTop}>
+                  <div className={styles.draftItemInfo}>
+                    {item.domain && (
+                      <span className={styles.domainPill}>
+                        {STANDUP_WORK_DOMAIN_LABELS[item.domain] ?? item.domain}
+                      </span>
+                    )}
+                    {item.workItemId && (
+                      <button
+                        type="button"
+                        className={styles.workItemLink}
+                        onClick={() => {
+                          void handleWorkItemClick(item.workItemId!);
+                        }}
+                        data-testid={`standup-brief-item-${item.id}`}
+                      >
+                        #{item.workItemId}
+                      </button>
+                    )}
+                    <span
+                      className={
+                        isRejected
+                          ? styles.draftSummaryRejected
+                          : styles.draftSummaryText
+                      }
+                    >
+                      {item.summary}
+                    </span>
+                    <span className={styles.evidenceMeta}>{item.evidence}</span>
+                  </div>
+
+                  <div
+                    className={styles.decisionToggle}
+                    role="group"
+                    aria-label={`Decision for ${item.summary}`}
+                  >
+                    <button
+                      type="button"
+                      className={`${styles.decisionBtn} ${
+                        !isRejected ? styles.decisionApproveActive : ''
+                      }`}
+                      onClick={() => handleItemDecision(item.id, 'approved')}
+                      disabled={isSubmitted}
+                      aria-pressed={!isRejected}
+                      data-testid={`draft-item-approve-${item.id}`}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.decisionBtn} ${
+                        isRejected ? styles.decisionRejectActive : ''
+                      }`}
+                      onClick={() => handleItemDecision(item.id, 'rejected')}
+                      disabled={isSubmitted}
+                      aria-pressed={isRejected}
+                      data-testid={`draft-item-reject-${item.id}`}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+
+                {isRejected && (
+                  <div className={styles.rejectReasonWrap}>
+                    <input
+                      type="text"
+                      className={styles.rejectReasonInput}
+                      placeholder="Optional note: why reject this item? (e.g. moved to next sprint, another dev owns it)"
+                      value={rejectionReasons[item.id] ?? ''}
+                      disabled={isSubmitted}
+                      onChange={(e) =>
+                        setRejectionReasons((prev) => ({
+                          ...prev,
+                          [item.id]: e.target.value,
+                        }))
+                      }
+                      data-testid={`draft-item-reject-reason-${item.id}`}
+                    />
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+
   return (
     <div className={styles.container}>
       <StandupSubNav active="standup" />
@@ -591,6 +800,11 @@ export const StandupCeremonyView: React.FC = () => {
               >
                 {deliveryModelLabel}
               </span>
+              {brief?.workDomains?.map((domain) => (
+                <span key={domain} className={styles.domainPill}>
+                  {STANDUP_WORK_DOMAIN_LABELS[domain] ?? domain}
+                </span>
+              ))}
             </div>
 
             <div className={styles.headerRight}>
@@ -601,16 +815,20 @@ export const StandupCeremonyView: React.FC = () => {
               >
                 <button
                   type="button"
-                  className={`${styles.modeBtn} ${activeMode === 'quick' ? styles.modeBtnActive : ''}`}
+                  className={`${styles.modeBtn} ${
+                    activeMode === 'quick' ? styles.modeBtnActive : ''
+                  }`}
                   onClick={() => setModeOverride('quick')}
                   aria-pressed={activeMode === 'quick'}
                   {...{ 'data-testid': 'standup-mode-quick' }}
                 >
-                  Quick Confirm
+                  Review AI Draft
                 </button>
                 <button
                   type="button"
-                  className={`${styles.modeBtn} ${activeMode === 'chat' ? styles.modeBtnActive : ''}`}
+                  className={`${styles.modeBtn} ${
+                    activeMode === 'chat' ? styles.modeBtnActive : ''
+                  }`}
                   onClick={() => setModeOverride('chat')}
                   aria-pressed={activeMode === 'chat'}
                   {...{ 'data-testid': 'standup-mode-chat' }}
@@ -651,7 +869,9 @@ export const StandupCeremonyView: React.FC = () => {
                 type="button"
                 className={styles.viewPulseBtn}
                 onClick={() =>
-                  navigate(`/standup-summary?session=${encodeURIComponent(session.sessionId)}`)
+                  navigate(
+                    `/standup-summary?session=${encodeURIComponent(session.sessionId)}`,
+                  )
                 }
                 {...{ 'data-testid': 'standup-view-team-pulse-btn' }}
               >
@@ -665,77 +885,85 @@ export const StandupCeremonyView: React.FC = () => {
               className={styles.quickConfirmScroll}
               {...{ 'data-testid': 'standup-quick-confirm-view' }}
             >
-              <div className={styles.quickGrid}>
-                {/* 1. Since Last Standup */}
-                <section
-                  className={styles.briefCard}
-                  {...{ 'data-testid': 'standup-brief-accomplished' }}
-                >
-                  <div className={styles.cardHeader}>
-                    <h2>Since Last Standup</h2>
-                    <button
-                      type="button"
-                      className={styles.refreshBtn}
-                      onClick={() => {
-                        void handleRefreshBrief();
-                      }}
-                      disabled={refreshBriefMutation.isPending}
-                      {...{ 'data-testid': 'standup-refresh-brief-btn' }}
-                    >
-                      {refreshBriefMutation.isPending ? 'Refreshing…' : 'Refresh Evidence'}
-                    </button>
+              {/* Multi-Day Arc & Recommended Focus */}
+              <div className={styles.arcFocusGrid}>
+                {brief?.multiDayArc && (
+                  <div
+                    className={styles.arcBanner}
+                    data-testid="standup-multi-day-arc"
+                  >
+                    <div className={styles.arcHeader}>
+                      <span className={styles.arcLabel}>Multi-Day Arc</span>
+                      <button
+                        type="button"
+                        className={styles.refreshBtn}
+                        onClick={() => {
+                          void handleRefreshBrief();
+                        }}
+                        disabled={refreshBriefMutation.isPending}
+                        data-testid="standup-refresh-brief-btn"
+                      >
+                        {refreshBriefMutation.isPending
+                          ? 'Refreshing…'
+                          : 'Refresh Evidence'}
+                      </button>
+                    </div>
+                    <div className={styles.arcSummaryText}>
+                      {brief.multiDayArc.summary}
+                    </div>
+                    {brief.multiDayArc.carryoverStreaks.length > 0 && (
+                      <div className={styles.streakPills}>
+                        {brief.multiDayArc.carryoverStreaks.map((s) => (
+                          <span
+                            key={s.workItemId}
+                            className={styles.riskFlagPill}
+                            data-testid={`standup-carryover-streak-${s.workItemId}`}
+                          >
+                            #{s.workItemId} carried {s.daysCarried}d
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                )}
 
-                  {brief && brief.accomplishedSinceLast.length > 0 ? (
-                    <ul className={styles.evidenceList}>
-                      {brief.accomplishedSinceLast.map((item, idx) => (
-                        <li key={`acc-${idx}`} className={styles.evidenceItem}>
-                          {item.workItemId && (
-                            <button
-                              type="button"
-                              className={styles.workItemLink}
-                              onClick={() => {
-                                void handleWorkItemClick(item.workItemId!);
-                              }}
-                              {...{ 'data-testid': `standup-brief-item-${item.workItemId}` }}
-                            >
-                              #{item.workItemId}
-                            </button>
-                          )}
-                          {item.workItemType && (
-                            <span
-                              className={`${styles.workItemTypeBadge} ${workItemTypeClass(item.workItemType)}`}
-                            >
-                              {item.workItemType}
-                            </span>
-                          )}
-                          <span className={styles.evidenceTitle}>{item.title}</span>
-                          <span className={styles.evidenceMeta}>{item.evidence}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className={styles.cardHint}>
-                      No automatic ADO or PR updates detected since last standup. Add a quick note below.
-                    </p>
-                  )}
+                {brief?.recommendedFocus && (
+                  <div
+                    className={styles.focusBanner}
+                    data-testid="standup-recommended-focus"
+                  >
+                    <span className={styles.arcLabel}>Recommended Focus Today</span>
+                    <div className={styles.arcSummaryText}>
+                      {brief.recommendedFocus}
+                    </div>
+                  </div>
+                )}
+              </div>
 
-                  <label className={styles.fieldLabel} htmlFor="standup-quick-yesterday">
-                    Summary since last standup
-                    <textarea
-                      id="standup-quick-yesterday"
-                      className={styles.quickTextarea}
-                      rows={2}
-                      value={yesterdayDraft}
-                      onChange={(e) => setYesterdayDraft(e.target.value)}
-                      disabled={isSubmitted}
-                      placeholder="What moved forward since last standup?"
-                      {...{ 'data-testid': 'standup-quick-yesterday' }}
-                    />
-                  </label>
-                </section>
+              <div className={styles.quickGrid}>
+                {/* Pre-Drafted Buckets with Approve / Reject */}
+                {renderDraftBucket(
+                  'Done Yesterday (AI-Drafted from ADO & PRs)',
+                  'standup-draft-group-yesterday',
+                  yesterdayDraftItems,
+                  'No automatic ADO or PR completions detected since last standup.',
+                )}
 
-                {/* 2. Prior Commitment Check */}
+                {renderDraftBucket(
+                  'Assigned & Focus Today',
+                  'standup-draft-group-today',
+                  todayDraftItems,
+                  'No active ADO assignments pre-drafted for today.',
+                )}
+
+                {renderDraftBucket(
+                  'Blockers & SDLC Alerts',
+                  'standup-draft-group-blocker',
+                  blockerDraftItems,
+                  'No pipeline, SLA, or SDLC alerts detected.',
+                )}
+
+                {/* Prior Commitment Check */}
                 {brief && brief.priorCommitments.length > 0 && (
                   <section
                     className={styles.briefCard}
@@ -768,8 +996,12 @@ export const StandupCeremonyView: React.FC = () => {
                               : 'Progressed'}
                           </span>
                           <div className={styles.commitmentBody}>
-                            <div className={styles.commitmentSummary}>{commitment.summary}</div>
-                            <div className={styles.commitmentNote}>{commitment.note}</div>
+                            <div className={styles.commitmentSummary}>
+                              {commitment.summary}
+                            </div>
+                            <div className={styles.commitmentNote}>
+                              {commitment.note}
+                            </div>
                           </div>
                         </li>
                       ))}
@@ -777,63 +1009,13 @@ export const StandupCeremonyView: React.FC = () => {
                   </section>
                 )}
 
-                {/* 3. Focus Today */}
-                <section
-                  className={styles.briefCard}
-                  {...{ 'data-testid': 'standup-brief-today' }}
-                >
-                  <div className={styles.cardHeader}>
-                    <h2>Focus Today</h2>
-                  </div>
-                  {brief && brief.suggestedToday.length > 0 && (
-                    <div className={styles.chipRow}>
-                      {brief.suggestedToday.map((item) => {
-                        const selected = selectedTodayIds.includes(item.workItemId);
-                        return (
-                          <button
-                            key={item.workItemId}
-                            type="button"
-                            className={`${styles.todayChip} ${selected ? styles.todayChipSelected : ''}`}
-                            onClick={() => toggleTodayChip(item.workItemId, item.title)}
-                            disabled={isSubmitted}
-                            aria-pressed={selected}
-                            {...{ 'data-testid': `standup-today-chip-${item.workItemId}` }}
-                          >
-                            <span>
-                              #{item.workItemId} · {item.title} [{item.state}]
-                            </span>
-                            {item.riskFlags.map((flag) => (
-                              <span key={flag} className={styles.riskFlagPill}>
-                                {flag}
-                              </span>
-                            ))}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <label className={styles.fieldLabel} htmlFor="standup-quick-today">
-                    Today&apos;s plan
-                    <textarea
-                      id="standup-quick-today"
-                      className={styles.quickTextarea}
-                      rows={2}
-                      value={todayDraft}
-                      onChange={(e) => setTodayDraft(e.target.value)}
-                      disabled={isSubmitted}
-                      placeholder="What are you focusing on today?"
-                      {...{ 'data-testid': 'standup-quick-today' }}
-                    />
-                  </label>
-                </section>
-
-                {/* 4. Exceptions & Proposed Updates */}
+                {/* Exceptions & Proposed ADO Updates */}
                 <section
                   className={styles.briefCard}
                   {...{ 'data-testid': 'standup-brief-exceptions' }}
                 >
                   <div className={styles.cardHeader}>
-                    <h2>Exceptions &amp; Proposed Updates</h2>
+                    <h2>Exceptions &amp; Confirmation-Gated ADO Proposals</h2>
                   </div>
                   {brief && brief.detectedExceptions.length > 0 ? (
                     <ul className={styles.exceptionList}>
@@ -850,8 +1032,12 @@ export const StandupCeremonyView: React.FC = () => {
                             {...{ 'data-testid': `standup-exception-${ex.id}` }}
                           >
                             <div className={styles.exceptionHeader}>
-                              <span className={styles.exceptionSeverity}>{ex.severity}</span>
-                              <span className={styles.exceptionMessage}>{ex.message}</span>
+                              <span className={styles.exceptionSeverity}>
+                                {ex.severity}
+                              </span>
+                              <span className={styles.exceptionMessage}>
+                                {ex.message}
+                              </span>
                             </div>
                             {ex.proposedAction && (
                               <label
@@ -864,10 +1050,13 @@ export const StandupCeremonyView: React.FC = () => {
                                   checked={staged}
                                   disabled={isSubmitted}
                                   onChange={() => toggleStagedException(ex.id)}
-                                  {...{ 'data-testid': `standup-stage-proposal-${ex.id}` }}
+                                  {...{
+                                    'data-testid': `standup-stage-proposal-${ex.id}`,
+                                  }}
                                 />
                                 <span>
-                                  Stage proposed update for confirmation: {ex.proposedAction.label}
+                                  Stage proposed update for confirmation:{' '}
+                                  {ex.proposedAction.label}
                                 </span>
                               </label>
                             )}
@@ -882,29 +1071,98 @@ export const StandupCeremonyView: React.FC = () => {
                   )}
                 </section>
 
-                {/* 5. Blockers, Handoffs & Capacity */}
+                {/* Corrections & Additions + Editable Update Fields */}
                 <section
                   className={styles.briefCard}
-                  {...{ 'data-testid': 'standup-brief-notes' }}
+                  data-testid="standup-corrections-card"
                 >
                   <div className={styles.cardHeader}>
-                    <h2>Blockers, Handoffs &amp; Capacity</h2>
+                    <h2>
+                      Corrections, Additions &amp; Final Standup Text
+                    </h2>
                   </div>
+                  <label
+                    className={styles.fieldLabel}
+                    htmlFor="standup-corrections-input"
+                  >
+                    Corrections &amp; Additions (What did the agent miss or get wrong?)
+                    <textarea
+                      id="standup-corrections-input"
+                      className={styles.quickTextarea}
+                      rows={2}
+                      value={userCorrections}
+                      onChange={(e) => setUserCorrections(e.target.value)}
+                      disabled={isSubmitted}
+                      placeholder="Add untracked work, clarify status drift, or note context for the facilitator and tomorrow's standup..."
+                      data-testid="standup-corrections-input"
+                    />
+                  </label>
+
                   <div className={styles.notesGrid}>
-                    <label className={styles.fieldLabel} htmlFor="standup-quick-blockers">
+                    <label
+                      className={styles.fieldLabel}
+                      htmlFor="standup-quick-yesterday"
+                    >
+                      Yesterday summary (auto-synced from approved items)
+                      <textarea
+                        id="standup-quick-yesterday"
+                        className={styles.quickTextarea}
+                        rows={2}
+                        value={yesterdayDraft}
+                        onChange={(e) => {
+                          setManualOverrideMode(true);
+                          setYesterdayDraft(e.target.value);
+                        }}
+                        disabled={isSubmitted}
+                        placeholder="What moved forward since last standup?"
+                        data-testid="standup-quick-yesterday"
+                      />
+                    </label>
+                    <label
+                      className={styles.fieldLabel}
+                      htmlFor="standup-quick-today"
+                    >
+                      Today&apos;s plan (auto-synced from approved items)
+                      <textarea
+                        id="standup-quick-today"
+                        className={styles.quickTextarea}
+                        rows={2}
+                        value={todayDraft}
+                        onChange={(e) => {
+                          setManualOverrideMode(true);
+                          setTodayDraft(e.target.value);
+                        }}
+                        disabled={isSubmitted}
+                        placeholder="What are you focusing on today?"
+                        data-testid="standup-quick-today"
+                      />
+                    </label>
+                  </div>
+
+                  <div className={styles.notesGrid}>
+                    <label
+                      className={styles.fieldLabel}
+                      htmlFor="standup-quick-blockers"
+                    >
                       Blockers (optional)
                       <input
                         id="standup-quick-blockers"
                         type="text"
                         className={styles.quickInput}
                         value={blockersDraft}
-                        onChange={(e) => setBlockersDraft(e.target.value)}
+                        onChange={(e) => {
+                          setManualOverrideMode(true);
+                          setBlockersDraft(e.target.value);
+                        }}
                         disabled={isSubmitted}
                         placeholder="Pipeline failure, review wait, external dependency, or none"
-                        {...{ 'data-testid': 'standup-quick-blockers' }}
+                        data-testid="standup-quick-blockers"
                       />
                     </label>
-                    <label className={styles.fieldLabel} htmlFor="standup-quick-handoffs">
+                    <label
+                      className={styles.fieldLabel}
+                      htmlFor="standup-quick-handoffs"
+                    >
                       Handoffs / Reviews needed (optional)
                       <input
                         id="standup-quick-handoffs"
@@ -914,10 +1172,13 @@ export const StandupCeremonyView: React.FC = () => {
                         onChange={(e) => setHandoffsDraft(e.target.value)}
                         disabled={isSubmitted}
                         placeholder="e.g., #104 ready for QA or PR review"
-                        {...{ 'data-testid': 'standup-quick-handoffs' }}
+                        data-testid="standup-quick-handoffs"
                       />
                     </label>
-                    <label className={styles.fieldLabel} htmlFor="standup-quick-capacity">
+                    <label
+                      className={styles.fieldLabel}
+                      htmlFor="standup-quick-capacity"
+                    >
                       Capacity / Availability (optional)
                       <input
                         id="standup-quick-capacity"
@@ -927,7 +1188,7 @@ export const StandupCeremonyView: React.FC = () => {
                         onChange={(e) => setCapacityDraft(e.target.value)}
                         disabled={isSubmitted}
                         placeholder="Available to pair, off Friday afternoon, etc."
-                        {...{ 'data-testid': 'standup-quick-capacity' }}
+                        data-testid="standup-quick-capacity"
                       />
                     </label>
                   </div>
@@ -936,14 +1197,25 @@ export const StandupCeremonyView: React.FC = () => {
 
               {!isSubmitted && (
                 <div className={styles.quickActionsBar}>
-                  <button
-                    type="button"
-                    className={styles.secondaryCoachBtn}
-                    onClick={() => setModeOverride('chat')}
-                    {...{ 'data-testid': 'standup-switch-coach-btn' }}
-                  >
-                    Need to talk through changes? Discuss with Coach
-                  </button>
+                  <div className={styles.leftActionGroup}>
+                    <button
+                      type="button"
+                      className={styles.rejectAllBtn}
+                      onClick={handleRejectAllManual}
+                      disabled={submitting}
+                      data-testid="standup-reject-all-btn"
+                    >
+                      Reject All &amp; Write Manually
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondaryCoachBtn}
+                      onClick={() => setModeOverride('chat')}
+                      data-testid="standup-switch-coach-btn"
+                    >
+                      Discuss with Coach
+                    </button>
+                  </div>
                   <button
                     type="button"
                     className={styles.quickSubmitBtn}
@@ -951,9 +1223,9 @@ export const StandupCeremonyView: React.FC = () => {
                       void handleQuickSubmit();
                     }}
                     disabled={submitting}
-                    {...{ 'data-testid': 'standup-quick-submit-btn' }}
+                    data-testid="standup-quick-submit-btn"
                   >
-                    {submitting ? 'Submitting…' : 'Confirm & Submit Standup'}
+                    {submitting ? 'Submitting…' : 'Approve & Submit Update'}
                   </button>
                 </div>
               )}
@@ -964,7 +1236,9 @@ export const StandupCeremonyView: React.FC = () => {
                 {visibleMessages.map((msg, idx) => {
                   const prevRole = idx > 0 ? visibleMessages[idx - 1].role : null;
                   const nextRole =
-                    idx < visibleMessages.length - 1 ? visibleMessages[idx + 1].role : null;
+                    idx < visibleMessages.length - 1
+                      ? visibleMessages[idx + 1].role
+                      : null;
                   const isFirstInGroup = prevRole !== msg.role;
                   const isLastInGroup = nextRole !== msg.role;
                   return (

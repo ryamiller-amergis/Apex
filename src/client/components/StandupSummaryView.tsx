@@ -11,6 +11,7 @@ import {
 } from '../hooks/useStandupDeliveryPulse';
 import {
   STANDUP_DELIVERY_MODEL_LABELS,
+  STANDUP_WORK_DOMAIN_LABELS,
   type StandupActionProposal,
   type StandupOverallHealth,
 } from '../../shared/types/standup';
@@ -178,6 +179,9 @@ export const StandupSummaryView: React.FC = () => {
     STANDUP_DELIVERY_MODEL_LABELS[deliveryModel] ?? 'Flow';
   const overallHealth = pulse?.overallHealth ?? 'on_track';
   const teamGoal = pulse?.teamGoal ?? session.config?.teamGoal ?? null;
+  const sdlcCallouts = pulse?.sdlcCallouts ?? [];
+  const areaBreakdown = pulse?.areaBreakdown ?? [];
+  const individualNarratives = pulse?.individualNarratives ?? [];
   const proposals = session.proposals ?? [];
   const pendingProposals = proposals.filter((p) => p.status === 'pending');
   const decidedProposals = proposals.filter((p) => p.status !== 'pending');
@@ -251,13 +255,74 @@ export const StandupSummaryView: React.FC = () => {
 
         {actionError && <div className={styles.actionError}>{actionError}</div>}
 
+        {/* SDLC & Release Process Callouts */}
+        <section
+          className={styles.fullWidthSection}
+          data-testid="pulse-sdlc-callouts-section"
+        >
+          <h2>SDLC &amp; Release Process Callouts ({sdlcCallouts.length})</h2>
+          {sdlcCallouts.length > 0 ? (
+            <div className={styles.sdlcGrid}>
+              {sdlcCallouts.map((callout) => (
+                <div
+                  key={callout.id}
+                  className={`${styles.sdlcCard} ${
+                    callout.severity === 'critical'
+                      ? styles.sdlcCritical
+                      : styles.sdlcWarning
+                  }`}
+                  data-testid={`pulse-sdlc-callout-${callout.id}`}
+                >
+                  <div className={styles.cardMetaRow}>
+                    <span
+                      className={
+                        callout.severity === 'critical'
+                          ? styles.blockerTypeBadge
+                          : styles.carryoverBadge
+                      }
+                    >
+                      {callout.severity}
+                    </span>
+                    <span className={styles.domainBadge}>
+                      {STANDUP_WORK_DOMAIN_LABELS[callout.domain] ?? callout.domain}
+                    </span>
+                    {callout.ownerDisplayName && (
+                      <span className={styles.ownerName}>
+                        {callout.ownerDisplayName}
+                      </span>
+                    )}
+                  </div>
+                  <div className={styles.cardTitle}>{callout.title}</div>
+                  <div className={styles.cardMainText}>{callout.detail}</div>
+                  {callout.filePaths && callout.filePaths.length > 0 && (
+                    <div className={styles.filePathRow}>
+                      {callout.filePaths.map((fp) => (
+                        <code key={fp} className={styles.fileChip}>
+                          {fp}
+                        </code>
+                      ))}
+                    </div>
+                  )}
+                  <div className={styles.recommendationText}>
+                    <strong>Facilitator check:</strong> {callout.recommendation}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className={styles.emptyHint}>
+              No SQL migration, Terraform/IaC pipeline, or QA build process risks detected.
+            </p>
+          )}
+        </section>
+
         <div className={styles.pulseBoard}>
           {/* 1. Blockers & Decisions Needed */}
           <section
             className={styles.pulseSection}
             {...{ 'data-testid': 'pulse-blockers-section' }}
           >
-            <h2>1. Blockers &amp; Decisions Needed</h2>
+            <h2>Blockers &amp; Decisions Needed</h2>
             {pulse && (pulse.blockers.length > 0 || pulse.decisionsNeeded.length > 0) ? (
               <div className={styles.cardStack}>
                 {pulse.blockers.map((blocker, idx) => (
@@ -283,12 +348,143 @@ export const StandupSummaryView: React.FC = () => {
             )}
           </section>
 
-          {/* 2. At-Risk Work & Commitment Carryover */}
+          {/* 2. Engineering Area Breakdown */}
+          <section
+            className={styles.pulseSection}
+            data-testid="pulse-area-breakdown-section"
+          >
+            <h2>Engineering Area Breakdown</h2>
+            {areaBreakdown.length > 0 ? (
+              <div className={styles.cardStack}>
+                {areaBreakdown.map((area) => (
+                  <div
+                    key={area.domain}
+                    className={styles.areaCard}
+                    data-testid={`pulse-area-card-${area.domain}`}
+                  >
+                    <div className={styles.cardMetaRow}>
+                      <span className={styles.domainBadge}>{area.label}</span>
+                      <span className={styles.areaStat}>
+                        {area.activeItemCount} active
+                      </span>
+                      {area.riskCount > 0 && (
+                        <span className={styles.chipAtRiskSmall}>
+                          {area.riskCount} risk{area.riskCount === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.cardMainText}>
+                      <strong>Focus:</strong> {area.keyFocus}
+                    </div>
+                    <div className={styles.areaContributors}>
+                      Contributors: {area.contributors.join(', ')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className={styles.emptyHint}>
+                Engineering areas populate automatically from active items and PRs.
+              </p>
+            )}
+          </section>
+        </div>
+
+        {/* Individual Standup Narratives (Multi-Day Aware) */}
+        <section
+          className={styles.fullWidthSection}
+          data-testid="pulse-individual-narratives-section"
+        >
+          <h2>
+            Individual Standup Narratives ({individualNarratives.length})
+          </h2>
+          {individualNarratives.length > 0 ? (
+            <div className={styles.narrativeGrid}>
+              {individualNarratives.map((narrative) => {
+                const resolvedName = shortUserLabel(
+                  narrative.userId,
+                  nameByOid[narrative.userId] || narrative.displayName,
+                );
+                const isConfirmed = narrative.status === 'confirmed';
+                return (
+                  <div
+                    key={narrative.userId}
+                    className={styles.narrativeCard}
+                    data-testid={`participant-narrative-${narrative.userId}`}
+                  >
+                    <div className={styles.narrativeHeader}>
+                      <div className={styles.narrativeIdentity}>
+                        <span className={styles.userId}>{resolvedName}</span>
+                        {narrative.domains.map((domain) => (
+                          <span key={domain} className={styles.domainBadge}>
+                            {STANDUP_WORK_DOMAIN_LABELS[domain] ?? domain}
+                          </span>
+                        ))}
+                      </div>
+                      <div className={styles.narrativeBadges}>
+                        {narrative.carryoverCount > 0 && (
+                          <span className={styles.carryoverBadge}>
+                            {narrative.carryoverCount} carryover
+                          </span>
+                        )}
+                        <span
+                          className={
+                            isConfirmed
+                              ? styles.confirmedNarrativeBadge
+                              : styles.draftedNarrativeBadge
+                          }
+                          data-testid={`participant-narrative-status-${narrative.userId}`}
+                        >
+                          {isConfirmed ? 'Confirmed' : 'AI-Drafted from ADO'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className={styles.arcLine}>{narrative.arcSummary}</div>
+
+                    <div className={styles.narrativeBody}>
+                      <div>
+                        <strong>Yesterday:</strong> {narrative.yesterdaySummary}
+                      </div>
+                      <div>
+                        <strong>Today&apos;s Focus:</strong> {narrative.todayFocus}
+                      </div>
+                      <div
+                        className={
+                          narrative.blockersSummary !== 'None' &&
+                          narrative.blockersSummary !== 'None detected'
+                            ? styles.blocker
+                            : ''
+                        }
+                      >
+                        <strong>Blockers:</strong> {narrative.blockersSummary}
+                      </div>
+                      {narrative.userCorrections && (
+                        <div
+                          className={styles.correctionBox}
+                          data-testid={`participant-narrative-correction-${narrative.userId}`}
+                        >
+                          <strong>Member Correction / Addition:</strong>{' '}
+                          {narrative.userCorrections}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className={styles.emptyHint}>No participants in this session.</p>
+          )}
+        </section>
+
+        <div className={styles.pulseBoard}>
+          {/* At-Risk Work & Commitment Carryover */}
           <section
             className={styles.pulseSection}
             {...{ 'data-testid': 'pulse-risks-section' }}
           >
-            <h2>2. At-Risk Work &amp; Commitment Carryover</h2>
+            <h2>At-Risk Work &amp; Commitment Carryover</h2>
             {pulse && (pulse.carryoverAlerts.length > 0 || pulse.atRiskItems.length > 0) ? (
               <div className={styles.cardStack}>
                 {pulse.carryoverAlerts.map((carry, idx) => (
@@ -330,12 +526,12 @@ export const StandupSummaryView: React.FC = () => {
             )}
           </section>
 
-          {/* 3. Handoffs, PR Reviews & Team Capacity */}
+          {/* Handoffs, PR Reviews & Team Capacity */}
           <section
             className={styles.pulseSection}
             {...{ 'data-testid': 'pulse-handoffs-capacity-section' }}
           >
-            <h2>3. Handoffs, PR Reviews &amp; Team Capacity</h2>
+            <h2>Handoffs, PR Reviews &amp; Team Capacity</h2>
             {pulse && (pulse.handoffsAndReviews.length > 0 || pulse.capacityNotes.length > 0) ? (
               <div className={styles.cardStack}>
                 {pulse.handoffsAndReviews.map((handoff, idx) => (
@@ -362,12 +558,12 @@ export const StandupSummaryView: React.FC = () => {
             )}
           </section>
 
-          {/* 4. Confirmation-Gated ADO Proposals */}
+          {/* Confirmation-Gated ADO Proposals */}
           <section
             className={styles.pulseSection}
             {...{ 'data-testid': 'pulse-proposals-section' }}
           >
-            <h2>4. Confirmation-Gated ADO Proposals ({pendingProposals.length} pending)</h2>
+            <h2>Confirmation-Gated ADO Proposals ({pendingProposals.length} pending)</h2>
             {proposals.length > 0 ? (
               <div className={styles.cardStack}>
                 {[...pendingProposals, ...decidedProposals].map((proposal) => (
@@ -429,7 +625,7 @@ export const StandupSummaryView: React.FC = () => {
           </section>
         </div>
 
-        {/* 5. Follow-ups, Facilitator Narrative & Participant Updates */}
+        {/* Follow-ups & Facilitator Narrative */}
         {session.followups.length > 0 && (
           <section className={styles.section}>
             <h2>Follow-ups ({session.followups.length})</h2>
@@ -462,58 +658,6 @@ export const StandupSummaryView: React.FC = () => {
             </div>
           </section>
         )}
-
-        <section className={styles.section}>
-          <h2>Participants ({session.participants.length})</h2>
-          <div className={styles.participantList}>
-            {session.participants.map((p) => (
-              <div key={p.id} className={styles.participantCard}>
-                <div className={styles.participantHeader}>
-                  <span className={styles.userId} title={p.userId}>
-                    {shortUserLabel(p.userId, p.displayName ?? nameByOid[p.userId])}
-                  </span>
-                  <span className={`${styles.chip} ${styles[p.status] ?? ''}`}>
-                    {p.status}
-                  </span>
-                </div>
-                {p.structuredUpdate && (
-                  <div className={styles.update}>
-                    {p.structuredUpdate.yesterday && (
-                      <div>
-                        <strong>Yesterday:</strong> {p.structuredUpdate.yesterday}
-                      </div>
-                    )}
-                    {p.structuredUpdate.today && (
-                      <div>
-                        <strong>Today:</strong> {p.structuredUpdate.today}
-                      </div>
-                    )}
-                    {p.structuredUpdate.blockers && (
-                      <div className={styles.blocker}>
-                        <strong>Blockers:</strong> {p.structuredUpdate.blockers}
-                      </div>
-                    )}
-                    {p.structuredUpdate.atRisk && (
-                      <div className={styles.blocker}>
-                        <strong>At risk:</strong> {p.structuredUpdate.atRisk}
-                      </div>
-                    )}
-                    {p.structuredUpdate.handoffs && (
-                      <div>
-                        <strong>Handoffs:</strong> {p.structuredUpdate.handoffs}
-                      </div>
-                    )}
-                    {p.structuredUpdate.capacity && (
-                      <div>
-                        <strong>Capacity:</strong> {p.structuredUpdate.capacity}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
       </div>
     </div>
   );

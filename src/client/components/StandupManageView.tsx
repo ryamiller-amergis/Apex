@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import { useGroups } from '../hooks/useGroups';
 import { useProjects, useProjectAreaPaths } from '../hooks/useProjects';
+import { useStandupRosterPreview } from '../hooks/useStandupDeliveryPulse';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { NumberStepper } from './NumberStepper';
 import {
@@ -13,9 +14,12 @@ import {
 } from '../utils/standupTiming';
 import {
   STANDUP_DELIVERY_MODEL_LABELS,
+  STANDUP_ROSTER_MODE_LABELS,
+  STANDUP_ROSTER_MODE_SHORT_LABELS,
   type StandupDeliveryModel,
   type StandupDeliveryPolicy,
   type StandupGoalSource,
+  type StandupRosterMode,
 } from '../../shared/types/standup';
 import { resolveStandupPolicy } from '../../shared/utils/standupDeliveryPolicy';
 import styles from './StandupManageView.module.css';
@@ -88,6 +92,24 @@ const DELIVERY_MODEL_OPTIONS: Array<{
   },
 ];
 
+const ROSTER_MODE_OPTIONS: Array<{
+  value: StandupRosterMode;
+  label: string;
+}> = [
+  {
+    value: 'ado_and_groups',
+    label: STANDUP_ROSTER_MODE_LABELS.ado_and_groups,
+  },
+  {
+    value: 'ado_active',
+    label: STANDUP_ROSTER_MODE_LABELS.ado_active,
+  },
+  {
+    value: 'groups_only',
+    label: STANDUP_ROSTER_MODE_LABELS.groups_only,
+  },
+];
+
 const GOAL_SOURCE_OPTIONS: Array<{ value: StandupGoalSource; label: string }> = [
   { value: 'none', label: 'None' },
   { value: 'manual', label: 'Manual Team Goal' },
@@ -112,6 +134,7 @@ interface StandupConfig {
   deliveryModel?: StandupDeliveryModel;
   goalSource?: StandupGoalSource;
   teamGoal?: string | null;
+  rosterMode?: StandupRosterMode;
   policy?: Partial<StandupDeliveryPolicy>;
   reminderDelayMin?: number;
   reminderIntervalMin?: number;
@@ -352,6 +375,7 @@ function makeDefaultFormState(project: string) {
     deliveryModel: 'flow' as StandupDeliveryModel,
     goalSource: 'none' as StandupGoalSource,
     teamGoal: '',
+    rosterMode: 'ado_and_groups' as StandupRosterMode,
     policy: resolveStandupPolicy('flow'),
     reminderDelayMin: 30,
     reminderIntervalMin: 60,
@@ -388,6 +412,13 @@ export const StandupManageView: React.FC = () => {
   );
   const { data: areaPaths = [], isLoading: areaPathsLoading } =
     useProjectAreaPaths(formData.project || null);
+  const { data: rosterPreview } = useStandupRosterPreview({
+    project: formData.project,
+    areaPath: formData.areaPath || undefined,
+    rosterMode: formData.rosterMode,
+    groupIds: formData.groupIds,
+    enabled: showForm && Boolean(formData.project),
+  });
 
   const toggleGroup = useCallback((groupId: string) => {
     setFormData((prev) => ({
@@ -491,6 +522,7 @@ export const StandupManageView: React.FC = () => {
       deliveryModel,
       goalSource: config.goalSource ?? 'none',
       teamGoal: config.teamGoal ?? '',
+      rosterMode: config.rosterMode ?? 'ado_and_groups',
       policy: resolveStandupPolicy(deliveryModel, config.policy),
       reminderDelayMin: config.reminderDelayMin ?? 30,
       reminderIntervalMin: config.reminderIntervalMin ?? 60,
@@ -625,10 +657,11 @@ export const StandupManageView: React.FC = () => {
             <p>
               <strong>What this page does:</strong>
               <br />
-              Configure automated daily standups and Delivery Pulse policies for
-              project groups. Choose a Delivery Model (Flow, Sprint, Milestone,
-              Support, or Custom) so standups and the Calendar only surface risks
-              that match how your team delivers.
+              Configure automated daily standups, hybrid ADO contributor
+              discovery, and SDLC-aware Delivery Pulse policies. Choose how
+              participants are discovered (ADO Work Items + Groups, Active ADO
+              Assignees Only, or Selected Groups Only) and select a Delivery
+              Model (Flow, Sprint, Milestone, Support, or Custom).
             </p>
           </div>
         )}
@@ -657,6 +690,28 @@ export const StandupManageView: React.FC = () => {
                   {adoProjects.map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label htmlFor="standup-config-roster-mode">
+                Participant Discovery
+                <select
+                  id="standup-config-roster-mode"
+                  value={formData.rosterMode}
+                  onChange={(e) =>
+                    setFormData((p) => ({
+                      ...p,
+                      rosterMode: e.target.value as StandupRosterMode,
+                    }))
+                  }
+                  className={styles.select}
+                  data-testid="standup-config-roster-mode"
+                >
+                  {ROSTER_MODE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
                     </option>
                   ))}
                 </select>
@@ -705,7 +760,10 @@ export const StandupManageView: React.FC = () => {
                 </select>
               </label>
 
-              <label htmlFor="standup-config-team-goal">
+              <label
+                htmlFor="standup-config-team-goal"
+                className={styles.fullSpanField}
+              >
                 Team Goal
                 <input
                   id="standup-config-team-goal"
@@ -721,7 +779,10 @@ export const StandupManageView: React.FC = () => {
 
               <div className={styles.groupPickerWrapper}>
                 <span className={styles.groupPickerLabel}>
-                  Groups
+                  Groups{' '}
+                  {formData.rosterMode === 'groups_only'
+                    ? '(required)'
+                    : '(optional — combined with or filters ADO contributors)'}
                   {formData.groupIds.length > 0 && (
                     <span className={styles.groupCount}>
                       {formData.groupIds.length} selected
@@ -734,7 +795,9 @@ export const StandupManageView: React.FC = () => {
                   <p className={styles.groupPickerHint}>Loading groups…</p>
                 ) : groups.length === 0 ? (
                   <p className={styles.groupPickerHint}>
-                    No groups found for this project
+                    No groups found for this project — active ADO contributors
+                    will still be discovered automatically unless Selected Groups
+                    Only is chosen.
                   </p>
                 ) : (
                   <div className={styles.groupCheckList}>
@@ -754,6 +817,28 @@ export const StandupManageView: React.FC = () => {
                         {g.name}
                       </label>
                     ))}
+                  </div>
+                )}
+
+                {rosterPreview && (
+                  <div
+                    className={styles.rosterPreviewBar}
+                    data-testid="standup-roster-preview"
+                  >
+                    <strong>Resolved Roster Preview:</strong>{' '}
+                    {rosterPreview.participants.length} participant(s)
+                    {rosterPreview.participants.length > 0 && (
+                      <span>
+                        {' — '}
+                        {rosterPreview.participants
+                          .slice(0, 6)
+                          .map(
+                            (p) =>
+                              `${p.displayName ?? p.email ?? p.userId} (${p.source})`,
+                          )
+                          .join(', ')}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -892,7 +977,7 @@ export const StandupManageView: React.FC = () => {
                     }
                     {...{ 'data-testid': 'standup-policy-pipeline-evidence' }}
                   />
-                  Pipeline failure signals
+                  Pipeline &amp; IaC stage signals
                 </label>
 
                 <label
@@ -914,7 +999,7 @@ export const StandupManageView: React.FC = () => {
                     }
                     {...{ 'data-testid': 'standup-policy-commitment-memory' }}
                   />
-                  Prior commitment carryover check
+                  Multi-day carryover memory
                 </label>
 
                 <label
@@ -1038,6 +1123,9 @@ export const StandupManageView: React.FC = () => {
                 const modelKey = config.deliveryModel ?? 'flow';
                 const modelLabel =
                   STANDUP_DELIVERY_MODEL_LABELS[modelKey] ?? 'Flow';
+                const rosterKey = config.rosterMode ?? 'ado_and_groups';
+                const rosterLabel =
+                  STANDUP_ROSTER_MODE_SHORT_LABELS[rosterKey] ?? 'ADO + Groups';
                 return (
                   <div
                     key={config.id}
@@ -1050,7 +1138,7 @@ export const StandupManageView: React.FC = () => {
                           ? config.groups.map((g) => g.name)
                           : config.group
                           ? [config.group.name]
-                          : ['(no groups)']
+                          : ['(ADO auto-discovered)']
                         ).map((name) => (
                           <span key={name} className={styles.groupTag}>
                             {name}
@@ -1065,6 +1153,12 @@ export const StandupManageView: React.FC = () => {
                         }}
                       >
                         {modelLabel}
+                      </span>
+                      <span
+                        className={styles.rosterPill}
+                        data-testid={`standup-config-card-roster-${config.id}`}
+                      >
+                        {rosterLabel}
                       </span>
                       {!config.enabled && (
                         <span className={styles.disabled}>Disabled</span>

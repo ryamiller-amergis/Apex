@@ -1,15 +1,9 @@
-import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { WorkItem } from '../types/workitem';
 import {
-  evaluateCalendarItemHealth,
   normalizeDeliveryModel,
-  normalizeGoalSource,
-  resolveStandupPolicy,
   synthesizeTeamPulse,
 } from '../../shared/utils/standupDeliveryPolicy';
 import type {
-  CalendarDeliveryPulseResponse,
   MyStandupSessionResponse,
   ParticipantPreparedBrief,
   StandupActionProposal,
@@ -17,6 +11,8 @@ import type {
   StandupDeliveryModel,
   StandupDeliveryPolicy,
   StandupGoalSource,
+  StandupRosterMember,
+  StandupRosterMode,
   StandupStructuredUpdate,
   StandupTeamPulse,
 } from '../../shared/types/standup';
@@ -34,6 +30,7 @@ export interface StandupSessionDetail {
     deliveryModel?: StandupDeliveryModel;
     goalSource?: StandupGoalSource;
     teamGoal?: string | null;
+    rosterMode?: StandupRosterMode;
     policy?: StandupDeliveryPolicy;
   };
   participants: Array<{
@@ -157,7 +154,6 @@ export function useSubmitStandupParticipant() {
       void qc.invalidateQueries({ queryKey: ['my-standup-session'] });
       void qc.invalidateQueries({ queryKey: ['standup-session'] });
       void qc.invalidateQueries({ queryKey: ['standup-sessions'] });
-      void qc.invalidateQueries({ queryKey: ['standup-delivery-pulse'] });
     },
   });
 }
@@ -178,14 +174,27 @@ export function useStandupSessionDetail(
       if (!raw) return null;
 
       const deliveryModel = normalizeDeliveryModel(raw.config?.deliveryModel);
-      const teamPulse =
-        raw.teamPulse ??
-        synthesizeTeamPulse({
-          deliveryModel,
-          teamGoal: raw.config?.teamGoal ?? null,
-          participants: raw.participants ?? [],
-          proposals: raw.proposals ?? [],
-        });
+      const synthesized = synthesizeTeamPulse({
+        deliveryModel,
+        teamGoal: raw.config?.teamGoal ?? null,
+        participants: raw.participants ?? [],
+        proposals: raw.proposals ?? [],
+        decisionsNeeded: raw.teamPulse?.decisionsNeeded,
+      });
+
+      const teamPulse: StandupTeamPulse = raw.teamPulse
+        ? {
+            ...synthesized,
+            ...raw.teamPulse,
+            sdlcCallouts:
+              raw.teamPulse.sdlcCallouts ?? synthesized.sdlcCallouts,
+            areaBreakdown:
+              raw.teamPulse.areaBreakdown ?? synthesized.areaBreakdown,
+            individualNarratives:
+              raw.teamPulse.individualNarratives ??
+              synthesized.individualNarratives,
+          }
+        : synthesized;
 
       return {
         ...raw,
@@ -213,68 +222,41 @@ export function useStandupSessionsList(project?: string | null) {
   });
 }
 
-export function useCalendarDeliveryPulse(
-  project: string | null | undefined,
-  workItems: WorkItem[],
-) {
-  const serverQuery = useQuery<CalendarDeliveryPulseResponse | null>({
-    queryKey: ['standup-delivery-pulse', project ?? ''],
-    queryFn: () =>
-      project
-        ? fetchJsonOrNull<CalendarDeliveryPulseResponse>(
-            `/api/standup/delivery-pulse?project=${encodeURIComponent(project)}`,
-          )
-        : Promise.resolve(null),
-    enabled: Boolean(project),
-    staleTime: 15_000,
-    retry: 1,
+export function useStandupRosterPreview(params: {
+  project: string;
+  areaPath?: string;
+  rosterMode: StandupRosterMode;
+  groupIds: string[];
+  enabled?: boolean;
+}) {
+  const { project, areaPath, rosterMode, groupIds, enabled = true } = params;
+  const groupKey = groupIds.join(',');
+
+  return useQuery<{
+    project: string;
+    rosterMode: StandupRosterMode;
+    participants: StandupRosterMember[];
+  } | null>({
+    queryKey: [
+      'standup-roster-preview',
+      project,
+      areaPath ?? '',
+      rosterMode,
+      groupKey,
+    ],
+    queryFn: async () => {
+      const qs = new URLSearchParams({ project, rosterMode });
+      if (areaPath) qs.set('areaPath', areaPath);
+      if (groupIds.length > 0) qs.set('groupIds', groupKey);
+      const res = await fetch(`/api/standup/roster-preview?${qs}`, {
+        credentials: 'include',
+      });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: Boolean(enabled && project),
+    staleTime: 20_000,
   });
-
-  const pulse = useMemo<CalendarDeliveryPulseResponse>(() => {
-    const base = serverQuery.data;
-    const deliveryModel = normalizeDeliveryModel(base?.deliveryModel);
-    const goalSource = normalizeGoalSource(base?.goalSource);
-    const policy = resolveStandupPolicy(deliveryModel, {
-      enableTargetDateChecks: base?.enableTargetDateChecks,
-      staleDaysThreshold: base?.staleDaysThreshold,
-      wipLimitPerPerson: base?.wipLimitPerPerson,
-      slaHoursHighPriority: base?.slaHoursHighPriority,
-    });
-    const proposals = base?.proposals ?? [];
-    const teamPulse = base?.teamPulse ?? null;
-
-    const evaluated = evaluateCalendarItemHealth(workItems, {
-      deliveryModel,
-      policy,
-      teamPulse,
-      proposals,
-    });
-
-    return {
-      project: project ?? '',
-      deliveryModel,
-      teamGoal: base?.teamGoal ?? null,
-      goalSource,
-      enableTargetDateChecks: policy.enableTargetDateChecks,
-      staleDaysThreshold: policy.staleDaysThreshold,
-      wipLimitPerPerson: policy.wipLimitPerPerson,
-      slaHoursHighPriority: policy.slaHoursHighPriority,
-      latestSessionId: base?.latestSessionId ?? null,
-      latestSessionDate: base?.latestSessionDate ?? null,
-      overallHealth: evaluated.overallHealth,
-      counts: evaluated.counts,
-      itemHealthById: evaluated.itemHealthById,
-      proposals,
-      teamPulse,
-    };
-  }, [project, serverQuery.data, workItems]);
-
-  return {
-    pulse,
-    isLoading: serverQuery.isLoading,
-    error: serverQuery.error,
-    refetch: serverQuery.refetch,
-  };
 }
 
 export function useApplyStandupProposal() {
@@ -300,29 +282,7 @@ export function useApplyStandupProposal() {
       }
       return res.json();
     },
-    onSuccess: ({ proposal }) => {
-      // Optimistically update loaded workItems caches so stubbed and live views stay in sync
-      qc.setQueriesData<WorkItem[]>({ queryKey: ['workItems'] }, (existing) => {
-        if (!Array.isArray(existing)) return existing;
-        return existing.map((item) => {
-          if (item.id !== proposal.workItemId) return item;
-          if (proposal.proposalType === 'target_date') {
-            if (proposal.fieldName === 'targetDate') {
-              return { ...item, targetDate: proposal.proposedValue };
-            }
-            return { ...item, dueDate: proposal.proposedValue };
-          }
-          if (proposal.proposalType === 'state') {
-            return { ...item, state: proposal.proposedValue };
-          }
-          if (proposal.proposalType === 'assigned_to') {
-            return { ...item, assignedTo: proposal.proposedValue };
-          }
-          return item;
-        });
-      });
-
-      void qc.invalidateQueries({ queryKey: ['standup-delivery-pulse'] });
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['standup-session'] });
       void qc.invalidateQueries({ queryKey: ['my-standup-session'] });
       void qc.invalidateQueries({ queryKey: ['workItems'] });
@@ -354,7 +314,6 @@ export function useDismissStandupProposal() {
       return res.json();
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['standup-delivery-pulse'] });
       void qc.invalidateQueries({ queryKey: ['standup-session'] });
       void qc.invalidateQueries({ queryKey: ['my-standup-session'] });
     },
