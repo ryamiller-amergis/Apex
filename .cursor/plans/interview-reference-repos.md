@@ -38,14 +38,17 @@ An interview (e.g. amergisconnect-ats) can attach read-only reference repos (Mat
 - [x] Tests: interviewLinkService, durableInteractiveTurnTypes, durableInteractiveTurnPrompt, interactiveActorHostEntrypoint (all pass); tsc server+client clean; eslint 0 errors
 
 ## Next
-1. User is testing PR #290 in dev: run migrations, enable the flag for the project, add catalog repos on the Brainstorm card, link them to an interview, and walk a Technical turn end to end.
-2. Decide on follow-ups: kickoff picker, handoff carry-over, legacy in-process path.
+1. PR #290 merged. Follow-up branch fix/v2-interview-linked-context: V2 interview turns now carry linked ADRs + Design Modules in the prompt (`renderLinkedContextForInterviewThread` → `loadLinkedContext` dep), every phase, no flag. Before it, V2 never wrote `.ai-pilot/linked-context.md`.
+2. ATS dev testing blocked: first turn 422 `INTERACTIVE_V2_SKILL_UNAVAILABLE`. Web app has no ATS mirror and reads locally unless flag `repo-read-service` is on for the project; user to check that flag. Dev web app `/home` is 10 GB and `REPO_CACHE_MIN_FREE_BYTES` needs 10 GiB free, so every new web-app clone is refused (infra/config change, needs approval).
+3. Decide on follow-ups: kickoff picker, handoff carry-over, legacy in-process path, interview page showing "Preparing" forever when the first send returns 422.
 
 ## Mistakes to avoid (learned in earlier chats)
 - Linked Design Modules do NOT bring other repos; they only render globs into a context doc.
 - Worker test fixtures often omit `workflowClass`; `turnReadSources` returns undefined (no throw) on unknown classes, so fixtures carrying sources must set `workflowClass`.
 - Don't use `formatSourcesContext` from Brainstorm for interviews: it tells the agent to use `search_repo_code`, which interview Technical turns close.
 - Plain `npx eslint` fails (flat config); use `npx cross-env ESLINT_USE_FLAT_CONFIG=false eslint <files>`.
+- `az devops invoke` from Git Bash rewrites `/path` args to `C:/Program Files/Git/...`; set `MSYS_NO_PATHCONV=1` or every item lookup falsely returns not found.
+- Diagnose dev with App Insights `appi-app-scrum-dev` (rg-scrum-dev) and Kudu VFS (`az rest --resource https://management.azure.com/`), not guesses.
 
 ## Verify with
 - `npx jest src/server/__tests__/interviewLinkService.test.ts src/server/__tests__/durableInteractiveTurnTypes.test.ts src/server/__tests__/durableInteractiveTurnPrompt.test.ts src/server/__tests__/interactiveActorHostEntrypoint.test.ts --silent`

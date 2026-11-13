@@ -222,6 +222,118 @@ export async function materializeLinkedContextForInterviewThread(
   });
 }
 
+interface ResolvedLinkedContextSections {
+  adrs: RenderAdrSection[];
+  designModules: RenderDesignModuleSection[];
+  staleAdrExcluded: number;
+}
+
+async function resolveLinkedContextSections(
+  interviewId: string,
+  actor: ActorContext,
+): Promise<ResolvedLinkedContextSections> {
+  const readModel = await getLinkedContext(interviewId, actor);
+
+  const acceptedAdrLinks = readModel.adrLinks.filter((link) => link.isAccepted);
+  const staleAdrExcluded = readModel.adrLinks.length - acceptedAdrLinks.length;
+
+  const adrs: RenderAdrSection[] = [];
+  for (const link of acceptedAdrLinks) {
+    const adr = await getAdr(link.adrId);
+    if (!adr || adr.status !== 'accepted') {
+      // Live re-check: treat as stale if status drifted since the read model.
+      continue;
+    }
+    adrs.push({
+      id: adr.id,
+      title: adr.title,
+      content: adr.content ?? '',
+    });
+  }
+
+  const designModules: RenderDesignModuleSection[] = [];
+  for (const link of readModel.designModuleLinks) {
+    const mod = await getModuleById(link.designModuleId);
+    if (!mod) continue;
+    designModules.push({
+      id: mod.id,
+      name: mod.label,
+      description: mod.description,
+      documentation: mod.content,
+      // Manifest strings only — never resolve or inline raw file contents (BR-010).
+      sourceGlobs: Array.isArray(mod.sourceGlobs) ? [...mod.sourceGlobs] : [],
+    });
+  }
+
+  return {
+    adrs,
+    designModules,
+    // Recount stale when live status drifted past the read-model flag.
+    staleAdrExcluded: staleAdrExcluded + (acceptedAdrLinks.length - adrs.length),
+  };
+}
+
+/**
+ * V2 interview turns run in a worker workspace this host cannot write, so the
+ * linked-context document travels in the prompt instead of on disk. Returns
+ * null when the thread has no Interview row, nothing is linked, or resolution
+ * fails.
+ */
+export async function renderLinkedContextForInterviewThread(options: {
+  threadId: string;
+  userId: string;
+  now?: () => Date;
+}): Promise<string | null> {
+  const interviewRow = await db.query.interviews.findFirst({
+    where: eq(interviews.chatThreadId, options.threadId),
+    columns: { id: true },
+  });
+  if (!interviewRow) return null;
+
+  const started = Date.now();
+  const interviewId = interviewRow.id;
+  try {
+    const { adrs, designModules, staleAdrExcluded } =
+      await resolveLinkedContextSections(interviewId, { userId: options.userId });
+    const included = adrs.length > 0 || designModules.length > 0;
+    emitTelemetry(
+      interviewId,
+      {
+        outcome: included ? 'written' : 'omitted',
+        adrCount: adrs.length,
+        designModuleCount: designModules.length,
+        staleAdrExcluded,
+        durationMs: Date.now() - started,
+      },
+      { delivery: 'prompt' },
+    );
+    if (!included) return null;
+    return renderLinkedContextDocument({
+      interviewId,
+      materializedAt: (options.now ?? (() => new Date()))().toISOString(),
+      adrs,
+      designModules,
+    });
+  } catch (err) {
+    const errorName = err instanceof Error ? err.name : 'Error';
+    console.warn(
+      `[linked-context] prompt render failed interviewId=${interviewId} error=${errorName}`,
+    );
+    emitTelemetry(
+      interviewId,
+      {
+        outcome: 'failed',
+        adrCount: 0,
+        designModuleCount: 0,
+        staleAdrExcluded: 0,
+        durationMs: Date.now() - started,
+      },
+      { delivery: 'prompt', errorName },
+    );
+    return null;
+  }
+}
+
 /**
  * Resolve current Interview links and materialize (or omit) `.ai-pilot/linked-context.md`.
  */
@@ -234,41 +346,8 @@ export async function materializeLinkedContext(
   const now = options.now ?? (() => new Date());
 
   try {
-    const readModel = await getLinkedContext(interviewId, options.actor);
-
-    const acceptedAdrLinks = readModel.adrLinks.filter((link) => link.isAccepted);
-    const staleAdrExcluded = readModel.adrLinks.length - acceptedAdrLinks.length;
-
-    const adrs: RenderAdrSection[] = [];
-    for (const link of acceptedAdrLinks) {
-      const adr = await getAdr(link.adrId);
-      if (!adr || adr.status !== 'accepted') {
-        // Live re-check: treat as stale if status drifted since the read model.
-        continue;
-      }
-      adrs.push({
-        id: adr.id,
-        title: adr.title,
-        content: adr.content ?? '',
-      });
-    }
-    // Recount stale when live status drifted past the read-model flag.
-    const liveStaleExcluded =
-      staleAdrExcluded + (acceptedAdrLinks.length - adrs.length);
-
-    const designModules: RenderDesignModuleSection[] = [];
-    for (const link of readModel.designModuleLinks) {
-      const mod = await getModuleById(link.designModuleId);
-      if (!mod) continue;
-      designModules.push({
-        id: mod.id,
-        name: mod.label,
-        description: mod.description,
-        documentation: mod.content,
-        // Manifest strings only — never resolve or inline raw file contents (BR-010).
-        sourceGlobs: Array.isArray(mod.sourceGlobs) ? [...mod.sourceGlobs] : [],
-      });
-    }
+    const { adrs, designModules, staleAdrExcluded: liveStaleExcluded } =
+      await resolveLinkedContextSections(interviewId, options.actor);
 
     if (adrs.length === 0 && designModules.length === 0) {
       ensureNoDocument(documentPath);

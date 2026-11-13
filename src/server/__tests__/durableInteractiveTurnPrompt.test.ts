@@ -81,6 +81,7 @@ async function admittedSpecification(
     optionalGroundingWaitMs?: number;
     trackEvent?: jest.Mock;
     referenceSources?: BrainstormTurnSources | null;
+    linkedContext?: string | null;
     /** Admits a turn with these messages first, on the same service. */
     priorTurnMessages?: ChatMessage[];
   } = {},
@@ -125,6 +126,7 @@ async function admittedSpecification(
       .mockResolvedValue(options.backgroundGrounding ?? false),
     loadInterviewContext: jest.fn().mockResolvedValue(options.interviewContext ?? null),
     loadReferenceSources: jest.fn().mockResolvedValue(options.referenceSources ?? null),
+    loadLinkedContext: jest.fn().mockResolvedValue(options.linkedContext ?? null),
     resolveMaxviewCapability: jest.fn().mockResolvedValue('disabled'),
     resolveDeadlines:
       options.resolveDeadlines ??
@@ -510,6 +512,44 @@ describe('durable guided interview turn', () => {
       });
 
       expect(specification.referenceSources).toBeUndefined();
+    });
+  });
+
+  describe('linked context', () => {
+    const linkedContext =
+      '# Linked Interview Grounding Context\n\n## Linked ADRs (accepted)\n\n### Use Postgres (`adr-1`)\n\nWe use Postgres.\n';
+
+    it('carries linked ADRs and Design Modules on a Discovery turn', async () => {
+      const specification = await admittedSpecification([], {
+        guided: true,
+        repositoryContext,
+        linkedContext,
+      });
+
+      expect(specification.guidedInterview?.phase).toBe('product');
+      expect(specification.currentPrompt).toContain('`.ai-pilot/linked-context.md`');
+      expect(specification.currentPrompt).toContain('### Use Postgres (`adr-1`)');
+    });
+
+    it('keeps carrying it on later Technical turns', async () => {
+      const specification = await admittedSpecification(
+        [
+          message('user', 'Begin.', 1),
+          message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+        ],
+        { guided: true, repositoryContext, linkedContext },
+      );
+
+      expect(specification.currentPrompt).toContain('### Use Postgres (`adr-1`)');
+    });
+
+    it('never adds it to a non-interview turn', async () => {
+      const specification = await admittedSpecification([], {
+        workflowClass: 'home-chat',
+        linkedContext,
+      });
+
+      expect(specification.currentPrompt).not.toContain('Linked Interview Grounding Context');
     });
   });
 
