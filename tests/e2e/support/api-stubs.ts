@@ -63,6 +63,34 @@ export async function stubAdoWorkItems(
   page: Page,
   items: StubWorkItem[] = DEFAULT_WORK_ITEMS,
 ): Promise<void> {
+  // Force classic ADO work-items mode so Calendar reads from /api/workitems
+  // rather than /api/apex-work-items when the work-board flag is seeded on.
+  await page.route('**/api/feature-flags/evaluate*', async (route) => {
+    try {
+      const response = await route.fetch();
+      const data = (await response.json()) as EvaluateFlagsResponse;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          flags: {
+            ...(data?.flags ?? {}),
+            'beta-to-prod-announcement': false,
+            'work-board': false,
+          },
+        }),
+      });
+    } catch {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          flags: { 'beta-to-prod-announcement': false, 'work-board': false },
+        }),
+      });
+    }
+  });
+
   // GET /api/workitems — the client (workItemService.getWorkItems) consumes the
   // JSON body directly as a WorkItem[] array, NOT a { items, totalCount } object.
   await page.route('**/api/workitems*', (route) => {

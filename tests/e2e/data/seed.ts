@@ -476,4 +476,55 @@ export const SeedApi = {
   }> {
     return post(request, '/seed/observability-telemetry', opts ?? {});
   },
+
+  async seedStandupDeliveryPulse(
+    request: APIRequestContext,
+    opts: {
+      project?: string;
+      deliveryModel?: 'flow' | 'sprint' | 'milestone' | 'support' | 'custom';
+      goalSource?: 'none' | 'manual' | 'iteration' | 'release_epic' | 'saved_query';
+      teamGoal?: string | null;
+      policy?: Record<string, unknown>;
+      sessionDate?: string;
+      sessionStatus?: 'collecting' | 'facilitating' | 'completed';
+      summaryMarkdown?: string | null;
+      participantUserId?: string;
+      participantStatus?: 'notified' | 'submitted';
+      preparedBrief?: unknown;
+      structuredUpdate?: {
+        yesterday?: string;
+        today?: string;
+        blockers?: string;
+        atRisk?: string;
+        handoffs?: string;
+        capacity?: string;
+      } | null;
+      proposals?: Array<{
+        workItemId: number;
+        workItemTitle: string;
+        proposalType: 'target_date' | 'state' | 'assigned_to';
+        fieldName: string;
+        currentValue?: string | null;
+        proposedValue: string;
+        reason: string;
+        confidence?: 'on_track' | 'uncertain' | 'at_risk';
+        status?: 'pending' | 'applied' | 'dismissed';
+      }>;
+      followups?: Array<{
+        title: string;
+        description?: string;
+        participantUserIds?: string[];
+      }>;
+      createSession?: boolean;
+    },
+  ): Promise<{
+    group: { id: string; name: string; project: string | null };
+    config: { id: string; project: string; deliveryModel: string; teamGoal: string | null };
+    session: { id: string; sessionDate: string; status: string } | null;
+    participant: { id: string; sessionId: string; userId: string; status: string } | null;
+    proposals: Array<{ id: string; workItemId: number; status: string }>;
+    followups: Array<{ id: string; title: string }>;
+  }> {
+    return post(request, '/seed/standup-delivery-pulse', opts);
+  },
 };

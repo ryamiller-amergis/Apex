@@ -26,6 +26,7 @@ async function main(): Promise<void> {
 
   const { db } = await import('../../../src/server/db/drizzle');
   const {
+    appGroups,
     notifications,
     reviewComments,
     prds,
@@ -35,6 +36,9 @@ async function main(): Promise<void> {
     documentApproverAssignments,
     chatThreads,
     projectSkillSettings,
+    standupActionProposals,
+    standupConfigs,
+    standupFollowups,
   } = await import('../../../src/server/db/schema');
   const { like, inArray } = await import('drizzle-orm');
 
@@ -107,6 +111,42 @@ async function main(): Promise<void> {
     .delete(projectSkillSettings)
     .where(like(projectSkillSettings.friendlyName, '[E2E]%'))
     .returning({ id: projectSkillSettings.id });
+
+  await db
+    .delete(standupActionProposals)
+    .where(like(standupActionProposals.workItemTitle, '[E2E]%'));
+  await db
+    .delete(standupFollowups)
+    .where(like(standupFollowups.title, '[E2E]%'));
+  const e2eGroups = await db
+    .select({ id: appGroups.id })
+    .from(appGroups)
+    .where(like(appGroups.name, '[E2E]%'));
+  const e2eGroupIdSet = new Set(e2eGroups.map((g) => g.id));
+  const allConfigs = await db
+    .select({
+      id: standupConfigs.id,
+      groupId: standupConfigs.groupId,
+      groupIds: standupConfigs.groupIds,
+      teamGoal: standupConfigs.teamGoal,
+      areaPath: standupConfigs.areaPath,
+    })
+    .from(standupConfigs);
+  const e2eConfigIds = allConfigs
+    .filter(
+      (cfg) =>
+        cfg.teamGoal?.startsWith('[E2E]') ||
+        cfg.areaPath?.startsWith('[E2E]') ||
+        (cfg.groupId && e2eGroupIdSet.has(cfg.groupId)) ||
+        (Array.isArray(cfg.groupIds) && cfg.groupIds.some((gid) => e2eGroupIdSet.has(gid))),
+    )
+    .map((cfg) => cfg.id);
+  if (e2eConfigIds.length > 0) {
+    await db.delete(standupConfigs).where(inArray(standupConfigs.id, e2eConfigIds));
+  }
+  if (e2eGroups.length > 0) {
+    await db.delete(appGroups).where(like(appGroups.name, '[E2E]%'));
+  }
 
   console.log(
     `[E2E reset] Removed: ${deletedComments.length} comments, ` +

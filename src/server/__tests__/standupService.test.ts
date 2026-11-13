@@ -40,6 +40,7 @@ jest.mock('../db/schema', () => ({
   standupSessions: {},
   standupParticipants: {},
   standupFollowups: {},
+  standupActionProposals: {},
   appGroupMembers: {},
   appUsers: {},
   projectSkillSettings: {},
@@ -53,6 +54,7 @@ import {
   runFacilitator,
   triggerSessionForConfig,
   generateDailySessions,
+  submitParticipant,
 } from '../services/standupService';
 import { createNotification } from '../services/notificationService';
 import { sendTeamsNotification } from '../services/teamsBotService';
@@ -294,5 +296,68 @@ describe('triggerSessionForConfig project skill settings', () => {
         skillSettingsId: 'skill-1',
       }),
     );
+  });
+});
+
+describe('submitParticipant Quick Confirm & proposal staging', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockResolvedValue(undefined),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.insert.mockReturnValue({
+      values: jest.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  it('persists direct structuredUpdate and stages pending proposals without requiring chat JSON', async () => {
+    mockDb.query.standupParticipants.findFirst.mockResolvedValue({
+      id: 'p-quick',
+      sessionId: 'session-quick',
+      threadId: 'thread-quick',
+      status: 'notified',
+    });
+    mockDb.query.standupSessions.findFirst.mockResolvedValue({
+      id: 'session-quick',
+      status: 'collecting',
+      config: {
+        project: 'MaxView',
+        deliveryModel: 'milestone',
+        teamGoal: 'Ship v3.0',
+        skillSettingsId: null,
+      },
+      participants: [],
+    });
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: jest.fn().mockResolvedValue([
+          { status: 'submitted' },
+          { status: 'notified' },
+        ]),
+      }),
+    });
+
+    await submitParticipant('p-quick', {
+      structuredUpdate: {
+        yesterday: 'Completed #501',
+        today: 'Working on #502',
+        blockers: '',
+      },
+      proposals: [
+        {
+          workItemId: 502,
+          workItemTitle: 'Milestone Feature',
+          proposalType: 'target_date',
+          fieldName: 'targetDate',
+          currentValue: null,
+          proposedValue: '2026-11-25',
+          reason: 'Missing target date under Milestone policy',
+        },
+      ],
+    });
+
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    expect(mockCreateThread).not.toHaveBeenCalled();
   });
 });
