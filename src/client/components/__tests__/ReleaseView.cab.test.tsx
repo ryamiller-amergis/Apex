@@ -93,22 +93,21 @@ describe('ReleaseView - Create CAB request', () => {
     (global.fetch as jest.Mock).mockImplementation((input: unknown) => {
       const url = String(input);
       if (url.startsWith('/api/releases/epics')) return okResponse(mockEpics);
-      if (url.includes('/related-items')) return okResponse([{ id: 53247, title: 'Item' }]);
-      if (url.startsWith('/api/releases?')) return okResponse([]);
+      if (url.includes('/related-items')) return okResponse([{ id: 53247, title: 'Item', state: 'In Progress', workItemType: 'Feature' }]);
       return okResponse([]);
     });
   });
 
-  it('opens the confirmation modal from Actions and starts the panel on confirm', async () => {
+  it('opens the confirmation modal from Inspector actions and starts the panel on confirm', async () => {
     const user = userEvent.setup();
     render(
       <ReleaseView workItems={[]} project="MaxView" areaPath="MaxView" />,
       { wrapper: createWrapper() },
     );
 
-    const menus = await screen.findAllByTitle('Actions');
-    await user.click(menus[1]);
-    await user.click(screen.getByTestId('release-create-cab-101'));
+    const card = await screen.findByTestId('release-card-101');
+    await user.click(card);
+    await user.click(await screen.findByTestId('release-create-cab-101'));
 
     expect(screen.getByTestId('create-cab-request-modal')).toBeInTheDocument();
     await user.click(screen.getByTestId('create-cab-confirm'));
@@ -130,7 +129,7 @@ describe('ReleaseView - Create CAB request', () => {
             ok: true,
             status: 200,
             statusText: 'OK',
-            json: async () => [{ id: 53247, title: 'Item' }],
+            json: async () => [{ id: 53247, title: 'Item', state: 'In Progress', workItemType: 'Feature' }],
           });
         });
       }
@@ -142,9 +141,9 @@ describe('ReleaseView - Create CAB request', () => {
       { wrapper: createWrapper() },
     );
 
-    const menus = await screen.findAllByTitle('Actions');
-    await user.click(menus[1]);
-    await user.click(screen.getByTestId('release-create-cab-101'));
+    const card = await screen.findByTestId('release-card-101');
+    await user.click(card);
+    await user.click(await screen.findByTestId('release-create-cab-101'));
     await user.click(screen.getByTestId('create-cab-confirm'));
     await user.click(screen.getByTestId('create-cab-cancel'));
     releaseRelated?.();

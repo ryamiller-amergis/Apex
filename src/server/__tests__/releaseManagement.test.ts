@@ -475,4 +475,77 @@ describe('Release Management API Routes', () => {
       });
     });
   });
+
+  describe('POST /api/releases/:version/tag', () => {
+    it('honors a valid project sub-areaPath when creating a release epic', async () => {
+      mockAdoService.getAreaPaths = jest.fn().mockResolvedValue([
+        'MaxView',
+        'MaxView\\Mobile',
+        'MaxView\\Desktop',
+      ]);
+      mockAdoService.createReleaseEpic = jest.fn().mockResolvedValue(555);
+
+      const response = await request(app)
+        .post('/api/releases/v2.4.0/tag')
+        .send({
+          project: 'MaxView',
+          areaPath: 'MaxView\\Mobile',
+          startDate: '2026-11-01',
+          targetDate: '2026-11-20',
+          description: 'Mobile sprint release',
+        })
+        .expect(200);
+
+      expect(response.body).toEqual({ success: true, epicId: 555, taggedCount: 0 });
+      expect(AzureDevOpsService).toHaveBeenCalledWith('MaxView', 'MaxView\\Mobile');
+      expect(mockAdoService.createReleaseEpic).toHaveBeenCalledWith(
+        'v2.4.0',
+        '2026-11-01',
+        '2026-11-20',
+        'Mobile sprint release',
+        'MaxView\\Mobile',
+      );
+    });
+
+    it('rejects an areaPath belonging to a different project with 400', async () => {
+      mockAdoService.createReleaseEpic = jest.fn();
+
+      const response = await request(app)
+        .post('/api/releases/v2.4.0/tag')
+        .send({
+          project: 'MaxView',
+          areaPath: 'OtherProject\\Mobile',
+          startDate: '2026-11-01',
+          targetDate: '2026-11-20',
+          description: 'Invalid area',
+        })
+        .expect(400);
+
+      expect(response.body.error).toMatch(/areaPath/i);
+      expect(mockAdoService.createReleaseEpic).not.toHaveBeenCalled();
+    });
+
+    it('rejects an areaPath not listed in project area paths with 400', async () => {
+      mockAdoService.getAreaPaths = jest.fn().mockResolvedValue([
+        'MaxView',
+        'MaxView\\Mobile',
+        'MaxView\\Desktop',
+      ]);
+      mockAdoService.createReleaseEpic = jest.fn();
+
+      const response = await request(app)
+        .post('/api/releases/v2.4.0/tag')
+        .send({
+          project: 'MaxView',
+          areaPath: 'MaxView\\NonExistent',
+          startDate: '2026-11-01',
+          targetDate: '2026-11-20',
+          description: 'Unknown area',
+        })
+        .expect(400);
+
+      expect(response.body.error).toMatch(/areaPath/i);
+      expect(mockAdoService.createReleaseEpic).not.toHaveBeenCalled();
+    });
+  });
 });

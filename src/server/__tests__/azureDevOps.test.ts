@@ -1668,6 +1668,101 @@ describe('AzureDevOpsService', () => {
       }], 777, 'MatterWorx');
     });
   });
+
+  describe('getReleaseEpics', () => {
+    it('selects System.AreaPath and returns areaPath and derived platform without extra calls', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ workItemRelations: [] }),
+      }) as any;
+
+      try {
+        const service = new AzureDevOpsService('MaxView', 'MaxView');
+        mockWitApi.queryByWiql.mockResolvedValue({
+          workItems: [{ id: 101 }, { id: 102 }, { id: 103 }],
+        });
+        mockWitApi.getWorkItems.mockResolvedValue([
+          {
+            id: 101,
+            fields: {
+              'System.Id': 101,
+              'System.Title': 'v2.4.0',
+              'System.State': 'In Progress',
+              'System.AreaPath': 'MaxView\\Mobile',
+              'System.Description': 'Mobile release',
+            },
+          },
+          {
+            id: 102,
+            fields: {
+              'System.Id': 102,
+              'System.Title': 'v3.1.0',
+              'System.State': 'New',
+              'System.AreaPath': 'MaxView\\Desktop',
+              'System.Description': 'Desktop release',
+            },
+          },
+          {
+            id: 103,
+            fields: {
+              'System.Id': 103,
+              'System.Title': 'v1.0.0',
+              'System.State': 'Done',
+              'System.AreaPath': 'MaxView\\Platform',
+            },
+          },
+        ]);
+
+        const epics = await service.getReleaseEpics();
+
+        const requestedFields = mockWitApi.getWorkItems.mock.calls[0][1] as string[];
+        expect(requestedFields).toContain('System.AreaPath');
+        expect(epics).toHaveLength(3);
+        expect(epics[0]).toMatchObject({
+          id: 101,
+          version: 'v2.4.0',
+          areaPath: 'MaxView\\Mobile',
+          platform: 'Mobile',
+        });
+        expect(epics[1]).toMatchObject({
+          id: 102,
+          version: 'v3.1.0',
+          areaPath: 'MaxView\\Desktop',
+          platform: 'Desktop',
+        });
+        expect(epics[2]).toMatchObject({
+          id: 103,
+          version: 'v1.0.0',
+          areaPath: 'MaxView\\Platform',
+          platform: 'Platform',
+        });
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('createReleaseEpic', () => {
+    it('honors explicit areaPath override over instance areaPath', async () => {
+      const service = new AzureDevOpsService('MaxView', 'MaxView');
+      mockWitApi.createWorkItem.mockResolvedValue({ id: 901 });
+
+      const epicId = await service.createReleaseEpic(
+        'v2.5.0',
+        '2026-11-01',
+        '2026-11-20',
+        'Mobile launch',
+        'MaxView\\Mobile',
+      );
+
+      expect(epicId).toBe(901);
+      const patch = mockWitApi.createWorkItem.mock.calls[0][1] as Array<{ path: string; value: unknown }>;
+      expect(patch).toEqual(expect.arrayContaining([
+        { op: 'add', path: '/fields/System.AreaPath', value: 'MaxView\\Mobile' },
+      ]));
+    });
+  });
 });
 
 describe('parseTestCaseStepsXml', () => {

@@ -5,8 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ReleaseView from '../ReleaseView';
 import { WorkItem } from '../../types/workitem';
 
-// ── useAppShell mock ──────────────────────────────────────────────────────────
-
 let mockIsInAnyGroup = jest.fn(() => true);
 let mockPermissionsLoaded = true;
 
@@ -16,8 +14,6 @@ jest.mock('../../hooks/useAppShell', () => ({
     permissionsLoaded: mockPermissionsLoaded,
   }),
 }));
-
-// ── test harness ──────────────────────────────────────────────────────────────
 
 const createWrapper = () => {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -57,9 +53,6 @@ function setupFetch(options: {
     if (url.includes('/api/releases/epics')) {
       return Promise.resolve({ ok: true, json: async () => [RENAMABLE_EPIC, LOCKED_EPIC] });
     }
-    if (url.startsWith('/api/releases?')) {
-      return Promise.resolve({ ok: true, json: async () => [] });
-    }
     if (url.includes('/rename') && method === 'PATCH') {
       const status = options.renameStatus ?? (options.renameOk !== false ? 200 : 409);
       return Promise.resolve({
@@ -78,8 +71,6 @@ function setupFetch(options: {
 const mockWorkItems: WorkItem[] = [];
 const defaultProps = { workItems: mockWorkItems, project: 'Proj', areaPath: 'Area' };
 
-// ── tests ─────────────────────────────────────────────────────────────────────
-
 describe('ReleaseView – inline rename', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -91,8 +82,7 @@ describe('ReleaseView – inline rename', () => {
     setupFetch({ renameOk: true });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v1.0')).toBeInTheDocument());
-    // Pencil icon visible next to the renamable version
+    await waitFor(() => expect(screen.getByTestId('release-rename-11')).toBeInTheDocument());
     expect(screen.getAllByText('✎').length).toBeGreaterThan(0);
   });
 
@@ -100,10 +90,13 @@ describe('ReleaseView – inline rename', () => {
     setupFetch({ renameOk: true });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v2.0')).toBeInTheDocument());
-    // The "Done" release row should not have a clickable version span
-    const doneCell = screen.getByText('v2.0');
-    expect(doneCell).not.toHaveAttribute('title', 'Click to rename');
+    fireEvent.click(await screen.findByTestId('release-scope-filter-all'));
+    fireEvent.click(await screen.findByTestId('release-card-22'));
+
+    const doneHeader = await screen.findByTestId('release-rename-22');
+    expect(doneHeader).toHaveTextContent('v2.0');
+    expect(doneHeader).not.toHaveAttribute('title', 'Click to rename');
+    expect(screen.queryByText('✎')).not.toBeInTheDocument();
   });
 
   it('does NOT show edit pencil for non-BA users', async () => {
@@ -111,7 +104,7 @@ describe('ReleaseView – inline rename', () => {
     setupFetch({ renameOk: true });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v1.0')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('release-rename-11')).toBeInTheDocument());
     expect(screen.queryByText('✎')).not.toBeInTheDocument();
   });
 
@@ -119,35 +112,32 @@ describe('ReleaseView – inline rename', () => {
     setupFetch({ renameOk: true });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v1.0')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('v1.0'));
+    fireEvent.click(await screen.findByTestId('release-rename-11'));
 
-    const input = screen.getByRole('textbox');
+    const input = screen.getByTestId('release-rename-input-11') as HTMLInputElement;
     expect(input).toBeInTheDocument();
-    expect((input as HTMLInputElement).value).toBe('v1.0');
+    expect(input.value).toBe('v1.0');
   });
 
   it('cancels inline edit on Escape', async () => {
     setupFetch({ renameOk: true });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v1.0')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('v1.0'));
-    const input = screen.getByRole('textbox');
+    fireEvent.click(await screen.findByTestId('release-rename-11'));
+    const input = screen.getByTestId('release-rename-input-11');
 
     fireEvent.keyDown(input, { key: 'Escape' });
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-    expect(screen.getByText('v1.0')).toBeInTheDocument();
+    expect(screen.queryByTestId('release-rename-input-11')).not.toBeInTheDocument();
+    expect(screen.getByTestId('release-rename-11')).toHaveTextContent('v1.0');
   });
 
   it('submits rename on Enter and calls PATCH /rename', async () => {
     setupFetch({ renameOk: true });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v1.0')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('v1.0'));
+    fireEvent.click(await screen.findByTestId('release-rename-11'));
 
-    const input = screen.getByRole('textbox');
+    const input = screen.getByTestId('release-rename-input-11');
     fireEvent.change(input, { target: { value: 'v1.1' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -166,15 +156,14 @@ describe('ReleaseView – inline rename', () => {
     setupFetch({ renameOk: false, renameError: 'A release named "v1.1" already exists', renameStatus: 409 });
     render(<ReleaseView {...defaultProps} />, { wrapper: createWrapper() });
 
-    await waitFor(() => expect(screen.getByText('v1.0')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('v1.0'));
+    fireEvent.click(await screen.findByTestId('release-rename-11'));
 
-    const input = screen.getByRole('textbox');
+    const input = screen.getByTestId('release-rename-input-11');
     fireEvent.change(input, { target: { value: 'v1.1' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(screen.getByText('A release named "v1.1" already exists')).toBeInTheDocument();
+      expect(screen.getByTestId('release-rename-error-11')).toHaveTextContent('A release named "v1.1" already exists');
     });
   });
 });

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { WorkItem, ReleaseMetrics } from '../types/workitem';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { WorkItem } from '../types/workitem';
 import { useDeploymentOutcomes } from '../hooks/useDeploymentOutcomes';
 import type { DeploymentResult } from '../../shared/types/deploymentOutcome';
 import { DeploymentOutcomeModal } from './DeploymentOutcomeModal';
@@ -7,25 +7,55 @@ import { DeploymentOutcomeReport } from './DeploymentOutcomeReport';
 import { CreateCabRequestModal } from './CreateCabRequestModal';
 import { CabReleaseAssistantPanel } from './CabReleaseAssistantPanel';
 import { ReleaseCabRequestAction } from './ReleaseCabRequestAction';
+import { ReleaseFormModal, type ReleaseFormValues } from './ReleaseFormModal';
 import { useAppShell } from '../hooks/useAppShell';
 import { reorderReleases } from '../utils/releaseOrder';
+import {
+  classifyWorkItemReadiness,
+  collectAvailablePlatforms,
+  computeReleaseReadiness,
+  filterAndSortInspectorItems,
+  filterReleaseEpics,
+  formatRemainingSummary,
+  formatTargetDateCountdown,
+  getEpicBucketCounts,
+  getEpicPlatform,
+  isRenamableStatus,
+  sortReleaseEpics,
+  type InspectorWorkItemTab,
+  type LifecycleScope,
+  type ReadinessGapFilter,
+  type ReleaseEpic,
+  type ReleaseSortBy,
+} from '../utils/releaseReadiness';
+
+type WorkItemTabMode = InspectorWorkItemTab;
 import {
   defaultPreviousReleaseBranch,
   type CreateCabRequestFormValues,
 } from '../utils/cabReleaseKickoff';
 import './ReleaseView.css';
 
-const RENAMABLE_STATUSES = ['New', 'In Design', 'In Progress'] as const;
 const SCROLL_EDGE_PX = 88;
 
-function adjustReleaseEpicCounts(epic: any, item: WorkItem, direction: 1 | -1) {
-  const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-  const amberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
-  const bucket = greenStates.includes(item.state) ? 'green' : amberStates.includes(item.state) ? 'amber' : 'red';
-  const totalItems = Math.max(0, (epic.totalItems ?? 0) + direction);
-  const greenItems = Math.max(0, (epic.greenItems ?? 0) + (bucket === 'green' ? direction : 0));
-  const amberItems = Math.max(0, (epic.amberItems ?? 0) + (bucket === 'amber' ? direction : 0));
-  const redItems = Math.max(0, (epic.redItems ?? 0) + (bucket === 'red' ? direction : 0));
+function toSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'other';
+}
+
+function platformToneClass(platform: string): string {
+  const lower = platform.toLowerCase();
+  if (lower === 'mobile') return 'platform-mobile';
+  if (lower === 'desktop') return 'platform-desktop';
+  return 'platform-other';
+}
+
+function adjustReleaseEpicCounts(epic: ReleaseEpic, item: WorkItem, direction: 1 | -1): ReleaseEpic {
+  const bucket = classifyWorkItemReadiness(item);
+  const counts = getEpicBucketCounts(epic);
+  const totalItems = Math.max(0, counts.total + direction);
+  const greenItems = Math.max(0, counts.green + (bucket === 'green' ? direction : 0));
+  const amberItems = Math.max(0, counts.amber + (bucket === 'amber' ? direction : 0));
+  const redItems = Math.max(0, counts.red + (bucket === 'red' ? direction : 0));
   return {
     ...epic,
     totalItems,
@@ -63,7 +93,7 @@ const OutcomeBadge: React.FC<{
 }> = ({ releaseVersion, deployedAt, onManage, 'data-testid': testId }) => {
   const { data: outcomes } = useDeploymentOutcomes(releaseVersion);
   const [showDetails, setShowDetails] = useState(false);
-  const outcomeSlug = releaseVersion.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'unknown';
+  const outcomeSlug = toSlug(releaseVersion);
 
   if (!outcomes || outcomes.length === 0) {
     return (
@@ -74,7 +104,7 @@ const OutcomeBadge: React.FC<{
         onClick={(e) => { e.stopPropagation(); onManage(releaseVersion, deployedAt); }}
         title="Add deployment outcome"
       >
-        + Add
+        + Outcome
       </button>
     );
   }
@@ -130,6 +160,22 @@ const OutcomeBadge: React.FC<{
   );
 };
 
+interface ReleaseInspectorOutcomesProps {
+  releaseVersion: string;
+  onPresenceChange: (hasOutcome: boolean) => void;
+}
+
+const ReleaseInspectorOutcomeSync: React.FC<ReleaseInspectorOutcomesProps> = ({
+  releaseVersion,
+  onPresenceChange,
+}) => {
+  const { data: outcomes } = useDeploymentOutcomes(releaseVersion);
+  useEffect(() => {
+    onPresenceChange(Boolean(outcomes && outcomes.length > 0));
+  }, [outcomes, onPresenceChange]);
+  return null;
+};
+
 interface ReleaseViewProps {
   workItems: WorkItem[];
   project: string;
@@ -142,29 +188,38 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   areaPath,
   onSelectItem,
 }) => {
-  const { isInAnyGroup, permissionsLoaded } = useAppShell();
-  const canManageReleases = permissionsLoaded && isInAnyGroup(['BA']);
-
-  const [, setReleases] = useState<string[]>([]);
-  const [selectedRelease, setSelectedRelease] = useState<string | null>(null);
-  const [releaseWorkItems, setReleaseWorkItems] = useState<WorkItem[]>([]);
-  const [releaseMetrics, setReleaseMetrics] = useState<ReleaseMetrics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [showNewReleaseModal, setShowNewReleaseModal] = useState(false);
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [editingEpicId, setEditingEpicId] = useState<number | null>(null);
-  const [newReleaseVersion, setNewReleaseVersion] = useState('');
-  const [newReleaseStartDate, setNewReleaseStartDate] = useState('');
-  const [newReleaseTargetDate, setNewReleaseTargetDate] = useState('');
-  const [newReleaseDescription, setNewReleaseDescription] = useState('');
-  const [newReleaseStatus, setNewReleaseStatus] = useState<string>('New');
-  const [, setSelectedWorkItemsForRelease] = useState<number[]>([]);
-  const [releaseEpics, setReleaseEpics] = useState<any[]>([]);
+  // 1. useState
+  const [releaseEpics, setReleaseEpics] = useState<ReleaseEpic[]>([]);
   const [loadingEpics, setLoadingEpics] = useState(false);
-  const [openActionMenuId, setOpenActionMenuId] = useState<number | null>(null);
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [selectedEpicId, setSelectedEpicId] = useState<number | null>(null);
+
+  // Top control bar filters & sort
+  const [platformFilter, setPlatformFilter] = useState<string>('All');
+  const [lifecycleScope, setLifecycleScope] = useState<LifecycleScope>('active');
+  const [releaseSearch, setReleaseSearch] = useState<string>('');
+  const [sortBy, setSortBy] = useState<ReleaseSortBy>('manual');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  // Inspector tabs & readiness gap filter
+  const [activeWorkItemTab, setActiveWorkItemTab] = useState<WorkItemTabMode>('needs-attention');
+  const [activeGapFilter, setActiveGapFilter] = useState<ReadinessGapFilter | null>(null);
+  const [selectedHasOutcome, setSelectedHasOutcome] = useState<boolean>(false);
+
+  // Related / nested work items
   const [childItems, setChildItems] = useState<Map<number, WorkItem[]>>(new Map());
   const [loadingChildren, setLoadingChildren] = useState<Set<number>>(new Set());
+  const [itemsWithUatReadyChildren, setItemsWithUatReadyChildren] = useState<Set<number>>(new Set());
+  const [expandedNestedItems, setExpandedNestedItems] = useState<Set<string>>(new Set());
+  const [nestedChildren, setNestedChildren] = useState<Map<number, WorkItem[]>>(new Map());
+  const [loadingNestedChildren, setLoadingNestedChildren] = useState<Set<number>>(new Set());
+
+  // Create / Edit release modal
+  const [showReleaseModal, setShowReleaseModal] = useState(false);
+  const [editingEpic, setEditingEpic] = useState<ReleaseEpic | null>(null);
+  const [formSubmitError, setFormSubmitError] = useState<string | null>(null);
+  const [isFormSubmitting, setIsFormSubmitting] = useState(false);
+
+  // Link items modal
   const [showLinkItemsModal, setShowLinkItemsModal] = useState(false);
   const [linkingEpicId, setLinkingEpicId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -172,16 +227,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [searchResults, setSearchResults] = useState<WorkItem[]>([]);
   const [selectedItemsToLink, setSelectedItemsToLink] = useState<number[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // Delete modal
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [deletingEpicId, setDeletingEpicId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Modals / Popovers / Panels
   const [showProgressInfo, setShowProgressInfo] = useState(false);
-  const [itemsWithUatReadyChildren, setItemsWithUatReadyChildren] = useState<Set<number>>(new Set());
-  const [expandedNestedItems, setExpandedNestedItems] = useState<Set<string>>(new Set());
-  const [nestedChildren, setNestedChildren] = useState<Map<number, WorkItem[]>>(new Map());
-  const [loadingNestedChildren, setLoadingNestedChildren] = useState<Set<number>>(new Set());
-  const [sortColumn, setSortColumn] = useState<string | null>('version');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [showNotesMenu, setShowNotesMenu] = useState(false);
   const [showOutcomeModal, setShowOutcomeModal] = useState(false);
   const [outcomeReleaseVersion, setOutcomeReleaseVersion] = useState<string>('');
   const [outcomeDeployedAt, setOutcomeDeployedAt] = useState<string | undefined>(undefined);
@@ -196,7 +250,6 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     snowMode: CreateCabRequestFormValues['snowMode'];
     cutReleaseBranch: boolean;
   } | null>(null);
-  const cabRequestGenerationRef = useRef(0);
 
   // Inline rename state
   const [inlineEditEpicId, setInlineEditEpicId] = useState<number | null>(null);
@@ -204,10 +257,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const [renameError, setRenameError] = useState<string | null>(null);
   const [isSavingRename, setIsSavingRename] = useState(false);
 
-  // Drag-to-reorder state
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
-  const dragIndexRef = useRef<number | null>(null);
+  // Drag & drop state
+  const [draggedEpicId, setDraggedEpicId] = useState<number | null>(null);
+  const [dropTargetEpicId, setDropTargetEpicId] = useState<number | null>(null);
+  const [assignmentNotice, setAssignmentNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [movingItemId, setMovingItemId] = useState<number | null>(null);
+
+  // 2. useRef
+  const cabRequestGenerationRef = useRef(0);
+  const draggedEpicIdRef = useRef<number | null>(null);
   const draggedReleaseItemRef = useRef<{ sourceEpicId: number; item: WorkItem } | null>(null);
   const releaseViewRef = useRef<HTMLDivElement>(null);
   const topEdgeRef = useRef<HTMLDivElement>(null);
@@ -216,307 +274,172 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
   const scrollFrameRef = useRef<number | null>(null);
   const revealDropZonesFrameRef = useRef<number | null>(null);
   const ignoreCardClickRef = useRef(false);
-  const [assignmentNotice, setAssignmentNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
-  const [movingItemId, setMovingItemId] = useState<number | null>(null);
 
-  // Fetch all release versions on mount
-  useEffect(() => {
-    fetchReleases();
-    fetchReleaseEpics();
-  }, [project, areaPath]);
+  // 4. useMemo / useCallback
+  const availablePlatforms = useMemo(
+    () => collectAvailablePlatforms(releaseEpics, project),
+    [releaseEpics, project],
+  );
 
-  // Close action menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (!target.closest('.actions-cell')) {
-        setOpenActionMenuId(null);
-      }
-    };
+  const visibleEpics = useMemo(() => {
+    const filtered = filterReleaseEpics(releaseEpics, {
+      platform: platformFilter,
+      scope: lifecycleScope,
+      search: releaseSearch,
+      project,
+    });
+    return sortReleaseEpics(filtered, sortBy, sortDirection);
+  }, [releaseEpics, platformFilter, lifecycleScope, releaseSearch, project, sortBy, sortDirection]);
 
-    if (openActionMenuId !== null) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+  const selectedEpic = useMemo(
+    () => visibleEpics.find((e) => e.id === selectedEpicId) ?? visibleEpics[0] ?? null,
+    [visibleEpics, selectedEpicId],
+  );
+
+  const selectedRelatedItems = useMemo(
+    () => (selectedEpic ? childItems.get(selectedEpic.id) ?? [] : []),
+    [selectedEpic, childItems],
+  );
+
+  const readinessSummary = useMemo(
+    () =>
+      selectedEpic
+        ? computeReleaseReadiness(selectedRelatedItems, selectedEpic, selectedHasOutcome)
+        : null,
+    [selectedEpic, selectedRelatedItems, selectedHasOutcome],
+  );
+
+  const inspectorItems = useMemo(
+    () => filterAndSortInspectorItems(selectedRelatedItems, activeWorkItemTab, activeGapFilter),
+    [selectedRelatedItems, activeWorkItemTab, activeGapFilter],
+  );
+
+  const tabCounts = useMemo(() => {
+    let needsAttention = 0;
+    let ready = 0;
+    for (const item of selectedRelatedItems) {
+      if (classifyWorkItemReadiness(item) === 'green') ready++;
+      else needsAttention++;
     }
-  }, [openActionMenuId]);
+    return { needsAttention, ready, all: selectedRelatedItems.length };
+  }, [selectedRelatedItems]);
 
-  const fetchReleaseEpics = async (options?: { background?: boolean }) => {
+  const fetchReleaseEpics = useCallback(async (options?: { background?: boolean; selectId?: number }) => {
     const background = options?.background ?? false;
     if (!background) setLoadingEpics(true);
     try {
       const response = await fetch(
-        `/api/releases/epics?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
+        `/api/releases/epics?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
       );
-      
       if (!response.ok) {
         console.error('Failed to fetch release epics:', response.status, response.statusText);
         if (!background) setReleaseEpics([]);
         return;
       }
-      
       const data = await response.json();
-      setReleaseEpics(data);
+      const epics: ReleaseEpic[] = Array.isArray(data) ? data : [];
+      setReleaseEpics(epics);
+      if (options?.selectId !== undefined) {
+        setSelectedEpicId(options.selectId);
+      }
     } catch (error) {
       console.error('Error fetching release epics:', error);
       if (!background) setReleaseEpics([]);
     } finally {
       if (!background) setLoadingEpics(false);
     }
-  };
+  }, [project, areaPath]);
 
-  const searchWorkItems = async (query: string, typeFilter: string) => {
+  const checkForUatReadyChildren = useCallback(async (workItemId: number, workItemType: string) => {
+    if (workItemType !== 'Epic' && workItemType !== 'Feature') return;
+    try {
+      const endpoint = workItemType === 'Epic'
+        ? `/api/epics/${workItemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
+        : `/api/features/${workItemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
+      const response = await fetch(endpoint);
+      if (!response.ok) return;
+      const children = await response.json();
+      const hasUatReady = Array.isArray(children) && children.some((child: WorkItem) =>
+        child.state === 'UAT - Ready For Test' ||
+        child.state === 'UAT Ready For Test' ||
+        child.state === 'UAT-Ready For Test',
+      );
+      if (hasUatReady) {
+        setItemsWithUatReadyChildren((prev) => new Set(prev).add(workItemId));
+      }
+    } catch (error) {
+      console.error('Error checking for UAT-ready children:', error);
+    }
+  }, [project, areaPath]);
+
+  const loadRelatedItems = useCallback(async (epicId: number) => {
+    setLoadingChildren((prev) => new Set(prev).add(epicId));
+    try {
+      const response = await fetch(
+        `/api/releases/${epicId}/related-items?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
+      );
+      if (!response.ok) {
+        console.error(`Failed to fetch children: ${response.status} ${response.statusText}`);
+        return;
+      }
+      const children: WorkItem[] = await response.json();
+      setChildItems((prev) => {
+        const next = new Map(prev);
+        next.set(epicId, Array.isArray(children) ? children : []);
+        return next;
+      });
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          if (child.workItemType === 'Epic' || child.workItemType === 'Feature') {
+            void checkForUatReadyChildren(child.id, child.workItemType);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching child items:', error);
+    } finally {
+      setLoadingChildren((prev) => {
+        const next = new Set(prev);
+        next.delete(epicId);
+        return next;
+      });
+    }
+  }, [project, areaPath, checkForUatReadyChildren]);
+
+  const searchWorkItems = useCallback(async (query: string, typeFilter: string) => {
     if (!query || query.length < 2) {
       setSearchResults([]);
       return;
     }
-
     setSearchLoading(true);
     try {
       const response = await fetch(
-        `/api/workitems/search?query=${encodeURIComponent(query)}&type=${encodeURIComponent(typeFilter)}&project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
+        `/api/workitems/search?query=${encodeURIComponent(query)}&type=${encodeURIComponent(typeFilter)}&project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
       );
-      
       if (!response.ok) {
         console.error('Failed to search work items:', response.status);
         setSearchResults([]);
         return;
       }
-      
       const data = await response.json();
-      setSearchResults(data);
+      setSearchResults(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error searching work items:', error);
       setSearchResults([]);
     } finally {
       setSearchLoading(false);
     }
-  };
+  }, [project, areaPath]);
 
-  // Debounce search
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (showLinkItemsModal) {
-        searchWorkItems(searchQuery, workItemTypeFilter);
-      }
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery, workItemTypeFilter, showLinkItemsModal]);
-
-  // Fetch release details when selected release changes
-  useEffect(() => {
-    if (selectedRelease) {
-      fetchReleaseDetails(selectedRelease);
-    }
-  }, [selectedRelease, project, areaPath]);
-
-  const fetchReleases = async () => {
-    try {
-      const response = await fetch(
-        `/api/releases?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
-      );
-      
-      if (!response.ok) {
-        console.error('Failed to fetch releases:', response.status, response.statusText);
-        setReleases([]);
-        return;
-      }
-      
-      const data = await response.json();
-      
-      // Ensure data is an array
-      if (Array.isArray(data)) {
-        setReleases(data);
-        if (data.length > 0 && !selectedRelease) {
-          setSelectedRelease(data[0]);
-        }
-      } else {
-        console.error('Releases data is not an array:', data);
-        setReleases([]);
-      }
-    } catch (error) {
-      console.error('Error fetching releases:', error);
-      setReleases([]);
-    }
-  };
-
-  const fetchReleaseDetails = async (version: string) => {
-    setLoading(true);
-    try {
-      // Fetch work items for this release
-      const workItemsResponse = await fetch(
-        `/api/releases/${encodeURIComponent(version)}/workitems?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
-      );
-      const workItemsData = await workItemsResponse.json();
-      setReleaseWorkItems(workItemsData);
-
-      // Fetch metrics for this release
-      const metricsResponse = await fetch(
-        `/api/releases/${encodeURIComponent(version)}/metrics?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
-      );
-      const metricsData = await metricsResponse.json();
-      setReleaseMetrics(metricsData);
-    } catch (error) {
-      console.error('Error fetching release details:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCreateRelease = async () => {
-    if (!newReleaseVersion) return;
-
-    try {
-      const response = await fetch(`/api/releases/${encodeURIComponent(newReleaseVersion)}/tag`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project,
-          areaPath,
-          startDate: newReleaseStartDate || undefined,
-          targetDate: newReleaseTargetDate || undefined,
-          description: newReleaseDescription || undefined,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log(`Release Epic created with ID: ${data.epicId}`);
-        handleCloseModal();
-        fetchReleases();
-        void fetchReleaseEpics({ background: true });
-      }
-    } catch (error) {
-      console.error('Error creating release:', error);
-    }
-  };
-
-  const handleUpdateRelease = async () => {
-    if (!newReleaseVersion || !editingEpicId) return;
-
-    try {
-      const response = await fetch(`/api/releases/${editingEpicId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: newReleaseVersion,
-          startDate: newReleaseStartDate || undefined,
-          targetDate: newReleaseTargetDate || undefined,
-          description: newReleaseDescription || undefined,
-          status: newReleaseStatus,
-          project,
-          areaPath,
-        }),
-      });
-
-      if (response.ok) {
-        console.log(`Release Epic updated: ${editingEpicId}`);
-        handleCloseModal();
-        void fetchReleaseEpics({ background: true });
-      }
-    } catch (error) {
-      console.error('Error updating release:', error);
-    }
-  };
-
-  const handleOpenOutcomeModal = (releaseVersion: string, deployedAt?: string) => {
-    setOutcomeReleaseVersion(releaseVersion);
-    setOutcomeDeployedAt(deployedAt);
-    setShowOutcomeModal(true);
-  };
-
-  const handleCloseOutcomeModal = () => {
-    setShowOutcomeModal(false);
-    setOutcomeReleaseVersion('');
-    setOutcomeDeployedAt(undefined);
-  };
-
-  const handleOpenEditModal = (epic: any) => {
-    setIsEditMode(true);
-    setEditingEpicId(epic.id);
-    setNewReleaseVersion(epic.version);
-    setNewReleaseStartDate(epic.startDate || '');
-    setNewReleaseTargetDate(epic.targetDate || '');
-    setNewReleaseDescription(epic.description || '');
-    setNewReleaseStatus(epic.status || 'New');
-    setShowNewReleaseModal(true);
-  };
-
-  const handleCloseModal = () => {
-    setShowNewReleaseModal(false);
-    setIsEditMode(false);
-    setEditingEpicId(null);
-    setNewReleaseVersion('');
-    setNewReleaseStartDate('');
-    setNewReleaseTargetDate('');
-    setNewReleaseDescription('');
-    setNewReleaseStatus('New');
-    setSelectedWorkItemsForRelease([]);
-  };
-
-  const handleOpenLinkItemsModal = (epicId: number) => {
-    setLinkingEpicId(epicId);
-    setShowLinkItemsModal(true);
-    setSearchQuery('');
-    setWorkItemTypeFilter('All');
-    setSearchResults([]);
-    setSelectedItemsToLink([]);
-  };
-
-  const handleCloseLinkItemsModal = () => {
-    setShowLinkItemsModal(false);
-    setLinkingEpicId(null);
-    setSearchQuery('');
-    setWorkItemTypeFilter('All');
-    setSearchResults([]);
-    setSelectedItemsToLink([]);
-  };
-
-  const handleLinkItems = async () => {
-    if (!linkingEpicId || selectedItemsToLink.length === 0) return;
-
-    try {
-      const response = await fetch(`/api/releases/${linkingEpicId}/link-related`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workItemIds: selectedItemsToLink,
-          project,
-          areaPath,
-        }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        const linkedItems = searchResults.filter((item) => selectedItemsToLink.includes(item.id));
-        updateLocalReleaseAssignments(linkingEpicId, linkedItems);
-        setAssignmentNotice({
-          kind: 'success',
-          text: result.movedCount > 0
-            ? `${linkedItems.length} item${linkedItems.length === 1 ? '' : 's'} assigned; ${result.movedCount} moved from another release.`
-            : `${linkedItems.length} item${linkedItems.length === 1 ? '' : 's'} assigned to the release.`,
-        });
-        handleCloseLinkItemsModal();
-        void fetchReleaseEpics({ background: true });
-      } else {
-        const error = await response.json();
-        setAssignmentNotice({ kind: 'error', text: error.error || 'Failed to assign items to the release.' });
-      }
-    } catch (error) {
-      console.error('Error linking items:', error);
-      setAssignmentNotice({ kind: 'error', text: 'Failed to assign items to the release.' });
-    }
-  };
-
-  const stopAutoScroll = () => {
+  const stopAutoScroll = useCallback(() => {
     scrollDirectionRef.current = 0;
     if (scrollFrameRef.current !== null) {
       cancelAnimationFrame(scrollFrameRef.current);
       scrollFrameRef.current = null;
     }
-  };
+  }, []);
 
-  const positionScrollEdges = () => {
+  const positionScrollEdges = useCallback(() => {
     const scroller = findScrollParent(releaseViewRef.current);
     if (!scroller || !topEdgeRef.current || !bottomEdgeRef.current) return;
     const rect = scroller.getBoundingClientRect();
@@ -526,9 +449,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     }
     topEdgeRef.current.style.top = `${rect.top}px`;
     bottomEdgeRef.current.style.top = `${rect.bottom - 48}px`;
-  };
+  }, []);
 
-  const updateAutoScroll = (clientY: number) => {
+  const updateAutoScroll = useCallback((clientY: number) => {
     const scroller = findScrollParent(releaseViewRef.current);
     positionScrollEdges();
     if (!scroller) return;
@@ -560,9 +483,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       scrollFrameRef.current = requestAnimationFrame(tick);
     };
     scrollFrameRef.current = requestAnimationFrame(tick);
-  };
+  }, [positionScrollEdges, stopAutoScroll]);
 
-  const endCardDrag = () => {
+  const endCardDrag = useCallback(() => {
     if (revealDropZonesFrameRef.current !== null) {
       cancelAnimationFrame(revealDropZonesFrameRef.current);
       revealDropZonesFrameRef.current = null;
@@ -579,19 +502,19 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     window.setTimeout(() => {
       ignoreCardClickRef.current = false;
     }, 0);
-  };
+  }, [stopAutoScroll]);
 
-  const revealDropZones = (sourceEpicId: number) => {
+  const revealDropZones = useCallback((sourceEpicId: number) => {
     const view = releaseViewRef.current;
     if (!view || draggedReleaseItemRef.current?.sourceEpicId !== sourceEpicId) return;
     view.classList.add('is-moving-card');
-    view.querySelectorAll<HTMLElement>('[data-release-drop]').forEach((row) => {
-      row.classList.toggle('is-source', row.dataset.releaseDrop === String(sourceEpicId));
+    view.querySelectorAll<HTMLElement>('[data-release-drop]').forEach((card) => {
+      card.classList.toggle('is-source', card.dataset.releaseDrop === String(sourceEpicId));
     });
     positionScrollEdges();
-  };
+  }, [positionScrollEdges]);
 
-  const beginCardDrag = (sourceEpicId: number, item: WorkItem, event: React.DragEvent<HTMLDivElement>) => {
+  const beginCardDrag = useCallback((sourceEpicId: number, item: WorkItem, event: React.DragEvent<HTMLDivElement>) => {
     event.stopPropagation();
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData?.('text/plain', String(item.id));
@@ -605,9 +528,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       revealDropZonesFrameRef.current = null;
       revealDropZones(sourceEpicId);
     });
-  };
+  }, [revealDropZones]);
 
-  const updateLocalReleaseAssignments = (targetEpicId: number, items: WorkItem[]) => {
+  const updateLocalReleaseAssignments = useCallback((targetEpicId: number, items: WorkItem[]) => {
     const movedIds = new Set(items.map((item) => item.id));
     setChildItems((previous) => {
       const next = new Map(previous);
@@ -621,15 +544,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       }
       return next;
     });
-  };
+  }, []);
 
-  const handleMoveReleaseItem = async (
+  const handleMoveReleaseItem = useCallback(async (
     sourceEpicId: number,
     targetEpicId: number,
     item: WorkItem,
   ) => {
     if (sourceEpicId === targetEpicId || movingItemId !== null) return;
-
     setMovingItemId(item.id);
     setAssignmentNotice(null);
     try {
@@ -643,7 +565,6 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
         setAssignmentNotice({ kind: 'error', text: error.error || `Failed to move #${item.id}.` });
         return;
       }
-
       updateLocalReleaseAssignments(targetEpicId, [item]);
       setReleaseEpics((previous) => previous.map((epic) => {
         if (epic.id === sourceEpicId) return adjustReleaseEpicCounts(epic, item, -1);
@@ -659,9 +580,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     } finally {
       setMovingItemId(null);
     }
-  };
+  }, [movingItemId, project, areaPath, updateLocalReleaseAssignments, releaseEpics, fetchReleaseEpics]);
 
-  const dropCardOnRelease = (targetEpicId: number, event: React.DragEvent) => {
+  const dropCardOnRelease = useCallback((targetEpicId: number, event: React.DragEvent) => {
     event.preventDefault();
     event.stopPropagation();
     const draggedItem = draggedReleaseItemRef.current;
@@ -669,275 +590,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       void handleMoveReleaseItem(draggedItem.sourceEpicId, targetEpicId, draggedItem.item);
     }
     endCardDrag();
-  };
+  }, [handleMoveReleaseItem, endCardDrag]);
 
-  const handleUnlinkItem = async (epicId: number, workItemId: number) => {
-    if (!confirm('Are you sure you want to unlink this item from the release?')) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/releases/${epicId}/unlink-related`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workItemIds: [workItemId],
-          project,
-          areaPath,
-        }),
-      });
-
-      if (response.ok) {
-        console.log(`Unlinked item ${workItemId} from epic ${epicId}`);
-        // Update local state to remove the item
-        setChildItems(prev => {
-          const next = new Map(prev);
-          const items = next.get(epicId) || [];
-          next.set(epicId, items.filter(item => item.id !== workItemId));
-          return next;
-        });
-        void fetchReleaseEpics({ background: true });
-      } else {
-        const error = await response.json();
-        alert(`Failed to unlink item: ${error.error || 'Unknown error'}`);
-      }
-    } catch (error) {
-      console.error('Error unlinking item:', error);
-      alert('Failed to unlink item. Please try again.');
-    }
-  };
-
-  const checkForUatReadyChildren = async (workItemId: number, workItemType: string) => {
-    // Only check for Epics and Features
-    if (workItemType !== 'Epic' && workItemType !== 'Feature') {
-      return;
-    }
-
-    try {
-      let endpoint = '';
-      if (workItemType === 'Epic') {
-        endpoint = `/api/epics/${workItemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
-      } else if (workItemType === 'Feature') {
-        endpoint = `/api/features/${workItemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
-      }
-
-      const response = await fetch(endpoint);
-      if (response.ok) {
-        const children = await response.json();
-        // Check if any children are in UAT Ready for Test state
-        const hasUatReady = children.some((child: WorkItem) => 
-          child.state === 'UAT - Ready For Test' || 
-          child.state === 'UAT Ready For Test' ||
-          child.state === 'UAT-Ready For Test'
-        );
-
-        if (hasUatReady) {
-          setItemsWithUatReadyChildren(prev => new Set(prev).add(workItemId));
-        }
-      }
-    } catch (error) {
-      console.error('Error checking for UAT-ready children:', error);
-    }
-  };
-
-  const toggleNestedItemExpansion = async (epicId: number, itemId: number, workItemType: string) => {
-    const cardKey = `${epicId}:${itemId}`;
-    const newExpanded = new Set(expandedNestedItems);
-    
-    if (expandedNestedItems.has(cardKey)) {
-      // Collapse
-      newExpanded.delete(cardKey);
-      setExpandedNestedItems(newExpanded);
-    } else {
-      // Expand
-      newExpanded.add(cardKey);
-      setExpandedNestedItems(newExpanded);
-      
-      // Fetch children if not already loaded
-      if (!nestedChildren.has(itemId)) {
-        setLoadingNestedChildren(prev => new Set(prev).add(itemId));
-        
-        try {
-          let endpoint = '';
-          if (workItemType === 'Epic') {
-            endpoint = `/api/epics/${itemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
-          } else if (workItemType === 'Feature') {
-            endpoint = `/api/features/${itemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
-          }
-          
-          const response = await fetch(endpoint);
-          if (response.ok) {
-            const children = await response.json();
-            setNestedChildren(prev => new Map(prev).set(itemId, children));
-          }
-        } catch (error) {
-          console.error('Error fetching nested children:', error);
-        } finally {
-          setLoadingNestedChildren(prev => {
-            const next = new Set(prev);
-            next.delete(itemId);
-            return next;
-          });
-        }
-      }
-    }
-  };
-
-  const handleDeleteReleaseEpic = async () => {
-    if (!deletingEpicId) return;
-
-    setIsDeleting(true);
-    try {
-      const response = await fetch(`/api/releases/${deletingEpicId}?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        console.log(`Deleted epic ${deletingEpicId}`);
-        setShowDeleteConfirmModal(false);
-        setDeletingEpicId(null);
-        void fetchReleaseEpics({ background: true });
-      } else {
-        const error = await response.json();
-        console.error('Failed to delete epic:', error);
-        alert(`Failed to delete epic: ${error.error || 'Unknown error'}`);
-      }
-    } catch (error) {
-      console.error('Error deleting epic:', error);
-      alert('Failed to delete epic. Please try again.');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  const toggleRowExpansion = async (epicId: number) => {
-    const newExpandedRows = new Set(expandedRows);
-    
-    if (expandedRows.has(epicId)) {
-      // Collapse row
-      newExpandedRows.delete(epicId);
-      setExpandedRows(newExpandedRows);
-    } else {
-      // Expand row
-      newExpandedRows.add(epicId);
-      setExpandedRows(newExpandedRows);
-      
-      // Fetch child items if not already loaded
-      if (!childItems.has(epicId)) {
-        // Add to loading state
-        setLoadingChildren(prev => {
-          const next = new Set(prev);
-          next.add(epicId);
-          return next;
-        });
-        
-        try {
-          console.log(`Fetching related items for epic ${epicId}`);
-          const response = await fetch(
-            `/api/releases/${epicId}/related-items?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
-          );
-          
-          if (response.ok) {
-            const children = await response.json();
-            console.log(`Received ${children.length} related items for epic ${epicId}`, children);
-            
-            // Update child items state
-            setChildItems(prev => {
-              const next = new Map(prev);
-              next.set(epicId, children);
-              return next;
-            });
-            
-            // Check each child for UAT-ready descendants
-            for (const child of children) {
-              if (child.workItemType === 'Epic' || child.workItemType === 'Feature') {
-                checkForUatReadyChildren(child.id, child.workItemType);
-              }
-            }
-          } else {
-            console.error(`Failed to fetch children: ${response.status} ${response.statusText}`);
-          }
-        } catch (error) {
-          console.error('Error fetching child items:', error);
-        } finally {
-          // Remove from loading state
-          setLoadingChildren(prev => {
-            const next = new Set(prev);
-            next.delete(epicId);
-            return next;
-          });
-        }
-      }
-    }
-  };
-
-  const getHealthStatus = (): 'on-track' | 'at-risk' | 'blocked' => {
-    if (!releaseMetrics) return 'on-track';
-    
-    if (releaseMetrics.blockedFeatures > 0) return 'blocked';
-    
-    const completionPct = calculateCompletionPercentage();
-    if (completionPct < 50 && releaseMetrics.inProgressFeatures < releaseMetrics.totalFeatures * 0.5) {
-      return 'at-risk';
-    }
-    return 'on-track';
-  };
-
-  const calculateCompletionPercentage = (): number => {
-    if (!releaseMetrics || releaseMetrics.totalFeatures === 0) return 0;
-    return Math.round((releaseMetrics.completedFeatures / releaseMetrics.totalFeatures) * 100);
-  };
-
-  const formatDate = (dateString?: string): string => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString();
-  };
-
-  const getStateClass = (state: string): string => {
-    const completedStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
-    const inProgressStates = ['Committed', 'In Progress', 'Ready For Test', 'In Test', 'UAT - Ready For Test'];
-    const blockedStates = ['Blocked'];
-
-    if (completedStates.includes(state)) return 'state-completed';
-    if (inProgressStates.includes(state)) return 'state-in-progress';
-    if (blockedStates.includes(state)) return 'state-blocked';
-    return 'state-not-started';
-  };
-
-  const downloadReleaseNotes = async (format: 'json' | 'markdown') => {
-    if (!selectedRelease) return;
-
-    try {
-      const response = await fetch(
-        `/api/releases/${encodeURIComponent(selectedRelease)}/notes?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}&format=${format}`
-      );
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `release-${selectedRelease}-notes.${format === 'markdown' ? 'md' : 'json'}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Error downloading release notes:', error);
-    }
-  };
-
-  const handleSort = (column: string) => {
-    if (sortColumn === column) {
-      setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortColumn(column);
-      setSortDirection('asc');
-    }
-  };
-
-  // ── Inline rename ──────────────────────────────────────────────────────────
-
-  const startInlineEdit = useCallback((epic: any) => {
+  const startInlineEdit = useCallback((epic: ReleaseEpic) => {
     setInlineEditEpicId(epic.id);
     setInlineEditValue(epic.version);
     setRenameError(null);
@@ -969,19 +624,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       }
       setInlineEditEpicId(null);
       setInlineEditValue('');
-      // Refresh both epic list and tag-based release list
-      fetchReleases();
       void fetchReleaseEpics({ background: true });
     } catch {
       setRenameError('An unexpected error occurred. Please try again.');
     } finally {
       setIsSavingRename(false);
     }
-  }, [inlineEditValue, project, areaPath]);
+  }, [inlineEditValue, project, areaPath, fetchReleaseEpics]);
 
-  // ── Drag-to-reorder ────────────────────────────────────────────────────────
-
-  const persistOrder = useCallback(async (orderedEpics: any[]) => {
+  const persistOrder = useCallback(async (orderedEpics: ReleaseEpic[]) => {
     try {
       await fetch('/api/releases/order', {
         method: 'PUT',
@@ -989,7 +640,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
         body: JSON.stringify({
           project,
           areaPath: areaPath ?? '',
-          epicIds: orderedEpics.map((e: any) => e.id),
+          epicIds: orderedEpics.map((e) => e.id),
         }),
       });
     } catch (err) {
@@ -997,36 +648,15 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     }
   }, [project, areaPath]);
 
-  const handleReorder = useCallback((fromIndex: number, toIndex: number) => {
+  const handleReorderByIds = useCallback((fromEpicId: number, toEpicId: number) => {
+    const fromIndex = releaseEpics.findIndex((e) => e.id === fromEpicId);
+    const toIndex = releaseEpics.findIndex((e) => e.id === toEpicId);
     const reordered = reorderReleases(releaseEpics, fromIndex, toIndex);
     if (!reordered) return;
     setReleaseEpics(reordered);
-    // Clear manual column sort so manual order is shown
-    setSortColumn(null);
+    setSortBy('manual');
     void persistOrder(reordered);
   }, [releaseEpics, persistOrder]);
-
-  const sortedEpics = React.useMemo(() => {
-    if (!sortColumn) return releaseEpics;
-    return [...releaseEpics].sort((a, b) => {
-      let aVal: any;
-      let bVal: any;
-      switch (sortColumn) {
-        case 'version':     aVal = a.version || '';     bVal = b.version || '';     break;
-        case 'status':      aVal = a.status || '';      bVal = b.status || '';      break;
-        case 'progress':    aVal = a.progress ?? 0;     bVal = b.progress ?? 0;     break;
-        case 'startDate':   aVal = a.startDate || '';   bVal = b.startDate || '';   break;
-        case 'targetDate':  aVal = a.targetDate || '';  bVal = b.targetDate || '';  break;
-        case 'description': aVal = (a.description || '').replace(/<[^>]*>/g, ''); bVal = (b.description || '').replace(/<[^>]*>/g, ''); break;
-        default: return 0;
-      }
-      if (typeof aVal === 'number') {
-        return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
-      }
-      const cmp = aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' });
-      return sortDirection === 'asc' ? cmp : -cmp;
-    });
-  }, [releaseEpics, sortColumn, sortDirection]);
 
   const handleConfirmCabRequest = useCallback(async (
     epic: { id: number; version: string },
@@ -1044,7 +674,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
         relatedIds = children.map((item) => item.id);
       }
     } catch {
-      // Keep the expanded-row cache when the refresh fails.
+      // Keep cached items when refresh fails.
     }
 
     if (cabRequestGenerationRef.current !== requestId) return;
@@ -1066,17 +696,342 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     setCabModalEpic(null);
   }, []);
 
-  const healthStatus = getHealthStatus();
-  const completionPercentage = calculateCompletionPercentage();
+  // 5. useEffect
+  useEffect(() => {
+    setSelectedEpicId(null);
+    setChildItems(new Map());
+    void fetchReleaseEpics();
+  }, [fetchReleaseEpics]);
 
-  useEffect(() => () => stopAutoScroll(), []);
+  // Keep a valid release selected when filters/epics change
+  useEffect(() => {
+    if (visibleEpics.length === 0) {
+      if (selectedEpicId !== null) setSelectedEpicId(null);
+      return;
+    }
+    if (selectedEpicId === null || !visibleEpics.some((e) => e.id === selectedEpicId)) {
+      setSelectedEpicId(visibleEpics[0].id);
+    }
+  }, [visibleEpics, selectedEpicId]);
 
-  const columnCount = canManageReleases ? 10 : 9;
+  // Load related items automatically for the inspected release
+  useEffect(() => {
+    if (!selectedEpic) return;
+    if (!childItems.has(selectedEpic.id) && !loadingChildren.has(selectedEpic.id)) {
+      void loadRelatedItems(selectedEpic.id);
+    }
+  }, [selectedEpic, childItems, loadingChildren, loadRelatedItems]);
+
+  // Close release notes dropdown when clicking outside
+  useEffect(() => {
+    if (!showNotesMenu) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.release-notes-dropdown-wrap')) {
+        setShowNotesMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showNotesMenu]);
+
+  // Debounce work item search in Link Items modal
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (showLinkItemsModal) {
+        void searchWorkItems(searchQuery, workItemTypeFilter);
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, workItemTypeFilter, showLinkItemsModal, searchWorkItems]);
+
+  useEffect(() => () => stopAutoScroll(), [stopAutoScroll]);
+
+  // 6. custom hooks
+  const { isInAnyGroup, permissionsLoaded } = useAppShell();
+  const canManageReleases = permissionsLoaded && isInAnyGroup(['BA']);
+
+  // Handlers
+  const selectReleaseCard = (epic: ReleaseEpic) => {
+    setSelectedEpicId(epic.id);
+    setActiveGapFilter(null);
+    setShowNotesMenu(false);
+    cancelInlineEdit();
+  };
+
+  const handleOpenCreateModal = () => {
+    setEditingEpic(null);
+    setFormSubmitError(null);
+    setShowReleaseModal(true);
+  };
+
+  const handleOpenEditModal = (epic: ReleaseEpic) => {
+    setEditingEpic(epic);
+    setFormSubmitError(null);
+    setShowReleaseModal(true);
+  };
+
+  const handleCloseReleaseModal = () => {
+    setShowReleaseModal(false);
+    setEditingEpic(null);
+    setFormSubmitError(null);
+  };
+
+  const handleSubmitReleaseForm = async (values: ReleaseFormValues) => {
+    setIsFormSubmitting(true);
+    setFormSubmitError(null);
+    try {
+      if (editingEpic) {
+        const response = await fetch(`/api/releases/${editingEpic.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            startDate: values.startDate || undefined,
+            targetDate: values.targetDate || undefined,
+            description: values.description || undefined,
+            status: values.status,
+            project,
+            areaPath: editingEpic.areaPath || areaPath,
+          }),
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          setFormSubmitError((err as { error?: string }).error || 'Failed to update release.');
+          return;
+        }
+        handleCloseReleaseModal();
+        void fetchReleaseEpics({ background: true, selectId: editingEpic.id });
+      } else {
+        const chosenAreaPath = values.areaPath?.trim() || areaPath;
+        const response = await fetch(`/api/releases/${encodeURIComponent(values.version.trim())}/tag`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project,
+            areaPath: chosenAreaPath,
+            startDate: values.startDate || undefined,
+            targetDate: values.targetDate || undefined,
+            description: values.description || undefined,
+          }),
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          setFormSubmitError((err as { error?: string }).error || 'Failed to create release.');
+          return;
+        }
+        const data = await response.json() as { epicId?: number };
+        handleCloseReleaseModal();
+        void fetchReleaseEpics({ background: true, selectId: data.epicId });
+      }
+    } catch {
+      setFormSubmitError('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsFormSubmitting(false);
+    }
+  };
+
+  const handleOpenOutcomeModal = (releaseVersion: string, deployedAt?: string) => {
+    setOutcomeReleaseVersion(releaseVersion);
+    setOutcomeDeployedAt(deployedAt);
+    setShowOutcomeModal(true);
+  };
+
+  const handleCloseOutcomeModal = () => {
+    setShowOutcomeModal(false);
+    setOutcomeReleaseVersion('');
+    setOutcomeDeployedAt(undefined);
+  };
+
+  const handleOpenLinkItemsModal = (epicId: number) => {
+    setLinkingEpicId(epicId);
+    setShowLinkItemsModal(true);
+    setSearchQuery('');
+    setWorkItemTypeFilter('All');
+    setSearchResults([]);
+    setSelectedItemsToLink([]);
+  };
+
+  const handleCloseLinkItemsModal = () => {
+    setShowLinkItemsModal(false);
+    setLinkingEpicId(null);
+    setSearchQuery('');
+    setWorkItemTypeFilter('All');
+    setSearchResults([]);
+    setSelectedItemsToLink([]);
+  };
+
+  const handleLinkItems = async () => {
+    if (!linkingEpicId || selectedItemsToLink.length === 0) return;
+    try {
+      const response = await fetch(`/api/releases/${linkingEpicId}/link-related`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workItemIds: selectedItemsToLink,
+          project,
+          areaPath,
+        }),
+      });
+      if (response.ok) {
+        const result = await response.json();
+        const linkedItems = searchResults.filter((item) => selectedItemsToLink.includes(item.id));
+        updateLocalReleaseAssignments(linkingEpicId, linkedItems);
+        setReleaseEpics((previous) => previous.map((epic) =>
+          epic.id === linkingEpicId
+            ? linkedItems.reduce((acc, item) => adjustReleaseEpicCounts(acc, item, 1), epic)
+            : epic,
+        ));
+        setAssignmentNotice({
+          kind: 'success',
+          text: result.movedCount > 0
+            ? `${linkedItems.length} item${linkedItems.length === 1 ? '' : 's'} assigned; ${result.movedCount} moved from another release.`
+            : `${linkedItems.length} item${linkedItems.length === 1 ? '' : 's'} assigned to the release.`,
+        });
+        handleCloseLinkItemsModal();
+        void fetchReleaseEpics({ background: true });
+      } else {
+        const error = await response.json();
+        setAssignmentNotice({ kind: 'error', text: error.error || 'Failed to assign items to the release.' });
+      }
+    } catch (error) {
+      console.error('Error linking items:', error);
+      setAssignmentNotice({ kind: 'error', text: 'Failed to assign items to the release.' });
+    }
+  };
+
+  const handleUnlinkItem = async (epicId: number, workItem: WorkItem) => {
+    if (!confirm('Are you sure you want to unlink this item from the release?')) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/releases/${epicId}/unlink-related`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workItemIds: [workItem.id],
+          project,
+          areaPath,
+        }),
+      });
+      if (response.ok) {
+        setChildItems((prev) => {
+          const next = new Map(prev);
+          const items = next.get(epicId) || [];
+          next.set(epicId, items.filter((item) => item.id !== workItem.id));
+          return next;
+        });
+        setReleaseEpics((prev) =>
+          prev.map((epic) => (epic.id === epicId ? adjustReleaseEpicCounts(epic, workItem, -1) : epic)),
+        );
+        void fetchReleaseEpics({ background: true });
+      } else {
+        const error = await response.json();
+        alert(`Failed to unlink item: ${error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error unlinking item:', error);
+      alert('Failed to unlink item. Please try again.');
+    }
+  };
+
+  const toggleNestedItemExpansion = async (epicId: number, itemId: number, workItemType: string) => {
+    const cardKey = `${epicId}:${itemId}`;
+    const newExpanded = new Set(expandedNestedItems);
+    if (expandedNestedItems.has(cardKey)) {
+      newExpanded.delete(cardKey);
+      setExpandedNestedItems(newExpanded);
+      return;
+    }
+
+    newExpanded.add(cardKey);
+    setExpandedNestedItems(newExpanded);
+
+    if (!nestedChildren.has(itemId)) {
+      setLoadingNestedChildren((prev) => new Set(prev).add(itemId));
+      try {
+        const endpoint = workItemType === 'Epic'
+          ? `/api/epics/${itemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
+          : `/api/features/${itemId}/children?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`;
+        const response = await fetch(endpoint);
+        if (response.ok) {
+          const children = await response.json();
+          setNestedChildren((prev) => new Map(prev).set(itemId, Array.isArray(children) ? children : []));
+        }
+      } catch (error) {
+        console.error('Error fetching nested children:', error);
+      } finally {
+        setLoadingNestedChildren((prev) => {
+          const next = new Set(prev);
+          next.delete(itemId);
+          return next;
+        });
+      }
+    }
+  };
+
+  const handleDeleteReleaseEpic = async () => {
+    if (!deletingEpicId) return;
+    setIsDeleting(true);
+    try {
+      const response = await fetch(
+        `/api/releases/${deletingEpicId}?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`,
+        { method: 'DELETE' },
+      );
+      if (response.ok) {
+        setShowDeleteConfirmModal(false);
+        setDeletingEpicId(null);
+        void fetchReleaseEpics({ background: true });
+      } else {
+        const error = await response.json();
+        console.error('Failed to delete epic:', error);
+        alert(`Failed to delete epic: ${error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error deleting epic:', error);
+      alert('Failed to delete epic. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const downloadReleaseNotes = async (version: string, format: 'json' | 'markdown') => {
+    setShowNotesMenu(false);
+    try {
+      const response = await fetch(
+        `/api/releases/${encodeURIComponent(version)}/notes?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}&format=${format}`,
+      );
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `release-${version}-notes.${format === 'markdown' ? 'md' : 'json'}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error('Error downloading release notes:', error);
+    }
+  };
+
+  const toggleGapFilter = (gap: ReadinessGapFilter) => {
+    setActiveGapFilter((current) => (current === gap ? null : gap));
+  };
+
+  const selectedPlatform = selectedEpic ? getEpicPlatform(selectedEpic, project) : '';
+  const selectedCountdown = selectedEpic
+    ? formatTargetDateCountdown(selectedEpic.targetDate, selectedEpic.status)
+    : null;
+  const selectedDescriptionText = selectedEpic?.description
+    ? selectedEpic.description.replace(/<[^>]*>/g, '').trim()
+    : '';
+  const isSelectedLoading = selectedEpic ? loadingChildren.has(selectedEpic.id) : false;
 
   return (
     <div
       className="release-view"
       ref={releaseViewRef}
+      {...{ 'data-testid': 'release-view' }}
       onDragOver={(event) => {
         if (!draggedReleaseItemRef.current) return;
         event.preventDefault();
@@ -1085,26 +1040,31 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     >
       <div ref={topEdgeRef} className="release-scroll-edge top">Scroll up</div>
       <div ref={bottomEdgeRef} className="release-scroll-edge bottom">Scroll down</div>
+
       <div className="release-header">
         <div className="release-header-top">
           <div className="header-title-wrapper">
             <h2>Release Management</h2>
             <div className="info-icon-wrapper">
-              <div
+              <button
+                type="button"
                 className="info-icon"
                 {...{ 'data-testid': 'release-progress-info' }}
                 onClick={() => setShowProgressInfo(!showProgressInfo)}
+                aria-label="Progress calculation info"
+                title="Progress calculation info"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-                  <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+                  <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" />
+                  <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" />
                 </svg>
-              </div>
+              </button>
               {showProgressInfo && (
                 <div className="progress-info-tooltip">
                   <div className="tooltip-header">
                     <h4>Progress Calculation</h4>
                     <button
+                      type="button"
                       className="btn-close-tooltip"
                       {...{ 'data-testid': 'release-progress-info-close' }}
                       onClick={() => setShowProgressInfo(false)}
@@ -1113,7 +1073,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     </button>
                   </div>
                   <div className="tooltip-content">
-                    <p>The progress bar shows a color-coded breakdown of work item states:</p>
+                    <p>The readiness strip shows a color-coded breakdown of work item states:</p>
                     <div className="calculation-breakdown">
                       <div className="calc-item">
                         <span className="calc-badge calc-green">✓ Green</span>
@@ -1125,20 +1085,21 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                       </div>
                       <div className="calc-item">
                         <span className="calc-badge calc-red">○ Red</span>
-                        <span className="calc-label">All other states</span>
+                        <span className="calc-label">All other states (Dev / New / Blocked)</span>
                       </div>
                     </div>
                     <p className="tooltip-note">
-                      The completion percentage reflects only <strong>green</strong> items (fully complete).<br/>
-                      Amber indicates items in UAT awaiting testing. Red indicates items still in progress or not started.
+                      Completion reflects only <strong>green</strong> items. Amber indicates items awaiting UAT; red indicates items still in Dev or blocked.
                     </p>
                   </div>
                 </div>
               )}
             </div>
           </div>
+
           <div className="release-actions">
             <button
+              type="button"
               className="btn-view-report"
               {...{ 'data-testid': 'release-view-report' }}
               onClick={() => setShowReport(!showReport)}
@@ -1146,9 +1107,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               {showReport ? '← Back to Releases' : 'View Report'}
             </button>
             <button
+              type="button"
               className="btn-create-release"
               {...{ 'data-testid': 'release-create' }}
-              onClick={() => setShowNewReleaseModal(true)}
+              onClick={handleOpenCreateModal}
             >
               + New Release
             </button>
@@ -1159,725 +1121,911 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       {assignmentNotice && (
         <div className={`release-assignment-notice ${assignmentNotice.kind}`} role="status">
           <span>{assignmentNotice.text}</span>
-          <button type="button" {...{ 'data-testid': 'release-assignment-dismiss' }} onClick={() => setAssignmentNotice(null)} aria-label="Dismiss message">✕</button>
+          <button
+            type="button"
+            {...{ 'data-testid': 'release-assignment-dismiss' }}
+            onClick={() => setAssignmentNotice(null)}
+            aria-label="Dismiss message"
+          >
+            ✕
+          </button>
         </div>
       )}
 
       {showReport ? (
-        <DeploymentOutcomeReport onClose={() => setShowReport(false)} />
+        <DeploymentOutcomeReport onClose={() => setShowReport(false)} project={project} areaPath={areaPath} />
       ) : (
-      <>
-      {/* Release Epics Data Grid */}
-      <div className="release-epics-grid">
-        {loadingEpics ? (
-          <div className="loading-message">Loading releases...</div>
-        ) : releaseEpics.length === 0 ? (
-          <div className="empty-message">No releases yet. Click "+ New Release" to create one.</div>
-        ) : (
-          <table className="epics-table">
-            <thead>
-              <tr>
-                {canManageReleases && <th style={{width: '32px'}} title="Drag to reorder"></th>}
-                <th style={{width: '40px'}}></th>
-                <th className="sortable-th" {...{ 'data-testid': 'release-sort-version' }} onClick={() => handleSort('version')}>
-                  Version <span className="sort-indicator">{sortColumn === 'version' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
-                </th>
-                <th className="sortable-th" {...{ 'data-testid': 'release-sort-status' }} onClick={() => handleSort('status')}>
-                  Status <span className="sort-indicator">{sortColumn === 'status' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
-                </th>
-                <th className="sortable-th" {...{ 'data-testid': 'release-sort-progress' }} onClick={() => handleSort('progress')}>
-                  Progress <span className="sort-indicator">{sortColumn === 'progress' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
-                </th>
-                <th className="sortable-th" {...{ 'data-testid': 'release-sort-start-date' }} onClick={() => handleSort('startDate')}>
-                  Start Date <span className="sort-indicator">{sortColumn === 'startDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
-                </th>
-                <th className="sortable-th" {...{ 'data-testid': 'release-sort-target-date' }} onClick={() => handleSort('targetDate')}>
-                  Target Date <span className="sort-indicator">{sortColumn === 'targetDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
-                </th>
-                <th className="sortable-th" {...{ 'data-testid': 'release-sort-description' }} onClick={() => handleSort('description')}>
-                  Description <span className="sort-indicator">{sortColumn === 'description' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</span>
-                </th>
-                <th>Result</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedEpics.map((epic, epicIndex) => (
-                <React.Fragment key={epic.id}>
-                  <tr
-                    onDragOver={canManageReleases ? (e) => {
-                      const draggedItem = draggedReleaseItemRef.current;
-                      if (draggedItem) {
-                        if (draggedItem.sourceEpicId === epic.id) return;
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        updateAutoScroll(e.clientY);
-                        return;
-                      }
-                      if (sortColumn === null) {
-                        e.preventDefault();
-                        setDropTargetIndex(epicIndex);
-                      }
-                    } : undefined}
-                    onDrop={canManageReleases ? (e) => {
-                      if (draggedReleaseItemRef.current) {
-                        dropCardOnRelease(epic.id, e);
-                        return;
-                      }
-                      e.preventDefault();
-                      const from = dragIndexRef.current;
-                      if (sortColumn === null && from !== null && from !== epicIndex) {
-                        handleReorder(from, epicIndex);
-                      }
-                      dragIndexRef.current = null;
-                      setDragIndex(null);
-                      setDropTargetIndex(null);
-                    } : undefined}
-                    className={[
-                      dragIndex === epicIndex ? 'row-dragging' : '',
-                      dropTargetIndex === epicIndex && dragIndex !== null && dragIndex !== epicIndex ? 'row-drop-target' : '',
-                    ].filter(Boolean).join(' ') || undefined}
+        <>
+          {/* Top Control Bar: Platform + Lifecycle Scope + Search & Sort */}
+          <div className="release-controls-bar" {...{ 'data-testid': 'release-controls-bar' }}>
+            <div className="release-controls-left">
+              <div className="segmented-control" role="group" aria-label="Platform filter">
+                {availablePlatforms.map((platform) => {
+                  const active = platformFilter.toLowerCase() === platform.toLowerCase();
+                  return (
+                    <button
+                      key={platform}
+                      type="button"
+                      className={`segmented-btn${active ? ' active' : ''}`}
+                      {...{ 'data-testid': `release-platform-filter-${toSlug(platform)}` }}
+                      onClick={() => setPlatformFilter(platform)}
+                    >
+                      {platform}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="segmented-control" role="group" aria-label="Lifecycle scope filter">
+                {(
+                  [
+                    { key: 'active', label: 'Active & Upcoming' },
+                    { key: 'shipped', label: 'Shipped' },
+                    { key: 'all', label: 'All' },
+                  ] as const
+                ).map((scope) => (
+                  <button
+                    key={scope.key}
+                    type="button"
+                    className={`segmented-btn${lifecycleScope === scope.key ? ' active' : ''}`}
+                    {...{ 'data-testid': `release-scope-filter-${scope.key}` }}
+                    onClick={() => setLifecycleScope(scope.key)}
                   >
-                    {canManageReleases && (
-                      <td className="drag-handle-cell">
-                        {sortColumn === null ? (
-                          <span
-                            className="drag-handle"
-                            title="Drag to reorder"
-                            draggable
-                            onDragStart={(event) => {
-                              event.stopPropagation();
-                              event.dataTransfer.effectAllowed = 'move';
-                              event.dataTransfer.setData?.('text/plain', `release-order:${epic.id}`);
-                              dragIndexRef.current = epicIndex;
-                              setDragIndex(epicIndex);
-                            }}
-                            onDragEnd={() => {
-                              dragIndexRef.current = null;
-                              setDragIndex(null);
-                              setDropTargetIndex(null);
-                            }}
-                          >⠿</span>
-                        ) : (
-                          <span
-                            className="drag-handle drag-handle-disabled"
-                            title="Clear column sort to enable drag ordering"
-                          >⠿</span>
-                        )}
-                      </td>
-                    )}
-                    <td>
-                      <button
-                        className="btn-expand"
-                        {...{ 'data-testid': `release-expand-${epic.id}` }}
-                        onClick={() => toggleRowExpansion(epic.id)}
-                        title={expandedRows.has(epic.id) ? 'Collapse' : 'Expand'}
-                      >
-                        {expandedRows.has(epic.id) ? '▼' : '▶'}
-                      </button>
-                    </td>
-                    <td className="version-cell">
-                      {inlineEditEpicId === epic.id ? (
-                        <span className="inline-rename-wrapper">
-                          <input
-                            className="inline-rename-input"
-                            {...{ 'data-testid': `release-rename-input-${epic.id}` }}
-                            value={inlineEditValue}
-                            autoFocus
-                            onChange={(e) => setInlineEditValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') { void commitRename(epic.id); }
-                              if (e.key === 'Escape') { cancelInlineEdit(); }
-                            }}
-                            onBlur={() => { void commitRename(epic.id); }}
-                            disabled={isSavingRename}
-                          />
-                          {renameError && <span className="rename-error">{renameError}</span>}
-                        </span>
-                      ) : (
-                        <span
-                          className={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? 'version-editable' : undefined}
-                          {...{ 'data-testid': `release-rename-${epic.id}` }}
-                          title={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? 'Click to rename' : undefined}
-                          onClick={canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) ? () => startInlineEdit(epic) : undefined}
+                    {scope.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="release-controls-right">
+              <div className="release-search-box">
+                <input
+                  type="search"
+                  className="release-search-input"
+                  placeholder="Search releases..."
+                  value={releaseSearch}
+                  onChange={(e) => setReleaseSearch(e.target.value)}
+                  aria-label="Search releases"
+                  {...{ 'data-testid': 'release-search-input' }}
+                />
+                {releaseSearch && (
+                  <button
+                    type="button"
+                    className="release-search-clear"
+                    onClick={() => setReleaseSearch('')}
+                    aria-label="Clear search"
+                    {...{ 'data-testid': 'release-search-clear' }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <div className="release-sort-group">
+                <label className="release-sort-label" htmlFor="release-sort-select">Sort:</label>
+                <select
+                  id="release-sort-select"
+                  className="release-sort-select"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as ReleaseSortBy)}
+                  {...{ 'data-testid': 'release-sort-select' }}
+                >
+                  <option value="manual">Manual Order</option>
+                  <option value="targetDate">Target Date</option>
+                  <option value="progress">Progress</option>
+                  <option value="version">Version</option>
+                </select>
+                {sortBy !== 'manual' && (
+                  <button
+                    type="button"
+                    className="release-sort-dir-btn"
+                    onClick={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                    title={sortDirection === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'}
+                    {...{ 'data-testid': 'release-sort-direction' }}
+                  >
+                    {sortDirection === 'asc' ? '↑' : '↓'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {loadingEpics ? (
+            <div className="loading-message">Loading releases...</div>
+          ) : releaseEpics.length === 0 ? (
+            <div className="empty-message" {...{ 'data-testid': 'release-empty-state' }}>
+              No releases yet. Click &quot;+ New Release&quot; to create one.
+            </div>
+          ) : (
+            <div className="release-workspace" {...{ 'data-testid': 'release-workspace' }}>
+              {/* Left Pane: Release Queue */}
+              <div className="release-queue-pane" {...{ 'data-testid': 'release-queue-pane' }}>
+                {visibleEpics.length === 0 ? (
+                  <div className="release-queue-empty" {...{ 'data-testid': 'release-queue-empty' }}>
+                    <p>No releases match the current filters.</p>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      {...{ 'data-testid': 'release-filters-reset' }}
+                      onClick={() => {
+                        setPlatformFilter('All');
+                        setLifecycleScope('all');
+                        setReleaseSearch('');
+                      }}
+                    >
+                      Reset filters
+                    </button>
+                  </div>
+                ) : (
+                  <div className="release-queue-list">
+                    {visibleEpics.map((epic) => {
+                      const platform = getEpicPlatform(epic, project);
+                      const countdown = formatTargetDateCountdown(epic.targetDate, epic.status);
+                      const remainingLabel = formatRemainingSummary(epic);
+                      const buckets = getEpicBucketCounts(epic);
+                      const isSelected = selectedEpic?.id === epic.id;
+                      const isDraggingCard = draggedEpicId === epic.id;
+                      const isReorderTarget = dropTargetEpicId === epic.id && draggedEpicId !== null && draggedEpicId !== epic.id;
+
+                      return (
+                        <div
+                          key={epic.id}
+                          role="button"
+                          tabIndex={0}
+                          data-release-drop={epic.id}
+                          {...{ 'data-testid': `release-card-${epic.id}` }}
+                          className={[
+                            'release-queue-card',
+                            isSelected ? 'selected' : '',
+                            isDraggingCard ? 'row-dragging' : '',
+                            isReorderTarget ? 'row-drop-target' : '',
+                          ].filter(Boolean).join(' ')}
+                          onClick={() => selectReleaseCard(epic)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              selectReleaseCard(epic);
+                            }
+                          }}
+                          onDragEnter={canManageReleases ? (e) => {
+                            if (draggedReleaseItemRef.current && draggedReleaseItemRef.current.sourceEpicId !== epic.id) {
+                              e.preventDefault();
+                              releaseViewRef.current?.querySelectorAll('.release-queue-card.card-drop-active').forEach((c) => {
+                                c.classList.remove('card-drop-active');
+                              });
+                              e.currentTarget.classList.add('card-drop-active');
+                            } else if (sortBy === 'manual' && draggedEpicIdRef.current !== null && draggedEpicIdRef.current !== epic.id) {
+                              e.preventDefault();
+                            }
+                          } : undefined}
+                          onDragOver={canManageReleases ? (e) => {
+                            if (draggedReleaseItemRef.current) {
+                              if (draggedReleaseItemRef.current.sourceEpicId === epic.id) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              e.dataTransfer.dropEffect = 'move';
+                              updateAutoScroll(e.clientY);
+                              return;
+                            }
+                            if (sortBy === 'manual' && draggedEpicIdRef.current !== null) {
+                              e.preventDefault();
+                              setDropTargetEpicId(epic.id);
+                            }
+                          } : undefined}
+                          onDrop={canManageReleases ? (e) => {
+                            if (draggedReleaseItemRef.current) {
+                              dropCardOnRelease(epic.id, e);
+                              return;
+                            }
+                            e.preventDefault();
+                            const fromId = draggedEpicIdRef.current;
+                            if (sortBy === 'manual' && fromId !== null && fromId !== epic.id) {
+                              handleReorderByIds(fromId, epic.id);
+                            }
+                            draggedEpicIdRef.current = null;
+                            setDraggedEpicId(null);
+                            setDropTargetEpicId(null);
+                          } : undefined}
                         >
-                          {epic.version}
-                          {canManageReleases && (RENAMABLE_STATUSES as readonly string[]).includes(epic.status) && (
-                            <span className="edit-pencil" aria-hidden>✎</span>
+                          <div className="release-card-top">
+                            <div className="release-card-identity">
+                              {canManageReleases && (
+                                <div
+                                  className={`drag-handle${sortBy !== 'manual' ? ' drag-handle-disabled' : ''}`}
+                                  {...{ 'data-testid': `release-drag-handle-${epic.id}` }}
+                                  title={sortBy === 'manual' ? 'Drag to reorder' : 'Switch sort to Manual Order to reorder releases'}
+                                  draggable={sortBy === 'manual'}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onDragStart={(event) => {
+                                    if (sortBy !== 'manual') return;
+                                    event.stopPropagation();
+                                    event.dataTransfer.effectAllowed = 'move';
+                                    event.dataTransfer.setData?.('text/plain', `release-order:${epic.id}`);
+                                    draggedEpicIdRef.current = epic.id;
+                                    requestAnimationFrame(() => {
+                                      if (draggedEpicIdRef.current === epic.id) {
+                                        setDraggedEpicId(epic.id);
+                                      }
+                                    });
+                                  }}
+                                  onDragEnd={() => {
+                                    draggedEpicIdRef.current = null;
+                                    setDraggedEpicId(null);
+                                    setDropTargetEpicId(null);
+                                  }}
+                                >
+                                  ⠿
+                                </div>
+                              )}
+                              <span
+                                className={`platform-badge ${platformToneClass(platform)}`}
+                                {...{ 'data-testid': `release-platform-badge-${epic.id}` }}
+                              >
+                                {platform}
+                              </span>
+                              <span
+                                className="release-card-version"
+                                {...{ 'data-testid': `release-card-version-${epic.id}` }}
+                              >
+                                {epic.version}
+                              </span>
+                            </div>
+                            <span className={`status-badge status-${toSlug(epic.status)}`}>
+                              {epic.status}
+                            </span>
+                          </div>
+
+                          <div className="release-card-meta">
+                            <span
+                              className={`release-countdown countdown-${countdown.variant}`}
+                              {...{ 'data-testid': `release-card-countdown-${epic.id}` }}
+                            >
+                              {countdown.label}
+                            </span>
+                            <OutcomeBadge
+                              {...{ 'data-testid': `release-outcome-badge-${epic.id}` }}
+                              releaseVersion={epic.version}
+                              deployedAt={epic.targetDate || undefined}
+                              onManage={handleOpenOutcomeModal}
+                            />
+                          </div>
+
+                          <div className="release-card-readiness">
+                            <div className="progress-bar-container">
+                              {buckets.total > 0 && (
+                                <>
+                                  <div
+                                    className="progress-bar-segment segment-green"
+                                    style={{ width: `${(buckets.green / buckets.total) * 100}%` }}
+                                    title={`Ready: ${buckets.green}`}
+                                  />
+                                  <div
+                                    className="progress-bar-segment segment-amber"
+                                    style={{ width: `${(buckets.amber / buckets.total) * 100}%` }}
+                                    title={`UAT Ready: ${buckets.amber}`}
+                                  />
+                                  <div
+                                    className="progress-bar-segment segment-red"
+                                    style={{ width: `${(buckets.red / buckets.total) * 100}%` }}
+                                    title={`Dev / Not Ready: ${buckets.red}`}
+                                  />
+                                </>
+                              )}
+                            </div>
+                            <span className="progress-details" {...{ 'data-testid': `release-card-ratio-${epic.id}` }}>
+                              {buckets.green}/{buckets.total} ({epic.progress}%)
+                            </span>
+                          </div>
+
+                          <div className="release-card-footer">
+                            <span
+                              className={`remaining-chip${buckets.red === 0 && buckets.amber === 0 && buckets.total > 0 ? ' all-ready' : ''}`}
+                              {...{ 'data-testid': `release-card-remaining-${epic.id}` }}
+                            >
+                              {remainingLabel}
+                            </span>
+                          </div>
+
+                          {canManageReleases && (
+                            <div className="release-card-drop-hint">
+                              Drop here to add to {epic.version}
+                            </div>
                           )}
-                        </span>
-                      )}
-                    </td>
-                  <td>
-                    <span className={`status-badge status-${epic.status.toLowerCase().replace(/\s+/g, '-')}`}>
-                      {epic.status}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="progress-cell">
-                      <div className="progress-bar-container">
-                        {epic.totalItems > 0 && (
-                          <>
-                            <div 
-                              className="progress-bar-segment segment-green" 
-                              style={{ width: `${(epic.greenItems / epic.totalItems) * 100}%` }}
-                              title={`Ready: ${epic.greenItems}`}
-                            ></div>
-                            <div 
-                              className="progress-bar-segment segment-amber" 
-                              style={{ width: `${(epic.amberItems / epic.totalItems) * 100}%` }}
-                              title={`UAT Ready for Test: ${epic.amberItems}`}
-                            ></div>
-                            <div 
-                              className="progress-bar-segment segment-red" 
-                              style={{ width: `${(epic.redItems / epic.totalItems) * 100}%` }}
-                              title={`Other: ${epic.redItems}`}
-                            ></div>
-                          </>
-                        )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Right Pane: Release Inspector */}
+              <div className="release-inspector-pane" {...{ 'data-testid': 'release-inspector' }}>
+                {!selectedEpic ? (
+                  <div className="inspector-empty-state">
+                    <p>Select a release from the queue to inspect its readiness and linked work items.</p>
+                  </div>
+                ) : (
+                  <>
+                    <ReleaseInspectorOutcomeSync
+                      releaseVersion={selectedEpic.version}
+                      onPresenceChange={setSelectedHasOutcome}
+                    />
+
+                    {/* Inspector Header */}
+                    <div className="inspector-header">
+                      <div className="inspector-header-main">
+                        <div className="inspector-title-row">
+                          <span
+                            className={`platform-badge ${platformToneClass(selectedPlatform)}`}
+                            {...{ 'data-testid': `release-inspector-platform-${selectedEpic.id}` }}
+                          >
+                            {selectedPlatform}
+                          </span>
+
+                          {inlineEditEpicId === selectedEpic.id ? (
+                            <span className="inline-rename-wrapper">
+                              <input
+                                className="inline-rename-input"
+                                {...{ 'data-testid': `release-rename-input-${selectedEpic.id}` }}
+                                value={inlineEditValue}
+                                autoFocus
+                                onChange={(e) => setInlineEditValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') { void commitRename(selectedEpic.id); }
+                                  if (e.key === 'Escape') { cancelInlineEdit(); }
+                                }}
+                                onBlur={() => { void commitRename(selectedEpic.id); }}
+                                disabled={isSavingRename}
+                              />
+                              {renameError && (
+                                <span className="rename-error" {...{ 'data-testid': `release-rename-error-${selectedEpic.id}` }}>
+                                  {renameError}
+                                </span>
+                              )}
+                            </span>
+                          ) : canManageReleases && isRenamableStatus(selectedEpic.status) ? (
+                            <button
+                              type="button"
+                              className="inspector-version-btn version-editable"
+                              {...{ 'data-testid': `release-rename-${selectedEpic.id}` }}
+                              title="Click to rename"
+                              onClick={() => startInlineEdit(selectedEpic)}
+                            >
+                              <span>{selectedEpic.version}</span>
+                              <span className="edit-pencil" aria-hidden>✎</span>
+                            </button>
+                          ) : (
+                            <h3
+                              className="inspector-version-title"
+                              {...{ 'data-testid': `release-rename-${selectedEpic.id}` }}
+                            >
+                              {selectedEpic.version}
+                            </h3>
+                          )}
+
+                          <span className={`status-badge status-${toSlug(selectedEpic.status)}`}>
+                            {selectedEpic.status}
+                          </span>
+                        </div>
+
+                        <div className="inspector-dates-row">
+                          <span>
+                            <strong>Start:</strong> {selectedEpic.startDate || 'Not set'}
+                          </span>
+                          <span>
+                            <strong>Target:</strong>{' '}
+                            {selectedEpic.targetDate ? (
+                              <span className={`release-countdown countdown-${selectedCountdown?.variant ?? 'upcoming'}`}>
+                                {selectedEpic.targetDate} ({selectedCountdown?.label})
+                              </span>
+                            ) : (
+                              <span className="release-countdown countdown-none">No target date</span>
+                            )}
+                          </span>
+                          {selectedEpic.areaPath && (
+                            <span className="inspector-area-path">
+                              <strong>Area:</strong> {selectedEpic.areaPath}
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="inspector-description">
+                          {selectedDescriptionText || 'No release description provided.'}
+                        </p>
                       </div>
-                      <span className="progress-text">{epic.progress}%</span>
-                      <span className="progress-details">({epic.completedItems}/{epic.totalItems} items)</span>
+
+                      <div className="inspector-actions">
+                        <button
+                          type="button"
+                          className="inspector-action-btn primary"
+                          {...{ 'data-testid': `release-action-link-${selectedEpic.id}` }}
+                          onClick={() => handleOpenLinkItemsModal(selectedEpic.id)}
+                        >
+                          + Link Items
+                        </button>
+                        <button
+                          type="button"
+                          className="inspector-action-btn"
+                          {...{ 'data-testid': `release-action-edit-${selectedEpic.id}` }}
+                          onClick={() => handleOpenEditModal(selectedEpic)}
+                        >
+                          Edit
+                        </button>
+                        <ReleaseCabRequestAction
+                          project={project}
+                          onClick={() => setCabModalEpic({ id: selectedEpic.id, version: selectedEpic.version })}
+                          {...{ 'data-testid': `release-create-cab-${selectedEpic.id}` }}
+                        />
+                        <button
+                          type="button"
+                          className="inspector-action-btn"
+                          {...{ 'data-testid': `release-action-outcome-${selectedEpic.id}` }}
+                          onClick={() => handleOpenOutcomeModal(selectedEpic.version, selectedEpic.targetDate || undefined)}
+                        >
+                          Deployment Outcome
+                        </button>
+                        <div className="release-notes-dropdown-wrap">
+                          <button
+                            type="button"
+                            className="inspector-action-btn"
+                            {...{ 'data-testid': `release-action-notes-${selectedEpic.id}` }}
+                            onClick={() => setShowNotesMenu((prev) => !prev)}
+                          >
+                            Release Notes ▾
+                          </button>
+                          {showNotesMenu && (
+                            <div className="action-dropdown">
+                              <button
+                                type="button"
+                                className="action-menu-item"
+                                {...{ 'data-testid': 'release-notes-markdown' }}
+                                onClick={() => void downloadReleaseNotes(selectedEpic.version, 'markdown')}
+                              >
+                                Download Markdown
+                              </button>
+                              <button
+                                type="button"
+                                className="action-menu-item"
+                                {...{ 'data-testid': 'release-notes-json' }}
+                                onClick={() => void downloadReleaseNotes(selectedEpic.version, 'json')}
+                              >
+                                Download JSON
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="inspector-action-btn danger"
+                          {...{ 'data-testid': `release-action-delete-${selectedEpic.id}` }}
+                          onClick={() => {
+                            setDeletingEpicId(selectedEpic.id);
+                            setShowDeleteConfirmModal(true);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
-                  </td>
-                  <td>{epic.startDate || 'N/A'}</td>
-                  <td>{epic.targetDate || 'N/A'}</td>
-                  <td className="description-cell">
-                    <div className="description-truncate" title={epic.description}>
-                      {epic.description ? epic.description.replace(/<[^>]*>/g, '').substring(0, 100) : 'N/A'}
-                      {epic.description && epic.description.length > 100 ? '...' : ''}
+
+                    {/* "What Else Is Needed" Readiness Summary */}
+                    <div className="readiness-summary" {...{ 'data-testid': 'readiness-summary' }}>
+                      <div className="readiness-summary-header">
+                        <h4>What Else Is Needed</h4>
+                        <span className="readiness-summary-total">
+                          {selectedRelatedItems.length} linked item{selectedRelatedItems.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+
+                      {isSelectedLoading && !childItems.has(selectedEpic.id) ? (
+                        <div className="readiness-loading">Calculating readiness breakdown...</div>
+                      ) : readinessSummary && (
+                        <>
+                          <div className="readiness-counters">
+                            <div className="readiness-counter ready">
+                              <span className="readiness-counter-value" {...{ 'data-testid': 'readiness-count-ready' }}>
+                                {readinessSummary.readyCount}
+                              </span>
+                              <span className="readiness-counter-label">Ready / Done</span>
+                            </div>
+                            <div className="readiness-counter uat">
+                              <span className="readiness-counter-value" {...{ 'data-testid': 'readiness-count-uat' }}>
+                                {readinessSummary.uatCount}
+                              </span>
+                              <span className="readiness-counter-label">Awaiting UAT</span>
+                            </div>
+                            <div className="readiness-counter not-ready">
+                              <span className="readiness-counter-value" {...{ 'data-testid': 'readiness-count-not-ready' }}>
+                                {readinessSummary.notReadyCount}
+                              </span>
+                              <span className="readiness-counter-label">Not Ready</span>
+                            </div>
+                          </div>
+
+                          <div className="readiness-gaps" {...{ 'data-testid': 'readiness-gaps' }}>
+                            {readinessSummary.notReadyCount > 0 && (
+                              <button
+                                type="button"
+                                className={`gap-pill gap-dev${activeGapFilter === 'dev' ? ' active' : ''}`}
+                                {...{ 'data-testid': 'gap-pill-dev' }}
+                                onClick={() => toggleGapFilter('dev')}
+                              >
+                                {readinessSummary.notReadyCount} {readinessSummary.notReadyCount === 1 ? 'item' : 'items'} still in Dev
+                              </button>
+                            )}
+                            {readinessSummary.uatCount > 0 && (
+                              <button
+                                type="button"
+                                className={`gap-pill gap-uat${activeGapFilter === 'uat' ? ' active' : ''}`}
+                                {...{ 'data-testid': 'gap-pill-uat' }}
+                                onClick={() => toggleGapFilter('uat')}
+                              >
+                                {readinessSummary.uatCount} awaiting UAT
+                              </button>
+                            )}
+                            {readinessSummary.unassignedCount > 0 && (
+                              <button
+                                type="button"
+                                className={`gap-pill gap-unassigned${activeGapFilter === 'unassigned' ? ' active' : ''}`}
+                                {...{ 'data-testid': 'gap-pill-unassigned' }}
+                                onClick={() => toggleGapFilter('unassigned')}
+                              >
+                                {readinessSummary.unassignedCount} unassigned
+                              </button>
+                            )}
+                            {readinessSummary.missingTargetDate && (
+                              <button
+                                type="button"
+                                className="gap-pill gap-meta"
+                                {...{ 'data-testid': 'gap-pill-no-target-date' }}
+                                onClick={() => handleOpenEditModal(selectedEpic)}
+                                title="Click to set a target date"
+                              >
+                                No target date
+                              </button>
+                            )}
+                            {readinessSummary.missingOutcome && (
+                              <button
+                                type="button"
+                                className="gap-pill gap-meta"
+                                {...{ 'data-testid': 'gap-pill-no-outcome' }}
+                                onClick={() => handleOpenOutcomeModal(selectedEpic.version, selectedEpic.targetDate || undefined)}
+                                title="Click to record deployment outcome"
+                              >
+                                No deployment outcome recorded
+                              </button>
+                            )}
+                            {readinessSummary.isAllClear && (
+                              <span className="gap-pill gap-clear" {...{ 'data-testid': 'readiness-all-clear' }}>
+                                ✓ All items ready &amp; outcome recorded
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
-                  </td>
-                  <td>
-                    <OutcomeBadge {...{ 'data-testid': `release-outcome-badge-${epic.id}` }} releaseVersion={epic.version} deployedAt={epic.targetDate || undefined} onManage={handleOpenOutcomeModal} />
-                  </td>
-                  <td>
-                    <div className="actions-cell">
-                      <button
-                        className="btn-action-menu"
-                        {...{ 'data-testid': `release-actions-${epic.id}` }}
-                        onClick={() => setOpenActionMenuId(openActionMenuId === epic.id ? null : epic.id)}
-                        title="Actions"
-                      >
-                        ⋯
-                      </button>
-                      {openActionMenuId === epic.id && (
-                        <div className="action-dropdown">
+
+                    {/* Scoped Work-Item Tabs */}
+                    <div className="inspector-tabs-bar">
+                      <div className="inspector-tabs" role="tablist" aria-label="Release work items filter">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={!activeGapFilter && activeWorkItemTab === 'needs-attention'}
+                          className={`inspector-tab${!activeGapFilter && activeWorkItemTab === 'needs-attention' ? ' active' : ''}`}
+                          {...{ 'data-testid': 'release-tab-needs-attention' }}
+                          onClick={() => {
+                            setActiveGapFilter(null);
+                            setActiveWorkItemTab('needs-attention');
+                          }}
+                        >
+                          Needs Attention ({tabCounts.needsAttention})
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={!activeGapFilter && activeWorkItemTab === 'ready'}
+                          className={`inspector-tab${!activeGapFilter && activeWorkItemTab === 'ready' ? ' active' : ''}`}
+                          {...{ 'data-testid': 'release-tab-ready' }}
+                          onClick={() => {
+                            setActiveGapFilter(null);
+                            setActiveWorkItemTab('ready');
+                          }}
+                        >
+                          Ready / Done ({tabCounts.ready})
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={!activeGapFilter && activeWorkItemTab === 'all'}
+                          className={`inspector-tab${!activeGapFilter && activeWorkItemTab === 'all' ? ' active' : ''}`}
+                          {...{ 'data-testid': 'release-tab-all' }}
+                          onClick={() => {
+                            setActiveGapFilter(null);
+                            setActiveWorkItemTab('all');
+                          }}
+                        >
+                          All Items ({tabCounts.all})
+                        </button>
+                      </div>
+
+                      {activeGapFilter && (
+                        <div className="gap-filter-active-bar">
+                          <span>
+                            Filtered by:{' '}
+                            <strong>
+                              {activeGapFilter === 'dev'
+                                ? 'Still in Dev'
+                                : activeGapFilter === 'uat'
+                                  ? 'Awaiting UAT'
+                                  : 'Unassigned'}
+                            </strong>
+                          </span>
                           <button
-                            className="action-menu-item"
-                            {...{ 'data-testid': `release-action-edit-${epic.id}` }}
-                            onClick={() => {
-                              handleOpenEditModal(epic);
-                              setOpenActionMenuId(null);
-                            }}
+                            type="button"
+                            className="gap-filter-reset-btn"
+                            {...{ 'data-testid': 'gap-filter-reset' }}
+                            onClick={() => setActiveGapFilter(null)}
                           >
-                            ✏️ Edit
-                          </button>
-                          <button
-                            className="action-menu-item"
-                            {...{ 'data-testid': `release-action-link-${epic.id}` }}
-                            onClick={() => {
-                              handleOpenLinkItemsModal(epic.id);
-                              setOpenActionMenuId(null);
-                            }}
-                          >
-                            🔗 Link Items
-                          </button>
-                          <button
-                            className="action-menu-item"
-                            {...{ 'data-testid': `release-action-outcome-${epic.id}` }}
-                            onClick={() => {
-                              handleOpenOutcomeModal(epic.version, epic.targetDate || undefined);
-                              setOpenActionMenuId(null);
-                            }}
-                          >
-                            📊 Deployment Outcome
-                          </button>
-                          <ReleaseCabRequestAction
-                            project={project}
-                            onClick={() => {
-                              setCabModalEpic({ id: epic.id, version: epic.version });
-                              setOpenActionMenuId(null);
-                            }}
-                            {...{ 'data-testid': `release-create-cab-${epic.id}` }}
-                          />
-                          <button
-                            className="action-menu-item"
-                            {...{ 'data-testid': `release-action-changelog-${epic.id}` }}
-                            onClick={() => {
-                              console.log('Create changelog for:', epic.id);
-                              setOpenActionMenuId(null);
-                            }}
-                          >
-                            📝 Create Changelog
-                          </button>
-                          <button
-                            className="action-menu-item"
-                            {...{ 'data-testid': `release-action-delete-${epic.id}` }}
-                            onClick={() => {
-                              setDeletingEpicId(epic.id);
-                              setShowDeleteConfirmModal(true);
-                              setOpenActionMenuId(null);
-                            }}
-                          >
-                            🗑️ Delete
+                            Clear filter
                           </button>
                         </div>
                       )}
                     </div>
-                  </td>
-                </tr>
-                {canManageReleases && (
-                  <tr className="release-item-drop-row" data-release-drop={epic.id}>
-                    <td colSpan={columnCount}>
-                      <div
-                        className="release-item-drop-zone"
-                        onDragEnter={(event) => {
-                          event.preventDefault();
-                          releaseViewRef.current?.querySelectorAll('.release-item-drop-zone.active').forEach((zone) => {
-                            zone.classList.remove('active');
-                          });
-                          event.currentTarget.classList.add('active');
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          event.dataTransfer.dropEffect = 'move';
-                          updateAutoScroll(event.clientY);
-                        }}
-                        onDrop={(event) => dropCardOnRelease(epic.id, event)}
-                      >
-                        Drop here to add to {epic.version}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                {expandedRows.has(epic.id) && (
-                  <tr className="expanded-row">
-                      <td colSpan={canManageReleases ? 10 : 9}>
-                        <div className="expanded-content">
-                          <div className="expanded-header">
-                            <div className="expanded-title">
-                              <span className="expanded-icon">📦</span>
-                              <h4>Associated Work Items</h4>
-                              <span className="expanded-count">{epic.completedItems}/{epic.totalItems} completed</span>
-                            </div>
-                            <div className="expanded-stats">
-                              <div className="stat-badge">
-                                <span className="stat-label">Progress</span>
-                                <span className="stat-value">{epic.progress}%</span>
-                              </div>
-                            </div>
+
+                    {/* Work Items List */}
+                    <div className="inspector-items-body">
+                      {isSelectedLoading && !childItems.has(selectedEpic.id) ? (
+                        <div className="child-loading">
+                          <div className="loading-spinner" />
+                          <span>Loading work items...</span>
+                        </div>
+                      ) : selectedRelatedItems.length === 0 ? (
+                        <div className="child-empty">
+                          <div className="empty-icon">📋</div>
+                          <div className="empty-text">No items linked to this release yet</div>
+                          <div className="empty-hint">Click &quot;+ Link Items&quot; to add work items to this release</div>
+                        </div>
+                      ) : inspectorItems.length === 0 ? (
+                        <div className="child-empty" {...{ 'data-testid': 'inspector-filtered-empty' }}>
+                          <div className="empty-text">
+                            {activeWorkItemTab === 'needs-attention' && !activeGapFilter
+                              ? 'Nothing needs attention — all linked items are ready!'
+                              : 'No work items match this view.'}
                           </div>
-                          
-                          {loadingChildren.has(epic.id) ? (
-                            <div className="child-loading">
-                              <div className="loading-spinner"></div>
-                              <span>Loading work items...</span>
-                            </div>
-                          ) : childItems.get(epic.id)?.length === 0 ? (
-                            <div className="child-empty">
-                              <div className="empty-icon">📋</div>
-                              <div className="empty-text">No items linked to this release yet</div>
-                              <div className="empty-hint">Click "Link Items" to add work items to this release</div>
-                            </div>
-                          ) : (
-                            <div className="child-items-grid">
-                              {childItems.get(epic.id)?.map((item) => {
-                                const stateClass = item.state.toLowerCase().replace(/\s+/g, '-');
-                                const typeClass = item.workItemType.toLowerCase().replace(/\s+/g, '-');
-                                const hasUatReadyChildren = itemsWithUatReadyChildren.has(item.id);
-                                const isExpandable = item.workItemType === 'Epic' || item.workItemType === 'Feature';
-                                const isExpanded = expandedNestedItems.has(`${epic.id}:${item.id}`);
-                                
-                                return (
-                                  <React.Fragment key={item.id}>
-                                    <div 
-                                      className={`child-item-card type-${typeClass}${hasUatReadyChildren ? ' has-uat-ready' : ''}${isExpanded ? ' expanded' : ''}${movingItemId === item.id ? ' moving' : ''}`}
-                                      {...{ 'data-testid': `release-item-${epic.id}-${item.id}` }}
-                                      draggable={canManageReleases && movingItemId === null}
-                                      title={canManageReleases ? 'Drag to another release, or click to view details' : undefined}
-                                      onDragStart={canManageReleases ? (event) => beginCardDrag(epic.id, item, event) : undefined}
-                                      onDragEnd={canManageReleases ? (event) => {
-                                        event.currentTarget.classList.remove('is-drag-source');
-                                        endCardDrag();
-                                      } : undefined}
-                                      onClick={canManageReleases ? (event) => {
-                                        if (ignoreCardClickRef.current) return;
-                                        if ((event.target as HTMLElement).closest('button')) return;
-                                        onSelectItem?.(item);
-                                      } : undefined}
+                        </div>
+                      ) : (
+                        <div className="child-items-grid">
+                          {inspectorItems.map((item) => {
+                            const stateClass = toSlug(item.state);
+                            const typeClass = toSlug(item.workItemType);
+                            const readinessBucket = classifyWorkItemReadiness(item);
+                            const hasUatReadyChildren = itemsWithUatReadyChildren.has(item.id);
+                            const isExpandable = item.workItemType === 'Epic' || item.workItemType === 'Feature';
+                            const isExpanded = expandedNestedItems.has(`${selectedEpic.id}:${item.id}`);
+
+                            return (
+                              <div
+                                key={item.id}
+                                className={`child-item-card type-${typeClass} readiness-${readinessBucket}${hasUatReadyChildren ? ' has-uat-ready' : ''}${isExpanded ? ' expanded' : ''}${movingItemId === item.id ? ' moving' : ''}`}
+                                {...{ 'data-testid': `release-item-${selectedEpic.id}-${item.id}` }}
+                                draggable={canManageReleases && movingItemId === null}
+                                title={canManageReleases ? 'Drag to another release, or click to view details' : undefined}
+                                onDragStart={canManageReleases ? (event) => beginCardDrag(selectedEpic.id, item, event) : undefined}
+                                onDragEnd={canManageReleases ? (event) => {
+                                  event.currentTarget.classList.remove('is-drag-source');
+                                  endCardDrag();
+                                } : undefined}
+                                onClick={canManageReleases ? (event) => {
+                                  if (ignoreCardClickRef.current) return;
+                                  if ((event.target as HTMLElement).closest('button')) return;
+                                  onSelectItem?.(item);
+                                } : undefined}
+                              >
+                                {isExpandable && (
+                                  <button
+                                    type="button"
+                                    className="btn-expand-nested"
+                                    {...{ 'data-testid': `release-item-expand-${selectedEpic.id}-${item.id}` }}
+                                    draggable={false}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void toggleNestedItemExpansion(selectedEpic.id, item.id, item.workItemType);
+                                    }}
+                                    title={isExpanded ? 'Collapse children' : 'Expand to view children'}
+                                  >
+                                    <svg
+                                      width="20"
+                                      height="20"
+                                      viewBox="0 0 20 20"
+                                      fill="none"
+                                      className={`expand-icon${isExpanded ? ' expanded' : ''}`}
                                     >
-                                      {isExpandable && (
-                                        <button
-                                          className="btn-expand-nested"
-                                          {...{ 'data-testid': `release-item-expand-${epic.id}-${item.id}` }}
-                                          draggable={false}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleNestedItemExpansion(epic.id, item.id, item.workItemType);
-                                          }}
-                                          title={isExpanded ? "Collapse children" : "Expand to view children"}
-                                        >
-                                          <svg 
-                                            width="20" 
-                                            height="20" 
-                                            viewBox="0 0 20 20" 
-                                            fill="none" 
-                                            className={`expand-icon${isExpanded ? ' expanded' : ''}`}
-                                          >
-                                            <path 
-                                              d="M6 8L10 12L14 8" 
-                                              stroke="currentColor" 
-                                              strokeWidth="2" 
-                                              strokeLinecap="round" 
-                                              strokeLinejoin="round"
-                                            />
-                                          </svg>
-                                        </button>
+                                      <path
+                                        d="M6 8L10 12L14 8"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  </button>
+                                )}
+
+                                <div
+                                  className="child-item-content"
+                                  {...{ 'data-testid': `release-item-open-${selectedEpic.id}-${item.id}` }}
+                                  onClick={canManageReleases ? undefined : () => onSelectItem?.(item)}
+                                  title={canManageReleases ? undefined : 'Click to view details'}
+                                >
+                                  <div className="child-item-header">
+                                    <span className="child-item-id">#{item.id}</span>
+                                    <span className={`child-item-type type-${typeClass}`}>
+                                      {item.workItemType}
+                                    </span>
+                                    <span className={`child-item-state state-${stateClass}`}>
+                                      {item.state}
+                                    </span>
+                                  </div>
+
+                                  <div className="child-item-title" title={item.title}>
+                                    {item.title}
+                                  </div>
+
+                                  <div className="child-item-footer">
+                                    <div className="footer-left">
+                                      {item.assignedTo ? (
+                                        <div className="child-item-assignee">
+                                          <span className="assignee-avatar">
+                                            {item.assignedTo.split(' ').map((n) => n[0]).join('').toUpperCase().substring(0, 2)}
+                                          </span>
+                                          <span className="assignee-name">{item.assignedTo}</span>
+                                        </div>
+                                      ) : (
+                                        <div className="child-item-unassigned">
+                                          <span className="unassigned-icon">👤</span>
+                                          <span className="unassigned-text">Unassigned</span>
+                                        </div>
                                       )}
-                                      <div
-                                        className="child-item-content"
-                                        {...{ 'data-testid': `release-item-open-${epic.id}-${item.id}` }}
-                                        onClick={canManageReleases ? undefined : () => onSelectItem?.(item)}
-                                        title={canManageReleases ? undefined : 'Click to view details'}
-                                      >
-                                        <div className="child-item-header">
-                                          <span className="child-item-id">#{item.id}</span>
-                                          <span className={`child-item-type type-${typeClass}`}>
-                                            {item.workItemType}
-                                          </span>
-                                          <span className={`child-item-state state-${stateClass}`}>
-                                            {item.state}
-                                          </span>
+                                      {item.targetDate && (
+                                        <div className="child-item-date">
+                                          <span className="date-icon">📅</span>
+                                          <span className="date-text">{new Date(item.targetDate).toLocaleDateString()}</span>
                                         </div>
-                                        
-                                        <div className="child-item-title" title={item.title}>
-                                          {item.title}
-                                        </div>
-                                        
-                                        <div className="child-item-footer">
-                                          <div className="footer-left">
-                                            {item.assignedTo ? (
-                                              <div className="child-item-assignee">
-                                                <span className="assignee-avatar">
-                                                  {item.assignedTo.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2)}
-                                                </span>
-                                                <span className="assignee-name">{item.assignedTo}</span>
-                                              </div>
-                                            ) : (
-                                              <div className="child-item-unassigned">
-                                                <span className="unassigned-icon">👤</span>
-                                                <span className="unassigned-text">Unassigned</span>
-                                              </div>
-                                            )}
-                                            
-                                            {item.targetDate && (
-                                              <div className="child-item-date">
-                                                <span className="date-icon">📅</span>
-                                                <span className="date-text">{new Date(item.targetDate).toLocaleDateString()}</span>
-                                              </div>
-                                            )}
-                                          </div>
-                                          
-                                          <button
-                                            className="btn-unlink-item"
-                                            {...{ 'data-testid': `release-item-unlink-${epic.id}-${item.id}` }}
-                                            draggable={false}
-                                            onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleUnlinkItem(epic.id, item.id);
-                                          }}
-                                          title="Unlink from release"
-                                        >
-                                          ✕
-                                        </button>
-                                      </div>
+                                      )}
                                     </div>
-                                    
-                                    {/* Nested children for Epic/Feature */}
-                                    {isExpanded && (
-                                      <div className="nested-children-container">
-                                        {loadingNestedChildren.has(item.id) ? (
-                                          <div className="nested-loading">
-                                            <div className="loading-spinner"></div>
-                                            <span>Loading child items...</span>
-                                          </div>
-                                        ) : nestedChildren.get(item.id)?.length === 0 ? (
-                                          <div className="nested-empty">
-                                            <span>No child items found</span>
-                                          </div>
-                                        ) : (
-                                          <div className="nested-items-list">
-                                            {nestedChildren.get(item.id)?.map((nestedItem) => {
-                                              const nestedStateClass = nestedItem.state.toLowerCase().replace(/\s+/g, '-');
-                                              const nestedTypeClass = nestedItem.workItemType.toLowerCase().replace(/\s+/g, '-');
-                                              
-                                              return (
-                                                <div 
-                                                  key={nestedItem.id} 
-                                                  className={`nested-item type-${nestedTypeClass}`}
-                                                  {...{ 'data-testid': `release-nested-item-${nestedItem.id}` }}
-                                                  onClick={() => onSelectItem && onSelectItem(nestedItem)}
-                                                  title="Click to view details"
-                                                >
-                                                  <div className="nested-item-main">
-                                                    <div className="nested-item-id">#{nestedItem.id}</div>
-                                                    <div className="nested-item-title">{nestedItem.title}</div>
-                                                    <span className={`nested-item-type type-${nestedTypeClass}`}>
-                                                      {nestedItem.workItemType}
-                                                    </span>
-                                                    <span className={`nested-item-state state-${nestedStateClass}`}>
-                                                      {nestedItem.state}
-                                                    </span>
-                                                  </div>
-                                                  {nestedItem.assignedTo && (
-                                                    <div className="nested-item-assignee">
-                                                      <span className="nested-assignee-avatar">
-                                                        {nestedItem.assignedTo.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2)}
-                                                      </span>
-                                                      <span className="nested-assignee-name">{nestedItem.assignedTo}</span>
-                                                    </div>
-                                                  )}
+
+                                    <button
+                                      type="button"
+                                      className="btn-unlink-item"
+                                      {...{ 'data-testid': `release-item-unlink-${selectedEpic.id}-${item.id}` }}
+                                      draggable={false}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void handleUnlinkItem(selectedEpic.id, item);
+                                      }}
+                                      title="Unlink from release"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {isExpanded && (
+                                  <div className="nested-children-container">
+                                    {loadingNestedChildren.has(item.id) ? (
+                                      <div className="nested-loading">
+                                        <div className="loading-spinner" />
+                                        <span>Loading child items...</span>
+                                      </div>
+                                    ) : (nestedChildren.get(item.id)?.length ?? 0) === 0 ? (
+                                      <div className="nested-empty">
+                                        <span>No child items found</span>
+                                      </div>
+                                    ) : (
+                                      <div className="nested-items-list">
+                                        {nestedChildren.get(item.id)?.map((nestedItem) => {
+                                          const nestedStateClass = toSlug(nestedItem.state);
+                                          const nestedTypeClass = toSlug(nestedItem.workItemType);
+                                          return (
+                                            <div
+                                              key={nestedItem.id}
+                                              role="button"
+                                              tabIndex={0}
+                                              className={`nested-item type-${nestedTypeClass}`}
+                                              {...{ 'data-testid': `release-nested-item-${nestedItem.id}` }}
+                                              onClick={() => onSelectItem?.(nestedItem)}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                  e.preventDefault();
+                                                  onSelectItem?.(nestedItem);
+                                                }
+                                              }}
+                                              title="Click to view details"
+                                            >
+                                              <div className="nested-item-main">
+                                                <div className="nested-item-id">#{nestedItem.id}</div>
+                                                <div className="nested-item-title">{nestedItem.title}</div>
+                                                <span className={`nested-item-type type-${nestedTypeClass}`}>
+                                                  {nestedItem.workItemType}
+                                                </span>
+                                                <span className={`nested-item-state state-${nestedStateClass}`}>
+                                                  {nestedItem.state}
+                                                </span>
+                                              </div>
+                                              {nestedItem.assignedTo && (
+                                                <div className="nested-item-assignee">
+                                                  <span className="nested-assignee-avatar">
+                                                    {nestedItem.assignedTo.split(' ').map((n) => n[0]).join('').toUpperCase().substring(0, 2)}
+                                                  </span>
+                                                  <span className="nested-assignee-name">{nestedItem.assignedTo}</span>
                                                 </div>
-                                              );
-                                            })}
-                                          </div>
-                                        )}
+                                              )}
+                                            </div>
+                                          );
+                                        })}
                                       </div>
                                     )}
                                   </div>
-                                </React.Fragment>
-                              );
-                              })}
-                            </div>
-                          )}
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {selectedRelease && !loading && (
-        <>
-          {/* Metrics Dashboard */}
-          <div className="release-metrics">
-            <div className="metric-card">
-              <div className="metric-label">Total Features</div>
-              <div className="metric-value">{releaseMetrics?.totalFeatures || 0}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">Completed</div>
-              <div className="metric-value completed">{releaseMetrics?.completedFeatures || 0}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">In Progress</div>
-              <div className="metric-value in-progress">{releaseMetrics?.inProgressFeatures || 0}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">Blocked</div>
-              <div className="metric-value blocked">{releaseMetrics?.blockedFeatures || 0}</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-label">Ready for Release</div>
-              <div className="metric-value ready">{releaseMetrics?.readyForReleaseFeatures || 0}</div>
-            </div>
-            <div className={`metric-card health-${healthStatus}`}>
-              <div className="metric-label">Health</div>
-              <div className="metric-value">{healthStatus.replace('-', ' ')}</div>
-            </div>
-          </div>
-
-          {/* Progress Bar */}
-          <div className="release-progress">
-            <div className="progress-header">
-              <span>Completion: {completionPercentage}%</span>
-              <div className="progress-legend">
-                <span className="legend-item"><span className="legend-dot legend-green"></span>Ready / Done</span>
-                <span className="legend-item"><span className="legend-dot legend-amber"></span>UAT Ready for Test</span>
-                <span className="legend-item"><span className="legend-dot legend-red"></span>Other</span>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
-            <div className="progress-bar">
-              {releaseMetrics && releaseMetrics.totalFeatures > 0 && (
-                <>
-                  <div 
-                    className="progress-segment segment-green" 
-                    style={{ width: `${(releaseMetrics.completedFeatures / releaseMetrics.totalFeatures) * 100}%` }}
-                    title={`Ready / Done: ${releaseMetrics.completedFeatures}`}
-                  ></div>
-                  <div 
-                    className="progress-segment segment-amber" 
-                    style={{ width: `${((releaseMetrics.uatReadyForTestFeatures || 0) / releaseMetrics.totalFeatures) * 100}%` }}
-                    title={`UAT Ready for Test: ${releaseMetrics.uatReadyForTestFeatures || 0}`}
-                  ></div>
-                  <div 
-                    className="progress-segment segment-red" 
-                    style={{ width: `${((releaseMetrics.totalFeatures - releaseMetrics.completedFeatures - (releaseMetrics.uatReadyForTestFeatures || 0)) / releaseMetrics.totalFeatures) * 100}%` }}
-                    title={`Other: ${releaseMetrics.totalFeatures - releaseMetrics.completedFeatures - (releaseMetrics.uatReadyForTestFeatures || 0)}`}
-                  ></div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Release Notes */}
-          <div className="release-notes-section">
-            <h3>Release Notes</h3>
-            <div className="release-notes-actions">
-              <button {...{ 'data-testid': 'release-notes-markdown' }} onClick={() => downloadReleaseNotes('markdown')}>
-                Download Markdown
-              </button>
-              <button {...{ 'data-testid': 'release-notes-json' }} onClick={() => downloadReleaseNotes('json')}>
-                Download JSON
-              </button>
-            </div>
-          </div>
-
-          {/* Work Items List */}
-          <div className="release-work-items">
-            <h3>Features & Epics ({releaseWorkItems.length})</h3>
-            <div className="work-items-table">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Type</th>
-                    <th>Title</th>
-                    <th>State</th>
-                    <th>Assigned To</th>
-                    <th>Target Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {releaseWorkItems.map((wi) => (
-                    <tr 
-                      key={wi.id}
-                      {...{ 'data-testid': `release-work-item-${wi.id}` }}
-                      onClick={() => onSelectItem && onSelectItem(wi)}
-                      className="clickable-row"
-                    >
-                      <td>{wi.id}</td>
-                      <td>{wi.workItemType}</td>
-                      <td>{wi.title}</td>
-                      <td>
-                        <span className={`state-badge ${getStateClass(wi.state)}`}>
-                          {wi.state}
-                        </span>
-                      </td>
-                      <td>{wi.assignedTo || 'Unassigned'}</td>
-                      <td>{formatDate(wi.targetDate)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </>
       )}
 
-      {loading && (
-        <div className="loading-message">Loading release details...</div>
-      )}
-      </>
+      {/* New / Edit Release Modal */}
+      {showReleaseModal && (
+        <ReleaseFormModal
+          isEditMode={Boolean(editingEpic)}
+          project={project}
+          currentAreaPath={areaPath}
+          defaultValues={editingEpic ? {
+            version: editingEpic.version,
+            areaPath: editingEpic.areaPath || areaPath,
+            startDate: editingEpic.startDate || '',
+            targetDate: editingEpic.targetDate || '',
+            description: editingEpic.description || '',
+            status: editingEpic.status || 'New',
+          } : undefined}
+          submitError={formSubmitError}
+          isSubmitting={isFormSubmitting}
+          onSubmit={handleSubmitReleaseForm}
+          onClose={handleCloseReleaseModal}
+          {...{ 'data-testid': 'release-form-modal' }}
+        />
       )}
 
-      {/* New/Edit Release Modal */}
-      {showNewReleaseModal && (
-        <div className="modal-overlay" {...{ 'data-testid': 'release-form-overlay' }} onClick={handleCloseModal}>
-          <div className="modal-content" {...{ 'data-testid': 'release-form-modal' }} onClick={(e) => e.stopPropagation()}>
-            <h3>{isEditMode ? 'Edit Release' : 'Create New Release'}</h3>
-            {isEditMode && (
-              <div className="form-group">
-                <label>Status:</label>
-                <select
-                  {...{ 'data-testid': 'release-form-status' }}
-                  value={newReleaseStatus}
-                  onChange={(e) => setNewReleaseStatus(e.target.value)}
-                  className="status-select"
-                >
-                  <option value="New">New</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="In Design">In Design</option>
-                  <option value="Done">Done</option>
-                  <option value="Removed">Removed</option>
-                </select>
-              </div>
-            )}
-            <div className="form-group">
-              <label>Release Name: <span style={{color: 'red'}}>*</span></label>
-              <input
-                type="text"
-                {...{ 'data-testid': 'release-form-name' }}
-                value={newReleaseVersion}
-                onChange={(e) => setNewReleaseVersion(e.target.value)}
-                placeholder="e.g., v1.0.0, 2024-Q1"
-                required
-                disabled={isEditMode}
-              />
-            </div>
-            <div className="form-group">
-              <label>Start Date: <span style={{color: 'red'}}>*</span></label>
-              <input
-                type="date"
-                {...{ 'data-testid': 'release-form-start-date' }}
-                value={newReleaseStartDate}
-                onChange={(e) => setNewReleaseStartDate(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Target Date: <span style={{color: 'red'}}>*</span></label>
-              <input
-                type="date"
-                {...{ 'data-testid': 'release-form-target-date' }}
-                value={newReleaseTargetDate}
-                onChange={(e) => setNewReleaseTargetDate(e.target.value)}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Description: <span style={{color: 'red'}}>*</span></label>
-              <textarea
-                {...{ 'data-testid': 'release-form-description' }}
-                value={newReleaseDescription}
-                onChange={(e) => setNewReleaseDescription(e.target.value)}
-                placeholder="Release description..."
-                rows={4}
-                required
-              />
-            </div>
-            <div className="modal-actions">
-              <button
-                {...{ 'data-testid': 'release-form-save' }}
-                onClick={isEditMode ? handleUpdateRelease : handleCreateRelease} 
-                className="btn-primary"
-                disabled={!newReleaseVersion || !newReleaseStartDate || !newReleaseTargetDate || !newReleaseDescription}
-              >
-                {isEditMode ? 'Update Release' : 'Create Release'}
-              </button>
-              <button {...{ 'data-testid': 'release-form-cancel' }} onClick={handleCloseModal} className="btn-secondary">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Link Items Modal */}
       {showLinkItemsModal && (
-        <div className="modal-overlay" {...{ 'data-testid': 'release-link-overlay' }} onClick={handleCloseLinkItemsModal}>
-          <div className="modal-content modal-large" {...{ 'data-testid': 'release-link-modal' }} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="modal-overlay"
+          {...{ 'data-testid': 'release-link-overlay' }}
+          onClick={handleCloseLinkItemsModal}
+        >
+          <div
+            className="modal-content modal-large"
+            role="dialog"
+            aria-modal="true"
+            {...{ 'data-testid': 'release-link-modal' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>Link Items to Release</h3>
-            
+
             <div className="search-section">
               <div className="search-filters">
                 <div className="form-group">
-                  <label>Search:</label>
+                  <label htmlFor="release-link-search-input">Search:</label>
                   <input
+                    id="release-link-search-input"
                     type="text"
                     {...{ 'data-testid': 'release-link-search' }}
                     value={searchQuery}
@@ -1887,8 +2035,9 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Type:</label>
+                  <label htmlFor="release-link-type-select">Type:</label>
                   <select
+                    id="release-link-type-select"
                     {...{ 'data-testid': 'release-link-type' }}
                     value={workItemTypeFilter}
                     onChange={(e) => setWorkItemTypeFilter(e.target.value)}
@@ -1916,13 +2065,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     <div className="results-header">
                       <span>{searchResults.length} items found</span>
                       <button
+                        type="button"
                         className="btn-select-all"
                         {...{ 'data-testid': 'release-link-select-all' }}
                         onClick={() => {
                           if (selectedItemsToLink.length === searchResults.length) {
                             setSelectedItemsToLink([]);
                           } else {
-                            setSelectedItemsToLink(searchResults.map(wi => wi.id));
+                            setSelectedItemsToLink(searchResults.map((wi) => wi.id));
                           }
                         }}
                       >
@@ -1939,7 +2089,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                             if (e.target.checked) {
                               setSelectedItemsToLink([...selectedItemsToLink, item.id]);
                             } else {
-                              setSelectedItemsToLink(selectedItemsToLink.filter(id => id !== item.id));
+                              setSelectedItemsToLink(selectedItemsToLink.filter((id) => id !== item.id));
                             }
                           }}
                         />
@@ -1947,7 +2097,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                           <div className="result-item-header">
                             <span className="result-item-id">#{item.id}</span>
                             <span className="result-item-type">{item.workItemType}</span>
-                            <span className={`result-item-state state-${item.state.toLowerCase().replace(/\s+/g, '-')}`}>
+                            <span className={`result-item-state state-${toSlug(item.state)}`}>
                               {item.state}
                             </span>
                           </div>
@@ -1965,20 +2115,27 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
 
             <div className="modal-actions">
               <button
+                type="button"
                 {...{ 'data-testid': 'release-link-submit' }}
-                onClick={handleLinkItems} 
+                onClick={() => void handleLinkItems()}
                 className="btn-primary"
                 disabled={selectedItemsToLink.length === 0}
               >
                 Link {selectedItemsToLink.length} Item{selectedItemsToLink.length !== 1 ? 's' : ''}
               </button>
-              <button {...{ 'data-testid': 'release-link-cancel' }} onClick={handleCloseLinkItemsModal} className="btn-secondary">
+              <button
+                type="button"
+                {...{ 'data-testid': 'release-link-cancel' }}
+                onClick={handleCloseLinkItemsModal}
+                className="btn-secondary"
+              >
                 Cancel
               </button>
             </div>
           </div>
         </div>
       )}
+
       {/* Outcome Modal */}
       {showOutcomeModal && outcomeReleaseVersion && (
         <DeploymentOutcomeModal
@@ -1992,11 +2149,29 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirmModal && deletingEpicId && (
-        <div className="modal-overlay" {...{ 'data-testid': 'release-delete-overlay' }} onClick={() => !isDeleting && setShowDeleteConfirmModal(false)}>
-          <div className="modal-content" {...{ 'data-testid': 'release-delete-modal' }} onClick={(e) => e.stopPropagation()}>
+        <div
+          className="modal-overlay"
+          {...{ 'data-testid': 'release-delete-overlay' }}
+          onClick={() => !isDeleting && setShowDeleteConfirmModal(false)}
+        >
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            {...{ 'data-testid': 'release-delete-modal' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="modal-header">
               <h3>Confirm Delete Release Epic</h3>
-              <button className="modal-close" {...{ 'data-testid': 'release-delete-close' }} onClick={() => setShowDeleteConfirmModal(false)} disabled={isDeleting}>✕</button>
+              <button
+                type="button"
+                className="modal-close"
+                {...{ 'data-testid': 'release-delete-close' }}
+                onClick={() => setShowDeleteConfirmModal(false)}
+                disabled={isDeleting}
+              >
+                ✕
+              </button>
             </div>
             <div className="modal-body">
               <div className="modal-icon-danger">🗑️</div>
@@ -2005,7 +2180,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               </p>
               <div className="modal-epic-info-delete">
                 <span className="modal-epic-version">
-                  {releaseEpics.find(e => e.id === deletingEpicId)?.version}
+                  {releaseEpics.find((e) => e.id === deletingEpicId)?.version}
                 </span>
                 <span className="modal-epic-id">
                   #{deletingEpicId}
@@ -2020,6 +2195,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             </div>
             <div className="modal-footer">
               <button
+                type="button"
                 className="modal-btn modal-btn-cancel"
                 {...{ 'data-testid': 'release-delete-cancel' }}
                 onClick={() => setShowDeleteConfirmModal(false)}
@@ -2028,9 +2204,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                 Cancel
               </button>
               <button
+                type="button"
                 className="modal-btn modal-btn-danger"
                 {...{ 'data-testid': 'release-delete-confirm' }}
-                onClick={handleDeleteReleaseEpic}
+                onClick={() => void handleDeleteReleaseEpic()}
                 disabled={isDeleting}
               >
                 {isDeleting ? 'Deleting...' : 'Delete Epic'}
@@ -2045,7 +2222,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
           {...{ 'data-testid': 'create-cab-request-modal' }}
           targetVersion={cabModalEpic.version}
           defaultPreviousBranch={defaultPreviousReleaseBranch(
-            sortedEpics.map((epic) => epic.version as string),
+            visibleEpics.map((epic) => epic.version),
             cabModalEpic.version,
           )}
           onCancel={dismissCabModal}

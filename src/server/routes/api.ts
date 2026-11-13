@@ -5,6 +5,7 @@ import { AzureDevOpsService } from '../services/azureDevOps';
 import { adoWriteForRequest, adoWritePreferUser, isAdoUserAuthError } from '../services/adoFactory';
 import { getAdoTokenForUser } from '../services/adoUserToken';
 import { generateBacklogId } from '../../shared/utils/backlogId';
+import { isAreaPathInProject } from '../../shared/utils/releasePlatform';
 import { signAgentToken, type AgentTokenClaims } from '../utils/agentTokens';
 import { WorkItemsQuery, UpdateDueDateRequest, DeveloperDueDateStats, DueDateHitRateStats, PullRequestTimeStats, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, CreateDeploymentRequest, AIWorkItemHealthSummary } from '../types/workitem';
 // DesignDocKickoffStats is returned directly by the service - no import needed here
@@ -1676,11 +1677,31 @@ router.post('/releases/:version/tag', async (req: Request, res: Response) => {
       targetDate?: string;
       description?: string;
     };
-    
-    const adoService = await adoWriteForRequest(req, project, areaPath);
-    
+
+    const trimmedAreaPath = typeof areaPath === 'string' ? areaPath.trim() : undefined;
+    if (project && trimmedAreaPath && !isAreaPathInProject(trimmedAreaPath, project)) {
+      return res.status(400).json({ error: 'areaPath does not belong to the specified project' });
+    }
+
+    const adoService = await adoWriteForRequest(req, project, trimmedAreaPath || areaPath);
+
+    if (project && trimmedAreaPath && typeof adoService.getAreaPaths === 'function') {
+      try {
+        const projectAreaPaths = await adoService.getAreaPaths(project);
+        if (
+          Array.isArray(projectAreaPaths) &&
+          projectAreaPaths.length > 0 &&
+          !projectAreaPaths.some((p) => p.toLowerCase() === trimmedAreaPath.toLowerCase())
+        ) {
+          return res.status(400).json({ error: 'areaPath does not belong to the specified project' });
+        }
+      } catch (areaErr) {
+        console.warn('[POST /releases/:version/tag] Could not verify areaPath against ADO area paths:', areaErr);
+      }
+    }
+
     // Create release Epic
-    const epicId = await adoService.createReleaseEpic(version, startDate, targetDate, description);
+    const epicId = await adoService.createReleaseEpic(version, startDate, targetDate, description, trimmedAreaPath || areaPath);
     
     // If workItemIds were provided, add release tag to each work item
     if (workItemIds && Array.isArray(workItemIds) && workItemIds.length > 0) {

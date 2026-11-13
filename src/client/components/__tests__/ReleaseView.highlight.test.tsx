@@ -1,13 +1,10 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ReleaseView from '../ReleaseView';
 import { WorkItem } from '../../types/workitem';
 
-// Mock useAppShell so the component does not pull in the real hook chain
-// (useWorkItems → config/env), which reads `import.meta.env` and cannot be
-// evaluated under ts-jest's CommonJS transform.
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     isInAnyGroup: () => true,
@@ -43,28 +40,13 @@ const installFetchMock = (options: {
   const epicChildren = options.epicChildren ?? [];
   const featureChildren = options.featureChildren ?? [];
 
-  (global.fetch as jest.Mock).mockImplementation((input: any, _init?: any) => {
+  (global.fetch as jest.Mock).mockImplementation((input: any) => {
     const url = typeof input === 'string' ? input : String(input);
 
-    if (url.startsWith('/api/releases/epics')) {
-      return okResponse(epics);
-    }
-
-    if (url.startsWith('/api/releases?')) {
-      return okResponse([]);
-    }
-
-    if (url.match(/\/api\/releases\/\d+\/related-items/)) {
-      return okResponse(relatedItems);
-    }
-
-    if (url.match(/\/api\/epics\/\d+\/children/)) {
-      return okResponse(epicChildren);
-    }
-
-    if (url.match(/\/api\/features\/\d+\/children/)) {
-      return okResponse(featureChildren);
-    }
+    if (url.startsWith('/api/releases/epics')) return okResponse(epics);
+    if (url.match(/\/api\/releases\/\d+\/related-items/)) return okResponse(relatedItems);
+    if (url.match(/\/api\/epics\/\d+\/children/)) return okResponse(epicChildren);
+    if (url.match(/\/api\/features\/\d+\/children/)) return okResponse(featureChildren);
 
     return okResponse([]);
   });
@@ -139,27 +121,12 @@ describe('ReleaseView - UAT Ready Highlighting', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
+    await screen.findByText('Epic A');
     await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load and children to be checked
-    await waitFor(() => {
-      expect(screen.getByText('Epic A')).toBeInTheDocument();
-    });
-
-    // Give time for the UAT check to complete
-    await waitFor(() => {
-      const epicCard = screen.getByText('Epic A').closest('.child-item-card');
-      expect(epicCard).toHaveClass('has-uat-ready');
+      expect(screen.getByTestId('release-item-123-456')).toHaveClass('has-uat-ready');
     }, { timeout: 3000 });
   });
 
@@ -209,27 +176,12 @@ describe('ReleaseView - UAT Ready Highlighting', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
+    await screen.findByText('Feature B');
     await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature B')).toBeInTheDocument();
-    });
-
-    // Give time for the UAT check to complete
-    await waitFor(() => {
-      const featureCard = screen.getByText('Feature B').closest('.child-item-card');
-      expect(featureCard).toHaveClass('has-uat-ready');
+      expect(screen.getByTestId('release-item-123-456')).toHaveClass('has-uat-ready');
     }, { timeout: 3000 });
   });
 
@@ -279,28 +231,12 @@ describe('ReleaseView - UAT Ready Highlighting', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature C')).toBeInTheDocument();
-    });
-
-    // Give time for any checks to complete
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    const featureCard = screen.getByText('Feature C').closest('.child-item-card');
-    expect(featureCard).not.toHaveClass('has-uat-ready');
+    await screen.findByText('Feature C');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.getByTestId('release-item-123-456')).not.toHaveClass('has-uat-ready');
   });
 
   it('should not highlight non-Epic/Feature work items', async () => {
@@ -332,27 +268,11 @@ describe('ReleaseView - UAT Ready Highlighting', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Task A')).toBeInTheDocument();
-    });
-
-    // Give time for any checks to complete
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    const taskCard = screen.getByText('Task A').closest('.child-item-card');
-    expect(taskCard).not.toHaveClass('has-uat-ready');
+    await screen.findByText('Task A');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getByTestId('release-item-123-456')).not.toHaveClass('has-uat-ready');
   });
 });

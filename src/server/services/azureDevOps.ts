@@ -7,6 +7,7 @@ import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateH
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
 import { retryWithBackoff } from '../utils/retry';
 import { APEX_ORIGIN_TAG } from '../../shared/types/devWorkbench';
+import { deriveReleasePlatform } from '../../shared/utils/releasePlatform';
 import type { RelatedItemCycleTime, RelatedItemsCycleTimeResponse } from '../../shared/types/relatedItemCycleTime';
 import type {
   QaAdoExistingTestCase,
@@ -2618,7 +2619,7 @@ export class AzureDevOpsService {
   /**
    * Create a release Epic in Azure DevOps
    */
-  async createReleaseEpic(releaseVersion: string, startDate?: string, targetDate?: string, description?: string): Promise<number> {
+  async createReleaseEpic(releaseVersion: string, startDate?: string, targetDate?: string, description?: string, areaPath?: string): Promise<number> {
     return retryWithBackoff(async () => {
       const witApi = await this.connection.getWorkItemTrackingApi();
 
@@ -2636,11 +2637,12 @@ export class AzureDevOpsService {
       ];
 
       // Add area path if configured
-      if (this.areaPath) {
+      const targetAreaPath = areaPath?.trim() || this.areaPath;
+      if (targetAreaPath) {
         patchDocument.push({
           op: 'add',
           path: '/fields/System.AreaPath',
-          value: this.areaPath,
+          value: targetAreaPath,
         });
       }
 
@@ -2724,6 +2726,7 @@ export class AzureDevOpsService {
         'System.Id',
         'System.Title',
         'System.State',
+        'System.AreaPath',
         'System.Description',
         'Microsoft.VSTS.Scheduling.StartDate',
         'Microsoft.VSTS.Scheduling.TargetDate',
@@ -2799,10 +2802,14 @@ export class AzureDevOpsService {
           }
         }
 
+        const epicAreaPath = typeof wi.fields['System.AreaPath'] === 'string' ? wi.fields['System.AreaPath'] : '';
+
         releaseEpics.push({
           id: wi.id,
           version: wi.fields['System.Title'] || '',
           status: wi.fields['System.State'] || '',
+          areaPath: epicAreaPath,
+          platform: deriveReleasePlatform(epicAreaPath, this.project),
           startDate: extractDate(wi.fields['Microsoft.VSTS.Scheduling.StartDate']),
           targetDate: extractDate(wi.fields['Microsoft.VSTS.Scheduling.TargetDate']),
           description: wi.fields['System.Description'] || '',

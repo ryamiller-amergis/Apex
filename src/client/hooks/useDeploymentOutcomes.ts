@@ -196,6 +196,8 @@ export interface ReleaseEpicSummary {
   id: number;
   version: string;
   status?: string;
+  areaPath?: string;
+  platform?: string;
   startDate?: string;
   targetDate?: string;
 }

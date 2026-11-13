@@ -5,9 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ReleaseView from '../ReleaseView';
 import { WorkItem } from '../../types/workitem';
 
-// Mock useAppShell so the component does not pull in the real hook chain
-// (useWorkItems → config/env), which reads `import.meta.env` and cannot be
-// evaluated under ts-jest's CommonJS transform.
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     isInAnyGroup: () => true,
@@ -50,7 +47,6 @@ const errorResponse = (data: any, status = 500) =>
   });
 
 const installFetchMock = (options: MockFetchOptions) => {
-  const releases = options.releases ?? [];
   const epics = options.epics ?? [];
   const epicsAfterDelete = options.epicsAfterDelete ?? epics;
   const deleteOk = options.deleteOk ?? true;
@@ -67,21 +63,13 @@ const installFetchMock = (options: MockFetchOptions) => {
       return okResponse(body);
     }
 
-    if (url.startsWith('/api/releases?')) {
-      return okResponse(releases);
-    }
-
     if (url.startsWith('/api/releases/') && method === 'DELETE') {
       if (options.neverResolveDelete) {
-        return new Promise(() => {
-          // Intentionally never resolve
-        });
+        return new Promise(() => {});
       }
-
       return deleteOk ? okResponse(deleteBody) : errorResponse(deleteBody, 404);
     }
 
-    // Default for any other endpoint ReleaseView might call in the future
     return okResponse([]);
   });
 };
@@ -109,8 +97,8 @@ describe('ReleaseView - Delete Epic Functionality', () => {
     (global.fetch as jest.Mock).mockReset();
   });
 
-  it('should render delete button in action menu', async () => {
-    installFetchMock({ releases: [], epics: mockEpics });
+  it('should render delete button in inspector actions', async () => {
+    installFetchMock({ epics: mockEpics });
 
     render(
       <ReleaseView
@@ -119,19 +107,14 @@ describe('ReleaseView - Delete Epic Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTitle('Actions'));
-    expect(screen.getByText('🗑️ Delete')).toBeInTheDocument();
+    expect(await screen.findByTestId('release-action-delete-123')).toBeInTheDocument();
   });
 
   it('should open delete confirmation modal when delete is clicked', async () => {
-    installFetchMock({ releases: [], epics: mockEpics });
+    installFetchMock({ epics: mockEpics });
 
     render(
       <ReleaseView
@@ -140,22 +123,17 @@ describe('ReleaseView - Delete Epic Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTitle('Actions'));
-    fireEvent.click(screen.getByText('🗑️ Delete'));
+    fireEvent.click(await screen.findByTestId('release-action-delete-123'));
 
     expect(screen.getByText('Confirm Delete Release Epic')).toBeInTheDocument();
     expect(screen.getByText(/Are you sure you want to delete this release epic/i)).toBeInTheDocument();
   });
 
   it('should successfully delete epic when confirmed', async () => {
-    installFetchMock({ releases: [], epics: mockEpics, epicsAfterDelete: [] });
+    installFetchMock({ epics: mockEpics, epicsAfterDelete: [] });
 
     render(
       <ReleaseView
@@ -164,23 +142,18 @@ describe('ReleaseView - Delete Epic Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTitle('Actions'));
-    fireEvent.click(screen.getByText('🗑️ Delete'));
-    fireEvent.click(screen.getByText('Delete Epic'));
+    fireEvent.click(await screen.findByTestId('release-action-delete-123'));
+    fireEvent.click(screen.getByTestId('release-delete-confirm'));
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining(
-          `/api/releases/123?project=${encodeURIComponent(mockProject)}&areaPath=${encodeURIComponent(mockAreaPath)}`
+          `/api/releases/123?project=${encodeURIComponent(mockProject)}&areaPath=${encodeURIComponent(mockAreaPath)}`,
         ),
-        expect.objectContaining({ method: 'DELETE' })
+        expect.objectContaining({ method: 'DELETE' }),
       );
     });
 
@@ -190,7 +163,7 @@ describe('ReleaseView - Delete Epic Functionality', () => {
   });
 
   it('should close modal when cancel is clicked', async () => {
-    installFetchMock({ releases: [], epics: mockEpics });
+    installFetchMock({ epics: mockEpics });
 
     render(
       <ReleaseView
@@ -199,16 +172,11 @@ describe('ReleaseView - Delete Epic Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTitle('Actions'));
-    fireEvent.click(screen.getByText('🗑️ Delete'));
-    fireEvent.click(screen.getByText('Cancel'));
+    fireEvent.click(await screen.findByTestId('release-action-delete-123'));
+    fireEvent.click(screen.getByTestId('release-delete-cancel'));
 
     await waitFor(() => {
       expect(screen.queryByText('Confirm Delete Release Epic')).not.toBeInTheDocument();
@@ -220,7 +188,6 @@ describe('ReleaseView - Delete Epic Functionality', () => {
     const alertMock = jest.spyOn(window, 'alert').mockImplementation(() => undefined);
 
     installFetchMock({
-      releases: [],
       epics: mockEpics,
       deleteOk: false,
       deleteBody: { error: 'Epic not found' },
@@ -233,16 +200,11 @@ describe('ReleaseView - Delete Epic Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTitle('Actions'));
-    fireEvent.click(screen.getByText('🗑️ Delete'));
-    fireEvent.click(screen.getByText('Delete Epic'));
+    fireEvent.click(await screen.findByTestId('release-action-delete-123'));
+    fireEvent.click(screen.getByTestId('release-delete-confirm'));
 
     await waitFor(() => {
       expect(alertMock).toHaveBeenCalledWith(expect.stringContaining('Failed to delete epic:'));
@@ -253,7 +215,7 @@ describe('ReleaseView - Delete Epic Functionality', () => {
   });
 
   it('should disable confirm button while deleting', async () => {
-    installFetchMock({ releases: [], epics: mockEpics, neverResolveDelete: true });
+    installFetchMock({ epics: mockEpics, neverResolveDelete: true });
 
     render(
       <ReleaseView
@@ -262,20 +224,14 @@ describe('ReleaseView - Delete Epic Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByTitle('Actions'));
-    fireEvent.click(screen.getByText('🗑️ Delete'));
-    fireEvent.click(screen.getByText('Delete Epic'));
+    fireEvent.click(await screen.findByTestId('release-action-delete-123'));
+    fireEvent.click(screen.getByTestId('release-delete-confirm'));
 
     await waitFor(() => {
-      const deletingButton = screen.getByText('Deleting...');
-      expect(deletingButton).toBeDisabled();
+      expect(screen.getByTestId('release-delete-confirm')).toBeDisabled();
     });
   });
 });

@@ -5,9 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ReleaseView from '../ReleaseView';
 import { WorkItem } from '../../types/workitem';
 
-// Mock useAppShell so the component does not pull in the real hook chain
-// (useWorkItems → config/env), which reads `import.meta.env` and cannot be
-// evaluated under ts-jest's CommonJS transform.
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     isInAnyGroup: () => true,
@@ -25,7 +22,6 @@ const createWrapper = () => {
 global.fetch = jest.fn();
 
 type MockFetchOptions = {
-  releases?: any;
   epics?: any;
   relatedItems?: any;
   relatedItemsAfterUnlink?: any;
@@ -51,7 +47,6 @@ const errorResponse = (data: any, status = 500) =>
   });
 
 const installFetchMock = (options: MockFetchOptions) => {
-  const releases = options.releases ?? [];
   const epics = options.epics ?? [];
   const relatedItems = options.relatedItems ?? [];
   const relatedItemsAfterUnlink = options.relatedItemsAfterUnlink ?? relatedItems;
@@ -71,10 +66,6 @@ const installFetchMock = (options: MockFetchOptions) => {
       return okResponse(body);
     }
 
-    if (url.startsWith('/api/releases?')) {
-      return okResponse(releases);
-    }
-
     if (url.match(/\/api\/releases\/\d+\/related-items/)) {
       const body = relatedItemsCallCount++ === 0 ? relatedItems : relatedItemsAfterUnlink;
       return okResponse(body);
@@ -84,7 +75,6 @@ const installFetchMock = (options: MockFetchOptions) => {
       return unlinkOk ? okResponse(unlinkBody) : errorResponse(unlinkBody, 500);
     }
 
-    // Default for any other endpoint
     return okResponse([]);
   });
 };
@@ -111,7 +101,7 @@ describe('ReleaseView - Unlink Item Functionality', () => {
     {
       id: 456,
       title: 'Feature A',
-      state: 'Done',
+      state: 'In Progress',
       workItemType: 'Feature',
       assignedTo: 'John Doe',
       targetDate: '2026-03-01',
@@ -136,21 +126,7 @@ describe('ReleaseView - Unlink Item Functionality', () => {
     },
   ];
 
-  const mockRelatedItemsAfterUnlink: WorkItem[] = [
-    {
-      id: 789,
-      title: 'Feature B',
-      state: 'In Progress',
-      workItemType: 'Feature',
-      assignedTo: 'Jane Smith',
-      targetDate: '2026-03-15',
-      tags: '',
-      changedDate: '2026-02-05',
-      createdDate: '2026-01-15',
-      areaPath: mockAreaPath,
-      iterationPath: 'Sprint 2',
-    },
-  ];
+  const mockRelatedItemsAfterUnlink: WorkItem[] = [mockRelatedItems[1]];
 
   const mockEpicsAfterUnlink = [
     {
@@ -158,8 +134,8 @@ describe('ReleaseView - Unlink Item Functionality', () => {
       title: 'Release 1.0',
       version: 'v1.0.0',
       status: 'In Progress',
-      progress: 50,
-      completedItems: 1,
+      progress: 0,
+      completedItems: 0,
       totalItems: 1,
     },
   ];
@@ -167,7 +143,6 @@ describe('ReleaseView - Unlink Item Functionality', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (global.fetch as jest.Mock).mockReset();
-    // Mock window.confirm to return true by default
     global.confirm = jest.fn(() => true);
   });
 
@@ -175,9 +150,8 @@ describe('ReleaseView - Unlink Item Functionality', () => {
     jest.restoreAllMocks();
   });
 
-  it('should render unlink button on hover', async () => {
+  it('should render unlink button on related item cards', async () => {
     installFetchMock({
-      releases: [],
       epics: mockEpics,
       relatedItems: mockRelatedItems,
     });
@@ -189,31 +163,16 @@ describe('ReleaseView - Unlink Item Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
-
-    // Click to expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature A')).toBeInTheDocument();
-    });
-
-    // Find the unlink buttons (they should exist but be hidden via CSS)
+    await screen.findByText('Feature A');
     const unlinkButtons = screen.getAllByTitle('Unlink from release');
     expect(unlinkButtons).toHaveLength(2);
   });
 
   it('should successfully unlink item when unlink button is clicked', async () => {
     installFetchMock({
-      releases: [],
       epics: mockEpics,
       relatedItems: mockRelatedItems,
       relatedItemsAfterUnlink: mockRelatedItemsAfterUnlink,
@@ -227,33 +186,16 @@ describe('ReleaseView - Unlink Item Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
+    await screen.findByText('Feature A');
+    fireEvent.click(screen.getByTestId('release-item-unlink-123-456'));
 
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature A')).toBeInTheDocument();
-    });
-
-    // Click unlink button on first item
-    const unlinkButtons = screen.getAllByTitle('Unlink from release');
-    fireEvent.click(unlinkButtons[0]);
-
-    // Verify confirm was called
     expect(global.confirm).toHaveBeenCalledWith(
-      'Are you sure you want to unlink this item from the release?'
+      'Are you sure you want to unlink this item from the release?',
     );
 
-    // Wait for API call to complete
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/releases/123/unlink-related'),
@@ -261,16 +203,13 @@ describe('ReleaseView - Unlink Item Functionality', () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: expect.stringContaining('"workItemIds":[456]'),
-        })
+        }),
       );
     });
 
-    // Feature A should be removed from the list
     await waitFor(() => {
       expect(screen.queryByText('Feature A')).not.toBeInTheDocument();
     });
-
-    // Feature B should still be there
     expect(screen.getByText('Feature B')).toBeInTheDocument();
   });
 
@@ -278,7 +217,6 @@ describe('ReleaseView - Unlink Item Functionality', () => {
     global.confirm = jest.fn(() => false);
 
     installFetchMock({
-      releases: [],
       epics: mockEpics,
       relatedItems: mockRelatedItems,
     });
@@ -290,40 +228,20 @@ describe('ReleaseView - Unlink Item Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
+    await screen.findByText('Feature A');
+    fireEvent.click(screen.getByTestId('release-item-unlink-123-456'));
 
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature A')).toBeInTheDocument();
-    });
-
-    // Click unlink button
-    const unlinkButtons = screen.getAllByTitle('Unlink from release');
-    fireEvent.click(unlinkButtons[0]);
-
-    // Verify confirm was called but API was not
     expect(global.confirm).toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Wait a bit to ensure no API call was made
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Verify unlink API was never called
     expect(global.fetch).not.toHaveBeenCalledWith(
       expect.stringContaining('/unlink-related'),
-      expect.anything()
+      expect.anything(),
     );
 
-    // Both items should still be present
     expect(screen.getByText('Feature A')).toBeInTheDocument();
     expect(screen.getByText('Feature B')).toBeInTheDocument();
   });
@@ -333,7 +251,6 @@ describe('ReleaseView - Unlink Item Functionality', () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
     installFetchMock({
-      releases: [],
       epics: mockEpics,
       relatedItems: mockRelatedItems,
       unlinkOk: false,
@@ -347,35 +264,18 @@ describe('ReleaseView - Unlink Item Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
+    await screen.findByText('Feature A');
+    fireEvent.click(screen.getByTestId('release-item-unlink-123-456'));
 
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature A')).toBeInTheDocument();
-    });
-
-    // Click unlink button
-    const unlinkButtons = screen.getAllByTitle('Unlink from release');
-    fireEvent.click(unlinkButtons[0]);
-
-    // Wait for error handling
     await waitFor(() => {
       expect(alertMock).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to unlink item:')
+        expect.stringContaining('Failed to unlink item:'),
       );
     });
 
-    // Both items should still be present (unlink failed)
     expect(screen.getByText('Feature A')).toBeInTheDocument();
     expect(screen.getByText('Feature B')).toBeInTheDocument();
 
@@ -385,7 +285,6 @@ describe('ReleaseView - Unlink Item Functionality', () => {
 
   it('should not propagate click event to card when unlink button is clicked', async () => {
     installFetchMock({
-      releases: [],
       epics: mockEpics,
       relatedItems: mockRelatedItems,
     });
@@ -397,29 +296,14 @@ describe('ReleaseView - Unlink Item Functionality', () => {
         areaPath={mockAreaPath}
         onSelectItem={mockOnSelectItem}
       />,
-      { wrapper: createWrapper() }
+      { wrapper: createWrapper() },
     );
 
-    // Wait for epics to load
-    await waitFor(() => {
-      expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    });
+    await screen.findByText('Feature A');
 
-    // Expand the row
-    const expandButton = screen.getByTitle('Expand');
-    fireEvent.click(expandButton);
-
-    // Wait for related items to load
-    await waitFor(() => {
-      expect(screen.getByText('Feature A')).toBeInTheDocument();
-    });
-
-    // Click unlink button (which should cancel confirmation)
     global.confirm = jest.fn(() => false);
-    const unlinkButtons = screen.getAllByTitle('Unlink from release');
-    fireEvent.click(unlinkButtons[0]);
+    fireEvent.click(screen.getByTestId('release-item-unlink-123-456'));
 
-    // Verify that onSelectItem was not called
     expect(mockOnSelectItem).not.toHaveBeenCalled();
   });
 });
