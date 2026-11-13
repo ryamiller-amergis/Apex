@@ -84,7 +84,10 @@ import {
 } from './guidedInterviewState';
 import { getSkillFile } from './skillCatalogFacade';
 import { loadInterviewReferenceSources } from './interviewLinkService';
-import { INTERVIEW_REFERENCE_REPOSITORIES_FLAG } from '../../shared/types/interviewLinks';
+import {
+  INTERVIEW_REFERENCE_REPOSITORIES_FLAG,
+  LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH,
+} from '../../shared/types/interviewLinks';
 import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
@@ -129,6 +132,8 @@ const INLINE_THREAD_CONTEXT_REFERENCE = 'the `# Thread context` section of this 
 // The worker clears `.ai-pilot/kickoff-transcript.md` before each turn.
 const KICKOFF_TRANSCRIPT_NOTE =
   'This section is the full content of `.ai-pilot/kickoff-transcript.md`. That file is not on disk for this session; wherever the skill or request refers to it, read this section instead.';
+const LINKED_CONTEXT_NOTE =
+  `The section below is the full content of \`${LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH}\`. That file is not on disk for this session; wherever the skill refers to it, read this section instead.`;
 
 /**
  * Instructions an agent needs once per session: the chat UI contract, the
@@ -285,6 +290,10 @@ type ServiceDependencies = Readonly<{
   loadReferenceSources: (
     input: Readonly<{ threadId: string; userId: string; project: string }>,
   ) => Promise<BrainstormTurnSources | null>;
+  /** Rendered linked ADRs and Design Modules for an Interview thread, or null when none apply. */
+  loadLinkedContext: (
+    input: Readonly<{ threadId: string; userId: string }>,
+  ) => Promise<string | null>;
   trackEvent: typeof trackEvent;
   now: () => Date;
 }>;
@@ -1407,6 +1416,17 @@ async function defaultLoadReferenceSources(
   // @feature-flag:interview-reference-repos end
 }
 
+async function defaultLoadLinkedContext(
+  input: Readonly<{ threadId: string; userId: string }>,
+): Promise<string | null> {
+  // Dynamic import: the materializer reaches designModuleService, which imports
+  // the legacy chat service, which imports this module.
+  const { renderLinkedContextForInterviewThread } = await import(
+    './linkedContextMaterializerService'
+  );
+  return renderLinkedContextForInterviewThread(input);
+}
+
 async function defaultHasPinnedGrounding(thread: ChatThread): Promise<boolean> {
   const rows = await runGroundingService.getGroundings({
     runType: 'chat',
@@ -1499,6 +1519,7 @@ function defaultDependencies(): ServiceDependencies {
     isBackgroundGroundingEnabled: defaultIsBackgroundGroundingEnabled,
     loadInterviewContext: defaultLoadInterviewContext,
     loadReferenceSources: defaultLoadReferenceSources,
+    loadLinkedContext: defaultLoadLinkedContext,
     trackEvent,
     now: () => new Date(),
   };
@@ -1582,6 +1603,12 @@ export function createDurableInteractiveTurnService(
               })
               .catch(() => null)
           : Promise.resolve(null);
+      const linkedContextLookup =
+        input.workflowClass === 'interview'
+          ? deps
+              .loadLinkedContext({ threadId: thread.id, userId: thread.userId })
+              .catch(() => null)
+          : Promise.resolve(null);
       // @feature-flag:interview-background-grounding start winner=enabled
       const backgroundGroundingLookup = guidedInterviewLookup.then(
         (guided) =>
@@ -1659,8 +1686,13 @@ export function createDurableInteractiveTurnService(
       const referenceSources = productPhaseInterview
         ? null
         : await referenceSourcesLookup;
+      const linkedContext = await linkedContextLookup;
       const turnInternalContext =
-        [input.internalContext?.trim(), referenceSources?.instructions]
+        [
+          input.internalContext?.trim(),
+          linkedContext ? `${LINKED_CONTEXT_NOTE}\n\n${linkedContext.trim()}` : null,
+          referenceSources?.instructions,
+        ]
           .filter(Boolean)
           .join('\n\n') || undefined;
       const groundInBackground = await backgroundGroundingLookup;
