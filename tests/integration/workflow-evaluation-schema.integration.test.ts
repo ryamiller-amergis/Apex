@@ -483,10 +483,11 @@ describe('VT-09 / VT-10 / VT-11 / VT-12 — definition versioning guards', () =>
        WHERE stage_key = 'interview_phase_1'`,
     );
     const nextVersion = Number(latest.version) + 1;
-    await query(
-      `UPDATE workflow_evaluation_definitions SET active = false
+    const [previous] = await query<{ id: string }>(
+      `SELECT id FROM workflow_evaluation_definitions
        WHERE stage_key = 'interview_phase_1' AND active = true`,
     );
+    await query(`UPDATE workflow_evaluation_definitions SET active = false WHERE id = $1`, [previous.id]);
     await query(
       `INSERT INTO workflow_evaluation_definitions (
          process_key, stage_key, evaluator_key, benchmark_key, version,
@@ -518,6 +519,15 @@ describe('VT-09 / VT-10 / VT-11 / VT-12 — definition versioning guards', () =>
     );
     expect(event.definition_id).toBe(versionOneId);
     expect(event.version).toBe(1);
+
+    // The blind-judge down migration only retires version 2, so VT-02's rollback
+    // needs the stage's original active row back.
+    await query(
+      `UPDATE workflow_evaluation_definitions SET active = false
+       WHERE stage_key = 'interview_phase_1' AND version = $1`,
+      [nextVersion],
+    );
+    await query(`UPDATE workflow_evaluation_definitions SET active = true WHERE id = $1`, [previous.id]);
   });
 });
 
