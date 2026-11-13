@@ -27,6 +27,13 @@ import type {
   BrainstormTargetModule,
 } from '../../shared/types/brainstormArtifact';
 import type {
+  RoadmapChangeEventKind,
+  RoadmapConfidence,
+  RoadmapEffortSize,
+  RoadmapHorizon,
+  RoadmapItemOrigin,
+} from '../../shared/types/roadmap';
+import type {
   OverlayTextBox,
   PageManifestEntry,
   PdfConversionStatus,
@@ -4827,4 +4834,127 @@ export const brainstormCitationsRelations = relations(brainstormCitations, ({ on
 
 export const brainstormActionsRelations = relations(brainstormActions, ({ one }) => ({
   session: one(brainstormSessions, { fields: [brainstormActions.sessionId], references: [brainstormSessions.id] }),
+}));
+
+export const roadmapProjectSettings = pgTable('roadmap_project_settings', {
+  project: text('project').primaryKey(),
+  syncDatesToAdo: boolean('sync_dates_to_ado').notNull().default(false),
+  updatedBy: text('updated_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const roadmapPlanOverlays = pgTable('roadmap_plan_overlays', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  workItemId: integer('work_item_id').notNull(),
+  workItemType: text('work_item_type').notNull().default('Epic'),
+  horizon: text('horizon').$type<RoadmapHorizon>(),
+  plannedStartDate: date('planned_start_date', { mode: 'string' }),
+  plannedTargetDate: date('planned_target_date', { mode: 'string' }),
+  baselineTargetDate: date('baseline_target_date', { mode: 'string' }),
+  confidence: text('confidence').$type<RoadmapConfidence>(),
+  notes: text('notes'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  updatedBy: text('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectWorkItemUq: uniqueIndex('uq_roadmap_plan_overlays_project_work_item').on(t.project, t.workItemId),
+  projectIdx: index('idx_roadmap_plan_overlays_project').on(t.project),
+  horizonCheck: check(
+    'roadmap_plan_overlays_horizon_check',
+    sql`${t.horizon} IS NULL OR ${t.horizon} IN ('now', 'next', 'later', 'unplanned')`,
+  ),
+  confidenceCheck: check(
+    'roadmap_plan_overlays_confidence_check',
+    sql`${t.confidence} IS NULL OR ${t.confidence} IN ('high', 'medium', 'low')`,
+  ),
+}));
+
+export const roadmapAdhocIdeas = pgTable('roadmap_adhoc_ideas', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  title: text('title').notNull(),
+  ownerLabel: text('owner_label'),
+  horizon: text('horizon').$type<RoadmapHorizon>().notNull().default('later'),
+  effortSize: text('effort_size').$type<RoadmapEffortSize>().notNull().default('M'),
+  confidence: text('confidence').$type<RoadmapConfidence>().notNull().default('low'),
+  releaseLabel: text('release_label'),
+  notes: text('notes'),
+  plannedStartDate: date('planned_start_date', { mode: 'string' }),
+  plannedTargetDate: date('planned_target_date', { mode: 'string' }),
+  baselineTargetDate: date('baseline_target_date', { mode: 'string' }),
+  promotedFeatureRequestId: uuid('promoted_feature_request_id'),
+  promotedAdoWorkItemId: integer('promoted_ado_work_item_id'),
+  promotedAt: timestamp('promoted_at', { withTimezone: true, mode: 'string' }),
+  archived: boolean('archived').notNull().default(false),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdBy: text('created_by').notNull(),
+  updatedBy: text('updated_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectArchivedIdx: index('idx_roadmap_adhoc_ideas_project_archived').on(t.project, t.archived),
+  horizonCheck: check(
+    'roadmap_adhoc_ideas_horizon_check',
+    sql`${t.horizon} IN ('now', 'next', 'later', 'unplanned')`,
+  ),
+  effortCheck: check(
+    'roadmap_adhoc_ideas_effort_check',
+    sql`${t.effortSize} IN ('S', 'M', 'L', 'XL')`,
+  ),
+  confidenceCheck: check(
+    'roadmap_adhoc_ideas_confidence_check',
+    sql`${t.confidence} IN ('high', 'medium', 'low')`,
+  ),
+}));
+
+export const roadmapChangeEvents = pgTable('roadmap_change_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  workItemId: integer('work_item_id'),
+  adhocIdeaId: uuid('adhoc_idea_id').references(() => roadmapAdhocIdeas.id, { onDelete: 'set null' }),
+  itemTitle: text('item_title').notNull(),
+  itemOrigin: text('item_origin').$type<RoadmapItemOrigin>().notNull(),
+  eventKind: text('event_kind').$type<RoadmapChangeEventKind>().notNull(),
+  fromHorizon: text('from_horizon').$type<RoadmapHorizon>(),
+  toHorizon: text('to_horizon').$type<RoadmapHorizon>(),
+  oldTargetDate: date('old_target_date', { mode: 'string' }),
+  newTargetDate: date('new_target_date', { mode: 'string' }),
+  deltaDays: integer('delta_days'),
+  reason: text('reason').notNull(),
+  note: text('note'),
+  syncedToAdo: boolean('synced_to_ado').notNull().default(false),
+  actorId: text('actor_id').notNull(),
+  actorName: text('actor_name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectCreatedIdx: index('idx_roadmap_change_events_project_created').on(t.project, t.createdAt),
+  originCheck: check(
+    'roadmap_change_events_origin_check',
+    sql`${t.itemOrigin} IN ('ado', 'board', 'adhoc')`,
+  ),
+  kindCheck: check(
+    'roadmap_change_events_kind_check',
+    sql`${t.eventKind} IN ('horizon_changed', 'date_changed', 'baseline_locked', 'idea_created', 'idea_promoted')`,
+  ),
+  fromHorizonCheck: check(
+    'roadmap_change_events_from_horizon_check',
+    sql`${t.fromHorizon} IS NULL OR ${t.fromHorizon} IN ('now', 'next', 'later', 'unplanned')`,
+  ),
+  toHorizonCheck: check(
+    'roadmap_change_events_to_horizon_check',
+    sql`${t.toHorizon} IS NULL OR ${t.toHorizon} IN ('now', 'next', 'later', 'unplanned')`,
+  ),
+}));
+
+export const roadmapAdhocIdeasRelations = relations(roadmapAdhocIdeas, ({ many }) => ({
+  changeEvents: many(roadmapChangeEvents),
+}));
+
+export const roadmapChangeEventsRelations = relations(roadmapChangeEvents, ({ one }) => ({
+  adhocIdea: one(roadmapAdhocIdeas, {
+    fields: [roadmapChangeEvents.adhocIdeaId],
+    references: [roadmapAdhocIdeas.id],
+  }),
 }));
