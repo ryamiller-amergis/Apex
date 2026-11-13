@@ -1,0 +1,19 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 880px;
+  padding: 16px 24px 32px;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+  color: var(--text-primary);
+}
+
+.intro {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}

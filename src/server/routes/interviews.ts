@@ -82,6 +82,7 @@ import {
   dismissPrdFixSession,
   applyProposedPrdChanges,
 } from '../services/prdService';
+import { emitSkillSignal } from '../services/skillSignalService';
 import {
   acceptFixValidation,
   assertDesignDocApprovalReady,
@@ -1651,6 +1652,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
             : { proposedContent: revised, updatedAt: new Date().toISOString() }) as any,
         )
         .where(eq(prdsTable.id, prdId));
+      emitPrdAssistantRegenerated(prd, getUserId(req), body.section);
       const updated = await getPrd(prdId);
       res.json({
         proposedContent: fixMode ? (updated?.content ?? revised) : (updated?.proposedContent ?? revised),
@@ -1688,6 +1690,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
           : { proposedBacklogJson: revisedBacklog as any, updatedAt: new Date().toISOString() }) as any,
       )
       .where(eq(prdsTable.id, prdId));
+    emitPrdAssistantRegenerated(prd, getUserId(req), body.section);
     const updated = await getPrd(prdId);
     res.json({
       proposedContent: fixMode ? (updated?.content ?? null) : (updated?.proposedContent ?? null),
@@ -1704,6 +1707,24 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
   }
 });
 
+function emitPrdAssistantRegenerated(
+  prd: { id: string; project: string; prdAssistantThreadId?: string | null },
+  actorId: string,
+  section: string,
+): void {
+  emitSkillSignal({
+    project: prd.project,
+    surface: 'prd_assistant',
+    subjectType: 'prd_proposed_edit',
+    subjectId: prd.id,
+    threadId: prd.prdAssistantThreadId ?? null,
+    kind: 'regenerated',
+    actorId,
+    metadata: { section },
+    idempotencyKey: `prd_assistant:regenerated:${prd.id}:${Date.now()}`,
+  });
+}
+
 // POST /prds/:prdId/reject-proposed — discard proposed content
 router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
@@ -1713,10 +1734,21 @@ router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage
       return;
     }
 
+    const rejectedAt = new Date().toISOString();
     await db
       .update(prdsTable)
-      .set({ proposedContent: null, proposedBacklogJson: null, updatedAt: new Date().toISOString() } as any)
+      .set({ proposedContent: null, proposedBacklogJson: null, updatedAt: rejectedAt } as any)
       .where(eq(prdsTable.id, req.params.prdId));
+    emitSkillSignal({
+      project: prd.project,
+      surface: 'prd_assistant',
+      subjectType: 'prd_proposed_edit',
+      subjectId: prd.id,
+      threadId: prd.prdAssistantThreadId ?? null,
+      kind: 'rejected',
+      actorId: getUserId(req),
+      idempotencyKey: `prd_assistant:rejected:${prd.id}:${rejectedAt}`,
+    });
 
     res.json({ ok: true });
   } catch (err) {
@@ -3276,9 +3308,10 @@ router.post('/design-docs/:id/apply-proposed', requirePermission('interviews:man
     // Read the fixCommentId before the atomic update so we know which comment to resolve.
     const docRow = await db.query.designDocs.findFirst({
       where: eq(designDocsTable.id, docId),
-      columns: { fixCommentId: true },
+      columns: { id: true, fixCommentId: true, project: true, docAssistantThreadId: true },
     });
     const fixCommentId = docRow?.fixCommentId ?? null;
+    if (docRow) emitDesignDocAssistantSignal(docRow, 'accepted', userId, { editedBeforeApply: false });
 
     await db.execute(sql`
       UPDATE design_docs
@@ -3356,6 +3389,7 @@ router.post('/design-docs/:id/apply-proposed-selective', requirePermission('inte
       columns: { fixCommentId: true },
     });
     const fixCommentId = docRow?.fixCommentId ?? null;
+    emitDesignDocAssistantSignal(doc, 'accepted', userId, { editedBeforeApply: true });
 
     const now = new Date().toISOString();
     await db
@@ -3466,6 +3500,7 @@ router.post('/design-docs/:id/regenerate-proposed-section', requirePermission('i
       .update(designDocsTable)
       .set(updates as any)
       .where(eq(designDocsTable.id, docId));
+    emitDesignDocAssistantSignal(doc, 'regenerated', getUserId(req), { section: body.section });
 
     const updated = await getDesignDoc(docId);
     res.json({
@@ -3495,12 +3530,32 @@ router.post('/design-docs/:id/reject-proposed', requirePermission('interviews:ma
       .update(designDocsTable)
       .set({ proposedDesignContent: null, proposedTechSpecContent: null, proposedAssumptionsContent: null, updatedAt: new Date().toISOString() } as any)
       .where(eq(designDocsTable.id, req.params.id));
+    emitDesignDocAssistantSignal(doc, 'rejected', getUserId(req), {});
 
     res.json({ ok: true });
   } catch (err) {
     next(err);
   }
 });
+
+function emitDesignDocAssistantSignal(
+  doc: { id: string; project: string; docAssistantThreadId?: string | null },
+  kind: 'accepted' | 'rejected' | 'regenerated',
+  actorId: string,
+  metadata: Record<string, unknown>,
+): void {
+  emitSkillSignal({
+    project: doc.project,
+    surface: 'design_doc_assistant',
+    subjectType: 'design_doc_proposed_edit',
+    subjectId: doc.id,
+    threadId: doc.docAssistantThreadId ?? null,
+    kind,
+    actorId,
+    metadata,
+    idempotencyKey: `design_doc_assistant:${kind}:${doc.id}:${Date.now()}`,
+  });
+}
 
 router.get('/available-approvers/:project/:documentType', requirePermission('interviews:view'), async (req, res, next) => {
   try {

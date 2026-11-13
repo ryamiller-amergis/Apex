@@ -34,6 +34,7 @@ import {
 import type { ApproveInterviewBriefResult } from './interviewBriefService';
 import { BuildIntakeDraftError, draftBuildIntakeBrief } from './interviewOrchestratorService';
 import type { BuildIntakeBriefDraft } from './interviewOrchestratorService';
+import { emitSkillSignal } from './skillSignalService';
 
 export const BUILD_BRIEF_FORBIDDEN_MESSAGE =
   'Only the requester, a Project Admin or a Platform Admin can change or approve this brief.';
@@ -535,6 +536,22 @@ export async function approveBuildBrief(input: {
     const after = await getInterviewBrief(interview.id).catch(() => null);
     if (after?.status === 'approved') throw new BuildBriefError(BUILD_BRIEF_RESUME_FAILED_MESSAGE, 500);
     throw new BuildBriefError(BUILD_BRIEF_APPROVE_FAILED_MESSAGE, 500);
+  }
+  if (interview.project) {
+    emitSkillSignal({
+      project: interview.project,
+      surface: 'build_intake',
+      subjectType: 'build_brief',
+      subjectId: brief.id,
+      kind: 'accepted',
+      actorId: input.actorId,
+      metadata: {
+        interviewId: interview.id,
+        briefVersion: brief.version,
+        editedBeforeApprove: brief.version > 1,
+        classification: classification.value,
+      },
+    });
   }
   return { ...result, classification };
 }

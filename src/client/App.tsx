@@ -33,6 +33,7 @@ import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
+import { SKILL_LEARNING_FLAG } from '../shared/types/featureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
 import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
 import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
@@ -87,6 +88,7 @@ const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ d
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
 const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
 const ApiKeysAdminView = lazy(() => import('./components/ApiKeysAdminView').then(m => ({ default: m.ApiKeysAdminView })));
+const WorkflowEvaluationsPage = lazy(() => import('./components/WorkflowEvaluationsPage').then(m => ({ default: m.WorkflowEvaluationsPage })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const ProfilePage = lazy(() => import('./components/ProfilePage').then(m => ({ default: m.ProfilePage })));
@@ -358,6 +360,7 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
+  const workflowEvaluationsEnabled = homeFlags[SKILL_LEARNING_FLAG] === true;
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
   const {
     data: selectableProjectList = [],
@@ -1441,6 +1444,24 @@ function App() {
                         API Keys
                       </button>
                     )}
+                    {/* @feature-flag:skill-learning start winner=enabled */}
+                    {workflowEvaluationsEnabled ? (
+                      /* @feature-flag:skill-learning enabled-start */
+                      <button
+                        className={`admin-tab${location.pathname === '/admin/workflow-evaluations' ? ' admin-tab-active' : ''}`}
+                        onClick={() => navigate('/admin/workflow-evaluations')}
+                        type="button"
+                        {...{ 'data-testid': 'admin-tab-workflow-evaluations' }}
+                      >
+                        Workflow evaluations
+                      </button>
+                      /* @feature-flag:skill-learning enabled-end */
+                    ) : (
+                      /* @feature-flag:skill-learning disabled-start */
+                      null
+                      /* @feature-flag:skill-learning disabled-end */
+                    )}
+                    {/* @feature-flag:skill-learning end */}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -1454,6 +1475,14 @@ function App() {
                     <LoadTestAllowlistSettings selectedProject={selectedProject} />
                   ) : location.pathname === '/admin/api-keys' ? (
                     <ApiKeysAdminView selectedProject={selectedProject} />
+                  // @feature-flag:skill-learning start winner=enabled
+                  ) : location.pathname === '/admin/workflow-evaluations' && homeFlagsLoading ? (
+                    <ViewSkeleton />
+                  ) : location.pathname === '/admin/workflow-evaluations' && workflowEvaluationsEnabled ? (
+                    // @feature-flag:skill-learning enabled-start
+                    <WorkflowEvaluationsPage selectedProject={selectedProject} />
+                    // @feature-flag:skill-learning enabled-end
+                  // @feature-flag:skill-learning end
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}

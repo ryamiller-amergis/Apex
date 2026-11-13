@@ -5,9 +5,15 @@ import path from 'node:path';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import {
   documentWorkflowRequiresRepository,
+  documentWorkflowResultFile,
   isAiRunV2DocumentSpecification,
+  SKILL_LEARNING_RESULT_FILE,
   type AiRunV2DocumentSpecification,
 } from '../../../shared/types/aiRunV2DocumentSpec';
+import {
+  JUDGE_APPENDIX_FILE,
+  JUDGE_RESULT_FILE,
+} from '../../../shared/types/aiRunV2EvaluationSpec';
 import type { BackgroundWorkflowClass } from '../../../shared/types/backgroundWorkflow';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import {
@@ -25,6 +31,7 @@ import {
   RepoServiceReader,
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
+import { checkJudgeOutput } from '../workflowEvaluationJudgeOutput';
 import type { ArtifactFile } from './artifactUploader';
 import { isTransientCursorConnectionError } from './transientCursorError';
 import type { ExecuteWorkload, ExecutionOutcome } from './worker';
@@ -105,6 +112,14 @@ function isExpectedOutputPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
+    case 'evaluation-judge':
+      if (segments.length !== 1) return false;
+      return name === JUDGE_RESULT_FILE || name === JUDGE_APPENDIX_FILE;
+    case 'evaluation-promptfoo':
+      // The Promptfoo executor writes its own files; no agent output is collected.
+      return false;
+    case 'skill-learning':
+      return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -203,6 +218,22 @@ function assertExpectedOutputSet(
       return;
     case 'playbook-step':
       // The Playbook's ingest step owns a missing scorecard, as on the V1 path.
+      return;
+    case 'evaluation-judge':
+      if (
+        names.length !== 2
+        || !names.includes(JUDGE_RESULT_FILE)
+        || !names.includes(JUDGE_APPENDIX_FILE)
+      ) {
+        throw new Error('Document workflow did not produce both judge result files');
+      }
+      return;
+    case 'evaluation-promptfoo':
+      throw new Error('The document executor does not run Promptfoo suites');
+    case 'skill-learning':
+      if (names.length !== 1 || names[0] !== SKILL_LEARNING_RESULT_FILE) {
+        throw new Error(`Document workflow did not produce ${SKILL_LEARNING_RESULT_FILE}`);
+      }
       return;
     default: {
       const unhandled: never = workflowClass;
@@ -305,6 +336,24 @@ export async function collectDocumentArtifacts(
     });
   }
   return artifacts;
+}
+
+function assertResultMatchesSchema(
+  files: readonly ArtifactFile[],
+  resultFile: string,
+  outputSchema: Record<string, unknown> | undefined,
+): void {
+  if (!outputSchema) {
+    throw new Error('Specification has no output schema');
+  }
+  const result = files.find((file) => file.path === `${ARTIFACT_OUTPUT_PREFIX}${resultFile}`);
+  if (!result) {
+    throw new Error(`The agent did not write ${resultFile}`);
+  }
+  const check = checkJudgeOutput(result.content.toString(), outputSchema);
+  if (!check.ok) {
+    throw new Error(`${resultFile} does not match the output schema: ${check.errors.join('; ')}`);
+  }
 }
 
 async function prepareDocumentWorkspace(
@@ -703,6 +752,10 @@ export function createDocumentExecute(
         ),
         signal,
       );
+      const resultFile = documentWorkflowResultFile(specification.workflowClass);
+      if (resultFile) {
+        assertResultMatchesSchema(files, resultFile, specification.outputSchema);
+      }
       const reply = result.text.trim();
       if (reply) {
         files.push({

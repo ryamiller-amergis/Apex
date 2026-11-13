@@ -53,9 +53,21 @@ import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import {
   deriveInterviewPhaseProgress,
   previewInterviewPhaseProgress,
+  startedInterviewPhases,
   stripInterviewPhaseMarkers,
   usesGuidedInterviewPhases,
 } from '../utils/interviewPhaseProgress';
+import {
+  INTERVIEW_FEEDBACK_PHASE_LABEL,
+  interviewFeedbackGate,
+  interviewPhaseStageKey,
+} from '../utils/interviewPhaseFeedback';
+import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
+import { useWorkflowEvaluationEvents } from '../hooks/useWorkflowEvaluations';
+import { usePutWorkflowMessageFeedback, useWorkflowMessageFeedback } from '../hooks/useWorkflowMessageFeedback';
+import type { InterviewMessageRating } from '../../shared/types/workflowMessageFeedback';
+import { InterviewMessageThumbs } from './InterviewMessageThumbs';
+import { InterviewPhaseFeedbackPanel } from './InterviewPhaseFeedbackPanel';
 import { InterviewPhaseBar } from './InterviewPhaseBar';
 import { BuildIntakeWarning, stripWarningLabelLine } from './BuildIntakeWarning';
 import { stripBuildIntakeMarkers, warningClasses } from '../../shared/utils/buildIntakeMarkers';
@@ -193,9 +205,11 @@ interface InterviewAgentMessageProps {
   alreadyAnswered?: boolean;
   fullWidth?: boolean;
   anchorRef?: React.Ref<HTMLDivElement>;
+  /** Shown at the bottom of the bubble, e.g. rating buttons. */
+  actions?: React.ReactNode;
 }
 
-export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false, anchorRef }) => {
+export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ text, onSend, isRunning, questionOffset = 0, interviewLocked = false, alreadyAnswered = false, fullWidth = false, anchorRef, actions }) => {
   const intakeWarnings = warningClasses(text);
   const markerFreeText = stripBuildIntakeMarkers(stripInterviewPhaseMarkers(text));
   const visibleText = intakeWarnings.length > 0 ? stripWarningLabelLine(markerFreeText) : markerFreeText;
@@ -254,6 +268,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
         </div>
         {warning}
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleText}</ReactMarkdown>
+        {actions}
       </div>
     );
   }
@@ -326,6 +341,7 @@ export const InterviewAgentMessage: React.FC<InterviewAgentMessageProps> = ({ te
           />
         );
       })}
+      {actions}
     </div>
   );
 };
@@ -1033,7 +1049,7 @@ const NewInterviewCompose: React.FC = () => {
 export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { can, userId, isAdmin } = useAppShell();
+  const { can, userId, isAdmin, isSuperAdmin } = useAppShell();
   const linkedContextLocationState =
     location.state as ExistingInterviewLocationState | null;
 
@@ -1166,6 +1182,38 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const contextEstimate = useContextEstimate(
     visibleMessagesForContext, input, streamingText, model, draftAttachmentChars,
   );
+
+  // @feature-flag:skill-learning
+  const feedbackAccess = useWorkflowEvaluationAccess(interview?.project);
+  const usesPhaseFeedback = feedbackAccess.canView
+    && interview?.status === 'in_progress'
+    && !isPlaybookInterview
+    && usesGuidedInterviewPhases(chatThread?.kickoff.skillPath);
+  const phaseFeedbackVersion = messages[messages.length - 1]?.id;
+  const phaseFeedbackQuery = (phase: 1 | 2 | 3, enabled: boolean) => ({
+    project: interview?.project,
+    subjectType: 'interview_phase' as const,
+    subjectId: interview?.id ?? '',
+    stageKey: interviewPhaseStageKey(phase),
+    includeOlderVersions: false,
+    subjectVersion: phaseFeedbackVersion,
+    enabled,
+  });
+  const phase1Feedback = useWorkflowEvaluationEvents(phaseFeedbackQuery(1, usesPhaseFeedback));
+  const phase2Feedback = useWorkflowEvaluationEvents(phaseFeedbackQuery(2, usesPhaseFeedback));
+  const phase3Feedback = useWorkflowEvaluationEvents(phaseFeedbackQuery(3, usesPhaseFeedback));
+  const [technicalFeedbackOpen, setTechnicalFeedbackOpen] = useState(false);
+  const messageFeedback = useWorkflowMessageFeedback({
+    project: interview?.project,
+    surface: 'interview',
+    subjectId: interview?.id ?? '',
+    enabled: feedbackAccess.canSubmit,
+  });
+  const putMessageFeedback = usePutWorkflowMessageFeedback({
+    project: interview?.project,
+    surface: 'interview',
+    subjectId: interview?.id ?? '',
+  });
 
   useEffect(() => {
     const resolved = chatThread?.kickoff.model ?? interview?.model;
@@ -1457,6 +1505,51 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   // @feature-flag:build-from-prompt enabled-end
   // @feature-flag:build-from-prompt end
   const isChatLocked = isReadOnlyViewer || isStatusLocked || buildIntakePaused;
+
+  // @feature-flag:skill-learning
+  const baUserId = interview.discoveryAssigneeId ?? interview.authorId;
+  const technicalUserId = interview.technicalAssigneeId ?? interview.authorId;
+  const reviewerName = (reviewerId: string, assignedName: string | undefined, fallback: string) => {
+    if (reviewerId === userId) return 'you';
+    return (reviewerId === interview.authorId ? interview.authorName : assignedName) ?? fallback;
+  };
+  const baName = reviewerName(baUserId, interview.discoveryAssigneeName, 'the BA');
+  const technicalName = reviewerName(technicalUserId, interview.technicalAssigneeName, 'the technical reviewer');
+  const persistedAgentTexts = messages.filter((m) => m.role === 'agent').map((m) => m.text);
+  const feedbackGate = usesPhaseFeedback && !isSuperAdmin
+    ? interviewFeedbackGate({
+      startedPhases: startedInterviewPhases(persistedAgentTexts),
+      deliveryComplete: deriveInterviewPhaseProgress(persistedAgentTexts).steps[1].state === 'complete',
+      baUserId,
+      technicalUserId,
+      feedback: {
+        1: phase1Feedback.isError ? undefined : phase1Feedback.data,
+        2: phase2Feedback.isError ? undefined : phase2Feedback.data,
+        3: phase3Feedback.isError ? undefined : phase3Feedback.data,
+      },
+    })
+    : null;
+  const isBaFeedbackLocked = !isChatLocked && Boolean(feedbackGate?.chatLockedForBa);
+  const isComposerLocked = isChatLocked || isBaFeedbackLocked;
+  const baPhaseLabels = (feedbackGate?.baPhasesMissing ?? [])
+    .map((phase) => INTERVIEW_FEEDBACK_PHASE_LABEL[phase])
+    .join(' and ');
+  const showTechnicalFeedbackPrompt = !isChatLocked
+    && feedbackAccess.canSubmit
+    && userId === technicalUserId
+    && Boolean(feedbackGate?.technicalMissing);
+  const completeWaitingOn = [
+    ...(baPhaseLabels ? [`${baName} to rate ${baPhaseLabels}`] : []),
+    ...(feedbackGate?.technicalMissing ? [`${technicalName} to rate Technical`] : []),
+  ];
+  const completeBlockedReason = feedbackGate?.completeBlocked
+    ? `Waiting for ${completeWaitingOn.join(', and ')}.`
+    : null;
+  const myMessageRatings = new Map(
+    (messageFeedback.data?.entries ?? []).map((entry) => [entry.messageId, entry.rating as InterviewMessageRating]),
+  );
+  const showMessageThumbs = feedbackAccess.canSubmit && !isReadOnlyViewer;
+
   const isGuidedInterview = usesGuidedInterviewPhases(
     chatThread?.kickoff.skillPath,
   );
@@ -1643,9 +1736,9 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 <button
                   className={styles.actionBtn}
                   onClick={() => void handleStatusChange('complete')}
-                  disabled={updateStatus.isPending}
+                  disabled={updateStatus.isPending || Boolean(completeBlockedReason)}
                   type="button"
-                  title="Mark this interview as complete"
+                  title={completeBlockedReason ?? 'Mark this interview as complete'}
                   {...{ 'data-testid': 'complete-interview-btn' }}
                 >
                   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1653,6 +1746,12 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   </svg>
                   Complete
                 </button>
+              )}
+              {/* @feature-flag:skill-learning */}
+              {canCompleteInterview && completeBlockedReason && (
+                <span className={styles.completeBlockedReason} {...{ 'data-testid': 'complete-interview-feedback-reason' }}>
+                  {completeBlockedReason}
+                </span>
               )}
               {canManage && interview.status === 'complete' && (
                 <button
@@ -1790,7 +1889,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         />
       )}
 
-      {isPlaybookInterview && isBuildIntake && <BuildBriefReview interviewId={id} />}
+      {isPlaybookInterview && isBuildIntake && <BuildBriefReview interviewId={id} project={interview.project} />}
       {isPlaybookInterview && !isBuildIntake && (
         <InterviewBriefReview
           brief={interviewBrief}
@@ -1901,7 +2000,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 key={msg.id}
                 text={msg.text}
                 onSend={(text) => {
-                  if (isChatLocked) return;
+                  if (isComposerLocked) return;
                   const order = messageQOffsets.get(msg.id) ?? msgIndex;
                   // Don't start a run while a later question is still open —
                   // hold this answer and send it together once the last
@@ -1931,7 +2030,15 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                 }}
                 isRunning={isInteractionBusy}
                 questionOffset={messageQOffsets.get(msg.id) ?? 0}
-                interviewLocked={isChatLocked}
+                interviewLocked={isComposerLocked}
+                actions={showMessageThumbs ? (
+                  <InterviewMessageThumbs
+                    messageId={msg.id}
+                    rating={myMessageRatings.get(msg.id) ?? null}
+                    disabled={isStatusLocked || putMessageFeedback.isPending}
+                    onRate={(rating) => putMessageFeedback.mutate({ messageId: msg.id, rating })}
+                  />
+                ) : undefined}
                 alreadyAnswered={isChoiceMessageAnswered(msg.id, msgIndex)}
                 fullWidth={msgIndex > lastUserMsgIndex}
                 anchorRef={msgIndex === visibleMessages.length - 1 ? activeQuestionRef : undefined}
@@ -2010,8 +2117,55 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </button>
           )}
         </div>
+      ) : isBaFeedbackLocked ? (
+        // @feature-flag:skill-learning
+        userId === baUserId && feedbackAccess.canSubmit ? (
+          <InterviewPhaseFeedbackPanel
+            project={interview.project}
+            interviewId={interview.id}
+            phases={feedbackGate?.baPhasesMissing ?? []}
+            title={`Rate ${baPhaseLabels} to continue`}
+            intro="Delivery is done. The chat reopens once you rate each phase. Your feedback improves the AI over time."
+            testIdPrefix="interview-ba-feedback"
+            data-testid="interview-ba-feedback-panel"
+          />
+        ) : (
+          <div className={styles.lockedNotice} {...{ 'data-testid': 'interview-ba-feedback-wait' }}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="7" width="10" height="8" rx="1.5" />
+              <path d="M5 7V5a3 3 0 0 1 6 0v2" />
+            </svg>
+            <span>Waiting for {baName} to rate {baPhaseLabels}. The chat reopens after that.</span>
+          </div>
+        )
       ) : (
         <div className={styles.inputArea}>
+          {/* @feature-flag:skill-learning */}
+          {showTechnicalFeedbackPrompt && (
+            <div className={styles.technicalFeedbackPrompt} {...{ 'data-testid': 'interview-technical-feedback-prompt' }}>
+              <span>Rate the Technical phase before this interview can be completed.</span>
+              <button
+                type="button"
+                className={styles.technicalFeedbackToggle}
+                aria-expanded={technicalFeedbackOpen}
+                onClick={() => setTechnicalFeedbackOpen((open) => !open)}
+                {...{ 'data-testid': 'interview-technical-feedback-toggle' }}
+              >
+                {technicalFeedbackOpen ? 'Hide' : 'Rate Technical'}
+              </button>
+            </div>
+          )}
+          {showTechnicalFeedbackPrompt && technicalFeedbackOpen && (
+            <InterviewPhaseFeedbackPanel
+              project={interview.project}
+              interviewId={interview.id}
+              phases={[3]}
+              title="Rate the Technical phase"
+              intro="Your feedback improves the AI over time. The interview can be completed once you rate it."
+              testIdPrefix="interview-technical-feedback"
+              data-testid="interview-technical-feedback-panel"
+            />
+          )}
           <div className={styles.contextBar}>
             <div
               className={styles.contextBarTrack}

@@ -140,6 +140,34 @@ jest.mock('../../hooks/useDesignPlan', () => ({
   useDesignPlan: jest.fn(() => ({ data: null })),
 }));
 
+const mockUseWorkflowEvaluationAccess = jest.fn();
+jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
+  useWorkflowEvaluationAccess: (...args: unknown[]) => mockUseWorkflowEvaluationAccess(...args),
+}));
+const mockUseWorkflowEvaluationEvents = jest.fn();
+jest.mock('../../hooks/useWorkflowEvaluations', () => ({
+  useWorkflowEvaluationEvents: (...args: unknown[]) => mockUseWorkflowEvaluationEvents(...args),
+}));
+jest.mock('../PrdQualityFeedbackPrompt', () => ({ __esModule: true, default: () => null }));
+jest.mock('../PrdQualityFeedbackTab', () => ({
+  __esModule: true,
+  default: () => <div data-testid="prd-quality-feedback-panel" />,
+}));
+jest.mock('../TestCasesQualityFeedbackPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="test-cases-quality-feedback-panel" />,
+}));
+
+const NO_FEEDBACK_ACCESS = {
+  flagEnabled: false,
+  canView: false,
+  canSubmit: false,
+  canAdmin: false,
+  isPlatformAdmin: false,
+  ready: true,
+  onRefused: jest.fn(),
+};
+
 // ── Base fixtures ──────────────────────────────────────────────────────────────
 
 const basePrd = {
@@ -190,6 +218,143 @@ beforeEach(() => {
   mockUseActiveUsers.mockReturnValue({ data: [] });
   mockUseDocumentAssignments.mockReturnValue({ data: [] });
   mockUseProjectSkillConfig.mockReturnValue({ data: { approvalMode: 'any_one' } });
+  mockUseWorkflowEvaluationAccess.mockReturnValue(NO_FEEDBACK_ACCESS);
+  mockUseWorkflowEvaluationEvents.mockReturnValue({ data: undefined, isError: false });
+});
+
+describe('QA feedback before QA approval', () => {
+  const READY_TEST_CASES = { id: 'tc-1', prdId: 'prd-1', status: 'ready', updatedAt: '2026-01-03T00:00:00Z' };
+
+  function qaUser(
+    userId: string,
+    interview: Record<string, unknown>,
+    shell: Record<string, unknown> = {},
+  ) {
+    mockUsePrd.mockReturnValue({
+      data: { ...basePrd, latestTestCase: READY_TEST_CASES },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseAppShell.mockReturnValue({
+      can: () => true,
+      userId,
+      isAdmin: false,
+      isSuperAdmin: false,
+      selectedProject: 'proj-alpha',
+      ...shell,
+    });
+    mockUseInterview.mockReturnValue({ data: { id: 'interview-1', ...interview } });
+    mockUseWorkflowEvaluationAccess.mockReturnValue({
+      ...NO_FEEDBACK_ACCESS,
+      flagEnabled: true,
+      canView: true,
+      canSubmit: true,
+    });
+  }
+
+  function testCaseFeedback(response: { data?: unknown; isError: boolean }) {
+    mockUseWorkflowEvaluationEvents.mockImplementation((args: { subjectType: string }) =>
+      args.subjectType === 'test_cases' ? response : { data: undefined, isError: false });
+  }
+
+  function eventsFrom(userId: string, artifactContentHash = 'current-hash') {
+    return {
+      data: {
+        events: [{ reviewerUserId: userId, reviewerRoleKey: 'qa', artifactContentHash }],
+        truncated: false,
+        currentArtifactHash: 'current-hash',
+      },
+      isError: false,
+    };
+  }
+
+  const NO_EVENTS = { data: { events: [], truncated: false, currentArtifactHash: 'current-hash' }, isError: false };
+
+  it('locks Approve QA until the QA approver rates the current test cases, and opens their feedback first', async () => {
+    qaUser('qa-user', { testCaseApproverIds: ['qa-user'] });
+    testCaseFeedback(NO_EVENTS);
+
+    renderView();
+
+    expect(screen.getByTestId('approve-qa-btn')).toBeDisabled();
+    expect(mockUseWorkflowEvaluationEvents).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: 'test_cases',
+      subjectId: 'tc-1',
+      stageKey: 'test_cases_human_review',
+      enabled: true,
+    }));
+    fireEvent.click(screen.getByTestId('qa-approve-open-feedback'));
+    const testCasePanel = await screen.findByTestId('test-cases-quality-feedback-panel');
+    const prdPanel = screen.getByTestId('prd-quality-feedback-panel');
+    expect(testCasePanel.compareDocumentPosition(prdPanel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('unlocks Approve QA once the approver has feedback on the current test cases', () => {
+    qaUser('qa-user', { testCaseApproverIds: ['qa-user'] });
+    testCaseFeedback(eventsFrom('qa-user'));
+
+    renderView();
+
+    expect(screen.getByTestId('approve-qa-btn')).toBeEnabled();
+    expect(screen.queryByTestId('qa-approve-feedback-reason')).not.toBeInTheDocument();
+  });
+
+  it('keeps Approve QA locked when the feedback was for older test cases or from someone else', () => {
+    qaUser('qa-user', { testCaseApproverIds: ['qa-user'] });
+    testCaseFeedback({
+      data: {
+        events: [
+          { reviewerUserId: 'qa-user', reviewerRoleKey: 'qa', artifactContentHash: 'older-hash' },
+          { reviewerUserId: 'someone-else', reviewerRoleKey: 'qa', artifactContentHash: 'current-hash' },
+        ],
+        truncated: false,
+        currentArtifactHash: 'current-hash',
+      },
+      isError: false,
+    });
+
+    renderView();
+
+    expect(screen.getByTestId('approve-qa-btn')).toBeDisabled();
+  });
+
+  it('shows the feedback reason on Approve QA as Owner until the test-case owner rates the test cases', () => {
+    qaUser('qa-owner', { testCaseOwnerId: 'qa-owner' });
+    testCaseFeedback(NO_EVENTS);
+    const { unmount } = renderView();
+
+    expect(screen.getByTestId('approve-qa-owner-btn')).toBeDisabled();
+    expect(screen.getByTestId('qa-owner-approve-feedback-reason')).toBeInTheDocument();
+    unmount();
+
+    testCaseFeedback(eventsFrom('qa-owner'));
+    renderView();
+    expect(screen.queryByTestId('qa-owner-approve-feedback-reason')).not.toBeInTheDocument();
+  });
+
+  it('does not lock when the lookup fails, for super admins, or before the test cases are ready', () => {
+    qaUser('qa-user', { testCaseApproverIds: ['qa-user'] });
+    testCaseFeedback({ data: undefined, isError: true });
+    const first = renderView();
+    expect(screen.getByTestId('approve-qa-btn')).toBeEnabled();
+    first.unmount();
+
+    qaUser('qa-user', { testCaseApproverIds: ['qa-user'] }, { isSuperAdmin: true });
+    testCaseFeedback(NO_EVENTS);
+    const second = renderView();
+    expect(screen.queryByTestId('qa-approve-feedback-reason')).not.toBeInTheDocument();
+    second.unmount();
+
+    qaUser('qa-user', { testCaseApproverIds: ['qa-user'] });
+    mockUsePrd.mockReturnValue({
+      data: { ...basePrd, latestTestCase: { ...READY_TEST_CASES, status: 'generating' } },
+      isLoading: false,
+      isError: false,
+    });
+    testCaseFeedback(NO_EVENTS);
+    renderView();
+    expect(screen.getByTestId('approve-qa-btn')).toBeEnabled();
+  });
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

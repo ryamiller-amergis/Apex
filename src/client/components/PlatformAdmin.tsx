@@ -35,6 +35,7 @@ import {
   useFlagAudit,
 } from '../hooks/usePlatformAdminFeatureFlags';
 import { FoundationSkillsAdmin } from './FoundationSkillsAdmin';
+import { SkillHealthAdmin } from './SkillHealthAdmin';
 import { WalkthroughsAdminPanel } from './WalkthroughsAdminPanel';
 import { UserMenu } from './UserMenu';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
@@ -80,7 +81,7 @@ const userAccessSchema = z.object({
 
 type UserAccessFormValues = z.infer<typeof userAccessSchema>;
 
-type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'builds' | 'flags' | 'skills' | 'walkthroughs' | 'observability';
+type PlatformAdminTab = 'access' | 'menu' | 'user-access' | 'dev-access' | 'builds' | 'flags' | 'skills' | 'skill-health' | 'walkthroughs' | 'observability';
 
 function resolveGroundingRolloutStage(
   flags: FeatureFlagWithRules[],
@@ -453,6 +454,18 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
             <button
               type="button"
               role="tab"
+              id="platform-admin-tab-skill-health"
+              aria-selected={activeTab === 'skill-health'}
+              aria-controls="platform-admin-panel-skill-health"
+              className={`${styles.tabButton} ${activeTab === 'skill-health' ? styles.tabButtonActive : ''}`}
+              onClick={() => setActiveTab('skill-health')}
+              {...{ 'data-testid': 'platform-admin-tab-skill-health' }}
+            >
+              Skill Health
+            </button>
+            <button
+              type="button"
+              role="tab"
               id="platform-admin-tab-walkthroughs"
               aria-selected={activeTab === 'walkthroughs'}
               aria-controls="platform-admin-panel-walkthroughs"
@@ -601,6 +614,16 @@ export const PlatformAdmin: React.FC<PlatformAdminProps> = ({
               className={styles.tabPanel}
             >
               <FoundationSkillsAdmin />
+            </div>
+          )}
+          {activeTab === 'skill-health' && (
+            <div
+              id="platform-admin-panel-skill-health"
+              role="tabpanel"
+              aria-labelledby="platform-admin-tab-skill-health"
+              className={styles.tabPanel}
+            >
+              <SkillHealthAdmin />
             </div>
           )}
           {activeTab === 'walkthroughs' && (

@@ -140,6 +140,10 @@ describe('aiUsageService', () => {
       expect(resolveFeatureFromKickoff({ skillPath: '.cursor/skills/prd-spec-review/SKILL.md' })).toBe('prd-review');
     });
 
+    it('labels the workflow evaluation judge', () => {
+      expect(resolveFeatureFromKickoff({ skillPath: 'apex/workflow-evaluation-judge@1' })).toBe('workflow-evaluation');
+    });
+
     it('returns other for unrecognized kickoff', () => {
       expect(resolveFeatureFromKickoff({})).toBe('other');
     });
@@ -203,6 +207,14 @@ describe('aiUsageService', () => {
         entityType: 'prd',
         entityId: 'prd-1',
       });
+    });
+
+    it('attributes a workflow evaluation run to its event without a lookup', async () => {
+      await expect(resolveUsageEntityFromThread('wfeval:event-1:llm_judge')).resolves.toEqual({
+        entityType: 'workflow-evaluation-event',
+        entityId: 'event-1',
+      });
+      expect(interviewFindFirst).not.toHaveBeenCalled();
     });
   });
 

@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useMemo, useEffect, useReducer, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { ErrorBoundary } from 'react-error-boundary';
 import { PrdAssistantPanel } from './PrdAssistantPanel';
 import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -7,6 +8,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { stripYamlFrontmatter } from '../utils/stripYamlFrontmatter';
 import { useAppShell } from '../hooks/useAppShell';
+import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
+import { useWorkflowEvaluationEvents } from '../hooks/useWorkflowEvaluations';
+import { hasCurrentOwnerFeedback } from '../utils/prdOwnerFeedback';
+import { hasCurrentFeedbackFrom } from '../utils/interviewPhaseFeedback';
+import {
+  WORKFLOW_EVALUATION_PRD_STAGE_KEY,
+  WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
+} from '../../shared/types/workflowEvaluation';
 import {
   usePrd,
   useInterview,
@@ -109,7 +118,11 @@ import type {
 import styles from './PrdReviewView.module.css';
 import { ApexLoader } from './ApexLoader';
 
-type TabId = 'preview' | 'backlog' | 'validation';
+type TabId = 'preview' | 'backlog' | 'validation' | 'quality-feedback';
+
+const PrdQualityFeedbackTab = lazy(() => import('./PrdQualityFeedbackTab'));
+const TestCasesQualityFeedbackPanel = lazy(() => import('./TestCasesQualityFeedbackPanel'));
+const PrdQualityFeedbackPrompt = lazy(() => import('./PrdQualityFeedbackPrompt'));
 
 type PrdFixKind = 'validation' | 'coverage';
 
@@ -592,9 +605,18 @@ export const PrdReviewView: React.FC = () => {
   const id = location.pathname.split('/').pop() ?? null;
   const navigate = useNavigate();
   const { can, userId, isAdmin, isSuperAdmin, selectedProject, workBoardEnabled } = useAppShell();
+  const feedbackAccess = useWorkflowEvaluationAccess(selectedProject);
 
   const queryClient = useQueryClient();
   const { data: prd, isLoading, isError, error: prdError, isFetching, refetch } = usePrd(id);
+  const subjectFeedbackQuery = useWorkflowEvaluationEvents({
+    project: selectedProject,
+    subjectType: 'prd',
+    subjectId: id ?? '',
+    stageKey: WORKFLOW_EVALUATION_PRD_STAGE_KEY,
+    includeOlderVersions: false,
+    enabled: feedbackAccess.canSubmit && !isSuperAdmin && prd?.status === 'pending_review',
+  });
   const { data: relatedDesignDocs } = useDesignDocsByPrd(id);
   const { data: relatedPrototypes = [] } = usePrototypesForPrd(
     prd?.status === 'approved' ? id : null
@@ -609,6 +631,15 @@ export const PrdReviewView: React.FC = () => {
   const { data: ownerApproval } = useOwnerApproval(id, 'prd');
   const { data: projectConfig } = useProjectSkillConfig(prd?.project);
   const latestTestCase = testCaseRecord ?? prd?.latestTestCase ?? null;
+  const testCasesReadyForFeedback = prd?.testCasesRequired !== false && latestTestCase?.status === 'ready';
+  const testCaseFeedbackQuery = useWorkflowEvaluationEvents({
+    project: selectedProject,
+    subjectType: 'test_cases',
+    subjectId: latestTestCase?.id ?? '',
+    stageKey: WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
+    includeOlderVersions: false,
+    enabled: feedbackAccess.canSubmit && !isSuperAdmin && prd?.status === 'pending_review' && testCasesReadyForFeedback,
+  });
   const prototypeStageEnabled = resolvePrototypeStageEnabled(
     prd?.prototypeStageEnabled,
     projectConfig,
@@ -1666,6 +1697,21 @@ export const PrdReviewView: React.FC = () => {
 
   const isAuthor = prd.authorId === userId;
   const isOwner = prd.ownerId === userId;
+  const showQualityFeedback = feedbackAccess.canView
+    && prd.status !== 'generating'
+    && prd.project === selectedProject;
+  const canSubmitFeedback = showQualityFeedback && feedbackAccess.canSubmit;
+  // Owners give feedback before approving. A failed lookup does not block approval.
+  const ownerFeedbackMissing = canSubmitFeedback
+    && !isSuperAdmin
+    && !subjectFeedbackQuery.isError
+    && !hasCurrentOwnerFeedback(subjectFeedbackQuery.data, userId);
+  // QA approvers give feedback on the test cases on screen before approving QA.
+  const qaFeedbackMissing = canSubmitFeedback
+    && !isSuperAdmin
+    && testCasesReadyForFeedback
+    && !testCaseFeedbackQuery.isError
+    && !(testCaseFeedbackQuery.data && userId && hasCurrentFeedbackFrom(testCaseFeedbackQuery.data, userId));
   const ownerOnly = !assignmentsLoading && !assignmentsError && assignments.length === 0;
   const qaOwnerOnly = !qaAssignmentsLoading && !qaAssignmentsError && qaAssignments.length === 0;
   const isOwnerActor = (prd.ownerId ? isOwner : isAuthor) || isSuperAdmin;
@@ -1684,6 +1730,17 @@ export const PrdReviewView: React.FC = () => {
   const hasAlreadyApprovedQa = qaAssignments.some(
     (a) => a.approverUserId === userId && a.status === 'approved'
   );
+  const qaFeedbackFirst = isAssignedQaApprover || (Boolean(userId) && sourceInterview?.testCaseOwnerId === userId);
+  const testCaseFeedbackPanel = testCasesReadyForFeedback && latestTestCase ? (
+    <TestCasesQualityFeedbackPanel
+      testCaseId={latestTestCase.id}
+      project={prd.project}
+      updatedAt={latestTestCase.updatedAt}
+      canView={showQualityFeedback}
+      canSubmit={canSubmitFeedback}
+      data-testid="test-cases-quality-feedback-panel"
+    />
+  ) : null;
   const canPerformReview =
     !ownerOnly && canReview && (isAssignedApprover || isAdmin) && (!isAuthor || isAdmin);
   const anyDesignDocApproved =
@@ -2230,12 +2287,40 @@ export const PrdReviewView: React.FC = () => {
                   <button
                     className={styles.btnApprove}
                     onClick={() => void handleQaApprove()}
-                    disabled={reviewTestCases.isPending}
+                    disabled={reviewTestCases.isPending || qaFeedbackMissing}
+                    aria-describedby={qaFeedbackMissing ? 'qa-approve-feedback-reason' : undefined}
+                    title={qaFeedbackMissing ? 'Give test case feedback before approving QA' : undefined}
                     type="button"
                     {...{ 'data-testid': 'approve-qa-btn' }}
                   >
                     Approve QA
                   </button>
+                  {/* @feature-flag:skill-learning start winner=enabled */}
+                  {qaFeedbackMissing ? (
+                    /* @feature-flag:skill-learning enabled-start */
+                    <span
+                      id="qa-approve-feedback-reason"
+                      role="status"
+                      className={styles.ownerFeedbackReason}
+                      {...{ 'data-testid': 'qa-approve-feedback-reason' }}
+                    >
+                      Give test case feedback before approving.{' '}
+                      <button
+                        type="button"
+                        className={styles.ownerFeedbackLink}
+                        onClick={() => setActiveTab('quality-feedback')}
+                        {...{ 'data-testid': 'qa-approve-open-feedback' }}
+                      >
+                        Open Quality feedback
+                      </button>
+                    </span>
+                    /* @feature-flag:skill-learning enabled-end */
+                  ) : (
+                    /* @feature-flag:skill-learning disabled-start */
+                    null
+                    /* @feature-flag:skill-learning disabled-end */
+                  )}
+                  {/* @feature-flag:skill-learning end */}
                 </div>
               </>
             )}
@@ -2250,13 +2335,42 @@ export const PrdReviewView: React.FC = () => {
                   <button
                     className={styles.btnApprove}
                     onClick={() => void handleQaOwnerApprove()}
-                    disabled={ownerApproveQa.isPending || !readiness.readyForReviewActions}
-                    title={!readiness.readyForReviewActions ? readiness.blockingReason : undefined}
+                    disabled={ownerApproveQa.isPending || !readiness.readyForReviewActions || qaFeedbackMissing}
+                    aria-describedby={qaFeedbackMissing ? 'qa-owner-approve-feedback-reason' : undefined}
+                    title={!readiness.readyForReviewActions
+                      ? readiness.blockingReason
+                      : qaFeedbackMissing ? 'Give test case feedback before approving QA' : undefined}
                     type="button"
                     {...{ 'data-testid': 'approve-qa-owner-btn' }}
                   >
                     Approve QA as Owner
                   </button>
+                  {/* @feature-flag:skill-learning start winner=enabled */}
+                  {qaFeedbackMissing ? (
+                    /* @feature-flag:skill-learning enabled-start */
+                    <span
+                      id="qa-owner-approve-feedback-reason"
+                      role="status"
+                      className={styles.ownerFeedbackReason}
+                      {...{ 'data-testid': 'qa-owner-approve-feedback-reason' }}
+                    >
+                      Give test case feedback before approving.{' '}
+                      <button
+                        type="button"
+                        className={styles.ownerFeedbackLink}
+                        onClick={() => setActiveTab('quality-feedback')}
+                        {...{ 'data-testid': 'qa-owner-approve-open-feedback' }}
+                      >
+                        Open Quality feedback
+                      </button>
+                    </span>
+                    /* @feature-flag:skill-learning enabled-end */
+                  ) : (
+                    /* @feature-flag:skill-learning disabled-start */
+                    null
+                    /* @feature-flag:skill-learning disabled-end */
+                  )}
+                  {/* @feature-flag:skill-learning end */}
                 </div>
               </>
             )}
@@ -2268,17 +2382,47 @@ export const PrdReviewView: React.FC = () => {
                 <button
                   className={styles.btnApprove}
                   onClick={() => void handleOwnerApprove()}
-                  disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
-                  aria-disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin)}
-                  aria-describedby={ownerOnly && !isOwnerActor ? 'owner-approve-disabled-reason' : undefined}
+                  disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin) || (isOwnerActor && ownerFeedbackMissing)}
+                  aria-disabled={ownerApprovePrd.isPending || !isOwnerActor || (!reviewerApprovalComplete && !isSuperAdmin) || (isOwnerActor && ownerFeedbackMissing)}
+                  aria-describedby={ownerOnly && !isOwnerActor
+                    ? 'owner-approve-disabled-reason'
+                    : isOwnerActor && ownerFeedbackMissing ? 'owner-approve-feedback-reason' : undefined}
                   title={!reviewerApprovalComplete && !isSuperAdmin
                     ? 'Reviewers must approve the PRD before owner approval'
-                    : undefined}
+                    : isOwnerActor && ownerFeedbackMissing
+                      ? 'Give Quality feedback as PRD owner before approving'
+                      : undefined}
                   type="button"
                   {...{ 'data-testid': 'approve-owner-btn' }}
                 >
                   Approve as Owner
                 </button>
+                {/* @feature-flag:skill-learning start winner=enabled */}
+                {isOwnerActor && ownerFeedbackMissing ? (
+                  /* @feature-flag:skill-learning enabled-start */
+                  <span
+                    id="owner-approve-feedback-reason"
+                    role="status"
+                    className={styles.ownerFeedbackReason}
+                    {...{ 'data-testid': 'owner-approve-feedback-reason' }}
+                  >
+                    Give Quality feedback before approving.{' '}
+                    <button
+                      type="button"
+                      className={styles.ownerFeedbackLink}
+                      onClick={() => setActiveTab('quality-feedback')}
+                      {...{ 'data-testid': 'owner-approve-open-feedback' }}
+                    >
+                      Open Quality feedback
+                    </button>
+                  </span>
+                  /* @feature-flag:skill-learning enabled-end */
+                ) : (
+                  /* @feature-flag:skill-learning disabled-start */
+                  null
+                  /* @feature-flag:skill-learning disabled-end */
+                )}
+                {/* @feature-flag:skill-learning end */}
                 {ownerOnly && !isOwnerActor && (
                   <span
                     id="owner-approve-disabled-reason"
@@ -2979,6 +3123,28 @@ export const PrdReviewView: React.FC = () => {
       ) : (
         /* ── Normal tabs ─────────────────────────────────────────────────────── */
         <div className={[styles.tabArea, isFullscreen && styles.tabAreaFullscreen].filter(Boolean).join(' ')}>
+          {/* @feature-flag:skill-learning start winner=enabled */}
+          {canSubmitFeedback && userId ? (
+            /* @feature-flag:skill-learning enabled-start */
+            <ErrorBoundary fallback={null}>
+              <Suspense fallback={null}>
+                <PrdQualityFeedbackPrompt
+                  prdId={prd.id}
+                  project={prd.project}
+                  status={prd.status}
+                  userId={userId}
+                  canSubmit={canSubmitFeedback}
+                  onOpenFeedbackTab={() => setActiveTab('quality-feedback')}
+                />
+              </Suspense>
+            </ErrorBoundary>
+            /* @feature-flag:skill-learning enabled-end */
+          ) : (
+            /* @feature-flag:skill-learning disabled-start */
+            null
+            /* @feature-flag:skill-learning disabled-end */
+          )}
+          {/* @feature-flag:skill-learning end */}
           <div className={styles.tabs}>
             <button
               className={`${styles.tab} ${activeTab === 'preview' ? styles.active : ''}`}
@@ -3006,6 +3172,25 @@ export const PrdReviewView: React.FC = () => {
                 Validation
               </button>
             )}
+            {/* @feature-flag:skill-learning start winner=enabled */}
+            {showQualityFeedback ? (
+              /* @feature-flag:skill-learning enabled-start */
+              <button
+                className={`${styles.tab} ${activeTab === 'quality-feedback' ? styles.active : ''}`}
+                onClick={() => setActiveTab('quality-feedback')}
+                type="button"
+                aria-pressed={activeTab === 'quality-feedback'}
+                {...{ 'data-testid': 'prd-tab-quality-feedback' }}
+              >
+                Quality feedback
+              </button>
+              /* @feature-flag:skill-learning enabled-end */
+            ) : (
+              /* @feature-flag:skill-learning disabled-start */
+              null
+              /* @feature-flag:skill-learning disabled-end */
+            )}
+            {/* @feature-flag:skill-learning end */}
             <button
               className={[styles.tabFullscreenBtn, isFullscreen && styles.tabFullscreenBtnActive].filter(Boolean).join(' ')}
               onClick={() => setIsFullscreen((v) => !v)}
@@ -3430,6 +3615,40 @@ export const PrdReviewView: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {/* @feature-flag:skill-learning start winner=enabled */}
+            {activeTab === 'quality-feedback' && showQualityFeedback ? (
+              /* @feature-flag:skill-learning enabled-start */
+              <ErrorBoundary
+                fallback={(
+                  <div className={styles.emptyPreview} role="alert">
+                    Quality feedback couldn&apos;t load. Refresh the page to try again.
+                  </div>
+                )}
+              >
+                <Suspense fallback={<div className={styles.emptyPreview}>Loading quality feedback…</div>}>
+                  <div className={styles.qualityFeedbackStack}>
+                    {qaFeedbackFirst && testCaseFeedbackPanel}
+                    <PrdQualityFeedbackTab
+                      prdId={prd.id}
+                      project={prd.project}
+                      content={prd.content}
+                      updatedAt={prd.updatedAt}
+                      canView={showQualityFeedback}
+                      canSubmit={canSubmitFeedback}
+                      data-testid="prd-quality-feedback-panel"
+                    />
+                    {!qaFeedbackFirst && testCaseFeedbackPanel}
+                  </div>
+                </Suspense>
+              </ErrorBoundary>
+              /* @feature-flag:skill-learning enabled-end */
+            ) : (
+              /* @feature-flag:skill-learning disabled-start */
+              null
+              /* @feature-flag:skill-learning disabled-end */
+            )}
+            {/* @feature-flag:skill-learning end */}
           </div>
         </div>
       )}

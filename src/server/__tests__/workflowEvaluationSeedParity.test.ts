@@ -9,6 +9,8 @@ import {
   WORKFLOW_EVALUATION_BENCHMARK_KEY,
   WORKFLOW_EVALUATION_CRITERIA_KEYS,
   WORKFLOW_EVALUATION_DEFINITION_EVALUATOR_KEY,
+  WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC,
+  WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY,
   WORKFLOW_EVALUATION_INTERVIEW_PHASE_RUBRIC,
   WORKFLOW_EVALUATION_OUTCOMES,
   WORKFLOW_EVALUATION_PRD_RUBRIC,
@@ -16,7 +18,11 @@ import {
   WORKFLOW_EVALUATION_REASON_CODES,
   WORKFLOW_EVALUATION_REVIEWER_ROLE_KEYS,
   WORKFLOW_EVALUATION_SEEDED_STAGE_KEYS,
+  WORKFLOW_EVALUATION_TEST_CASES_RUBRIC,
+  WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY,
+  WORKFLOW_EVALUATION_BLIND_JUDGE_DEFINITION_VERSION,
   workflowEvaluationJudgeOutputSchema,
+  workflowEvaluationJudgeOutputSchemaV2,
   workflowEvaluationPromptfooSuiteRef,
   type WorkflowEvaluationRubric,
 } from '../../shared/types/workflowEvaluation';
@@ -128,5 +134,78 @@ describe('TBI-002 / VT-13 / VT-14 — evaluation definition seed', () => {
       /CREATE TABLE workflow_evaluation_definitions \([\s\S]*?\);/i,
     );
     expect(createDefs?.[0] ?? '').not.toMatch(/\bproject\b/i);
+  });
+});
+
+describe('design doc evaluation definition seed', () => {
+  const dir = path.resolve(process.cwd(), 'migrations');
+  const file = fs.readdirSync(dir).filter((name) => name.endsWith('_workflow-evaluation-design-doc.sql'));
+  const [up = '', down = ''] = fs.readFileSync(path.join(dir, file[0] ?? ''), 'utf8').split(/-- Down Migration/i);
+
+  it('seeds one design_doc_human_review row matching the shared rubric and judge schema', () => {
+    expect(file).toHaveLength(1);
+    expect(up).toContain(`'${WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY}'`);
+    expect(up).toContain(`'${workflowEvaluationPromptfooSuiteRef(WORKFLOW_EVALUATION_DESIGN_DOC_STAGE_KEY)}'`);
+    const rubrics = dollarBlocks(up, 'rubric').map((block) => JSON.parse(block) as WorkflowEvaluationRubric);
+    expect(rubrics).toEqual([WORKFLOW_EVALUATION_DESIGN_DOC_RUBRIC]);
+    const schemas = dollarBlocks(up, 'judge').map((block) => JSON.parse(block) as Record<string, unknown>);
+    expect(schemas).toEqual([toJSONSchema(workflowEvaluationJudgeOutputSchema)]);
+  });
+
+  it('allows the design_doc subject type and is safe to re-run', () => {
+    expect(up).toMatch(/subject_type IN \('interview_phase', 'prd', 'design_doc'\)/);
+    expect(up).toMatch(/ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+NOTHING/i);
+    expect(stripComments(up)).not.toMatch(/\bUPDATE\b/i);
+    expect(down).toMatch(/subject_type IN \('interview_phase', 'prd'\)/);
+  });
+});
+
+describe('test cases evaluation definition seed', () => {
+  const dir = path.resolve(process.cwd(), 'migrations');
+  const file = fs.readdirSync(dir).filter((name) => name.endsWith('_workflow-evaluation-test-cases.sql'));
+  const [up = '', down = ''] = fs.readFileSync(path.join(dir, file[0] ?? ''), 'utf8').split(/-- Down Migration/i);
+
+  it('seeds one test_cases_human_review row matching the shared rubric and judge schema', () => {
+    expect(file).toHaveLength(1);
+    expect(up).toContain(`'${WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY}'`);
+    expect(up).toContain(`'${workflowEvaluationPromptfooSuiteRef(WORKFLOW_EVALUATION_TEST_CASES_STAGE_KEY)}'`);
+    const rubrics = dollarBlocks(up, 'rubric').map((block) => JSON.parse(block) as WorkflowEvaluationRubric);
+    expect(rubrics).toEqual([WORKFLOW_EVALUATION_TEST_CASES_RUBRIC]);
+    const schemas = dollarBlocks(up, 'judge').map((block) => JSON.parse(block) as Record<string, unknown>);
+    expect(schemas).toEqual([toJSONSchema(workflowEvaluationJudgeOutputSchema)]);
+  });
+
+  it('allows the test_cases subject type, is safe to re-run, and restores the design doc state on down', () => {
+    expect(up).toMatch(/subject_type IN \('interview_phase', 'prd', 'design_doc', 'test_cases'\)/);
+    expect(up).toMatch(/subject_type IN \('design_doc', 'test_cases'\)/);
+    expect(up).toMatch(/ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+NOTHING/i);
+    expect(stripComments(up)).not.toMatch(/\bUPDATE\b/i);
+    expect(down).toMatch(/subject_type IN \('interview_phase', 'prd', 'design_doc'\)/);
+    expect(down).toMatch(/subject_type = 'design_doc'/);
+  });
+});
+
+describe('blind judge definition version 2', () => {
+  const dir = path.resolve(process.cwd(), 'migrations');
+  const file = fs.readdirSync(dir).filter((name) => name.endsWith('_workflow-evaluation-blind-judge-criteria-scores.sql'));
+  const [up = '', down = ''] = fs.readFileSync(path.join(dir, file[0] ?? ''), 'utf8').split(/-- Down Migration/i);
+
+  it('seeds the version 2 judge schema from the shared blind-judge schema', () => {
+    expect(file).toHaveLength(1);
+    const schemas = dollarBlocks(up, 'judge').map((block) => JSON.parse(block) as Record<string, unknown>);
+    expect(schemas).toEqual([toJSONSchema(workflowEvaluationJudgeOutputSchemaV2)]);
+    expect(schemas[0]).toMatchObject({ required: expect.arrayContaining(['criteriaScores']) });
+  });
+
+  it('copies every version 1 stage, retires version 1 first, and is safe to re-run', () => {
+    const selectedColumns = up.slice(up.indexOf('SELECT\n'), up.indexOf('FROM workflow_evaluation_definitions v1\n'));
+    expect(selectedColumns.split(',').map((column) => column.trim())).toContain(
+      String(WORKFLOW_EVALUATION_BLIND_JUDGE_DEFINITION_VERSION),
+    );
+    expect(selectedColumns).toContain('v1.rubric');
+    expect(up.indexOf('SET active = false')).toBeLessThan(up.indexOf('INSERT INTO'));
+    expect(up).toMatch(/ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+NOTHING/i);
+    expect(down).toMatch(/version = 1;/);
+    expect(down).toMatch(/NOT EXISTS \(SELECT 1 FROM workflow_evaluation_events/);
   });
 });

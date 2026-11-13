@@ -17,6 +17,7 @@ import type {
   AiUsageStatus,
 } from '../../shared/types/aiCostAnalytics';
 import type { EffortLevel } from '../../shared/types/effort';
+import { parseWorkflowEvaluationRunThreadId } from '../../shared/types/aiRunV2EvaluationSpec';
 
 // Estimate: ~4 chars per token (GPT-4 heuristic, good enough for allocation)
 const CHARS_PER_TOKEN = 4;
@@ -53,6 +54,7 @@ export function resolveFeatureFromKickoff(kickoff: {
 
   if (skillPath) {
     const lower = skillPath.toLowerCase();
+    if (lower.includes('workflow-evaluation')) return 'workflow-evaluation';
     if (lower.includes('adr-interview') || lower.includes('adr-finalize') || lower.includes('adr-assistant')) {
       return 'adr';
     }
@@ -72,6 +74,9 @@ export function resolveFeatureFromKickoff(kickoff: {
 export async function resolveUsageEntityFromThread(
   threadId: string,
 ): Promise<{ entityType: string; entityId: string } | null> {
+  const evaluationRun = parseWorkflowEvaluationRunThreadId(threadId);
+  if (evaluationRun) return { entityType: 'workflow-evaluation-event', entityId: evaluationRun.eventId };
+
   const interview = await db.query.interviews.findFirst({
     where: eq(interviews.chatThreadId, threadId),
     columns: { id: true },

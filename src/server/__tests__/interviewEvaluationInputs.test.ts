@@ -86,7 +86,8 @@ describe('getInterviewEvaluationInputs — TBI-006', () => {
     });
     getThreadAsync.mockResolvedValue({
       kickoff: { skillPath: '.cursor/skills/grill-design/SKILL.md', model: 'kickoff-model' },
-      groundedSha: 'sha-1',
+      groundedSha: 'repo-commit',
+      skillSha256: 'sha-1',
       messages: [
         { id: '1', role: 'user', text: 'Hello', ts: 't1' },
         { id: '2', role: 'agent', text: 'Hi', ts: 't2', hidden: true },
@@ -127,7 +128,7 @@ describe('getInterviewEvaluationInputs — TBI-006', () => {
     });
     getThreadAsync.mockResolvedValue({
       kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md' },
-      groundedSha: 'real-sha',
+      skillSha256: 'real-sha',
       messages: [
         { id: '1', role: 'agent', text: 'Start [[interview-phase:discovery:1:6]]', ts: 't1' },
         { id: '2', role: 'user', text: 'The problem.', ts: 't2' },

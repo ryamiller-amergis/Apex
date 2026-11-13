@@ -421,6 +421,27 @@
   gap: 6px;
 }
 
+.ownerFeedbackReason {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.qualityFeedbackStack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.ownerFeedbackLink {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-color);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ── Header action buttons — compact, uniform height ───────────────────── */
 
 .actionBtn {

@@ -1,5 +1,68 @@
 [
   {
+    "version": "1.42.0",
+    "date": "2026-11-09",
+    "title": "Skill Health and Skill Learning",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Platform Admin has a Skill Health tab that shows, project by project, how each skill performs: review score, pass rate, acceptance, review comments and cost per document"
+      },
+      {
+        "type": "feature",
+        "description": "Create an Azure DevOps work item to improve a skill straight from Skill Health. Apex skills go to the Apex Backlog; other projects' skills go to that project's Azure DevOps under your own account"
+      },
+      {
+        "type": "feature",
+        "description": "PRDs, design docs and chats now record which version of their skill produced them, and Skill Health compares those versions side by side"
+      },
+      {
+        "type": "feature",
+        "description": "In projects with human workflow evaluation turned on, Skill Health shows reviewer feedback by stage, recent regenerate and reject decisions, and the judge's suggested fixes, each of which you can file as a work item"
+      },
+      {
+        "type": "feature",
+        "description": "Skill Learning (flag skill-learning): test a new SKILL.md by replaying past PRD or design doc runs with it, compare blind judge scores against the current Skill, approve the change at a Playbook gate, and Apex opens a pull request that changes only that SKILL.md. Each project sets a monthly budget in Skill Health; nothing runs until one is set"
+      },
+      {
+        "type": "feature",
+        "description": "Rate AI output as good, needs improvement or bad on ADRs, Brainstorm artifacts, build briefs, Playbook runs, QA Lab and the PRD, design doc and ADR assistants. Ratings are optional and never block your work"
+      },
+      {
+        "type": "feature",
+        "description": "Skill Health now has Skills, Human feedback, Outcomes and Learning tabs, and shows accept, reject, regenerate and roll-back outcomes for every AI surface, with ranges that say when a sample is too small to trust"
+      },
+      {
+        "type": "improvement",
+        "description": "Skill Health shows results by model and effort, median hours to approval, review rounds and cost per accepted document, and records every approver and owner decision instead of only the last one"
+      },
+      {
+        "type": "improvement",
+        "description": "After a Skill change is merged, Apex compares live documents made with the new and old versions and alerts you if the new one does clearly worse"
+      },
+      {
+        "type": "improvement",
+        "description": "The judge's agreement with people is tracked over time. Skill Health warns when it drops and lists the reviews where the judge was unsure or far from the person, so you can recheck those first"
+      },
+      {
+        "type": "improvement",
+        "description": "A sample of ADRs, Brainstorm artifacts, build briefs and QA case sets now gets a rubric score from an AI judge, paid from the Skill Learning budget"
+      },
+      {
+        "type": "improvement",
+        "description": "When most reviewer-corrected documents add the same section, Skill Health proposes a Promptfoo check for it. Accepted checks run on every later review"
+      },
+      {
+        "type": "improvement",
+        "description": "Suggest checks: an AI run reads what reviewers changed in a stage's documents and suggests plain-language checks, such as every requirement having a measurable target. Accepted checks are graded by a model on every later review, up to five per stage"
+      },
+      {
+        "type": "improvement",
+        "description": "Skill Learning's AI work (drafting candidate Skills, judging sampled artifacts and suggesting checks) now runs on the document worker instead of the Apex server"
+      }
+    ]
+  },
+  {
     "version": "1.41.0",
     "date": "2026-11-07",
     "title": "Quick Links",

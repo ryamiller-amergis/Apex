@@ -19,6 +19,9 @@ function splitMigration() {
   return { upSql, downSql };
 }
 
+/** Registry workflows added after this migration, so its backfill does not list them. */
+const WORKFLOWS_ADDED_AFTER_EXPAND = new Set<string>(['evaluation_judge']);
+
 const snake = (field: string) => field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const legacyColumns = getTableColumns(projectSkillSettings);
 
@@ -60,9 +63,12 @@ describe('project_skill_workflow_settings migration', () => {
 
   it('backfills each registry workflow from exactly the legacy columns the registry names', () => {
     const tuples = backfillTuples(upSql);
-    expect([...tuples.keys()]).toEqual(PROJECT_SKILL_WORKFLOWS.map((workflow) => workflow.key));
+    const backfilledWorkflows = PROJECT_SKILL_WORKFLOWS.filter(
+      (workflow) => !WORKFLOWS_ADDED_AFTER_EXPAND.has(workflow.key),
+    );
+    expect([...tuples.keys()]).toEqual(backfilledWorkflows.map((workflow) => workflow.key));
 
-    for (const workflow of PROJECT_SKILL_WORKFLOWS) {
+    for (const workflow of backfilledWorkflows) {
       const legacy = workflow.legacy as Partial<Record<string, string>>;
       const expected = PROJECT_SKILL_WORKFLOW_FIELDS.map((field) => {
         const legacyField = legacy[field];

@@ -19,6 +19,7 @@ jest.mock('react-markdown', () => ({
   },
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('../SkillRating', () => ({ SkillRating: () => null }));
 jest.mock('../../hooks/useBrainstormArtifact', () => {
   const actual = jest.requireActual('../../hooks/useBrainstormArtifact');
   return {

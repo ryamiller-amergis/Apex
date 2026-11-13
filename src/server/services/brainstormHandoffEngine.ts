@@ -43,6 +43,7 @@ import {
   type TargetServices,
 } from './brainstormHandoffTargets';
 import { trackEvent } from './telemetry';
+import { emitSkillSignal } from './skillSignalService';
 
 export class BrainstormHandoffError extends Error {
   constructor(
@@ -678,7 +679,8 @@ export const drizzleHandoffPersistence: HandoffPersistence = {
       .update(brainstormActions)
       .set({ state: 'completed', resultRef: JSON.stringify(resultRef), confirmedAt: at, updatedAt: at })
       .where(and(eq(brainstormActions.id, id), eq(brainstormActions.claimToken, token), eq(brainstormActions.state, 'executing')))
-      .returning({ id: brainstormActions.id });
+      .returning(handoffSignalColumns);
+    if (rows[0]) emitHandoffSignal(rows[0], 'handoff_completed', {});
     return rows.length === 1;
   },
   async fail(id, token, code, at) {
@@ -689,7 +691,8 @@ export const drizzleHandoffPersistence: HandoffPersistence = {
       .update(brainstormActions)
       .set({ state: 'failed', failureCode: code, updatedAt: at })
       .where(guard)
-      .returning({ id: brainstormActions.id });
+      .returning(handoffSignalColumns);
+    if (rows[0]) emitHandoffSignal(rows[0], 'handoff_failed', { failureCode: code });
     return rows.length === 1;
   },
   async release(id, token) {
@@ -699,6 +702,36 @@ export const drizzleHandoffPersistence: HandoffPersistence = {
       .where(and(eq(brainstormActions.id, id), eq(brainstormActions.claimToken, token)));
   },
 };
+
+const handoffSignalColumns = {
+  id: brainstormActions.id,
+  project: brainstormActions.project,
+  sessionId: brainstormActions.sessionId,
+  actionKind: brainstormActions.actionKind,
+  targetModule: brainstormActions.targetModule,
+  artifactVersion: brainstormActions.artifactVersion,
+};
+
+function emitHandoffSignal(
+  row: { id: string; project: string; sessionId: string; actionKind: string; targetModule: string; artifactVersion: number | null },
+  kind: 'handoff_completed' | 'handoff_failed',
+  metadata: Record<string, unknown>,
+): void {
+  emitSkillSignal({
+    project: row.project,
+    surface: 'brainstorm',
+    subjectType: 'brainstorm_handoff',
+    subjectId: row.id,
+    kind,
+    metadata: {
+      ...metadata,
+      sessionId: row.sessionId,
+      actionKind: row.actionKind,
+      targetModule: row.targetModule,
+      artifactVersion: row.artifactVersion,
+    },
+  });
+}
 
 // ── Production wiring ─────────────────────────────────────────────────────────
 

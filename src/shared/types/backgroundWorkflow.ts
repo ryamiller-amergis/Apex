@@ -20,7 +20,10 @@ export type BackgroundWorkflowClass =
   | 'validation'
   | 'test-cases'
   | 'walkthrough-smart-tagging'
-  | 'playbook-step';
+  | 'playbook-step'
+  | 'evaluation-judge'
+  | 'evaluation-promptfoo'
+  | 'skill-learning';
 
 export type WorkflowRouteDecision =
   | { route: 'worker'; workspacePath: string; runId: string }

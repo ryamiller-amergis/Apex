@@ -1,0 +1,9 @@
+{
+  "name": "apex-promptfoo-runner",
+  "private": true,
+  "description": "Pinned Promptfoo install for evaluation runs on the V2 document worker.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "engines": { "node": ">=22.22.0" },
+  "dependencies": { "promptfoo": "0.124.1" }
+}

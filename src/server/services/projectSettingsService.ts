@@ -23,6 +23,7 @@ import type {
   RepositoryCheckoutStatus,
 } from '../../shared/types/projectSettings';
 import type { GroupWithMembers } from '../../shared/types/groups';
+import type { EffortLevel } from '../../shared/types/effort';
 import type {
   ApprovalMode,
   ModuleApprovalModes,
@@ -103,6 +104,41 @@ export async function getSkillConfig(
     )
     .limit(1);
   return rows[0] ? toSkillConfig(rows[0]) : null;
+}
+
+/**
+ * Sets the model and effort every workflow-evaluation judge uses on the
+ * project's default config. `upsertSkillConfig` never sends these fields, so
+ * saving Project Settings keeps them. Returns null when there is no default config.
+ */
+export async function setEvaluationJudgeSettings(
+  project: string,
+  settings: { model: string | null; effort: EffortLevel | null },
+  updatedBy?: string,
+): Promise<ProjectSkillConfig | null> {
+  const now = new Date().toISOString();
+  const settingsId = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(projectSkillSettings)
+      .set({ updatedBy, updatedAt: now })
+      .where(
+        and(
+          eq(projectSkillSettings.project, project),
+          eq(projectSkillSettings.isDefault, true)
+        )
+      )
+      .returning({ id: projectSkillSettings.id });
+    const row = rows[0];
+    if (!row) return null;
+    await saveWorkflowSettings(
+      tx,
+      row.id,
+      { evaluationJudgeModel: settings.model, evaluationJudgeEffort: settings.effort },
+      now,
+    );
+    return row.id;
+  });
+  return settingsId ? getSkillConfigById(settingsId) : null;
 }
 
 export async function getSkillConfigById(

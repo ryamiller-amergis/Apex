@@ -21,6 +21,7 @@ import { getApproverUserIdsForProject, getSkillSettingsName } from './projectSet
 import { assignApprovers, isApprovalComplete } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { recordOwnerApproval } from './ownerApprovalService';
+import { emitSkillSignal } from './skillSignalService';
 
 const EDITABLE_STATUSES: AdrStatus[] = ['in_progress', 'accepted', 'superseded'];
 const WATCHER_INTERVAL_MS = 5_000;
@@ -350,16 +351,39 @@ export async function applyAdrProposedContent(
     resolvedAt: now,
     updatedAt: now,
   }).where(commentFilter);
+  emitAdrAssistantSignal(row, 'accepted', userId, now, { editedBeforeApply: options?.mergedContent != null });
 }
 
 export async function rejectAdrProposedContent(id: string, userId: string): Promise<void> {
   const row = await requireAuthor(id, userId);
   if (row.status !== 'proposed') throw httpError('Proposed edits can be rejected only while the ADR is proposed', 409);
+  const now = new Date().toISOString();
   await db.update(adrs).set({
     proposedContent: null,
     fixCommentId: null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   }).where(eq(adrs.id, id));
+  emitAdrAssistantSignal(row, 'rejected', userId, now, {});
+}
+
+function emitAdrAssistantSignal(
+  row: { id: string; project: string; adrAssistantThreadId: string | null },
+  kind: 'accepted' | 'rejected',
+  userId: string,
+  decidedAt: string,
+  metadata: Record<string, unknown>,
+): void {
+  emitSkillSignal({
+    project: row.project,
+    surface: 'adr_assistant',
+    subjectType: 'adr_proposed_edit',
+    subjectId: row.id,
+    threadId: row.adrAssistantThreadId,
+    kind,
+    actorId: userId,
+    metadata,
+    idempotencyKey: `adr_assistant:${kind}:${row.id}:${decidedAt}`,
+  });
 }
 
 export async function deleteAdr(id: string, userId: string): Promise<void> {
@@ -442,17 +466,26 @@ export async function applyAdrGenerationResult(
 ): Promise<boolean> {
   const adr = await db.query.adrs.findFirst({
     where: eq(adrs.generationThreadId, generationThreadId),
-    columns: { id: true, authorId: true, title: true, status: true },
+    columns: { id: true, authorId: true, title: true, status: true, project: true },
   });
   if (!adr) return false;
   if (adr.status !== 'generating') return true;
 
   stopAdrWatcher(adr.id);
+  const generationSignal = {
+    project: adr.project,
+    surface: 'adr' as const,
+    subjectType: 'adr_generation',
+    subjectId: generationThreadId,
+    threadId: generationThreadId,
+  };
   if (content) {
     await syncAdrContent(adr.id, content);
     await notifyAdrAuthor(adr, 'generated');
+    emitSkillSignal({ ...generationSignal, kind: 'completed', metadata: { adrId: adr.id } });
     return true;
   }
+  emitSkillSignal({ ...generationSignal, kind: 'run_failed', metadata: { adrId: adr.id, detail: failureDetail ?? null } });
 
   await db.update(adrs)
     .set({ status: 'in_progress', updatedAt: new Date().toISOString() })

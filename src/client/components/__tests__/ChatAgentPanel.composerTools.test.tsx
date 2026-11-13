@@ -88,6 +88,24 @@ jest.mock('../../hooks/useFocusChatMessage', () => ({
   useFocusChatMessage: () => undefined,
 }));
 
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ userId: 'user-1' }),
+}));
+
+jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
+  useWorkflowEvaluationAccess: () => ({ canSubmit: false }),
+}));
+
+jest.mock('../../hooks/useSkillRatings', () => ({
+  useSkillRatings: () => new Map(),
+  usePutSkillRating: () => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null, variables: undefined }),
+}));
+
+jest.mock('../../hooks/useWorkflowMessageFeedback', () => ({
+  useWorkflowMessageFeedback: () => ({ data: undefined }),
+  usePutWorkflowMessageFeedback: () => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null }),
+}));
+
 jest.mock('../ThreadHistorySidebar', () => ({
   ThreadHistorySidebar: () => <div>Full history</div>,
 }));

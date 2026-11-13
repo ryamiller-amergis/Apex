@@ -69,10 +69,10 @@ describe('getPrdEvaluationInputs — TBI-006', () => {
         }],
       },
       chatThreadId: 'thread-1',
+      skillSha256: 'skill-sha',
     });
     mockDb.query.chatThreads.findFirst.mockResolvedValue({
       kickoff: { skillPath: '.cursor/skills/to-prd/SKILL.md', model: 'other-model' },
-      groundedSha: 'grounded-sha',
     });
 
     const result = await getPrdEvaluationInputs('prd-1');
@@ -82,7 +82,7 @@ describe('getPrdEvaluationInputs — TBI-006', () => {
       project: 'proj-a',
       model: 'claude',
       skillPath: '.cursor/skills/to-prd/SKILL.md',
-      skillVersion: 'grounded-sha',
+      skillVersion: 'skill-sha',
       interviewId: 'interview-1',
       content: '# PRD',
     });

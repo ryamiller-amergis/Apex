@@ -932,6 +932,17 @@ export async function prepareRepositoryReadRuntime(options: {
   };
 }
 
+function skillContentSha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function recordLoadedSkill(thread: ChatThread, content: string): void {
+  const sha = skillContentSha256(content);
+  if (thread.skillSha256 === sha) return;
+  thread.skillSha256 = sha;
+  persistThread(thread);
+}
+
 function groundedTurnPromptOptions(
   state: ThreadState,
   grounding: CallerGroundingSelection,
@@ -960,6 +971,8 @@ function groundedTurnPromptOptions(
       grounding,
       state.thread.kickoff
     ),
+    onResolvedSkill: (skill: { path: string; content: string }) =>
+      recordLoadedSkill(state.thread, skill.content),
   };
 }
 
@@ -2287,6 +2300,7 @@ export async function prepareBackgroundWorkflowTurn(
     groundingProvenance,
     onResolvedSkill: (skill) => {
       resolvedSkill = skill;
+      recordLoadedSkill(state.thread, skill.content);
     },
     onSkillReadError: (error) => {
       if (isRepositorySyncingError(error)) skillReadHitSyncingMirror = true;
@@ -2307,9 +2321,7 @@ export async function prepareBackgroundWorkflowTurn(
     ...(frozenSkill
       ? {
           skillContent: frozenSkill.content,
-          skillSha256: createHash('sha256')
-            .update(frozenSkill.content)
-            .digest('hex'),
+          skillSha256: skillContentSha256(frozenSkill.content),
         }
       : skillReadHitSyncingMirror
         ? { skillRepositorySyncing: true }
@@ -4471,6 +4483,7 @@ async function tryDispatchInteractiveTurn(
             grounding,
             state.thread.kickoff
           ),
+          onResolvedSkill: (skill) => recordLoadedSkill(state.thread, skill.content),
         }
       );
       if (timedOut) return bypass('timeout-abort');

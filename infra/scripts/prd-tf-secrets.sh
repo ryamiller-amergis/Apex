@@ -57,6 +57,9 @@ _prd_secrets() {
   export TF_VAR_ai_platform_v2_interactive_redis_key=$(app_secret ca-apex-ai-fast-interactive-prd redis-key)
   export TF_VAR_ai_platform_v2_visual_aws_access_key_id=$(app_secret ca-apex-ai-runs-visual-v2-prd aws-access-key-id)
   export TF_VAR_ai_platform_v2_visual_aws_secret_access_key=$(app_secret ca-apex-ai-runs-visual-v2-prd aws-secret-access-key)
+  # The document worker grades llm-rubric checks with the same Bedrock key.
+  export TF_VAR_ai_platform_v2_documents_aws_access_key_id=$TF_VAR_ai_platform_v2_visual_aws_access_key_id
+  export TF_VAR_ai_platform_v2_documents_aws_secret_access_key=$TF_VAR_ai_platform_v2_visual_aws_secret_access_key
   export TF_VAR_ai_platform_v2_database_url=$(app_secret ca-apex-ai-orchestrator-prd database-url)
   export TF_VAR_ai_platform_v2_application_insights_connection_string=$(az monitor app-insights component show -g $data_rg -a appi-app-apex-prd $s --query connectionString -o tsv | tr -d '\r')
 

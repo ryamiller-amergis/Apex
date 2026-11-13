@@ -227,6 +227,7 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           !file.includes('__tests__') &&
           file !== 'src/server/routes/e2eSetup.ts' &&
           file !== 'src/server/services/designDocValidationPlaybookService.ts' &&
+          file !== 'src/server/services/skillApprovalPlaybook.ts' &&
           file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
           // Only a cursor-agent node loads a repository Skill. Cloud-agent steps are agent steps too.
           file !== 'src/server/services/playbookExecutionCapabilityService.ts' &&
