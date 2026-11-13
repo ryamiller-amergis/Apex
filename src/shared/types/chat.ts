@@ -135,6 +135,16 @@ export interface ChatThreadKickoff {
   standupUserDisplayName?: string;
   /** Email/ADO uniqueName of the standup participant (for [System.AssignedTo] filters) */
   standupUserEmail?: string;
+  /** Configured Delivery Pulse model for standup prompts */
+  standupDeliveryModel?: import('./standup').StandupDeliveryModel;
+  /** Configured goal source for standup prompts */
+  standupGoalSource?: import('./standup').StandupGoalSource;
+  /** Active team goal text for standup prompts */
+  standupTeamGoal?: string | null;
+  /** Active delivery policy overrides for standup prompts */
+  standupPolicy?: Partial<import('./standup').StandupDeliveryPolicy>;
+  /** Pre-computed participant brief summary injected into standup participant sessions */
+  standupBriefSummary?: string;
 }
 
 export type ChatThreadStatus = 'idle' | 'running' | 'error' | 'closed';
