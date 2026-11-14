@@ -69,6 +69,7 @@ import {
 } from '../interactiveDurableStreamBatcher';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
 import { isRetryableCursorConnectionError } from './cursorConnectionError';
+import { turnReadSources } from './brainstormSourceMount';
 import type { InteractiveActorBootstrap } from '../../../shared/types/aiRunIngest';
 import { createPerThreadTurnQueue, type PerThreadTurnQueue } from './perThreadTurnQueue';
 
@@ -104,7 +105,7 @@ export const INTERACTIVE_THINKING_DETAIL = 'Thinking…';
 export function brainstormSourceIdsSignature(
   bootstrap: Pick<InteractiveActorBootstrap, 'specification'>,
 ): string {
-  const roots = bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
+  const roots = turnReadSources(bootstrap.specification)?.readRoots ?? [];
   if (roots.length === 0) return '';
   return roots
     .map((root) => `${root.sourceId}:${root.commitSha.toLowerCase()}`)

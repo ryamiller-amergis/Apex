@@ -1,3 +1,4 @@
+import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import type { ChatMessage, ChatThread, ChatTurnSkill } from '../../shared/types/chat';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import {
@@ -79,6 +80,8 @@ async function admittedSpecification(
     hasPinnedGrounding?: boolean;
     optionalGroundingWaitMs?: number;
     trackEvent?: jest.Mock;
+    referenceSources?: BrainstormTurnSources | null;
+    linkedContext?: string | null;
     /** Admits a turn with these messages first, on the same service. */
     priorTurnMessages?: ChatMessage[];
   } = {},
@@ -122,6 +125,8 @@ async function admittedSpecification(
       .fn()
       .mockResolvedValue(options.backgroundGrounding ?? false),
     loadInterviewContext: jest.fn().mockResolvedValue(options.interviewContext ?? null),
+    loadReferenceSources: jest.fn().mockResolvedValue(options.referenceSources ?? null),
+    loadLinkedContext: jest.fn().mockResolvedValue(options.linkedContext ?? null),
     resolveMaxviewCapability: jest.fn().mockResolvedValue('disabled'),
     resolveDeadlines:
       options.resolveDeadlines ??
@@ -456,6 +461,96 @@ describe('durable guided interview turn', () => {
     expect(specification.mcpServers).toContainEqual(
       expect.objectContaining({ serverName: 'ado-skills' }),
     );
+  });
+
+  describe('reference repositories', () => {
+    const referenceSources: BrainstormTurnSources = {
+      readRoots: [{
+        sourceId: '10000000-0000-4000-8000-00000000000a',
+        kind: 'project-repository',
+        displayName: 'MaxView',
+        workspacePath: '/data/workspaces/brainstorm-repo-mirrors/10000000-0000-4000-8000-00000000000a',
+        commitSha: 'b'.repeat(40),
+        provider: 'ado',
+        project: 'MaxView',
+        repository: 'maxview-api',
+      }],
+      unavailableSources: [],
+      mcpServers: [],
+      instructions: '# Reference repositories\n- "MaxView": read under sources/10000000-0000-4000-8000-00000000000a/',
+    };
+
+    it('mounts them on a Technical turn and tells the agent where they are', async () => {
+      const specification = await admittedSpecification(
+        [
+          message('user', 'Begin.', 1),
+          message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+        ],
+        { guided: true, repositoryContext, referenceSources },
+      );
+
+      expect(specification.referenceSources).toEqual(referenceSources);
+      expect(specification.currentPrompt).toContain('# Reference repositories');
+    });
+
+    it('leaves them off Discovery and Delivery turns', async () => {
+      const specification = await admittedSpecification([], {
+        guided: true,
+        repositoryContext,
+        referenceSources,
+      });
+
+      expect(specification.guidedInterview?.phase).toBe('product');
+      expect(specification.referenceSources).toBeUndefined();
+      expect(specification.currentPrompt).not.toContain('# Reference repositories');
+    });
+
+    it('never looks them up for a non-interview turn', async () => {
+      const specification = await admittedSpecification([], {
+        workflowClass: 'home-chat',
+        referenceSources,
+      });
+
+      expect(specification.referenceSources).toBeUndefined();
+    });
+  });
+
+  describe('linked context', () => {
+    const linkedContext =
+      '# Linked Interview Grounding Context\n\n## Linked ADRs (accepted)\n\n### Use Postgres (`adr-1`)\n\nWe use Postgres.\n';
+
+    it('carries linked ADRs and Design Modules on a Discovery turn', async () => {
+      const specification = await admittedSpecification([], {
+        guided: true,
+        repositoryContext,
+        linkedContext,
+      });
+
+      expect(specification.guidedInterview?.phase).toBe('product');
+      expect(specification.currentPrompt).toContain('`.ai-pilot/linked-context.md`');
+      expect(specification.currentPrompt).toContain('### Use Postgres (`adr-1`)');
+    });
+
+    it('keeps carrying it on later Technical turns', async () => {
+      const specification = await admittedSpecification(
+        [
+          message('user', 'Begin.', 1),
+          message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+        ],
+        { guided: true, repositoryContext, linkedContext },
+      );
+
+      expect(specification.currentPrompt).toContain('### Use Postgres (`adr-1`)');
+    });
+
+    it('never adds it to a non-interview turn', async () => {
+      const specification = await admittedSpecification([], {
+        workflowClass: 'home-chat',
+        linkedContext,
+      });
+
+      expect(specification.currentPrompt).not.toContain('Linked Interview Grounding Context');
+    });
   });
 
   it('tells the interviewer to ask the person when no context.md is available', async () => {
