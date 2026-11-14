@@ -38,6 +38,38 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
     await SeedApi.reset(e2eApi);
   });
 
+  test('0. Standup management stays up when list responses are not arrays', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    await SeedApi.seedAdminRole(e2eApi, { userId: PERSONA_OIDS.manager });
+    await page.route('**/api/standup/configs*', async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Failed to fetch standup configs' }),
+      });
+    });
+    await page.route('**/api/standup/sessions*', async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Failed to fetch sessions' }),
+      });
+    });
+
+    await loginAsPersona('manager');
+    const pulsePage = new StandupPulsePage(page);
+    await pulsePage.gotoManage();
+
+    await expect(page.getByText('Something went wrong')).toHaveCount(0);
+    await expect(page.getByTestId('standup-manage-load-error')).toContainText(
+      'Failed to fetch standup configs',
+    );
+    await expect(page.getByRole('heading', { name: 'Configurations' })).toBeVisible();
+  });
+
   test('1. Approve / Reject & Inline Correction Journey (/standup): reviews multi-day arc, rejects inaccurate item, submits inline correction, and reflects in Team Pulse', async ({
     page,
     loginAsPersona,

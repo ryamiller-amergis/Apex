@@ -42,6 +42,13 @@ import {
   type StandupTeamPulse,
 } from '../../shared/types/standup';
 
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string');
+  }
+  return [];
+}
+
 const router = Router();
 
 async function buildDisplayNameMap(userIds: string[]): Promise<Map<string, string>> {
@@ -237,7 +244,7 @@ router.get('/configs', requirePermission('standup:manage'), async (_req: Request
       orderBy: desc(standupConfigs.createdAt),
     });
 
-    const allGroupIds = [...new Set(configs.flatMap((c) => (c.groupIds as string[]) ?? []))];
+    const allGroupIds = [...new Set(configs.flatMap((c) => asStringArray(c.groupIds)))];
     const groupMap = new Map<string, { id: string; name: string }>();
     if (allGroupIds.length > 0) {
       const groupRows = await db
@@ -255,7 +262,7 @@ router.get('/configs', requirePermission('standup:manage'), async (_req: Request
         goalSource: normalizeGoalSource(c.goalSource),
         rosterMode: normalizeRosterMode(c.rosterMode),
         policy: resolveStandupPolicy(model, c.policy),
-        groups: ((c.groupIds as string[]) ?? []).map((id) => groupMap.get(id)).filter(Boolean),
+        groups: asStringArray(c.groupIds).map((id) => groupMap.get(id)).filter(Boolean),
       };
     });
 

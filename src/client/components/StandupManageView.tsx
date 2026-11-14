@@ -363,6 +363,22 @@ const StandupSubNav: React.FC = () => {
   );
 };
 
+function asList<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function readStandupError(body: unknown, label: string): string {
+  if (
+    body &&
+    typeof body === 'object' &&
+    'error' in body &&
+    typeof (body as { error: unknown }).error === 'string'
+  ) {
+    return (body as { error: string }).error;
+  }
+  return `Could not load ${label}.`;
+}
+
 function makeDefaultFormState(project: string) {
   return {
     groupIds: [] as string[],
@@ -400,6 +416,7 @@ export const StandupManageView: React.FC = () => {
   const [isDeletingSession, setIsDeletingSession] = useState(false);
   const [isDeletingConfig, setIsDeletingConfig] = useState(false);
   const [showManageInfo, setShowManageInfo] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const { selectedProject } = useAppShell();
   const [formData, setFormData] = useState(() =>
@@ -451,10 +468,29 @@ export const StandupManageView: React.FC = () => {
         fetch('/api/standup/configs', { credentials: 'include' }),
         fetch('/api/standup/sessions', { credentials: 'include' }),
       ]);
-      setConfigs(await configsRes.json());
-      setSessions(await sessionsRes.json());
+      const [configsBody, sessionsBody] = await Promise.all([
+        configsRes.json().catch(() => null),
+        sessionsRes.json().catch(() => null),
+      ]);
+      const errors: string[] = [];
+      if (!configsRes.ok || !Array.isArray(configsBody)) {
+        setConfigs([]);
+        errors.push(readStandupError(configsBody, 'standup configurations'));
+      } else {
+        setConfigs(configsBody);
+      }
+      if (!sessionsRes.ok || !Array.isArray(sessionsBody)) {
+        setSessions([]);
+        errors.push(readStandupError(sessionsBody, 'standup sessions'));
+      } else {
+        setSessions(sessionsBody);
+      }
+      setLoadError(errors.length > 0 ? errors.join(' ') : null);
     } catch (err) {
       console.error('Failed to load standup data:', err);
+      setConfigs([]);
+      setSessions([]);
+      setLoadError('Failed to load standup data.');
     } finally {
       setLoading(false);
     }
@@ -643,6 +679,12 @@ export const StandupManageView: React.FC = () => {
           </button>
         </header>
 
+        {loadError && (
+          <p className={styles.loadError} data-testid="standup-manage-load-error" role="alert">
+            {loadError}
+          </p>
+        )}
+
         {showManageInfo && (
           <div className={styles.infoTooltip}>
             <button
@@ -687,7 +729,7 @@ export const StandupManageView: React.FC = () => {
                   {...{ 'data-testid': 'standup-config-project' }}
                 >
                   <option value="">— Select project —</option>
-                  {adoProjects.map((p) => (
+                  {asList(adoProjects).map((p) => (
                     <option key={p.id} value={p.name}>
                       {p.name}
                     </option>
@@ -793,7 +835,7 @@ export const StandupManageView: React.FC = () => {
                   <p className={styles.groupPickerHint}>Select a project first</p>
                 ) : groupsLoading ? (
                   <p className={styles.groupPickerHint}>Loading groups…</p>
-                ) : groups.length === 0 ? (
+                ) : asList(groups).length === 0 ? (
                   <p className={styles.groupPickerHint}>
                     No groups found for this project — active ADO contributors
                     will still be discovered automatically unless Selected Groups
@@ -801,7 +843,7 @@ export const StandupManageView: React.FC = () => {
                   </p>
                 ) : (
                   <div className={styles.groupCheckList}>
-                    {groups.map((g) => (
+                    {asList(groups).map((g) => (
                       <label
                         key={g.id}
                         className={styles.groupCheckItem}
@@ -826,11 +868,11 @@ export const StandupManageView: React.FC = () => {
                     data-testid="standup-roster-preview"
                   >
                     <strong>Resolved Roster Preview:</strong>{' '}
-                    {rosterPreview.participants.length} participant(s)
-                    {rosterPreview.participants.length > 0 && (
+                    {asList(rosterPreview.participants).length} participant(s)
+                    {asList(rosterPreview.participants).length > 0 && (
                       <span>
                         {' — '}
-                        {rosterPreview.participants
+                        {asList(rosterPreview.participants)
                           .slice(0, 6)
                           .map(
                             (p) =>
@@ -860,7 +902,7 @@ export const StandupManageView: React.FC = () => {
                       ? 'Loading area paths…'
                       : '— All areas (optional) —'}
                   </option>
-                  {areaPaths.map((ap) => (
+                  {asList(areaPaths).map((ap) => (
                     <option key={ap} value={ap}>
                       {ap}
                     </option>
@@ -1134,8 +1176,8 @@ export const StandupManageView: React.FC = () => {
                   >
                     <div className={styles.configHeader}>
                       <div className={styles.configGroups}>
-                        {(config.groups && config.groups.length > 0
-                          ? config.groups.map((g) => g.name)
+                        {(asList(config.groups).length > 0
+                          ? asList(config.groups).map((g) => g.name)
                           : config.group
                           ? [config.group.name]
                           : ['(ADO auto-discovered)']
@@ -1179,7 +1221,7 @@ export const StandupManageView: React.FC = () => {
                         {config.scheduleTime} {config.timezone}
                       </span>
                       <span>
-                        {config.weekdays
+                        {asList<number>(config.weekdays)
                           .map((d) => WEEKDAY_LABELS[d])
                           .join(', ')}
                       </span>
@@ -1249,7 +1291,7 @@ export const StandupManageView: React.FC = () => {
                     </span>
                   </div>
                   <div className={styles.participants}>
-                    {session.participants.map((p) => (
+                    {asList(session.participants).map((p) => (
                       <span
                         key={p.id}
                         className={`${styles.participantChip} ${styles[p.status] ?? ''}`}
@@ -1285,9 +1327,9 @@ export const StandupManageView: React.FC = () => {
                       Delete Session
                     </button>
                   </div>
-                  {session.followups.length > 0 && (
+                  {asList(session.followups).length > 0 && (
                     <div className={styles.followups}>
-                      {session.followups.map((f) => (
+                      {asList(session.followups).map((f) => (
                         <div key={f.id} className={styles.followupItem}>
                           {f.title}
                         </div>
