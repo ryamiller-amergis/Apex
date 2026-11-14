@@ -363,6 +363,8 @@ const StandupSubNav: React.FC = () => {
   );
 };
 
+function asList<T>(value: readonly T[] | null | undefined): T[];
+function asList<T>(value: unknown): T[];
 function asList<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
