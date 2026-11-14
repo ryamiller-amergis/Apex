@@ -957,7 +957,7 @@ const NewInterviewCompose: React.FC = () => {
             <button
               className={styles.sendBtn}
               onClick={() => void handleSend()}
-              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill) || !repoReadiness.isReady}
+              disabled={(!input.trim() && attachments.length === 0) || isSending || !resolvedRepoName || !title.trim() || (!resolvedSkillPath && !grillSkill)}
               type="button"
               aria-label="Start interview"
               {...{ 'data-testid': 'interview-compose-start' }}
@@ -981,11 +981,6 @@ const NewInterviewCompose: React.FC = () => {
         {!grillSkill && !resolvedSkillPath && skillConfig && interviewSkillOptions.length === 0 && (
           <div className={styles.composeError}>
             No interview skill is configured for this repo project. Please ask an admin to set the interview skill path in project settings.
-          </div>
-        )}
-        {!repoReadiness.isReady && repoReadiness.message && (
-          <div className={styles.composeError} {...{ 'data-testid': 'interview-compose-repo-not-ready' }}>
-            {repoReadiness.message}
           </div>
         )}
         {(grillSkill || resolvedSkillPath) && (
@@ -1844,18 +1839,16 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {(sendError || prdGenError || (!repoReadiness.isReady && repoReadiness.message)) && (
-        <div className={styles.sendError} {...{ 'data-testid': 'interview-repo-not-ready' }}>
-          {sendError ?? prdGenError ?? repoReadiness.message}
-          {(sendError || prdGenError) && (
-            <button
-              type="button"
-              className={styles.sendErrorDismiss}
-              onClick={() => { clearSendError(); setPrdGenError(null); }}
-              aria-label="Dismiss error"
-              {...{ 'data-testid': 'interview-dismiss-error' }}
-            >×</button>
-          )}
+      {(sendError || prdGenError) && (
+        <div className={styles.sendError}>
+          {sendError ?? prdGenError}
+          <button
+            type="button"
+            className={styles.sendErrorDismiss}
+            onClick={() => { clearSendError(); setPrdGenError(null); }}
+            aria-label="Dismiss error"
+            {...{ 'data-testid': 'interview-dismiss-error' }}
+          >×</button>
         </div>
       )}
 
@@ -2352,7 +2345,6 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
                   disabled={
                     (!input.trim() && attachments.length === 0)
                     || isInteractionBusy
-                    || !repoReadiness.isReady
                     || resumeGate.composerBlocked
                   }
                   type="button"

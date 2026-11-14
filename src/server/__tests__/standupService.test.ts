@@ -40,6 +40,7 @@ jest.mock('../db/schema', () => ({
   standupSessions: {},
   standupParticipants: {},
   standupFollowups: {},
+  standupActionProposals: {},
   appGroupMembers: {},
   appUsers: {},
   projectSkillSettings: {},
@@ -53,7 +54,9 @@ import {
   runFacilitator,
   triggerSessionForConfig,
   generateDailySessions,
+  submitParticipant,
 } from '../services/standupService';
+import { resolveStandupRoster } from '../services/standupEvidenceCollectorService';
 import { createNotification } from '../services/notificationService';
 import { sendTeamsNotification } from '../services/teamsBotService';
 import { createThread } from '../services/chatAgentService';
@@ -294,5 +297,101 @@ describe('triggerSessionForConfig project skill settings', () => {
         skillSettingsId: 'skill-1',
       }),
     );
+  });
+});
+
+describe('submitParticipant Quick Confirm & proposal staging', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const setMock = jest.fn().mockReturnValue({
+      where: jest.fn().mockResolvedValue(undefined),
+    });
+    mockDb.update.mockReturnValue({ set: setMock });
+    mockDb.insert.mockReturnValue({
+      values: jest.fn().mockResolvedValue(undefined),
+    });
+  });
+
+  it('persists direct structuredUpdate and stages pending proposals without requiring chat JSON', async () => {
+    mockDb.query.standupParticipants.findFirst.mockResolvedValue({
+      id: 'p-quick',
+      sessionId: 'session-quick',
+      threadId: 'thread-quick',
+      status: 'notified',
+    });
+    mockDb.query.standupSessions.findFirst.mockResolvedValue({
+      id: 'session-quick',
+      status: 'collecting',
+      config: {
+        project: 'MaxView',
+        deliveryModel: 'milestone',
+        teamGoal: 'Ship v3.0',
+        skillSettingsId: null,
+      },
+      participants: [],
+    });
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: jest.fn().mockResolvedValue([
+          { status: 'submitted' },
+          { status: 'notified' },
+        ]),
+      }),
+    });
+
+    await submitParticipant('p-quick', {
+      structuredUpdate: {
+        yesterday: 'Completed #501',
+        today: 'Working on #502',
+        blockers: '',
+        userCorrections: 'Clarified #503 moved to next sprint',
+        approvalAction: 'approved_with_edits',
+        itemDecisions: { 'd-1': 'approved', 'd-2': 'rejected' },
+        rejectedItems: [{ id: 'd-2', summary: '#503 Old task', reason: 'Moved' }],
+      },
+      proposals: [
+        {
+          workItemId: 502,
+          workItemTitle: 'Milestone Feature',
+          proposalType: 'target_date',
+          fieldName: 'targetDate',
+          currentValue: null,
+          proposedValue: '2026-11-25',
+          reason: 'Missing target date under Milestone policy',
+        },
+      ],
+    });
+
+    expect(mockDb.insert).toHaveBeenCalledTimes(1);
+    expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+
+  it('resolves group members in groups_only and ado_and_groups fallback when ADO is unconfigured in test', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        innerJoin: () => ({
+          where: jest.fn().mockResolvedValue([
+            { userId: 'u-1', displayName: 'Dev One', email: 'dev1@localhost' },
+            { userId: 'u-1', displayName: 'Dev One', email: 'dev1@localhost' },
+          ]),
+        }),
+      }),
+    });
+
+    const groupsOnly = await resolveStandupRoster({
+      project: 'MaxView',
+      rosterMode: 'groups_only',
+      groupIds: ['g-1'],
+    });
+    expect(groupsOnly).toEqual([
+      { userId: 'u-1', displayName: 'Dev One', email: 'dev1@localhost', source: 'group' },
+    ]);
+
+    const adoOnlyInTest = await resolveStandupRoster({
+      project: 'MaxView',
+      rosterMode: 'ado_active',
+      groupIds: [],
+    });
+    expect(adoOnlyInTest).toEqual([]);
   });
 });

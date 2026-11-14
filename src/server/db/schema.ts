@@ -51,6 +51,17 @@ import type {
   ChatThreadKickoff,
   SseEvent,
 } from '../../shared/types/chat';
+import type {
+  ParticipantPreparedBrief,
+  StandupConfidence,
+  StandupDeliveryModel,
+  StandupDeliveryPolicy,
+  StandupGoalSource,
+  StandupProposalType,
+  StandupRosterMode,
+  StandupStructuredUpdate,
+  StandupTeamPulse,
+} from '../../shared/types/standup';
 import type { McpServerOperation } from '../../shared/types/mcpServers';
 import type {
   AgentRunCancelState,
@@ -1822,6 +1833,11 @@ export const standupConfigs = pgTable('standup_configs', {
   reminderDelayMin: integer('reminder_delay_min').notNull().default(30),
   reminderIntervalMin: integer('reminder_interval_min').notNull().default(60),
   facilitatorDeadlineMin: integer('facilitator_deadline_min').notNull().default(120),
+  deliveryModel: text('delivery_model').$type<StandupDeliveryModel>().notNull().default('flow'),
+  goalSource: text('goal_source').$type<StandupGoalSource>().notNull().default('none'),
+  teamGoal: text('team_goal'),
+  rosterMode: text('roster_mode').$type<StandupRosterMode>().notNull().default('ado_and_groups'),
+  policy: jsonb('policy').$type<Partial<StandupDeliveryPolicy>>().notNull().default({}),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -1835,6 +1851,7 @@ export const standupSessions = pgTable('standup_sessions', {
   status: text('status').notNull().default('open'),
   facilitatorThreadId: uuid('facilitator_thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
   summaryMarkdown: text('summary_markdown'),
+  teamPulse: jsonb('team_pulse').$type<StandupTeamPulse>(),
   lastRemindedAt: timestamp('last_reminded_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
@@ -1848,7 +1865,8 @@ export const standupParticipants = pgTable('standup_participants', {
   userId: text('user_id').notNull().references(() => appUsers.oid, { onDelete: 'cascade' }),
   threadId: uuid('thread_id').references(() => chatThreads.id, { onDelete: 'set null' }),
   status: text('status').notNull().default('pending'),
-  structuredUpdate: jsonb('structured_update').$type<{ yesterday?: string; today?: string; blockers?: string; atRisk?: string; handoffs?: string; capacity?: string }>(),
+  structuredUpdate: jsonb('structured_update').$type<StandupStructuredUpdate>(),
+  preparedBrief: jsonb('prepared_brief').$type<ParticipantPreparedBrief>(),
   adoAccessToken: text('ado_access_token'),
   adoTokenExpiresAt: timestamp('ado_token_expires_at', { withTimezone: true, mode: 'string' }),
   submittedAt: timestamp('submitted_at', { withTimezone: true, mode: 'string' }),
@@ -1866,6 +1884,28 @@ export const standupFollowups = pgTable('standup_followups', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
 
+export const standupActionProposals = pgTable('standup_action_proposals', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: uuid('session_id').notNull().references(() => standupSessions.id, { onDelete: 'cascade' }),
+  participantId: uuid('participant_id').references(() => standupParticipants.id, { onDelete: 'set null' }),
+  project: text('project').notNull(),
+  workItemId: integer('work_item_id').notNull(),
+  workItemTitle: text('work_item_title').notNull(),
+  proposalType: text('proposal_type').$type<StandupProposalType>().notNull(),
+  fieldName: text('field_name').notNull(),
+  currentValue: text('current_value'),
+  proposedValue: text('proposed_value').notNull(),
+  reason: text('reason').notNull(),
+  confidence: text('confidence').$type<StandupConfidence>().notNull().default('at_risk'),
+  status: text('status').$type<'pending' | 'applied' | 'dismissed'>().notNull().default('pending'),
+  decidedBy: text('decided_by'),
+  decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sessionIdx: index('idx_standup_action_proposals_session').on(t.sessionId),
+  projectStatusIdx: index('idx_standup_action_proposals_project_status').on(t.project, t.status),
+}));
+
 // ── Standup Relations ─────────────────────────────────────────────────────────
 
 export const standupConfigsRelations = relations(standupConfigs, ({ one, many }) => ({
@@ -1880,17 +1920,24 @@ export const standupSessionsRelations = relations(standupSessions, ({ one, many 
   facilitatorThread: one(chatThreads, { fields: [standupSessions.facilitatorThreadId], references: [chatThreads.id] }),
   participants: many(standupParticipants),
   followups: many(standupFollowups),
+  proposals: many(standupActionProposals),
 }));
 
-export const standupParticipantsRelations = relations(standupParticipants, ({ one }) => ({
+export const standupParticipantsRelations = relations(standupParticipants, ({ one, many }) => ({
   session: one(standupSessions, { fields: [standupParticipants.sessionId], references: [standupSessions.id] }),
   user: one(appUsers, { fields: [standupParticipants.userId], references: [appUsers.oid] }),
   thread: one(chatThreads, { fields: [standupParticipants.threadId], references: [chatThreads.id] }),
+  proposals: many(standupActionProposals),
 }));
 
 export const standupFollowupsRelations = relations(standupFollowups, ({ one }) => ({
   session: one(standupSessions, { fields: [standupFollowups.sessionId], references: [standupSessions.id] }),
   followupThread: one(chatThreads, { fields: [standupFollowups.followupThreadId], references: [chatThreads.id] }),
+}));
+
+export const standupActionProposalsRelations = relations(standupActionProposals, ({ one }) => ({
+  session: one(standupSessions, { fields: [standupActionProposals.sessionId], references: [standupSessions.id] }),
+  participant: one(standupParticipants, { fields: [standupActionProposals.participantId], references: [standupParticipants.id] }),
 }));
 
 // ── Feature Flags Tables ──────────────────────────────────────────────────────

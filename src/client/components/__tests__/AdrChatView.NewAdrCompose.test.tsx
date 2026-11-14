@@ -264,7 +264,7 @@ describe('NewAdrCompose', () => {
     expect(createAdr).not.toHaveBeenCalled();
   });
 
-  it('disables start and shows an error when the project repository is not cloned', () => {
+  it('does not show a proactive repository grounding banner and only surfaces an error on submit when not cloned', () => {
     mockUseProjectRepositoryReadiness.mockReturnValue({
       isReady: false,
       message:
@@ -287,15 +287,15 @@ describe('NewAdrCompose', () => {
       </QueryClientProvider>,
     );
 
+    expect(screen.queryByText(/project administrator must clone/i)).not.toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Choose event transport' } });
     fireEvent.change(screen.getByPlaceholderText(/describe what is being built/i), {
       target: { value: 'Compare queue and event-stream options.' },
     });
 
-    expect(screen.getByRole('button', { name: 'Start ADR' })).toBeDisabled();
-    expect(screen.getByTestId('adr-compose-repo-not-ready')).toHaveTextContent(
-      /project administrator must clone/i,
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start ADR' }));
+    expect(screen.getByText(/project administrator must clone/i)).toBeInTheDocument();
     expect(createAdr).not.toHaveBeenCalled();
   });
 

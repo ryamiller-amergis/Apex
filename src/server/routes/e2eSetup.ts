@@ -13,6 +13,8 @@ import { and, eq, inArray, like, ne, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   adrs,
+  appGroupMembers,
+  appGroups,
   appPermissions,
   appRolePermissions,
   appRoles,
@@ -38,10 +40,33 @@ import {
   projectSkillSettings,
   projectSkillWorkflowSettings,
   reviewComments,
+  standupActionProposals,
+  standupConfigs,
+  standupFollowups,
+  standupParticipants,
+  standupSessions,
   testCases,
   traceEvents,
   tracePathRollups,
 } from '../db/schema';
+import type {
+  ParticipantPreparedBrief,
+  StandupActionProposalInput,
+  StandupDeliveryModel,
+  StandupDeliveryPolicy,
+  StandupGoalSource,
+  StandupRosterMode,
+  StandupStructuredUpdate,
+} from '../../shared/types/standup';
+import {
+  evaluateParticipantBrief,
+  normalizeDeliveryModel,
+  normalizeGoalSource,
+  normalizeRosterMode,
+  recomputeSessionTeamPulse,
+  resolveStandupPolicy,
+  type EvaluateParticipantBriefInput,
+} from '../services/standupDeliveryPolicyService';
 import { DEFAULT_ENABLED_MENU_VIEWS, type MenuItemKey } from '../../shared/types/menuSettings';
 import { clerkTicketFetchStub, setMcpServerFetchStub } from '../services/mcpServerFetchStub';
 import type { ValidationScorecard } from '../../shared/types/interview';
@@ -114,6 +139,52 @@ router.post('/reset', async (_req, res) => {
     await db.delete(mcpServers).where(like(mcpServers.name, `${E2E_PREFIX}%`));
     await db.delete(appRoles).where(like(appRoles.name, `${E2E_PREFIX}%`));
     setMcpServerFetchStub(null);
+
+    // Clean up Standup Delivery Pulse E2E records
+    await db
+      .delete(standupActionProposals)
+      .where(like(standupActionProposals.workItemTitle, `${E2E_PREFIX}%`));
+    await db
+      .delete(standupFollowups)
+      .where(like(standupFollowups.title, `${E2E_PREFIX}%`));
+
+    const e2eGroups = await db
+      .select({ id: appGroups.id })
+      .from(appGroups)
+      .where(like(appGroups.name, `${E2E_PREFIX}%`));
+    const e2eGroupIdSet = new Set(e2eGroups.map((g) => g.id));
+
+    const allStandupConfigs = await db
+      .select({
+        id: standupConfigs.id,
+        groupId: standupConfigs.groupId,
+        groupIds: standupConfigs.groupIds,
+        teamGoal: standupConfigs.teamGoal,
+        areaPath: standupConfigs.areaPath,
+      })
+      .from(standupConfigs);
+
+    const e2eConfigIds = allStandupConfigs
+      .filter((cfg) => {
+        if (cfg.teamGoal?.startsWith(E2E_PREFIX)) return true;
+        if (cfg.areaPath?.startsWith(E2E_PREFIX)) return true;
+        if (cfg.groupId && e2eGroupIdSet.has(cfg.groupId)) return true;
+        if (
+          Array.isArray(cfg.groupIds) &&
+          cfg.groupIds.some((gid) => e2eGroupIdSet.has(gid))
+        ) {
+          return true;
+        }
+        return false;
+      })
+      .map((cfg) => cfg.id);
+
+    if (e2eConfigIds.length > 0) {
+      await db.delete(standupConfigs).where(inArray(standupConfigs.id, e2eConfigIds));
+    }
+    if (e2eGroups.length > 0) {
+      await db.delete(appGroups).where(like(appGroups.name, `${E2E_PREFIX}%`));
+    }
 
     await db.delete(reviewComments).where(like(reviewComments.body, `${E2E_PREFIX}%`));
     await db.delete(notifications).where(like(notifications.title, `${E2E_PREFIX}%`));
@@ -1480,6 +1551,317 @@ router.post('/seed/observability-telemetry', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: `E2E seed/observability-telemetry failed: ${message}` });
+  }
+});
+
+// Seed deterministic Standup & Delivery Pulse config, session, participants, followups, and proposals.
+router.post('/seed/standup-delivery-pulse', async (req, res) => {
+  try {
+    const {
+      project = 'MaxView',
+      deliveryModel = 'flow',
+      goalSource = 'manual',
+      teamGoal = 'Keep flow cycle time under 3 days',
+      rosterMode = 'ado_and_groups',
+      policy,
+      sessionDate = new Date().toISOString().slice(0, 10),
+      sessionStatus = 'collecting',
+      summaryMarkdown = '### Delivery Pulse Summary\nAll signals collected.',
+      participantUserId = 'dev-mock-oid-00000000-0000-0000-0000-000000000000',
+      participantStatus = 'notified',
+      preparedBrief,
+      participantEvidence,
+      structuredUpdate,
+      additionalParticipants = [],
+      proposals = [],
+      followups = [],
+      createSession = true,
+    } = (req.body ?? {}) as {
+      project?: string;
+      deliveryModel?: StandupDeliveryModel;
+      goalSource?: StandupGoalSource;
+      teamGoal?: string | null;
+      rosterMode?: StandupRosterMode;
+      policy?: Partial<StandupDeliveryPolicy>;
+      sessionDate?: string;
+      sessionStatus?: 'collecting' | 'facilitating' | 'completed';
+      summaryMarkdown?: string | null;
+      participantUserId?: string;
+      participantStatus?: 'notified' | 'submitted';
+      preparedBrief?: ParticipantPreparedBrief | null;
+      participantEvidence?: Partial<EvaluateParticipantBriefInput>;
+      structuredUpdate?: StandupStructuredUpdate | null;
+      additionalParticipants?: Array<{
+        userId: string;
+        status?: 'notified' | 'submitted';
+        preparedBrief?: ParticipantPreparedBrief | null;
+        participantEvidence?: Partial<EvaluateParticipantBriefInput>;
+        structuredUpdate?: StandupStructuredUpdate | null;
+      }>;
+      proposals?: Array<
+        StandupActionProposalInput & { status?: 'pending' | 'applied' | 'dismissed' }
+      >;
+      followups?: Array<{
+        title: string;
+        description?: string;
+        participantUserIds?: string[];
+      }>;
+      createSession?: boolean;
+    };
+
+    const groupName = `${E2E_PREFIX} Delivery Pulse Team`;
+    const existingGroup = await db
+      .select()
+      .from(appGroups)
+      .where(and(eq(appGroups.name, groupName), eq(appGroups.project, project)))
+      .limit(1);
+
+    let group = existingGroup[0];
+    if (!group) {
+      const [insertedGroup] = await db
+        .insert(appGroups)
+        .values({
+          name: groupName,
+          project,
+          description: `${E2E_PREFIX} Standup Delivery Pulse group`,
+          createdBy: E2E_ASSIGNED_BY,
+        })
+        .returning();
+      group = insertedGroup;
+    }
+
+    const allParticipantUserIds = [
+      participantUserId,
+      ...additionalParticipants.map((ap) => ap.userId),
+    ];
+    for (const uid of allParticipantUserIds) {
+      await db
+        .insert(appGroupMembers)
+        .values({
+          groupId: group.id,
+          userId: uid,
+          addedBy: E2E_ASSIGNED_BY,
+        })
+        .onConflictDoNothing();
+    }
+
+    const resolvedModel = normalizeDeliveryModel(deliveryModel);
+    const resolvedGoalSource = normalizeGoalSource(goalSource);
+    const resolvedRosterMode = normalizeRosterMode(rosterMode);
+    const resolvedPolicy = resolveStandupPolicy(resolvedModel, policy);
+    const prefixedGoal = teamGoal ? e2eTitle(teamGoal) : null;
+
+    const [config] = await db
+      .insert(standupConfigs)
+      .values({
+        groupId: group.id,
+        groupIds: [group.id],
+        project,
+        deliveryModel: resolvedModel,
+        goalSource: resolvedGoalSource,
+        teamGoal: prefixedGoal,
+        rosterMode: resolvedRosterMode,
+        policy: resolvedPolicy,
+        enabled: true,
+      })
+      .returning();
+
+    if (!createSession) {
+      res.json({
+        group,
+        config,
+        session: null,
+        participant: null,
+        proposals: [],
+        followups: [],
+      });
+      return;
+    }
+
+    const userMetaByOid = new Map<
+      string,
+      { displayName: string | null; email: string | null }
+    >();
+    const userRows = await db
+      .select({
+        oid: appUsers.oid,
+        displayName: appUsers.displayName,
+        email: appUsers.email,
+      })
+      .from(appUsers)
+      .where(inArray(appUsers.oid, allParticipantUserIds));
+    for (const u of userRows) {
+      userMetaByOid.set(u.oid, {
+        displayName: u.displayName ?? null,
+        email: u.email ?? null,
+      });
+    }
+
+    const buildBriefFromEvidence = (
+      userId: string,
+      ev?: Partial<EvaluateParticipantBriefInput>,
+    ): ParticipantPreparedBrief | null => {
+      const meta = userMetaByOid.get(userId);
+      if (!ev) {
+        return evaluateParticipantBrief({
+          deliveryModel: resolvedModel,
+          teamGoal: prefixedGoal,
+          policy: resolvedPolicy,
+          activeWorkItems: [],
+          ownerDisplayName: meta?.displayName ?? null,
+          ownerEmail: meta?.email ?? null,
+        });
+      }
+      return evaluateParticipantBrief({
+        deliveryModel: resolvedModel,
+        teamGoal: prefixedGoal,
+        policy: resolvedPolicy,
+        activeWorkItems: ev.activeWorkItems ?? [],
+        changedSinceLastWorkItems: ev.changedSinceLastWorkItems,
+        pullRequests: ev.pullRequests,
+        builds: ev.builds,
+        pipelineFailures: ev.pipelineFailures,
+        priorHistory: ev.priorHistory,
+        priorStructuredUpdate: ev.priorStructuredUpdate,
+        openFollowups: ev.openFollowups,
+        ownerDisplayName: ev.ownerDisplayName ?? meta?.displayName ?? null,
+        ownerEmail: ev.ownerEmail ?? meta?.email ?? null,
+      });
+    };
+
+    const threadId = randomUUID();
+    await db.insert(chatThreads).values({
+      id: threadId,
+      userId: participantUserId,
+      status: 'idle',
+      title: e2eTitle(`Standup ${sessionDate}`),
+      kickoff: {
+        project,
+        repo: '',
+        mode: 'standup-participant',
+        standupDeliveryModel: resolvedModel,
+        standupTeamGoal: prefixedGoal,
+      },
+    });
+
+    const [session] = await db
+      .insert(standupSessions)
+      .values({
+        configId: config.id,
+        groupId: group.id,
+        sessionDate,
+        status: sessionStatus,
+        summaryMarkdown,
+        ...(sessionStatus === 'completed'
+          ? { completedAt: new Date().toISOString() }
+          : {}),
+      })
+      .returning();
+
+    const primaryBrief =
+      preparedBrief !== undefined
+        ? preparedBrief
+        : buildBriefFromEvidence(participantUserId, participantEvidence);
+
+    const [participant] = await db
+      .insert(standupParticipants)
+      .values({
+        sessionId: session.id,
+        userId: participantUserId,
+        threadId,
+        status: participantStatus,
+        preparedBrief: primaryBrief,
+        structuredUpdate: structuredUpdate ?? null,
+        ...(participantStatus === 'submitted'
+          ? { submittedAt: new Date().toISOString() }
+          : {}),
+      })
+      .returning();
+
+    for (const extra of additionalParticipants) {
+      const extraThreadId = randomUUID();
+      await db.insert(chatThreads).values({
+        id: extraThreadId,
+        userId: extra.userId,
+        status: 'idle',
+        title: e2eTitle(`Standup ${sessionDate} ${extra.userId.slice(-6)}`),
+        kickoff: {
+          project,
+          repo: '',
+          mode: 'standup-participant',
+          standupDeliveryModel: resolvedModel,
+          standupTeamGoal: prefixedGoal,
+        },
+      });
+      const extraStatus = extra.status ?? 'notified';
+      const extraBrief =
+        extra.preparedBrief !== undefined
+          ? extra.preparedBrief
+          : buildBriefFromEvidence(extra.userId, extra.participantEvidence);
+      await db.insert(standupParticipants).values({
+        sessionId: session.id,
+        userId: extra.userId,
+        threadId: extraThreadId,
+        status: extraStatus,
+        preparedBrief: extraBrief,
+        structuredUpdate: extra.structuredUpdate ?? null,
+        ...(extraStatus === 'submitted'
+          ? { submittedAt: new Date().toISOString() }
+          : {}),
+      });
+    }
+
+    const insertedProposals = [];
+    for (const p of proposals) {
+      const [propRow] = await db
+        .insert(standupActionProposals)
+        .values({
+          sessionId: session.id,
+          participantId: participant.id,
+          project,
+          workItemId: p.workItemId,
+          workItemTitle: e2eTitle(p.workItemTitle),
+          proposalType: p.proposalType,
+          fieldName: p.fieldName,
+          currentValue: p.currentValue ?? null,
+          proposedValue: p.proposedValue,
+          reason: p.reason,
+          confidence: p.confidence ?? 'at_risk',
+          status: p.status ?? 'pending',
+        })
+        .returning();
+      insertedProposals.push(propRow);
+    }
+
+    const insertedFollowups = [];
+    for (const f of followups) {
+      const [fRow] = await db
+        .insert(standupFollowups)
+        .values({
+          sessionId: session.id,
+          title: e2eTitle(f.title),
+          description: f.description ?? null,
+          participantUserIds: f.participantUserIds ?? [participantUserId],
+          relatedWorkItemIds: [],
+          status: 'open',
+        })
+        .returning();
+      insertedFollowups.push(fRow);
+    }
+
+    const teamPulse = await recomputeSessionTeamPulse(session.id);
+
+    res.json({
+      group,
+      config,
+      session: { ...session, teamPulse },
+      participant,
+      proposals: insertedProposals,
+      followups: insertedFollowups,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/standup-delivery-pulse failed: ${message}` });
   }
 });
 
