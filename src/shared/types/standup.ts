@@ -155,6 +155,71 @@ export interface ParticipantDetectedException {
   proposedAction?: StandupProposedAction;
 }
 
+export type StandupActivityAttribution = 'confirmed' | 'suggested';
+
+export interface StandupSuggestedActivity {
+  id: string;
+  bucket: 'yesterday' | 'today';
+  summary: string;
+  source: 'ado' | 'github' | 'history' | 'followup';
+  actor?: string;
+  owner?: string;
+  workItemId?: number;
+  prId?: number;
+  attribution: StandupActivityAttribution;
+  reason: string;
+}
+
+export interface StandupCheckInValues {
+  yesterday: string;
+  today: string;
+  blockers?: string;
+  handoffs?: string;
+  capacity?: string;
+  userCorrections?: string;
+}
+
+export const STANDUP_CHECK_IN_SCHEMA = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  title: 'StandupCheckIn',
+  type: 'object',
+  additionalProperties: false,
+  required: ['today'],
+  properties: {
+    yesterday: {
+      type: 'string',
+      title: 'Since last standup',
+      maxLength: 2000,
+    },
+    today: {
+      type: 'string',
+      title: "Today's focus",
+      minLength: 1,
+      maxLength: 2000,
+    },
+    blockers: {
+      type: 'string',
+      title: 'Blockers or help needed',
+      maxLength: 1000,
+    },
+    handoffs: {
+      type: 'string',
+      title: 'Handoffs or reviews needed',
+      maxLength: 1000,
+    },
+    capacity: {
+      type: 'string',
+      title: 'Availability note',
+      maxLength: 500,
+    },
+    userCorrections: {
+      type: 'string',
+      title: 'Additional note or correction',
+      maxLength: 1000,
+    },
+  },
+} as const;
+
 export interface StandupDraftedItem {
   id: string;
   bucket: 'yesterday' | 'today' | 'blocker';
@@ -163,6 +228,8 @@ export interface StandupDraftedItem {
   prId?: number;
   domain?: StandupWorkDomain;
   evidence: string;
+  attribution?: StandupActivityAttribution;
+  owner?: string;
 }
 
 export interface ParticipantCarryoverStreak {
@@ -217,6 +284,8 @@ export interface ParticipantStandupNarrative {
   yesterdaySummary: string;
   todayFocus: string;
   blockersSummary: string;
+  handoffsSummary?: string;
+  capacitySummary?: string;
   userCorrections?: string;
   carryoverCount: number;
 }
@@ -255,6 +324,9 @@ export interface ParticipantPreparedBrief {
     sessionDate: string;
   }>;
   draftedItems?: StandupDraftedItem[];
+  suggestedActivity?: StandupSuggestedActivity[];
+  proposedQuestions?: string[];
+  hasExternalEvidence?: boolean;
   recommendedFocus?: string;
   multiDayArc?: ParticipantMultiDayArc;
   workDomains?: StandupWorkDomain[];
@@ -308,6 +380,7 @@ export interface StandupTeamPulse {
     note: string;
   }>;
   decisionsNeeded: string[];
+  facilitatorPrompts?: string[];
   sdlcCallouts?: StandupSdlcCallout[];
   areaBreakdown?: StandupAreaBreakdownEntry[];
   individualNarratives?: ParticipantStandupNarrative[];

@@ -12,6 +12,7 @@ import {
   type StandupActionProposal,
   type StandupApprovalAction,
   type StandupAreaBreakdownEntry,
+  type StandupCheckInValues,
   type StandupDeliveryModel,
   type StandupDeliveryPolicy,
   type StandupDraftedItem,
@@ -22,9 +23,12 @@ import {
   type StandupRosterMode,
   type StandupSdlcCallout,
   type StandupStructuredUpdate,
+  type StandupSuggestedActivity,
   type StandupTeamPulse,
   type StandupWorkDomain,
 } from '../types/standup';
+
+export const MAX_PERSONAL_STANDUP_ITEMS = 3;
 
 export interface EvidenceWorkItem {
   id: number;
@@ -32,6 +36,8 @@ export interface EvidenceWorkItem {
   workItemType: string;
   state: string;
   assignedTo?: string;
+  assignedToEmail?: string;
+  isUnassigned?: boolean;
   changedDate?: string;
   createdDate?: string;
   targetDate?: string | null;
@@ -68,6 +74,7 @@ export interface EvidencePullRequest {
   status: 'active' | 'completed' | 'abandoned';
   createdAt: string;
   closedAt?: string;
+  authorEmail?: string;
   linkedWorkItemIds: number[];
   hasApproval?: boolean;
   repositoryName?: string;
@@ -100,6 +107,7 @@ export interface EvaluateParticipantBriefInput {
   policy?: Partial<StandupDeliveryPolicy> | null;
   expectedIterationPath?: string | null;
   ownerDisplayName?: string | null;
+  ownerEmail?: string | null;
   activeWorkItems: EvidenceWorkItem[];
   changedSinceLastWorkItems?: EvidenceWorkItem[];
   pullRequests?: EvidencePullRequest[];
@@ -802,6 +810,91 @@ function computeMultiDayArc(params: {
   };
 }
 
+// ── Ownership Attribution & Check-In Validation ──────────────────────────────
+
+function truncateBriefText(text: string, maxLen = 90): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxLen) return clean;
+  return `${clean.slice(0, maxLen - 1).trimEnd()}…`;
+}
+
+export function classifyWorkItemOwnership(
+  item: EvidenceWorkItem,
+  ownerEmail?: string | null,
+  ownerDisplayName?: string | null,
+): 'owned' | 'other_owner' | 'unassigned' | 'unspecified' {
+  if (item.isUnassigned) return 'unassigned';
+
+  const itemEmail = item.assignedToEmail?.trim().toLowerCase() ?? '';
+  const itemAssignee = item.assignedTo?.trim().toLowerCase() ?? '';
+  if (!itemEmail && !itemAssignee) {
+    return 'unspecified';
+  }
+
+  const ownerEmailNorm = ownerEmail?.trim().toLowerCase() ?? '';
+  const ownerNameNorm = ownerDisplayName?.trim().toLowerCase() ?? '';
+  if (!ownerEmailNorm && !ownerNameNorm) {
+    return 'unspecified';
+  }
+
+  if (
+    ownerEmailNorm &&
+    (itemEmail === ownerEmailNorm ||
+      itemAssignee === ownerEmailNorm ||
+      itemAssignee.includes(`<${ownerEmailNorm}>`))
+  ) {
+    return 'owned';
+  }
+  if (ownerNameNorm && itemAssignee === ownerNameNorm) {
+    return 'owned';
+  }
+
+  return 'other_owner';
+}
+
+export function validateStandupCheckIn(
+  values: Partial<StandupCheckInValues> | null | undefined,
+): { ok: true; value: StandupCheckInValues } | { ok: false; error: string } {
+  if (!values || typeof values !== 'object') {
+    return { ok: false, error: "Please enter today's focus before submitting." };
+  }
+  const today = typeof values.today === 'string' ? values.today.trim() : '';
+  const yesterday =
+    typeof values.yesterday === 'string' ? values.yesterday.trim() : '';
+  const blockers =
+    typeof values.blockers === 'string' ? values.blockers.trim() : '';
+  const handoffs =
+    typeof values.handoffs === 'string' ? values.handoffs.trim() : '';
+  const capacity =
+    typeof values.capacity === 'string' ? values.capacity.trim() : '';
+  const userCorrections =
+    typeof values.userCorrections === 'string'
+      ? values.userCorrections.trim()
+      : '';
+
+  if (!today && !yesterday && !blockers) {
+    return {
+      ok: false,
+      error: "Please share at least today's focus (or progress / blocker) before submitting.",
+    };
+  }
+  if (today.length > 2000 || yesterday.length > 2000) {
+    return { ok: false, error: 'Standup update text exceeds the 2,000-character limit.' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      yesterday,
+      today: today || 'Continuing current priorities',
+      ...(blockers ? { blockers } : {}),
+      ...(handoffs ? { handoffs } : {}),
+      ...(capacity ? { capacity } : {}),
+      ...(userCorrections ? { userCorrections } : {}),
+    },
+  };
+}
+
 // ── Participant Prepared Brief Evaluation ────────────────────────────────────
 
 export function evaluateParticipantBrief(
@@ -810,8 +903,8 @@ export function evaluateParticipantBrief(
   const now = toDate(input.now) ?? new Date();
   const deliveryModel = normalizeDeliveryModel(input.deliveryModel);
   const policy = resolveStandupPolicy(deliveryModel, input.policy);
-  const changedItems = input.changedSinceLastWorkItems ?? [];
-  const prs = policy.enablePrEvidence ? (input.pullRequests ?? []) : [];
+  const rawChangedItems = input.changedSinceLastWorkItems ?? [];
+  const rawPrs = policy.enablePrEvidence ? (input.pullRequests ?? []) : [];
   const builds = policy.enablePipelineEvidence ? (input.builds ?? []) : [];
   const pipelineFailures = policy.enablePipelineEvidence
     ? (input.pipelineFailures ?? [])
@@ -826,13 +919,122 @@ export function evaluateParticipantBrief(
       : [];
   const latestPriorUpdate = history[0]?.structuredUpdate ?? input.priorStructuredUpdate ?? null;
 
-  const activeById = new Map<number, EvidenceWorkItem>();
+  const priorMentionedIds = new Set<number>();
+  for (const rec of history) {
+    const u = rec.structuredUpdate;
+    if (!u) continue;
+    for (const id of extractWorkItemIds(`${u.yesterday ?? ''} ${u.today ?? ''}`)) {
+      priorMentionedIds.add(id);
+    }
+  }
+
+  const suggestedActivity: StandupSuggestedActivity[] = [];
+  const seenSuggestedIds = new Set<string>();
+  const pushSuggested = (entry: StandupSuggestedActivity) => {
+    if (seenSuggestedIds.has(entry.id)) return;
+    seenSuggestedIds.add(entry.id);
+    suggestedActivity.push(entry);
+  };
+
+  // Enforce strict owner attribution on active items
+  const ownedActiveInputItems: EvidenceWorkItem[] = [];
   for (const item of input.activeWorkItems) {
+    const ownership = classifyWorkItemOwnership(
+      item,
+      input.ownerEmail,
+      input.ownerDisplayName,
+    );
+    if (ownership === 'other_owner') {
+      pushSuggested({
+        id: `suggested-wi-${item.id}`,
+        bucket: 'today',
+        summary: `#${item.id} ${item.title} [${item.state}]`,
+        source: 'ado',
+        actor: input.ownerDisplayName ?? input.ownerEmail ?? undefined,
+        owner: item.assignedTo ?? item.assignedToEmail,
+        workItemId: item.id,
+        attribution: 'suggested',
+        reason: `Assigned to ${item.assignedTo ?? item.assignedToEmail ?? 'another teammate'}`,
+      });
+      continue;
+    }
+    ownedActiveInputItems.push(item);
+  }
+
+  const activeById = new Map<number, EvidenceWorkItem>();
+  for (const item of ownedActiveInputItems) {
     activeById.set(item.id, item);
   }
+
+  // Enforce strict actor-vs-owner attribution on ChangedBy items
+  const changedItems: EvidenceWorkItem[] = [];
+  for (const item of rawChangedItems) {
+    const ownership = classifyWorkItemOwnership(
+      item,
+      input.ownerEmail,
+      input.ownerDisplayName,
+    );
+    if (ownership === 'other_owner') {
+      pushSuggested({
+        id: `suggested-wi-${item.id}`,
+        bucket: 'yesterday',
+        summary: `#${item.id} ${item.title} [${item.state}]`,
+        source: 'ado',
+        actor: input.ownerDisplayName ?? input.ownerEmail ?? undefined,
+        owner: item.assignedTo ?? item.assignedToEmail,
+        workItemId: item.id,
+        attribution: 'suggested',
+        reason: `Assigned to ${item.assignedTo ?? item.assignedToEmail ?? 'another teammate'} — you updated it`,
+      });
+      continue;
+    }
+    if (
+      ownership === 'unassigned' &&
+      !activeById.has(item.id) &&
+      !priorMentionedIds.has(item.id) &&
+      !TERMINAL_STATES.has(item.state.trim().toLowerCase())
+    ) {
+      pushSuggested({
+        id: `suggested-wi-${item.id}`,
+        bucket: 'yesterday',
+        summary: `#${item.id} ${item.title} [${item.state}]`,
+        source: 'ado',
+        actor: input.ownerDisplayName ?? input.ownerEmail ?? undefined,
+        workItemId: item.id,
+        attribution: 'suggested',
+        reason: 'Unassigned item you updated',
+      });
+      continue;
+    }
+    changedItems.push(item);
+  }
+
   const changedById = new Map<number, EvidenceWorkItem>();
   for (const item of changedItems) {
     changedById.set(item.id, item);
+  }
+
+  // Filter PRs to those authored by this participant (never claim a teammate's PR)
+  const ownerEmailLower = input.ownerEmail?.trim().toLowerCase() ?? '';
+  const prs: EvidencePullRequest[] = [];
+  for (const pr of rawPrs) {
+    const prAuthorLower = pr.authorEmail?.trim().toLowerCase() ?? '';
+    if (ownerEmailLower && prAuthorLower && prAuthorLower !== ownerEmailLower) {
+      pushSuggested({
+        id: `suggested-pr-${pr.prId}`,
+        bucket: 'yesterday',
+        summary: `PR !${pr.prId}: ${pr.title}`,
+        source: 'ado',
+        actor: input.ownerDisplayName ?? input.ownerEmail ?? undefined,
+        owner: pr.authorEmail,
+        prId: pr.prId,
+        workItemId: pr.linkedWorkItemIds[0],
+        attribution: 'suggested',
+        reason: `Authored by ${pr.authorEmail}`,
+      });
+      continue;
+    }
+    prs.push(pr);
   }
 
   const accomplishedSinceLast: ParticipantPreparedBrief['accomplishedSinceLast'] = [];
@@ -901,7 +1103,7 @@ export function evaluateParticipantBrief(
         note,
       });
 
-      if (status === 'untouched') {
+      if (status === 'untouched' && ids.length > 0) {
         for (const id of ids) carryoverWorkItemIds.add(id);
         detectedExceptions.push({
           id: `untouched-commitment-${idx}`,
@@ -1000,7 +1202,7 @@ export function evaluateParticipantBrief(
   }
 
   // WIP check
-  const nonTerminalActive = input.activeWorkItems.filter(
+  const nonTerminalActive = ownedActiveInputItems.filter(
     (item) => !TERMINAL_STATES.has(item.state.trim().toLowerCase()),
   );
   const wipItems = nonTerminalActive.filter((item) =>
@@ -1211,7 +1413,10 @@ export function evaluateParticipantBrief(
     pipelineFailures,
   });
 
-  // Pre-drafted items for 1-click Approve / Reject UX
+  const hasExternalEvidence =
+    nonTerminalActive.length > 0 || changedItems.length > 0 || prs.length > 0;
+
+  // Pre-drafted items (strictly capped at MAX_PERSONAL_STANDUP_ITEMS per personal bucket)
   const draftedItems: StandupDraftedItem[] = [];
   accomplishedSinceLast.forEach((acc, idx) => {
     const wi = acc.workItemId
@@ -1224,41 +1429,76 @@ export function evaluateParticipantBrief(
         : wi
         ? classifyWorkItemDomain(wi)
         : 'general';
-    draftedItems.push({
-      id: acc.prId
-        ? `draft-yesterday-pr-${acc.prId}`
-        : acc.workItemId
-        ? `draft-yesterday-wi-${acc.workItemId}`
-        : `draft-yesterday-${idx}`,
-      bucket: 'yesterday',
-      summary: acc.prId
-        ? `Merged PR !${acc.prId}: ${acc.title}${acc.workItemId ? ` (#${acc.workItemId})` : ''}`
-        : `#${acc.workItemId} ${acc.title}${acc.state ? ` [${acc.state}]` : ''}`,
-      workItemId: acc.workItemId,
-      prId: acc.prId,
-      domain,
-      evidence: acc.evidence,
-    });
+    const summaryText = acc.prId
+      ? `Merged PR !${acc.prId}: ${acc.title}${acc.workItemId ? ` (#${acc.workItemId})` : ''}`
+      : `#${acc.workItemId} ${acc.title}${acc.state ? ` [${acc.state}]` : ''}`;
+
+    if (idx < MAX_PERSONAL_STANDUP_ITEMS) {
+      draftedItems.push({
+        id: acc.prId
+          ? `draft-yesterday-pr-${acc.prId}`
+          : acc.workItemId
+          ? `draft-yesterday-wi-${acc.workItemId}`
+          : `draft-yesterday-${idx}`,
+        bucket: 'yesterday',
+        summary: summaryText,
+        workItemId: acc.workItemId,
+        prId: acc.prId,
+        domain,
+        evidence: acc.evidence,
+        attribution: 'confirmed',
+      });
+    } else {
+      pushSuggested({
+        id: acc.prId
+          ? `suggested-overflow-pr-${acc.prId}`
+          : `suggested-overflow-wi-${acc.workItemId ?? idx}`,
+        bucket: 'yesterday',
+        summary: summaryText,
+        source: acc.prId ? 'github' : 'ado',
+        workItemId: acc.workItemId,
+        prId: acc.prId,
+        attribution: 'suggested',
+        reason: 'Additional recent update',
+      });
+    }
   });
 
-  suggestedToday.slice(0, 5).forEach((item) => {
+  suggestedToday.forEach((item, idx) => {
     const fullItem = activeById.get(item.workItemId);
     const domain = fullItem ? classifyWorkItemDomain(fullItem) : 'general';
     const flagSuffix =
       item.riskFlags.length > 0 ? ` (${item.riskFlags.join(', ')})` : '';
-    draftedItems.push({
-      id: `draft-today-wi-${item.workItemId}`,
-      bucket: 'today',
-      summary: `#${item.workItemId} ${item.title} [${item.state}]${flagSuffix}`,
-      workItemId: item.workItemId,
-      domain,
-      evidence: item.iterationPath
-        ? `Assigned in ${item.iterationPath}`
-        : 'Assigned in ADO',
-    });
+    const summaryText = `#${item.workItemId} ${item.title} [${item.state}]${flagSuffix}`;
+
+    if (idx < MAX_PERSONAL_STANDUP_ITEMS) {
+      draftedItems.push({
+        id: `draft-today-wi-${item.workItemId}`,
+        bucket: 'today',
+        summary: summaryText,
+        workItemId: item.workItemId,
+        domain,
+        evidence: item.iterationPath
+          ? `Assigned in ${item.iterationPath}`
+          : 'Assigned to you',
+        attribution: 'confirmed',
+      });
+    } else if (idx < 8) {
+      pushSuggested({
+        id: `suggested-today-wi-${item.workItemId}`,
+        bucket: 'today',
+        summary: summaryText,
+        source: 'ado',
+        workItemId: item.workItemId,
+        attribution: 'suggested',
+        reason: 'Additional assigned item',
+      });
+    }
   });
 
+  let blockerDraftCount = 0;
   for (const callout of sdlcCallouts) {
+    if (blockerDraftCount >= 2) break;
     if (callout.severity === 'critical' || callout.category === 'sql_migration') {
       draftedItems.push({
         id: `draft-blocker-${callout.id}`,
@@ -1268,11 +1508,14 @@ export function evaluateParticipantBrief(
         prId: callout.prIds?.[0],
         domain: callout.domain,
         evidence: `SDLC ${callout.category}`,
+        attribution: 'confirmed',
       });
+      blockerDraftCount += 1;
     }
   }
 
   for (const ex of detectedExceptions) {
+    if (blockerDraftCount >= 2) break;
     if (
       ex.kind === 'pipeline_failure' ||
       ex.kind === 'sla_breach' ||
@@ -1286,8 +1529,22 @@ export function evaluateParticipantBrief(
         prId: ex.prId,
         domain: ex.kind === 'pipeline_failure' ? 'iac' : 'general',
         evidence: ex.kind,
+        attribution: 'confirmed',
       });
+      blockerDraftCount += 1;
     }
+  }
+
+  // Generic / non-ADO history continuity suggestion
+  if (!hasExternalEvidence && latestPriorUpdate?.today?.trim()) {
+    pushSuggested({
+      id: 'suggested-history-prior-today',
+      bucket: 'yesterday',
+      summary: latestPriorUpdate.today.trim(),
+      source: 'history',
+      attribution: 'suggested',
+      reason: 'Planned in your previous check-in',
+    });
   }
 
   // Recommended focus synthesis
@@ -1309,8 +1566,45 @@ export function evaluateParticipantBrief(
       : `Progress #${topToday.workItemId} (${topToday.title}) [${topToday.state}] and keep active WIP moving cleanly.`;
   } else {
     recommendedFocus = input.teamGoal
-      ? `Pick up the next highest-priority item supporting "${input.teamGoal}".`
-      : 'Confirm current priority assignment or pull the next ready item.';
+      ? `Share the main priority moving "${input.teamGoal}" forward today.`
+      : 'Share your main focus for today and flag anything blocking progress.';
+  }
+
+  // AI-proposed contextual check-in questions (generic first, works with or without ADO)
+  const proposedQuestions: string[] = [];
+  const openFollowups = input.openFollowups ?? [];
+  if (latestPriorUpdate?.blockers && !isNoneLike(latestPriorUpdate.blockers)) {
+    proposedQuestions.push(
+      `Last check-in you flagged a blocker (“${truncateBriefText(latestPriorUpdate.blockers, 80)}”) — is it cleared or do you still need help?`,
+    );
+  } else if (openFollowups.length > 0) {
+    proposedQuestions.push(
+      `Open standup follow-up: “${truncateBriefText(openFollowups[0].title, 80)}” — any update for the team?`,
+    );
+  }
+
+  if (proposedQuestions.length < 2) {
+    if (topStreak) {
+      proposedQuestions.push(
+        `#${topStreak.workItemId} (${truncateBriefText(topStreak.title, 60)}) has carried across ${topStreak.daysCarried} check-ins — can it wrap today, or is something blocking it?`,
+      );
+    } else if (!hasExternalEvidence && latestPriorUpdate?.today?.trim()) {
+      proposedQuestions.push(
+        `Last check-in you planned: “${truncateBriefText(latestPriorUpdate.today, 85)}”. Did that finish, or does part of it carry into today?`,
+      );
+    } else if (criticalSdlc) {
+      proposedQuestions.push(`${criticalSdlc.title}: ${criticalSdlc.recommendation}`);
+    } else if (criticalEx) {
+      proposedQuestions.push(`Needs attention: ${criticalEx.message}`);
+    }
+  }
+
+  if (proposedQuestions.length === 0) {
+    proposedQuestions.push(
+      input.teamGoal?.trim()
+        ? `What moved forward since last check-in, and how does today's focus advance “${truncateBriefText(input.teamGoal, 75)}”?`
+        : 'What moved forward since last check-in, what is your #1 focus today, and do you need help from anyone?',
+    );
   }
 
   return {
@@ -1321,8 +1615,11 @@ export function evaluateParticipantBrief(
     priorCommitments,
     suggestedToday,
     detectedExceptions,
-    openFollowups: input.openFollowups ?? [],
+    openFollowups,
     draftedItems,
+    suggestedActivity,
+    proposedQuestions: proposedQuestions.slice(0, 2),
+    hasExternalEvidence,
     recommendedFocus,
     multiDayArc,
     workDomains,
@@ -1510,8 +1807,16 @@ export function synthesizeTeamPulse(
     // Individual standup narrative (for BOTH confirmed and unsubmitted AI-drafted participants)
     const carryoverStreakCount = brief?.multiDayArc?.carryoverStreaks?.length ?? 0;
     const untouchedCount =
-      brief?.priorCommitments?.filter((c) => c.status === 'untouched').length ?? 0;
+      brief?.priorCommitments?.filter(
+        (c) => c.status === 'untouched' && c.workItemIds.length > 0,
+      ).length ?? 0;
     const carryoverCount = Math.max(carryoverStreakCount, untouchedCount);
+
+    const hasDraftEvidence =
+      Boolean(brief?.hasExternalEvidence) ||
+      (brief?.draftedItems?.length ?? 0) > 0 ||
+      (brief?.accomplishedSinceLast?.length ?? 0) > 0 ||
+      (brief?.suggestedToday?.length ?? 0) > 0;
 
     const draftedYesterday =
       brief?.draftedItems
@@ -1522,22 +1827,23 @@ export function synthesizeTeamPulse(
         ?.slice(0, 3)
         .map((a) => (a.workItemId ? `#${a.workItemId} ${a.title}` : a.title))
         .join('; ') ||
-      'No ADO or PR changes recorded since last standup.';
+      'No update submitted yet.';
 
-    const draftedToday =
-      brief?.recommendedFocus ||
-      brief?.draftedItems
-        ?.filter((i) => i.bucket === 'today')
-        .slice(0, 3)
-        .map((i) => i.summary)
-        .join('; ') ||
-      'Pending standup confirmation.';
+    const draftedToday = hasDraftEvidence
+      ? brief?.recommendedFocus ||
+        brief?.draftedItems
+          ?.filter((i) => i.bucket === 'today')
+          .slice(0, 3)
+          .map((i) => i.summary)
+          .join('; ') ||
+        'Waiting for check-in.'
+      : 'Waiting for check-in.';
 
     const draftedBlockers =
       brief?.draftedItems
         ?.filter((i) => i.bucket === 'blocker')
         .map((i) => i.summary)
-        .join('; ') || 'None detected';
+        .join('; ') || 'None';
 
     if (isSubmitted && update) {
       individualNarratives.push({
@@ -1547,14 +1853,20 @@ export function synthesizeTeamPulse(
         domains: participantDomains,
         arcSummary:
           brief?.multiDayArc?.summary ??
-          'Confirmed update recorded for today.',
+          'Submitted for today.',
         yesterdaySummary:
-          update.yesterday?.trim() || 'No updates reported for yesterday.',
+          update.yesterday?.trim() || 'No updates reported since last check-in.',
         todayFocus:
           update.today?.trim() || draftedToday,
         blockersSummary: !isNoneLike(update.blockers)
           ? update.blockers!.trim()
           : 'None',
+        ...(update.handoffs && !isNoneLike(update.handoffs)
+          ? { handoffsSummary: update.handoffs.trim() }
+          : {}),
+        ...(update.capacity && !isNoneLike(update.capacity)
+          ? { capacitySummary: update.capacity.trim() }
+          : {}),
         ...(update.userCorrections?.trim()
           ? { userCorrections: update.userCorrections.trim() }
           : {}),
@@ -1568,7 +1880,9 @@ export function synthesizeTeamPulse(
         domains: participantDomains,
         arcSummary:
           brief?.multiDayArc?.summary ??
-          'AI-drafted from live ADO, PR, and pipeline activity (awaiting confirmation).',
+          (hasDraftEvidence
+            ? 'Awaiting member confirmation.'
+            : 'Waiting for check-in.'),
         yesterdaySummary: draftedYesterday,
         todayFocus: draftedToday,
         blockersSummary: draftedBlockers,
@@ -1874,13 +2188,68 @@ export function synthesizeTeamPulse(
     overallHealth = 'watch';
   }
 
+  // Order readout cards so confirmed submissions appear first for reading out loud
+  individualNarratives.sort((a, b) => {
+    if (a.status === b.status) return 0;
+    return a.status === 'confirmed' ? -1 : 1;
+  });
+
   const totalParticipants = input.participants.length;
-  const goalPrefix = teamGoal ? `Goal "${teamGoal}": ` : '';
-  const goalProgressSummary =
-    `${goalPrefix}${submittedCount}/${totalParticipants} updates confirmed · ` +
-    `${sdlcCallouts.length} SDLC callout${sdlcCallouts.length === 1 ? '' : 's'} · ` +
-    `${blockers.length} blocker${blockers.length === 1 ? '' : 's'} · ` +
-    `${carryoverAlerts.length} carryover alert${carryoverAlerts.length === 1 ? '' : 's'}.`;
+  const summaryParts = [
+    `${submittedCount} of ${totalParticipants} checked in`,
+    blockers.length > 0
+      ? `${blockers.length} blocker${blockers.length === 1 ? '' : 's'}`
+      : 'no blockers',
+  ];
+  if (carryoverAlerts.length > 0) {
+    summaryParts.push(
+      `${carryoverAlerts.length} carryover${carryoverAlerts.length === 1 ? '' : 's'}`,
+    );
+  }
+  if (sdlcCallouts.length > 0) {
+    summaryParts.push(
+      `${sdlcCallouts.length} SDLC check${sdlcCallouts.length === 1 ? '' : 's'}`,
+    );
+  }
+  const goalPrefix = teamGoal ? `Goal "${teamGoal}" — ` : '';
+  const goalProgressSummary = `${goalPrefix}${summaryParts.join(' · ')}.`;
+
+  // AI-proposed Scrum Master huddle questions (up to 3)
+  const facilitatorPrompts: string[] = [];
+  for (const b of blockers.slice(0, 2)) {
+    const who = b.ownerDisplayName ? `${b.ownerDisplayName}` : 'the team';
+    facilitatorPrompts.push(
+      `Who can help unblock ${who} on “${truncateBriefText(b.summary, 80)}” right after standup?`,
+    );
+  }
+  if (facilitatorPrompts.length < 3 && carryoverAlerts.length > 0) {
+    const c = carryoverAlerts[0];
+    const who = c.displayName ?? c.userId;
+    facilitatorPrompts.push(
+      `Check with ${who}: “${truncateBriefText(c.summary, 80)}” — should we split scope or pair today?`,
+    );
+  }
+  if (facilitatorPrompts.length < 3 && handoffsAndReviews.length > 0) {
+    const h = handoffsAndReviews[0];
+    facilitatorPrompts.push(
+      `Confirm handoff${h.fromUser ? ` from ${h.fromUser}` : ''}: “${truncateBriefText(h.summary, 80)}”.`,
+    );
+  }
+  const waitingNames = individualNarratives
+    .filter((n) => n.status !== 'confirmed')
+    .map((n) => n.displayName);
+  if (facilitatorPrompts.length < 3 && waitingNames.length > 0) {
+    facilitatorPrompts.push(
+      `Still waiting on ${waitingNames.slice(0, 3).join(', ')}${waitingNames.length > 3 ? ` (+${waitingNames.length - 3} more)` : ''} — grab a quick verbal check or follow up async.`,
+    );
+  }
+  if (facilitatorPrompts.length === 0 && totalParticipants > 0) {
+    facilitatorPrompts.push(
+      teamGoal
+        ? `All updates are in with zero blockers — confirm everyone is aligned on “${truncateBriefText(teamGoal, 75)}” and wrap early.`
+        : "All updates are in with zero blockers — read out highlights and wrap early.",
+    );
+  }
 
   return {
     generatedAt: now.toISOString(),
@@ -1895,6 +2264,7 @@ export function synthesizeTeamPulse(
     handoffsAndReviews,
     capacityNotes,
     decisionsNeeded: Array.from(decisionsSet),
+    facilitatorPrompts: facilitatorPrompts.slice(0, 3),
     sdlcCallouts,
     areaBreakdown,
     individualNarratives,

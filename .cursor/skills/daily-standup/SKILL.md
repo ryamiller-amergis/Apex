@@ -1,102 +1,54 @@
-# Daily Standup Procedure (SDLC-Aware & Multi-Day Delivery Pulse)
+# Daily Standup Procedure (AI-Led Check-In & Scrum Master Readout)
 
-This skill drives the interactive coach in an AI-facilitated daily standup ceremony. Follow the session's configured **Delivery Model** (`flow`, `sprint`, `milestone`, `support`, or `custom`), **Team Goal**, **Multi-Day Arc**, and **SDLC Process Callouts** rather than assuming every team uses target dates or sprints.
+This skill supports Apex's AI-led daily standup ceremony. Standups work seamlessly **with or without Azure DevOps**: plain-language check-ins, prior daily answers, open follow-ups, and team goals are first-class, while ADO / Git / pipeline evidence is additive when configured.
 
-## Prerequisites
+## Core Principles
 
-The agent has access to:
-- `query_work_items` — find the participant's active work items, recent updates, and (when configured) iteration or release epics
-- `update_work_item` — update work item fields (`state`, `assignedTo`, `targetDate`, `tags`, `parent`) after explicit user confirmation
-- `add_work_item_comment` — add discussion comments to work items (use to @-mention teammates or QA)
-- `create_work_items` — create new tasks, bugs, or PBIs
+1. **Personal Check-Ins Stay Personal (Strict Ownership Attribution)**:
+   - Never attribute another teammate's assigned work item or authored pull request to the current participant.
+   - `ChangedBy` or reviewer activity on someone else's item is at most an unselected suggestion — never preselected as personal work.
+   - Cap personal suggestions to at most **3** items per section so the check-in takes under 60 seconds.
+2. **Generic First (ADO Optional)**:
+   - Not every team uses Azure DevOps or target dates. Plain-language updates (without `#ID` tickets) are complete and valid.
+   - Propose 1–2 concise contextual questions based on what is going on: prior day's planned focus, unresolved blockers, open follow-ups, or the configured Team Goal.
+3. **Scrum Master Readout**:
+   - The facilitator synthesizes **confirmed participant check-ins** into a clean, read-aloud team readout: Team Goal, Blockers & Questions to Ask, and one short card per person (`Done`, `Today`, `Blockers/Notes`), clearly distinguishing `Submitted` vs `Waiting for check-in`.
+   - Technical SDLC / pipeline signals (SQL migrations, skipped/failed Terraform plan stages, red QA builds) remain supplemental insights when code/pipeline evidence exists.
 
 ## Delivery Model Policy Rules
 
-Adapt queries, risk checks, and questions to `deliveryModel` and `enableTargetDateChecks` from `# Session context`:
+Adapt risk checks and questions to `deliveryModel` and `enableTargetDateChecks` from `# Session context`:
 
 1. **`flow` (Flow / Kanban — Default)**:
-   - Focus on flow aging (items unchanged past `staleDaysThreshold`), WIP limits (`wipLimitPerPerson`), PR review wait or merged-PR state lag, multi-day carryover streaks, and blockers.
-   - **Do NOT** ask for missing target dates or release tags unless `enableTargetDateChecks: true`.
+   - Focus on flow aging, carryover streaks, and blockers. Do **not** ask for missing target dates unless `enableTargetDateChecks: true`.
 2. **`sprint` (Sprint / Iteration)**:
-   - Focus on active iteration scope, sprint goal progress, multi-day carryover streaks, PR review wait, and blockers.
-   - **Do NOT** require per-item target dates unless `enableTargetDateChecks: true`.
+   - Focus on current sprint goal progress, carryover streaks, and blockers. Do **not** require per-item target dates unless `enableTargetDateChecks: true`.
 3. **`milestone` (Milestone / Release)**:
-   - Cross-reference upcoming release epics (`ReleaseVersion` tag) and `Release:*` tags on work items.
-   - Flag release-relevant items missing a target date (`⚠️ no target date`) and items due within 7 days that are still in `New`, `Active`, or `In PR`.
+   - Check upcoming release milestones and flag release-relevant items missing a target date or at risk within 7 days.
 4. **`support` (Support / Operations)**:
-   - Focus on high-priority bugs and production incidents, SLA age (`slaHoursHighPriority`), root-cause follow-up, and handoffs.
-   - **Do NOT** require per-item target dates unless `enableTargetDateChecks: true`.
+   - Focus on high-priority incidents, SLA age, and handoffs.
 5. **`custom`**:
-   - Enforce whichever thresholds (`staleDaysThreshold`, `wipLimitPerPerson`, `slaHoursHighPriority`, `enableTargetDateChecks`) are enabled in the session context.
+   - Apply only the thresholds enabled in `# Session context`.
 
-## SDLC & Engineering Domain Intelligence
+## Optional ADO & Work Board Safety Rules
 
-Inspect `# Pre-Computed Participant Brief` for code artifact and pipeline timeline findings across engineering domains (`Database / SQL`, `Infra / Terraform`, `Backend / API`, `Frontend / UI`, `QA & Testing`, `Security & Auth`, `Prod Support`):
+When a project uses Azure DevOps or the Apex Work Board:
+- Filter ADO queries by `memberEmail` (`[System.AssignedTo] = '<memberEmail>'`) — never `@Me`.
+- Format ADO work items as `#ID · Type — Title [State]` when work item IDs exist.
+- **Never delete** work items, and **always confirm** before any write operation.
 
-1. **SQL / Schema Migrations (`migrations/**`, `*.sql`)**:
-   - When a participant's active or recently merged PR modifies SQL or schema files, ask them to confirm `-- Down Migration` reversibility, migration sequence ordering, and whether a database rollout step is needed for the release.
-2. **Terraform / IaC Pipeline Verification (`*.tf`, `*.tfvars`, `infra/**`, `*.bicep`)**:
-   - When an IaC PR's build failed, never ran, or skipped/omitted a `terraform` / `iac` / `plan` / `validate` pipeline stage, call out the exact pipeline gap and confirm it will be validated before merge or promotion.
-3. **QA & Release Build Health (`red_build_in_qa`, `missing_tests`)**:
-   - Flag items sitting in `Ready for Test`, `UIT`, `UAT`, or `Ready for Release` while a linked build is failing or a PR remains unmerged, and check whether source changes (`src/server/**`, `src/client/**`) included automated test updates.
-4. **Multi-Day Continuity & User Corrections**:
-   - Reference multi-day carryover streaks (items planned across 2+ standups without completion) to offer splitting or unblocking help, and record any explicit `userCorrections` where the member clarifies work that ADO or Git missed.
-
-## Procedure (Exception-First, 60–90 Seconds)
-
-### 1. Start From Pre-Drafted Brief & Work Item Context
-
-If `# Pre-Computed Participant Brief` is present in the session prompt, present the pre-drafted items, recommended focus, and multi-day arc immediately instead of asking the participant to recite yesterday's work from scratch.
-
-When querying Azure DevOps directly, filter by `memberEmail` (ADO `uniqueName`) — never use `@Me` (which resolves to the service account):
-
-```sql
-SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State],
-       [System.AssignedTo], [Microsoft.VSTS.Scheduling.TargetDate],
-       [System.IterationPath], [System.Tags]
-FROM WorkItems
-WHERE [System.AssignedTo] = '<memberEmail>'
-  AND [System.State] <> 'Closed'
-  AND [System.State] <> 'Done'
-  AND [System.State] <> 'Removed'
-ORDER BY [System.ChangedDate] DESC
-```
-
-### 2. Verify Draft, Exceptions, SDLC Alerts & Corrections
-
-Ask the participant what to approve, reject, or correct, focusing only on exceptions:
-- **Stale interim state** or **multi-day carryover streak**
-- **PR merged while work-item state lags**
-- **SQL migration**, **IaC pipeline stage**, or **red QA build** alerts
-- **Model-specific risks** (`wipLimitPerPerson`, sprint mismatch, `slaHoursHighPriority`, or `milestone` target-date gaps)
-
-Always **confirm** with the participant before calling `update_work_item`.
-
-### 3. Confirm Focus Today, Handoffs, Blockers & Capacity
-
-- Confirm today's priority focus (anchoring to `teamGoal` when configured).
-- Capture **handoffs** (who work moves to next), **blockers** (pipeline/build failure, person/review wait, external dependency, or production incident), and **capacity / availability** (idle bandwidth or PTO).
-
-### 4. Wrap-Up & Structured Output
-
-Keep the exchange brief (1–2 turns when everything is clear). Confirm any requested ADO writes first, then emit the structured update JSON block:
+## Structured Check-In Output
 
 ```json
 {
-  "yesterday": "Completed #101, merged PR !42",
-  "today": "Finishing #104 toward team goal",
-  "blockers": "Build pipeline failing on main",
-  "atRisk": "#104 carried across 3 standups",
-  "handoffs": "#101 ready for QA review",
-  "capacity": "Available to review PRs this afternoon",
-  "userCorrections": "Also paired on auth hotfix not yet linked in ADO"
+  "yesterday": "Completed partner onboarding checklist",
+  "today": "Finalize Q4 rollout runbook",
+  "blockers": "",
+  "atRisk": "",
+  "handoffs": "",
+  "capacity": "",
+  "userCorrections": ""
 }
 ```
 
 Leave any field that does not apply as `""`.
-
-## Formatting & Safety Rules
-
-- Always format ADO work items as `#ID · Type — Title [State]` (e.g., `#12345 · Bug — Login timeout [Active]`) so `#ID` renders as a clickable link in the UI.
-- **Never delete** work items — only create, update, comment, tag, or re-parent.
-- **Always confirm** before any write operation.

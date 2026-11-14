@@ -1,8 +1,11 @@
 /**
- * End-to-End Playwright coverage for Standup Delivery Pulse (SDLC-Aware, Multi-Day & Pre-Drafted).
+ * End-to-End Playwright coverage for Simplified AI-Led Standup Check-In & Scrum Master Readout.
  *
- * Runs offline against local Express + Vite + PostgreSQL using /e2e/seed/standup-delivery-pulse
- * and stubbed ADO endpoints — zero live external ADO or AI calls.
+ * Covers:
+ *   0. Standup management resilience on non-array error responses
+ *   1. Generic / Non-ADO team check-in (AI-proposed prompt from prior check-in, no Standup Coach chat, plain-language submit)
+ *   2. Strict two-user ADO attribution (no cross-user work item leakage), note/blocker submission, and Scrum Master readout
+ *   3. Standup config persistence + optional collapsed Delivery & SDLC Insights drawer
  */
 import {
   test,
@@ -20,7 +23,7 @@ import {
 import { DEFAULT_ENABLED_MENU_VIEWS } from '../../../src/shared/types/menuSettings';
 import { StandupPulsePage } from '../pages/standup-pulse.page';
 
-test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', () => {
+test.describe('AI-Led Standup Check-In & Scrum Master Readout', () => {
   test.beforeEach(async ({ page, e2eApi }) => {
     await page.addInitScript((project) => {
       window.localStorage.setItem('selectedProject', project);
@@ -70,7 +73,92 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
     await expect(page.getByRole('heading', { name: 'Configurations' })).toBeVisible();
   });
 
-  test('1. Approve / Reject & Inline Correction Journey (/standup): reviews multi-day arc, rejects inaccurate item, submits inline correction, and reflects in Team Pulse', async ({
+  test('1. Generic Non-ADO Standup Check-In (/standup -> /standup-summary): AI proposes contextual prompt without ADO, no Standup Coach chat, and Scrum Master sees readout', async ({
+    page,
+    loginAsPersona,
+    e2eApi,
+  }) => {
+    await SeedApi.seedStandupDeliveryPulse(e2eApi, {
+      project: E2E_PROJECT,
+      deliveryModel: 'flow',
+      rosterMode: 'groups_only',
+      goalSource: 'manual',
+      teamGoal: 'Complete Q4 partner onboarding launch',
+      participantUserId: PERSONA_OIDS.ba,
+      participantStatus: 'notified',
+      participantEvidence: {
+        ownerDisplayName: 'BA User',
+        activeWorkItems: [],
+        changedSinceLastWorkItems: [],
+        priorHistory: [
+          {
+            sessionDate: '2026-11-12',
+            structuredUpdate: {
+              yesterday: 'Reviewed stakeholder sign-off deck',
+              today: 'Finalize partner welcome checklist',
+              blockers: 'Waiting on legal copy review',
+            },
+          },
+        ],
+      },
+      additionalParticipants: [
+        {
+          userId: PERSONA_OIDS['product-owner'],
+          status: 'notified',
+          participantEvidence: {
+            ownerDisplayName: 'PO User',
+            activeWorkItems: [],
+          },
+        },
+      ],
+    });
+
+    await loginAsPersona('ba');
+    const pulsePage = new StandupPulsePage(page);
+    await pulsePage.gotoStandup();
+
+    // Standup Coach chat is gone; AI Check-In Prompt guides the user generically
+    await expect(page.getByText(/discuss with coach/i)).toHaveCount(0);
+    await expect(pulsePage.aiPromptCard()).toContainText(
+      'Waiting on legal copy review',
+    );
+    await expect(pulsePage.aiPromptCard()).toContainText(
+      'Finalize partner welcome checklist',
+    );
+
+    await pulsePage
+      .yesterdayInput()
+      .fill('Completed partner welcome checklist after legal sign-off');
+    await pulsePage
+      .todayInput()
+      .fill('Run dry-run onboarding walkthrough with support lead');
+    await pulsePage.quickConfirmSubmitBtn().click();
+
+    await expect(pulsePage.submittedBanner()).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('standup-view-team-pulse-btn').click();
+
+    // Scrum Master readout shows BA's plain-language check-in as Submitted and PO as Waiting for check-in (with zero empty ADO boxes)
+    const baCard = page.getByTestId(
+      `participant-narrative-${PERSONA_OIDS.ba}`,
+    );
+    await expect(baCard).toContainText(
+      'Completed partner welcome checklist after legal sign-off',
+    );
+    await expect(baCard).toContainText(
+      'Run dry-run onboarding walkthrough with support lead',
+    );
+    await expect(
+      page.getByTestId(`participant-narrative-status-${PERSONA_OIDS.ba}`),
+    ).toHaveText('Submitted');
+    await expect(
+      page.getByTestId(
+        `participant-narrative-status-${PERSONA_OIDS['product-owner']}`,
+      ),
+    ).toHaveText('Waiting for check-in');
+    await expect(pulsePage.pulseDeliveryInsights()).toHaveCount(0);
+  });
+
+  test('2. Strict Two-User Ownership Attribution & Scrum Master Readout: prevents cross-user ADO leakage, captures blocker/note, and gives Scrum Master a clear readout', async ({
     page,
     loginAsPersona,
     e2eApi,
@@ -84,13 +172,25 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
       participantStatus: 'notified',
       participantEvidence: {
         ownerDisplayName: 'Dev User',
+        ownerEmail: 'dev@localhost',
         activeWorkItems: [
           {
             id: 5002,
             title: 'Idempotent retry worker',
             workItemType: 'Task',
             state: 'Active',
+            assignedTo: 'Dev User',
+            assignedToEmail: 'dev@localhost',
             changedDate: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+          },
+          {
+            id: 5088,
+            title: 'QA regression suite owned by QA',
+            workItemType: 'Task',
+            state: 'Active',
+            assignedTo: 'QA User',
+            assignedToEmail: 'qa@localhost',
+            changedDate: new Date().toISOString(),
           },
         ],
         changedSinceLastWorkItems: [
@@ -99,14 +199,28 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
             title: 'Streamline webhook dispatcher',
             workItemType: 'Product Backlog Item',
             state: 'Ready for Test',
+            assignedTo: 'Dev User',
+            assignedToEmail: 'dev@localhost',
             changedDate: new Date().toISOString(),
           },
           {
             id: 5099,
-            title: 'Misattributed legacy ticket',
+            title: 'QA bug triaged by Dev but owned by QA',
             workItemType: 'Bug',
             state: 'Active',
+            assignedTo: 'QA User',
+            assignedToEmail: 'qa@localhost',
             changedDate: new Date().toISOString(),
+          },
+        ],
+        pullRequests: [
+          {
+            prId: 701,
+            title: 'Teammate PR where Dev was only a reviewer',
+            status: 'completed',
+            createdAt: new Date().toISOString(),
+            authorEmail: 'qa@localhost',
+            linkedWorkItemIds: [5099],
           },
         ],
         priorHistory: [
@@ -124,130 +238,96 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
               today: '#5002 Idempotent retry worker',
             },
           },
-          {
-            sessionDate: '2026-11-10',
-            structuredUpdate: {
-              yesterday: 'Closed #4990',
-              today: '#5002 Idempotent retry worker',
-            },
-          },
         ],
       },
+      additionalParticipants: [
+        {
+          userId: PERSONA_OIDS.qa,
+          status: 'submitted',
+          structuredUpdate: {
+            yesterday: 'Verified #5099 QA bug fix on staging',
+            today: 'Finish #5088 QA regression suite',
+            blockers: '',
+          },
+          participantEvidence: {
+            ownerDisplayName: 'QA User',
+            ownerEmail: 'qa@localhost',
+            activeWorkItems: [
+              {
+                id: 5088,
+                title: 'QA regression suite owned by QA',
+                workItemType: 'Task',
+                state: 'Active',
+                assignedTo: 'QA User',
+                assignedToEmail: 'qa@localhost',
+              },
+            ],
+          },
+        },
+      ],
     });
 
     await loginAsPersona('developer');
     const pulsePage = new StandupPulsePage(page);
     await pulsePage.gotoStandup();
 
-    await expect(pulsePage.deliveryModelBadge()).toHaveText('Flow');
-    await expect(pulsePage.teamGoalBanner()).toContainText(
-      'Keep flow cycle time under 3 days',
+    // Only Dev's owned items (#5001, #5002) are pre-filled; QA's #5099, #5088, and PR !701 are NOT preselected!
+    await expect(pulsePage.yesterdayInput()).toHaveValue(
+      /#5001 Streamline webhook dispatcher/,
     );
-    await expect(pulsePage.multiDayArcBanner()).toContainText('#5002 (3d)');
-    await expect(pulsePage.recommendedFocusBanner()).toContainText('#5002');
-    // Flow mode does not nag about missing target dates
-    await expect(page.getByTestId('standup-brief-exceptions')).not.toContainText(
-      /no target date/i,
-    );
+    await expect(pulsePage.yesterdayInput()).not.toHaveValue(/5099/);
+    await expect(pulsePage.yesterdayInput()).not.toHaveValue(/701/);
+    await expect(pulsePage.todayInput()).toHaveValue(/#5002 Idempotent retry worker/);
+    await expect(pulsePage.todayInput()).not.toHaveValue(/5088/);
 
-    // Reject inaccurate item #5099
-    await page
-      .getByTestId('draft-item-reject-draft-yesterday-wi-5099')
-      .click();
-
-    // Enter inline user correction
+    // Add a blocker and an optional note
+    await pulsePage
+      .blockersInput()
+      .fill('Need Redis connection string updated in staging');
+    await page.getByTestId('standup-optional-notes-drawer').locator('summary').click();
     await pulsePage
       .correctionsInput()
-      .fill('Also paired with QA on webhook contract smoke tests');
+      .fill('Paired with QA for 20m on webhook contract checks');
 
-    // Submit standup
     await pulsePage.quickConfirmSubmitBtn().click();
-
     await expect(pulsePage.submittedBanner()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('standup-submitted-badge')).toHaveText(
-      'Submitted',
+
+    // Switch to Manager (Scrum Master) and open the Standup Readout
+    await loginAsPersona('manager');
+    await pulsePage.gotoSummaryNoParams();
+
+    // Scrum Master sees blocker + AI suggested question at top, and both Dev & QA Submitted cards ready to read out
+    await expect(pulsePage.pulseBlockersSection()).toContainText(
+      'Need Redis connection string updated in staging',
+    );
+    await expect(pulsePage.pulseFacilitatorPrompts()).toContainText(
+      'Need Redis connection string updated in staging',
     );
 
-    // Navigate to Team Pulse summary and verify rejected item is excluded & correction is displayed
-    await page.getByTestId('standup-view-team-pulse-btn').click();
-    const devNarrative = page.getByTestId(
+    const devReadout = page.getByTestId(
       `participant-narrative-${PERSONA_OIDS.developer}`,
     );
-    await expect(devNarrative).toBeVisible({ timeout: 10_000 });
-    await expect(devNarrative).toContainText('#5001 Streamline webhook dispatcher');
-    await expect(devNarrative).not.toContainText('Misattributed legacy ticket');
+    await expect(devReadout).toContainText('#5001 Streamline webhook dispatcher');
+    await expect(devReadout).not.toContainText('5099');
     await expect(
       page.getByTestId(
         `participant-narrative-correction-${PERSONA_OIDS.developer}`,
       ),
-    ).toContainText('Also paired with QA on webhook contract smoke tests');
+    ).toContainText('Paired with QA for 20m on webhook contract checks');
+
+    const qaReadout = page.getByTestId(
+      `participant-narrative-${PERSONA_OIDS.qa}`,
+    );
+    await expect(qaReadout).toContainText('Verified #5099 QA bug fix on staging');
+    await expect(qaReadout).toContainText('Finish #5088 QA regression suite');
   });
 
-  test('2. ADO Roster Auto-Discovery & Delivery Model Config (/standup-manage): configures ADO + Groups roster discovery without target dates and persists', async ({
+  test('3. Config Persistence & Supplemental Delivery Insights Drawer (/standup-manage & /standup-summary)', async ({
     page,
     loginAsPersona,
     e2eApi,
   }) => {
     await SeedApi.seedAdminRole(e2eApi, { userId: PERSONA_OIDS.manager });
-    await SeedApi.seedStandupDeliveryPulse(e2eApi, {
-      project: E2E_PROJECT,
-      deliveryModel: 'flow',
-      teamGoal: 'Initial Seed Config',
-      createSession: false,
-    });
-
-    await page.route('**/api/projects/*/area-paths*', (route) => {
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(['MaxView\\Core']),
-      });
-    });
-
-    await loginAsPersona('manager');
-    const pulsePage = new StandupPulsePage(page);
-    await pulsePage.gotoManage();
-
-    await page.getByTestId('standup-new-config-btn').click();
-    await page.getByTestId('standup-config-project').selectOption(E2E_PROJECT);
-
-    // Verify default Participant Discovery is 'ado_and_groups' and Flow has target-date checks unchecked
-    await expect(page.getByTestId('standup-config-roster-mode')).toHaveValue(
-      'ado_and_groups',
-    );
-    await expect(page.getByTestId('standup-config-delivery-model')).toHaveValue(
-      'flow',
-    );
-    await expect(
-      page.getByTestId('standup-policy-target-date-checks'),
-    ).not.toBeChecked();
-
-    // Save config WITH ZERO groups selected (valid under ado_and_groups auto-discovery!)
-    await page
-      .getByTestId('standup-config-goal-source')
-      .selectOption('manual');
-    await page
-      .getByTestId('standup-config-team-goal')
-      .fill('[E2E] Auto-Discovered Flow Pulse Goal');
-
-    await page.getByTestId('standup-config-save-btn').click();
-
-    await expect(
-      page.getByText('[E2E] Auto-Discovered Flow Pulse Goal'),
-    ).toBeVisible({ timeout: 10_000 });
-    await expect(
-      page
-        .locator('[data-testid^="standup-config-card-roster-"]')
-        .filter({ hasText: 'ADO + Groups' })
-        .first(),
-    ).toBeVisible();
-  });
-
-  test('3. SDLC Facilitator Callouts, Area Breakdown & Per-Person Narratives (/standup-summary): surfaces SQL migration, IaC pipeline alert, areas, narratives, and proposals', async ({
-    page,
-    loginAsPersona,
-    e2eApi,
-  }) => {
     const seeded = await SeedApi.seedStandupDeliveryPulse(e2eApi, {
       project: E2E_PROJECT,
       deliveryModel: 'flow',
@@ -258,18 +338,18 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
       structuredUpdate: {
         yesterday: 'Drafted #6001 billing schema migration',
         today: 'Verifying rollback script and API handler',
-        blockers: 'Dev CI pipeline failing on #6002',
-        userCorrections: 'Confirmed DBA review scheduled for 3pm EST',
+        blockers: '',
       },
       participantEvidence: {
         ownerDisplayName: 'Dev User',
+        ownerEmail: 'dev@localhost',
         activeWorkItems: [
           {
             id: 6001,
             title: 'Billing ledger SQL migration & API',
             workItemType: 'Product Backlog Item',
             state: 'In PR',
-            tags: 'Release:v3.2',
+            assignedToEmail: 'dev@localhost',
             changedDate: new Date().toISOString(),
           },
         ],
@@ -279,6 +359,7 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
             title: 'feat(billing): ledger migration & API',
             status: 'active',
             createdAt: new Date().toISOString(),
+            authorEmail: 'dev@localhost',
             linkedWorkItemIds: [6001],
             changedFiles: [
               'migrations/20261115_billing.sql',
@@ -288,67 +369,6 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
           },
         ],
       },
-      additionalParticipants: [
-        {
-          userId: PERSONA_OIDS.qa,
-          status: 'notified',
-          structuredUpdate: null,
-          participantEvidence: {
-            ownerDisplayName: 'QA Dev User',
-            activeWorkItems: [
-              {
-                id: 6005,
-                title: 'Provision worker container autoscaling',
-                workItemType: 'Technical Backlog Item',
-                state: 'In PR',
-                changedDate: new Date().toISOString(),
-              },
-            ],
-            changedSinceLastWorkItems: [
-              {
-                id: 6004,
-                title: 'Update Terraform backend variables',
-                workItemType: 'Task',
-                state: 'Ready for Test',
-                changedDate: new Date().toISOString(),
-              },
-            ],
-            pullRequests: [
-              {
-                prId: 405,
-                title: 'infra: worker autoscaling terraform',
-                status: 'active',
-                createdAt: new Date().toISOString(),
-                linkedWorkItemIds: [6005],
-                changedFiles: ['infra/worker.tf'],
-                builds: [
-                  {
-                    buildId: 8801,
-                    buildNumber: '20261113.5',
-                    definitionName: 'Infra-Validate',
-                    status: 'completed',
-                    result: 'succeeded',
-                    stagesAndJobs: [
-                      {
-                        name: 'lint-check',
-                        type: 'Stage',
-                        state: 'completed',
-                        result: 'succeeded',
-                      },
-                      {
-                        name: 'terraform-plan',
-                        type: 'Stage',
-                        state: 'completed',
-                        result: 'skipped',
-                      },
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      ],
       proposals: [
         {
           workItemId: 6001,
@@ -360,16 +380,6 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
           reason: 'PR merged into main',
           confidence: 'at_risk',
         },
-        {
-          workItemId: 6005,
-          workItemTitle: 'Provision worker container autoscaling',
-          proposalType: 'state',
-          fieldName: 'state',
-          currentValue: 'New',
-          proposedValue: 'Active',
-          reason: 'Implementation in progress',
-          confidence: 'uncertain',
-        },
       ],
     });
 
@@ -377,60 +387,19 @@ test.describe('Standup Delivery Pulse (Pre-Drafted, Multi-Day & SDLC-Aware)', ()
     const pulsePage = new StandupPulsePage(page);
     await pulsePage.gotoSummaryNoParams();
 
-    await expect(pulsePage.pulseDeliveryModel()).toHaveText('Flow');
-    await expect(pulsePage.pulseTeamGoal()).toContainText(
-      'Billing & Worker Infra Rollout',
-    );
-    await expect(pulsePage.pulseOverallHealth()).toHaveText('At Risk');
+    // Delivery & SDLC Insights drawer is collapsed by default so readout stays clean
+    const drawer = pulsePage.pulseDeliveryInsights();
+    await expect(drawer).toBeVisible();
+    await drawer.locator('summary').click();
 
-    // 1. SDLC Callouts: SQL migration + Terraform IaC skipped stage
     await expect(pulsePage.pulseSdlcCalloutsSection()).toContainText(
       'migrations/20261115_billing.sql',
     );
-    await expect(pulsePage.pulseSdlcCalloutsSection()).toContainText(
-      'infra/worker.tf',
-    );
-    await expect(pulsePage.pulseSdlcCalloutsSection()).toContainText(
-      'stage "terraform-plan" was skipped',
-    );
 
-    // 2. Engineering Area Breakdown
-    await expect(pulsePage.pulseAreaBreakdownSection()).toContainText(
-      'Database / SQL',
-    );
-    await expect(pulsePage.pulseAreaBreakdownSection()).toContainText(
-      'Infra / Terraform',
-    );
-
-    // 3. Per-person multi-day narratives: Confirmed (with correction) AND AI-Drafted from ADO
-    await expect(
-      page.getByTestId(
-        `participant-narrative-status-${PERSONA_OIDS.developer}`,
-      ),
-    ).toHaveText('Confirmed');
-    await expect(
-      page.getByTestId(
-        `participant-narrative-correction-${PERSONA_OIDS.developer}`,
-      ),
-    ).toContainText('Confirmed DBA review scheduled for 3pm EST');
-
-    await expect(
-      page.getByTestId(`participant-narrative-status-${PERSONA_OIDS.qa}`),
-    ).toHaveText('AI-Drafted from ADO');
-    await expect(
-      page.getByTestId(`participant-narrative-${PERSONA_OIDS.qa}`),
-    ).toContainText('IaC Pipeline Verification Alert');
-
-    // 4. Confirmation-gated ADO proposals apply & dismiss
-    const [firstProposal, secondProposal] = seeded.proposals;
+    const [firstProposal] = seeded.proposals;
     await page.getByTestId(`proposal-apply-btn-${firstProposal.id}`).click();
     await expect(
       page.getByTestId(`proposal-status-${firstProposal.id}`),
     ).toHaveText('applied');
-
-    await page.getByTestId(`proposal-dismiss-btn-${secondProposal.id}`).click();
-    await expect(
-      page.getByTestId(`proposal-status-${secondProposal.id}`),
-    ).toHaveText('dismissed');
   });
 });

@@ -3,13 +3,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { StandupCeremonyView } from '../StandupCeremonyView';
 
-jest.mock('react-markdown', () => ({
-  __esModule: true,
-  default: ({ children }: { children: string }) => <div>{children}</div>,
-}));
-
-jest.mock('remark-gfm', () => () => undefined);
-
 jest.mock('../../hooks/useAppShell', () => ({
   useAppShell: () => ({
     can: () => true,
@@ -18,45 +11,7 @@ jest.mock('../../hooks/useAppShell', () => ({
   }),
 }));
 
-jest.mock('../../hooks/useChatThreads', () => ({
-  useChatThread: () => ({ data: { messages: [], status: 'idle' } }),
-}));
-
-jest.mock('../../hooks/useAgentChatSession', () => ({
-  useAgentChatSession: () => ({
-    messages: [],
-    streamingText: '',
-    thinkingText: '',
-    isRetrying: false,
-    retryReason: null,
-    isRunning: false,
-    status: 'idle',
-    showTypingIndicator: false,
-    send: jest.fn().mockResolvedValue(true),
-  }),
-}));
-
-jest.mock('../../hooks/useChatAttachments', () => ({
-  useChatAttachments: () => ({
-    attachments: [],
-    attachmentError: null,
-    addFiles: jest.fn(),
-    removeAttachment: jest.fn(),
-    clearAttachments: jest.fn(),
-  }),
-}));
-
-jest.mock('../../hooks/useSpeechInput', () => ({
-  useSpeechInput: () => ({
-    isListening: false,
-    isSpeechSupported: false,
-    speechError: null,
-    toggle: jest.fn(),
-    stop: jest.fn(),
-  }),
-}));
-
-const seededMySession = {
+const seededAdoSession = {
   participantId: 'part-flow-1',
   sessionId: 'sess-flow-1',
   threadId: 'thread-flow-1',
@@ -85,70 +40,59 @@ const seededMySession = {
     generatedAt: '2026-11-13T12:00:00.000Z',
     deliveryModel: 'flow',
     teamGoal: 'Keep flow cycle time under 3 days',
-    workDomains: ['backend', 'database'],
+    hasExternalEvidence: true,
+    proposedQuestions: [
+      '#104 (Retry queue worker) has carried across 3 check-ins — can it wrap today, or is something blocking it?',
+    ],
     multiDayArc: {
       sessionsAnalyzed: 3,
-      summary: 'Across 3 prior standups: 2 progress updates logged, carrying #104 (3d).',
+      summary:
+        'Across 3 prior standups: 2 progress updates logged, carrying #104 (3d).',
       carryoverStreaks: [
         { workItemId: 104, title: 'Retry queue worker', daysCarried: 3 },
       ],
     },
-    recommendedFocus:
-      'Close out multi-day carryover #104 (Retry queue worker, carried 3 standups) before starting net-new work.',
     draftedItems: [
       {
         id: 'draft-yesterday-wi-101',
         bucket: 'yesterday',
         summary: '#101 API caching layer [Ready for Test]',
         workItemId: 101,
-        domain: 'backend',
         evidence: 'ADO update — state [Ready for Test]',
+        attribution: 'confirmed',
       },
       {
-        id: 'draft-yesterday-wi-199',
+        id: 'draft-yesterday-wi-102',
         bucket: 'yesterday',
-        summary: '#199 Legacy ticket reassigned only [Active]',
-        workItemId: 199,
-        domain: 'general',
+        summary: '#102 Token cleanup [Active]',
+        workItemId: 102,
         evidence: 'ADO update — state [Active]',
+        attribution: 'confirmed',
       },
       {
         id: 'draft-today-wi-104',
         bucket: 'today',
         summary: '#104 Retry queue worker [Active] (Carryover 3d)',
         workItemId: 104,
-        domain: 'database',
-        evidence: 'Assigned in ADO',
+        evidence: 'Assigned to you',
+        attribution: 'confirmed',
       },
     ],
-    accomplishedSinceLast: [
+    suggestedActivity: [
       {
-        workItemId: 101,
-        title: 'API caching layer',
-        workItemType: 'Product Backlog Item',
-        state: 'Ready for Test',
-        evidence: 'ADO update — state [Ready for Test]',
+        id: 'suggested-wi-199',
+        bucket: 'yesterday',
+        summary: '#199 Teammate ticket [Active]',
+        source: 'ado',
+        owner: 'Alex Rivera',
+        workItemId: 199,
+        attribution: 'suggested',
+        reason: 'Assigned to Alex Rivera — you updated it',
       },
     ],
-    priorCommitments: [
-      {
-        summary: '#104 Retry queue worker',
-        workItemIds: [104],
-        status: 'untouched',
-        note: 'No ADO state change or PR activity recorded since last standup',
-      },
-    ],
-    suggestedToday: [
-      {
-        workItemId: 104,
-        title: 'Retry queue worker',
-        workItemType: 'Task',
-        state: 'Active',
-        targetDate: null,
-        iterationPath: null,
-        riskFlags: ['Carryover 3d', 'Stale 4d'],
-      },
-    ],
+    accomplishedSinceLast: [],
+    priorCommitments: [],
+    suggestedToday: [],
     detectedExceptions: [
       {
         id: 'lag-104',
@@ -173,12 +117,12 @@ const seededMySession = {
   proposals: [],
 };
 
-describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02, AC-03)', () => {
+describe('StandupCeremonyView Compact AI-Led Check-In', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('renders multi-day arc, excludes rejected items, folds inline userCorrections, and stages proposals', async () => {
+  it('renders compact check-in without Standup Coach, keeps unowned items out of default draft, removes deselected chip, and submits', async () => {
     let capturedSubmitBody: {
       structuredUpdate?: Record<string, string>;
       proposals?: unknown[];
@@ -189,10 +133,13 @@ describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02,
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: async () => seededMySession,
+          json: async () => seededAdoSession,
         } as Response);
       }
-      if (url.includes('/participants/part-flow-1/submit') && init?.method === 'POST') {
+      if (
+        url.includes('/participants/part-flow-1/submit') &&
+        init?.method === 'POST'
+      ) {
         capturedSubmitBody = JSON.parse(String(init.body ?? '{}'));
         return Promise.resolve({
           ok: true,
@@ -207,7 +154,9 @@ describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02,
       } as Response);
     });
 
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     render(
       <QueryClientProvider client={qc}>
         <MemoryRouter>
@@ -216,28 +165,36 @@ describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02,
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByTestId('standup-delivery-model-badge')).toHaveTextContent(
-      'Flow',
-    );
-    expect(screen.getByTestId('standup-multi-day-arc')).toHaveTextContent(
-      'carrying #104 (3d)',
-    );
-    expect(screen.getByTestId('standup-recommended-focus')).toHaveTextContent(
-      'Close out multi-day carryover #104',
+    expect(
+      await screen.findByTestId('standup-delivery-model-badge'),
+    ).toHaveTextContent('Flow');
+
+    // No Standup Coach chat button or panel
+    expect(screen.queryByText(/discuss with coach/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/standup coach/i)).not.toBeInTheDocument();
+
+    // AI prompt question is visible
+    expect(screen.getByTestId('standup-ai-prompt-card')).toHaveTextContent(
+      '#104 (Retry queue worker) has carried across 3 check-ins',
     );
 
-    // Reject inaccurate item #199
-    fireEvent.click(screen.getByTestId('draft-item-reject-draft-yesterday-wi-199'));
+    // Unowned item #199 is NOT pre-filled in yesterday draft
+    const yesterdayField = screen.getByTestId(
+      'standup-quick-yesterday',
+    ) as HTMLTextAreaElement;
+    expect(yesterdayField.value).toContain('#101');
+    expect(yesterdayField.value).not.toContain('#199');
 
-    // Add an inline user correction
+    // Remove #102 from personal check-in
+    fireEvent.click(screen.getByTestId('draft-item-reject-draft-yesterday-wi-102'));
+    expect(yesterdayField.value).not.toContain('#102');
+
+    // Add optional note & stage optional proposal
     fireEvent.change(screen.getByTestId('standup-corrections-input'), {
-      target: { value: 'Also fixed flaky auth integration test not tracked in ADO' },
+      target: { value: 'Paired on auth smoke test' },
     });
-
-    // Stage proposed state update
     fireEvent.click(screen.getByTestId('standup-stage-proposal-lag-104'));
 
-    // Submit update
     fireEvent.click(screen.getByTestId('standup-quick-submit-btn'));
 
     await waitFor(() => {
@@ -245,12 +202,10 @@ describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02,
     });
 
     expect(capturedSubmitBody.structuredUpdate?.yesterday).toContain('#101');
+    expect(capturedSubmitBody.structuredUpdate?.yesterday).not.toContain('#102');
     expect(capturedSubmitBody.structuredUpdate?.yesterday).not.toContain('#199');
     expect(capturedSubmitBody.structuredUpdate?.userCorrections).toBe(
-      'Also fixed flaky auth integration test not tracked in ADO',
-    );
-    expect(capturedSubmitBody.structuredUpdate?.approvalAction).toBe(
-      'approved_with_edits',
+      'Paired on auth smoke test',
     );
     expect(capturedSubmitBody.proposals).toEqual([
       expect.objectContaining({
@@ -259,5 +214,101 @@ describe('StandupCeremonyView Pre-Drafted Approve / Reject & Corrections (AC-02,
         proposedValue: 'Ready for Test',
       }),
     ]);
+  });
+
+  it('supports generic teams with zero ADO evidence using AI-proposed prompts and plain-language answers', async () => {
+    let capturedSubmitBody: {
+      structuredUpdate?: Record<string, string>;
+    } = {};
+
+    const genericNoAdoSession = {
+      ...seededAdoSession,
+      participantId: 'part-generic-1',
+      preparedBrief: {
+        generatedAt: '2026-11-13T12:00:00.000Z',
+        deliveryModel: 'flow',
+        teamGoal: 'Launch Q4 partner onboarding',
+        hasExternalEvidence: false,
+        proposedQuestions: [
+          'Last check-in you planned: “Finalize partner welcome email”. Did that finish, or does part of it carry into today?',
+        ],
+        draftedItems: [],
+        suggestedActivity: [
+          {
+            id: 'suggested-history-prior-today',
+            bucket: 'yesterday',
+            summary: 'Finalize partner welcome email',
+            source: 'history',
+            attribution: 'suggested',
+            reason: 'Planned in your previous check-in',
+          },
+        ],
+        accomplishedSinceLast: [],
+        priorCommitments: [],
+        suggestedToday: [],
+        detectedExceptions: [],
+        openFollowups: [],
+      },
+    };
+
+    global.fetch = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.includes('/api/standup/my-session')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => genericNoAdoSession,
+        } as Response);
+      }
+      if (
+        url.includes('/participants/part-generic-1/submit') &&
+        init?.method === 'POST'
+      ) {
+        capturedSubmitBody = JSON.parse(String(init.body ?? '{}'));
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true }),
+      } as Response);
+    });
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <StandupCeremonyView />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByTestId('standup-ai-prompt-card'),
+    ).toHaveTextContent('Finalize partner welcome email');
+
+    fireEvent.change(screen.getByTestId('standup-quick-yesterday'), {
+      target: { value: 'Sent partner welcome email copy to marketing' },
+    });
+    fireEvent.change(screen.getByTestId('standup-quick-today'), {
+      target: { value: 'Publish partner onboarding checklist' },
+    });
+
+    fireEvent.click(screen.getByTestId('standup-quick-submit-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('standup-submitted-banner')).toBeInTheDocument();
+    });
+
+    expect(capturedSubmitBody.structuredUpdate).toMatchObject({
+      yesterday: 'Sent partner welcome email copy to marketing',
+      today: 'Publish partner onboarding checklist',
+      blockers: '',
+    });
   });
 });

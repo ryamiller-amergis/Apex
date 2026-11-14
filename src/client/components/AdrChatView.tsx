@@ -382,7 +382,7 @@ const NewAdrCompose: React.FC = () => {
               type="button"
               aria-label="Start ADR"
               aria-busy={reviewerAvailability.isLoading}
-              disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending || !repoReadiness.isReady || reviewerAvailability.isLoading || reviewerAvailability.isError || !reviewerAvailability.data}
+              disabled={!title.trim() || (!input.trim() && attachments.length === 0) || !repo || pending || reviewerAvailability.isLoading || reviewerAvailability.isError || !reviewerAvailability.data}
               onClick={() => void handleStart()}
               {...{
                 'data-testid': reviewerAvailability.data?.modules[0]?.available === false
@@ -395,11 +395,6 @@ const NewAdrCompose: React.FC = () => {
           </div>
           {speech.isListening && <div className={styles.speechStatus}>Listening… your speech is being transcribed.</div>}
         </div>
-        {!repoReadiness.isReady && repoReadiness.message && (
-          <div className={styles.composeError} {...{ 'data-testid': 'adr-compose-repo-not-ready' }}>
-            {repoReadiness.message}
-          </div>
-        )}
       </div>
       {showReviewerModal && (
         <AdrReviewerModal

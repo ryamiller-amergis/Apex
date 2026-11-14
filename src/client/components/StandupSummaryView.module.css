@@ -25,7 +25,7 @@
   cursor: pointer;
   font-size: 0.9rem;
   font-weight: 500;
-  transition: all 0.2s ease;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 
 .subNavBtn:hover {
@@ -45,7 +45,15 @@
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 20px 24px 32px;
+}
+
+.shell {
+  max-width: 980px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .header {
@@ -53,9 +61,8 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
+  gap: 12px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -63,29 +70,31 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
 }
 
 .header h1 {
   margin: 0;
+  font-size: 1.35rem;
   color: var(--text-primary);
 }
 
 .date {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 .status {
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
   font-weight: 600;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
 }
 
-.open {
+.open,
+.facilitating {
   background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-secondary));
   color: var(--accent-color);
 }
@@ -95,20 +104,15 @@
   color: var(--warning-text);
 }
 
-.facilitating {
-  background: color-mix(in srgb, var(--accent-color) 22%, var(--bg-secondary));
-  color: var(--accent-color);
-}
-
 .completed {
   background: var(--success-color);
   color: var(--on-success);
 }
 
 .modelBadge {
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
   font-weight: 600;
   background: color-mix(in srgb, var(--accent-color) 15%, var(--bg-secondary));
   color: var(--accent-color);
@@ -116,9 +120,9 @@
 }
 
 .healthBadge {
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
   font-weight: 700;
 }
 
@@ -130,13 +134,11 @@
 .healthWatch {
   background: color-mix(in srgb, var(--warning-color) 20%, var(--bg-secondary));
   color: var(--warning-text);
-  border: 1px solid color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
 }
 
 .healthAtRisk {
   background: color-mix(in srgb, var(--error-color) 18%, var(--bg-secondary));
   color: var(--error-color);
-  border: 1px solid color-mix(in srgb, var(--error-color) 45%, var(--border-color));
 }
 
 .sessionSwitcherLabel {
@@ -148,30 +150,32 @@
 }
 
 .sessionSelect {
-  padding: 6px 10px;
+  padding: 5px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
 }
 
 .goalBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-left: 4px solid var(--accent-color);
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  border-left: 3px solid var(--accent-color);
 }
 
 .goalRow {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .goalTag {
@@ -183,203 +187,149 @@
 }
 
 .goalTitle {
-  font-size: 0.95rem;
+  font-size: 0.94rem;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .goalSummary {
   font-size: 0.82rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .actionError {
-  margin-bottom: 16px;
-  padding: 10px 14px;
+  padding: 10px 12px;
   border-radius: 8px;
+  background: color-mix(in srgb, var(--error-color) 14%, var(--bg-primary));
   border: 1px solid var(--error-color);
-  background: color-mix(in srgb, var(--error-color) 15%, var(--bg-primary));
   color: var(--error-color);
-  font-size: 0.85rem;
+  font-size: 0.86rem;
 }
 
-.pulseBoard {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.fullWidthSection {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 20px;
+.sectionCard {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
 }
 
-.fullWidthSection h2 {
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sectionHeader h2 {
   margin: 0;
   font-size: 1rem;
   color: var(--text-primary);
 }
 
-.sdlcGrid,
-.narrativeGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 12px;
+.blockerCountBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--error-color) 18%, var(--bg-primary));
+  color: var(--error-color);
 }
 
-.sdlcCard,
-.areaCard,
-.narrativeCard {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 12px 14px;
+.cardStack {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.sdlcCritical {
-  border-left: 4px solid var(--error-color);
-}
-
-.sdlcWarning {
-  border-left: 4px solid var(--warning-color);
-}
-
-.domainBadge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
+.blockerCard {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
-}
-
-.filePathRow {
+  border-left: 3px solid var(--error-color);
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.fileChip {
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.76rem;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+.decisionCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.86rem;
 }
 
-.recommendationText {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  padding-top: 4px;
-  border-top: 1px solid var(--border-color);
-}
-
-.areaStat {
-  font-size: 0.76rem;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.chipAtRiskSmall {
-  margin-left: auto;
+.decisionTag {
   padding: 2px 7px;
-  border-radius: 10px;
+  border-radius: 4px;
   font-size: 0.7rem;
   font-weight: 700;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-secondary));
+  color: var(--accent-color);
+}
+
+.cardMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.blockerTypeBadge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
   background: color-mix(in srgb, var(--error-color) 18%, var(--bg-secondary));
   color: var(--error-color);
 }
 
-.areaContributors {
-  font-size: 0.78rem;
-  color: var(--text-muted);
+.ownerName {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-.narrativeHeader {
+.cardMainText {
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.promptsBox {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-color) 7%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 25%, var(--border-color));
 }
 
-.narrativeIdentity,
-.narrativeBadges {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.confirmedNarrativeBadge {
-  padding: 2px 8px;
-  border-radius: 10px;
+.promptsLabel {
   font-size: 0.72rem;
   font-weight: 700;
-  background: var(--success-color);
-  color: var(--on-success);
-}
-
-.draftedNarrativeBadge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-secondary));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--accent-color);
-  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
 }
 
-.arcLine {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.narrativeBody {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.86rem;
-  color: var(--text-secondary);
-}
-
-.correctionBox {
-  margin-top: 4px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-secondary));
-  border-left: 3px solid var(--accent-color);
-  color: var(--text-primary);
-  font-size: 0.84rem;
-}
-
-.pulseSection {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.pulseSection h2 {
+.promptsList {
   margin: 0;
-  font-size: 0.98rem;
+  padding-left: 18px;
   color: var(--text-primary);
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .emptyHint {
@@ -388,160 +338,285 @@
   color: var(--text-muted);
 }
 
-.cardStack {
+.readoutGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 12px;
+}
+
+.readoutCard {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.blockerCard,
-.decisionCard,
-.carryoverCard,
-.riskCard,
-.infoCard,
-.proposalCard {
+  padding: 14px;
+  border-radius: 10px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
-.blockerCard {
-  border-left: 3px solid var(--error-color);
+.readoutSubmitted {
+  border-left: 3px solid var(--success-color);
 }
 
-.carryoverCard {
-  border-left: 3px solid var(--warning-color);
+.readoutWaiting {
+  opacity: 0.82;
 }
 
-.cardMetaRow {
+.readoutHeader {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.blockerTypeBadge {
-  text-transform: uppercase;
-  font-size: 0.68rem;
+.personName {
+  font-size: 0.96rem;
   font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--error-color) 18%, var(--bg-secondary));
-  color: var(--error-color);
+  color: var(--text-primary);
+}
+
+.readoutBadges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.submittedBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--success-color);
+  color: var(--on-success);
+}
+
+.waitingBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
 }
 
 .carryoverBadge {
-  text-transform: uppercase;
-  font-size: 0.68rem;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
   background: color-mix(in srgb, var(--warning-color) 18%, var(--bg-secondary));
   color: var(--warning-text);
 }
 
-.ownerName {
+.readoutBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.readoutLine {
+  display: flex;
+  gap: 6px;
+}
+
+.lineLabel {
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 58px;
+  flex-shrink: 0;
+}
+
+.blockerLine {
+  color: var(--error-color);
+}
+
+.blockerLine .lineLabel {
+  color: var(--error-color);
+}
+
+.noteBox {
+  margin-top: 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.waitingBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.waitingHint {
   font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.followupCard {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.followupTitle {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.followupDesc {
+  margin-top: 3px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.markdown {
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.insightsDrawer {
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 12px 16px;
+}
+
+.insightsSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-secondary);
 }
 
-.cardMainText {
-  font-size: 0.88rem;
+.insightsSummary:hover {
   color: var(--text-primary);
 }
 
-.decisionCard,
-.infoCard {
-  flex-direction: row;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 0.86rem;
-  color: var(--text-primary);
-}
-
-.decisionTag,
-.infoTag {
-  font-size: 0.7rem;
+.signalCountBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
   font-weight: 700;
-  text-transform: uppercase;
-  padding: 2px 6px;
+  background: color-mix(in srgb, var(--warning-color) 18%, var(--bg-primary));
+  color: var(--warning-text);
+}
+
+.insightsBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.insightBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.insightBlock h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.sdlcCard,
+.proposalCard,
+.infoCard {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.sdlcCritical {
+  border-left: 3px solid var(--error-color);
+}
+
+.sdlcWarning {
+  border-left: 3px solid var(--warning-color);
+}
+
+.domainBadge {
+  padding: 2px 7px;
   border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.riskId {
-  font-weight: 700;
-  color: var(--accent-color);
-  font-size: 0.84rem;
 }
 
 .cardTitle {
   font-weight: 600;
   color: var(--text-primary);
-  font-size: 0.86rem;
+  margin-top: 4px;
 }
 
-.confidenceChip {
-  margin-left: auto;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.7rem;
-  font-weight: 700;
-}
-
-.chipAtRisk {
-  background: color-mix(in srgb, var(--error-color) 18%, var(--bg-secondary));
-  color: var(--error-color);
-}
-
-.chipUncertain {
-  background: color-mix(in srgb, var(--warning-color) 18%, var(--bg-secondary));
-  color: var(--warning-text);
-}
-
-.reasonList {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 0.82rem;
+.recommendationText {
+  margin-top: 4px;
+  font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+.areaGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
 }
 
 .proposalHeader {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.proposalDiff {
-  font-size: 0.84rem;
-  color: var(--text-secondary);
-}
-
-.proposedVal {
+.riskId {
   font-weight: 700;
   color: var(--accent-color);
 }
 
+.proposalDiff {
+  margin-top: 4px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.proposedVal {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .proposalReason {
-  font-size: 0.8rem;
+  margin-top: 3px;
+  font-size: 0.78rem;
   color: var(--text-muted);
 }
 
 .proposalActions {
   display: flex;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 .applyBtn {
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: 6px;
   border: none;
   background: var(--accent-color);
@@ -549,8 +624,6 @@
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: var(--glow-accent);
-  transition: all 0.2s ease;
 }
 
 .applyBtn:hover:not(:disabled) {
@@ -558,133 +631,16 @@
 }
 
 .dismissBtn {
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: 6px;
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-secondary);
   font-size: 0.8rem;
   cursor: pointer;
-  transition: all 0.2s ease;
 }
 
 .dismissBtn:hover:not(:disabled) {
   border-color: var(--accent-color);
   color: var(--text-primary);
-}
-
-.section {
-  margin-bottom: 32px;
-}
-
-.section h2 {
-  margin: 0 0 16px;
-  color: var(--text-primary);
-  font-size: 1.1rem;
-}
-
-.markdown {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 20px;
-  line-height: 1.6;
-  color: var(--text-primary);
-}
-
-.participantList,
-.followupList {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.participantCard,
-.followupCard {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.participantHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.userId {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.chip {
-  margin-left: auto;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
-}
-
-.pending {
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
-}
-
-.notified,
-.thread_created {
-  background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-secondary));
-  color: var(--accent-color);
-}
-
-.in_progress {
-  background: color-mix(in srgb, var(--warning-color) 18%, var(--bg-secondary));
-  color: var(--warning-text);
-}
-
-.submitted,
-.resolved,
-.applied {
-  background: var(--success-color);
-  color: var(--on-success);
-}
-
-.dismissed {
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
-}
-
-.update {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-}
-
-.blocker {
-  color: var(--error-color);
-}
-
-.followupTitle {
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.followupDesc {
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-}
-
-.followupMeta {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  font-size: 0.8rem;
-  color: var(--text-muted);
 }

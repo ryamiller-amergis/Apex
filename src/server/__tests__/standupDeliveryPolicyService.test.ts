@@ -491,3 +491,114 @@ describe('Policy & SDLC AI Prompts (AC-05)', () => {
     expect(facilitatorPrompt).toContain('Individual Standup Narratives');
   });
 });
+
+describe('Strict Ownership Attribution, Item Caps & Generic No-ADO Standup', () => {
+  it('excludes items and PRs owned by another teammate from preselected draft and caps personal buckets at 3', () => {
+    const brief = evaluateParticipantBrief({
+      now: FIXED_NOW,
+      deliveryModel: 'flow',
+      ownerDisplayName: 'Ryan Miller',
+      ownerEmail: 'ryan@amergis.com',
+      activeWorkItems: [
+        { id: 1, title: 'Owned task 1', workItemType: 'Task', state: 'Active', assignedToEmail: 'ryan@amergis.com' },
+        { id: 2, title: 'Owned task 2', workItemType: 'Task', state: 'Active', assignedToEmail: 'ryan@amergis.com' },
+        { id: 3, title: 'Owned task 3', workItemType: 'Task', state: 'Active', assignedToEmail: 'ryan@amergis.com' },
+        { id: 4, title: 'Owned task 4 overflow', workItemType: 'Task', state: 'Active', assignedToEmail: 'ryan@amergis.com' },
+        { id: 99, title: 'Teammate task', workItemType: 'Task', state: 'Active', assignedTo: 'Alex Rivera', assignedToEmail: 'alex@amergis.com' },
+      ],
+      changedSinceLastWorkItems: [
+        { id: 10, title: 'Owned finished item', workItemType: 'Bug', state: 'Ready for Test', assignedToEmail: 'ryan@amergis.com' },
+        { id: 88, title: 'Teammate bug triaged by Ryan', workItemType: 'Bug', state: 'Active', assignedTo: 'Alex Rivera', assignedToEmail: 'alex@amergis.com' },
+      ],
+      pullRequests: [
+        {
+          prId: 500,
+          title: 'Alex PR reviewed by Ryan',
+          status: 'completed',
+          createdAt: FIXED_NOW,
+          authorEmail: 'alex@amergis.com',
+          linkedWorkItemIds: [88],
+        },
+      ],
+    });
+
+    const yesterdayDraft = (brief.draftedItems ?? []).filter((i) => i.bucket === 'yesterday');
+    const todayDraft = (brief.draftedItems ?? []).filter((i) => i.bucket === 'today');
+
+    expect(yesterdayDraft.map((i) => i.workItemId)).toEqual([10]);
+    expect(todayDraft).toHaveLength(3);
+    expect(todayDraft.map((i) => i.workItemId)).not.toContain(99);
+    expect(todayDraft.map((i) => i.workItemId)).not.toContain(4);
+
+    const suggestedIds = (brief.suggestedActivity ?? []).map((s) => s.id);
+    expect(suggestedIds).toEqual(
+      expect.arrayContaining([
+        'suggested-wi-99',
+        'suggested-wi-88',
+        'suggested-pr-500',
+        'suggested-today-wi-4',
+      ]),
+    );
+  });
+
+  it('produces contextual AI check-in questions and Scrum Master prompts when no ADO evidence exists', () => {
+    const noAdoBrief = evaluateParticipantBrief({
+      now: FIXED_NOW,
+      deliveryModel: 'flow',
+      teamGoal: 'Complete Q4 customer onboarding',
+      activeWorkItems: [],
+      priorHistory: [
+        {
+          sessionDate: '2026-11-12',
+          structuredUpdate: {
+            yesterday: 'Drafted onboarding guide',
+            today: 'Review onboarding guide with support',
+            blockers: 'Waiting on updated screenshots',
+          },
+        },
+      ],
+    });
+
+    expect(noAdoBrief.hasExternalEvidence).toBe(false);
+    expect(noAdoBrief.proposedQuestions?.join(' ')).toContain(
+      'Waiting on updated screenshots',
+    );
+    expect(noAdoBrief.proposedQuestions?.join(' ')).toContain(
+      'Review onboarding guide with support',
+    );
+
+    const pulse = synthesizeTeamPulse({
+      now: FIXED_NOW,
+      deliveryModel: 'flow',
+      teamGoal: 'Complete Q4 customer onboarding',
+      participants: [
+        {
+          userId: 'u-1',
+          displayName: 'Sam',
+          status: 'submitted',
+          structuredUpdate: {
+            yesterday: 'Finished onboarding guide review',
+            today: 'Publish help center article',
+            blockers: 'Need CMS publish permission',
+          },
+          preparedBrief: noAdoBrief,
+        },
+        {
+          userId: 'u-2',
+          displayName: 'Taylor',
+          status: 'notified',
+          structuredUpdate: null,
+          preparedBrief: evaluateParticipantBrief({
+            now: FIXED_NOW,
+            activeWorkItems: [],
+          }),
+        },
+      ],
+    });
+
+    expect(pulse.goalProgressSummary).toContain('1 of 2 checked in');
+    expect(pulse.goalProgressSummary).not.toContain('SDLC');
+    expect(pulse.facilitatorPrompts?.join(' ')).toContain('Need CMS publish permission');
+    expect(pulse.facilitatorPrompts?.join(' ')).toContain('Taylor');
+  });
+});

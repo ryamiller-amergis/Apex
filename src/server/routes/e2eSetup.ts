@@ -1678,10 +1678,40 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       return;
     }
 
+    const userMetaByOid = new Map<
+      string,
+      { displayName: string | null; email: string | null }
+    >();
+    const userRows = await db
+      .select({
+        oid: appUsers.oid,
+        displayName: appUsers.displayName,
+        email: appUsers.email,
+      })
+      .from(appUsers)
+      .where(inArray(appUsers.oid, allParticipantUserIds));
+    for (const u of userRows) {
+      userMetaByOid.set(u.oid, {
+        displayName: u.displayName ?? null,
+        email: u.email ?? null,
+      });
+    }
+
     const buildBriefFromEvidence = (
+      userId: string,
       ev?: Partial<EvaluateParticipantBriefInput>,
     ): ParticipantPreparedBrief | null => {
-      if (!ev) return null;
+      const meta = userMetaByOid.get(userId);
+      if (!ev) {
+        return evaluateParticipantBrief({
+          deliveryModel: resolvedModel,
+          teamGoal: prefixedGoal,
+          policy: resolvedPolicy,
+          activeWorkItems: [],
+          ownerDisplayName: meta?.displayName ?? null,
+          ownerEmail: meta?.email ?? null,
+        });
+      }
       return evaluateParticipantBrief({
         deliveryModel: resolvedModel,
         teamGoal: prefixedGoal,
@@ -1694,7 +1724,8 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
         priorHistory: ev.priorHistory,
         priorStructuredUpdate: ev.priorStructuredUpdate,
         openFollowups: ev.openFollowups,
-        ownerDisplayName: ev.ownerDisplayName,
+        ownerDisplayName: ev.ownerDisplayName ?? meta?.displayName ?? null,
+        ownerEmail: ev.ownerEmail ?? meta?.email ?? null,
       });
     };
 
@@ -1728,7 +1759,9 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       .returning();
 
     const primaryBrief =
-      preparedBrief ?? buildBriefFromEvidence(participantEvidence) ?? null;
+      preparedBrief !== undefined
+        ? preparedBrief
+        : buildBriefFromEvidence(participantUserId, participantEvidence);
 
     const [participant] = await db
       .insert(standupParticipants)
@@ -1762,9 +1795,9 @@ router.post('/seed/standup-delivery-pulse', async (req, res) => {
       });
       const extraStatus = extra.status ?? 'notified';
       const extraBrief =
-        extra.preparedBrief ??
-        buildBriefFromEvidence(extra.participantEvidence) ??
-        null;
+        extra.preparedBrief !== undefined
+          ? extra.preparedBrief
+          : buildBriefFromEvidence(extra.userId, extra.participantEvidence);
       await db.insert(standupParticipants).values({
         sessionId: session.id,
         userId: extra.userId,

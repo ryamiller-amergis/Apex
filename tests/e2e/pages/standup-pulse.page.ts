@@ -2,7 +2,7 @@ import type { Page, Locator } from '@playwright/test';
 import { dismissOverlays } from '../support/overlays';
 
 /**
- * Page object for Standup Ceremony (/standup), Team Pulse Summary (/standup-summary),
+ * Page object for AI-Led Standup Check-In (/standup), Scrum Master Readout (/standup-summary),
  * and Standup Management (/standup-manage).
  */
 export class StandupPulsePage {
@@ -32,7 +32,7 @@ export class StandupPulsePage {
       .waitFor({ state: 'visible', timeout: 15_000 });
   }
 
-  // ── Standup Ceremony Locators & Actions ──────────────────────────────────
+  // ── Personal Check-In Locators ───────────────────────────────────────────
 
   deliveryModelBadge(): Locator {
     return this.page.getByTestId('standup-delivery-model-badge');
@@ -42,12 +42,20 @@ export class StandupPulsePage {
     return this.page.getByTestId('standup-team-goal');
   }
 
-  multiDayArcBanner(): Locator {
-    return this.page.getByTestId('standup-multi-day-arc');
+  aiPromptCard(): Locator {
+    return this.page.getByTestId('standup-ai-prompt-card');
   }
 
-  recommendedFocusBanner(): Locator {
-    return this.page.getByTestId('standup-recommended-focus');
+  yesterdayInput(): Locator {
+    return this.page.getByTestId('standup-quick-yesterday');
+  }
+
+  todayInput(): Locator {
+    return this.page.getByTestId('standup-quick-today');
+  }
+
+  blockersInput(): Locator {
+    return this.page.getByTestId('standup-quick-blockers');
   }
 
   correctionsInput(): Locator {
@@ -62,7 +70,7 @@ export class StandupPulsePage {
     return this.page.getByTestId('standup-submitted-banner');
   }
 
-  // ── Team Pulse Summary Locators ──────────────────────────────────────────
+  // ── Scrum Master Readout Locators ────────────────────────────────────────
 
   pulseDeliveryModel(): Locator {
     return this.page.getByTestId('pulse-delivery-model');
@@ -76,24 +84,28 @@ export class StandupPulsePage {
     return this.page.getByTestId('pulse-team-goal');
   }
 
-  pulseSdlcCalloutsSection(): Locator {
-    return this.page.getByTestId('pulse-sdlc-callouts-section');
-  }
-
   pulseBlockersSection(): Locator {
     return this.page.getByTestId('pulse-blockers-section');
   }
 
-  pulseAreaBreakdownSection(): Locator {
-    return this.page.getByTestId('pulse-area-breakdown-section');
+  pulseFacilitatorPrompts(): Locator {
+    return this.page.getByTestId('pulse-facilitator-prompts');
   }
 
   pulseIndividualNarrativesSection(): Locator {
     return this.page.getByTestId('pulse-individual-narratives-section');
   }
 
-  pulseRisksSection(): Locator {
-    return this.page.getByTestId('pulse-risks-section');
+  pulseDeliveryInsights(): Locator {
+    return this.page.getByTestId('pulse-delivery-insights');
+  }
+
+  pulseSdlcCalloutsSection(): Locator {
+    return this.page.getByTestId('pulse-sdlc-callouts-section');
+  }
+
+  pulseAreaBreakdownSection(): Locator {
+    return this.page.getByTestId('pulse-area-breakdown-section');
   }
 
   pulseProposalsSection(): Locator {

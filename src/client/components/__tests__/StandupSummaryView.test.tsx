@@ -47,11 +47,6 @@ const mockSession = {
         deliveryModel: 'flow' as const,
         teamGoal: 'Keep flow cycle time under 3 days',
         workDomains: ['database' as const, 'backend' as const],
-        multiDayArc: {
-          sessionsAnalyzed: 2,
-          summary: 'Across 2 prior standups: 2 progress updates logged, zero multi-day carryovers.',
-          carryoverStreaks: [],
-        },
         accomplishedSinceLast: [],
         priorCommitments: [],
         suggestedToday: [
@@ -73,7 +68,7 @@ const mockSession = {
             domain: 'database' as const,
             title: 'SQL / Schema Change Detected (PR !77)',
             detail:
-              'SQL / Schema Change Detected: PR !77 (#101) modifies migrations/20261115_billing.sql — verify migration rollback, execution order, and release DB step are accounted for.',
+              'SQL / Schema Change Detected: PR !77 (#101) modifies migrations/20261115_billing.sql.',
             recommendation:
               'Confirm -- Down Migration reversibility and release DB execution.',
             workItemIds: [101],
@@ -95,16 +90,9 @@ const mockSession = {
         deliveryModel: 'flow' as const,
         teamGoal: 'Keep flow cycle time under 3 days',
         workDomains: ['iac' as const],
+        hasExternalEvidence: true,
         recommendedFocus: 'Re-run skipped Terraform plan stage on PR !81',
-        accomplishedSinceLast: [
-          {
-            workItemId: 205,
-            title: 'Worker container scaling',
-            workItemType: 'Task',
-            state: 'In PR',
-            evidence: 'ADO update',
-          },
-        ],
+        accomplishedSinceLast: [],
         priorCommitments: [],
         suggestedToday: [],
         detectedExceptions: [],
@@ -117,7 +105,7 @@ const mockSession = {
             domain: 'iac' as const,
             title: 'IaC Pipeline Verification Alert (PR !81)',
             detail:
-              'IaC Pipeline Verification Alert: PR !81 (#205) modifies infra/worker.tf, but pipeline Infra-CI #44 did not complete a passing Terraform/IaC validation stage (stage "terraform-plan" was skipped).',
+              'PR !81 (#205) modifies infra/worker.tf, stage "terraform-plan" was skipped.',
             recommendation: 'Run and verify Terraform validate & plan stage.',
             workItemIds: [205],
             prIds: [81],
@@ -177,13 +165,13 @@ function renderWithSession(sessionId: string | null) {
   );
 }
 
-describe('StandupSummaryView (SDLC Callouts, Area Breakdown & Narratives)', () => {
+describe('StandupSummaryView Scrum Master Readout', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     mockPermissions = new Set(['standup:participate', 'workitems:write']);
   });
 
-  it('renders SDLC callouts, area breakdown, and both Confirmed and AI-Drafted individual narratives', async () => {
+  it('prioritizes blockers, AI huddle questions, and per-person Submitted vs Waiting readout cards while keeping SDLC insights in a collapsible drawer', async () => {
     global.fetch = jest.fn().mockImplementation((url: string) => {
       if (url.includes('/api/standup/sessions/session-1')) {
         return Promise.resolve({
@@ -202,37 +190,43 @@ describe('StandupSummaryView (SDLC Callouts, Area Breakdown & Narratives)', () =
     renderWithSession('session-1');
 
     await waitFor(() => {
-      expect(screen.getByText('Standup Summary')).toBeInTheDocument();
+      expect(screen.getByText('Standup Readout')).toBeInTheDocument();
     });
 
+    // Blockers and AI huddle questions appear first
+    expect(screen.getByTestId('pulse-blockers-section')).toHaveTextContent(
+      'Staging pipeline failing on #102',
+    );
+    expect(screen.getByTestId('pulse-facilitator-prompts')).toHaveTextContent(
+      'Who can help unblock Dev User',
+    );
+
+    // Submitted vs Waiting readout cards
+    expect(
+      screen.getByTestId('participant-narrative-status-user-1'),
+    ).toHaveTextContent('Submitted');
+    expect(
+      screen.getByTestId('participant-narrative-user-1'),
+    ).toHaveTextContent('Shipped #101 billing migration');
+    expect(
+      screen.getByTestId('participant-narrative-correction-user-1'),
+    ).toHaveTextContent('Coordinated DB migration window with SRE');
+
+    expect(
+      screen.getByTestId('participant-narrative-status-user-2'),
+    ).toHaveTextContent('Waiting for check-in');
+
+    // Supplemental SDLC insights live inside the collapsible drawer
+    expect(screen.getByTestId('pulse-delivery-insights')).toBeInTheDocument();
     expect(screen.getByTestId('pulse-sdlc-callouts-section')).toHaveTextContent(
       'migrations/20261115_billing.sql',
     );
     expect(screen.getByTestId('pulse-sdlc-callouts-section')).toHaveTextContent(
       'infra/worker.tf',
     );
-    expect(screen.getByTestId('pulse-area-breakdown-section')).toHaveTextContent(
-      'Database / SQL',
-    );
-    expect(screen.getByTestId('pulse-area-breakdown-section')).toHaveTextContent(
-      'Infra / Terraform',
-    );
-
-    // Confirmed participant with user correction
-    expect(
-      screen.getByTestId('participant-narrative-status-user-1'),
-    ).toHaveTextContent('Confirmed');
-    expect(
-      screen.getByTestId('participant-narrative-correction-user-1'),
-    ).toHaveTextContent('Coordinated DB migration window with SRE');
-
-    // Unsubmitted participant gets AI-Drafted from ADO narrative
-    expect(
-      screen.getByTestId('participant-narrative-status-user-2'),
-    ).toHaveTextContent('AI-Drafted from ADO');
   });
 
-  it('auto-loads latest session when ?session= query param is omitted (AC-06)', async () => {
+  it('auto-loads latest session when ?session= query param is omitted', async () => {
     const fetchMock = jest.fn().mockImplementation((url: string) => {
       if (url.includes('/api/standup/sessions/latest')) {
         return Promise.resolve({
@@ -261,24 +255,26 @@ describe('StandupSummaryView (SDLC Callouts, Area Breakdown & Narratives)', () =
     );
   });
 
-  it('allows confirming and applying a pending ADO proposal when user has workitems:write (AC-07)', async () => {
-    const fetchMock = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes('/proposals/prop-1/apply') && init?.method === 'POST') {
+  it('allows confirming and applying a pending ADO proposal inside Delivery Insights', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes('/proposals/prop-1/apply') && init?.method === 'POST') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              proposal: { ...mockSession.proposals[0], status: 'applied' },
+            }),
+          } as Response);
+        }
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: async () => ({
-            ok: true,
-            proposal: { ...mockSession.proposals[0], status: 'applied' },
-          }),
+          json: async () => mockSession,
         } as Response);
-      }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => mockSession,
-      } as Response);
-    });
+      });
     global.fetch = fetchMock;
 
     renderWithSession('session-1');

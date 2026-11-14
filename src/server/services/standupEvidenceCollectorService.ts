@@ -388,11 +388,9 @@ async function fetchAdoPrsAndBuildsForMember(params: {
         .flat()
         .filter(({ pr }) => {
           const creatorEmail = extractEmailFromIdentity(pr.createdBy);
-          if (creatorEmail === lowerEmail) return true;
-          const reviewers = Array.isArray(pr.reviewers) ? pr.reviewers : [];
-          return reviewers.some((rev) => extractEmailFromIdentity(rev) === lowerEmail);
+          return creatorEmail === lowerEmail;
         })
-        .slice(0, 10);
+        .slice(0, 6);
 
       pullRequests = await mapWithConcurrency(
         matchedPrEntries,
@@ -463,6 +461,7 @@ async function fetchAdoPrsAndBuildsForMember(params: {
             closedAt: pr.closedDate
               ? new Date(pr.closedDate).toISOString()
               : undefined,
+            authorEmail: extractEmailFromIdentity(pr.createdBy) ?? undefined,
             linkedWorkItemIds,
             hasApproval,
             repositoryName: repoName,
@@ -619,6 +618,8 @@ async function fetchAdoPrsAndBuildsForMember(params: {
 
 async function fetchGitHubEvidenceIfConfigured(params: {
   skillSettingsId?: string | null;
+  memberEmail?: string | null;
+  ownedWorkItemIds?: Set<number>;
   enablePrEvidence: boolean;
   enablePipelineEvidence: boolean;
 }): Promise<{
@@ -659,7 +660,7 @@ async function fetchGitHubEvidenceIfConfigured(params: {
     };
 
     const pullsRes = await fetch(
-      `https://api.github.com/repos/${repoSlug}/pulls?state=all&sort=updated&direction=desc&per_page=6`,
+      `https://api.github.com/repos/${repoSlug}/pulls?state=all&sort=updated&direction=desc&per_page=10`,
       { headers },
     ).catch(() => null);
     if (!pullsRes?.ok) return empty;
@@ -672,14 +673,32 @@ async function fetchGitHubEvidenceIfConfigured(params: {
       created_at: string;
       closed_at: string | null;
       body?: string | null;
+      user?: { login?: string };
       head?: { ref?: string; sha?: string };
       base?: { ref?: string };
     }>;
 
+    const emailHandle = params.memberEmail
+      ? params.memberEmail.split('@')[0]?.trim().toLowerCase()
+      : '';
+    const ownedIds = params.ownedWorkItemIds ?? new Set<number>();
+
     const pullRequests: EvidencePullRequest[] = [];
     const builds: EvidenceBuildSummary[] = [];
 
-    for (const pr of rawPulls.slice(0, 6)) {
+    for (const pr of rawPulls) {
+      if (pullRequests.length >= 4) break;
+      const wiMatches = `${pr.title} ${pr.body ?? ''}`.match(/(?:AB#|#)(\d+)/gi) ?? [];
+      const linkedWorkItemIds = wiMatches
+        .map((m) => Number.parseInt(m.replace(/\D+/g, ''), 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      const loginLower = pr.user?.login?.trim().toLowerCase() ?? '';
+      const matchesOwnedWorkItem = linkedWorkItemIds.some((id) => ownedIds.has(id));
+      const matchesLogin = Boolean(emailHandle && loginLower && loginLower === emailHandle);
+      if (!matchesOwnedWorkItem && !matchesLogin) {
+        continue;
+      }
+
       const filesRes = params.enablePrEvidence
         ? await fetch(
             `https://api.github.com/repos/${repoSlug}/pulls/${pr.number}/files?per_page=50`,
@@ -692,11 +711,6 @@ async function fetchGitHubEvidenceIfConfigured(params: {
       const changedFiles = filesJson
         .map((f) => f.filename)
         .filter((f): f is string => typeof f === 'string');
-
-      const wiMatches = `${pr.title} ${pr.body ?? ''}`.match(/(?:AB#|#)(\d+)/gi) ?? [];
-      const linkedWorkItemIds = wiMatches
-        .map((m) => Number.parseInt(m.replace(/\D+/g, ''), 10))
-        .filter((n) => Number.isFinite(n) && n > 0);
 
       let prBuilds: EvidenceBuildSummary[] = [];
       if (params.enablePipelineEvidence && pr.head?.sha) {
@@ -829,21 +843,16 @@ async function fetchAdoEvidenceForMember(params: {
       ORDER BY [System.ChangedDate] DESC
     `;
 
-    const [activeRes, changedRes, adoPrBuilds, ghPrBuilds] = await Promise.all([
+    const [activeRes, changedRes, adoPrBuilds] = await Promise.all([
       ado
-        .queryWorkItemsByWiql({ wiql: activeQuery, maxResults: 40 })
+        .queryWorkItemsByWiql({ wiql: activeQuery, maxResults: 25 })
         .catch(() => ({ items: [] })),
       ado
-        .queryWorkItemsByWiql({ wiql: changedQuery, maxResults: 30 })
+        .queryWorkItemsByWiql({ wiql: changedQuery, maxResults: 20 })
         .catch(() => ({ items: [] })),
       fetchAdoPrsAndBuildsForMember({
         project: params.project,
         memberEmail: params.memberEmail,
-        enablePrEvidence: params.enablePrEvidence,
-        enablePipelineEvidence: params.enablePipelineEvidence,
-      }),
-      fetchGitHubEvidenceIfConfigured({
-        skillSettingsId: params.skillSettingsId,
         enablePrEvidence: params.enablePrEvidence,
         enablePipelineEvidence: params.enablePipelineEvidence,
       }),
@@ -852,12 +861,14 @@ async function fetchAdoEvidenceForMember(params: {
     const mapRawItem = (raw: Record<string, unknown>): EvidenceWorkItem => {
       const fields = (raw.fields as Record<string, unknown> | undefined) ?? raw;
       const assignedRaw = fields['System.AssignedTo'] ?? raw.assignedTo;
+      const assignedToEmail = extractEmailFromIdentity(assignedRaw) ?? undefined;
       const assignedTo =
         typeof assignedRaw === 'string'
           ? assignedRaw
           : (assignedRaw as { displayName?: string; uniqueName?: string } | undefined)
               ?.displayName ??
             (assignedRaw as { uniqueName?: string } | undefined)?.uniqueName;
+      const isUnassigned = assignedRaw == null || (!assignedTo && !assignedToEmail);
       return {
         id: Number(raw.id ?? fields['System.Id'] ?? 0),
         title: String(fields['System.Title'] ?? raw.title ?? ''),
@@ -866,6 +877,8 @@ async function fetchAdoEvidenceForMember(params: {
         ),
         state: String(fields['System.State'] ?? raw.state ?? 'New'),
         assignedTo,
+        assignedToEmail,
+        isUnassigned,
         changedDate: fields['System.ChangedDate']
           ? String(fields['System.ChangedDate'])
           : typeof raw.changedDate === 'string'
@@ -913,6 +926,15 @@ async function fetchAdoEvidenceForMember(params: {
     )
       .map(mapRawItem)
       .filter((item) => item.id > 0);
+
+    const ownedWorkItemIds = new Set<number>(activeWorkItems.map((i) => i.id));
+    const ghPrBuilds = await fetchGitHubEvidenceIfConfigured({
+      skillSettingsId: params.skillSettingsId,
+      memberEmail: params.memberEmail,
+      ownedWorkItemIds,
+      enablePrEvidence: params.enablePrEvidence,
+      enablePipelineEvidence: params.enablePipelineEvidence,
+    });
 
     return {
       activeWorkItems,
@@ -1054,6 +1076,7 @@ export async function collectAndSaveParticipantBrief(
     policy: resolvedPolicy,
     expectedIterationPath: config.iterationPath ?? null,
     ownerDisplayName: memberDisplayName,
+    ownerEmail: memberEmail,
     activeWorkItems: adoEvidence.activeWorkItems,
     changedSinceLastWorkItems: adoEvidence.changedSinceLastWorkItems,
     pullRequests: adoEvidence.pullRequests,

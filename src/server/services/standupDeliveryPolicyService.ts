@@ -13,7 +13,9 @@ import {
 } from '../../shared/types/standup';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 import {
+  MAX_PERSONAL_STANDUP_ITEMS,
   classifyDomainsFromEvidence,
+  classifyWorkItemOwnership,
   evaluateParticipantBrief,
   evaluateSdlcCallouts,
   extractWorkItemIds,
@@ -23,6 +25,7 @@ import {
   reconcileDraftedUpdate,
   resolveStandupPolicy,
   synthesizeTeamPulse,
+  validateStandupCheckIn,
   type EvaluateParticipantBriefInput,
   type EvaluateSdlcCalloutsInput,
   type EvidenceBuildStageRecord,
@@ -36,7 +39,9 @@ import {
 } from '../../shared/utils/standupDeliveryPolicy';
 
 export {
+  MAX_PERSONAL_STANDUP_ITEMS,
   classifyDomainsFromEvidence,
+  classifyWorkItemOwnership,
   evaluateParticipantBrief,
   evaluateSdlcCallouts,
   extractWorkItemIds,
@@ -46,6 +51,7 @@ export {
   reconcileDraftedUpdate,
   resolveStandupPolicy,
   synthesizeTeamPulse,
+  validateStandupCheckIn,
   type EvaluateParticipantBriefInput,
   type EvaluateSdlcCalloutsInput,
   type EvidenceBuildStageRecord,
@@ -85,6 +91,13 @@ export function formatPreparedBriefForPrompt(
 
   if (brief.recommendedFocus) {
     lines.push(`Recommended Focus Today: ${brief.recommendedFocus}`);
+  }
+
+  if (brief.proposedQuestions && brief.proposedQuestions.length > 0) {
+    lines.push('', 'AI Proposed Check-In Questions:');
+    for (const q of brief.proposedQuestions) {
+      lines.push(`- ${q}`);
+    }
   }
 
   if (brief.accomplishedSinceLast.length > 0) {
@@ -378,8 +391,8 @@ export function buildStandupFacilitatorPrompt(
       : deliveryModel === 'milestone';
 
   const parts: string[] = [
-    `# Standup Ceremony — SDLC & Multi-Day Team Pulse Facilitator`,
-    `You are the standup facilitator. Synthesize all participants' confirmed updates, user corrections, AI-drafted ADO briefs, PR file changes, and pipeline stage timelines into an actionable 5-minute Team Pulse summary.`,
+    `# Standup Ceremony — Scrum Master Readout & Team Facilitator`,
+    `You are the standup facilitator. Produce a crisp, read-aloud Scrum Master readout grounded first in each participant's confirmed check-in (with or without Azure DevOps), plus any blockers, proposed huddle questions, and optional SDLC risks when code/pipeline evidence exists.`,
     ``,
     `# Session context`,
     `  sessionId:              "${kickoff.standupSessionId}"`,
@@ -388,18 +401,18 @@ export function buildStandupFacilitatorPrompt(
     `  enableTargetDateChecks: ${enableTargetDateChecks}`,
     ``,
     `# Available MCP tools`,
-    `- \`get_standup_session\` — read all participants' structured updates (including \`userCorrections\` and \`rejectedItems\`), \`preparedBrief\` (PR files, pipeline timelines, multi-day carryover streaks, SDLC callouts), synthesized \`teamPulse\`, proposals, and transcripts`,
-    `- \`create_standup_followup\` — create a follow-up item for involved participants`,
+    `- \`get_standup_session\` — read all participants' confirmed \`structuredUpdate\` (including \`userCorrections\`), \`preparedBrief\`, synthesized \`teamPulse\` (including \`facilitatorPrompts\`), proposals, and follow-ups`,
+    `- \`create_standup_followup\` — create a follow-up item for involved participants when coordination is needed after standup`,
     `- \`complete_standup_session\` — finalize the session (persist summary + decisions, create follow-up threads, notify members)`,
-    `- \`query_work_items\` — check ADO work item details if needed`,
-    `- \`query_board_items\` / \`list_board_releases\` — Work Board alternatives when the project uses the board`,
+    `- \`query_work_items\` — optional ADO lookup ONLY when a participant references ADO work items`,
+    `- \`query_board_items\` / \`list_board_releases\` — optional Work Board lookup when the project uses the board`,
     ``,
     `# Procedure`,
-    `1. Call \`get_standup_session\` with the sessionId to load all participant updates, \`userCorrections\`, \`preparedBrief\` SDLC signals, and \`teamPulse\`.`,
-    `2. Inspect SDLC & multi-day patterns and call \`create_standup_followup\` where coordination is required:`,
-    `   - **SDLC & Release Process Risks** — highlight \`.sql\` / \`migrations/**\` schema changes requiring rollback/release verification, \`.tf\` / \`infra/**\` IaC PRs whose pipeline did NOT pass a \`terraform\`/\`iac\`/\`plan\`/\`validate\` stage (failed, skipped, or missing), \`Ready for Test\`/\`UAT\` items with red builds or open PRs, and source PRs lacking tests.`,
-    `   - **Blockers & incidents** — pipeline/build failures, shared environment outages, external dependencies, or production incidents.`,
-    `   - **Multi-day carryover streaks & flow bottlenecks** — items carried across multiple standups without completion, plus any explicit \`userCorrections\` where a participant corrected ADO drift.`,
+    `1. Call \`get_standup_session\` with the sessionId. Treat each participant's confirmed \`structuredUpdate\` as the source of truth. Never invent ADO work items for teams using plain-language check-ins.`,
+    `2. Call \`create_standup_followup\` only when real coordination is needed:`,
+    `   - **Blockers & help requests** — reported blockers, environment/pipeline issues, external dependencies, or handoffs waiting on a teammate.`,
+    `   - **Multi-day carryover streaks** — items carried across multiple check-ins that need splitting or pairing.`,
+    `   - **SDLC & Release Process Callouts (when code/pipeline evidence is present)** — \`.sql\` / \`migrations/**\` rollback/release checks, \`.tf\` / \`infra/**\` skipped or failed IaC stages, or red QA builds.`,
     ...(enableTargetDateChecks
       ? [
           `   - **Milestone & target-date risks** — release-relevant items that are overdue, due within 7 days in early states, or missing target dates.`,
@@ -407,14 +420,12 @@ export function buildStandupFacilitatorPrompt(
       : [
           `   - **Model-aligned delivery risks (${deliveryModel})** — aging work, sprint scope drift, or support SLA risks (do NOT invent missing-target-date warnings when target-date checks are disabled).`,
         ]),
-    `   - **Handoffs, PR reviews & capacity** — pair teammates handing off work or waiting on reviews, and match available capacity to blocked/unowned items.`,
-    `3. Compose a crisp markdown summary ordered for a 5-minute live huddle:`,
+    `3. Compose a brief, read-aloud markdown summary for a 5-minute standup:`,
     `   1. **Team Goal & Overall Health**${teamGoal ? ` ("${teamGoal}")` : ''}`,
-    `   2. **SDLC & Release Process Callouts** (SQL migrations, Terraform/IaC pipeline stage verification, QA build health)`,
-    `   3. **Blockers & Decisions Needed**`,
-    `   4. **Engineering Area Breakdown** (categorize work across Database/SQL, Infra/Terraform, Backend/API, Frontend/UI, QA & Testing, Security & Auth, Prod Support)`,
-    `   5. **Individual Standup Narratives** (concise per-person multi-day summary for every participant, distinguishing Confirmed updates + user corrections vs AI-Drafted from ADO)`,
-    `   6. **Handoffs, Capacity & Follow-ups Created**`,
+    `   2. **Blockers & Questions to Ask** (who is blocked, who can help, and 1-3 quick huddle prompts)`,
+    `   3. **Individual Standup Narratives** (short read-aloud line per person: Done, Today, Blockers/Notes, clearly marking Submitted vs Waiting for check-in)`,
+    `   4. **SDLC & Release Process Callouts / Engineering Area Breakdown** (include only when code, PR, or work-item signals are present — omit filler when none exist)`,
+    `   5. **Handoffs & Follow-ups Created**`,
     `4. Call \`complete_standup_session\` exactly once with the sessionId, your markdown summary, and optional \`decisionsNeeded\` list. This MUST be your final action.`,
     ``,
     `Also output the final summary as your last message.`,
