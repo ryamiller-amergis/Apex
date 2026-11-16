@@ -76,7 +76,7 @@ Feature Requests is a complete slice through every layer:
 - Migration: newest file in `migrations/`; create with `npm run migrate:create -- <slug>`
 - Integration test: `tests/integration/notifications.integration.test.ts`
 - E2E: `tests/e2e/specs/access-control.spec.ts` + a page object in `tests/e2e/pages/`
-- Rules: `.cursor/rules/react-coding-standards.mdc`, `.cursor/rules/ui-design-standards.mdc`, `.cursor/rules/postgresql-db.mdc`,
+- Rules: `.cursor/rules/react-coding-standards.mdc`, `.cursor/rules/ui-design-standards.mdc`, `.cursor/rules/ui-consistency.mdc`, `.cursor/rules/postgresql-db.mdc`,
   `.cursor/rules/rbac-governance.mdc`, `.cursor/rules/feature-flags.mdc`, `.cursor/rules/agent-chat-surfaces.mdc`
 
 ## Commands (quietest form)

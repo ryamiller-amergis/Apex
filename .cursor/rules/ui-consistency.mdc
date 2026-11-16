@@ -1,0 +1,8 @@
+---
+description: When a task changes what the user sees, follow the UI design standards and reuse shared components
+alwaysApply: true
+---
+
+# UI consistency
+
+If the task changes layout, components, CSS, or on-screen copy, read `.cursor/rules/ui-design-standards.mdc` before writing UI. Start from its "Reuse shared components" table; when nothing there fits, match a neighboring screen's CSS module.

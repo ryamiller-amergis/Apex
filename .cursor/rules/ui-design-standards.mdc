@@ -6,6 +6,17 @@ alwaysApply: false
 
 # UI Design Standards
 
+## Reuse shared components
+
+Apex styles with CSS modules and the tokens in `src/client/App.css`. There is no Tailwind in the app, and there is no shared Button, Card, input, or modal shell yet. Use a shared component when one exists; otherwise copy the nearest screen's CSS module.
+
+| Need | Use |
+|------|-----|
+| Table with filters and search | `DataGridToolbar`, `DataGridFilterPills` / `DataGridFilterSelect`, `DataGrid.module.css`. Load `.cursor/skills/data-grid-ui/SKILL.md`. |
+| Discrete number | `NumberStepper` (`src/client/components/NumberStepper.tsx`) |
+| Delete confirmation | `ConfirmDeleteModal` |
+| Button, card, field, or dialog with no shared component | Match a neighboring component. Do not invent a one-off color, radius, or spacing scale. |
+
 ## CSS Variables — Always Use Tokens
 
 Never hardcode colors, shadows, or borders. Use the CSS custom properties defined in `App.css`:
