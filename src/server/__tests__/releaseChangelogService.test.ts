@@ -56,6 +56,8 @@ jest.mock('../services/bedrockService', () => ({
   ]),
 }));
 
+let assignedReleaseProjects = new Set<string>(['MaxView']);
+
 jest.mock('../middleware/rbac', () => ({
   requireGroupMembership:
     () => (req: Request & { user?: unknown }, _res: Response, next: NextFunction) => {
@@ -64,7 +66,18 @@ jest.mock('../middleware/rbac', () => ({
     },
   requirePermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
   requireAnyPermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
-  requireProjectAccess: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireProjectAccess: (resolve: (req: Request) => string | undefined) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      const project = resolve(req);
+      if (!project || !assignedReleaseProjects.has(project)) {
+        return res.status(403).json({ error: 'Forbidden: not assigned to this project' });
+      }
+      next();
+    },
+  resolveRequestProject: (req: Request) => {
+    const bodyProject = (req.body as { project?: unknown } | undefined)?.project;
+    return typeof bodyProject === 'string' ? bodyProject : undefined;
+  },
   attachPermissions: (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
@@ -441,6 +454,7 @@ describe('POST /api/releases/:epicId/changelog route', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    assignedReleaseProjects = new Set(['MaxView']);
     setReleaseChangelogAiProviderForTests(null);
 
     app = express();
@@ -461,7 +475,7 @@ describe('POST /api/releases/:epicId/changelog route', () => {
     });
   });
 
-  it('returns 400 for invalid epic ID or missing project', async () => {
+  it('returns 400 for an invalid epic ID and 403 when project is missing', async () => {
     await request(app)
       .post('/api/releases/not-a-number/changelog')
       .send({ project: 'MaxView' })
@@ -470,7 +484,19 @@ describe('POST /api/releases/:epicId/changelog route', () => {
     await request(app)
       .post('/api/releases/101/changelog')
       .send({})
-      .expect(400);
+      .expect(403);
+  });
+
+  it('returns 403 when the caller is not assigned to the named project', async () => {
+    assignedReleaseProjects = new Set(['OtherProject']);
+
+    const res = await request(app)
+      .post('/api/releases/101/changelog')
+      .send({ project: 'MaxView' })
+      .expect(403);
+
+    expect(res.body.error).toMatch(/not assigned/i);
+    expect(mockAdoInstance.getReleaseEpicChangelogContext).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the release epic does not exist in ADO', async () => {

@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.43.0",
+    "date": "2026-11-16",
+    "title": "Planning Releases and Platforms",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Releases can target the platforms you configure for a project, such as Mobile and Desktop, and each release shows how ready that platform is"
+      },
+      {
+        "type": "feature",
+        "description": "Create Changelog on a release writes an executive summary from the linked work items, grouped by platform, and you can copy or download it"
+      },
+      {
+        "type": "improvement",
+        "description": "Planning now has Roadmap and Releases. Developer Stats, QA Metrics, and AI Analysis are no longer tabs there. QA Lab still uses the planning QA permission"
+      }
+    ]
+  },
+  {
     "version": "1.42.0",
     "date": "2026-11-09",
     "title": "Skill Health and Skill Learning",

@@ -42,7 +42,7 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
 import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
-import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
+import { requireGroupMembership, requirePermission, requireProjectAccess, resolveRequestProject } from '../middleware/rbac';
 import {
   getReleaseOrder,
   applyOrderToEpics,
@@ -1346,8 +1346,10 @@ function handleReleasePlatformError(res: Response, error: unknown, fallbackMessa
   return res.status(500).json({ error: fallbackMessage });
 }
 
+const requireReleaseProject = requireProjectAccess(resolveRequestProject);
+
 // GET /api/releases/platforms - Fetch configured target platforms & assignments for a project
-router.get('/releases/platforms', async (req: Request, res: Response) => {
+router.get('/releases/platforms', requireReleaseProject, async (req: Request, res: Response) => {
   try {
     const { project } = req.query as { project?: string };
     if (!project || typeof project !== 'string' || !project.trim()) {
@@ -1364,6 +1366,7 @@ router.get('/releases/platforms', async (req: Request, res: Response) => {
 router.post(
   '/releases/platforms',
   requireGroupMembership('BA'),
+  requireReleaseProject,
   async (req: Request, res: Response) => {
     try {
       const { project, name, color } = req.body as {
@@ -1395,6 +1398,7 @@ router.post(
 router.put(
   '/releases/platforms/order',
   requireGroupMembership('BA'),
+  requireReleaseProject,
   async (req: Request, res: Response) => {
     try {
       const { project, platformIds } = req.body as {
@@ -1419,6 +1423,7 @@ router.put(
 router.delete(
   '/releases/platforms/:platformId',
   requireGroupMembership('BA'),
+  requireReleaseProject,
   async (req: Request, res: Response) => {
     try {
       const { platformId } = req.params;
@@ -1441,6 +1446,7 @@ router.delete(
 router.put(
   '/releases/work-items/:workItemId/platforms',
   requireGroupMembership('BA'),
+  requireReleaseProject,
   async (req: Request, res: Response) => {
     try {
       const workItemId = parseInt(req.params.workItemId, 10);
@@ -1475,6 +1481,7 @@ router.put(
 router.put(
   '/releases/:epicId/platforms',
   requireGroupMembership('BA'),
+  requireReleaseProject,
   async (req: Request, res: Response) => {
     try {
       const epicId = parseInt(req.params.epicId, 10);
@@ -1764,6 +1771,7 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
 router.post(
   '/releases/:epicId/changelog',
   requirePermission('planning:releases'),
+  requireReleaseProject,
   async (req: Request, res: Response) => {
     try {
       const epicId = parseInt(req.params.epicId, 10);

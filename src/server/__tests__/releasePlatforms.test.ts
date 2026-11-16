@@ -11,6 +11,8 @@ jest.mock('../db/drizzle', () => ({
   },
 }));
 
+let assignedReleaseProjects = new Set<string>(['MaxView']);
+
 jest.mock('../middleware/rbac', () => ({
   requireGroupMembership:
     () => (req: Request & { user?: unknown }, _res: Response, next: NextFunction) => {
@@ -19,7 +21,20 @@ jest.mock('../middleware/rbac', () => ({
     },
   requirePermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
   requireAnyPermission: () => (_req: Request, _res: Response, next: NextFunction) => next(),
-  requireProjectAccess: () => (_req: Request, _res: Response, next: NextFunction) => next(),
+  requireProjectAccess: (resolve: (req: Request) => string | undefined) =>
+    (req: Request, res: Response, next: NextFunction) => {
+      const project = resolve(req);
+      if (!project || !assignedReleaseProjects.has(project)) {
+        return res.status(403).json({ error: 'Forbidden: not assigned to this project' });
+      }
+      next();
+    },
+  resolveRequestProject: (req: Request) => {
+    const queryProject = req.query?.project;
+    if (typeof queryProject === 'string' && queryProject) return queryProject;
+    const bodyProject = (req.body as { project?: unknown } | undefined)?.project;
+    return typeof bodyProject === 'string' ? bodyProject : undefined;
+  },
   attachPermissions: (_req: Request, _res: Response, next: NextFunction) => next(),
 }));
 
@@ -365,13 +380,14 @@ describe('Release Platform API routes (/api/releases/platforms*)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    assignedReleaseProjects = new Set(['MaxView']);
     app = express();
     app.use(express.json());
     app.use('/api', apiRouter);
   });
 
-  it('GET /api/releases/platforms validates project and returns state', async () => {
-    await request(app).get('/api/releases/platforms').expect(400);
+  it('GET /api/releases/platforms rejects a missing project and returns state for an assigned one', async () => {
+    await request(app).get('/api/releases/platforms').expect(403);
 
     mockSelectQueue([[desktopPlatform], [], []]);
     const res = await request(app)
@@ -442,5 +458,17 @@ describe('Release Platform API routes (/api/releases/platforms*)', () => {
       epicId: 101,
       platformIds: ['plat-desktop'],
     });
+  });
+
+  it('returns 403 when the caller is not assigned to the named project', async () => {
+    assignedReleaseProjects = new Set(['OtherProject']);
+
+    const res = await request(app)
+      .post('/api/releases/platforms')
+      .send({ project: 'MaxView', name: 'Desktop', color: 'blue' })
+      .expect(403);
+
+    expect(res.body.error).toMatch(/not assigned/i);
+    expect(mockDb.insert).not.toHaveBeenCalled();
   });
 });
