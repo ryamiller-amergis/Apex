@@ -168,6 +168,34 @@ describe('releasePlatforms — shared tag & resolution helpers', () => {
     );
     expect(resolved.map((p) => p.slug)).toEqual(['desktop', 'mobile']);
   });
+
+  it('inherits platform from ancestor Feature/Epic unless overridden on the leaf item', () => {
+    const platforms = [desktopPlatform, mobilePlatform];
+
+    // Leaf PBI #1001 has no own platform or tag, so it inherits Mobile from Feature #500
+    const inheritedFromDb = resolveWorkItemPlatforms(
+      { id: 1001, tags: '', ancestorIds: [500] },
+      platforms,
+      { 500: ['plat-mobile'] },
+    );
+    expect(inheritedFromDb.map((p) => p.slug)).toEqual(['mobile']);
+
+    // Leaf PBI #1002 inherits Mobile from Feature's ADO tag when neither has DB assignment
+    const inheritedFromTag = resolveWorkItemPlatforms(
+      { id: 1002, tags: '', ancestorIds: [500], ancestorTags: 'Platform:Mobile' },
+      platforms,
+      {},
+    );
+    expect(inheritedFromTag.map((p) => p.slug)).toEqual(['mobile']);
+
+    // Leaf PBI #1003 explicitly overrides with Desktop -> does not inherit Mobile
+    const overridden = resolveWorkItemPlatforms(
+      { id: 1003, tags: 'Desktop', ancestorIds: [500] },
+      platforms,
+      { 500: ['plat-mobile'] },
+    );
+    expect(overridden.map((p) => p.slug)).toEqual(['desktop']);
+  });
 });
 
 describe('releasePlatformService — CRUD & assignment persistence', () => {

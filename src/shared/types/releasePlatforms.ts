@@ -42,6 +42,10 @@ export interface ReleasePlatformSummaryChildItem {
   state: string;
   workItemType?: string;
   tags?: string;
+  /** Ancestor IDs from immediate parent up to the linked Feature/Epic (for platform inheritance). */
+  ancestorIds?: number[];
+  /** Combined semicolon-separated tags from ancestor Feature/Epic items (for tag-based platform inheritance). */
+  ancestorTags?: string;
 }
 
 export interface ProjectReleasePlatformsState {
@@ -116,9 +120,16 @@ export function matchPlatformsFromTags(
 /**
  * Resolves effective platforms (ordered by `sortOrder`) for a single work item
  * by unioning explicit DB platform IDs and ADO tag matches against live project platforms.
+ * If the item itself has no explicit or tag-matched platform, falls back to inherited
+ * platforms from `ancestorIds` / `ancestorTags` (e.g. a PBI inheriting from its parent Feature).
  */
 export function resolveWorkItemPlatforms(
-  item: { id: number; tags?: string | null },
+  item: {
+    id: number;
+    tags?: string | null;
+    ancestorIds?: readonly number[];
+    ancestorTags?: string | null;
+  },
   platforms: readonly ReleasePlatform[],
   workItemPlatformIds: Readonly<Record<number, readonly string[]>>,
 ): ReleasePlatform[] {
@@ -127,6 +138,23 @@ export function resolveWorkItemPlatforms(
   const explicit = workItemPlatformIds[item.id] ?? [];
   const tagMatched = matchPlatformsFromTags(item.tags, platforms);
   const selectedSet = new Set<string>([...explicit, ...tagMatched]);
+
+  if (selectedSet.size === 0) {
+    if (item.ancestorIds && item.ancestorIds.length > 0) {
+      for (const ancestorId of item.ancestorIds) {
+        for (const id of workItemPlatformIds[ancestorId] ?? []) {
+          selectedSet.add(id);
+        }
+        if (selectedSet.size > 0) break;
+      }
+    }
+    if (selectedSet.size === 0 && item.ancestorTags) {
+      for (const id of matchPlatformsFromTags(item.ancestorTags, platforms)) {
+        selectedSet.add(id);
+      }
+    }
+  }
+
   if (selectedSet.size === 0) return [];
 
   return [...platforms]
@@ -139,7 +167,7 @@ export function resolveWorkItemPlatforms(
  * by unioning:
  *  1. Explicit epic platform assignments in Apex DB
  *  2. ADO tag matches on the release epic itself (if present)
- *  3. Effective platforms of all linked work items
+ *  3. Effective platforms of all linked work items and rolled-up leaf items
  */
 export function resolveReleaseEpicPlatforms(
   epic: {
@@ -150,7 +178,12 @@ export function resolveReleaseEpicPlatforms(
   platforms: readonly ReleasePlatform[],
   epicPlatformIds: Readonly<Record<number, readonly string[]>>,
   workItemPlatformIds: Readonly<Record<number, readonly string[]>>,
-  loadedChildren?: readonly { id: number; tags?: string | null }[],
+  loadedChildren?: readonly {
+    id: number;
+    tags?: string | null;
+    ancestorIds?: readonly number[];
+    ancestorTags?: string | null;
+  }[],
 ): ReleasePlatform[] {
   if (platforms.length === 0) return [];
 
@@ -159,11 +192,17 @@ export function resolveReleaseEpicPlatforms(
     selectedSet.add(id);
   }
 
-  const itemsToInspect = loadedChildren ?? epic.childItemsSummary ?? [];
-  for (const child of itemsToInspect) {
-    const childPlatforms = resolveWorkItemPlatforms(child, platforms, workItemPlatformIds);
-    for (const p of childPlatforms) {
+  for (const child of epic.childItemsSummary ?? []) {
+    for (const p of resolveWorkItemPlatforms(child, platforms, workItemPlatformIds)) {
       selectedSet.add(p.id);
+    }
+  }
+
+  if (loadedChildren) {
+    for (const child of loadedChildren) {
+      for (const p of resolveWorkItemPlatforms(child, platforms, workItemPlatformIds)) {
+        selectedSet.add(p.id);
+      }
     }
   }
 

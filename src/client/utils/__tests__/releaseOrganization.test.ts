@@ -8,6 +8,7 @@ import {
   getWorkItemValidationBucket,
   groupExpandedWorkItems,
   groupReleaseEpics,
+  summarizeWorkItemsValidation,
   type ReleaseEpicRecord,
 } from '../releaseOrganization';
 import type { ReleasePlatform } from '../../../shared/types/releasePlatforms';
@@ -286,5 +287,92 @@ describe('releaseOrganization — expanded work item filtering & grouping', () =
     });
     expect(summaries[0]).toMatchObject({ greenItems: 1, totalItems: 1, leftToValidate: 0 });
     expect(summaries[1]).toMatchObject({ greenItems: 0, totalItems: 2, leftToValidate: 2 });
+  });
+
+  it('rolls up Feature child PBIs into validation counts and platform readiness even when Feature state is In Progress', () => {
+    const featureWithChildren = makeWorkItem({
+      id: 700,
+      title: 'Mobile Offline Inspections',
+      state: 'In Progress', // BA has not flipped Feature to Done yet
+      workItemType: 'Feature',
+      tags: '',
+      childRollup: {
+        totalItems: 4,
+        greenItems: 3,
+        amberItems: 1,
+        redItems: 0,
+        completionPercent: 75,
+        childrenSummary: [
+          { id: 701, state: 'Done', workItemType: 'Product Backlog Item', tags: '', ancestorIds: [700] },
+          { id: 702, state: 'Ready For Release', workItemType: 'Product Backlog Item', tags: '', ancestorIds: [700] },
+          { id: 703, state: 'UAT - Test Done', workItemType: 'Technical Backlog Item', tags: '', ancestorIds: [700] },
+          { id: 704, state: 'UAT - Ready For Test', workItemType: 'Bug', tags: '', ancestorIds: [700] },
+        ],
+      },
+    });
+
+    const summary = summarizeWorkItemsValidation([featureWithChildren]);
+    expect(summary).toEqual({
+      totalItems: 4,
+      greenItems: 3,
+      amberItems: 1,
+      redItems: 0,
+      leftToValidate: 1,
+      completionPercent: 75,
+    });
+
+    // Assigning Mobile to parent Feature #700 cascades to all 4 child items in Platform Readiness
+    const overview = computeSlatedReleasesOverview({
+      epics: [
+        {
+          id: 900,
+          version: 'MV 2027.01.13',
+          status: 'In Progress',
+          targetDate: '2027-01-13',
+          totalItems: 4,
+          completedItems: 3,
+          greenItems: 3,
+          amberItems: 1,
+          redItems: 0,
+          progress: 75,
+          childItemsSummary: featureWithChildren.childRollup!.childrenSummary,
+        },
+      ],
+      platforms: [DESKTOP, MOBILE],
+      epicPlatformIds: {},
+      workItemPlatformIds: { 700: ['plat-mobile'] },
+      todayIsoDate: '2026-11-16',
+    });
+
+    const mobileReadiness = overview.platformReadiness.find((p) => p.platform.slug === 'mobile')!;
+    expect(mobileReadiness.slatedReleaseCount).toBe(1);
+    expect(mobileReadiness.totalItems).toBe(4);
+    expect(mobileReadiness.greenItems).toBe(3);
+    expect(mobileReadiness.amberItems).toBe(1);
+    expect(mobileReadiness.redItems).toBe(0);
+    expect(mobileReadiness.leftToValidate).toBe(1);
+    expect(mobileReadiness.completionPercent).toBe(75);
+
+    // Grouping by Validation Status puts Feature #700 in UAT Ready (amber) since 0 red and 1 amber child remain
+    const byValidation = groupExpandedWorkItems({
+      items: [featureWithChildren],
+      groupBy: 'validation',
+      platforms: [DESKTOP, MOBILE],
+      workItemPlatformIds: { 700: ['plat-mobile'] },
+    });
+    expect(byValidation.map((s) => s.key)).toEqual(['amber']);
+
+    // Expanded platform summary reflects 3/4 ready · 1 left for Mobile
+    const expandedPlatforms = computeExpandedPlatformSummaries({
+      items: [featureWithChildren],
+      platforms: [DESKTOP, MOBILE],
+      workItemPlatformIds: { 700: ['plat-mobile'] },
+    });
+    expect(expandedPlatforms.find((p) => p.platform.slug === 'mobile')).toMatchObject({
+      totalItems: 4,
+      greenItems: 3,
+      leftToValidate: 1,
+      completionPercent: 75,
+    });
   });
 });

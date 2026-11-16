@@ -147,6 +147,33 @@ export function getWorkItemValidationBucket(state?: string | null): ValidationBu
 }
 
 /**
+ * Returns the effective validation bucket for a work item, rolling up from leaf descendants
+ * when the item is a Feature or Epic with children (e.g. a Feature whose PBIs are all Done
+ * counts as `green` even before a BA flips the Feature itself to Done).
+ */
+export function getEffectiveWorkItemValidationBucket(item: {
+  state?: string | null;
+  childRollup?: {
+    totalItems: number;
+    greenItems: number;
+    amberItems: number;
+    redItems: number;
+  };
+}): ValidationBucket {
+  const ownBucket = getWorkItemValidationBucket(item.state);
+  if (ownBucket === 'green') return 'green';
+
+  const rollup = item.childRollup;
+  if (rollup && rollup.totalItems > 0) {
+    if (rollup.greenItems === rollup.totalItems) return 'green';
+    if (rollup.redItems === 0 && rollup.amberItems > 0) return 'amber';
+    return 'red';
+  }
+
+  return ownBucket;
+}
+
+/**
  * Unchanged completion formula: `totalItems > 0 ? Math.round((greenItems / totalItems) * 100) : 0`.
  */
 export function computeCompletionPercent(greenItems: number, totalItems: number): number {
@@ -154,20 +181,34 @@ export function computeCompletionPercent(greenItems: number, totalItems: number)
 }
 
 export function summarizeWorkItemsValidation(
-  items: readonly { state?: string | null }[],
+  items: readonly {
+    state?: string | null;
+    childRollup?: {
+      totalItems: number;
+      greenItems: number;
+      amberItems: number;
+      redItems: number;
+    };
+  }[],
 ): ReleaseValidationSummary {
   let greenItems = 0;
   let amberItems = 0;
   let redItems = 0;
 
   for (const item of items) {
-    const bucket = getWorkItemValidationBucket(item.state);
-    if (bucket === 'green') greenItems += 1;
-    else if (bucket === 'amber') amberItems += 1;
-    else redItems += 1;
+    if (item.childRollup && item.childRollup.totalItems > 0) {
+      greenItems += item.childRollup.greenItems;
+      amberItems += item.childRollup.amberItems;
+      redItems += item.childRollup.redItems;
+    } else {
+      const bucket = getWorkItemValidationBucket(item.state);
+      if (bucket === 'green') greenItems += 1;
+      else if (bucket === 'amber') amberItems += 1;
+      else redItems += 1;
+    }
   }
 
-  const totalItems = items.length;
+  const totalItems = greenItems + amberItems + redItems;
   const leftToValidate = amberItems + redItems;
   return {
     totalItems,
@@ -256,6 +297,32 @@ export function computeLifecycleCounts(
   }
 
   return counts;
+}
+
+function expandLoadedItemsToLeaves(
+  loadedChildren: readonly WorkItem[],
+): ReleasePlatformSummaryChildItem[] {
+  const seen = new Set<number>();
+  const leaves: ReleasePlatformSummaryChildItem[] = [];
+  for (const child of loadedChildren) {
+    if (child.childRollup?.childrenSummary && child.childRollup.childrenSummary.length > 0) {
+      for (const leaf of child.childRollup.childrenSummary) {
+        if (seen.has(leaf.id)) continue;
+        seen.add(leaf.id);
+        leaves.push(leaf);
+      }
+    } else {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      leaves.push({
+        id: child.id,
+        state: child.state,
+        workItemType: child.workItemType,
+        tags: child.tags,
+      });
+    }
+  }
+  return leaves;
 }
 
 function stripHtmlTags(raw?: string | null): string {
@@ -536,8 +603,10 @@ export function computeSlatedReleasesOverview(options: {
 
       slatedReleaseCount += 1;
 
-      const itemsSource: readonly { id: number; state: string; tags?: string }[] | undefined =
-        loadedChildren ?? epic.childItemsSummary;
+      const itemsSource: readonly ReleasePlatformSummaryChildItem[] | undefined =
+        loadedChildren && loadedChildren.length > 0
+          ? expandLoadedItemsToLeaves(loadedChildren)
+          : epic.childItemsSummary;
 
       if (itemsSource && itemsSource.length > 0) {
         const epicExplicitlyTargetsPlatform = epicExplicitIds.includes(platform.id);
@@ -600,9 +669,11 @@ export function computeExpandedPlatformSummaries(options: {
   const { items, platforms, workItemPlatformIds } = options;
   if (platforms.length === 0) return [];
 
+  const leafItems = expandLoadedItemsToLeaves(items);
+
   return platforms.map((platform) => {
-    const matching = items.filter((item) =>
-      resolveWorkItemPlatforms(item, platforms, workItemPlatformIds).some(
+    const matching = leafItems.filter((leaf) =>
+      resolveWorkItemPlatforms(leaf, platforms, workItemPlatformIds).some(
         (p) => p.id === platform.id,
       ),
     );
@@ -612,6 +683,36 @@ export function computeExpandedPlatformSummaries(options: {
       ...summary,
     };
   });
+}
+
+function workItemMatchesPlatformFilter(
+  item: WorkItem,
+  platformSlugFilter: string,
+  platforms: readonly ReleasePlatform[],
+  workItemPlatformIds: Readonly<Record<number, readonly string[]>>,
+): boolean {
+  const ownResolved = resolveWorkItemPlatforms(item, platforms, workItemPlatformIds);
+  const childLeaves = item.childRollup?.childrenSummary;
+
+  if (platformSlugFilter === 'unassigned') {
+    if (ownResolved.length > 0) return false;
+    if (childLeaves && childLeaves.length > 0) {
+      return childLeaves.some(
+        (leaf) => resolveWorkItemPlatforms(leaf, platforms, workItemPlatformIds).length === 0,
+      );
+    }
+    return true;
+  }
+
+  if (ownResolved.some((p) => p.slug === platformSlugFilter)) return true;
+  if (childLeaves && childLeaves.length > 0) {
+    return childLeaves.some((leaf) =>
+      resolveWorkItemPlatforms(leaf, platforms, workItemPlatformIds).some(
+        (p) => p.slug === platformSlugFilter,
+      ),
+    );
+  }
+  return false;
 }
 
 export function filterExpandedWorkItems(options: {
@@ -630,17 +731,30 @@ export function filterExpandedWorkItems(options: {
   } = options;
 
   return items.filter((item) => {
-    const bucket = getWorkItemValidationBucket(item.state);
-    if (bucketFilter === 'left-to-validate' && bucket === 'green') return false;
-    if (bucketFilter === 'uat-ready' && bucket !== 'amber') return false;
-    if (bucketFilter === 'in-dev' && bucket !== 'red') return false;
-    if (bucketFilter === 'validated' && bucket !== 'green') return false;
+    const rollup = item.childRollup;
+    if (rollup && rollup.totalItems > 0) {
+      if (bucketFilter === 'left-to-validate' && rollup.amberItems + rollup.redItems === 0) {
+        return false;
+      }
+      if (bucketFilter === 'uat-ready' && rollup.amberItems === 0) {
+        return false;
+      }
+      if (bucketFilter === 'in-dev' && rollup.redItems === 0) {
+        return false;
+      }
+      if (bucketFilter === 'validated' && rollup.greenItems === 0) {
+        return false;
+      }
+    } else {
+      const bucket = getWorkItemValidationBucket(item.state);
+      if (bucketFilter === 'left-to-validate' && bucket === 'green') return false;
+      if (bucketFilter === 'uat-ready' && bucket !== 'amber') return false;
+      if (bucketFilter === 'in-dev' && bucket !== 'red') return false;
+      if (bucketFilter === 'validated' && bucket !== 'green') return false;
+    }
 
     if (platformSlugFilter && platforms.length > 0) {
-      const resolved = resolveWorkItemPlatforms(item, platforms, workItemPlatformIds);
-      if (platformSlugFilter === 'unassigned') {
-        if (resolved.length > 0) return false;
-      } else if (!resolved.some((p) => p.slug === platformSlugFilter)) {
+      if (!workItemMatchesPlatformFilter(item, platformSlugFilter, platforms, workItemPlatformIds)) {
         return false;
       }
     }
@@ -683,7 +797,7 @@ export function groupExpandedWorkItems(options: {
     return definitions
       .map((def) => {
         const matching = items.filter(
-          (item) => getWorkItemValidationBucket(item.state) === def.key,
+          (item) => getEffectiveWorkItemValidationBucket(item) === def.key,
         );
         const summary = summarizeWorkItemsValidation(matching);
         return {
@@ -701,12 +815,15 @@ export function groupExpandedWorkItems(options: {
     const sections: WorkItemGroupSection[] = [];
     for (const platform of platforms) {
       const matching = items.filter((item) =>
-        resolveWorkItemPlatforms(item, platforms, workItemPlatformIds).some(
-          (p) => p.id === platform.id,
-        ),
+        workItemMatchesPlatformFilter(item, platform.slug, platforms, workItemPlatformIds),
       );
       if (matching.length > 0) {
-        const summary = summarizeWorkItemsValidation(matching);
+        const matchingLeaves = expandLoadedItemsToLeaves(matching).filter((leaf) =>
+          resolveWorkItemPlatforms(leaf, platforms, workItemPlatformIds).some(
+            (p) => p.id === platform.id,
+          ),
+        );
+        const summary = summarizeWorkItemsValidation(matchingLeaves);
         sections.push({
           key: platform.slug,
           label: platform.name,
@@ -717,11 +834,14 @@ export function groupExpandedWorkItems(options: {
       }
     }
 
-    const unassigned = items.filter(
-      (item) => resolveWorkItemPlatforms(item, platforms, workItemPlatformIds).length === 0,
+    const unassigned = items.filter((item) =>
+      workItemMatchesPlatformFilter(item, 'unassigned', platforms, workItemPlatformIds),
     );
     if (unassigned.length > 0) {
-      const summary = summarizeWorkItemsValidation(unassigned);
+      const unassignedLeaves = expandLoadedItemsToLeaves(unassigned).filter(
+        (leaf) => resolveWorkItemPlatforms(leaf, platforms, workItemPlatformIds).length === 0,
+      );
+      const summary = summarizeWorkItemsValidation(unassignedLeaves);
       sections.push({
         key: 'unassigned',
         label: 'Unassigned Platform',

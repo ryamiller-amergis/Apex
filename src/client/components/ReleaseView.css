@@ -2891,6 +2891,59 @@
   position: relative;
 }
 
+.child-item-rollup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+}
+
+.child-item-rollup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.child-item-rollup-pct {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.child-item-rollup-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.rollup-pill.rollup-green {
+  color: var(--success-color);
+  font-weight: 600;
+}
+
+.rollup-pill.rollup-amber {
+  color: #f0ad4e;
+  font-weight: 500;
+}
+
+.rollup-pill.rollup-red {
+  color: var(--error-color);
+  font-weight: 500;
+}
+
+.progress-bar-container.child-rollup-bar {
+  height: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
 .card-platform-popover-wrapper {
   position: relative;
   display: inline-flex;

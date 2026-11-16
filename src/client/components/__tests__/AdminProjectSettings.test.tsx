@@ -199,7 +199,7 @@ describe('AdminProjectSettings — Design Module skill', () => {
     ).toBeInTheDocument();
   });
 
-  it('exposes Design Module under Sidecar Skills when adding a config', () => {
+  it('exposes Design Module and Release Changelog under Sidecar Skills when adding a config', () => {
     render(<AdminProjectSettings selectedProject="Apex" />);
 
     fireEvent.click(screen.getByRole('button', { name: '+ Add Repo Config' }));
@@ -209,6 +209,12 @@ describe('AdminProjectSettings — Design Module skill', () => {
     expect(
       screen.getByText(
         /Generates Architecture Explorer module documents from curated source globs/i
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText('Release Changelog')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Generates platform-aware executive Markdown release notes from a release epic/i
       )
     ).toBeInTheDocument();
   });

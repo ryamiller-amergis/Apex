@@ -22,6 +22,7 @@ export type AgentModuleId =
   | 'loadTestGeneration'
   | 'designModule'
   | 'designModuleScoping'
+  | 'releaseChangelog'
   | 'brainstorm';
 
 export interface ChatMessage {

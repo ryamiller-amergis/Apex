@@ -2693,6 +2693,244 @@ export class AzureDevOpsService {
   }
 
   /**
+   * Resolves hierarchical leaf items for a set of linked work items so Features and Epics
+   * roll up their underlying PBI/TBI/Bug execution progress rather than staying red until
+   * a BA closes the parent Feature. Tasks under PBIs are not expanded so a PBI remains the
+   * unit of QA validation, while childless Features/Epics fall back to themselves.
+   */
+  private async resolveReleaseLeafRollup(
+    witApi: Awaited<ReturnType<azdev.WebApi['getWorkItemTrackingApi']>>,
+    rootItems: Array<{
+      id: number;
+      state: string;
+      workItemType: string;
+      tags: string;
+    }>,
+  ): Promise<{
+    leafSummary: Array<{
+      id: number;
+      state: string;
+      workItemType: string;
+      tags: string;
+      ancestorIds?: number[];
+      ancestorTags?: string;
+    }>;
+    rollupByRootId: Map<number, import('../types/workitem').WorkItemChildRollup>;
+  }> {
+    const CONTAINER_TYPES = new Set(['Epic', 'Feature']);
+    const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
+    const amberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
+
+    const containerRoots = rootItems.filter((item) => CONTAINER_TYPES.has(item.workItemType));
+    const rollupByRootId = new Map<number, import('../types/workitem').WorkItemChildRollup>();
+
+    if (containerRoots.length === 0) {
+      return {
+        leafSummary: rootItems.map((item) => ({
+          id: item.id,
+          state: item.state,
+          workItemType: item.workItemType,
+          tags: item.tags,
+        })),
+        rollupByRootId,
+      };
+    }
+
+    const parentToChildren = new Map<number, number[]>();
+    const childToParent = new Map<number, number>();
+    const allDiscoveredIds = new Set<number>();
+
+    const chunkSize = 100;
+    for (let i = 0; i < containerRoots.length; i += chunkSize) {
+      const chunkIds = containerRoots.slice(i, i + chunkSize).map((r) => r.id);
+      const wiql = `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.Id] IN (${chunkIds.join(',')})) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+      try {
+        const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+        for (const rel of queryResult?.workItemRelations ?? []) {
+          const src = rel.source?.id;
+          const tgt = rel.target?.id;
+          if (typeof src === 'number' && typeof tgt === 'number' && src !== tgt) {
+            const list = parentToChildren.get(src) ?? [];
+            if (!list.includes(tgt)) list.push(tgt);
+            parentToChildren.set(src, list);
+            if (!childToParent.has(tgt)) {
+              childToParent.set(tgt, src);
+            }
+            allDiscoveredIds.add(tgt);
+          }
+        }
+      } catch (err) {
+        console.warn('[resolveReleaseLeafRollup] Failed recursive hierarchy WIQL, falling back to direct items:', err);
+      }
+    }
+
+    const itemById = new Map<
+      number,
+      { id: number; state: string; workItemType: string; tags: string }
+    >();
+    for (const r of rootItems) {
+      itemById.set(r.id, r);
+      allDiscoveredIds.delete(r.id);
+    }
+
+    if (allDiscoveredIds.size > 0) {
+      const fetched = await this.getWorkItemsInBatches(
+        witApi,
+        Array.from(allDiscoveredIds),
+        ['System.Id', 'System.State', 'System.WorkItemType', 'System.Tags'],
+      );
+      for (const wi of fetched) {
+        if (!wi?.id || !wi.fields) continue;
+        const state = String(wi.fields['System.State'] ?? '');
+        if (state === 'Removed') continue;
+        itemById.set(wi.id, {
+          id: wi.id,
+          state,
+          workItemType: String(wi.fields['System.WorkItemType'] ?? ''),
+          tags: String(wi.fields['System.Tags'] ?? ''),
+        });
+      }
+    }
+
+    const collectLeavesUnder = (
+      nodeId: number,
+      ancestorIds: number[],
+      visited: Set<number>,
+    ): Array<{
+      id: number;
+      state: string;
+      workItemType: string;
+      tags: string;
+      ancestorIds?: number[];
+      ancestorTags?: string;
+    }> => {
+      if (visited.has(nodeId)) return [];
+      visited.add(nodeId);
+
+      const node = itemById.get(nodeId);
+      if (!node) return [];
+
+      // Stop expanding below Feature/Epic so PBIs, TBIs, and Bugs are counted as single QA units
+      // (even if developers attach granular Tasks underneath a PBI).
+      if (!CONTAINER_TYPES.has(node.workItemType)) {
+        const ancestorTagParts = ancestorIds
+          .map((aid) => itemById.get(aid)?.tags ?? '')
+          .filter((t) => t.trim().length > 0);
+        return [
+          {
+            id: node.id,
+            state: node.state,
+            workItemType: node.workItemType,
+            tags: node.tags,
+            ...(ancestorIds.length > 0 ? { ancestorIds } : {}),
+            ...(ancestorTagParts.length > 0
+              ? { ancestorTags: ancestorTagParts.join('; ') }
+              : {}),
+          },
+        ];
+      }
+
+      const directChildIds = (parentToChildren.get(nodeId) ?? []).filter((cid) =>
+        itemById.has(cid),
+      );
+      if (directChildIds.length === 0) {
+        const ancestorTagParts = ancestorIds
+          .map((aid) => itemById.get(aid)?.tags ?? '')
+          .filter((t) => t.trim().length > 0);
+        return [
+          {
+            id: node.id,
+            state: node.state,
+            workItemType: node.workItemType,
+            tags: node.tags,
+            ...(ancestorIds.length > 0 ? { ancestorIds } : {}),
+            ...(ancestorTagParts.length > 0
+              ? { ancestorTags: ancestorTagParts.join('; ') }
+              : {}),
+          },
+        ];
+      }
+
+      const nextAncestors = [nodeId, ...ancestorIds];
+      const leaves: Array<{
+        id: number;
+        state: string;
+        workItemType: string;
+        tags: string;
+        ancestorIds?: number[];
+        ancestorTags?: string;
+      }> = [];
+      for (const cid of directChildIds) {
+        leaves.push(...collectLeavesUnder(cid, nextAncestors, visited));
+      }
+      return leaves;
+    };
+
+    // Build per-root rollup first (for Feature/Epic cards when expanded)
+    for (const root of containerRoots) {
+      const directChildIds = (parentToChildren.get(root.id) ?? []).filter((cid) =>
+        itemById.has(cid),
+      );
+      if (directChildIds.length === 0) continue;
+
+      const rootVisited = new Set<number>([root.id]);
+      const leaves: Array<{
+        id: number;
+        state: string;
+        workItemType: string;
+        tags: string;
+        ancestorIds?: number[];
+        ancestorTags?: string;
+      }> = [];
+      for (const cid of directChildIds) {
+        leaves.push(...collectLeavesUnder(cid, [root.id], rootVisited));
+      }
+
+      if (leaves.length > 0) {
+        let greenItems = 0;
+        let amberItems = 0;
+        let redItems = 0;
+        for (const leaf of leaves) {
+          if (greenStates.includes(leaf.state)) greenItems++;
+          else if (amberStates.includes(leaf.state)) amberItems++;
+          else redItems++;
+        }
+        const totalItems = leaves.length;
+        rollupByRootId.set(root.id, {
+          totalItems,
+          greenItems,
+          amberItems,
+          redItems,
+          completionPercent: totalItems > 0 ? Math.round((greenItems / totalItems) * 100) : 0,
+          childrenSummary: leaves,
+        });
+      }
+    }
+
+    // Deduplicate across the release epic in case both a Feature and one of its PBIs were linked
+    const seenLeafIds = new Set<number>();
+    const leafSummary: Array<{
+      id: number;
+      state: string;
+      workItemType: string;
+      tags: string;
+      ancestorIds?: number[];
+      ancestorTags?: string;
+    }> = [];
+
+    for (const root of rootItems) {
+      const rootLeaves = collectLeavesUnder(root.id, [], new Set<number>());
+      for (const leaf of rootLeaves) {
+        if (seenLeafIds.has(leaf.id)) continue;
+        seenLeafIds.add(leaf.id);
+        leafSummary.push(leaf);
+      }
+    }
+
+    return { leafSummary, rollupByRootId };
+  }
+
+  /**
    * Get all release Epics with their details and progress
    */
   async getReleaseEpics(): Promise<any[]> {
@@ -2773,6 +3011,8 @@ export class AzureDevOpsService {
           state: string;
           workItemType: string;
           tags: string;
+          ancestorIds?: number[];
+          ancestorTags?: string;
         }> = [];
 
         if (childrenResponse.ok) {
@@ -2788,24 +3028,26 @@ export class AzureDevOpsService {
               'System.Id',
               'System.Tags',
             ]);
-            const actualChildren = childWorkItems.filter((child) => child.id !== wi.id);
-            totalItems = actualChildren.length;
-            
+            const actualChildren = childWorkItems
+              .filter((child) => child.id !== wi.id && child.fields?.['System.State'] !== 'Removed')
+              .map((child) => ({
+                id: child.id!,
+                state: String(child.fields?.['System.State'] || ''),
+                workItemType: String(child.fields?.['System.WorkItemType'] || ''),
+                tags: String(child.fields?.['System.Tags'] || ''),
+              }));
+
+            const { leafSummary } = await this.resolveReleaseLeafRollup(witApi, actualChildren);
+            childItemsSummary = leafSummary;
+            totalItems = leafSummary.length;
+
             const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
             const amberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
 
-            childItemsSummary = actualChildren.map((child) => ({
-              id: child.id!,
-              state: child.fields?.['System.State'] || '',
-              workItemType: child.fields?.['System.WorkItemType'] || '',
-              tags: child.fields?.['System.Tags'] || '',
-            }));
-
-            actualChildren.forEach((child) => {
-              const state = child.fields?.['System.State'];
-              if (greenStates.includes(state)) {
+            leafSummary.forEach((leaf) => {
+              if (greenStates.includes(leaf.state)) {
                 greenItems++;
-              } else if (amberStates.includes(state)) {
+              } else if (amberStates.includes(leaf.state)) {
                 amberItems++;
               } else {
                 redItems++;
@@ -3326,23 +3568,302 @@ export class AzureDevOpsService {
         'System.Description',
       ];
 
-      const relatedItems = await witApi.getWorkItems(relatedIds, fields);
+      const relatedItems = await this.getWorkItemsInBatches(witApi, relatedIds, fields);
+      const mappedItems: WorkItem[] = relatedItems
+        .filter((wi) => Boolean(wi?.id && wi.fields))
+        .map((wi) => ({
+          id: wi.id!,
+          title: wi.fields?.['System.Title'] || '',
+          state: wi.fields?.['System.State'] || '',
+          assignedTo: wi.fields?.['System.AssignedTo']?.displayName,
+          workItemType: wi.fields?.['System.WorkItemType'] || '',
+          changedDate: wi.fields?.['System.ChangedDate'],
+          createdDate: wi.fields?.['System.CreatedDate'],
+          closedDate: wi.fields?.['Microsoft.VSTS.Common.ClosedDate'],
+          areaPath: wi.fields?.['System.AreaPath'],
+          iterationPath: wi.fields?.['System.IterationPath'],
+          tags: wi.fields?.['System.Tags'],
+          description: wi.fields?.['System.Description'],
+        }));
 
-      return relatedItems.map((wi) => ({
-        id: wi.id!,
-        title: wi.fields?.['System.Title'] || '',
-        state: wi.fields?.['System.State'] || '',
-        assignedTo: wi.fields?.['System.AssignedTo']?.displayName,
-        workItemType: wi.fields?.['System.WorkItemType'] || '',
-        changedDate: wi.fields?.['System.ChangedDate'],
-        createdDate: wi.fields?.['System.CreatedDate'],
-        closedDate: wi.fields?.['Microsoft.VSTS.Common.ClosedDate'],
-        areaPath: wi.fields?.['System.AreaPath'],
-        iterationPath: wi.fields?.['System.IterationPath'],
-        tags: wi.fields?.['System.Tags'],
-        description: wi.fields?.['System.Description'],
-      }));
+      const { rollupByRootId } = await this.resolveReleaseLeafRollup(
+        witApi,
+        mappedItems.map((item) => ({
+          id: item.id,
+          state: item.state,
+          workItemType: item.workItemType,
+          tags: item.tags || '',
+        })),
+      );
+
+      return mappedItems.map((item) => {
+        const childRollup = rollupByRootId.get(item.id);
+        return childRollup ? { ...item, childRollup } : item;
+      });
     });
+  }
+
+  /**
+   * Fetches the release Epic metadata along with its full hierarchical tree of associated
+   * work items (Epics, Features, and their underlying PBIs, TBIs, and Bugs) for executive
+   * changelog generation. One attempt only: a retry would hold the modal open.
+   */
+  async getReleaseEpicChangelogContext(epicId: number): Promise<{
+    epic: {
+      id: number;
+      version: string;
+      status: string;
+      startDate?: string;
+      targetDate?: string;
+      description: string;
+      tags: string;
+    };
+    items: Array<{
+      id: number;
+      title: string;
+      workItemType: string;
+      state: string;
+      tags: string;
+      description: string;
+      ancestorIds: number[];
+      ancestorTags: string;
+      children: any[];
+    }>;
+  } | null> {
+    return retryWithBackoff(
+      async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+
+      const epic = await witApi.getWorkItem(
+        epicId,
+        undefined,
+        undefined,
+        WorkItemExpand.Relations,
+        this.project,
+      );
+
+      if (!epic?.id || !epic.fields) {
+        return null;
+      }
+
+      const extractDate = (dateValue: unknown): string | undefined => {
+        if (!dateValue) return undefined;
+        const date = new Date(String(dateValue));
+        if (Number.isNaN(date.getTime())) return undefined;
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      };
+
+      const epicMeta = {
+        id: epic.id,
+        version: String(epic.fields['System.Title'] ?? ''),
+        status: String(epic.fields['System.State'] ?? ''),
+        startDate: extractDate(epic.fields['Microsoft.VSTS.Scheduling.StartDate']),
+        targetDate: extractDate(epic.fields['Microsoft.VSTS.Scheduling.TargetDate']),
+        description: String(epic.fields['System.Description'] ?? ''),
+        tags: String(epic.fields['System.Tags'] ?? ''),
+      };
+
+      const relatedIds = (epic.relations ?? [])
+        .filter((rel: any) => rel.rel === 'System.LinkTypes.Related')
+        .map((rel: any) => {
+          const match = rel.url?.match(/\/(\d+)$/);
+          return match ? parseInt(match[1], 10) : null;
+        })
+        .filter((id: number | null): id is number => id !== null && id !== epic.id);
+
+      if (relatedIds.length === 0) {
+        return { epic: epicMeta, items: [] };
+      }
+
+      const rootFields = [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+        'System.Tags',
+      ];
+
+      const descendantFields = [
+        'System.Id',
+        'System.Title',
+        'System.State',
+        'System.WorkItemType',
+        'System.Tags',
+      ];
+
+      const fetchRecursiveRelations = async () => {
+        const relations: Array<{ src: number; tgt: number }> = [];
+        const chunkSize = 100;
+        for (let i = 0; i < relatedIds.length; i += chunkSize) {
+          const chunkIds = relatedIds.slice(i, i + chunkSize);
+          const wiql = `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.Id] IN (${chunkIds.join(',')})) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+          try {
+            const queryResult = await witApi.queryByWiql({ query: wiql }, { project: this.project });
+            for (const rel of queryResult?.workItemRelations ?? []) {
+              const src = rel.source?.id;
+              const tgt = rel.target?.id;
+              if (typeof src === 'number' && typeof tgt === 'number' && src !== tgt) {
+                relations.push({ src, tgt });
+              }
+            }
+          } catch (err) {
+            console.warn('[getReleaseEpicChangelogContext] Recursive hierarchy WIQL failed:', err);
+          }
+        }
+        return relations;
+      };
+
+      // Run root item fetch and recursive hierarchy link query in parallel to cut an entire ADO round-trip
+      const [rawRelated, rawRelations] = await Promise.all([
+        this.getWorkItemsInBatches(witApi, relatedIds, rootFields),
+        fetchRecursiveRelations(),
+      ]);
+
+      type RawNode = {
+        id: number;
+        title: string;
+        workItemType: string;
+        state: string;
+        tags: string;
+        description: string;
+      };
+
+      const itemById = new Map<number, RawNode>();
+      const rootItems: RawNode[] = [];
+      const CONTAINER_TYPES = new Set(['Epic', 'Feature']);
+
+      for (const wi of rawRelated) {
+        if (!wi?.id || !wi.fields) continue;
+        const state = String(wi.fields['System.State'] ?? '');
+        if (state === 'Removed') continue;
+        const node: RawNode = {
+          id: wi.id,
+          title: String(wi.fields['System.Title'] ?? ''),
+          workItemType: String(wi.fields['System.WorkItemType'] ?? ''),
+          state,
+          tags: String(wi.fields['System.Tags'] ?? ''),
+          description: String(wi.fields['System.Description'] ?? ''),
+        };
+        itemById.set(node.id, node);
+        rootItems.push(node);
+      }
+
+      const containerRootIds = new Set(
+        rootItems.filter((item) => CONTAINER_TYPES.has(item.workItemType)).map((r) => r.id),
+      );
+      const parentToChildren = new Map<number, number[]>();
+      const descendantIds = new Set<number>();
+
+      if (containerRootIds.size > 0 && rawRelations.length > 0) {
+        // Walk relations from container roots so standalone PBI -> Task links are never traversed
+        const rawAdj = new Map<number, number[]>();
+        for (const { src, tgt } of rawRelations) {
+          const list = rawAdj.get(src) ?? [];
+          if (!list.includes(tgt)) list.push(tgt);
+          rawAdj.set(src, list);
+        }
+
+        const queue = Array.from(containerRootIds);
+        const seenContainers = new Set<number>(queue);
+        while (queue.length > 0) {
+          const curr = queue.shift()!;
+          for (const tgt of rawAdj.get(curr) ?? []) {
+            const list = parentToChildren.get(curr) ?? [];
+            if (!list.includes(tgt)) list.push(tgt);
+            parentToChildren.set(curr, list);
+            if (!itemById.has(tgt)) {
+              descendantIds.add(tgt);
+            }
+            if (!seenContainers.has(tgt)) {
+              seenContainers.add(tgt);
+              queue.push(tgt);
+            }
+          }
+        }
+      }
+
+      if (descendantIds.size > 0) {
+        const fetchedDescendants = await this.getWorkItemsInBatches(
+          witApi,
+          Array.from(descendantIds),
+          descendantFields,
+        );
+        for (const wi of fetchedDescendants) {
+          if (!wi?.id || !wi.fields) continue;
+          const state = String(wi.fields['System.State'] ?? '');
+          const workItemType = String(wi.fields['System.WorkItemType'] ?? '');
+          if (state === 'Removed' || workItemType === 'Task') continue;
+          itemById.set(wi.id, {
+            id: wi.id,
+            title: String(wi.fields['System.Title'] ?? ''),
+            workItemType,
+            state,
+            tags: String(wi.fields['System.Tags'] ?? ''),
+            description: '',
+          });
+        }
+      }
+
+      type TreeNode = RawNode & {
+        ancestorIds: number[];
+        ancestorTags: string;
+        children: TreeNode[];
+      };
+
+      // Track IDs already nested under a linked Epic/Feature so we don't duplicate standalone links
+      const nestedChildIds = new Set<number>();
+      for (const [, childList] of parentToChildren) {
+        for (const cid of childList) {
+          nestedChildIds.add(cid);
+        }
+      }
+
+      const buildNode = (
+        nodeId: number,
+        ancestorIds: number[],
+        visited: Set<number>,
+      ): TreeNode | null => {
+        if (visited.has(nodeId)) return null;
+        const raw = itemById.get(nodeId);
+        if (!raw) return null;
+        visited.add(nodeId);
+
+        const ancestorTags = ancestorIds
+          .map((aid) => itemById.get(aid)?.tags ?? '')
+          .filter((t) => t.trim().length > 0)
+          .join('; ');
+
+        const children: TreeNode[] = [];
+        if (CONTAINER_TYPES.has(raw.workItemType)) {
+          const nextAncestors = [nodeId, ...ancestorIds];
+          for (const cid of parentToChildren.get(nodeId) ?? []) {
+            const childTree = buildNode(cid, nextAncestors, visited);
+            if (childTree) children.push(childTree);
+          }
+        }
+
+        return {
+          ...raw,
+          ancestorIds,
+          ancestorTags,
+          children,
+        };
+      };
+
+      const treeRoots: TreeNode[] = [];
+      for (const root of rootItems) {
+        if (nestedChildIds.has(root.id)) continue;
+        const built = buildNode(root.id, [], new Set<number>());
+        if (built) treeRoots.push(built);
+      }
+
+      return { epic: epicMeta, items: treeRoots };
+    },
+      { maxRetries: 1 },
+    );
   }
 
   /**

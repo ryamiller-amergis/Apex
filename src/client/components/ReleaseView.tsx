@@ -8,6 +8,7 @@ import { CreateCabRequestModal } from './CreateCabRequestModal';
 import { CabReleaseAssistantPanel } from './CabReleaseAssistantPanel';
 import { ReleaseCabRequestAction } from './ReleaseCabRequestAction';
 import { ReleasePlatformModal } from './ReleasePlatformModal';
+import { ReleaseChangelogModal } from './ReleaseChangelogModal';
 import { useAppShell } from '../hooks/useAppShell';
 import { useReleasePlatforms } from '../hooks/useReleasePlatforms';
 import { reorderReleases } from '../utils/releaseOrder';
@@ -43,25 +44,47 @@ const SCROLL_EDGE_PX = 88;
 function adjustReleaseEpicCounts(epic: any, item: WorkItem, direction: 1 | -1) {
   const greenStates = ['Ready For Release', 'UAT - Test Done', 'Done', 'Closed'];
   const amberStates = ['UAT - Ready For Test', 'UAT Ready For Test', 'UAT-Ready For Test'];
-  const bucket = greenStates.includes(item.state) ? 'green' : amberStates.includes(item.state) ? 'amber' : 'red';
-  const totalItems = Math.max(0, (epic.totalItems ?? 0) + direction);
-  const greenItems = Math.max(0, (epic.greenItems ?? 0) + (bucket === 'green' ? direction : 0));
-  const amberItems = Math.max(0, (epic.amberItems ?? 0) + (bucket === 'amber' ? direction : 0));
-  const redItems = Math.max(0, (epic.redItems ?? 0) + (bucket === 'red' ? direction : 0));
+  const rollup = item.childRollup;
+  const hasRollup = Boolean(rollup && rollup.totalItems > 0);
+  const deltaTotal = hasRollup ? rollup!.totalItems : 1;
+  const bucket = greenStates.includes(item.state)
+    ? 'green'
+    : amberStates.includes(item.state)
+      ? 'amber'
+      : 'red';
+  const deltaGreen = hasRollup ? rollup!.greenItems : bucket === 'green' ? 1 : 0;
+  const deltaAmber = hasRollup ? rollup!.amberItems : bucket === 'amber' ? 1 : 0;
+  const deltaRed = hasRollup ? rollup!.redItems : bucket === 'red' ? 1 : 0;
+
+  const totalItems = Math.max(0, (epic.totalItems ?? 0) + direction * deltaTotal);
+  const greenItems = Math.max(0, (epic.greenItems ?? 0) + direction * deltaGreen);
+  const amberItems = Math.max(0, (epic.amberItems ?? 0) + direction * deltaAmber);
+  const redItems = Math.max(0, (epic.redItems ?? 0) + direction * deltaRed);
+
   let childItemsSummary = epic.childItemsSummary;
   if (Array.isArray(childItemsSummary)) {
+    const entriesToAdjust =
+      rollup?.childrenSummary && rollup.childrenSummary.length > 0
+        ? rollup.childrenSummary
+        : [
+            {
+              id: item.id,
+              state: item.state,
+              workItemType: item.workItemType,
+              tags: item.tags ?? '',
+            },
+          ];
+    const targetIds = new Set(entriesToAdjust.map((e) => e.id));
     if (direction === -1) {
-      childItemsSummary = childItemsSummary.filter((entry: { id: number }) => entry.id !== item.id);
-    } else if (!childItemsSummary.some((entry: { id: number }) => entry.id === item.id)) {
-      childItemsSummary = [
-        ...childItemsSummary,
-        {
-          id: item.id,
-          state: item.state,
-          workItemType: item.workItemType,
-          tags: item.tags ?? '',
-        },
-      ];
+      childItemsSummary = childItemsSummary.filter(
+        (entry: { id: number }) => !targetIds.has(entry.id),
+      );
+    } else {
+      const existingIds = new Set(childItemsSummary.map((entry: { id: number }) => entry.id));
+      const additions = entriesToAdjust.filter((entry) => !existingIds.has(entry.id));
+      if (additions.length > 0) {
+        childItemsSummary = [...childItemsSummary, ...additions];
+      }
     }
   }
   return {
@@ -272,6 +295,10 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
 
   // Organization, platform management, and QA validation workspace state
   const [showPlatformsModal, setShowPlatformsModal] = useState(false);
+  const [changelogModalEpic, setChangelogModalEpic] = useState<{
+    id: number;
+    version: string;
+  } | null>(null);
   const [lifecycleFilter, setLifecycleFilter] = useState<ReleaseLifecycleFilter>('all');
   const [releaseGroupBy, setReleaseGroupBy] = useState<ReleaseGroupBy>('none');
   const [platformFilterSlug, setPlatformFilterSlug] = useState<string | null>(null);
@@ -959,10 +986,16 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
               return next;
             });
             
-            // Check each child for UAT-ready descendants
+            // Check each child for UAT-ready descendants (use precomputed childRollup when available)
             for (const child of children) {
               if (child.workItemType === 'Epic' || child.workItemType === 'Feature') {
-                checkForUatReadyChildren(child.id, child.workItemType);
+                if (child.childRollup) {
+                  if (child.childRollup.amberItems > 0) {
+                    setItemsWithUatReadyChildren((prev) => new Set(prev).add(child.id));
+                  }
+                } else {
+                  checkForUatReadyChildren(child.id, child.workItemType);
+                }
               }
             }
           } else {
@@ -1382,6 +1415,55 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
             <div className="child-item-title" title={item.title}>
               {item.title}
             </div>
+
+            {item.childRollup && item.childRollup.totalItems > 0 && (
+              <div
+                className="child-item-rollup"
+                {...{ 'data-testid': `release-item-rollup-${epic.id}-${item.id}` }}
+              >
+                <div className="child-item-rollup-header">
+                  <span className="child-item-rollup-pct">
+                    {item.childRollup.completionPercent}% ({item.childRollup.greenItems}/
+                    {item.childRollup.totalItems} child items validated)
+                  </span>
+                  <span className="child-item-rollup-counts">
+                    {item.childRollup.amberItems > 0 && (
+                      <span className="rollup-pill rollup-amber">
+                        ● {item.childRollup.amberItems} UAT ready
+                      </span>
+                    )}
+                    {item.childRollup.redItems > 0 && (
+                      <span className="rollup-pill rollup-red">
+                        ○ {item.childRollup.redItems} in dev
+                      </span>
+                    )}
+                    {item.childRollup.amberItems === 0 && item.childRollup.redItems === 0 && (
+                      <span className="rollup-pill rollup-green">✓ All children validated</span>
+                    )}
+                  </span>
+                </div>
+                <div className="progress-bar-container child-rollup-bar">
+                  <div
+                    className="progress-bar-segment segment-green"
+                    style={{
+                      width: `${(item.childRollup.greenItems / item.childRollup.totalItems) * 100}%`,
+                    }}
+                  />
+                  <div
+                    className="progress-bar-segment segment-amber"
+                    style={{
+                      width: `${(item.childRollup.amberItems / item.childRollup.totalItems) * 100}%`,
+                    }}
+                  />
+                  <div
+                    className="progress-bar-segment segment-red"
+                    style={{
+                      width: `${(item.childRollup.redItems / item.childRollup.totalItems) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {hasConfiguredPlatforms && (
               <div
@@ -1896,7 +1978,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                     className="action-menu-item"
                     {...{ 'data-testid': `release-action-changelog-${epic.id}` }}
                     onClick={() => {
-                      console.log('Create changelog for:', epic.id);
+                      setChangelogModalEpic({ id: epic.id, version: epic.version });
                       setOpenActionMenuId(null);
                     }}
                   >
@@ -2203,7 +2285,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
                       </div>
                     </div>
                     <p className="tooltip-note">
-                      The completion percentage reflects only <strong>green</strong> items (fully complete).<br/>
+                      The completion percentage reflects <strong>green</strong> items (fully complete). When Features or Epics are linked to a release, progress rolls up from their underlying child PBIs, TBIs, and Bugs so completed work is counted immediately even while the parent Feature remains In Progress.<br/>
                       Amber indicates items in UAT awaiting testing. Red indicates items still in progress or not started.
                     </p>
                   </div>
@@ -3003,6 +3085,17 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
           previousReleaseBranch={cabPanel.previousReleaseBranch}
           snowMode={cabPanel.snowMode}
           cutReleaseBranch={cabPanel.cutReleaseBranch}
+        />
+      )}
+
+      {changelogModalEpic && (
+        <ReleaseChangelogModal
+          {...{ 'data-testid': 'release-changelog-modal' }}
+          epicId={changelogModalEpic.id}
+          version={changelogModalEpic.version}
+          project={project}
+          areaPath={areaPath}
+          onClose={() => setChangelogModalEpic(null)}
         />
       )}
 

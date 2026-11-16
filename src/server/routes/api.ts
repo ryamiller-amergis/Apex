@@ -59,6 +59,11 @@ import {
   setReleaseWorkItemPlatforms,
   ReleasePlatformValidationError,
 } from '../services/releasePlatformService';
+import {
+  generateReleaseChangelog,
+  ReleaseChangelogError,
+  warmReleaseChangelogAgent,
+} from '../services/releaseChangelogService';
 import { chatThreads as chatThreadsSchema, devSessions } from '../db/schema';
 import {
   createOrReuseSession,
@@ -1513,6 +1518,9 @@ router.get('/releases/epics', async (req: Request, res: Response) => {
     const { orders } = await getReleaseOrder(project ?? '', normalizedArea);
     const sorted = applyOrderToEpics(epics as Array<{ id: number } & Record<string, unknown>>, orders);
 
+    // Pre-warm headless changelog agent in the background so Create Changelog skips cold start
+    warmReleaseChangelogAgent(project);
+
     res.json(sorted);
   } catch (error: any) {
     console.error('Error fetching release epics:', error);
@@ -1751,6 +1759,50 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
     res.status(500).json({ error: 'Failed to fetch related items' });
   }
 });
+
+// POST /api/releases/:epicId/changelog - Generate platform-aware executive Markdown changelog for a release epic
+router.post(
+  '/releases/:epicId/changelog',
+  requirePermission('planning:releases'),
+  async (req: Request, res: Response) => {
+    try {
+      const epicId = parseInt(req.params.epicId, 10);
+      if (isNaN(epicId) || epicId <= 0) {
+        return res.status(400).json({ error: 'Invalid epic ID' });
+      }
+
+      const { project, areaPath, forceRefresh } = (req.body ?? {}) as {
+        project?: string;
+        areaPath?: string;
+        forceRefresh?: boolean;
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+
+      const userId = getUserId(req) ?? undefined;
+      const startedAt = Date.now();
+      const result = await generateReleaseChangelog({
+        epicId,
+        project,
+        areaPath,
+        userId,
+        forceRefresh: Boolean(forceRefresh),
+      });
+      console.info(
+        `[releaseChangelog] epic=${epicId} items=${result.itemCount} source=${result.source} ${Date.now() - startedAt}ms`,
+      );
+
+      return res.json(result);
+    } catch (error: unknown) {
+      if (error instanceof ReleaseChangelogError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
+      console.error('Error generating release changelog:', error);
+      return res.status(500).json({ error: 'Failed to generate release changelog' });
+    }
+  },
+);
 
 // GET /api/releases/:epicId/cycle-time — last In Progress → last Done/Closed for related items
 router.get('/releases/:epicId/cycle-time', async (req: Request, res: Response) => {
@@ -4787,6 +4839,10 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       loadTestGenerationEffort: config.loadTestGenerationEffort ?? null,
       designModuleEffort: config.designModuleEffort ?? null,
       designModuleScopingEffort: config.designModuleScopingEffort ?? null,
+      releaseChangelogSkillPath: config.releaseChangelogSkillPath ?? null,
+      releaseChangelogModel: config.releaseChangelogModel ?? null,
+      releaseChangelogEffort: config.releaseChangelogEffort ?? null,
+      releaseChangelogBedrockModelId: config.releaseChangelogBedrockModelId ?? null,
       defaultEffort: config.defaultEffort ?? null,
     });
   } catch {
