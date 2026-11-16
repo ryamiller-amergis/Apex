@@ -128,7 +128,9 @@ jest.mock('../agentChat', () => {
       canSend,
       isRunning,
       isCancelling,
+      before,
       after,
+      placeholder,
     }: {
       testIdPrefix: string;
       model?: string;
@@ -139,12 +141,16 @@ jest.mock('../agentChat', () => {
       canSend?: boolean;
       isRunning?: boolean;
       isCancelling?: boolean;
+      before?: React.ReactNode;
       after?: React.ReactNode;
+      placeholder?: string;
     }) => (
       <div {...{ 'data-testid': `${testIdPrefix}-composer-mock`, 'data-model': model }}>
         Composer
+        {before}
         <textarea
           data-testid={`${testIdPrefix}-message-input`}
+          placeholder={placeholder}
           value={value ?? ''}
           onChange={(event) => onChange?.(event.target.value)}
         />
@@ -563,6 +569,74 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     expect(screen.queryByTestId('chat-agent-empty-transcript')).not.toBeInTheDocument();
     expect(screen.getByText('Starting skill…')).toBeInTheDocument();
+  });
+
+  it('drops the startup spinner once the new Home thread has a reply, even if the saved first message differs', () => {
+    mockSkillConfigState = {
+      data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: false },
+      isLoading: false,
+      isError: false,
+    };
+    const onNewChat = jest.fn();
+    const props = {
+      isOpen: true,
+      onClose: jest.fn(),
+      onNewChat,
+      launchedFromHome: true,
+      selectedProject: 'Apex',
+    };
+    const { rerender } = render(<ChatAgentPanel thread={null} {...props} />);
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Flags are broken in prod' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+
+    expect(onNewChat).toHaveBeenCalled();
+    expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
+
+    const startedThread: ChatThread = {
+      ...thread,
+      messages: [
+        { id: 'user-1', role: 'user', text: 'Flags are broken in prod.', ts: '2026-08-31T10:00:00Z' },
+        { id: 'agent-1', role: 'agent', text: 'Who is running into this?', ts: '2026-08-31T10:00:05Z' },
+      ],
+    };
+    rerender(<ChatAgentPanel thread={startedThread} activeThreadId={startedThread.id} {...props} />);
+
+    expect(screen.queryByTestId('chat-run-spinner')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent is thinking…')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Flags are broken in prod.')).toHaveLength(1);
+    expect(screen.queryByText('Flags are broken in prod')).not.toBeInTheDocument();
+  });
+
+  it('does not open the / skill picker in a Home chat', () => {
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    const input = screen.getByTestId('chat-agent-message-input');
+    expect(input).toHaveAttribute('placeholder', 'Message agent · Enter to send');
+    fireEvent.change(input, { target: { value: '/' } });
+
+    expect(screen.queryByText('to-prd')).not.toBeInTheDocument();
+    expect(screen.queryByText(/↑↓ navigate/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the / skill picker in the drawer chat', () => {
+    render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), { target: { value: '/' } });
+
+    expect(screen.getByText('to-prd')).toBeInTheDocument();
+    expect(screen.getByText(/↑↓ navigate/)).toBeInTheDocument();
   });
 
   it('shows a refused first message inside the new thread', () => {
