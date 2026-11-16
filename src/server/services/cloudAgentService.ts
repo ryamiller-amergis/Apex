@@ -392,7 +392,7 @@ async function openPullRequestAsPlaybookAuthor(
   const authorId = cloud?.pullRequestAuthorId;
   const sourceBranch = observed.branchName?.trim() || cloud?.branchName?.trim() || null;
   if (!authorId) return null;
-  if (observed.noChanges || !sourceBranch || !cloud?.workItemId || !snapshot?.repository || snapshot.provider === 'github') {
+  if (!sourceBranch || !cloud?.workItemId || !snapshot?.repository || snapshot.provider === 'github') {
     console.warn('[cloud-agent] Playbook pull request was not opened', JSON.stringify({
       runId: run.id,
       noChanges: Boolean(observed.noChanges),
@@ -405,6 +405,40 @@ async function openPullRequestAsPlaybookAuthor(
   }
 
   const delivery = await deliveryForProject(run.projectId);
+  const targetBranch = delivery.targetBranch || cloud.baseBranch;
+  if (observed.noChanges) {
+    // Cursor reports the branches it pushed itself. An agent that pushes its own branch to the
+    // remote leaves that list empty, so Azure DevOps decides whether the branch holds new work.
+    const ahead = await (deps.getBranchAheadCount ?? defaultBranchAheadCount)({
+      project: run.projectId,
+      repo: snapshot.repository,
+      branch: sourceBranch,
+      targetBranch,
+    }).catch((err: unknown) => {
+      console.warn('[cloud-agent] could not check the Playbook branch for commits', JSON.stringify({
+        runId: run.id,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+      return null;
+    });
+    if (!ahead) {
+      console.warn('[cloud-agent] Playbook pull request was not opened', JSON.stringify({
+        runId: run.id,
+        noChanges: true,
+        sourceBranch,
+        branchAheadCount: ahead,
+        workItemId: cloud.workItemId,
+        repository: snapshot.repository,
+        provider: snapshot.provider ?? null,
+      }));
+      return null;
+    }
+    console.warn('[cloud-agent] Cursor reported no branch, but the Playbook branch has commits; opening the pull request', JSON.stringify({
+      runId: run.id,
+      sourceBranch,
+      aheadCount: ahead,
+    }));
+  }
   const adoUserToken = await (deps.getStoredAdoTokenForUser ?? getStoredAdoTokenForUser)(authorId);
   if (!adoUserToken) {
     console.warn('[cloud-agent] Playbook author token did not redeem; the service account opens the pull request', JSON.stringify({
@@ -422,7 +456,7 @@ async function openPullRequestAsPlaybookAuthor(
     return await deps.openCloudAgentPullRequest({
       project: run.projectId,
       repo: snapshot.repository,
-      targetBranch: delivery.targetBranch || cloud.baseBranch,
+      targetBranch,
       sourceBranch,
       titleBranch: cloud.branchName ?? sourceBranch,
       workItemId: cloud.workItemId,
@@ -521,6 +555,22 @@ export interface CloudAgentServiceDeps {
   }) => Promise<string | null>;
   /** Playbook pull requests: the author's Azure DevOps token from their saved refresh token. */
   getStoredAdoTokenForUser?: (userId: string) => Promise<string | null>;
+  /** Commits the branch holds that the target lacks, or null when the branch is not on the remote. */
+  getBranchAheadCount?: (input: {
+    project: string;
+    repo: string;
+    branch: string;
+    targetBranch: string;
+  }) => Promise<number | null>;
+}
+
+function defaultBranchAheadCount(input: {
+  project: string;
+  repo: string;
+  branch: string;
+  targetBranch: string;
+}): Promise<number | null> {
+  return new AzureDevOpsService(input.project).getBranchAheadCount(input);
 }
 
 const defaultDeps: CloudAgentServiceDeps = {
