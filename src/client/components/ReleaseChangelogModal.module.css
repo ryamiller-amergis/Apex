@@ -136,7 +136,7 @@
 .tabBtnActive {
   background: var(--accent-color);
   border-color: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   box-shadow: var(--glow-accent);
 }
 
@@ -304,7 +304,7 @@
   border-radius: 6px;
   border: 1px solid var(--accent-color);
   background: var(--accent-color);
-  color: var(--bg-primary);
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
