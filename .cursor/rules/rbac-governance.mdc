@@ -1,6 +1,6 @@
 ---
 description: Evaluate every UI feature change for RBAC impact -- add, modify, or remove permission keys and client-side can() guards as needed
-globs: src/client/**/*.tsx,src/client/**/*.module.css,src/client/hooks/**/*.ts,src/client/App.tsx
+globs: src/client/**/*.tsx,src/client/**/*.module.css,src/client/hooks/**/*.ts,src/client/App.tsx,src/server/routes/**/*.ts
 alwaysApply: false
 ---
 
@@ -24,6 +24,10 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 1. Does the removed UI code contain a `can('...')` call or reference a permission key?
 2. If yes, search for ALL other usages of that key: `requirePermission`, `requireAnyPermission`, `can(` across the entire codebase.
 3. If **zero usages remain** after removal → load the `rbac-management` skill and follow the **Remove a Permission** workflow.
+
+## Project scope
+
+`requirePermission` and `requireGroupMembership` are global. They do not check that the caller belongs to the project named in the request. A route that reads a project from the query, body, or path also needs `requireProjectAccess`. A member of project A must not read or write project B by changing that value.
 
 ## Current Permission Catalog
 
