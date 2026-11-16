@@ -45,6 +45,7 @@ import {
   PlaybookStepExecutionContext,
   PlaybookStepOutcome,
 } from './stepRuns';
+import { workItemPromptSection } from './workItemContext';
 import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
@@ -142,6 +143,21 @@ async function routeStepThroughV2(input: {
   return decision.route === 'worker' ? decision.runId : null;
 }
 
+/** A failed read still runs the step: the agent is told the item could not be read. */
+async function withWorkItemSection(
+  prompt: string,
+  context: PlaybookStepExecutionContext,
+): Promise<string> {
+  try {
+    const section = await workItemPromptSection(context);
+    return section ? `${prompt}\n\n${section}` : prompt;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`[playbook] cursor-agent step ${context.stepId} could not read its work item: ${reason}`);
+    return `${prompt}\n\n## Azure DevOps work item\n\nApex could not read the work item for this run: ${reason}`;
+  }
+}
+
 export async function executeCursorAgentStep(
   context: PlaybookStepExecutionContext
 ): Promise<PlaybookStepOutcome> {
@@ -154,7 +170,7 @@ export async function executeCursorAgentStep(
    */
   if (config.skillPath) assertSkillAllowed(STEP_TYPE, config.skillPath);
   const skillPath = playbookSkillPath(config.skillPath);
-  const prompt = promptWithOutcomes(config.prompt, config.outcomes);
+  const stepPrompt = promptWithOutcomes(config.prompt, config.outcomes);
   const mcpCapability = resolvePlaybookMcpCapability(config.mcpProfile);
   // Undefined is tolerated only for immutable versions published before FEAT-014. New publication
   // requires a profile; any explicitly named non-read profile is also refused again at execution.
@@ -197,6 +213,7 @@ export async function executeCursorAgentStep(
   const policy = frozenPolicy
     ? { ...frozenPolicy, enforcement: 'enforce' as const }
     : resolvedPolicy;
+  const prompt = await withWorkItemSection(stepPrompt, context);
 
   // The SDK rejects a blank model id outright, so a step in a project with no configured default
   // cannot fall through to the empty string. This is the resolution the interactive lane already

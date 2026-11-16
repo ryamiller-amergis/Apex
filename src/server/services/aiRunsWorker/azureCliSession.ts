@@ -1,8 +1,7 @@
 /**
- * Signs the Azure CLI in as the insights reader.
- *
- * The worker must not call this before an agent run. That identity is not a member of Azure
- * DevOps, and a signed-in session makes later work-item calls use it.
+ * The investigation skill runs `az` itself. The worker image installs the CLI and carries the
+ * insights-reader identity, but a fresh container has no CLI session, so the first command
+ * reports that Azure is not logged in.
  */
 import { execFile } from 'node:child_process';
 
