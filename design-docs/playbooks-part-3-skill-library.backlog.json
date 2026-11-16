@@ -1,0 +1,390 @@
+{
+  "personas": [
+    {
+      "name": "Project Admin",
+      "type": "Admin",
+      "description": "Authors Playbooks and project skills, and reviews preset updates before a draft uses them."
+    },
+    {
+      "name": "Platform Admin",
+      "type": "Admin",
+      "description": "Approves capability and skill-type changes on a forked skill, and can approve a reference file when a project has no second approver."
+    },
+    {
+      "name": "Developer",
+      "type": "Technical",
+      "description": "Builds and runs Playbooks, and is the assignee who chats with an interactive agent task."
+    }
+  ],
+  "businessRules": [
+    {
+      "id": "BR-001",
+      "rule": "A skill version never changes once saved. A draft is a separate record and does not change a published Playbook.",
+      "appliesTo": "Pin a skill version at publish"
+    },
+    {
+      "id": "BR-002",
+      "rule": "A preset update reaches a draft only after someone accepts the diff. Publish does not pick up a new preset version on its own.",
+      "appliesTo": "Review a preset update before publish"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Instruction files are part of the published bundle hash. Reference files are read at their latest approved version when a run starts, once for that run.",
+      "appliesTo": "Approve a reference file"
+    },
+    {
+      "id": "BR-004",
+      "rule": "The author of a reference-file version cannot approve it. A fork cannot be published while a capability or skill-type change is unapproved.",
+      "appliesTo": "Approve a reference file"
+    },
+    {
+      "id": "BR-005",
+      "rule": "A new project skill cannot declare capabilities. A new publish names a skill version. A bare repo path is accepted only from a Playbook published before Part 3.",
+      "appliesTo": "Create a project skill"
+    },
+    {
+      "id": "BR-006",
+      "rule": "An interactive step resumes only after the assignee approves output that passes the loose result and the skill's kind. Cancelling the run records no result.",
+      "appliesTo": "Approve an interactive agent result"
+    }
+  ],
+  "epics": [
+    {
+      "title": "Skill Library and Skill Contracts",
+      "priority": "Must Have",
+      "description": "Give each project versioned skills, shared presets, and an interactive agent task, without changing the bytes a published Playbook already pinned. This is Playbooks Part 3.",
+      "successMetrics": [
+        "A published Playbook still runs after its preset file changes on disk, and the run uses the pinned bytes.",
+        "Approving a MaxView resource catalog changes the next incident run without republishing the Playbook.",
+        "An interactive agent task does not resume until the assignee approves a valid result."
+      ],
+      "outOfScope": [
+        "Write profiles on agent steps",
+        "Creating reader identities for projects other than MaxView",
+        "A timeout branch on an interactive step",
+        "Slot placeholders, custom output fields, AI-assisted forks, and promoting a project skill to a preset",
+        "Reassigning an interactive step",
+        "Turning package skill copies into presets",
+        "The SkillOpt pilot",
+        "Creating Azure DevOps work items from this backlog"
+      ],
+      "assumptions": [
+        "The accepted Part 3 ADR is the scope.",
+        "Playbooks menu visibility remains the project switch. No new feature flag.",
+        "MaxView already has a reader identity. Part 3 records it and creates none.",
+        "The production inventory is a migration gate and its results are not known yet."
+      ],
+      "dependencies": [
+        "None"
+      ],
+      "features": [
+        {
+          "id": "FEAT-001",
+          "title": "Versioned skills that published Playbooks pin",
+          "priority": "Must Have",
+          "description": "Project Admins publish a Playbook against a skill version. A later preset edit becomes a new version a draft can review, and Playbooks already published keep running.",
+          "affectedPersonas": ["Project Admin"],
+          "outOfScope": [
+            "The Skill Library page",
+            "Interactive agent chat",
+            "Creating reader identities"
+          ],
+          "dependsOn": [],
+          "items": [
+            {
+              "type": "TBI",
+              "id": "TBI-001",
+              "title": "Store immutable skill versions and pin them at publish",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "parallelGroup": null,
+              "description": "Add the skill version store for presets, forks, project skills, and companion files. Parse skill frontmatter as YAML, copy type and kind to columns, and hash the skill version plus instruction files. Publish freezes that version. A run of a Part 3 policy checks the bundle hash. A run of an older policy checks the single-file hash and is never rehashed. Reference files stay out of the hash. A preset is keyed by its frontmatter name, with a rename map so a renamed preset continues. After Part 3, a new publish names a skill version.",
+              "technicalDependencies": [
+                "Playbook publish and the current agent-run policy",
+                "The background agent worker that checks the skill hash",
+                "PostgreSQL migrations"
+              ],
+              "nonFunctionalRequirements": [
+                "Saving a version and resolving it at publish stays within 2 seconds at P95",
+                "Two saves cannot overwrite a stored version"
+              ],
+              "definitionOfDone": [
+                "A published Playbook still runs after the preset file on disk changes, and the run uses the pinned bytes.",
+                "An instruction-file change is not visible to a published Playbook until that Playbook is republished.",
+                "A second preset source with an existing preset key is refused.",
+                "A node with a kind is checked against the loose result first and the kind second. A node with no kind keeps today's loose check."
+              ]
+            },
+            {
+              "type": "TBI",
+              "id": "TBI-002",
+              "title": "Import current skills without breaking published Playbooks",
+              "priority": "Must Have",
+              "dependsOn": ["TBI-001"],
+              "parallelGroup": null,
+              "description": "Run the production inventory first and attach it to the change. It lists every pinned skill path and hash, every incident policy missing the cloud-shell capability, and every project whose published Playbook uses the incident skill. Import those bytes as version 1 before any skill file is edited. On startup, insert a new preset version when a preset source hash is new, including the renamed project-neutral incident skill as version 2 of the same preset. Map the three old incident paths to that version 1 entry and compare the path string the policy froze. Point the recommender at the new incident path and remove only the worker's old-name shell check. Record the shell capability on any version 1 incident entry whose frozen policy lacks it. Import the MaxView catalog as MaxView's first approved reference file. Pause incident schedules in any other project until that project has a reader identity. Carry the project's reader client ID on the run specification. The worker has no fallback identity.",
+              "technicalDependencies": [
+                "TBI-001 skill version store",
+                "Production Playbook versions for the inventory",
+                "Git history of the current skill files",
+                "The existing MaxView reader identity"
+              ],
+              "nonFunctionalRequirements": [
+                "The startup import runs on one instance at a time",
+                "A preset source over 200,000 bytes is skipped, logged, and does not create a version"
+              ],
+              "definitionOfDone": [
+                "The migration does not merge until the inventory is attached.",
+                "A published incident Playbook runs against its version 1 bytes after the preset is renamed.",
+                "Drafts of that preset show a reviewable diff and nothing is republished automatically.",
+                "The SkillOpt plan is renumbered to Part 4 in its own doc edit.",
+                "An incident run in a project with no reader identity fails with a clear message instead of using another project's identity."
+              ]
+            },
+            {
+              "type": "PBI",
+              "id": "PBI-001",
+              "title": "Review a preset update before publish",
+              "priority": "Must Have",
+              "dependsOn": ["TBI-001"],
+              "parallelGroup": null,
+              "userStory": {
+                "persona": "Project Admin",
+                "iWant": "review a preset change and accept it on a draft before I publish",
+                "soThat": "a published Playbook keeps the skill bytes I already approved"
+              },
+              "businessRules": [
+                "BR-001: A saved skill version never changes a published Playbook.",
+                "BR-002: A preset update applies only after an explicit accept, and accept re-checks the graph."
+              ],
+              "nonFunctionalRequirements": {
+                "performance": "The diff opens within 2 seconds at P95 for a skill under the file size limit.",
+                "accessibility": "The accept and dismiss actions are keyboard reachable and named for a screen reader.",
+                "security": "Only a Project Admin for that project can accept a preset update onto a draft."
+              },
+              "outOfScope": [
+                "Editing the preset body in place",
+                "Automatic publish of every Playbook that uses the skill"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "given": "a published Playbook pins a preset version and a newer version exists",
+                  "when": "the Project Admin opens the draft and accepts the diff",
+                  "then": "the draft pins the new version and the published Playbook still pins the old one until republish"
+                },
+                {
+                  "given": "the newer preset version changes the skill type",
+                  "when": "the Project Admin accepts it",
+                  "then": "the graph is checked again and an invalid graph is refused with the reason"
+                },
+                {
+                  "given": "a preset version is deprecated",
+                  "when": "the Project Admin opens the skill picker",
+                  "then": "the deprecated version is hidden and any published Playbook that pins it still runs"
+                },
+                {
+                  "given": "the Project Admin publishes without accepting the newer version",
+                  "when": "publish completes",
+                  "then": "the published Playbook stays on the previous version"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "FEAT-002",
+          "title": "Project skill library",
+          "priority": "Must Have",
+          "description": "Project Admins create project skills, fork presets, and approve reference files. Platform Admins approve capability and skill-type changes on a fork. A Playbook author can see skill names, types, and kinds in the builder.",
+          "affectedPersonas": ["Project Admin", "Platform Admin"],
+          "outOfScope": [
+            "AI-assisted editing of a fork",
+            "Promoting a project skill to a preset",
+            "Write capabilities on a new project skill"
+          ],
+          "dependsOn": ["FEAT-001"],
+          "items": [
+            {
+              "type": "TBI",
+              "id": "TBI-003",
+              "title": "Enforce library permissions and reference-file rules",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "parallelGroup": null,
+              "description": "Add the view and reference-approval permissions, and start checking the existing manage permission. Review who already holds that permission, globally and per project. A project role overrides a global role. The library menu appears only where Playbooks are enabled. Reference-file contents require author or approver permission. Generate and save reject capabilities, a reference-file key, invalid YAML, an unknown kind, and invalid decision labels. Names are unique in the project and cannot reuse a preset key. A project file whose name matches a preset file is rejected. A fork cannot change which files are reference files. A fork with a capability or skill-type change cannot be published until a Platform Admin approves it.",
+              "technicalDependencies": [
+                "FEAT-001 skill version store",
+                "The existing role and menu-visibility checks",
+                "AI usage recording"
+              ],
+              "nonFunctionalRequirements": [
+                "A library list returns within 2 seconds at P95",
+                "Reference-file contents are omitted from view-only responses"
+              ],
+              "definitionOfDone": [
+                "A view-only user can read instruction files and reference-file names, and cannot read reference-file contents.",
+                "The author of a reference-file version cannot approve it, and a Platform Admin cannot approve their own edit.",
+                "The library warns when fewer than two people in the project can approve.",
+                "A generated draft is not saved until the author saves it, and the author is recorded.",
+                "A Playbook author without the skill-view permission still sees names, types, and kinds in the builder picker."
+              ]
+            },
+            {
+              "type": "PBI",
+              "id": "PBI-002",
+              "title": "Create a project skill and approve its reference files",
+              "priority": "Must Have",
+              "dependsOn": ["TBI-003"],
+              "parallelGroup": null,
+              "userStory": {
+                "persona": "Project Admin",
+                "iWant": "create a project skill from a short description and approve reference files separately from the skill text",
+                "soThat": "my project can tailor a shared skill without changing what other projects run"
+              },
+              "businessRules": [
+                "BR-003: Instruction files stay pinned. Reference files apply at the next run after approval.",
+                "BR-004: The author cannot approve their own reference-file version.",
+                "BR-005: A new project skill cannot declare capabilities."
+              ],
+              "nonFunctionalRequirements": {
+                "performance": "Generate shows progress and the author can keep editing the draft while it runs.",
+                "accessibility": "The skill form fields and the approve action have visible labels and keyboard access.",
+                "security": "Reference files are marked as data in the prompt and must not hold secrets. The approver confirms that."
+              },
+              "outOfScope": [
+                "Letting a project skill grant itself a cloud shell",
+                "Filtering catalog identifiers out of run output"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "given": "a Project Admin enters a title, a type, and what the skill should do",
+                  "when": "they generate a draft, edit it, and save",
+                  "then": "the saved skill has a registered kind, no capabilities, and records them as the author"
+                },
+                {
+                  "given": "a generated draft is valid and the Project Admin adds a capability by hand",
+                  "when": "they save",
+                  "then": "the save is refused and the reason is shown"
+                },
+                {
+                  "given": "a required reference file has no approved version",
+                  "when": "a Project Admin publishes a Playbook that uses the preset",
+                  "then": "publish is refused"
+                },
+                {
+                  "given": "an approved reference file is updated and approved by someone other than the author",
+                  "when": "a new run starts",
+                  "then": "the run uses the new approved version and records it, and the published Playbook is not republished"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "FEAT-003",
+          "title": "Interactive agent task",
+          "priority": "Must Have",
+          "description": "Developers complete an interactive agent task in the run they already have open. The agent proposes a result, the assignee approves it, and the Playbook continues with that result.",
+          "affectedPersonas": ["Developer", "Project Admin"],
+          "outOfScope": [
+            "A separate chat page",
+            "Reassigning the step",
+            "A timeout branch",
+            "Write profiles on the interactive step"
+          ],
+          "dependsOn": ["FEAT-001"],
+          "items": [
+            {
+              "type": "TBI",
+              "id": "TBI-004",
+              "title": "Run interactive turns under the published policy",
+              "priority": "Must Have",
+              "dependsOn": [],
+              "parallelGroup": null,
+              "description": "Register the interactive step as leaving Apex, with the same read-only profile refusal as a background agent step. Give it a frozen policy and a hash check. Each turn runs as a Playbook agent run on the step's thread and is admitted and spend-checked on its own. The step counts once toward the agent-step cap. The deadline matches the interview step. The assignee is notified when the step opens and 24 hours before it expires. Cancelling the run aborts an in-flight turn and closes the thread without deleting it. A triggered Playbook cannot be published when this step has no assignee.",
+              "technicalDependencies": [
+                "FEAT-001 frozen policy and kinds",
+                "The Playbook step registry and the approval-gate check",
+                "In-app and Teams notifications",
+                "The existing chat session hook used by other agent surfaces"
+              ],
+              "nonFunctionalRequirements": [
+                "No agent run is in flight while the step waits for the assignee",
+                "A denied turn does not consume a hidden retry"
+              ],
+              "definitionOfDone": [
+                "A read-only interactive step needs no approval gate. A write profile is refused.",
+                "A proposal that fails either schema is retried out of view at most twice, then the assignee is told and can keep chatting.",
+                "Reaching the turn limit forces one proposal. After one rejected revision, the assignee can only approve or cancel.",
+                "When the deadline passes, the step expires and the run ends with no partial result.",
+                "The assignee is notified in the app and in Teams, and the notification opens the run."
+              ]
+            },
+            {
+              "type": "PBI",
+              "id": "PBI-003",
+              "title": "Approve an interactive agent result",
+              "priority": "Must Have",
+              "dependsOn": ["TBI-004"],
+              "parallelGroup": null,
+              "userStory": {
+                "persona": "Developer",
+                "iWant": "chat with an agent task in the run and approve its result when I am done",
+                "soThat": "later steps receive a result I have confirmed"
+              },
+              "businessRules": [
+                "BR-006: The step resumes only after the assignee approves output that passes both schemas."
+              ],
+              "nonFunctionalRequirements": {
+                "performance": "Sending a chat turn shows progress within 1 second and does not block the rest of the run view.",
+                "accessibility": "The chat, the approve action, and the cancel action are keyboard reachable and named for a screen reader.",
+                "security": "The assignee must still be allowed to run Playbooks in the project when the step starts. Someone who lost access fails the step instead of leaving it waiting."
+              },
+              "outOfScope": [
+                "Chatting on a separate interview page",
+                "Splitting the person who chats from the person who approves"
+              ],
+              "acceptanceCriteria": [
+                {
+                  "given": "a Playbook reaches an interactive agent task assigned to the Developer",
+                  "when": "they open the run",
+                  "then": "the chat is in the run's suspension panel and they can send messages"
+                },
+                {
+                  "given": "the agent proposes a result that passes the loose result and the skill's kind",
+                  "when": "the Developer approves it",
+                  "then": "the step completes with that result and the Playbook continues"
+                },
+                {
+                  "given": "the Developer forces completion and the final turn fails either schema",
+                  "when": "the turn finishes",
+                  "then": "the step stays open and they can keep chatting or cancel"
+                },
+                {
+                  "given": "the Developer cancels the run during the chat",
+                  "when": "cancellation completes",
+                  "then": "the thread is closed, the transcript remains readable to someone who can view the run, and no result is recorded"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "implementationPhases": [
+    {
+      "phase": 1,
+      "epics": ["Skill Library and Skill Contracts"],
+      "rationale": "There is one epic. FEAT-001 is the version store the library and the interactive step both pin. FEAT-002 and FEAT-003 depend on it and can proceed after that store exists. They do not depend on each other."
+    }
+  ],
+  "assumptionsMade": [
+    "The accepted ADR \"Playbooks Part 3: Skill Library and Skill Contracts\" is the scope. This PRD does not add decisions.",
+    "Playbooks menu visibility stays the way a project turns Playbooks on. The library does not need its own flag.",
+    "MaxView already has a reader identity. Part 3 records it and does not create identities.",
+    "The production inventory is a gate for the migration, and its results are not known yet. The allow-list of preset paths outside the foundation folder grows from that inventory.",
+    "Each interactive turn runs as a Playbook agent run on the step's thread, not through the Agent Home chat path.",
+    "A Playbook author sees skill names, types, and kinds in the builder without the skill-view permission."
+  ]
+}
