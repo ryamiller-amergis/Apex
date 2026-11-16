@@ -486,7 +486,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const isHomeCompose = launchedFromHome && !inConversation;
   const isEmptyCompose = !inConversation;
 
-  // Skills for Home pill descriptions and the / picker on active threads
+  // Home chats run through their pill's skill, so the / picker is drawer-only.
+  const slashSkillsEnabled = !launchedFromHome;
+
   const { data: homeSkills = [] } = useSkillList(
     launchedFromHome ? selectedProject ?? null : null,
     launchedFromHome ? skillConfig?.skillRepo ?? null : null,
@@ -494,8 +496,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     skillConfig?.skillProvider ?? undefined,
   );
   const { data: threadSkills = [] } = useSkillList(
-    thread?.kickoff.project ?? null,
-    thread?.kickoff.repo ?? null,
+    slashSkillsEnabled ? thread?.kickoff.project ?? null : null,
+    slashSkillsEnabled ? thread?.kickoff.repo ?? null : null,
     thread?.kickoff.branch,
   );
 
@@ -819,12 +821,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     }
   }, [newChatError]);
 
+  // Clear on any saved message, not an exact echo of the typed text: the saved
+  // text can differ, and the startup spinner would then never go away.
   useEffect(() => {
-    if (!pendingOutgoing) return;
-    if (visibleMessages.some((message) => message.role === 'user' && message.text === pendingOutgoing)) {
+    if (!pendingOutgoing || !sessionThreadId) return;
+    if (visibleMessages.length > 0) {
       setPendingOutgoing(null);
     }
-  }, [pendingOutgoing, visibleMessages]);
+  }, [pendingOutgoing, sessionThreadId, visibleMessages.length]);
 
   useEffect(() => {
     if (!sessionThreadId) {
@@ -1475,7 +1479,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             value={input}
             onChange={(val) => {
               setInput(val);
-              const isSlash = /^\//.test(val);
+              const isSlash = slashSkillsEnabled && /^\//.test(val);
               setSkillPickerOpen(isSlash);
               if (isSlash) setSkillPickerIdx(0);
             }}
@@ -1488,7 +1492,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               isRunning
                 ? 'Agent is thinking…'
                 : launchedFromHome
-                  ? 'Message agent · / for skills · Enter to send'
+                  ? 'Message agent · Enter to send'
                   : 'Message agent · type / to invoke a skill…'
             }
             testIdPrefix="chat-agent"

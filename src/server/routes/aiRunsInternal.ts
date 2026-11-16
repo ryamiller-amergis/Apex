@@ -25,10 +25,10 @@ import {
 } from '../services/interactiveToolProxyService';
 import {
   isDurableInteractiveTurnSpecification,
-  type DurableInteractiveTurnSpecification,
   type FrozenInteractiveMcpDescriptor,
 } from '../../shared/types/durableInteractiveTurn';
 import { handleBrainstormArtifactMcp } from '../services/brainstormArtifactMcp';
+import { withDurableChatAdoWriteGrant } from '../services/chatAdoWriteAuth';
 
 const router = Router();
 
@@ -234,20 +234,36 @@ router.post(
         return;
       }
 
+      const specification = attempt.specSnapshot;
       const result = await invokeInteractiveToolProxy({
         claims,
-        specification: attempt.specSnapshot,
+        specification,
         body: req.body,
-        invokeInternal: (_name, descriptor, body, context) =>
-          descriptor.serverName === 'brainstorm-artifact'
-            ? handleBrainstormArtifactMcp({
-                runId,
-                specification: attempt.specSnapshot as DurableInteractiveTurnSpecification,
-                body,
-              })
-            : postLocalMcp(localMcpUrl(descriptor), body, {
-                signal: context.signal,
-              }),
+        invokeInternal: (_name, descriptor, body, context) => {
+          if (descriptor.serverName === 'brainstorm-artifact') {
+            return handleBrainstormArtifactMcp({ runId, specification, body });
+          }
+          const call = () =>
+            postLocalMcp(localMcpUrl(descriptor), body, {
+              signal: context.signal,
+            });
+          const grant = context.grant;
+          if (
+            descriptor.serverName !== 'ado-skills' ||
+            !grant?.allowedOperations.includes('ado:write')
+          ) {
+            return call();
+          }
+          return withDurableChatAdoWriteGrant(
+            {
+              threadId: specification.threadId,
+              userId: grant.userId,
+              project: grant.projectId,
+              token: context.delegatedAdoToken,
+            },
+            call,
+          );
+        },
       });
       res.status(200).json(result);
     } catch (error) {
