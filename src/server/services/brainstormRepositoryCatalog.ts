@@ -142,6 +142,36 @@ export function catalogReadiness(status: BrainstormCatalogStatus, error: string 
   return { ready: false, text: 'An administrator still needs to clone this repository.' };
 }
 
+export type CatalogReadRoot =
+  | {
+      ok: true;
+      displayName: string;
+      sha: string;
+      cacheDir: string;
+      provider: 'github' | 'ado';
+      repository: string;
+      groundingProject: string;
+    }
+  | { ok: false; displayName: string; readinessText: string };
+
+/** The commit, mirror directory, and grounding identity an agent turn reads a catalog repository from. */
+export function catalogReadRoot(catalog: BrainstormCatalogRepositoryDto, project: string): CatalogReadRoot {
+  const readiness = catalogReadiness(catalog.status, catalog.error);
+  if (!readiness.ready || !catalog.commitSha) {
+    return { ok: false, displayName: catalog.displayName, readinessText: readiness.text };
+  }
+  const parsed = parseCloneUrlGroundingIdentity(catalog.cloneUrl, project, catalog.displayName);
+  return {
+    ok: true,
+    displayName: catalog.displayName,
+    sha: catalog.commitSha,
+    cacheDir: brainstormRepositoryMirrorDir(catalog.id),
+    provider: parsed.provider,
+    repository: parsed.repository,
+    groundingProject: parsed.project,
+  };
+}
+
 export async function listBrainstormRepositories(project: string): Promise<BrainstormCatalogRepositoryDto[]> {
   const rows = await db
     .select()

@@ -377,6 +377,7 @@ describe('interactive actor host dispatch endpoint', () => {
         remotePrimaryReader: null,
         bootstrap: {
           specification: {
+            workflowClass: 'brainstorm',
             grounding: { provider: 'github', project: 'Apex', repository: 'Apex', sha: 'a'.repeat(40), profileId: 'p1' },
             brainstorm: {
               sources: {
@@ -439,6 +440,65 @@ describe('interactive actor host dispatch endpoint', () => {
       const unscoped = await reader.searchCode('targetToken', 2);
       expect(primaryReader.searchCode).toHaveBeenCalledWith('targetToken', 2);
       expect(unscoped).toHaveLength(2);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('reads Interview reference repositories under sources/<id> and leaves other paths on the primary reader', async () => {
+    const fs = await import('fs');
+    const os = await import('os');
+    const path = await import('path');
+    const { execFileSync } = await import('child_process');
+    const { createBrainstormWorkspaceReader } = await import(
+      '../services/interactiveActorHost/entrypoint'
+    );
+
+    const sourceId = '10000000-0000-4000-8000-00000000000a';
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-interview-ws-'));
+    const sourceDir = path.join(workspace, 'sources', sourceId);
+    try {
+      fs.mkdirSync(sourceDir, { recursive: true });
+      fs.writeFileSync(path.join(sourceDir, 'placement.ts'), 'export const placement = "maxview";\n');
+      execFileSync('git', ['init'], { cwd: sourceDir });
+
+      const primaryReader = {
+        identity: { provider: 'ado' as const, project: 'ATS', repo: 'ats', sha: 'a'.repeat(40) },
+        readFile: jest.fn().mockResolvedValue('primary'),
+        listDir: jest.fn(),
+        searchCode: jest.fn(),
+      };
+      const reader = createBrainstormWorkspaceReader({
+        destination: workspace,
+        primaryReader,
+        remotePrimaryReader: null,
+        bootstrap: {
+          specification: {
+            workflowClass: 'interview',
+            grounding: { provider: 'ado', project: 'ATS', repository: 'ats', sha: 'a'.repeat(40), profileId: 'p1' },
+            referenceSources: {
+              readRoots: [{
+                kind: 'project-repository',
+                sourceId,
+                displayName: 'MaxView',
+                provider: 'ado',
+                project: 'MaxView',
+                repository: 'maxview-api',
+                commitSha: 'b'.repeat(40),
+                workspacePath: sourceDir,
+              }],
+              mcpServers: [],
+              unavailableSources: [],
+              instructions: '# Reference repositories',
+            },
+          },
+        } as unknown as import('../../shared/types/aiRunIngest').InteractiveActorBootstrap,
+      });
+
+      await expect(reader.readFile(`sources/${sourceId}/placement.ts`)).resolves.toContain('maxview');
+      expect(primaryReader.readFile).not.toHaveBeenCalled();
+      await expect(reader.readFile('src/app.ts')).resolves.toBe('primary');
+      expect(primaryReader.readFile).toHaveBeenCalledWith('src/app.ts');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

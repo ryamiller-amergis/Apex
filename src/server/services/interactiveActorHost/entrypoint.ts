@@ -65,7 +65,7 @@ import {
 } from './interactiveSessionActor';
 import { collectInteractiveArtifacts } from './interactiveArtifactCollector';
 import { materializeInteractiveWorkspace } from './interactiveWorkspaceMaterializer';
-import { mountBrainstormSources } from './brainstormSourceMount';
+import { mountBrainstormSources, turnReadSources } from './brainstormSourceMount';
 import { defaultRunGit } from '../grounding/bundleCheckout';
 import { createPerThreadTurnQueue } from './perThreadTurnQueue';
 import {
@@ -249,7 +249,7 @@ export function createBrainstormWorkspaceReader(input: {
     commitSha: string;
   }) => Promise<RepoReader | null>;
 }): RepoReader {
-  const readRoots = input.bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
+  const readRoots = turnReadSources(input.bootstrap.specification)?.readRoots ?? [];
   if (readRoots.length === 0) return input.primaryReader;
 
   const localReader = new LocalCheckoutReader({
@@ -822,14 +822,19 @@ export async function main(): Promise<void> {
       // linked immediately, while cloud Blob bundles are read directly from
       // bare repositories (`ensureBare` + `BareRepoReader`) without unpacking
       // multi-GB working trees into `destination/sources/` before the turn starts.
+      // Interview reference repositories follow the Brainstorm path: a missing
+      // local clone is read lazily from its bare mirror rather than failing the turn.
+      const readsSourcesLazily =
+        isBrainstorm || bootstrap.specification.workflowClass === 'interview';
+      const readSources = turnReadSources(bootstrap.specification);
       await mountBrainstormSources({
-        sources: bootstrap.specification.brainstorm?.sources,
+        sources: readSources,
         destination,
         signal,
         runGit: async (args, cwd) => {
           await defaultRunGit(cwd ? ['-C', cwd, ...args] : args, { signal });
         },
-        checkout: isBrainstorm
+        checkout: readsSourcesLazily
           ? async () => ({ status: 'deferred' })
           : (sourceGrounding, sourceDestination, sourceSignal) =>
               repositoryCheckout.checkout(
@@ -838,10 +843,10 @@ export async function main(): Promise<void> {
                 sourceSignal,
               ),
       });
-      if (isBrainstorm) {
-        const rootsToWarm = bootstrap.specification.brainstorm?.sources?.readRoots ?? [];
+      if (isBrainstorm || (readSources?.readRoots.length ?? 0) > 0) {
+        const rootsToWarm = readSources?.readRoots ?? [];
         void (async () => {
-          if (grounding && !signal.aborted) {
+          if (isBrainstorm && grounding && !signal.aborted) {
             await repositoryCheckout.ensureBare(grounding, signal).catch(() => {});
           }
           for (const root of rootsToWarm) {

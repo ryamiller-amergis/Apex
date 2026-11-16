@@ -1,7 +1,11 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
-import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import {
+  GitVersionType,
+  PullRequestStatus,
+  type GitVersionDescriptor,
+} from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { ExcludeFlags, TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
@@ -2251,6 +2255,74 @@ export class AzureDevOpsService {
           version: comment.version,
         }));
     });
+  }
+
+  /**
+   * One work item with the fields an incident investigation reads, its attachments and links,
+   * and its comments. Returns null when the item does not exist in this project.
+   */
+  async getWorkItemInvestigationContext(workItemId: number): Promise<{
+    id: number;
+    url: string;
+    fields: Record<string, string>;
+    attachments: Array<{ name: string; url: string }>;
+    hyperlinks: string[];
+    comments: Array<{ createdBy?: string; createdDate?: string; text: string }>;
+  } | null> {
+    const item = await retryWithBackoff(async () => {
+      const witApi = await this.connection.getWorkItemTrackingApi();
+      return witApi.getWorkItem(workItemId, undefined, undefined, WorkItemExpand.Relations, this.project);
+    });
+    if (!item?.id || !item.fields) return null;
+
+    const person = (value: any): string => value?.displayName || value?.uniqueName || '';
+    const fieldMap: Array<[string, string]> = [
+      ['Title', 'System.Title'],
+      ['Type', 'System.WorkItemType'],
+      ['State', 'System.State'],
+      ['Reason', 'System.Reason'],
+      ['Area path', 'System.AreaPath'],
+      ['Iteration path', 'System.IterationPath'],
+      ['Tags', 'System.Tags'],
+      ['Priority', 'Microsoft.VSTS.Common.Priority'],
+      ['Severity', 'Microsoft.VSTS.Common.Severity'],
+      ['Created by', 'System.CreatedBy'],
+      ['Created date', 'System.CreatedDate'],
+      ['Changed date', 'System.ChangedDate'],
+      ['Assigned to', 'System.AssignedTo'],
+      ['Found in build', 'Microsoft.VSTS.Build.FoundIn'],
+      ['Description', 'System.Description'],
+      ['Repro steps', 'Microsoft.VSTS.TCM.ReproSteps'],
+      ['System info', 'Microsoft.VSTS.TCM.SystemInfo'],
+      ['Acceptance criteria', 'Microsoft.VSTS.Common.AcceptanceCriteria'],
+    ];
+    const fields: Record<string, string> = {};
+    for (const [label, ref] of fieldMap) {
+      const raw = item.fields[ref];
+      if (raw === undefined || raw === null || raw === '') continue;
+      const value = typeof raw === 'object' && !(raw instanceof Date) ? person(raw) : String(raw instanceof Date ? raw.toISOString() : raw);
+      if (value) fields[label] = value;
+    }
+
+    const relations = item.relations ?? [];
+    const attachments = relations
+      .filter((relation) => relation.rel === 'AttachedFile' && relation.url)
+      .map((relation) => ({ name: String(relation.attributes?.name ?? 'attachment'), url: relation.url! }));
+    const hyperlinks = relations
+      .filter((relation) => relation.rel === 'Hyperlink' && relation.url)
+      .map((relation) => relation.url!);
+    const comments = (await this.getWorkItemCommentHistory(workItemId, 50))
+      .filter((comment) => !comment.isDeleted && comment.text)
+      .map(({ createdBy, createdDate, text }) => ({ createdBy, createdDate, text }));
+
+    return {
+      id: item.id,
+      url: `${this.organization}/${encodeURIComponent(this.project)}/_workitems/edit/${item.id}`,
+      fields,
+      attachments,
+      hyperlinks,
+      comments,
+    };
   }
 
   /**
@@ -7664,6 +7736,27 @@ export class AzureDevOpsService {
       email: createdBy?.uniqueName?.trim() || null,
       title: typeof title === 'string' ? title.trim() || null : null,
     };
+  }
+
+  /**
+   * How many commits `branch` holds that `targetBranch` lacks. Returns null when the branch does
+   * not exist, so a caller can tell "nothing pushed" from "pushed with no new commits".
+   */
+  async getBranchAheadCount(opts: {
+    repo: string;
+    project: string;
+    branch: string;
+    targetBranch: string;
+  }): Promise<number | null> {
+    const gitApi = await this.connection.getGitApi();
+    const stats = await gitApi.getBranch(
+      opts.repo,
+      opts.branch,
+      opts.project,
+      { version: opts.targetBranch, versionType: GitVersionType.Branch } as GitVersionDescriptor,
+    );
+    if (!stats?.commit) return null;
+    return typeof stats.aheadCount === 'number' ? stats.aheadCount : 0;
   }
 
   /**

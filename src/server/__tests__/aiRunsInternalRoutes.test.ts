@@ -4,6 +4,8 @@
 const mockDbSelect = jest.fn();
 const mockVerifyProxyToken = jest.fn();
 const mockInvokeToolProxy = jest.fn();
+const mockPostLocalMcp = jest.fn();
+const mockWithDurableChatAdoWriteGrant = jest.fn();
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -39,6 +41,12 @@ jest.mock('../services/interactiveToolProxyService', () => ({
   },
   invokeInteractiveToolProxy: (...args: unknown[]) =>
     mockInvokeToolProxy(...args),
+  postLocalMcp: (...args: unknown[]) => mockPostLocalMcp(...args),
+}));
+
+jest.mock('../services/chatAdoWriteAuth', () => ({
+  withDurableChatAdoWriteGrant: (...args: unknown[]) =>
+    mockWithDurableChatAdoWriteGrant(...args),
 }));
 
 import express from 'express';
@@ -295,5 +303,121 @@ describe('POST /api/internal/ai-runs/:runId/tools/:serverName active attempt', (
     expect(res.body.code).toBe('AI_RUN_DISPATCH_MISMATCH');
     expect(res.body.error).toMatch(/active attempt/i);
     expect(mockInvokeToolProxy).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/internal/ai-runs/:runId/tools/ado-skills write grant', () => {
+  const threadId = '10000000-0000-4000-8000-000000000002';
+  const userId = '10000000-0000-4000-8000-000000000003';
+  const descriptor = { kind: 'internal-proxy', serverName: 'ado-skills', enableRepoBrowse: true };
+
+  function arrangeRunningAttempt(allowedOperations: string[]) {
+    mockVerifyProxyToken.mockReturnValue({
+      runId: 'run-1',
+      attemptId: 'attempt-1',
+      dispatchMessageId: 'dispatch-1',
+      serverName: 'ado-skills',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    const results: unknown[][] = [
+      [{ id: 'run-1', transportVersion: 'dapr-actor-v2', dispatchMessageId: 'dispatch-1' }],
+      [
+        {
+          id: 'attempt-1',
+          runId: 'run-1',
+          dispatchMessageId: 'dispatch-1',
+          status: 'running',
+          specSnapshot: {
+            schemaVersion: 1,
+            kind: 'interactive-turn',
+            turnId: '10000000-0000-4000-8000-000000000001',
+            threadId,
+            userId,
+            projectId: 'project-1',
+            interactiveClass: 'fast',
+            workflowClass: 'home-chat',
+            model: 'm',
+            effort: null,
+            skill: null,
+            currentMessage: {
+              id: '10000000-0000-4000-8000-000000000001',
+              text: 'Create a bug in ADO',
+              hidden: false,
+              attachments: [],
+            },
+            transcript: [],
+            grounding: null,
+            mcpServers: [descriptor],
+            toolGrant: {
+              userId,
+              projectId: 'project-1',
+              allowedOperations,
+              expiresAt: '2099-01-01T00:00:00.000Z',
+              encryptedAdoToken: null,
+            },
+            currentPrompt: 'x',
+            recreationPrompt: 'x',
+            deadlines: {
+              absoluteTurnMs: 300_000,
+              repositoryPreparationMs: null,
+              firstEventMs: 30_000,
+              toolCallMs: 60_000,
+            },
+          },
+        },
+      ],
+    ];
+    let call = 0;
+    mockDbSelect.mockImplementation(() => {
+      const rows = results[call] ?? [];
+      call += 1;
+      const limit = jest.fn().mockResolvedValue(rows);
+      const where = jest.fn().mockReturnValue({ limit });
+      return { from: jest.fn().mockReturnValue({ where }) };
+    });
+    mockInvokeToolProxy.mockImplementation(
+      async (req: {
+        body: unknown;
+        specification: { toolGrant: unknown };
+        invokeInternal: (...args: unknown[]) => Promise<unknown>;
+      }) =>
+        req.invokeInternal('ado-skills', descriptor, req.body, {
+          grant: req.specification.toolGrant,
+          delegatedAdoToken: 'delegated-token',
+        }),
+    );
+    mockPostLocalMcp.mockResolvedValue({ result: 'created' });
+    mockWithDurableChatAdoWriteGrant.mockImplementation(
+      async (_input: unknown, call: () => Promise<unknown>) => call(),
+    );
+  }
+
+  it('runs the ado-skills call inside the turn write grant when the grant allows ado:write', async () => {
+    arrangeRunningAttempt(['ado:read', 'ado:write']);
+
+    const res = await request(buildApp())
+      .post('/api/internal/ai-runs/run-1/tools/ado-skills')
+      .query({ token: 'signed-token' })
+      .send({ method: 'tools/call' });
+
+    expect(res.status).toBe(200);
+    expect(mockWithDurableChatAdoWriteGrant).toHaveBeenCalledWith(
+      { threadId, userId, project: 'project-1', token: 'delegated-token' },
+      expect.any(Function),
+    );
+    expect(mockPostLocalMcp).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not grant writes for a read-only ADO grant', async () => {
+    arrangeRunningAttempt(['ado:read']);
+
+    const res = await request(buildApp())
+      .post('/api/internal/ai-runs/run-1/tools/ado-skills')
+      .query({ token: 'signed-token' })
+      .send({ method: 'tools/call' });
+
+    expect(res.status).toBe(200);
+    expect(mockWithDurableChatAdoWriteGrant).not.toHaveBeenCalled();
+    expect(mockPostLocalMcp).toHaveBeenCalledTimes(1);
   });
 });

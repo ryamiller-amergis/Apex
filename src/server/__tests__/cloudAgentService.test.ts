@@ -2073,6 +2073,86 @@ describe('reconcileRunningCloudAgentRuns', () => {
       }));
     });
 
+    it('opens the pull request when Cursor reports no changes but the planned branch has commits', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
+        noChanges: true,
+      }));
+      const openCloudAgentPullRequest = jest.fn().mockResolvedValue(PR_URL);
+      const getBranchAheadCount = jest.fn().mockResolvedValue(1);
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getBranchAheadCount,
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+      warn.mockRestore();
+
+      expect(getBranchAheadCount).toHaveBeenCalledWith({
+        project: 'MaxView',
+        repo: 'MaxView',
+        branch: 'feat/42-add-search',
+        targetBranch: 'main',
+      });
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        sourceBranch: 'feat/42-add-search',
+        targetBranch: 'main',
+        adoUserToken: 'author-token',
+      }));
+      expect(mockMarkTerminal).toHaveBeenCalledWith(RUN_ID, expect.objectContaining({
+        status: 'completed',
+      }));
+    });
+
+    it.each([
+      ['has no commits ahead of the target', 0],
+      ['is not on the remote', null],
+    ])('opens no pull request when Cursor reports no changes and the branch %s', async (_name, ahead) => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
+        noChanges: true,
+      }));
+      const openCloudAgentPullRequest = jest.fn();
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getBranchAheadCount: jest.fn().mockResolvedValue(ahead),
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+      warn.mockRestore();
+
+      expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    });
+
+    it('opens no pull request when the branch check itself fails and Cursor reports no changes', async () => {
+      mockLiveRows([playbookExecution()]);
+      const getCloudAgentRun = jest.fn().mockResolvedValue(observation({
+        status: 'finished',
+        branchName: null,
+        noChanges: true,
+      }));
+      const openCloudAgentPullRequest = jest.fn();
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun,
+        openCloudAgentPullRequest,
+        getBranchAheadCount: jest.fn().mockRejectedValue(new Error('TF401019')),
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+      warn.mockRestore();
+
+      expect(openCloudAgentPullRequest).not.toHaveBeenCalled();
+    });
+
     it('opens it with the service account and tells the author when their token no longer redeems', async () => {
       mockLiveRows([playbookExecution()]);
       const getCloudAgentRun = jest.fn().mockResolvedValue(observation({

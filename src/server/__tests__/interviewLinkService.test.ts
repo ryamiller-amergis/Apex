@@ -19,6 +19,13 @@ const mockInsert = jest.fn();
 const mockDelete = jest.fn();
 const mockExecute = jest.fn();
 const mockTransaction = jest.fn();
+const mockReferenceLinksFindMany = jest.fn();
+const mockListCatalog = jest.fn();
+
+jest.mock('../services/brainstormRepositoryCatalog', () => ({
+  ...jest.requireActual('../services/brainstormRepositoryCatalog'),
+  listBrainstormRepositories: (...a: unknown[]) => mockListCatalog(...a),
+}));
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -28,6 +35,7 @@ jest.mock('../db/drizzle', () => ({
       designModules: { findFirst: (...a: unknown[]) => mockDesignModuleFindFirst(...a) },
       interviewAdrLinks: { findMany: (...a: unknown[]) => mockAdrLinksFindMany(...a) },
       interviewDesignModuleLinks: { findMany: (...a: unknown[]) => mockModuleLinksFindMany(...a) },
+      interviewReferenceRepositories: { findMany: (...a: unknown[]) => mockReferenceLinksFindMany(...a) },
     },
     select: (...a: unknown[]) => mockSelect(...a),
     insert: (...a: unknown[]) => mockInsert(...a),
@@ -40,10 +48,16 @@ jest.mock('../db/drizzle', () => ({
 import {
   addAdrLink,
   addDesignModuleLink,
+  addReferenceRepositoryLink,
   getLinkedContext,
+  loadInterviewReferenceSources,
   removeAdrLink,
 } from '../services/interviewLinkService';
-import { InterviewLinkError, LINKED_CONTEXT_CAPACITY } from '../../shared/types/interviewLinks';
+import {
+  InterviewLinkError,
+  LINKED_CONTEXT_CAPACITY,
+  REFERENCE_REPOSITORY_CAPACITY,
+} from '../../shared/types/interviewLinks';
 
 const ACTOR = { userId: 'user-ba', isSuperAdmin: true };
 const INTERVIEW_ID = '11111111-1111-1111-1111-111111111111';
@@ -307,6 +321,127 @@ describe('interviewLinkService — mutations (PBI-001)', () => {
 
     await addAdrLink(INTERVIEW_ID, ACTOR, { adrId: ADR_ID });
     expect(selectAfterLock).toBe(true);
+  });
+});
+
+describe('interviewLinkService — reference repositories', () => {
+  const REPO_ID = '44444444-4444-4444-8444-444444444444';
+  const FAILED_REPO_ID = '55555555-5555-4555-8555-555555555555';
+  const SHA = 'a'.repeat(40);
+  const readyRepo = {
+    id: REPO_ID,
+    project: 'Apex',
+    displayName: 'MaxView',
+    cloneUrl: 'https://dev.azure.com/org/MaxView/_git/maxview-api',
+    branch: 'main',
+    status: 'ready',
+    commitSha: SHA,
+    error: null,
+  };
+
+  function setupReferenceTransaction(opts: {
+    repo?: Record<string, unknown> | null;
+    linkedCount?: number;
+  }) {
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const repo = opts.repo === undefined ? readyRepo : opts.repo;
+      const tx = {
+        execute: jest.fn().mockResolvedValue({
+          rows: [{ id: INTERVIEW_ID, project: 'Apex', status: 'in_progress' }],
+        }),
+        select: jest.fn()
+          .mockImplementationOnce(() => ({
+            from: () => ({ where: () => ({ limit: () => Promise.resolve(repo ? [repo] : []) }) }),
+          }))
+          .mockImplementation(() => countChain(opts.linkedCount ?? 0)),
+        insert: jest.fn().mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) }),
+      };
+      return fn(tx);
+    });
+  }
+
+  beforeEach(() => {
+    mockReferenceLinksFindMany.mockResolvedValue([]);
+    mockListCatalog.mockResolvedValue([readyRepo]);
+  });
+
+  it('rejects a catalog repository that is not cloned yet', async () => {
+    setupReferenceTransaction({ repo: { ...readyRepo, status: 'cloning', commitSha: null } });
+    await expect(
+      addReferenceRepositoryLink(INTERVIEW_ID, ACTOR, { catalogRepositoryId: REPO_ID }),
+    ).rejects.toMatchObject({ code: 'REPOSITORY_NOT_READY' });
+  });
+
+  it('rejects a catalog repository from another project', async () => {
+    setupReferenceTransaction({ repo: { ...readyRepo, project: 'OtherProj' } });
+    await expect(
+      addReferenceRepositoryLink(INTERVIEW_ID, ACTOR, { catalogRepositoryId: REPO_ID }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_CROSS_PROJECT' });
+  });
+
+  it('rejects a link past the reference repository cap', async () => {
+    setupReferenceTransaction({ linkedCount: REFERENCE_REPOSITORY_CAPACITY });
+    await expect(
+      addReferenceRepositoryLink(INTERVIEW_ID, ACTOR, { catalogRepositoryId: REPO_ID }),
+    ).rejects.toMatchObject({ code: 'LINK_CAP_EXCEEDED' });
+  });
+
+  it('links a ready repository and moves it out of the candidates', async () => {
+    setupReferenceTransaction({});
+    mockReferenceLinksFindMany.mockResolvedValue([
+      { catalogRepositoryId: REPO_ID, linkedBy: 'user-ba', linkedAt: '2026-11-13T15:00:00.000Z' },
+    ]);
+
+    const model = await addReferenceRepositoryLink(INTERVIEW_ID, ACTOR, { catalogRepositoryId: REPO_ID });
+
+    expect(model.links).toEqual([
+      expect.objectContaining({ catalogRepositoryId: REPO_ID, displayName: 'MaxView', ready: true }),
+    ]);
+    expect(model.candidates).toEqual([]);
+    expect(mockListCatalog).toHaveBeenCalledWith('Apex');
+  });
+
+  it('builds read roots on the catalog mirror and lists unready repositories as unavailable', async () => {
+    mockInterviewFindFirst.mockResolvedValue({ id: INTERVIEW_ID, project: 'Apex' });
+    mockSelect.mockReturnValue({
+      from: () => ({
+        where: () => Promise.resolve([
+          { catalogRepositoryId: REPO_ID },
+          { catalogRepositoryId: FAILED_REPO_ID },
+        ]),
+      }),
+    });
+    mockListCatalog.mockResolvedValue([
+      readyRepo,
+      { ...readyRepo, id: FAILED_REPO_ID, displayName: 'MatterWorx', status: 'failed', commitSha: null, error: 'auth failed' },
+    ]);
+
+    const sources = await loadInterviewReferenceSources('thread-1');
+
+    expect(sources?.readRoots).toEqual([
+      expect.objectContaining({
+        sourceId: REPO_ID,
+        displayName: 'MaxView',
+        commitSha: SHA,
+        provider: 'ado',
+        project: 'MaxView',
+        repository: 'maxview-api',
+        workspacePath: expect.stringContaining(REPO_ID),
+      }),
+    ]);
+    expect(sources?.unavailableSources).toEqual([
+      { sourceId: FAILED_REPO_ID, displayName: 'MatterWorx', reason: 'auth failed' },
+    ]);
+    expect(sources?.instructions).toContain(`sources/${REPO_ID}/`);
+    expect(sources?.instructions).toContain('Unavailable "MatterWorx"');
+  });
+
+  it('returns null when the thread has no reference repositories', async () => {
+    mockInterviewFindFirst.mockResolvedValue({ id: INTERVIEW_ID, project: 'Apex' });
+    mockSelect.mockReturnValue({ from: () => ({ where: () => Promise.resolve([]) }) });
+
+    await expect(loadInterviewReferenceSources('thread-1')).resolves.toBeNull();
+    expect(mockListCatalog).not.toHaveBeenCalled();
   });
 });
 

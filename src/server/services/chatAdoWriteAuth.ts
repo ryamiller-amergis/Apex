@@ -57,6 +57,15 @@ export async function registerChatAdoWriteTurn(input: {
     );
   }
 
+  return setTurnContext(input);
+}
+
+function setTurnContext(input: {
+  threadId: string;
+  userId: string;
+  project: string;
+  token: string | null;
+}): () => void {
   const registrationId = Symbol(input.threadId);
   const previous = turnContexts.get(input.threadId);
   if (previous) clearTimeout(previous.timeout);
@@ -84,6 +93,23 @@ export async function registerChatAdoWriteTurn(input: {
     clearTimeout(current.timeout);
     turnContexts.delete(input.threadId);
   };
+}
+
+/**
+ * Authorize ADO writes for one V2 tool-proxy call. Call only after the proxy
+ * verified the run/attempt fence and decrypted an `ado:write` grant; the
+ * permission check ran when App Service admitted the turn.
+ */
+export async function withDurableChatAdoWriteGrant<T>(
+  input: { threadId: string; userId: string; project: string; token: string | null },
+  call: () => Promise<T>,
+): Promise<T> {
+  const release = setTurnContext(input);
+  try {
+    return await call();
+  } finally {
+    release();
+  }
 }
 
 export function adoServiceForChatThread(

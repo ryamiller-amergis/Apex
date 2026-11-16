@@ -11,6 +11,11 @@ const mockGetLinkedContext = jest.fn();
 const mockGetAdr = jest.fn();
 const mockGetModuleById = jest.fn();
 const mockTrackEvent = jest.fn();
+const mockFindInterview = jest.fn();
+
+jest.mock('../db/drizzle', () => ({
+  db: { query: { interviews: { findFirst: (...a: unknown[]) => mockFindInterview(...a) } } },
+}));
 
 jest.mock('../services/interviewLinkService', () => ({
   getLinkedContext: (...a: unknown[]) => mockGetLinkedContext(...a),
@@ -32,6 +37,7 @@ import {
   LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH,
   materializeLinkedContext,
   renderLinkedContextDocument,
+  renderLinkedContextForInterviewThread,
 } from '../services/linkedContextMaterializerService';
 import type { LinkedContextReadModel } from '../../shared/types/interviewLinks';
 
@@ -176,6 +182,74 @@ describe('renderLinkedContextDocument — DoD-0 / VT-01 template', () => {
 
     expect(markdown.indexOf(ADR_A)).toBeLessThan(markdown.indexOf(ADR_B));
     expect(markdown.indexOf(MOD_A)).toBeLessThan(markdown.indexOf(MOD_B));
+  });
+});
+
+describe('renderLinkedContextForInterviewThread — V2 prompt delivery', () => {
+  const THREAD_ID = '99999999-9999-4999-8999-999999999999';
+
+  it('renders accepted ADRs and modules for the thread interview without writing a file', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockResolvedValue(baseReadModel({
+      adrLinks: [
+        ...baseReadModel().adrLinks,
+        {
+          adrId: ADR_STALE,
+          title: 'Stale ADR',
+          isAccepted: true,
+          linkedBy: 'user-ba',
+          linkedAt: '2026-08-03T00:00:00.000Z',
+        },
+      ],
+    }));
+
+    const markdown = await renderLinkedContextForInterviewThread({
+      threadId: THREAD_ID,
+      userId: 'user-mgr',
+      now: () => new Date('2026-11-13T00:00:00.000Z'),
+    });
+
+    expect(mockGetLinkedContext).toHaveBeenCalledWith(INTERVIEW_ID, { userId: 'user-mgr' });
+    expect(markdown).toContain('Content of ADR A v1');
+    expect(markdown).toContain('Generated docs for Module B');
+    expect(markdown).not.toContain('Should never appear');
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      'interview.linked_context.materialize',
+      expect.objectContaining({ outcome: 'written', delivery: 'prompt' }),
+      expect.objectContaining({ adrCount: 2, designModuleCount: 2, staleAdrExcluded: 1 }),
+    );
+  });
+
+  it('returns null when nothing is linked', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockResolvedValue(baseReadModel({ adrLinks: [], designModuleLinks: [], count: 0 }));
+
+    await expect(
+      renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' }),
+    ).resolves.toBeNull();
+  });
+
+  it('returns null when the thread has no interview', async () => {
+    mockFindInterview.mockResolvedValue(undefined);
+
+    await expect(
+      renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' }),
+    ).resolves.toBeNull();
+    expect(mockGetLinkedContext).not.toHaveBeenCalled();
+  });
+
+  it('returns null and reports failure when link resolution throws', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockRejectedValue(new TypeError('boom'));
+
+    await expect(
+      renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' }),
+    ).resolves.toBeNull();
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      'interview.linked_context.materialize',
+      expect.objectContaining({ outcome: 'failed', delivery: 'prompt', errorName: 'TypeError' }),
+      expect.anything(),
+    );
   });
 });
 

@@ -74,7 +74,9 @@ import { stripBuildIntakeMarkers, warningClasses } from '../../shared/utils/buil
 import { BUILD_INTAKE_OPTION_KEY } from '../../shared/types/buildPreflight';
 import { BUILD_INTAKE_PAUSED_MESSAGE } from '../../shared/types/buildAccess';
 import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
-import { useFeatureFlags } from '../hooks/useFeatureFlags';
+import { useFeatureFlag, useFeatureFlags } from '../hooks/useFeatureFlags';
+import { INTERVIEW_REFERENCE_REPOSITORIES_FLAG } from '../../shared/types/interviewLinks';
+import { InterviewReferenceRepositories } from './InterviewReferenceRepositories';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { choiceBlocksAnsweredByLaterMessages } from '../utils/choiceAnswerMatching';
 import { createChatTurnId } from '../utils/chatTurnId';
@@ -1058,6 +1060,10 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
   const isPlaybookInterview = Boolean(interview?.playbookRunId);
   const isBuildIntake = interview?.playbookProfileKey === BUILD_INTAKE_OPTION_KEY;
   const buildFlags = useFeatureFlags(isBuildIntake ? interview?.project ?? undefined : undefined);
+  const referenceRepositoriesEnabled = useFeatureFlag(
+    INTERVIEW_REFERENCE_REPOSITORIES_FLAG,
+    interview?.project ?? undefined,
+  );
   const {
     data: interviewBrief,
     isLoading: isBriefLoading,
@@ -2388,6 +2394,20 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
               }
               onClose={closeLinkedContext}
             />
+            {/* @feature-flag:interview-reference-repos start winner=enabled */}
+            {referenceRepositoriesEnabled ? (
+              /* @feature-flag:interview-reference-repos enabled-start */
+              <InterviewReferenceRepositories
+                interviewId={interview.id}
+                canEdit={canManage && interview.status === 'in_progress'}
+              />
+              /* @feature-flag:interview-reference-repos enabled-end */
+            ) : (
+              /* @feature-flag:interview-reference-repos disabled-start */
+              null
+              /* @feature-flag:interview-reference-repos disabled-end */
+            )}
+            {/* @feature-flag:interview-reference-repos end */}
           </dialog>
         </div>
       )}

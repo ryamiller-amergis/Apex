@@ -34,16 +34,23 @@ import {
 import {
   addAdrLink,
   addDesignModuleLink,
+  addReferenceRepositoryLink,
   getLinkedContext,
+  getReferenceRepositories,
   listCandidates,
   listProjectCandidates,
   removeAdrLink,
   removeDesignModuleLink,
+  removeReferenceRepositoryLink,
 } from '../services/interviewLinkService';
-import { InterviewLinkError } from '../../shared/types/interviewLinks';
+import {
+  INTERVIEW_REFERENCE_REPOSITORIES_FLAG,
+  InterviewLinkError,
+} from '../../shared/types/interviewLinks';
 import type {
   AddAdrLinkRequest,
   AddDesignModuleLinkRequest,
+  AddReferenceRepositoryRequest,
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
 import { getActiveUsers, getUserPermissions } from '../services/rbacService';
@@ -181,7 +188,7 @@ import {
   generateFallbackReport as generateFallbackValidationReport,
   ingestValidationScorecard,
 } from '../services/documentValidationService';
-import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import { isFeatureEnabled, isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
 import { writeThreadFolderFile } from '../services/threadFolder';
 import {
   DesignDocValidationPlaybookConfigurationError,
@@ -3624,6 +3631,7 @@ function sendInterviewLinkError(res: Response, err: InterviewLinkError): void {
       return;
     case 'ADR_NOT_ACCEPTED':
     case 'ARTIFACT_CROSS_PROJECT':
+    case 'REPOSITORY_NOT_READY':
     case 'INTERVIEW_NOT_IN_PROGRESS':
       res.status(422).json(body);
       return;
@@ -3790,6 +3798,86 @@ router.delete(
         req.params.designModuleId,
       );
       res.json(result);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+/** Sends 404 and returns false unless the reference-repositories flag is on for the Interview's project. */
+async function referenceRepositoriesEnabled(req: Request, res: Response): Promise<boolean> {
+  const interview = await getInterview(req.params.interviewId);
+  const enabled = interview
+    ? await isFeatureEnabled(INTERVIEW_REFERENCE_REPOSITORIES_FLAG, {
+        userId: getUserId(req),
+        project: interview.project,
+      }).catch(() => false)
+    : false;
+  // @feature-flag:interview-reference-repos start winner=enabled
+  if (!enabled) {
+    // @feature-flag:interview-reference-repos disabled-start
+    res.status(404).json({ error: 'Not found' });
+    return false;
+    // @feature-flag:interview-reference-repos disabled-end
+  }
+  // @feature-flag:interview-reference-repos enabled-start
+  return true;
+  // @feature-flag:interview-reference-repos enabled-end
+  // @feature-flag:interview-reference-repos end
+}
+
+router.get(
+  '/:interviewId/reference-repositories',
+  requirePermission('interviews:view'),
+  async (req, res, next) => {
+    try {
+      if (!(await referenceRepositoriesEnabled(req, res))) return;
+      res.json(await getReferenceRepositories(req.params.interviewId, actorFromRequest(req)));
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:interviewId/reference-repositories',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      if (!(await referenceRepositoriesEnabled(req, res))) return;
+      const body = req.body as AddReferenceRepositoryRequest;
+      res.json(await addReferenceRepositoryLink(req.params.interviewId, actorFromRequest(req), body));
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+router.delete(
+  '/:interviewId/reference-repositories/:catalogRepositoryId',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      if (!(await referenceRepositoriesEnabled(req, res))) return;
+      res.json(
+        await removeReferenceRepositoryLink(
+          req.params.interviewId,
+          actorFromRequest(req),
+          req.params.catalogRepositoryId,
+        ),
+      );
     } catch (err) {
       if (err instanceof InterviewLinkError) {
         sendInterviewLinkError(res, err);

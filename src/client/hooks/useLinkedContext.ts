@@ -7,10 +7,12 @@ import {
 import type {
   AddAdrLinkRequest,
   AddDesignModuleLinkRequest,
+  AddReferenceRepositoryRequest,
   LinkCandidateType,
   LinkMutationResult,
   LinkedContextReadModel,
   PaginatedCandidates,
+  ReferenceRepositoriesReadModel,
 } from '../../shared/types/interviewLinks';
 
 const CANDIDATE_STALE_TIME_MS = 30_000;
@@ -53,6 +55,8 @@ export type PersistStagedLinksResult = {
 export const interviewLinkKeys = {
   links: (interviewId: string) =>
     ['interview-links', interviewId] as const,
+  referenceRepositories: (interviewId: string) =>
+    ['interview-reference-repositories', interviewId] as const,
   candidateRoot: (project: string, interviewId: string | null) =>
     ['interview-link-candidates', project, interviewId] as const,
   candidates: (
@@ -306,6 +310,45 @@ export function useRemoveDesignModuleLink(
       reconcileLinkedContext(queryClient, interviewId, result),
     onSettled: () =>
       invalidateLinkedContext(queryClient, interviewId, project),
+  });
+}
+
+function referenceRepositoriesUrl(interviewId: string): string {
+  return `/api/interviews/${encodeURIComponent(interviewId)}/reference-repositories`;
+}
+
+export function useReferenceRepositories(interviewId: string, enabled: boolean) {
+  return useQuery<ReferenceRepositoriesReadModel, Error>({
+    queryKey: interviewLinkKeys.referenceRepositories(interviewId),
+    queryFn: () => apiFetch(referenceRepositoriesUrl(interviewId)),
+    enabled: enabled && Boolean(interviewId),
+  });
+}
+
+export function useAddReferenceRepository(interviewId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ReferenceRepositoriesReadModel, Error, AddReferenceRepositoryRequest>({
+    mutationFn: (body) =>
+      apiFetch(referenceRepositoriesUrl(interviewId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (result) =>
+      queryClient.setQueryData(interviewLinkKeys.referenceRepositories(interviewId), result),
+  });
+}
+
+export function useRemoveReferenceRepository(interviewId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ReferenceRepositoriesReadModel, Error, string>({
+    mutationFn: (catalogRepositoryId) =>
+      apiFetch(
+        `${referenceRepositoriesUrl(interviewId)}/${encodeURIComponent(catalogRepositoryId)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: (result) =>
+      queryClient.setQueryData(interviewLinkKeys.referenceRepositories(interviewId), result),
   });
 }
 
