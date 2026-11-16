@@ -19,7 +19,7 @@ Also activates on: "investigate MaxView logs", "check App Insights", "query fire
 - [RESOURCE_CATALOG.md](RESOURCE_CATALOG.md) — which app / resource / environment to look at.
 - [INVESTIGATION_GUIDE.md](INVESTIGATION_GUIDE.md) — read-only rules, the zero-result recovery procedure, and how to report evidence.
 
-If `az account show` fails, run `az login --identity --client-id "$AZURE_INSIGHTS_CLIENT_ID" --output none`, and stop if that variable is missing or the login fails.
+Do not run `az login --identity`. The worker identity is not a member of Azure DevOps, and a signed-in session makes work-item calls use it.
 
 ## Workflow
 

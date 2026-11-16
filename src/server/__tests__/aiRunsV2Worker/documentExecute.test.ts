@@ -1056,7 +1056,7 @@ describe('V2 document execution', () => {
     expect(createExecution).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the pinned repository and signs in to Azure for an investigation step', async () => {
+  it('opens the pinned repository for an investigation step without signing in to Azure', async () => {
     const spec = specification({
       workflowClass: 'playbook-step',
       groundedSha: 'abc123',
@@ -1067,7 +1067,6 @@ describe('V2 document execution', () => {
     });
     const repoReader = { kind: 'repo' };
     const openRepository = jest.fn().mockResolvedValue(repoReader);
-    const signInAzure = jest.fn().mockResolvedValue(undefined);
     const createExecution = jest.fn(async (_snapshot, checkout) => {
       expect(checkout).toBe(repoReader);
       return {
@@ -1082,7 +1081,6 @@ describe('V2 document execution', () => {
     const execute = createDocumentExecute({
       openRepository,
       createExecution,
-      signInAzure,
     });
 
     await execute({
@@ -1110,7 +1108,6 @@ describe('V2 document execution', () => {
     });
 
     expect(openRepository).toHaveBeenCalledTimes(1);
-    expect(signInAzure).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a Playbook policy hashed from different Skill bytes', async () => {

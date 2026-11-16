@@ -21,10 +21,8 @@ import {
   executeCursorExecutionCore,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
-import { ensureInsightsAzureLogin } from '../aiRunsWorker/azureCliSession';
 import {
   createLocalCursorExecution,
-  playbookAgentNeedsAzureCli,
   type WorkerCursorExecution,
 } from '../aiRunsWorker/cursorExecution';
 import {
@@ -54,8 +52,6 @@ export type DocumentExecutionDependencies = Readonly<{
     signal?: AbortSignal,
   ) => Promise<RepoReader>;
   createExecution?: CreateExecution;
-  /** Signs `az` in before a step that queries Azure. Tests pass a stub. */
-  signInAzure?: () => Promise<void>;
   tempRoot?: string;
   now?: () => number;
 }>;
@@ -602,7 +598,6 @@ export function createDocumentExecute(
     dependencies.openRepository ?? openDocumentRepository;
   const createExecution =
     dependencies.createExecution ?? createLocalCursorExecution;
-  const signInAzure = dependencies.signInAzure ?? ensureInsightsAzureLogin;
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
   const now = dependencies.now ?? Date.now;
 
@@ -659,9 +654,6 @@ export function createDocumentExecute(
       const repository = readsPinnedRepository
         ? await raceOperation(openRepository(specification, signal), signal)
         : undefined;
-      if (playbookAgentNeedsAzureCli(snapshot)) {
-        await raceOperation(signInAzure(), signal);
-      }
       if (signal.aborted) throw abortError();
 
       await raceOperation(
