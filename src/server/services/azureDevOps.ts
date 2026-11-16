@@ -1,7 +1,11 @@
 import { Readable } from 'stream';
 import * as azdev from 'azure-devops-node-api';
 import { WorkItemErrorPolicy, WorkItemExpand } from 'azure-devops-node-api/interfaces/WorkItemTrackingInterfaces';
-import { PullRequestStatus } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import {
+  GitVersionType,
+  PullRequestStatus,
+  type GitVersionDescriptor,
+} from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { ExcludeFlags, TestSuiteType, type TestSuite } from 'azure-devops-node-api/interfaces/TestPlanInterfaces';
 import { WorkItem, CycleTimeData, DueDateChange, DeveloperDueDateStats, DueDateHitRateStats, Release, ReleaseMetrics, InProgressTimeStats, QACycleTimeStats, UATCycleTimeStats, UATSittingItem, AIWorkItemMetric, AIWorkItemHealthSummary, DesignDocKickoffStats } from '../types/workitem';
 import type { AiCodeWorkItemAdoptionSummary } from '../types/aiCapabilityLadder';
@@ -7191,6 +7195,27 @@ export class AzureDevOpsService {
       email: createdBy?.uniqueName?.trim() || null,
       title: typeof title === 'string' ? title.trim() || null : null,
     };
+  }
+
+  /**
+   * How many commits `branch` holds that `targetBranch` lacks. Returns null when the branch does
+   * not exist, so a caller can tell "nothing pushed" from "pushed with no new commits".
+   */
+  async getBranchAheadCount(opts: {
+    repo: string;
+    project: string;
+    branch: string;
+    targetBranch: string;
+  }): Promise<number | null> {
+    const gitApi = await this.connection.getGitApi();
+    const stats = await gitApi.getBranch(
+      opts.repo,
+      opts.branch,
+      opts.project,
+      { version: opts.targetBranch, versionType: GitVersionType.Branch } as GitVersionDescriptor,
+    );
+    if (!stats?.commit) return null;
+    return typeof stats.aheadCount === 'number' ? stats.aheadCount : 0;
   }
 
   /**
