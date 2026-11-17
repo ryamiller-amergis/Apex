@@ -20,7 +20,10 @@ function splitMigration() {
 }
 
 /** Registry workflows added after this migration, so its backfill does not list them. */
-const WORKFLOWS_ADDED_AFTER_EXPAND = new Set<string>(['evaluation_judge']);
+const WORKFLOWS_ADDED_AFTER_EXPAND = new Set<string>([
+  'evaluation_judge',
+  'release_changelog',
+]);
 
 const snake = (field: string) => field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const legacyColumns = getTableColumns(projectSkillSettings);
