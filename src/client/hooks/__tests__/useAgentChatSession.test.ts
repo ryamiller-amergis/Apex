@@ -474,6 +474,7 @@ describe('useAgentChatSession', () => {
     const { result } = renderHook(() =>
       useAgentChatSession('thread-1', {
         enablePreparationState: true,
+        initialActiveRunId: 'run-queued',
         createTurnId: () => TURN_ID_1,
       }),
     );
@@ -498,13 +499,70 @@ describe('useAgentChatSession', () => {
     );
   });
 
-  it('computes isPreparing when enablePreparationState is true and no messages', () => {
+  it('computes isPreparing for an empty thread with a queued run', () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'idle' };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        initialActiveRunId: 'run-queued',
+      })
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.hasPreparationError).toBe(false);
+  });
+
+  it('computes isPreparing for an empty thread whose run is running', () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'running' };
     const { result } = renderHook(() =>
       useAgentChatSession('thread-1', { enablePreparationState: true })
     );
     expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+  });
+
+  it('does not prepare an empty idle thread with no run, so the composer can send', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'idle', messages: [] };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        initialStatus: 'idle',
+        initialActiveRunId: null,
+        createTurnId: () => TURN_ID_1,
+      })
+    );
+
+    expect(result.current.isPreparing).toBe(false);
     expect(result.current.hasPreparationError).toBe(false);
+    expect(result.current.preparationMessage).toBeNull();
+    expect(result.current.isInteractionBusy).toBe(false);
+
+    await act(async () => {
+      await result.current.send('Kick off the interview');
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('Kick off the interview'),
+      }),
+    );
+  });
+
+  it('still prepares an empty idle thread with no run while grounding is preparing', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      groundingPreparation: {
+        status: 'preparing',
+        message: 'Preparing project repository…',
+        retryAfterMs: 1_000,
+      },
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { enablePreparationState: true })
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
   });
 
   it('computes hasPreparationError on error status with no messages', () => {
