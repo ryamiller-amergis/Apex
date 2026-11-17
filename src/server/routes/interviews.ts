@@ -33,6 +33,7 @@ import {
 } from '../services/interviewService';
 import {
   addAdrLink,
+  addBrainstormLink,
   addDesignModuleLink,
   addReferenceRepositoryLink,
   getLinkedContext,
@@ -40,6 +41,7 @@ import {
   listCandidates,
   listProjectCandidates,
   removeAdrLink,
+  removeBrainstormLink,
   removeDesignModuleLink,
   removeReferenceRepositoryLink,
 } from '../services/interviewLinkService';
@@ -49,6 +51,7 @@ import {
 } from '../../shared/types/interviewLinks';
 import type {
   AddAdrLinkRequest,
+  AddBrainstormLinkRequest,
   AddDesignModuleLinkRequest,
   AddReferenceRepositoryRequest,
   LinkCandidateType,
@@ -3621,6 +3624,14 @@ function actorFromRequest(req: Request) {
   };
 }
 
+const LINK_CANDIDATE_TYPES: readonly LinkCandidateType[] = ['adr', 'design-module', 'brainstorm'];
+
+function parseLinkCandidateType(value: unknown): LinkCandidateType | null {
+  return LINK_CANDIDATE_TYPES.find((type) => type === value) ?? null;
+}
+
+const LINK_CANDIDATE_TYPE_ERROR = 'Query parameter type must be "adr", "design-module" or "brainstorm"';
+
 /** Map InterviewLinkError → stable HTTP status + human-readable message (no artifact bodies). */
 function sendInterviewLinkError(res: Response, err: InterviewLinkError): void {
   const body = { error: err.message, code: err.code };
@@ -3662,12 +3673,11 @@ router.get(
         return;
       }
 
-      const typeRaw = String(req.query.type ?? '');
-      if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
-        res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+      const type = parseLinkCandidateType(req.query.type);
+      if (!type) {
+        res.status(400).json({ error: LINK_CANDIDATE_TYPE_ERROR });
         return;
       }
-      const type = typeRaw as LinkCandidateType;
       const search = typeof req.query.search === 'string' ? req.query.search : undefined;
       const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
       const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
@@ -3713,12 +3723,11 @@ router.get('/:interviewId/links', requirePermission('interviews:view'), async (r
 // GET /:interviewId/link-candidates — paginated candidates (offset/limit, pageSize=50)
 router.get('/:interviewId/link-candidates', requirePermission('interviews:view'), async (req, res, next) => {
   try {
-    const typeRaw = String(req.query.type ?? '');
-    if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
-      res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+    const type = parseLinkCandidateType(req.query.type);
+    if (!type) {
+      res.status(400).json({ error: LINK_CANDIDATE_TYPE_ERROR });
       return;
     }
-    const type = typeRaw as LinkCandidateType;
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
     const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
@@ -3796,6 +3805,41 @@ router.delete(
         req.params.interviewId,
         actorFromRequest(req),
         req.params.designModuleId,
+      );
+      res.json(result);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+router.post('/:interviewId/links/brainstorm', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const body = req.body as AddBrainstormLinkRequest;
+    const result = await addBrainstormLink(req.params.interviewId, actorFromRequest(req), body);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete(
+  '/:interviewId/links/brainstorm/:brainstormSessionId',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      const result = await removeBrainstormLink(
+        req.params.interviewId,
+        actorFromRequest(req),
+        req.params.brainstormSessionId,
       );
       res.json(result);
     } catch (err) {

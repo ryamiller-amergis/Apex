@@ -753,6 +753,18 @@ export const interviewReferenceRepositories = pgTable('interview_reference_repos
   interviewIdx: index('idx_interview_reference_repositories_interview_id').on(t.interviewId),
 }));
 
+/** Brainstorm sessions linked to an Interview; the latest artifact grounds its turns. */
+export const interviewBrainstormLinks = pgTable('interview_brainstorm_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  interviewId: uuid('interview_id').notNull().references(() => interviews.id, { onDelete: 'cascade' }),
+  brainstormSessionId: uuid('brainstorm_session_id').notNull().references(() => brainstormSessions.id, { onDelete: 'cascade' }),
+  linkedBy: text('linked_by').notNull(),
+  linkedAt: timestamp('linked_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  interviewSessionUq: unique('uq_interview_brainstorm_links_interview_session').on(t.interviewId, t.brainstormSessionId),
+  sessionIdx: index('idx_interview_brainstorm_links_session_id').on(t.brainstormSessionId),
+}));
+
 function briefSectionsCheck(sections: AnyPgColumn) {
   return sql`
     jsonb_typeof(${sections}) = 'object'
@@ -1186,6 +1198,17 @@ export const interviewDesignModuleLinksRelations = relations(interviewDesignModu
   designModule: one(designModules, {
     fields: [interviewDesignModuleLinks.designModuleId],
     references: [designModules.id],
+  }),
+}));
+
+export const interviewBrainstormLinksRelations = relations(interviewBrainstormLinks, ({ one }) => ({
+  interview: one(interviews, {
+    fields: [interviewBrainstormLinks.interviewId],
+    references: [interviews.id],
+  }),
+  brainstormSession: one(brainstormSessions, {
+    fields: [interviewBrainstormLinks.brainstormSessionId],
+    references: [brainstormSessions.id],
   }),
 }));
 
