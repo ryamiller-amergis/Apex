@@ -21,10 +21,38 @@ function gitDiffMigrations(base, head) {
   return diff.length > 0;
 }
 
+const CONNECT_ATTEMPTS = 4;
+const CONNECT_TIMEOUT_MS = 20_000;
+const CONNECT_RETRY_DELAY_MS = 5_000;
+
+// A GitHub-hosted runner occasionally cannot open the TCP connection (ETIMEDOUT).
+// Retry with a short timeout instead of waiting out the OS default once.
+async function connectWithRetry(pg, databaseUrl) {
+  let lastError;
+  for (let attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt += 1) {
+    const client = new pg.Client({
+      connectionString: databaseUrl,
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    });
+    try {
+      await client.connect();
+      return client;
+    } catch (error) {
+      lastError = error;
+      await client.end().catch(() => {});
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : error?.message;
+      console.warn(`Database connect attempt ${attempt}/${CONNECT_ATTEMPTS} failed (${code})`);
+      if (attempt < CONNECT_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_DELAY_MS));
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function hasPendingMigrations(databaseUrl) {
   const { default: pg } = await import('pg');
-  const client = new pg.Client({ connectionString: databaseUrl });
-  await client.connect();
+  const client = await connectWithRetry(pg, databaseUrl);
 
   const files = readdirSync(join(process.cwd(), 'migrations')).filter((file) =>
     file.endsWith('.sql'),
