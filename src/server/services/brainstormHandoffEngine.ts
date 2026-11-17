@@ -33,6 +33,7 @@ import {
 import type { BrainstormCitationDto } from '../../shared/types/brainstormSources';
 import {
   HANDOFF_TARGETS,
+  INTERVIEW_TARGET,
   buildHandoffContext,
   executeTarget,
   outlineArtifact,
@@ -548,6 +549,55 @@ export function createHandoffEngine(deps: HandoffEngineDeps) {
       throw unavailable(action);
     },
 
+    /**
+     * Start Interview runs on the new interview page. Once that page creates the
+     * Interview, this records it as the completed start-interview handoff for the
+     * current artifact version, so the panel shows "Open" for it.
+     */
+    async recordInterview(session: HandoffSession, userId: string, input: { interviewId: string }): Promise<BrainstormHandoffResultDto> {
+      requireCreator(session, userId);
+      const artifact = await deps.artifacts.getArtifact(session.id, session.project);
+      if (!artifact.type || !INTERVIEW_TARGET.appliesTo(artifact.type) || !artifact.markdown.trim()) {
+        throw new BrainstormHandoffError('ACTION_UNAVAILABLE', 409);
+      }
+      const interview = await deps.services.findInterview?.(input.interviewId);
+      if (!interview || interview.project !== session.project || interview.authorId !== userId) {
+        throw new BrainstormHandoffError('INTERVIEW_NOT_FOUND', 404);
+      }
+
+      const existing = await persistence.findLive(session.id, INTERVIEW_TARGET.kind, artifact.version);
+      if (existing?.state === 'completed' && existing.resultRef) return result(existing, true);
+      if (existing?.state === 'executing') throw new BrainstormHandoffError('ACTION_UNAVAILABLE', 409, { state: 'in_progress' });
+      if (existing?.state === 'previewed') {
+        await persistence.fail(existing.id, null, 'SUPERSEDED', now().toISOString());
+      }
+
+      const resultRef: BrainstormResultRef = {
+        module: 'interview',
+        id: input.interviewId,
+        link: `/backlog/interview/${input.interviewId}`,
+      };
+      const inserted = await persistence.insert({
+        sessionId: session.id,
+        project: session.project,
+        actionKind: INTERVIEW_TARGET.kind,
+        targetModule: INTERVIEW_TARGET.module,
+        state: 'completed',
+        previewSnapshot: { actionId: INTERVIEW_TARGET.id, contentSha256: sha256(artifact.markdown), plan: null, preview: null },
+        idempotencyKey: newId(),
+        artifactVersion: artifact.version,
+        resultRef,
+        confirmedAt: now().toISOString(),
+      });
+      if (inserted) {
+        track('brainstorm.handoff.completed', { project: session.project, sessionId: session.id, targetModule: 'interview' });
+        return result(inserted, false);
+      }
+      const raced = await persistence.findLive(session.id, INTERVIEW_TARGET.kind, artifact.version);
+      if (raced?.state === 'completed' && raced.resultRef) return result(raced, true);
+      throw new BrainstormHandoffError('ACTION_UNAVAILABLE', 409);
+    },
+
     async getHandoff(session: HandoffSession, viewerId: string, handoffId: string): Promise<BrainstormHandoffSummaryDto> {
       const row = await persistence.findById(session.id, handoffId);
       if (!row || (session.creatorId !== viewerId && row.state !== 'completed')) {
@@ -783,6 +833,10 @@ export const defaultTargetServices: TargetServices = {
       skillSettingsId: input.repository.settingsId ?? undefined,
     }, { skipAutoKickoff: true });
     return thread.id;
+  },
+  async findInterview(interviewId) {
+    const interview = await (await import('./interviewService')).getInterview(interviewId);
+    return interview ? { project: interview.project, authorId: interview.authorId } : null;
   },
   async findRecordByThread(module, threadId) {
     if (module === 'feature-request') {

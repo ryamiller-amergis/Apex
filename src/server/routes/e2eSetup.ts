@@ -1242,6 +1242,49 @@ router.post('/seed/brainstorm-flag', async (req, res) => {
   }
 });
 
+/**
+ * Creates a Brainstorm session and its chat thread directly, so specs that only need
+ * a session with an artifact do not depend on the V2 interactive transport.
+ * The thread carries the E2E title prefix; /reset deletes it and the session cascades.
+ */
+router.post('/seed/brainstorm-session', async (req, res) => {
+  try {
+    const { project, creatorId, title, model = 'composer-2' } = req.body as {
+      project: string;
+      creatorId: string;
+      title: string;
+      model?: string;
+    };
+    const threadId = randomUUID();
+    const prefixedTitle = e2eTitle(title);
+    await db.insert(chatThreads).values({
+      id: threadId,
+      userId: creatorId,
+      status: 'idle',
+      title: prefixedTitle,
+      kickoff: { project, repo: '', pillLabel: 'Brainstorm' },
+    });
+    const [session] = await db
+      .insert(brainstormSessions)
+      .values({
+        project,
+        creatorId,
+        state: 'active',
+        model,
+        title: prefixedTitle,
+        chatThreadId: threadId,
+        version: 1,
+        createdBy: creatorId,
+        updatedBy: creatorId,
+      })
+      .returning({ id: brainstormSessions.id, chatThreadId: brainstormSessions.chatThreadId });
+    res.json(session);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `E2E seed/brainstorm-session failed: ${message}` });
+  }
+});
+
 /** Writes artifact versions through the real store, standing in for collaborator turns. */
 router.post('/seed/brainstorm-artifact', async (req, res) => {
   try {

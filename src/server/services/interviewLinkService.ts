@@ -1,21 +1,30 @@
 /**
- * Interview Link Service (FEAT-001) — deep module owning typed ADR / Design Module
- * grounding links: project scope, accepted-only ADR eligibility, Interview lifecycle,
- * combined-cap, deduplication, and the current-link read model with live stale flags.
+ * Interview Link Service (FEAT-001) — deep module owning typed ADR / Design Module /
+ * Brainstorm grounding links: project scope, accepted-only ADR eligibility, Brainstorm
+ * read access, Interview lifecycle, combined-cap, deduplication, and the current-link
+ * read model with live stale flags.
  */
 
 import { and, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   adrs,
+  brainstormArtifacts,
   brainstormRepositories,
+  brainstormSessions,
   designModules,
   interviewAdrLinks,
+  interviewBrainstormLinks,
   interviewDesignModuleLinks,
   interviewReferenceRepositories,
   interviews,
 } from '../db/schema';
 import { getAssignmentsForUser } from './userProjectAssignmentService';
+import { isBrainstormEnabled, loadBrainstormViewer } from './brainstormThread';
+import { decideBrainstormAccess, type BrainstormSessionFacts } from './brainstormAccessPolicy';
+import { brainstormLinkTitle } from '../../shared/utils/brainstormArtifactTitle';
+import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
+import type { BrainstormArtifactType } from '../../shared/types/brainstormArtifact';
 import {
   catalogReadRoot,
   catalogReadiness,
@@ -27,12 +36,14 @@ import {
   LINKED_CONTEXT_CAPACITY,
   REFERENCE_REPOSITORY_CAPACITY,
   type AddAdrLinkRequest,
+  type AddBrainstormLinkRequest,
   type AddDesignModuleLinkRequest,
   type AddReferenceRepositoryRequest,
   type LinkCandidate,
   type LinkCandidateType,
   type LinkMutationResult,
   type LinkedAdr,
+  type LinkedBrainstorm,
   type LinkedContextReadModel,
   type LinkedDesignModule,
   type PaginatedCandidates,
@@ -122,6 +133,39 @@ function toLinkedDesignModule(row: {
   };
 }
 
+function toLinkedBrainstorm(row: {
+  brainstormSessionId: string;
+  linkedBy: string;
+  linkedAt: string;
+  brainstormSession: {
+    title: string | null;
+    artifacts: Array<{ artifactType: BrainstormArtifactType | null; markdown: string }>;
+  } | null;
+}): LinkedBrainstorm {
+  const artifact = row.brainstormSession?.artifacts[0];
+  return {
+    brainstormSessionId: row.brainstormSessionId,
+    title: brainstormLinkTitle(artifact?.markdown, row.brainstormSession?.title),
+    artifactType: artifact?.artifactType ?? null,
+    linkedBy: row.linkedBy,
+    linkedAt: row.linkedAt,
+  };
+}
+
+/**
+ * Brainstorm read access for the actor in `project`: the flag must be on for them,
+ * and the shared policy must allow reading a session of that project.
+ */
+async function canReadBrainstorm(
+  actor: ActorContext,
+  project: string,
+  session: BrainstormSessionFacts,
+): Promise<boolean> {
+  if (!(await isBrainstormEnabled(actor.userId, project))) return false;
+  const viewer = await loadBrainstormViewer(actor.userId, project, { isSuperAdmin: actor.isSuperAdmin });
+  return decideBrainstormAccess({ viewer, project, session }, 'read').kind === 'read';
+}
+
 async function buildReadModel(interviewId: string): Promise<LinkedContextReadModel> {
   const adrRows = await db.query.interviewAdrLinks.findMany({
     where: eq(interviewAdrLinks.interviewId, interviewId),
@@ -134,14 +178,27 @@ async function buildReadModel(interviewId: string): Promise<LinkedContextReadMod
     orderBy: [desc(interviewDesignModuleLinks.linkedAt)],
   });
 
+  const brainstormRows = await db.query.interviewBrainstormLinks.findMany({
+    where: eq(interviewBrainstormLinks.interviewId, interviewId),
+    with: {
+      brainstormSession: {
+        columns: { title: true },
+        with: { artifacts: { columns: { artifactType: true, markdown: true } } },
+      },
+    },
+    orderBy: [desc(interviewBrainstormLinks.linkedAt)],
+  });
+
   const adrLinks = adrRows.map(toLinkedAdr);
   const designModuleLinks = moduleRows.map(toLinkedDesignModule);
+  const brainstormLinks = brainstormRows.map(toLinkedBrainstorm);
 
   return {
     interviewId,
     adrLinks,
     designModuleLinks,
-    count: adrLinks.length + designModuleLinks.length,
+    brainstormLinks,
+    count: adrLinks.length + designModuleLinks.length + brainstormLinks.length,
     capacity: LINKED_CONTEXT_CAPACITY,
   };
 }
@@ -159,7 +216,11 @@ async function countCombinedLinks(
     .select({ value: count() })
     .from(interviewDesignModuleLinks)
     .where(eq(interviewDesignModuleLinks.interviewId, interviewId));
-  return Number(adrCount?.value ?? 0) + Number(modCount?.value ?? 0);
+  const [brainstormCount] = await tx
+    .select({ value: count() })
+    .from(interviewBrainstormLinks)
+    .where(eq(interviewBrainstormLinks.interviewId, interviewId));
+  return Number(adrCount?.value ?? 0) + Number(modCount?.value ?? 0) + Number(brainstormCount?.value ?? 0);
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -205,8 +266,64 @@ export type ListCandidatesQuery = {
   limit?: number;
 };
 
+/** Sessions of the project whose artifact has content, newest activity first. */
+async function queryBrainstormCandidates(
+  project: string,
+  actor: ActorContext,
+  search: string | undefined,
+  offset: number,
+  limit: number,
+): Promise<PaginatedCandidates> {
+  if (!(await canReadBrainstorm(actor, project, { project, creatorId: '', state: 'active' }))) {
+    return { items: [], total: 0, offset, limit };
+  }
+  const conditions = [
+    eq(brainstormSessions.project, project),
+    sql`btrim(${brainstormArtifacts.markdown}) <> ''`,
+  ];
+  if (search) {
+    conditions.push(
+      or(
+        ilike(brainstormSessions.title, `%${search}%`),
+        ilike(brainstormArtifacts.markdown, `%${search}%`),
+      )!,
+    );
+  }
+  const where = and(...conditions);
+  const [totalRow] = await db
+    .select({ value: count() })
+    .from(brainstormSessions)
+    .innerJoin(brainstormArtifacts, eq(brainstormArtifacts.sessionId, brainstormSessions.id))
+    .where(where);
+  const rows = await db
+    .select({
+      id: brainstormSessions.id,
+      title: brainstormSessions.title,
+      // The title comes from the first heading; the whole artifact is not needed.
+      markdown: sql<string>`left(${brainstormArtifacts.markdown}, 4000)`,
+    })
+    .from(brainstormSessions)
+    .innerJoin(brainstormArtifacts, eq(brainstormArtifacts.sessionId, brainstormSessions.id))
+    .where(where)
+    .orderBy(desc(brainstormSessions.lastActivityAt))
+    .limit(limit)
+    .offset(offset);
+
+  return {
+    items: rows.map((row) => ({
+      type: 'brainstorm' as const,
+      id: row.id,
+      title: brainstormLinkTitle(row.markdown, row.title),
+    })),
+    total: Number(totalRow?.value ?? 0),
+    offset,
+    limit,
+  };
+}
+
 async function queryCandidatesForProject(
   project: string,
+  actor: ActorContext,
   query: ListCandidatesQuery,
 ): Promise<PaginatedCandidates> {
   const offset = Math.max(0, query.offset ?? 0);
@@ -215,6 +332,10 @@ async function queryCandidatesForProject(
     LINK_CANDIDATE_DEFAULT_PAGE_SIZE,
   );
   const search = query.search?.trim();
+
+  if (query.type === 'brainstorm') {
+    return queryBrainstormCandidates(project, actor, search, offset, limit);
+  }
 
   if (query.type === 'adr') {
     const conditions = [
@@ -292,7 +413,7 @@ export async function listCandidates(
 ): Promise<PaginatedCandidates> {
   const interview = await loadInterviewOrThrow(interviewId);
   await assertProjectAccess(actor, interview.project);
-  return queryCandidatesForProject(interview.project, query);
+  return queryCandidatesForProject(interview.project, actor, query);
 }
 
 /**
@@ -305,7 +426,7 @@ export async function listProjectCandidates(
   query: ListCandidatesQuery,
 ): Promise<PaginatedCandidates> {
   await assertProjectAccess(actor, project);
-  return queryCandidatesForProject(project, query);
+  return queryCandidatesForProject(project, actor, query);
 }
 
 async function lockInterviewAndValidate(
@@ -438,6 +559,96 @@ export async function addDesignModuleLink(
         );
       }
       throw err;
+    }
+  });
+
+  return { linkedContext: await buildReadModel(interviewId) };
+}
+
+/**
+ * Link a same-project Brainstorm session the actor can read. Enforces combined cap
+ * atomically. A session the actor cannot read is reported as not found.
+ */
+export async function addBrainstormLink(
+  interviewId: string,
+  actor: ActorContext,
+  body: AddBrainstormLinkRequest,
+): Promise<LinkMutationResult> {
+  const brainstormSessionId = body.brainstormSessionId?.trim();
+  if (!isCanonicalUuid(brainstormSessionId)) {
+    throw new InterviewLinkError('ARTIFACT_NOT_FOUND', 'Brainstorm session not found');
+  }
+
+  await db.transaction(async (tx) => {
+    const interview = await lockInterviewAndValidate(tx, interviewId, actor);
+
+    const session = await tx.query.brainstormSessions.findFirst({
+      where: eq(brainstormSessions.id, brainstormSessionId),
+      columns: { id: true, project: true, creatorId: true, state: true },
+    });
+    if (!session) {
+      throw new InterviewLinkError('ARTIFACT_NOT_FOUND', 'Brainstorm session not found');
+    }
+    if (session.project !== interview.project) {
+      throw new InterviewLinkError(
+        'ARTIFACT_CROSS_PROJECT',
+        'Linked artifacts must belong to the same project as the Interview',
+      );
+    }
+    if (!(await canReadBrainstorm(actor, interview.project, session))) {
+      throw new InterviewLinkError('ARTIFACT_NOT_FOUND', 'Brainstorm session not found');
+    }
+
+    const currentCount = await countCombinedLinks(interviewId, tx);
+    if (currentCount >= LINKED_CONTEXT_CAPACITY) {
+      throw new InterviewLinkError(
+        'LINK_CAP_EXCEEDED',
+        `An Interview may have at most ${LINKED_CONTEXT_CAPACITY} linked artifacts`,
+      );
+    }
+
+    try {
+      await tx.insert(interviewBrainstormLinks).values({
+        interviewId,
+        brainstormSessionId,
+        linkedBy: actor.userId,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new InterviewLinkError(
+          'LINK_DUPLICATE',
+          'This artifact is already linked to the Interview',
+        );
+      }
+      throw err;
+    }
+  });
+
+  return { linkedContext: await buildReadModel(interviewId) };
+}
+
+export async function removeBrainstormLink(
+  interviewId: string,
+  actor: ActorContext,
+  brainstormSessionId: string,
+): Promise<LinkMutationResult> {
+  await db.transaction(async (tx) => {
+    await lockInterviewAndValidate(tx, interviewId, actor);
+
+    const deleted = isCanonicalUuid(brainstormSessionId)
+      ? await tx
+        .delete(interviewBrainstormLinks)
+        .where(
+          and(
+            eq(interviewBrainstormLinks.interviewId, interviewId),
+            eq(interviewBrainstormLinks.brainstormSessionId, brainstormSessionId),
+          ),
+        )
+        .returning({ id: interviewBrainstormLinks.id })
+      : [];
+
+    if (deleted.length === 0) {
+      throw new InterviewLinkError('ARTIFACT_NOT_FOUND', 'Brainstorm link not found');
     }
   });
 

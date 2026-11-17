@@ -301,9 +301,12 @@ export function useAgentChatSession(
   // Preparation state (opt-in)
   const isEmptyInProgress =
     enablePreparationState && visibleMessages.length === 0 && !streamingText;
+  // An empty idle thread with no queued or running run is waiting for its first
+  // message (threads created with skipAutoKickoff), not preparing.
+  const hasPendingRun = status === 'running' || Boolean(initialActiveRunId);
   const isPreparing = Boolean(
     groundingPreparation?.status === 'preparing' ||
-    (enablePreparationState && isEmptyInProgress && status !== 'error')
+    (enablePreparationState && isEmptyInProgress && hasPendingRun && status !== 'error')
   );
   const hasPreparationError = Boolean(
     groundingPreparation?.status === 'failed' ||

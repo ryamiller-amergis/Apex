@@ -164,6 +164,12 @@ function fakeServices() {
       return id;
     }),
     markInterviewThread: jest.fn(async () => {}),
+    findInterview: jest.fn(async (id: string) => {
+      if (id === 'interview-new') return { project: 'alpha', authorId: 'creator' };
+      if (id === 'interview-other-project') return { project: 'beta', authorId: 'creator' };
+      if (id === 'interview-other-author') return { project: 'alpha', authorId: 'someone-else' };
+      return null;
+    }),
   };
   return { records, services };
 }
@@ -546,6 +552,68 @@ describe('VT-30: keep as standalone', () => {
   it('is refused for an empty artifact', async () => {
     const { engine } = setup({ type: null, markdown: '', version: 0 });
     await expect(engine.keepStandalone(session, 'creator', { expectedVersion: 0 })).rejects.toMatchObject({ code: 'ACTION_UNAVAILABLE' });
+  });
+});
+
+describe('recordInterview: Start Interview from the new interview page', () => {
+  it('records the interview as the completed start-interview handoff and lists Open', async () => {
+    const { engine, memory, fake } = setup({ type: 'discovery_brief', markdown: DESIGN_MD });
+    const outcome = await engine.recordInterview(session, 'creator', { interviewId: 'interview-new' });
+
+    expect(outcome).toMatchObject({
+      state: 'completed',
+      replayed: false,
+      resultRef: { module: 'interview', id: 'interview-new', link: '/backlog/interview/interview-new' },
+    });
+    expect(memory.rows).toHaveLength(1);
+    expect(memory.rows[0]).toMatchObject({ actionKind: 'start_workflow', targetModule: 'interview', state: 'completed', artifactVersion: 3 });
+    expect(fake.services.createThread).not.toHaveBeenCalled();
+    expect(fake.services.createInterview).not.toHaveBeenCalled();
+
+    const listed = await engine.listActions(session, 'creator');
+    expect(listed.actions.find((action) => action.id === 'start-interview')).toMatchObject({
+      state: 'completed',
+      resultRef: { link: '/backlog/interview/interview-new' },
+    });
+  });
+
+  it('replays the stored link for the same artifact version', async () => {
+    const { engine, memory } = setup({ type: 'technical_design', markdown: DESIGN_MD });
+    const first = await engine.recordInterview(session, 'creator', { interviewId: 'interview-new' });
+    const second = await engine.recordInterview(session, 'creator', { interviewId: 'interview-new' });
+    expect(second).toMatchObject({ handoffId: first.handoffId, replayed: true });
+    expect(memory.rows).toHaveLength(1);
+  });
+
+  it('supersedes an unconfirmed preview from the old modal flow', async () => {
+    const { engine, memory } = setup({ type: 'discovery_brief', markdown: DESIGN_MD });
+    await engine.preview(session, 'creator', { actionId: 'start-interview', expectedVersion: 3 });
+    const outcome = await engine.recordInterview(session, 'creator', { interviewId: 'interview-new' });
+    expect(outcome.state).toBe('completed');
+    expect(memory.rows.map((row) => row.state)).toEqual(['failed', 'completed']);
+  });
+
+  it('refuses a non-creator', async () => {
+    const { engine, memory } = setup({ type: 'discovery_brief', markdown: DESIGN_MD });
+    await expect(engine.recordInterview(session, 'someone-else', { interviewId: 'interview-new' }))
+      .rejects.toMatchObject({ code: 'NOT_CREATOR', status: 403 });
+    expect(memory.rows).toHaveLength(0);
+  });
+
+  it.each(['interview-missing', 'interview-other-project', 'interview-other-author'])(
+    'refuses %s as not found',
+    async (interviewId) => {
+      const { engine, memory } = setup({ type: 'discovery_brief', markdown: DESIGN_MD });
+      await expect(engine.recordInterview(session, 'creator', { interviewId }))
+        .rejects.toMatchObject({ code: 'INTERVIEW_NOT_FOUND', status: 404 });
+      expect(memory.rows).toHaveLength(0);
+    },
+  );
+
+  it('refuses an artifact type that does not start an interview', async () => {
+    const { engine } = setup({ type: 'adr', markdown: ADR_MD });
+    await expect(engine.recordInterview(session, 'creator', { interviewId: 'interview-new' }))
+      .rejects.toMatchObject({ code: 'ACTION_UNAVAILABLE' });
   });
 });
 

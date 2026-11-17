@@ -13,6 +13,8 @@ const mockAddAdrLink = jest.fn();
 const mockAddDesignModuleLink = jest.fn();
 const mockRemoveAdrLink = jest.fn();
 const mockRemoveDesignModuleLink = jest.fn();
+const mockAddBrainstormLink = jest.fn();
+const mockRemoveBrainstormLink = jest.fn();
 
 jest.mock('../services/interviewLinkService', () => ({
   getLinkedContext: (...a: unknown[]) => mockGetLinkedContext(...a),
@@ -22,6 +24,8 @@ jest.mock('../services/interviewLinkService', () => ({
   addDesignModuleLink: (...a: unknown[]) => mockAddDesignModuleLink(...a),
   removeAdrLink: (...a: unknown[]) => mockRemoveAdrLink(...a),
   removeDesignModuleLink: (...a: unknown[]) => mockRemoveDesignModuleLink(...a),
+  addBrainstormLink: (...a: unknown[]) => mockAddBrainstormLink(...a),
+  removeBrainstormLink: (...a: unknown[]) => mockRemoveBrainstormLink(...a),
 }));
 
 jest.mock('../services/interviewService', () => ({
@@ -371,6 +375,66 @@ describe('DELETE link endpoints', () => {
     const res = await request(buildApp()).delete(
       `/api/interviews/${INTERVIEW_ID}/links/design-module/${ADR_ID}`,
     );
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('Brainstorm link endpoints', () => {
+  const BRAINSTORM_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const emptyModel = {
+    interviewId: INTERVIEW_ID,
+    adrLinks: [],
+    designModuleLinks: [],
+    brainstormLinks: [],
+    count: 0,
+    capacity: 10,
+  };
+
+  it('links a brainstorm session', async () => {
+    mockAddBrainstormLink.mockResolvedValue({ linkedContext: { ...emptyModel, count: 1 } });
+    const res = await request(buildApp())
+      .post(`/api/interviews/${INTERVIEW_ID}/links/brainstorm`)
+      .send({ brainstormSessionId: BRAINSTORM_ID });
+    expect(res.status).toBe(200);
+    expect(mockAddBrainstormLink).toHaveBeenCalledWith(
+      INTERVIEW_ID,
+      expect.objectContaining({ userId: 'user-test' }),
+      { brainstormSessionId: BRAINSTORM_ID },
+    );
+    expect(permissionKeys).toEqual(expect.arrayContaining(['interviews:manage']));
+  });
+
+  it('maps a brainstorm the user cannot view to 404', async () => {
+    mockAddBrainstormLink.mockRejectedValue(
+      new InterviewLinkError('ARTIFACT_NOT_FOUND', 'Brainstorm session not found'),
+    );
+    const res = await request(buildApp())
+      .post(`/api/interviews/${INTERVIEW_ID}/links/brainstorm`)
+      .send({ brainstormSessionId: BRAINSTORM_ID });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('ARTIFACT_NOT_FOUND');
+  });
+
+  it('removes a brainstorm link', async () => {
+    mockRemoveBrainstormLink.mockResolvedValue({ linkedContext: emptyModel });
+    const res = await request(buildApp()).delete(
+      `/api/interviews/${INTERVIEW_ID}/links/brainstorm/${BRAINSTORM_ID}`,
+    );
+    expect(res.status).toBe(200);
+    expect(mockRemoveBrainstormLink).toHaveBeenCalledWith(
+      INTERVIEW_ID,
+      expect.objectContaining({ userId: 'user-test' }),
+      BRAINSTORM_ID,
+    );
+  });
+
+  it.each([
+    [`/api/interviews/${INTERVIEW_ID}/link-candidates`, {}],
+    ['/api/interviews/link-candidates', { project: 'Apex' }],
+  ])('accepts type=brainstorm on %s', async (path, query) => {
+    mockListCandidates.mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
+    mockListProjectCandidates.mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
+    const res = await request(buildApp()).get(path).query({ ...query, type: 'brainstorm' });
     expect(res.status).toBe(200);
   });
 });
