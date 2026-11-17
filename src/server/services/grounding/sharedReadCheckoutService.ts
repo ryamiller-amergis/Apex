@@ -382,12 +382,12 @@ export function createSharedReadCheckoutService(
 
   // Eviction may run on another host (repo-read), which cannot see refCounts,
   // so a held tree keeps its last-used sidecar fresher than the idle TTL.
+  // The write is synchronous: an in-flight async write can still look idle to
+  // the other host and lose the tree.
   let retainHeartbeat: NodeJS.Timeout | null = null;
   const touchRetained = (): void => {
     for (const digest of refCounts.keys()) {
-      void fsp
-        .writeFile(lastUsedPath(path.join(sharedRoot, digest)), String(now()), 'utf-8')
-        .catch(() => undefined);
+      touchLastUsed(path.join(sharedRoot, digest));
     }
   };
   const syncRetainHeartbeat = (): void => {
@@ -403,9 +403,7 @@ export function createSharedReadCheckoutService(
   const retain = (identity: SharedReadCheckoutIdentity): void => {
     const digest = identityDigest(identity);
     refCounts.set(digest, (refCounts.get(digest) ?? 0) + 1);
-    void fsp
-      .writeFile(lastUsedPath(resolvePath(identity)), String(now()), 'utf-8')
-      .catch(() => undefined);
+    touchLastUsed(resolvePath(identity));
     syncRetainHeartbeat();
   };
 
