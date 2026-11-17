@@ -89,6 +89,13 @@ import {
 import { AgentComposer } from './agentChat';
 import { ApexLoader } from './ApexLoader';
 import { ArtifactUsageStrip } from './ArtifactUsageStrip';
+import { useBrainstormInterviewSource, useRecordBrainstormInterview } from '../hooks/useBrainstormInterviewHandoff';
+import {
+  brainstormInterviewOpeningPrompt,
+  brainstormInterviewSkillName,
+  brainstormInterviewTitle,
+} from '../utils/brainstormInterviewPrefill';
+import { skillNameFromPath } from '../../shared/skillPaths';
 import styles from './InterviewChatView.module.css';
 
 function badgeClass(status: InterviewStatus): string {
@@ -376,7 +383,9 @@ function buildLinkedContextFailureSummary(
     const fallbackLabel =
       selection.type === 'adr'
         ? `ADR ${selection.id}`
-        : `Design Module ${selection.id}`;
+        : selection.type === 'brainstorm'
+          ? `Brainstorm ${selection.id}`
+          : `Design Module ${selection.id}`;
     return `${staged?.label ?? fallbackLabel}: ${error}`;
   });
   return `Some linked context could not be saved. ${details.join(' ')} The Interview was created and other valid links were saved. Open Linked Context to retry.`;
@@ -386,6 +395,7 @@ const NewInterviewCompose: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const featureRequest = (location.state as NewInterviewLocationState | null)?.featureRequest;
+  const brainstormSessionId = new URLSearchParams(location.search).get('brainstormSessionId')?.trim() || null;
   const { selectedProject, selectedSkillSettingsId, can } = useAppShell();
   const [input, setInput] = useState(() => buildFeatureRequestInterviewPrefillText(featureRequest));
   const [title, setTitle] = useState(() => featureRequest?.title ?? '');
@@ -407,6 +417,8 @@ const NewInterviewCompose: React.FC = () => {
   const prevEffectiveDefaultRef = useRef<string>(DEFAULT_MODEL_ID);
   const featureRequestIdRef = useRef(featureRequest?.id);
   const linkedAdrSeedDoneRef = useRef(false);
+  const brainstormPrefillDoneRef = useRef(false);
+  const brainstormSkillDoneRef = useRef(false);
 
   const [selectedSkillOption, setSelectedSkillOption] = useState<InterviewSkillOption | null>(null);
 
@@ -418,6 +430,8 @@ const NewInterviewCompose: React.FC = () => {
   useAvailableModelSelection(model, setModel, availableModels);
 
   const interviewSkillOptions = skillConfig?.interviewSkillOptions ?? [];
+  const brainstormSource = useBrainstormInterviewSource(selectedProject, brainstormSessionId);
+  const brainstormSkillName = brainstormInterviewSkillName(brainstormSource.data?.artifactType ?? null);
 
   useEffect(() => {
     if (interviewSkillOptions.length === 1) {
@@ -426,6 +440,27 @@ const NewInterviewCompose: React.FC = () => {
       setSelectedSkillOption(interviewSkillOptions[0]);
     }
   }, [interviewSkillOptions.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (brainstormSkillDoneRef.current || !brainstormSkillName || interviewSkillOptions.length === 0) return;
+    brainstormSkillDoneRef.current = true;
+    const option = interviewSkillOptions.find((candidate) => skillNameFromPath(candidate.path) === brainstormSkillName);
+    if (option) setSelectedSkillOption(option);
+  }, [brainstormSkillName, interviewSkillOptions]);
+
+  useEffect(() => {
+    const data = brainstormSource.data;
+    if (brainstormPrefillDoneRef.current || !data || data.sessionId !== brainstormSessionId) return;
+    brainstormPrefillDoneRef.current = true;
+    const prefillTitle = brainstormInterviewTitle(data.markdown, data.sessionTitle);
+    setTitle((current) => current.trim() ? current : prefillTitle);
+    setInput((current) => current.trim() ? current : brainstormInterviewOpeningPrompt(prefillTitle));
+    setStagedLinkedContext((current) =>
+      current.some((selection) => selection.type === 'brainstorm' && selection.id === data.sessionId)
+        ? current
+        : [...current, { type: 'brainstorm', id: data.sessionId, label: prefillTitle }],
+    );
+  }, [brainstormSource.data, brainstormSessionId]);
 
   // Resolve repo + branch: admin config takes priority, then heuristic fallback
   const resolvedRepoName = skillConfig?.skillRepo
@@ -443,9 +478,13 @@ const NewInterviewCompose: React.FC = () => {
     skillConfig?.skillProvider,
   );
 
+  const brainstormSkill = brainstormSkillName && interviewSkillOptions.length === 0
+    ? skills.find((s) => s.name === brainstormSkillName)
+    : undefined;
+
   const resolvedSkillPath = interviewSkillOptions.length > 0
     ? selectedSkillOption?.path
-    : (skillConfig?.interviewSkillPath ?? undefined);
+    : (brainstormSkill?.path ?? skillConfig?.interviewSkillPath ?? undefined);
 
   const grillSkill = resolvedSkillPath
     ? skills.find((s) => s.path === resolvedSkillPath)
@@ -473,6 +512,10 @@ const NewInterviewCompose: React.FC = () => {
   const createInterview = useCreateInterview();
   const persistStagedLinks = usePersistStagedLinks(selectedProject);
   const { mutateAsync: linkFeatureRequestInterview } = useLinkFeatureRequestInterview();
+  const { mutateAsync: recordBrainstormInterview } = useRecordBrainstormInterview(selectedProject, brainstormSessionId);
+  const stagedBrainstorm = brainstormSessionId
+    ? stagedLinkedContext.find((selection) => selection.type === 'brainstorm' && selection.id === brainstormSessionId)
+    : undefined;
 
   useEffect(() => {
     if (linkedAdrSeedDoneRef.current) return;
@@ -615,6 +658,19 @@ const NewInterviewCompose: React.FC = () => {
         project: selectedProject,
         repo: resolvedRepoName,
       });
+      if (brainstormSessionId) {
+        try {
+          await recordBrainstormInterview({ interviewId: result.interviewId });
+        } catch (recordError: unknown) {
+          const error = recordError instanceof Error ? recordError : new Error(String(recordError));
+          console.error('[InterviewChatView] Failed to record the interview on the brainstorm session:', error);
+          trackException(error, {
+            context: 'interview.record-brainstorm-handoff',
+            brainstormSessionId,
+            interviewId: result.interviewId,
+          });
+        }
+      }
       if (featureRequestIdRef.current) {
         try {
           await linkFeatureRequestInterview({
@@ -661,7 +717,7 @@ const NewInterviewCompose: React.FC = () => {
       setSendError(msg);
       setIsSending(false);
     }
-  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, persistStagedLinks, stagedLinkedContext, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled, repoReadiness.isReady, repoReadiness.message]);
+  }, [input, title, attachments, resolvedRepoName, resolvedBranch, selectedProject, resolvedSkillPath, grillSkill, startChat, createInterview, persistStagedLinks, stagedLinkedContext, brainstormSessionId, recordBrainstormInterview, linkFeatureRequestInterview, navigate, clearAttachments, model, skillConfig, prototypeStageEnabled, testCasesEnabled, repoReadiness.isReady, repoReadiness.message]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -869,6 +925,27 @@ const NewInterviewCompose: React.FC = () => {
                   >×</button>
                 </span>
               ))}
+            </div>
+          )}
+          {stagedBrainstorm && (
+            <div className={styles.attachmentList}>
+              <span className={styles.attachmentChip} {...{ 'data-testid': 'interview-compose-brainstorm-chip' }}>
+                <span className={styles.attachmentSize}>Brainstorm</span>
+                <span className={styles.attachmentName}>{stagedBrainstorm.label}</span>
+                <button
+                  type="button"
+                  className={styles.attachmentRemove}
+                  onClick={() => setStagedLinkedContext((current) => current.filter((selection) => selection !== stagedBrainstorm))}
+                  disabled={isSending}
+                  aria-label={`Remove linked brainstorm ${stagedBrainstorm.label}`}
+                  {...{ 'data-testid': 'interview-compose-brainstorm-chip-remove' }}
+                >×</button>
+              </span>
+            </div>
+          )}
+          {brainstormSessionId && brainstormSource.isError && (
+            <div className={styles.attachmentError} role="alert" {...{ 'data-testid': 'interview-compose-brainstorm-error' }}>
+              We could not load the brainstorm. You can still start the interview without it.
             </div>
           )}
           {attachmentError && <div className={styles.attachmentError}>{attachmentError}</div>}
