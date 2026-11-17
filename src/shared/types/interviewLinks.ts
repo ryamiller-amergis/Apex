@@ -3,6 +3,8 @@
  * Consumed by the Interview Link Service, typed API, and FEAT-002 picker.
  */
 
+import type { BrainstormArtifactType } from './brainstormArtifact';
+
 /** Workspace-relative path for the live linked-context grounding document (FEAT-003). */
 export const LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH = '.ai-pilot/linked-context.md' as const;
 
@@ -12,7 +14,7 @@ export const LINK_CANDIDATE_DEFAULT_PAGE_SIZE = 50 as const;
 
 export type AdrStaleReason = 'no_longer_accepted';
 
-export type LinkCandidateType = 'adr' | 'design-module';
+export type LinkCandidateType = 'adr' | 'design-module' | 'brainstorm';
 
 export interface LinkedAdr {
   adrId: string;
@@ -30,10 +32,20 @@ export interface LinkedDesignModule {
   linkedAt: string;
 }
 
+/** A Brainstorm session whose latest artifact grounds the Interview. */
+export interface LinkedBrainstorm {
+  brainstormSessionId: string;
+  title: string;
+  artifactType: BrainstormArtifactType | null;
+  linkedBy: string;
+  linkedAt: string;
+}
+
 export interface LinkedContextReadModel {
   interviewId: string;
   adrLinks: LinkedAdr[];
   designModuleLinks: LinkedDesignModule[];
+  brainstormLinks?: LinkedBrainstorm[];
   count: number;
   capacity: typeof LINKED_CONTEXT_CAPACITY;
 }
@@ -52,7 +64,13 @@ export interface DesignModuleLinkCandidate {
   name: string;
 }
 
-export type LinkCandidate = AdrLinkCandidate | DesignModuleLinkCandidate;
+export interface BrainstormLinkCandidate {
+  type: 'brainstorm';
+  id: string;
+  title: string;
+}
+
+export type LinkCandidate = AdrLinkCandidate | DesignModuleLinkCandidate | BrainstormLinkCandidate;
 
 export interface PaginatedCandidates<T = LinkCandidate> {
   items: T[];
@@ -67,6 +85,10 @@ export interface AddAdrLinkRequest {
 
 export interface AddDesignModuleLinkRequest {
   designModuleId: string;
+}
+
+export interface AddBrainstormLinkRequest {
+  brainstormSessionId: string;
 }
 
 export interface LinkMutationResult {

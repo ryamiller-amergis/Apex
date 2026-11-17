@@ -1,6 +1,7 @@
 /**
- * Linked Context Materializer (FEAT-003) — resolves live Interview ADR / Design Module
- * links into one deterministic workspace Markdown document immediately before an agent turn.
+ * Linked Context Materializer (FEAT-003) — resolves live Interview ADR / Design Module /
+ * Brainstorm links into one deterministic workspace Markdown document immediately before
+ * an agent turn.
  *
  * Failure policy (confirmed): fail-open — omit any stale document, emit diagnostics, and
  * let the turn proceed on repository grounding.
@@ -10,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { chatThreads, designDocs, interviews, prds } from '../db/schema';
+import { brainstormArtifacts, chatThreads, designDocs, interviews, prds } from '../db/schema';
 import { getAdr } from './adrService';
 import { getModuleById } from './designModuleService';
 import {
@@ -21,6 +22,7 @@ import { trackEvent } from './telemetry';
 import { keepsThreadFolder } from './threadFolder';
 import { LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH } from '../../shared/types/interviewLinks';
 import type { RunRef } from '../../shared/types/runGrounding';
+import type { BrainstormArtifactType } from '../../shared/types/brainstormArtifact';
 
 export { LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH };
 
@@ -68,11 +70,22 @@ export interface RenderDesignModuleSection {
   sourceGlobs: string[];
 }
 
+export interface RenderBrainstormSection {
+  /** Brainstorm session id. */
+  id: string;
+  title: string;
+  artifactType: BrainstormArtifactType | null;
+  version: number;
+  markdown: string;
+}
+
 export interface RenderLinkedContextInput {
   interviewId: string;
   materializedAt: string;
   adrs: RenderAdrSection[];
   designModules: RenderDesignModuleSection[];
+  /** Rendered only when non-empty, so ADR/module-only documents stay unchanged. */
+  brainstorms?: RenderBrainstormSection[];
 }
 
 function resolveDocumentPath(workspaceDir: string): string {
@@ -89,6 +102,7 @@ function compareById(a: { id: string }, b: { id: string }): number {
 export function renderLinkedContextDocument(input: RenderLinkedContextInput): string {
   const adrs = [...input.adrs].sort(compareById);
   const modules = [...input.designModules].sort(compareById);
+  const brainstorms = [...(input.brainstorms ?? [])].sort(compareById);
 
   const lines: string[] = [
     '# Linked Interview Grounding Context',
@@ -98,6 +112,7 @@ export function renderLinkedContextDocument(input: RenderLinkedContextInput): st
     `Materialized-At: ${input.materializedAt}`,
     `Accepted-Adr-Count: ${adrs.length}`,
     `Design-Module-Count: ${modules.length}`,
+    ...(brainstorms.length > 0 ? [`Brainstorm-Count: ${brainstorms.length}`] : []),
     '',
     '## Linked ADRs (accepted)',
     '',
@@ -129,6 +144,20 @@ export function renderLinkedContextDocument(input: RenderLinkedContextInput): st
         lines.push('');
       }
       lines.push('**Generated documentation:**', '', mod.documentation?.trim() || '_None._', '');
+    }
+  }
+
+  if (brainstorms.length > 0) {
+    lines.push('## Linked Brainstorm Artifacts', '');
+    for (const brainstorm of brainstorms) {
+      lines.push(
+        `### ${brainstorm.title} (\`${brainstorm.id}\`)`,
+        '',
+        `Artifact type: ${brainstorm.artifactType ?? 'untyped'} · version ${brainstorm.version}`,
+        '',
+        brainstorm.markdown.trim(),
+        '',
+      );
     }
   }
 
@@ -225,7 +254,12 @@ export async function materializeLinkedContextForInterviewThread(
 interface ResolvedLinkedContextSections {
   adrs: RenderAdrSection[];
   designModules: RenderDesignModuleSection[];
+  brainstorms: RenderBrainstormSection[];
   staleAdrExcluded: number;
+}
+
+function hasSections(sections: Pick<ResolvedLinkedContextSections, 'adrs' | 'designModules' | 'brainstorms'>): boolean {
+  return sections.adrs.length > 0 || sections.designModules.length > 0 || sections.brainstorms.length > 0;
 }
 
 async function resolveLinkedContextSections(
@@ -265,9 +299,26 @@ async function resolveLinkedContextSections(
     });
   }
 
+  const brainstorms: RenderBrainstormSection[] = [];
+  for (const link of readModel.brainstormLinks ?? []) {
+    const artifact = await db.query.brainstormArtifacts.findFirst({
+      where: eq(brainstormArtifacts.sessionId, link.brainstormSessionId),
+      columns: { artifactType: true, markdown: true, version: true },
+    });
+    if (!artifact?.markdown.trim()) continue;
+    brainstorms.push({
+      id: link.brainstormSessionId,
+      title: link.title,
+      artifactType: artifact.artifactType ?? null,
+      version: artifact.version,
+      markdown: artifact.markdown,
+    });
+  }
+
   return {
     adrs,
     designModules,
+    brainstorms,
     // Recount stale when live status drifted past the read-model flag.
     staleAdrExcluded: staleAdrExcluded + (acceptedAdrLinks.length - adrs.length),
   };
@@ -293,9 +344,9 @@ export async function renderLinkedContextForInterviewThread(options: {
   const started = Date.now();
   const interviewId = interviewRow.id;
   try {
-    const { adrs, designModules, staleAdrExcluded } =
-      await resolveLinkedContextSections(interviewId, { userId: options.userId });
-    const included = adrs.length > 0 || designModules.length > 0;
+    const sections = await resolveLinkedContextSections(interviewId, { userId: options.userId });
+    const { adrs, designModules, brainstorms, staleAdrExcluded } = sections;
+    const included = hasSections(sections);
     emitTelemetry(
       interviewId,
       {
@@ -313,6 +364,7 @@ export async function renderLinkedContextForInterviewThread(options: {
       materializedAt: (options.now ?? (() => new Date()))().toISOString(),
       adrs,
       designModules,
+      brainstorms,
     });
   } catch (err) {
     const errorName = err instanceof Error ? err.name : 'Error';
@@ -346,10 +398,10 @@ export async function materializeLinkedContext(
   const now = options.now ?? (() => new Date());
 
   try {
-    const { adrs, designModules, staleAdrExcluded: liveStaleExcluded } =
-      await resolveLinkedContextSections(interviewId, options.actor);
+    const sections = await resolveLinkedContextSections(interviewId, options.actor);
+    const { adrs, designModules, brainstorms, staleAdrExcluded: liveStaleExcluded } = sections;
 
-    if (adrs.length === 0 && designModules.length === 0) {
+    if (!hasSections(sections)) {
       ensureNoDocument(documentPath);
       const result: MaterializeResult = {
         outcome: 'omitted',
@@ -367,6 +419,7 @@ export async function materializeLinkedContext(
       materializedAt: now().toISOString(),
       adrs,
       designModules,
+      brainstorms,
     });
 
     atomicWriteDocument(documentPath, markdown);

@@ -43,6 +43,18 @@ jest.mock('../../hooks/useFeatureRequests', () => ({
   }),
 }));
 
+const mockUseBrainstormInterviewSource = jest.fn((..._args: unknown[]) => ({
+  data: undefined as unknown,
+  isLoading: false,
+  isError: false,
+}));
+const mockRecordBrainstormInterview = jest.fn();
+
+jest.mock('../../hooks/useBrainstormInterviewHandoff', () => ({
+  useBrainstormInterviewSource: (...args: unknown[]) => mockUseBrainstormInterviewSource(...args),
+  useRecordBrainstormInterview: () => ({ mutateAsync: mockRecordBrainstormInterview }),
+}));
+
 jest.mock('../../hooks/useLinkedContext', () => ({
   usePersistStagedLinks: () => ({
     mutateAsync: mockPersistStagedLinksMutateAsync,
@@ -821,5 +833,148 @@ describe('NewInterviewCompose — no interview skill configured', () => {
   it('does not show the skill hint paragraph', () => {
     renderCompose();
     expect(screen.queryByText(/skill will guide this structured interview/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── NewInterviewCompose — started from a Brainstorm session ───────────────────
+
+describe('NewInterviewCompose — Start Interview from Brainstorm', () => {
+  let startChatMutateAsync: jest.Mock;
+  let createInterviewMutateAsync: jest.Mock;
+
+  function source(artifactType: 'technical_design' | 'discovery_brief') {
+    return {
+      sessionId: 's-1',
+      sessionTitle: 'queue chat',
+      artifactType,
+      markdown: '# Queue design\n\nWorkers poll.',
+      version: 3,
+    };
+  }
+
+  function renderBrainstormCompose() {
+    return render(
+      <MemoryRouter initialEntries={['/backlog/interview/new?brainstormSessionId=s-1']}>
+        <InterviewChatView />
+      </MemoryRouter>,
+    );
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (useProjectSkillConfig as jest.Mock).mockReturnValue({ data: null });
+    (useSkillList as jest.Mock).mockReturnValue({
+      data: [
+        { id: 'skill-1', name: 'grill-with-docs', path: '.cursor/skills/grill-with-docs/SKILL.md' },
+        { id: 'skill-2', name: 'grill-design', path: '.cursor/skills/grill-design/SKILL.md' },
+      ],
+    });
+    startChatMutateAsync = jest.fn().mockResolvedValue({ threadId: 'thread-abc' });
+    (useStartChat as jest.Mock).mockReturnValue({ mutateAsync: startChatMutateAsync, isPending: false });
+    createInterviewMutateAsync = jest.fn().mockResolvedValue({ interviewId: 'iv-1' });
+    (useCreateInterview as jest.Mock).mockReturnValue({ mutateAsync: createInterviewMutateAsync, isPending: false });
+    mockPersistStagedLinksMutateAsync.mockResolvedValue({ linkedContext: undefined, failures: [] });
+    mockRecordBrainstormInterview.mockResolvedValue({ handoffId: 'h-1', state: 'completed' });
+    mockUseBrainstormInterviewSource.mockReturnValue({
+      data: source('technical_design'),
+      isLoading: false,
+      isError: false,
+    });
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ok: true }) }) as jest.Mock;
+    MockSectionOwnerModal.mockImplementation(({ onConfirm }: { onConfirm: (s: Record<string, unknown>) => void }) => {
+      useEffect(() => { onConfirm({}); }, [onConfirm]);
+      return null;
+    });
+  });
+
+  it('loads the session named in the query string for the selected project', () => {
+    renderBrainstormCompose();
+    expect(mockUseBrainstormInterviewSource).toHaveBeenCalledWith('MaxView', 's-1');
+  });
+
+  it('does not load a brainstorm without the query parameter', () => {
+    renderCompose();
+    expect(mockUseBrainstormInterviewSource).toHaveBeenCalledWith('MaxView', null);
+    expect(screen.queryByTestId('interview-compose-brainstorm-chip')).not.toBeInTheDocument();
+  });
+
+  it('prefills the title and opening prompt, and stages the brainstorm as linked context', async () => {
+    renderBrainstormCompose();
+
+    await waitFor(() => expect(screen.getByLabelText(/title/i)).toHaveValue('Queue design'));
+    expect(
+      (screen.getByPlaceholderText(/describe what you'd like/i) as HTMLTextAreaElement).value,
+    ).toContain('"Queue design"');
+    expect(screen.getByTestId('interview-compose-brainstorm-chip')).toHaveTextContent('Queue design');
+    expect(screen.getByTestId('interview-compose-linked-context-count')).toHaveTextContent('1');
+  });
+
+  it('keeps the prefilled fields editable', async () => {
+    renderBrainstormCompose();
+    await waitFor(() => expect(screen.getByLabelText(/title/i)).toHaveValue('Queue design'));
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'My own title' } });
+    expect(screen.getByLabelText(/title/i)).toHaveValue('My own title');
+  });
+
+  it('uses grill-design for a technical design and records the interview on the session', async () => {
+    renderBrainstormCompose();
+    await waitFor(() => expect(screen.getByLabelText(/title/i)).toHaveValue('Queue design'));
+
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => expect(mockRecordBrainstormInterview).toHaveBeenCalledWith({ interviewId: 'iv-1' }));
+    expect(startChatMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      kickoff: expect.objectContaining({ skillPath: '.cursor/skills/grill-design/SKILL.md' }),
+    }));
+    expect(mockPersistStagedLinksMutateAsync).toHaveBeenCalledWith({
+      interviewId: 'iv-1',
+      selections: [{ type: 'brainstorm', id: 's-1' }],
+    });
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/backlog/interview/iv-1'));
+  });
+
+  it('uses the project default interview skill for a discovery brief', async () => {
+    mockUseBrainstormInterviewSource.mockReturnValue({
+      data: source('discovery_brief'),
+      isLoading: false,
+      isError: false,
+    });
+    renderBrainstormCompose();
+    await waitFor(() => expect(screen.getByLabelText(/title/i)).toHaveValue('Queue design'));
+
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => expect(startChatMutateAsync).toHaveBeenCalled());
+    expect(startChatMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      kickoff: expect.objectContaining({ skillPath: '.cursor/skills/grill-with-docs/SKILL.md' }),
+    }));
+  });
+
+  it('still posts the first message when recording the link on the session fails', async () => {
+    mockRecordBrainstormInterview.mockRejectedValueOnce(new Error('record failed'));
+    renderBrainstormCompose();
+    await waitFor(() => expect(screen.getByLabelText(/title/i)).toHaveValue('Queue design'));
+
+    fireEvent.click(screen.getByLabelText('Start interview'));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/chat/threads/thread-abc/messages', expect.any(Object));
+    });
+  });
+
+  it('removing the brainstorm chip drops it from the staged links', async () => {
+    renderBrainstormCompose();
+    await waitFor(() => expect(screen.getByTestId('interview-compose-brainstorm-chip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('interview-compose-brainstorm-chip-remove'));
+
+    expect(screen.queryByTestId('interview-compose-brainstorm-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('interview-compose-linked-context-count')).not.toBeInTheDocument();
+  });
+
+  it('explains when the brainstorm cannot be loaded', () => {
+    mockUseBrainstormInterviewSource.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    renderBrainstormCompose();
+    expect(screen.getByTestId('interview-compose-brainstorm-error')).toHaveTextContent(/could not load the brainstorm/i);
   });
 });

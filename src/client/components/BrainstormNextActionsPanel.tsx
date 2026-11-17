@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { BrainstormActionDto, BrainstormActionId, BrainstormArtifactDto } from '../../shared/types/brainstormArtifact';
 import { BrainstormApiError } from '../hooks/useBrainstormSessions';
 import { useBrainstormActions, useKeepStandalone } from '../hooks/useBrainstormActions';
@@ -28,6 +28,11 @@ const STATE_TEXT: Record<BrainstormActionDto['state'], string> = {
   completed: 'Done',
 };
 
+const AVAILABLE_TEXT: Partial<Record<BrainstormActionId, string>> = {
+  'keep-standalone': 'Keep',
+  'start-interview': 'Start',
+};
+
 export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProps> = ({
   project,
   sessionId,
@@ -37,6 +42,7 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
 }) => {
   const actions = useBrainstormActions(project, sessionId);
   const keep = useKeepStandalone(project, sessionId);
+  const navigate = useNavigate();
   const [open, setOpen] = useState<BrainstormActionDto | null>(null);
   const [keepError, setKeepError] = useState<string | null>(null);
   const hasContent = artifact.version > 0 && artifact.markdown.trim().length > 0;
@@ -55,6 +61,10 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
           ),
         },
       );
+      return;
+    }
+    if (action.id === 'start-interview') {
+      navigate(`/backlog/interview/new?brainstormSessionId=${encodeURIComponent(sessionId)}`);
       return;
     }
     setOpen(action);
@@ -157,7 +167,7 @@ export const BrainstormNextActionsPanel: React.FC<BrainstormNextActionsPanelProp
                   onClick={() => start(action)}
                   {...{ 'data-testid': `brainstorm-action-start-${action.id}` }}
                 >
-                  {action.state === 'available' ? (action.id === 'keep-standalone' ? 'Keep' : 'Preview') : STATE_TEXT[action.state]}
+                  {action.state === 'available' ? AVAILABLE_TEXT[action.id] ?? 'Preview' : STATE_TEXT[action.state]}
                 </button>
               )}
             </li>

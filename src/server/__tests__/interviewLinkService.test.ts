@@ -20,7 +20,15 @@ const mockDelete = jest.fn();
 const mockExecute = jest.fn();
 const mockTransaction = jest.fn();
 const mockReferenceLinksFindMany = jest.fn();
+const mockBrainstormLinksFindMany = jest.fn();
 const mockListCatalog = jest.fn();
+const mockIsBrainstormEnabled = jest.fn();
+const mockLoadBrainstormViewer = jest.fn();
+
+jest.mock('../services/brainstormThread', () => ({
+  isBrainstormEnabled: (...a: unknown[]) => mockIsBrainstormEnabled(...a),
+  loadBrainstormViewer: (...a: unknown[]) => mockLoadBrainstormViewer(...a),
+}));
 
 jest.mock('../services/brainstormRepositoryCatalog', () => ({
   ...jest.requireActual('../services/brainstormRepositoryCatalog'),
@@ -36,6 +44,7 @@ jest.mock('../db/drizzle', () => ({
       interviewAdrLinks: { findMany: (...a: unknown[]) => mockAdrLinksFindMany(...a) },
       interviewDesignModuleLinks: { findMany: (...a: unknown[]) => mockModuleLinksFindMany(...a) },
       interviewReferenceRepositories: { findMany: (...a: unknown[]) => mockReferenceLinksFindMany(...a) },
+      interviewBrainstormLinks: { findMany: (...a: unknown[]) => mockBrainstormLinksFindMany(...a) },
     },
     select: (...a: unknown[]) => mockSelect(...a),
     insert: (...a: unknown[]) => mockInsert(...a),
@@ -47,11 +56,14 @@ jest.mock('../db/drizzle', () => ({
 
 import {
   addAdrLink,
+  addBrainstormLink,
   addDesignModuleLink,
   addReferenceRepositoryLink,
   getLinkedContext,
+  listCandidates,
   loadInterviewReferenceSources,
   removeAdrLink,
+  removeBrainstormLink,
 } from '../services/interviewLinkService';
 import {
   InterviewLinkError,
@@ -63,6 +75,7 @@ const ACTOR = { userId: 'user-ba', isSuperAdmin: true };
 const INTERVIEW_ID = '11111111-1111-1111-1111-111111111111';
 const ADR_ID = '22222222-2222-2222-2222-222222222222';
 const MODULE_ID = '33333333-3333-3333-3333-333333333333';
+const BRAINSTORM_ID = '66666666-6666-4666-8666-666666666666';
 
 function countChain(value: number) {
   return {
@@ -76,8 +89,10 @@ function setupTransaction(opts: {
   interview?: { id: string; project: string; status: string } | null;
   adr?: { id: string; project: string; status: string } | null;
   designModule?: { id: string; project: string; label: string } | null;
+  brainstormSession?: { id: string; project: string; creatorId: string; state: string } | null;
   adrCount?: number;
   moduleCount?: number;
+  brainstormCount?: number;
   insertError?: unknown;
   deleteReturning?: { id: string }[];
 }) {
@@ -103,10 +118,18 @@ function setupTransaction(opts: {
               : opts.designModule,
           ),
         },
+        brainstormSessions: {
+          findFirst: jest.fn().mockResolvedValue(
+            opts.brainstormSession === undefined
+              ? { id: BRAINSTORM_ID, project: 'Apex', creatorId: 'user-po', state: 'active' }
+              : opts.brainstormSession,
+          ),
+        },
       },
       select: jest.fn()
         .mockImplementationOnce(() => countChain(opts.adrCount ?? 0))
-        .mockImplementation(() => countChain(opts.moduleCount ?? 0)),
+        .mockImplementationOnce(() => countChain(opts.moduleCount ?? 0))
+        .mockImplementation(() => countChain(opts.brainstormCount ?? 0)),
       insert: jest.fn().mockReturnValue({
         values: jest.fn().mockImplementation(async () => {
           if (opts.insertError) throw opts.insertError;
@@ -128,6 +151,14 @@ beforeEach(() => {
   mockGetAssignmentsForUser.mockResolvedValue(['Apex']);
   mockAdrLinksFindMany.mockResolvedValue([]);
   mockModuleLinksFindMany.mockResolvedValue([]);
+  mockBrainstormLinksFindMany.mockResolvedValue([]);
+  mockIsBrainstormEnabled.mockResolvedValue(true);
+  mockLoadBrainstormViewer.mockResolvedValue({
+    id: 'user-ba',
+    isSuperAdmin: false,
+    isProjectMember: true,
+    permissions: new Set(['brainstorm:view']),
+  });
 });
 
 describe('interviewLinkService — getLinkedContext (PBI-002 / VT-07)', () => {
@@ -314,13 +345,175 @@ describe('interviewLinkService — mutations (PBI-001)', () => {
       tx.select = jest.fn().mockImplementation(() => {
         if (executeCalled) selectAfterLock = true;
         calls += 1;
-        return countChain(calls === 1 ? 5 : 4); // 9 total — under cap, insert OK
+        return countChain(calls === 1 ? 5 : calls === 2 ? 4 : 0); // 9 total — under cap, insert OK
       });
       return fn(tx);
     });
 
     await addAdrLink(INTERVIEW_ID, ACTOR, { adrId: ADR_ID });
     expect(selectAfterLock).toBe(true);
+  });
+});
+
+describe('interviewLinkService — brainstorm links', () => {
+  function chain(result: unknown) {
+    const node: Record<string, unknown> = {};
+    for (const method of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy', 'limit', 'offset']) {
+      node[method] = () => node;
+    }
+    node.then = (resolve: (value: unknown) => unknown, reject?: (err: unknown) => unknown) =>
+      Promise.resolve(result).then(resolve, reject);
+    return node;
+  }
+
+  it('includes brainstorm links in the read model, titled by the artifact, sharing the count', async () => {
+    mockInterviewFindFirst.mockResolvedValue({ id: INTERVIEW_ID, project: 'Apex', status: 'in_progress' });
+    mockAdrLinksFindMany.mockResolvedValue([
+      {
+        adrId: ADR_ID,
+        linkedBy: 'user-ba',
+        linkedAt: '2026-08-01T00:00:00.000Z',
+        adr: { title: 'Async Infra', status: 'accepted' },
+      },
+    ]);
+    mockBrainstormLinksFindMany.mockResolvedValue([
+      {
+        brainstormSessionId: BRAINSTORM_ID,
+        linkedBy: 'user-ba',
+        linkedAt: '2026-11-17T00:00:00.000Z',
+        brainstormSession: {
+          title: 'help me think about queues',
+          artifacts: [{ artifactType: 'technical_design', markdown: '# Queue design\n\nWorkers poll.' }],
+        },
+      },
+    ]);
+
+    const model = await getLinkedContext(INTERVIEW_ID, ACTOR);
+
+    expect(model.brainstormLinks).toEqual([
+      {
+        brainstormSessionId: BRAINSTORM_ID,
+        title: 'Queue design',
+        artifactType: 'technical_design',
+        linkedBy: 'user-ba',
+        linkedAt: '2026-11-17T00:00:00.000Z',
+      },
+    ]);
+    expect(model.count).toBe(2);
+  });
+
+  it('falls back to the session title when the artifact has no heading', async () => {
+    mockInterviewFindFirst.mockResolvedValue({ id: INTERVIEW_ID, project: 'Apex', status: 'in_progress' });
+    mockBrainstormLinksFindMany.mockResolvedValue([
+      {
+        brainstormSessionId: BRAINSTORM_ID,
+        linkedBy: 'user-ba',
+        linkedAt: '2026-11-17T00:00:00.000Z',
+        brainstormSession: { title: 'Queue chat', artifacts: [] },
+      },
+    ]);
+    const model = await getLinkedContext(INTERVIEW_ID, ACTOR);
+    expect(model.brainstormLinks?.[0]).toMatchObject({ title: 'Queue chat', artifactType: null });
+  });
+
+  it('links a same-project brainstorm the user can view', async () => {
+    setupTransaction({});
+    const result = await addBrainstormLink(INTERVIEW_ID, ACTOR, { brainstormSessionId: BRAINSTORM_ID });
+    expect(result.linkedContext.interviewId).toBe(INTERVIEW_ID);
+    expect(mockLoadBrainstormViewer).toHaveBeenCalledWith('user-ba', 'Apex', { isSuperAdmin: true });
+    expect(mockIsBrainstormEnabled).toHaveBeenCalledWith('user-ba', 'Apex');
+  });
+
+  it('rejects a brainstorm from another project', async () => {
+    setupTransaction({
+      brainstormSession: { id: BRAINSTORM_ID, project: 'OtherProj', creatorId: 'user-po', state: 'active' },
+    });
+    await expect(
+      addBrainstormLink(INTERVIEW_ID, ACTOR, { brainstormSessionId: BRAINSTORM_ID }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_CROSS_PROJECT' });
+  });
+
+  it.each([
+    ['the brainstorm flag is off', () => mockIsBrainstormEnabled.mockResolvedValue(false)],
+    ['the user lacks brainstorm:view', () => mockLoadBrainstormViewer.mockResolvedValue({
+      id: 'user-ba', isSuperAdmin: false, isProjectMember: true, permissions: new Set<string>(),
+    })],
+    ['the user is not a project member', () => mockLoadBrainstormViewer.mockResolvedValue({
+      id: 'user-ba', isSuperAdmin: false, isProjectMember: false, permissions: new Set(['brainstorm:view']),
+    })],
+  ])('reports the brainstorm as not found when %s', async (_label, arrange) => {
+    arrange();
+    setupTransaction({});
+    await expect(
+      addBrainstormLink(INTERVIEW_ID, ACTOR, { brainstormSessionId: BRAINSTORM_ID }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' });
+  });
+
+  it('rejects a malformed brainstorm id before touching the database', async () => {
+    await expect(
+      addBrainstormLink(INTERVIEW_ID, ACTOR, { brainstormSessionId: 'not-a-uuid' }),
+    ).rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' });
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('shares the capacity of 10 with ADRs and Design Modules', async () => {
+    setupTransaction({ adrCount: 5, moduleCount: 3, brainstormCount: 2 });
+    await expect(
+      addBrainstormLink(INTERVIEW_ID, ACTOR, { brainstormSessionId: BRAINSTORM_ID }),
+    ).rejects.toMatchObject({ code: 'LINK_CAP_EXCEEDED' });
+  });
+
+  it('counts brainstorm links against the cap when adding an ADR', async () => {
+    setupTransaction({ adrCount: 4, moduleCount: 4, brainstormCount: 2 });
+    await expect(
+      addAdrLink(INTERVIEW_ID, ACTOR, { adrId: ADR_ID }),
+    ).rejects.toMatchObject({ code: 'LINK_CAP_EXCEEDED' });
+  });
+
+  it('maps a duplicate brainstorm link to LINK_DUPLICATE', async () => {
+    setupTransaction({ insertError: { code: '23505' } });
+    await expect(
+      addBrainstormLink(INTERVIEW_ID, ACTOR, { brainstormSessionId: BRAINSTORM_ID }),
+    ).rejects.toMatchObject({ code: 'LINK_DUPLICATE' });
+  });
+
+  it('removes a brainstorm link', async () => {
+    setupTransaction({});
+    const result = await removeBrainstormLink(INTERVIEW_ID, ACTOR, BRAINSTORM_ID);
+    expect(result.linkedContext.interviewId).toBe(INTERVIEW_ID);
+  });
+
+  it('reports a missing brainstorm link on remove', async () => {
+    setupTransaction({ deleteReturning: [] });
+    await expect(removeBrainstormLink(INTERVIEW_ID, ACTOR, BRAINSTORM_ID))
+      .rejects.toMatchObject({ code: 'ARTIFACT_NOT_FOUND' });
+  });
+
+  it('lists brainstorm candidates with content in the interview project', async () => {
+    mockInterviewFindFirst.mockResolvedValue({ id: INTERVIEW_ID, project: 'Apex', status: 'in_progress' });
+    mockSelect
+      .mockReturnValueOnce(chain([{ value: 1 }]))
+      .mockReturnValueOnce(chain([
+        { id: BRAINSTORM_ID, title: 'Queue chat', markdown: '# Queue design\n\nWorkers poll.' },
+      ]));
+
+    const page = await listCandidates(INTERVIEW_ID, ACTOR, { type: 'brainstorm' });
+
+    expect(page).toEqual({
+      items: [{ type: 'brainstorm', id: BRAINSTORM_ID, title: 'Queue design' }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    });
+  });
+
+  it('lists no brainstorm candidates when the user cannot view Brainstorm', async () => {
+    mockInterviewFindFirst.mockResolvedValue({ id: INTERVIEW_ID, project: 'Apex', status: 'in_progress' });
+    mockIsBrainstormEnabled.mockResolvedValue(false);
+    const page = await listCandidates(INTERVIEW_ID, ACTOR, { type: 'brainstorm' });
+    expect(page.items).toEqual([]);
+    expect(page.total).toBe(0);
+    expect(mockSelect).not.toHaveBeenCalled();
   });
 });
 
