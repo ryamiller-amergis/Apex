@@ -26,6 +26,7 @@ import {
 import { effortLabel } from '../../shared/utils/effort';
 import { buildFallbackPoDigestResponse } from '../../shared/utils/observabilityPoDigest';
 import { DEFAULT_MODEL_ID, PLATFORM_MODEL_OPTIONS } from '../config/models';
+import { ApexLoader } from './ApexLoader';
 import { useAppShell } from '../hooks/useAppShell';
 import {
   useGenerateObservabilityPoDigest,
@@ -147,6 +148,8 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
   const schedule: ObservabilityScheduleSummary =
     activePayload?.schedule ?? fallbackPayload.schedule;
   const history = activePayload?.history ?? fallbackPayload.history;
+  const synthesisRunning = activePayload?.synthesisRun?.status === 'running';
+  const synthesisFailed = activePayload?.synthesisRun?.status === 'failed';
 
   const handleGenerateNow = useCallback(() => {
     generateMutation.mutate({
@@ -267,14 +270,38 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
             <button
               type="button"
               className={styles.primaryButton}
-              disabled={generateMutation.isPending}
+              disabled={generateMutation.isPending || synthesisRunning}
               onClick={handleGenerateNow}
               {...{ 'data-testid': 'observability-generate-digest' }}
             >
-              {generateMutation.isPending ? 'Synthesizing Digest…' : 'Generate Digest Now'}
+              {generateMutation.isPending
+                ? 'Queuing Digest…'
+                : synthesisRunning
+                  ? 'Synthesizing Digest…'
+                  : 'Generate Digest Now'}
             </button>
           </div>
         </div>
+
+        {synthesisRunning && (
+          <div className={styles.synthesisStatus} role="status" {...{ 'data-testid': 'observability-synthesis-running' }}>
+            <ApexLoader size={36} />
+            <span>The document worker is writing this digest. This page updates when it finishes.</span>
+          </div>
+        )}
+        {generateMutation.isError && (
+          <p className={styles.synthesisError} role="alert" {...{ 'data-testid': 'observability-synthesis-error' }}>
+            {generateMutation.error.message}
+          </p>
+        )}
+        {synthesisFailed && !generateMutation.isError && (
+          <p className={styles.synthesisError} role="alert" {...{ 'data-testid': 'observability-synthesis-failed' }}>
+            The document worker did not finish this digest.
+            {activePayload?.synthesisRun?.failureDetail
+              ? ` ${activePayload.synthesisRun.failureDetail}`
+              : ''}
+          </p>
+        )}
 
         {/* Scheduled Twice-Daily Digest Strip (6:00 AM & 6:00 PM) */}
         <div
@@ -958,6 +985,7 @@ const SuggestionTrackerList: React.FC<SuggestionTrackerListProps> = ({ sectionId
                 categoryFilter === category ? `${styles.chip} ${styles.chipActive}` : styles.chip
               }
               aria-pressed={categoryFilter === category}
+              data-testid={`observability-suggestion-filter-${sectionId}-${category}`}
               onClick={() => setCategoryFilter(category)}
             >
               {category === 'all' ? 'All' : OBSERVABILITY_SUGGESTION_CATEGORY_LABELS[category]}

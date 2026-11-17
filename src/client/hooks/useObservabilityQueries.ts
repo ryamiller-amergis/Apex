@@ -101,6 +101,8 @@ export function useObservabilityPoDigest(
       ),
     enabled: Boolean(project),
     staleTime: 15_000,
+    refetchInterval: (query) =>
+      query.state.data?.synthesisRun?.status === 'running' ? 5_000 : false,
   });
 }
 

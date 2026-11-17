@@ -754,6 +754,27 @@ export interface ObservabilityPoDigestSnapshot {
   sections?: ObservabilityDynamicSkillSection[];
 }
 
+/** The AI part of a digest, written by the V2 document worker. */
+export interface ObservabilityPoSkillSynthesis {
+  headline?: string;
+  dropReasonsSummary?: ObservabilityDropReasonsSummary;
+  adoptionRecommendations?: ObservabilityAdoptionSummary;
+  customSections?: ObservabilityDynamicSkillSection[];
+}
+
+export type ObservabilityPoDigestRunStatus = 'running' | 'completed' | 'failed';
+
+/** The latest AI synthesis run for one project and trend window. */
+export interface ObservabilityPoDigestSynthesisRun {
+  runId: string;
+  status: ObservabilityPoDigestRunStatus;
+  model: string;
+  effort: EffortLevel;
+  requestedAt: string;
+  completedAt: string | null;
+  failureDetail: string | null;
+}
+
 export interface ObservabilityPoDigestResponse {
   digest: ObservabilityPoDigestSnapshot;
   schedule: ObservabilityScheduleSummary;
@@ -766,6 +787,8 @@ export interface ObservabilityPoDigestResponse {
     generatedAt: string;
     headline: string;
   }>;
+  /** Null when no AI synthesis has been requested for this window yet. */
+  synthesisRun?: ObservabilityPoDigestSynthesisRun | null;
 }
 
 export interface GenerateObservabilityPoDigestRequest {

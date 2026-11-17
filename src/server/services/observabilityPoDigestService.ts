@@ -2,9 +2,10 @@
  * Product Owner Observability Digest Service & Twice-Daily Scheduler (06:00 AM & 06:00 PM).
  *
  * Queries PostgreSQL (`trace_events`, `trace_path_rollups`, `app_users`) via Drizzle
- * across Today, 1d, 7d, 14d, 30d, and 60d trend windows, and executes the
- * `.cursor/skills/observability-po-digest/SKILL.md` skill with the selected model
- * (e.g. `composer-2.5`) and reasoning effort (`low`, `medium`, `high`).
+ * across Today, 1d, 7d, 14d, 30d, and 60d trend windows. The
+ * `.cursor/skills/observability-po-digest/SKILL.md` synthesis runs on the V2 document
+ * worker (see observabilityPoDigestRuns.ts); App Service never calls a model here. Until a
+ * run finishes, the digest shows the telemetry-only synthesis.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,13 +28,11 @@ import {
   OBSERVABILITY_PO_SKILL_PATH,
   OBSERVABILITY_TREND_WINDOW_LABELS,
   type GenerateObservabilityPoDigestRequest,
-  type ObservabilityAdoptionSummary,
   type ObservabilityDigestSlot,
-  type ObservabilityDropReasonsSummary,
-  type ObservabilityDynamicSkillSection,
   type ObservabilityDynamicSkillSectionItem,
   type ObservabilityPoDigestResponse,
   type ObservabilityPoDigestSnapshot,
+  type ObservabilityPoDigestSynthesisRun,
   type ObservabilityTrendWindow,
 } from '../../shared/types/observability';
 import {
@@ -43,7 +42,6 @@ import {
   buildDefaultSeedTelemetryRows,
   buildDigestSnapshotFromAggregates,
   computeSlotTimestamps,
-  extractTrackedSuggestions,
   isObservabilityTrendWindow,
   normalizeObservabilityEffort,
   normalizeObservabilityModel,
@@ -53,33 +51,22 @@ import {
   type RawDigestTraceEventRow,
   type RawDigestUserRow,
 } from '../../shared/utils/observabilityPoDigest';
-import { buildCursorModelSelection } from './agentEffortResolver';
 import { OBSERVABILITY_RETENTION_DAYS } from './observabilityOperationsService';
+import {
+  createObservabilityPoDigestRunStore,
+  ObservabilityPoDigestQueueError,
+  trackedSuggestionsOf,
+  type ObservabilityPoDigestRunStart,
+  type ObservabilityPoDigestRunRecord,
+  type ObservabilityPoDigestRunStore,
+} from './observabilityPoDigestRuns';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export { isObservabilityTrendWindow, synthesizePoDigestSnapshot };
+export { ObservabilityPoDigestQueueError };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_DIGEST_EVENT_ROWS = 10_000;
-
-export interface ObservabilityPoSkillAiSynthesisResult {
-  headline?: string;
-  dropReasonsSummary?: ObservabilityDropReasonsSummary;
-  adoptionRecommendations?: ObservabilityAdoptionSummary;
-  customSections?: ObservabilityDynamicSkillSection[];
-  sections?: ObservabilityDynamicSkillSection[];
-}
-
-export interface ObservabilityPoAiProvider {
-  synthesizeDigest(input: {
-    skillMarkdown: string;
-    prompt: string;
-    model: string;
-    effort: EffortLevel;
-    project: string;
-    window: ObservabilityTrendWindow;
-  }): Promise<ObservabilityPoSkillAiSynthesisResult | null>;
-}
 
 export interface ObservabilityPoTelemetrySource {
   loadTelemetry(
@@ -93,14 +80,37 @@ export interface ObservabilityPoTelemetrySource {
   }>;
 }
 
-let aiProviderOverride: ObservabilityPoAiProvider | null = null;
+let runStoreOverride: ObservabilityPoDigestRunStore | null = null;
+let defaultRunStore: ObservabilityPoDigestRunStore | null = null;
 let telemetrySourceOverride: ObservabilityPoTelemetrySource | null = null;
 let skillMarkdownOverride: string | null = null;
 
-export function setObservabilityPoAiProviderForTests(
-  provider: ObservabilityPoAiProvider | null,
+/** Unit tests and E2E have no Blob or Service Bus, so no synthesis run is started or read. */
+const inactiveRunStore: ObservabilityPoDigestRunStore = {
+  async start() {
+    return { status: 'not_started', reason: 'No V2 transport in test or E2E mode' };
+  },
+  async latestRun() {
+    return null;
+  },
+  async latestCompleted() {
+    return null;
+  },
+};
+
+function runStore(): ObservabilityPoDigestRunStore {
+  if (runStoreOverride) return runStoreOverride;
+  if (process.env.NODE_ENV === 'test' || process.env.E2E_MODE === 'true') {
+    return inactiveRunStore;
+  }
+  defaultRunStore ??= createObservabilityPoDigestRunStore();
+  return defaultRunStore;
+}
+
+export function setObservabilityPoDigestRunStoreForTests(
+  store: ObservabilityPoDigestRunStore | null,
 ): void {
-  aiProviderOverride = provider;
+  runStoreOverride = store;
 }
 
 export function setObservabilityPoTelemetrySourceForTests(
@@ -127,24 +137,11 @@ export function loadObservabilityPoSkillMarkdown(): string {
   }
 }
 
-function extractJsonObject(raw: string): Record<string, unknown> | null {
-  const trimmed = raw.trim();
-  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fence ? fence[1]!.trim() : trimmed;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    const parsed = JSON.parse(candidate.slice(start, end + 1));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-export function buildObservabilityPoSkillPrompt(input: {
+/**
+ * The telemetry rollup the worker reads beside the frozen skill. The skill itself travels on
+ * the specification, so it is only read here to list the extra sections to synthesize.
+ */
+export function buildObservabilityPoTelemetryInput(input: {
   skillMarkdown: string;
   project: string;
   window: ObservabilityTrendWindow;
@@ -161,8 +158,6 @@ export function buildObservabilityPoSkillPrompt(input: {
   const parsedSections = parseSkillSectionsFromMarkdown(skillMarkdown);
 
   return [
-    skillMarkdown,
-    '',
     '## Live PostgreSQL Telemetry Rollup Input',
     '',
     `- **Project:** ${project}`,
@@ -219,90 +214,8 @@ export function buildObservabilityPoSkillPrompt(input: {
         ]
       : []),
     '',
-    'Return ONLY a valid JSON object containing `headline`, `dropReasonsSummary` (`headline`, `narrative`, `findings`), `adoptionRecommendations` (`headline`, `narrative`, `recommendations`), and `customSections` (array of dynamic sections for any sections beyond the 6 core signals).',
+    'Write `.ai-pilot/output/observability-po-digest.json` containing `headline`, `dropReasonsSummary` (`headline`, `narrative`, `findings`), `adoptionRecommendations` (`headline`, `narrative`, `recommendations`), and `customSections` (array of dynamic sections for any sections beyond the 6 core signals).',
   ].join('\n');
-}
-
-function defaultCursorSkillAiProvider(): ObservabilityPoAiProvider {
-  return {
-    async synthesizeDigest({ prompt, model, effort }) {
-      const apiKey = process.env.CURSOR_API_KEY?.trim();
-      if (
-        !apiKey ||
-        process.env.NODE_ENV === 'test' ||
-        process.env.E2E_MODE === 'true'
-      ) {
-        return null;
-      }
-
-      let agent: { [Symbol.asyncDispose]?: () => Promise<void> } | null = null;
-      try {
-        const { Agent } = await import('@cursor/sdk');
-        const created = await Agent.create({
-          apiKey,
-          model: buildCursorModelSelection(model, effort),
-        });
-        agent = created;
-        const run = await created.send(prompt);
-        let text = '';
-        if (run.supports('stream')) {
-          for await (const event of run.stream()) {
-            if (event.type === 'assistant') {
-              for (const block of event.message.content) {
-                if (block.type === 'text') {
-                  text += block.text;
-                }
-              }
-            }
-          }
-        } else {
-          const finished = await run.wait();
-          text = typeof finished === 'object' && finished ? JSON.stringify(finished) : '';
-        }
-
-        const parsed = extractJsonObject(text);
-        if (!parsed) return null;
-
-        const dropReasons = parsed.dropReasonsSummary as
-          | ObservabilityDropReasonsSummary
-          | undefined;
-        const adoption = parsed.adoptionRecommendations as
-          | ObservabilityAdoptionSummary
-          | undefined;
-        const rawCustomSections = Array.isArray(parsed.customSections)
-          ? (parsed.customSections as ObservabilityDynamicSkillSection[])
-          : Array.isArray(parsed.sections)
-            ? (parsed.sections as ObservabilityDynamicSkillSection[])
-            : undefined;
-
-        return {
-          headline: typeof parsed.headline === 'string' ? parsed.headline : undefined,
-          dropReasonsSummary:
-            dropReasons &&
-            typeof dropReasons.headline === 'string' &&
-            Array.isArray(dropReasons.findings)
-              ? dropReasons
-              : undefined,
-          adoptionRecommendations:
-            adoption &&
-            typeof adoption.headline === 'string' &&
-            Array.isArray(adoption.recommendations)
-              ? adoption
-              : undefined,
-          customSections: rawCustomSections,
-          sections: rawCustomSections,
-        };
-      } catch (err) {
-        console.warn(
-          '[observabilityPoDigest] live Cursor SDK skill synthesis fell back to deterministic telemetry synthesis:',
-          err instanceof Error ? err.message : String(err),
-        );
-        return null;
-      } finally {
-        await agent?.[Symbol.asyncDispose]?.().catch(() => {});
-      }
-    },
-  };
 }
 
 /**
@@ -466,7 +379,6 @@ interface StoredProjectDigestState {
   eveningLastRunAt: string | null;
   snapshotsByWindow: Map<ObservabilityTrendWindow, ObservabilityPoDigestSnapshot>;
   history: ObservabilityPoDigestSnapshot[];
-  trackedSuggestions: ObservabilityDynamicSkillSectionItem[];
 }
 
 const stateByProject = new Map<string, StoredProjectDigestState>();
@@ -486,72 +398,94 @@ function ensureProjectState(project: string, now = new Date()): StoredProjectDig
     eveningLastRunAt: lastEveningIso,
     snapshotsByWindow: new Map(),
     history: [],
-    trackedSuggestions: [],
   };
   stateByProject.set(project, created);
   return created;
 }
 
-async function computeDigestSnapshotFromDatabaseAndSkill(options: {
+async function loadAggregates(
+  project: string,
+  window: ObservabilityTrendWindow,
+  now: Date,
+): Promise<ReturnType<typeof aggregateTelemetryFromDatabaseRows>> {
+  const telemetry = await queryDatabaseTelemetryForPoDigest(project, now);
+  return aggregateTelemetryFromDatabaseRows({
+    events: telemetry.events,
+    rollups: telemetry.rollups,
+    users: telemetry.users,
+    window,
+    now,
+  });
+}
+
+/** Today's telemetry with the latest finished AI synthesis for the window laid over it. */
+function buildDigestSnapshot(options: {
   project: string;
   window: ObservabilityTrendWindow;
   model: string;
   effort: EffortLevel;
   slot: ObservabilityDigestSlot;
-  state: StoredProjectDigestState;
-  now?: Date;
-}): Promise<ObservabilityPoDigestSnapshot> {
-  const now = options.now ?? new Date();
-  const previousSuggestions = options.state.trackedSuggestions;
-  const telemetry = await queryDatabaseTelemetryForPoDigest(options.project, now);
-
-  const aggregated = aggregateTelemetryFromDatabaseRows({
-    events: telemetry.events,
-    rollups: telemetry.rollups,
-    users: telemetry.users,
-    window: options.window,
-    now,
-  });
-
-  const skillMarkdown = loadObservabilityPoSkillMarkdown();
-  const prompt = buildObservabilityPoSkillPrompt({
-    skillMarkdown,
+  aggregated: ReturnType<typeof aggregateTelemetryFromDatabaseRows>;
+  skillMarkdown: string;
+  completed: ObservabilityPoDigestRunRecord | null;
+  now: Date;
+}): ObservabilityPoDigestSnapshot {
+  const { completed } = options;
+  return buildDigestSnapshotFromAggregates({
     project: options.project,
     window: options.window,
-    model: options.model,
-    effort: options.effort,
+    model: completed?.model ?? options.model,
+    effort: completed?.effort ?? options.effort,
     slot: options.slot,
-    aggregated,
-    previousSuggestions,
+    aggregated: options.aggregated,
+    skillMarkdown: options.skillMarkdown,
+    aiSynthesis: completed?.synthesis ?? undefined,
+    previousSuggestions: trackedSuggestionsOf(completed),
+    now: options.now,
   });
+}
 
-  const provider = aiProviderOverride ?? defaultCursorSkillAiProvider();
-  const aiSynthesis = await provider.synthesizeDigest({
-    skillMarkdown,
-    prompt,
-    model: options.model,
-    effort: options.effort,
-    project: options.project,
-    window: options.window,
-  });
+function toSynthesisRun(
+  run: ObservabilityPoDigestRunRecord | null,
+): ObservabilityPoDigestSynthesisRun | null {
+  if (!run) return null;
+  return {
+    runId: run.runId,
+    status: run.status,
+    model: run.model,
+    effort: run.effort,
+    requestedAt: run.requestedAt,
+    completedAt: run.completedAt,
+    failureDetail: run.failureDetail,
+  };
+}
 
-  const snapshot = buildDigestSnapshotFromAggregates({
-    project: options.project,
-    window: options.window,
-    model: options.model,
-    effort: options.effort,
-    slot: options.slot,
-    aggregated,
-    skillMarkdown,
-    aiSynthesis: aiSynthesis ?? undefined,
-    previousSuggestions,
-    now,
-  });
-  const tracked = extractTrackedSuggestions(snapshot);
-  if (tracked.length > 0) {
-    options.state.trackedSuggestions = tracked;
-  }
-  return snapshot;
+function digestResponse(
+  state: StoredProjectDigestState,
+  digest: ObservabilityPoDigestSnapshot,
+  latestRun: ObservabilityPoDigestRunRecord | null,
+  now: Date,
+): ObservabilityPoDigestResponse {
+  return {
+    digest,
+    schedule: buildDefaultScheduleSummary(
+      state.configuredModel,
+      state.configuredEffort,
+      state.morningLastRunAt,
+      state.eveningLastRunAt,
+      now,
+    ),
+    history: state.history.slice(0, 8).map((item) => ({
+      id: item.id,
+      slot: item.slot,
+      window: item.window,
+      model: item.model,
+      effort: item.effort,
+      generatedAt: item.generatedAt,
+      headline: item.headline,
+    })),
+    synthesisRun: toSynthesisRun(latestRun),
+  };
 }
 
 export async function getObservabilityPoDigest(options: {
@@ -580,13 +514,21 @@ export async function getObservabilityPoDigest(options: {
       ? 'evening_6pm'
       : 'morning_6am');
 
-  const digest = await computeDigestSnapshotFromDatabaseAndSkill({
+  const store = runStore();
+  const [aggregated, completed, latestRun] = await Promise.all([
+    loadAggregates(project, window, now),
+    store.latestCompleted(project, window),
+    store.latestRun(project, window),
+  ]);
+  const digest = buildDigestSnapshot({
     project,
     window,
     model: requestedModel,
     effort: requestedEffort,
     slot: lastSlot,
-    state,
+    aggregated,
+    skillMarkdown: loadObservabilityPoSkillMarkdown(),
+    completed,
     now,
   });
 
@@ -595,25 +537,7 @@ export async function getObservabilityPoDigest(options: {
     state.history = [digest];
   }
 
-  return {
-    digest,
-    schedule: buildDefaultScheduleSummary(
-      state.configuredModel,
-      state.configuredEffort,
-      state.morningLastRunAt,
-      state.eveningLastRunAt,
-      now,
-    ),
-    history: state.history.slice(0, 8).map((item) => ({
-      id: item.id,
-      slot: item.slot,
-      window: item.window,
-      model: item.model,
-      effort: item.effort,
-      generatedAt: item.generatedAt,
-      headline: item.headline,
-    })),
-  };
+  return digestResponse(state, digest, latestRun, now);
 }
 
 export async function generateObservabilityPoDigest(
@@ -640,43 +564,71 @@ export async function generateObservabilityPoDigest(
     state.eveningLastRunAt = now.toISOString();
   }
 
-  const activeDigest = await computeDigestSnapshotFromDatabaseAndSkill({
+  const store = runStore();
+  const [aggregated, completed] = await Promise.all([
+    loadAggregates(project, window, now),
+    store.latestCompleted(project, window),
+  ]);
+  const skillMarkdown = loadObservabilityPoSkillMarkdown();
+  const previousSuggestions = trackedSuggestionsOf(completed);
+  let started: ObservabilityPoDigestRunStart;
+  try {
+    started = await store.start({
+      project,
+      window,
+      slot,
+      model,
+      effort,
+      skillMarkdown,
+      telemetryInput: buildObservabilityPoTelemetryInput({
+        skillMarkdown,
+        project,
+        window,
+        model,
+        effort,
+        slot,
+        aggregated,
+        previousSuggestions,
+      }),
+      previousSuggestions,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[observabilityPoDigest] could not queue the document run:', detail);
+    const missingStorage = detail.includes('AI_PLATFORM_V2_BLOB_ACCOUNT_NAME');
+    throw new ObservabilityPoDigestQueueError(
+      missingStorage
+        ? 'The digest could not be queued. This server has no V2 artifact storage configured, so the document worker never receives the run.'
+        : `The digest could not be queued. ${detail}`,
+    );
+  }
+  if (started.status === 'already_running') {
+    console.log(
+      `[observabilityPoDigest] ${project} ${window} synthesis already running (runId=${started.runId})`,
+    );
+  }
+
+  const activeDigest = buildDigestSnapshot({
     project,
     window,
     model,
     effort,
     slot,
-    state,
+    aggregated,
+    skillMarkdown,
+    completed,
     now,
   });
 
   state.snapshotsByWindow.set(window, activeDigest);
   state.history = [activeDigest, ...state.history].slice(0, 12);
 
-  return {
-    digest: activeDigest,
-    schedule: buildDefaultScheduleSummary(
-      state.configuredModel,
-      state.configuredEffort,
-      state.morningLastRunAt,
-      state.eveningLastRunAt,
-      now,
-    ),
-    history: state.history.slice(0, 8).map((item) => ({
-      id: item.id,
-      slot: item.slot,
-      window: item.window,
-      model: item.model,
-      effort: item.effort,
-      generatedAt: item.generatedAt,
-      headline: item.headline,
-    })),
-  };
+  return digestResponse(state, activeDigest, await store.latestRun(project, window), now);
 }
 
 export function resetObservabilityPoDigestForTests(): void {
   stateByProject.clear();
-  aiProviderOverride = null;
+  runStoreOverride = null;
   telemetrySourceOverride = null;
   skillMarkdownOverride = null;
 }

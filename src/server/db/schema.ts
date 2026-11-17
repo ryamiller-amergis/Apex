@@ -160,7 +160,15 @@ import type {
   InterviewSpecialistReviewStatus,
 } from '../../shared/types/interview';
 import type { ApiKeyCadence, ApiKeyScope } from '../../shared/types/apiKey';
-import type { SafeTraceDetails, TraceEventType } from '../../shared/types/observability';
+import type {
+  ObservabilityDigestSlot,
+  ObservabilityDynamicSkillSectionItem,
+  ObservabilityPoDigestRunStatus,
+  ObservabilityPoSkillSynthesis,
+  ObservabilityTrendWindow,
+  SafeTraceDetails,
+  TraceEventType,
+} from '../../shared/types/observability';
 import type {
   WalkthroughAnchorPlacement,
   WalkthroughGenerationProvenance,
@@ -3529,6 +3537,35 @@ export const tracePathRollups = pgTable('trace_path_rollups', {
   countsCheck: check(
     'trace_path_rollups_counts_check',
     sql`${t.transitionCount} >= 0 AND ${t.distinctActorCount} >= 0`,
+  ),
+}));
+
+export const observabilityPoDigestRuns = pgTable('observability_po_digest_runs', {
+  runId: text('run_id').primaryKey(),
+  project: text('project').notNull(),
+  trendWindow: text('trend_window').$type<ObservabilityTrendWindow>().notNull(),
+  slot: text('slot').$type<ObservabilityDigestSlot>().notNull(),
+  model: text('model').notNull(),
+  effort: text('effort').$type<EffortLevel>().notNull(),
+  status: text('status').$type<ObservabilityPoDigestRunStatus>().notNull().default('running'),
+  previousSuggestions: jsonb('previous_suggestions')
+    .$type<ObservabilityDynamicSkillSectionItem[]>()
+    .notNull()
+    .default([]),
+  synthesis: jsonb('synthesis').$type<ObservabilityPoSkillSynthesis>(),
+  failureDetail: text('failure_detail'),
+  requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  projectWindowIdx: index('idx_observability_po_digest_runs_project_window')
+    .on(t.project, t.trendWindow, t.requestedAt),
+  statusCheck: check(
+    'observability_po_digest_runs_status_check',
+    sql`${t.status} IN ('running', 'completed', 'failed')`,
+  ),
+  slotCheck: check(
+    'observability_po_digest_runs_slot_check',
+    sql`${t.slot} IN ('morning_6am', 'evening_6pm', 'on_demand')`,
   ),
 }));
 

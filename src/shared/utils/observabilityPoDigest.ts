@@ -32,6 +32,7 @@ import {
   type ObservabilityModuleRetentionDropItem,
   type ObservabilityPoDigestResponse,
   type ObservabilityPoDigestSnapshot,
+  type ObservabilityPoSkillSynthesis,
   type ObservabilityScheduleSummary,
   type ObservabilitySuggestionCategory,
   type ObservabilitySuggestionStage,
@@ -1314,6 +1315,54 @@ export function extractTrackedSuggestions(
       sec.id === OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID || sec.displayType === 'tracker',
   );
   return tracker?.items ?? [];
+}
+
+function isTrackerSection(section: ObservabilityDynamicSkillSection): boolean {
+  return (
+    section.displayType === 'tracker'
+    || slugifySectionId(section.id || section.title || '') === OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID
+  );
+}
+
+/**
+ * Fold a finished synthesis's suggestion tracker into the baseline it was given, so the
+ * stored result keeps each suggestion's id, stage, and first-suggested date. Returns the
+ * baseline unchanged when the synthesis has no tracker items.
+ */
+export function mergeSynthesisSuggestions(options: {
+  synthesis: ObservabilityPoSkillSynthesis;
+  previous: ObservabilityDynamicSkillSectionItem[];
+  now: Date;
+}): {
+  synthesis: ObservabilityPoSkillSynthesis;
+  trackedSuggestions: ObservabilityDynamicSkillSectionItem[];
+} {
+  const sections = options.synthesis.customSections ?? [];
+  const trackerIndex = sections.findIndex(isTrackerSection);
+  const items = trackerIndex >= 0 ? sections[trackerIndex]?.items ?? [] : [];
+  if (items.length === 0) {
+    return { synthesis: options.synthesis, trackedSuggestions: options.previous };
+  }
+  const trackedSuggestions = mergeTrackedSuggestions({
+    items,
+    previous: options.previous,
+    now: options.now,
+  });
+  return {
+    synthesis: {
+      ...options.synthesis,
+      customSections: sections.map((section, index) =>
+        index === trackerIndex ? { ...section, items: trackedSuggestions } : section),
+    },
+    trackedSuggestions,
+  };
+}
+
+/** Suggestion tracker items stored on a synthesis, or an empty list. */
+export function extractSynthesisSuggestions(
+  synthesis: ObservabilityPoSkillSynthesis | null | undefined,
+): ObservabilityDynamicSkillSectionItem[] {
+  return synthesis?.customSections?.find(isTrackerSection)?.items ?? [];
 }
 
 /**
