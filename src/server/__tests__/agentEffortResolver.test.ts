@@ -218,6 +218,7 @@ describe('agentEffortResolver', () => {
       testCaseSkillPath: '.cursor/skills/create-test-case/SKILL.md',
       loadTestGenerationSkillPath: '.cursor/skills/k6-load-test-generation/SKILL.md',
       designModuleScopingSkillPath: '.cursor/skills/design-module-scoping/SKILL.md',
+      releaseChangelogSkillPath: '.cursor/skills/release-changelog/SKILL.md',
       designDocValidationSkillPath: '.cursor/skills/design-doc-validation/SKILL.md',
     });
     const kickoff = {
@@ -279,6 +280,12 @@ describe('agentEffortResolver', () => {
         skillConfig
       )
     ).toBe('designModuleScoping');
+    expect(
+      deriveAgentModule(
+        { ...kickoff, skillPath: skillConfig.releaseChangelogSkillPath! },
+        skillConfig
+      )
+    ).toBe('releaseChangelog');
     expect(
       deriveAgentModule(
         { ...kickoff, skillPath: skillConfig.designDocValidationSkillPath! },

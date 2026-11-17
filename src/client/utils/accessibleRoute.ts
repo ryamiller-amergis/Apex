@@ -39,7 +39,7 @@ const MODULE_ORDER: ReadonlyArray<{
   },
   {
     view: 'planning',
-    route: '/planning/dev-stats',
+    route: '/planning/roadmap',
     isAccessible: ({ can, isSuperAdmin, enabledViews }) =>
       isSuperAdmin || (enabledViews.includes('planning') && can('planning:view')),
   },

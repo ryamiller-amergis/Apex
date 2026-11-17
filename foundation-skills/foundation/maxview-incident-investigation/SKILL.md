@@ -19,7 +19,7 @@ Also activates on: "investigate MaxView logs", "check App Insights", "query fire
 - [RESOURCE_CATALOG.md](RESOURCE_CATALOG.md) — which app / resource / environment to look at.
 - [INVESTIGATION_GUIDE.md](INVESTIGATION_GUIDE.md) — read-only rules, the zero-result recovery procedure, and how to report evidence.
 
-If `az account show` fails, run `az login --identity --client-id "$AZURE_INSIGHTS_CLIENT_ID" --output none`, and stop if that variable is missing or the login fails.
+In a Playbook step, Azure CLI is already signed in for telemetry, and the Azure DevOps work item is in the prompt under "Azure DevOps work item". Read the item from there. Do not call Azure DevOps from the shell: the signed-in identity is not a member of the organization, so `az boards` and REST calls fail with TF401444.
 
 ## Workflow
 

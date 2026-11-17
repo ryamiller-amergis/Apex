@@ -23,6 +23,7 @@ const MODULE_EFFORT_KEYS = {
   loadTestGeneration: 'loadTestGenerationEffort',
   designModule: 'designModuleEffort',
   designModuleScoping: 'designModuleScopingEffort',
+  releaseChangelog: 'releaseChangelogEffort',
   // Brainstorm has no project override; it uses the project default.
   brainstorm: 'defaultEffort',
 } as const satisfies Record<AgentModuleId, keyof ProjectSkillConfig>;
@@ -47,6 +48,7 @@ const SKILL_PATH_MODULES = [
   ['loadTestGenerationSkillPath', 'loadTestGeneration'],
   ['designModuleSkillPath', 'designModule'],
   ['designModuleScopingSkillPath', 'designModuleScoping'],
+  ['releaseChangelogSkillPath', 'releaseChangelog'],
 ] as const satisfies ReadonlyArray<
   readonly [keyof ProjectSkillConfig, AgentModuleId]
 >;

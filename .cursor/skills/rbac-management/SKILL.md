@@ -85,6 +85,19 @@ router.get('/my-feature', requirePermission('<category>:<name>'), handler);
 router.get('/my-feature', requireAnyPermission('<category>:<name>', 'admin:roles'), handler);
 ```
 
+When the route reads a project from the query, body, or path, also apply `requireProjectAccess`. Permission and group checks are global, so they do not stop a caller assigned to project A from naming project B.
+
+```typescript
+import { requirePermission, requireProjectAccess } from '../middleware/rbac';
+
+router.post(
+  '/my-feature',
+  requirePermission('<category>:<name>'),
+  requireProjectAccess((req) => req.body?.project ?? req.query.project),
+  handler,
+);
+```
+
 ### 3. Wire client gating
 
 ```tsx
