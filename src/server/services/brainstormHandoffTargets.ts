@@ -217,6 +217,8 @@ export interface TargetServices {
     request: string;
   }): Promise<string>;
   markInterviewThread(threadId: string): Promise<void>;
+  /** Owner facts of an Interview created outside the handoff (the new interview page). */
+  findInterview?(interviewId: string): Promise<{ project: string; authorId: string } | null>;
 }
 
 /** The stored target fields a preview fixes and a confirmation executes. */

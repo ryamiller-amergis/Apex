@@ -19,6 +19,7 @@ import { BRAINSTORM_CREATE, BRAINSTORM_VIEW } from '../../shared/types/brainstor
 
 const SESSION_ID = '70000000-0000-4000-8000-000000000001';
 const HANDOFF_ID = '70000000-0000-4000-8000-000000000002';
+const INTERVIEW_ID = '70000000-0000-4000-8000-000000000003';
 const PROJECT = 'alpha';
 const session = { id: SESSION_ID, project: PROJECT, creatorId: 'creator', state: 'active' as const };
 
@@ -48,6 +49,7 @@ function makeEngine() {
     confirm: jest.fn().mockResolvedValue({ handoffId: HANDOFF_ID, state: 'completed', resultRef: { module: 'adr', id: 'a', link: '/adr/a' }, replayed: false }),
     keepStandalone: jest.fn().mockResolvedValue({ handoffId: HANDOFF_ID, state: 'completed', resultRef: { module: 'standalone', id: 'x', link: null }, replayed: false }),
     getHandoff: jest.fn().mockResolvedValue({ handoffId: HANDOFF_ID, state: 'completed' }),
+    recordInterview: jest.fn().mockResolvedValue({ handoffId: HANDOFF_ID, state: 'completed', resultRef: { module: 'interview', id: INTERVIEW_ID, link: `/backlog/interview/${INTERVIEW_ID}` }, replayed: false }),
   };
 }
 
@@ -143,6 +145,29 @@ describe('handoff routes', () => {
     expect(res.status).toBe(200);
     expect(engine.keepStandalone).toHaveBeenCalledWith(session, 'creator', { expectedVersion: 3 });
   });
+
+  it('records the interview a Start Interview created on the new interview page', async () => {
+    const engine = makeEngine();
+    const res = await request(appWith(engine)).post(`${base}/handoffs/interview`).send({ interviewId: INTERVIEW_ID });
+    expect(res.status).toBe(200);
+    expect(res.body.resultRef.link).toBe(`/backlog/interview/${INTERVIEW_ID}`);
+    expect(engine.recordInterview).toHaveBeenCalledWith(session, 'creator', { interviewId: INTERVIEW_ID });
+  });
+
+  it('refuses a malformed interview id with 400 and calls nothing', async () => {
+    const engine = makeEngine();
+    const res = await request(appWith(engine)).post(`${base}/handoffs/interview`).send({ interviewId: 'nope' });
+    expect(res.status).toBe(400);
+    expect(engine.recordInterview).not.toHaveBeenCalled();
+  });
+
+  it('passes an engine refusal for the interview through with its code', async () => {
+    const engine = makeEngine();
+    engine.recordInterview.mockRejectedValue(new BrainstormHandoffError('INTERVIEW_NOT_FOUND', 404));
+    const res = await request(appWith(engine)).post(`${base}/handoffs/interview`).send({ interviewId: INTERVIEW_ID });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('INTERVIEW_NOT_FOUND');
+  });
 });
 
 describe('VT-05 / VT-25: a non-creator member reads but does not write', () => {
@@ -159,6 +184,7 @@ describe('VT-05 / VT-25: a non-creator member reads but does not write', () => {
     [`${base}/handoffs/preview`, { actionId: 'create-adr', expectedVersion: 3 }],
     [`${base}/handoffs/${HANDOFF_ID}/confirm`, { confirm: true }],
     [`${base}/handoffs/keep-standalone`, { expectedVersion: 3 }],
+    [`${base}/handoffs/interview`, { interviewId: INTERVIEW_ID }],
   ])('POST %s returns 403 and calls nothing', async (path, body) => {
     const engine = makeEngine();
     const res = await request(appWith(engine)).post(path).set('Idempotency-Key', 'key-1').send(body);
@@ -166,6 +192,7 @@ describe('VT-05 / VT-25: a non-creator member reads but does not write', () => {
     expect(engine.preview).not.toHaveBeenCalled();
     expect(engine.confirm).not.toHaveBeenCalled();
     expect(engine.keepStandalone).not.toHaveBeenCalled();
+    expect(engine.recordInterview).not.toHaveBeenCalled();
   });
 });
 
@@ -195,6 +222,7 @@ describe('VT-45: flag off', () => {
     ['get', `/sessions/${SESSION_ID}/actions`],
     ['post', `/sessions/${SESSION_ID}/handoffs/preview`],
     ['post', `/sessions/${SESSION_ID}/handoffs/keep-standalone`],
+    ['post', `/sessions/${SESSION_ID}/handoffs/interview`],
     ['post', `/sessions/${SESSION_ID}/handoffs/${HANDOFF_ID}/confirm`],
     ['get', `/sessions/${SESSION_ID}/handoffs/${HANDOFF_ID}`],
     ['get', `/artifacts/${HANDOFF_ID}`],
