@@ -276,8 +276,126 @@ describe('AzureDevOpsService', () => {
 
       await service.getWorkItems();
 
-      // Should be called 4 times (2 for fields: 200 + 50, and 2 for relations: 200 + 50)
-      expect(mockWitApi.getWorkItems).toHaveBeenCalledTimes(4);
+      // Field batches only (200 + 50). Parents come back from WIQL, not another work-item download.
+      expect(mockWitApi.getWorkItems).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('getFeaturesByEpicIds', () => {
+    it('returns a feature list for every requested epic, including the 201st', async () => {
+      const service = new AzureDevOpsService();
+      const epicIds = Array.from({ length: 201 }, (_, index) => index + 1);
+
+      mockWitApi.queryByWiql.mockImplementation(async (wiql: { query: string }) => {
+        const match = wiql.query.match(/IN \(([^)]+)\)/);
+        const sources = match ? match[1].split(',').map((value) => Number(value.trim())) : [];
+        return {
+          workItemRelations: sources.map((source) => ({
+            source: { id: source },
+            target: { id: source + 10000 },
+          })),
+        };
+      });
+      mockWitApi.getWorkItems.mockImplementation(async (ids: number[]) =>
+        ids.map((id) => ({
+          id,
+          fields: {
+            'System.Id': id,
+            'System.Title': `Feature ${id}`,
+            'System.State': 'Active',
+            'System.WorkItemType': 'Feature',
+            'System.ChangedDate': '2024-01-01T00:00:00Z',
+            'System.CreatedDate': '2024-01-01T00:00:00Z',
+          },
+        })),
+      );
+
+      const result = await service.getFeaturesByEpicIds(epicIds);
+
+      expect(Object.keys(result)).toHaveLength(201);
+      expect(result[1]).toEqual([expect.objectContaining({ id: 10001, workItemType: 'Feature' })]);
+      expect(result[201]).toEqual([expect.objectContaining({ id: 10201, workItemType: 'Feature' })]);
+    });
+
+    it('rejects when a link query fails instead of returning empty feature lists', async () => {
+      const service = new AzureDevOpsService();
+      mockWitApi.queryByWiql.mockRejectedValue(new Error('wiql down'));
+
+      await expect(service.getFeaturesByEpicIds([10])).rejects.toThrow('wiql down');
+    });
+  });
+
+  describe('getReleaseEpics leaf rollup', () => {
+    function adoItem(id: number, workItemType: string, state: string) {
+      return {
+        id,
+        fields: {
+          'System.Id': id,
+          'System.Title': `${workItemType} ${id}`,
+          'System.State': state,
+          'System.WorkItemType': workItemType,
+          'System.Tags': workItemType === 'Epic' ? 'ReleaseVersion' : '',
+          'System.Description': '',
+        },
+      };
+    }
+
+    it('counts each release from its own leaves when both releases share one link graph', async () => {
+      const service = new AzureDevOpsService();
+      const items = new Map<number, ReturnType<typeof adoItem>>([
+        [10, adoItem(10, 'Epic', 'Active')],
+        [20, adoItem(20, 'Epic', 'Active')],
+        [100, adoItem(100, 'Feature', 'Active')],
+        [200, adoItem(200, 'Feature', 'Active')],
+        [101, adoItem(101, 'Product Backlog Item', 'Done')],
+        [102, adoItem(102, 'Task', 'Done')],
+        [201, adoItem(201, 'Product Backlog Item', 'New')],
+      ]);
+
+      mockWitApi.queryByWiql.mockImplementation(async (wiql: { query: string }) => {
+        const query = wiql.query;
+        if (query.includes('Hierarchy-Forward')) {
+          return {
+            workItemRelations: [
+              { source: { id: 100 }, target: { id: 101 } },
+              { source: { id: 101 }, target: { id: 102 } },
+              { source: { id: 200 }, target: { id: 201 } },
+            ],
+          };
+        }
+        if (query.includes('Related')) {
+          return {
+            workItemRelations: [
+              { source: { id: 10 }, target: { id: 100 } },
+              { source: { id: 20 }, target: { id: 200 } },
+            ],
+          };
+        }
+        return { workItems: [{ id: 10 }, { id: 20 }] };
+      });
+      mockWitApi.getWorkItems.mockImplementation(async (ids: number[]) =>
+        ids.map((id) => items.get(id)).filter((item) => item !== undefined),
+      );
+
+      const result = await service.getReleaseEpics();
+      const first = result.find((epic) => epic.id === 10);
+      const second = result.find((epic) => epic.id === 20);
+
+      expect(first).toMatchObject({ totalItems: 1, greenItems: 1, redItems: 0, completedItems: 1 });
+      expect(first.childItemsSummary.map((leaf: { id: number }) => leaf.id)).toEqual([101]);
+      expect(second).toMatchObject({ totalItems: 1, greenItems: 0, redItems: 1, completedItems: 0 });
+      expect(second.childItemsSummary.map((leaf: { id: number }) => leaf.id)).toEqual([201]);
+    });
+
+    it('rejects the release list when a link query fails', async () => {
+      const service = new AzureDevOpsService();
+      mockWitApi.queryByWiql.mockImplementation(async (wiql: { query: string }) => {
+        if (wiql.query.includes('WorkItemLinks')) throw new Error('wiql down');
+        return { workItems: [{ id: 10 }] };
+      });
+      mockWitApi.getWorkItems.mockResolvedValue([adoItem(10, 'Epic', 'Active')]);
+
+      await expect(service.getReleaseEpics()).rejects.toThrow('wiql down');
     });
   });
 

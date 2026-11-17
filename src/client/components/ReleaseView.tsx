@@ -271,6 +271,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     cutReleaseBranch: boolean;
   } | null>(null);
   const cabRequestGenerationRef = useRef(0);
+  const releaseListGen = useRef(0);
 
   // Inline rename state
   const [inlineEditEpicId, setInlineEditEpicId] = useState<number | null>(null);
@@ -348,10 +349,14 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     return () => document.removeEventListener('mousedown', handleDocClick);
   }, [openEpicPlatformPopoverId, openItemPlatformPopoverKey]);
 
-  // Fetch all release versions on mount
+  // Epics paint the tab. The older per-version detail panel loads after that, so it does not compete with the list.
   useEffect(() => {
-    fetchReleases();
-    fetchReleaseEpics();
+    const generation = ++releaseListGen.current;
+    void (async () => {
+      await fetchReleaseEpics({ generation });
+      if (releaseListGen.current !== generation) return;
+      await fetchReleases(generation);
+    })();
   }, [project, areaPath]);
 
   // Close action menu when clicking outside
@@ -369,27 +374,32 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     }
   }, [openActionMenuId]);
 
-  const fetchReleaseEpics = async (options?: { background?: boolean }) => {
+  const fetchReleaseEpics = async (options?: { background?: boolean; generation?: number }) => {
     const background = options?.background ?? false;
+    const generation = options?.generation ?? releaseListGen.current;
+    const stillCurrent = () => releaseListGen.current === generation;
     if (!background) setLoadingEpics(true);
     try {
       const response = await fetch(
         `/api/releases/epics?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
       );
-      
+
+      if (!stillCurrent()) return;
+
       if (!response.ok) {
         console.error('Failed to fetch release epics:', response.status, response.statusText);
         if (!background) setReleaseEpics([]);
         return;
       }
-      
+
       const data = await response.json();
+      if (!stillCurrent()) return;
       setReleaseEpics(data);
     } catch (error) {
       console.error('Error fetching release epics:', error);
-      if (!background) setReleaseEpics([]);
+      if (!background && stillCurrent()) setReleaseEpics([]);
     } finally {
-      if (!background) setLoadingEpics(false);
+      if (!background && stillCurrent()) setLoadingEpics(false);
     }
   };
 
@@ -439,20 +449,24 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
     }
   }, [selectedRelease, project, areaPath]);
 
-  const fetchReleases = async () => {
+  const fetchReleases = async (generation = releaseListGen.current) => {
+    const stillCurrent = () => releaseListGen.current === generation;
     try {
       const response = await fetch(
         `/api/releases?project=${encodeURIComponent(project)}&areaPath=${encodeURIComponent(areaPath)}`
       );
-      
+
+      if (!stillCurrent()) return;
+
       if (!response.ok) {
         console.error('Failed to fetch releases:', response.status, response.statusText);
         setReleases([]);
         return;
       }
-      
+
       const data = await response.json();
-      
+      if (!stillCurrent()) return;
+
       // Ensure data is an array
       if (Array.isArray(data)) {
         setReleases(data);
@@ -465,7 +479,7 @@ const ReleaseView: React.FC<ReleaseViewProps> = ({
       }
     } catch (error) {
       console.error('Error fetching releases:', error);
-      setReleases([]);
+      if (stillCurrent()) setReleases([]);
     }
   };
 

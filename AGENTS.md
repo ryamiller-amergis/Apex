@@ -74,7 +74,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Playbook** | A saved, versioned sequence of typed steps that Apex runs on a project's behalf. A step is a `cursor-agent` turn, an `approval-gate` that waits for a person, a `notify`, a `branch`, or an `ingest-artifact`. Steps that leave Apex sit behind a gate, so nothing reaches an external agent unapproved |
 | **Playbook definition / version** | A Playbook is edited as a retained draft and published as an immutable version. A run pins the version it started on, so editing a Playbook never changes a run already in flight |
 | **Playbook run** | One execution of a published version. It suspends at an approval gate or while waiting on an agent run, and resumes when the gate is decided or the agent finishes — a restart mid-run does not lose it, because the state is in Apex's own tables rather than in memory |
-| **Planning tabs** | Roadmap and Releases only. Developer Stats, QA Metrics, and AI Analysis are not Planning tabs. `planning:qa` stays for QA Lab and test cases |
+| **Planning tabs** | Roadmap and Releases only. Developer Stats, QA Metrics, and AI Analysis are not Planning tabs. `planning:qa` stays for QA Lab and test cases. Roadmap bars load feature children with one `POST /api/roadmap/epic-features` call, and release percentages are counted per epic from one shared link graph in `getReleaseEpics`. Do not fetch children once per epic when the tab opens |
 
 ## Directory Structure
 

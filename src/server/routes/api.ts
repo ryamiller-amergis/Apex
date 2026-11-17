@@ -1220,6 +1220,30 @@ router.get('/dev-team-members', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/roadmap/epic-features - Feature children for the visible roadmap epics, one round trip
+router.post('/roadmap/epic-features', requireProjectAccess(resolveRequestProject), async (req: Request, res: Response) => {
+  try {
+    const { project, areaPath, epicIds } = (req.body ?? {}) as {
+      project?: string;
+      areaPath?: string;
+      epicIds?: unknown;
+    };
+    if (!project || typeof project !== 'string' || !project.trim()) {
+      return res.status(400).json({ error: 'project is required' });
+    }
+    if (!Array.isArray(epicIds)) {
+      return res.status(400).json({ error: 'epicIds must be an array' });
+    }
+    const ids = epicIds.filter((id): id is number => typeof id === 'number' && Number.isInteger(id) && id > 0);
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const features = await adoService.getFeaturesByEpicIds(ids);
+    return res.json(features);
+  } catch (error: any) {
+    console.error('Error fetching roadmap epic features:', error);
+    return res.status(500).json({ error: 'Failed to fetch roadmap features' });
+  }
+});
+
 // GET /api/epics/:id/children - Get child work items for an Epic
 router.get('/epics/:id/children', async (req: Request, res: Response) => {
   try {
