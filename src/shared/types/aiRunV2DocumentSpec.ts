@@ -27,6 +27,7 @@ export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'evaluation-judge',
   'evaluation-promptfoo',
   'skill-learning',
+  'observability-po-digest',
 ] as const satisfies readonly BackgroundWorkflowClass[];
 
 const JUDGE_SCRATCH_PATHS: readonly string[] = Object.values(WORKFLOW_EVALUATION_SCRATCH_PATHS);
@@ -39,6 +40,16 @@ export const SKILL_LEARNING_SCRATCH_PATHS = {
 export const SKILL_LEARNING_RESULT_FILE = 'skill-learning-result.json';
 const SKILL_LEARNING_SCRATCH_PATH_LIST: readonly string[] = Object.values(SKILL_LEARNING_SCRATCH_PATHS);
 
+/** Inputs and the one result file of an `observability-po-digest` run. */
+export const OBSERVABILITY_PO_DIGEST_SCRATCH_PATHS = {
+  input: '.ai-pilot/observability-po-digest/telemetry-rollup.md',
+  outputSchema: '.ai-pilot/observability-po-digest/output-schema.json',
+} as const;
+export const OBSERVABILITY_PO_DIGEST_RESULT_FILE = 'observability-po-digest.json';
+const OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST: readonly string[] = Object.values(
+  OBSERVABILITY_PO_DIGEST_SCRATCH_PATHS,
+);
+
 /** Workflows whose single JSON result the worker checks against `outputSchema` before upload. */
 export function documentWorkflowResultFile(workflowClass: BackgroundWorkflowClass): string | null {
   switch (workflowClass) {
@@ -46,6 +57,8 @@ export function documentWorkflowResultFile(workflowClass: BackgroundWorkflowClas
       return JUDGE_RESULT_FILE;
     case 'skill-learning':
       return SKILL_LEARNING_RESULT_FILE;
+    case 'observability-po-digest':
+      return OBSERVABILITY_PO_DIGEST_RESULT_FILE;
     case 'prd':
     case 'adr':
     case 'design-doc':
@@ -91,7 +104,7 @@ export type AiRunV2DocumentSpecification = Readonly<{
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
-  /** Required for `evaluation-judge` and `skill-learning`, refused for every other workflow. */
+  /** Required for `evaluation-judge`, `skill-learning` and `observability-po-digest`; refused for every other workflow. */
   outputSchema?: Record<string, unknown>;
   /** Required for `evaluation-judge` and refused for every other workflow. */
   evaluation?: WorkflowEvaluationRunIdentity;
@@ -127,6 +140,7 @@ export function documentWorkflowRequiresRepository(
     case 'evaluation-judge':
     case 'evaluation-promptfoo':
     case 'skill-learning':
+    case 'observability-po-digest':
       return false;
     default: {
       const unhandled: never = workflowClass;
@@ -171,6 +185,8 @@ export function isAllowedDocumentScratchInputPath(
       return JUDGE_SCRATCH_PATHS.includes(value);
     case 'skill-learning':
       return SKILL_LEARNING_SCRATCH_PATH_LIST.includes(value);
+    case 'observability-po-digest':
+      return OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST.includes(value);
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
@@ -208,6 +224,8 @@ export function hasRequiredScratchInputs(
       return JUDGE_SCRATCH_PATHS.every((value) => paths.includes(value));
     case 'skill-learning':
       return SKILL_LEARNING_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
+    case 'observability-po-digest':
+      return OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
     case 'evaluation-promptfoo':
       // Promptfoo has its own specification; the document guard never accepts it.
       return false;
@@ -339,7 +357,10 @@ export function isAiRunV2DocumentSpecification(
     for (const field of ['groundedSha', 'repository', 'provider'] as const) {
       if (candidate[field] !== undefined) return false;
     }
-  } else if (candidate.workflowClass === 'skill-learning') {
+  } else if (
+    candidate.workflowClass === 'skill-learning'
+    || candidate.workflowClass === 'observability-po-digest'
+  ) {
     if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
     if (candidate.evaluation !== undefined) return false;
     for (const field of ['groundedSha', 'repository', 'provider'] as const) {

@@ -211,7 +211,8 @@ export function createFinishedAttemptReader(deps?: {
               'playbook-step',
               'evaluation-promptfoo',
               'evaluation-judge',
-              'skill-learning'
+              'skill-learning',
+              'observability-po-digest'
             )
             AND NOT EXISTS (
               SELECT 1
@@ -288,7 +289,8 @@ export function createFinishedAttemptReader(deps?: {
             'playbook-step',
             'evaluation-promptfoo',
             'evaluation-judge',
-            'skill-learning'
+            'skill-learning',
+            'observability-po-digest'
           )
           AND NOT EXISTS (
             SELECT 1

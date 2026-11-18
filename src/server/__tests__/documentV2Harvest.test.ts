@@ -544,6 +544,68 @@ describe('V2 document artifact harvest', () => {
     expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
   });
 
+  it('hands a Product Owner digest result to the digest store with its run id', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'observability-po-digest',
+      threadId: 'observability-po-digest:Apex:7d',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/observability-po-digest.json': '{"headline":"Digest"}',
+    });
+    const observabilityDigests = {
+      applyCompleted: jest.fn(async (input: { outputDir: string }) => {
+        await expect(fs.readFile(path.join(input.outputDir, 'observability-po-digest.json'), 'utf8'))
+          .resolves.toBe('{"headline":"Digest"}');
+      }),
+      applyFailed: jest.fn(),
+    };
+    const applyWorkspace = jest.fn();
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace,
+      applySmartTagging: jest.fn(),
+      skillReplays: { owns: () => false, applyCompleted: jest.fn(), applyFailed: jest.fn() },
+      observabilityDigests,
+    });
+
+    expect(observabilityDigests.applyCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-1' }),
+    );
+    expect(applyWorkspace).not.toHaveBeenCalled();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('records a failed Product Owner digest run on the digest store', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'observability-po-digest',
+      threadId: 'observability-po-digest:Apex:7d',
+      status: 'failed',
+      manifestRef: null,
+      failureDetail: 'Model Blocked',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt);
+    const observabilityDigests = {
+      applyCompleted: jest.fn(),
+      applyFailed: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace: jest.fn(),
+      applySmartTagging: jest.fn(),
+      skillReplays: { owns: () => false, applyCompleted: jest.fn(), applyFailed: jest.fn() },
+      observabilityDigests,
+    });
+
+    expect(observabilityDigests.applyFailed).toHaveBeenCalledWith({
+      runId: 'run-1',
+      reason: expect.stringContaining('Model Blocked'),
+    });
+  });
+
   it('records a failed Skill replay on the experiment', async () => {
     const currentAttempt = attempt({
       threadId: 'skill-replay:run-7:generate',

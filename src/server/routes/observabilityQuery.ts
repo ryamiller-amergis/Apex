@@ -14,6 +14,7 @@ import {
   generateObservabilityPoDigest,
   getObservabilityPoDigest,
   isObservabilityTrendWindow,
+  ObservabilityPoDigestQueueError,
 } from '../services/observabilityPoDigestService';
 import * as observabilityQueryService from '../services/observabilityQueryService';
 import {
@@ -44,6 +45,12 @@ function sendQueryError(kind: string, err: unknown, res: Response): void {
     res.status(err.status).json({ error: err.message, code: err.code });
     return;
   }
+  if (err instanceof ObservabilityPoDigestQueueError) {
+    logQueryFailure(kind, 'QUEUE_FAILED');
+    res.status(503).json({ error: err.message, code: 'OBSERVABILITY_QUEUE_FAILED' });
+    return;
+  }
+  console.error('observability query failed', err);
   logQueryFailure(kind, 'INTERNAL');
   res.status(500).json({ error: 'Internal server error' });
 }
