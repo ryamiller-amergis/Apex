@@ -150,6 +150,11 @@ function persistBedrockUsage(
 const MODEL_ID =
   process.env.BEDROCK_MODEL_ID ?? 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
+/** The model and region in-process text calls use, for work that runs elsewhere with the same defaults. */
+export function defaultBedrockTextModel(): { modelId: string; region: string } {
+  return { modelId: MODEL_ID, region: process.env.AWS_REGION ?? 'us-east-1' };
+}
+
 /**
  * Model used specifically for UI/UX mock generation. Falls back to the default
  * MODEL_ID if BEDROCK_UI_MOCK_MODEL_ID is not set, so existing deployments

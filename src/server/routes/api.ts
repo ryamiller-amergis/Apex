@@ -19,7 +19,7 @@ import { db } from '../db/drizzle';
 import { getSkillConfig, getSkillConfigById, listSkillConfigsForProject, resolveSkillConfig } from '../services/projectSettingsService';
 import { fetchAvailableModels } from '../services/modelsService';
 import { getDefaultModel } from '../services/appSettingsService';
-import { getAgentHealthStats, createThread } from '../services/chatAgentService';
+import { getAgentHealthStats, createThread, updateThreadKickoffContext } from '../services/chatAgentService';
 import { getWorkerTierHealthStats } from '../services/workerTierHealthService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
@@ -42,7 +42,7 @@ import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getUserEmail } from '../utils/requestUser';
 import { isDevAccessAllowlisted } from '../services/devEnvAllowlistService';
 import type { CreateProjectAccessRequestsRequest } from '../../shared/types/platformAdmin';
-import { requireGroupMembership, requirePermission, requireProjectAccess } from '../middleware/rbac';
+import { requireGroupMembership, requirePermission, requireProjectAccess, resolveRequestProject } from '../middleware/rbac';
 import {
   getReleaseOrder,
   applyOrderToEpics,
@@ -50,6 +50,20 @@ import {
   pruneStaleOrders,
 } from '../services/releaseOrderService';
 import { assignWorkItemsToRelease, renameRelease } from '../services/releaseManagementService';
+import {
+  createProjectReleasePlatform,
+  deleteProjectReleasePlatform,
+  getProjectReleasePlatformsState,
+  reorderProjectReleasePlatforms,
+  setReleaseEpicPlatforms,
+  setReleaseWorkItemPlatforms,
+  ReleasePlatformValidationError,
+} from '../services/releasePlatformService';
+import {
+  generateReleaseChangelog,
+  ReleaseChangelogError,
+  warmReleaseChangelogAgent,
+} from '../services/releaseChangelogService';
 import { chatThreads as chatThreadsSchema, devSessions } from '../db/schema';
 import {
   createOrReuseSession,
@@ -72,6 +86,8 @@ import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
 import diagramsRouter from './diagrams';
 import playbooksRouter from './playbooks';
+import projectQuickLinksRouter from './projectQuickLinks';
+import userQuickLinksRouter from './userQuickLinks';
 const router = express.Router();
 const publicHealthPaths = new Set([
   '/health',
@@ -109,6 +125,8 @@ export function shouldSkipSessionMiddleware(fullPath: string): boolean {
 
 router.use('/run-groundings', runGroundingsRouter);
 router.use('/projects/:projectId/diagrams', diagramsRouter);
+router.use('/projects/:projectId/quick-links', projectQuickLinksRouter);
+router.use('/projects/:projectId/my-quick-links', userQuickLinksRouter);
 router.use('/playbooks', playbooksRouter);
 // GET /api/available-models — accessible to all authenticated users so that
 // non-admin roles (e.g. interviews:manage) can populate model dropdowns.
@@ -1202,6 +1220,30 @@ router.get('/dev-team-members', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/roadmap/epic-features - Feature children for the visible roadmap epics, one round trip
+router.post('/roadmap/epic-features', requireProjectAccess(resolveRequestProject), async (req: Request, res: Response) => {
+  try {
+    const { project, areaPath, epicIds } = (req.body ?? {}) as {
+      project?: string;
+      areaPath?: string;
+      epicIds?: unknown;
+    };
+    if (!project || typeof project !== 'string' || !project.trim()) {
+      return res.status(400).json({ error: 'project is required' });
+    }
+    if (!Array.isArray(epicIds)) {
+      return res.status(400).json({ error: 'epicIds must be an array' });
+    }
+    const ids = epicIds.filter((id): id is number => typeof id === 'number' && Number.isInteger(id) && id > 0);
+    const adoService = new AzureDevOpsService(project, areaPath);
+    const features = await adoService.getFeaturesByEpicIds(ids);
+    return res.json(features);
+  } catch (error: any) {
+    console.error('Error fetching roadmap epic features:', error);
+    return res.status(500).json({ error: 'Failed to fetch roadmap features' });
+  }
+});
+
 // GET /api/epics/:id/children - Get child work items for an Epic
 router.get('/epics/:id/children', async (req: Request, res: Response) => {
   try {
@@ -1314,6 +1356,184 @@ router.post('/admin/trigger-feature-check', async (req: Request, res: Response) 
 
 // ============= RELEASE MANAGEMENT ROUTES =============
 
+function handleReleasePlatformError(res: Response, error: unknown, fallbackMessage: string) {
+  if (error instanceof ReleasePlatformValidationError) {
+    if (error.code === 'DUPLICATE_PLATFORM') {
+      return res.status(409).json({ error: error.message });
+    }
+    if (error.code === 'NOT_FOUND') {
+      return res.status(404).json({ error: error.message });
+    }
+    return res.status(400).json({ error: error.message });
+  }
+  console.error(fallbackMessage, error);
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+const requireReleaseProject = requireProjectAccess(resolveRequestProject);
+
+// GET /api/releases/platforms - Fetch configured target platforms & assignments for a project
+router.get('/releases/platforms', requireReleaseProject, async (req: Request, res: Response) => {
+  try {
+    const { project } = req.query as { project?: string };
+    if (!project || typeof project !== 'string' || !project.trim()) {
+      return res.status(400).json({ error: 'project query parameter is required' });
+    }
+    const state = await getProjectReleasePlatformsState(project);
+    return res.json(state);
+  } catch (error) {
+    return handleReleasePlatformError(res, error, 'Failed to load release platforms');
+  }
+});
+
+// POST /api/releases/platforms - Create a target platform for a project (BA/admin only)
+router.post(
+  '/releases/platforms',
+  requireGroupMembership('BA'),
+  requireReleaseProject,
+  async (req: Request, res: Response) => {
+    try {
+      const { project, name, color } = req.body as {
+        project?: string;
+        name?: string;
+        color?: string;
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'name is required' });
+      }
+      const createdBy = getProfileOid(req) ?? 'unknown';
+      const platform = await createProjectReleasePlatform({
+        project,
+        name,
+        color,
+        createdBy,
+      });
+      return res.status(201).json(platform);
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to create release platform');
+    }
+  },
+);
+
+// PUT /api/releases/platforms/order - Reorder target platforms for a project (BA/admin only)
+router.put(
+  '/releases/platforms/order',
+  requireGroupMembership('BA'),
+  requireReleaseProject,
+  async (req: Request, res: Response) => {
+    try {
+      const { project, platformIds } = req.body as {
+        project?: string;
+        platformIds?: string[];
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!Array.isArray(platformIds) || platformIds.length === 0) {
+        return res.status(400).json({ error: 'platformIds must be a non-empty array' });
+      }
+      const platforms = await reorderProjectReleasePlatforms(project, platformIds);
+      return res.json({ platforms });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to reorder release platforms');
+    }
+  },
+);
+
+// DELETE /api/releases/platforms/:platformId - Delete a target platform for a project (BA/admin only)
+router.delete(
+  '/releases/platforms/:platformId',
+  requireGroupMembership('BA'),
+  requireReleaseProject,
+  async (req: Request, res: Response) => {
+    try {
+      const { platformId } = req.params;
+      const project =
+        (typeof req.query.project === 'string' && req.query.project) ||
+        (typeof req.body?.project === 'string' && req.body.project) ||
+        '';
+      if (!project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      await deleteProjectReleasePlatform(project, platformId);
+      return res.json({ success: true, deletedPlatformId: platformId });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to delete release platform');
+    }
+  },
+);
+
+// PUT /api/releases/work-items/:workItemId/platforms - Assign explicit platforms to a work item (BA/admin only)
+router.put(
+  '/releases/work-items/:workItemId/platforms',
+  requireGroupMembership('BA'),
+  requireReleaseProject,
+  async (req: Request, res: Response) => {
+    try {
+      const workItemId = parseInt(req.params.workItemId, 10);
+      if (isNaN(workItemId) || workItemId <= 0) {
+        return res.status(400).json({ error: 'Invalid work item ID' });
+      }
+      const { project, platformIds } = req.body as {
+        project?: string;
+        platformIds?: string[];
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!Array.isArray(platformIds)) {
+        return res.status(400).json({ error: 'platformIds must be an array' });
+      }
+      const updatedBy = getProfileOid(req) ?? 'unknown';
+      const savedIds = await setReleaseWorkItemPlatforms({
+        project,
+        workItemId,
+        platformIds,
+        updatedBy,
+      });
+      return res.json({ success: true, workItemId, platformIds: savedIds });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to update work item platforms');
+    }
+  },
+);
+
+// PUT /api/releases/:epicId/platforms - Assign explicit platforms to a release epic (BA/admin only)
+router.put(
+  '/releases/:epicId/platforms',
+  requireGroupMembership('BA'),
+  requireReleaseProject,
+  async (req: Request, res: Response) => {
+    try {
+      const epicId = parseInt(req.params.epicId, 10);
+      if (isNaN(epicId) || epicId <= 0) {
+        return res.status(400).json({ error: 'Invalid epic ID' });
+      }
+      const { project, platformIds } = req.body as {
+        project?: string;
+        platformIds?: string[];
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+      if (!Array.isArray(platformIds)) {
+        return res.status(400).json({ error: 'platformIds must be an array' });
+      }
+      const savedIds = await setReleaseEpicPlatforms({
+        project,
+        adoEpicId: epicId,
+        platformIds,
+      });
+      return res.json({ success: true, epicId, platformIds: savedIds });
+    } catch (error) {
+      return handleReleasePlatformError(res, error, 'Failed to update release epic platforms');
+    }
+  },
+);
+
 // GET /api/releases/epics - Get all release Epics with progress, sorted by Apex manual order
 router.get('/releases/epics', async (req: Request, res: Response) => {
   try {
@@ -1328,6 +1548,9 @@ router.get('/releases/epics', async (req: Request, res: Response) => {
     await pruneStaleOrders(project ?? '', normalizedArea, liveIds);
     const { orders } = await getReleaseOrder(project ?? '', normalizedArea);
     const sorted = applyOrderToEpics(epics as Array<{ id: number } & Record<string, unknown>>, orders);
+
+    // Pre-warm headless changelog agent in the background so Create Changelog skips cold start
+    warmReleaseChangelogAgent(project);
 
     res.json(sorted);
   } catch (error: any) {
@@ -1567,6 +1790,51 @@ router.get('/releases/:epicId/related-items', async (req: Request, res: Response
     res.status(500).json({ error: 'Failed to fetch related items' });
   }
 });
+
+// POST /api/releases/:epicId/changelog - Generate platform-aware executive Markdown changelog for a release epic
+router.post(
+  '/releases/:epicId/changelog',
+  requirePermission('planning:releases'),
+  requireReleaseProject,
+  async (req: Request, res: Response) => {
+    try {
+      const epicId = parseInt(req.params.epicId, 10);
+      if (isNaN(epicId) || epicId <= 0) {
+        return res.status(400).json({ error: 'Invalid epic ID' });
+      }
+
+      const { project, areaPath, forceRefresh } = (req.body ?? {}) as {
+        project?: string;
+        areaPath?: string;
+        forceRefresh?: boolean;
+      };
+      if (!project || typeof project !== 'string' || !project.trim()) {
+        return res.status(400).json({ error: 'project is required' });
+      }
+
+      const userId = getUserId(req) ?? undefined;
+      const startedAt = Date.now();
+      const result = await generateReleaseChangelog({
+        epicId,
+        project,
+        areaPath,
+        userId,
+        forceRefresh: Boolean(forceRefresh),
+      });
+      console.info(
+        `[releaseChangelog] epic=${epicId} items=${result.itemCount} source=${result.source} ${Date.now() - startedAt}ms`,
+      );
+
+      return res.json(result);
+    } catch (error: unknown) {
+      if (error instanceof ReleaseChangelogError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
+      console.error('Error generating release changelog:', error);
+      return res.status(500).json({ error: 'Failed to generate release changelog' });
+    }
+  },
+);
 
 // GET /api/releases/:epicId/cycle-time — last In Progress → last Done/Closed for related items
 router.get('/releases/:epicId/cycle-time', async (req: Request, res: Response) => {
@@ -4603,6 +4871,10 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       loadTestGenerationEffort: config.loadTestGenerationEffort ?? null,
       designModuleEffort: config.designModuleEffort ?? null,
       designModuleScopingEffort: config.designModuleScopingEffort ?? null,
+      releaseChangelogSkillPath: config.releaseChangelogSkillPath ?? null,
+      releaseChangelogModel: config.releaseChangelogModel ?? null,
+      releaseChangelogEffort: config.releaseChangelogEffort ?? null,
+      releaseChangelogBedrockModelId: config.releaseChangelogBedrockModelId ?? null,
       defaultEffort: config.defaultEffort ?? null,
     });
   } catch {
@@ -4743,12 +5015,14 @@ router.post(
           .from(chatThreadsSchema)
           .where(drizzleEq(chatThreadsSchema.id, threadId))
           .limit(1);
+        const refreshedContext = buildContextMarkdown(session.contextSnapshot);
         if (threadRow?.workspaceDir) {
           const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
           try {
-            fs.writeFileSync(contextPath, buildContextMarkdown(session.contextSnapshot), 'utf-8');
+            fs.writeFileSync(contextPath, refreshedContext, 'utf-8');
           } catch { /* non-fatal */ }
         }
+        await updateThreadKickoffContext(threadId, refreshedContext);
       }
 
       res.status(isNew ? 201 : 200).json({

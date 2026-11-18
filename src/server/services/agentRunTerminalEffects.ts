@@ -18,18 +18,13 @@
  * Nothing in here throws. The run is already terminal by the time it runs, and
  * the V2 caller acknowledges a Service Bus message straight afterwards.
  */
-import { randomUUID } from 'crypto';
 import type {
   AgentRunLane,
   AgentRunStatus,
   AgentRunTerminalReason,
 } from '../../shared/types/agentRunLifecycle';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
-import {
-  nextRunEventSequence,
-  notifyRunEvent,
-  RUN_EVENT_SOURCE_INSTANCE,
-} from './pgNotifyService';
+import { buildRunDoneEnvelope, notifyRunEvent } from './pgNotifyService';
 import { workerTierTelemetry } from './workerTierTelemetry';
 
 export type TerminalGroundingDeactivator = (
@@ -133,26 +128,6 @@ export async function bestEffortDeactivateGrounding(
   }
 }
 
-function buildTerminalDoneEvent(
-  run: TerminalRunSubject,
-  detail: string | undefined,
-  timestamp: string,
-): AgentRunEventEnvelope {
-  return {
-    eventId: randomUUID(),
-    threadId: run.threadId,
-    runId: run.runId,
-    sourceInstance: RUN_EVENT_SOURCE_INSTANCE,
-    sequence: nextRunEventSequence(run.runId),
-    timestamp,
-    type: 'done',
-    phase: 'completion',
-    status: run.status,
-    detail,
-    event: { type: 'done', runId: run.runId },
-  };
-}
-
 /**
  * Apply the post-terminal effects for a run whichever transport wrote it.
  */
@@ -165,7 +140,12 @@ export async function applyTerminalRunEffects(
     const publish = input.publishRunEvent ?? notifyRunEvent;
     try {
       await publish(
-        buildTerminalDoneEvent(run, input.detail, new Date().toISOString()),
+        buildRunDoneEnvelope({
+          runId: run.runId,
+          threadId: run.threadId,
+          status: run.status,
+          detail: input.detail,
+        }),
         { persist: true },
       );
     } catch {

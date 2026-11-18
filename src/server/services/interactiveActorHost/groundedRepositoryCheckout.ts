@@ -418,6 +418,84 @@ export function createGroundedRepositoryCheckout(
       }
     },
 
+    /**
+     * Restores only the object-only bare repository for `grounding` without
+     * unpacking a working tree (`git ls-tree` + `git worktree add`). Used by
+     * Brainstorm turns so `BareRepoReader` can read directly from the bare
+     * clone without a 30-second startup delay or multi-GB working trees inside
+     * the Cursor Agent's working directory.
+     */
+    async ensureBare(
+      grounding: NonNullable<DurableInteractiveTurnSpecification['grounding']>,
+      signal: AbortSignal,
+    ): Promise<
+      | Readonly<{
+          status: 'ready';
+          identity: RepositoryIdentity;
+          mirrorPath: string;
+          source: 'base' | 'bundle';
+          durationMs: number;
+        }>
+      | Readonly<{
+          status: 'unavailable';
+          reason: GroundedCheckoutUnavailableReason;
+          durationMs: number;
+        }>
+    > {
+      const startedAt = now();
+      const elapsed = () => now() - startedAt;
+      const unavailable = (reason: GroundedCheckoutUnavailableReason) => ({
+        status: 'unavailable' as const,
+        reason,
+        durationMs: elapsed(),
+      });
+      const container = getContainerClient();
+      if (!container) return unavailable('not-configured');
+      let pinnedBase: string | undefined;
+      try {
+        const identity = bundleIdentityForGrounding(grounding);
+        const basePath = basePathFor(identity);
+        pinBase(basePath);
+        pinnedBase = basePath;
+
+        let shared = baseRestores.get(basePath);
+        const ownsRestore = !shared;
+        if (!shared) {
+          const controller = new AbortController();
+          const created: SharedRestore = {
+            outcome: restoreBase(container, identity, basePath, controller.signal),
+            controller,
+            waiters: 0,
+          };
+          shared = created;
+          baseRestores.set(basePath, created);
+          const forget = (): void => {
+            if (baseRestores.get(basePath) === created) baseRestores.delete(basePath);
+          };
+          void created.outcome.then(
+            (outcome) => {
+              if (outcome.status !== 'ready') forget();
+            },
+            forget,
+          );
+        }
+        const outcome = await awaitRestore(basePath, shared, signal);
+        if (outcome.status !== 'ready') return unavailable(outcome.reason);
+        baseLastUsed.set(basePath, now());
+        return {
+          status: 'ready',
+          identity,
+          mirrorPath: basePath,
+          source: ownsRestore ? outcome.source : 'base',
+          durationMs: elapsed(),
+        };
+      } catch {
+        return unavailable('failed');
+      } finally {
+        if (pinnedBase) unpinBase(pinnedBase);
+      }
+    },
+
     /** Removes a thread worktree and returns its share of the disk budget. */
     async release(destination: string): Promise<void> {
       worktreeBytes.delete(destination);

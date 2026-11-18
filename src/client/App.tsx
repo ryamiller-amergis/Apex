@@ -33,8 +33,9 @@ import { RepoSelector } from './components/RepoSelector';
 import { DEFAULT_MODEL_ID } from './config/models';
 import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
+import { SKILL_LEARNING_FLAG } from '../shared/types/featureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
-import { BUILD_FROM_PROMPT_FLAG } from '../shared/types/featureFlags';
+import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
 import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
@@ -55,9 +56,6 @@ import './App.css';
 const ScrumCalendar = lazy(() => import('./components/ScrumCalendar').then(m => ({ default: m.ScrumCalendar })));
 const UnscheduledList = lazy(() => import('./components/UnscheduledList').then(m => ({ default: m.UnscheduledList })));
 const DetailsPanel = lazy(() => import('./components/DetailsPanel').then(m => ({ default: m.DetailsPanel })));
-const CycleTimeAnalytics = lazy(() => import('./components/CycleTimeAnalytics').then(m => ({ default: m.CycleTimeAnalytics })));
-const DevStats = lazy(() => import('./components/DevStats').then(m => ({ default: m.DevStats })));
-const QAMetrics = lazy(() => import('./components/QAMetrics').then(m => ({ default: m.QAMetrics })));
 const RoadmapView = lazy(() => import('./components/RoadmapView').then(m => ({ default: m.RoadmapView })));
 const BoardReleaseRoadmap = lazy(() =>
   import('./components/BoardReleaseRoadmap').then((m) => ({ default: m.BoardReleaseRoadmap })),
@@ -65,12 +63,8 @@ const BoardReleaseRoadmap = lazy(() =>
 const BoardReleaseView = lazy(() =>
   import('./components/BoardReleaseView').then((m) => ({ default: m.BoardReleaseView })),
 );
-const BoardPlanningStats = lazy(() =>
-  import('./components/BoardPlanningStats').then((m) => ({ default: m.BoardPlanningStats })),
-);
 const ReleaseView = lazy(() => import('./components/ReleaseView'));
 const CloudCost = lazy(() => import('./components/CloudCost').then(m => ({ default: m.CloudCost })));
-const AIAnalysis = lazy(() => import('./components/AIAnalysis').then(m => ({ default: m.AIAnalysis })));
 const AiCostAnalytics = lazy(() => import('./components/AiCostAnalytics').then(m => ({ default: m.AiCostAnalytics })));
 const InterviewsDashboard = lazy(() => import('./components/InterviewsDashboard'));
 const InterviewChatView = lazy(() => import('./components/InterviewChatView'));
@@ -87,6 +81,7 @@ const AdminGroups = lazy(() => import('./components/AdminGroups').then(m => ({ d
 const AdminNotifications = lazy(() => import('./components/AdminNotifications').then(m => ({ default: m.AdminNotifications })));
 const LoadTestAllowlistSettings = lazy(() => import('./components/LoadTestAllowlistSettings').then(m => ({ default: m.LoadTestAllowlistSettings })));
 const ApiKeysAdminView = lazy(() => import('./components/ApiKeysAdminView').then(m => ({ default: m.ApiKeysAdminView })));
+const WorkflowEvaluationsPage = lazy(() => import('./components/WorkflowEvaluationsPage').then(m => ({ default: m.WorkflowEvaluationsPage })));
 const PlatformAdmin = lazy(() => import('./components/PlatformAdmin').then(m => ({ default: m.PlatformAdmin })));
 const NotificationsPage = lazy(() => import('./components/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const ProfilePage = lazy(() => import('./components/ProfilePage').then(m => ({ default: m.ProfilePage })));
@@ -98,6 +93,7 @@ const StandupSummaryView = lazy(() => import('./components/StandupSummaryView'))
 const FeatureRequestsView = lazy(() => import('./components/FeatureRequestsView'));
 const ApexWorkBoardView = lazy(() => import('./components/ApexWorkBoardView').then(m => ({ default: m.ApexWorkBoardView })));
 const UiLabView = lazy(() => import('./components/UiLabView').then(m => ({ default: m.UiLabView })));
+const QaLabView = lazy(() => import('./components/QaLabView').then(m => ({ default: m.QaLabView })));
 const DesignModuleView = lazy(() => import('./components/DesignModuleView'));
 const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'));
 const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
@@ -141,21 +137,20 @@ const BrainstormSessionsPage = lazy(() =>
 const BrainstormWorkspace = lazy(() =>
   import('./components/BrainstormWorkspace').then((m) => ({ default: m.BrainstormWorkspace })),
 );
+const ProdSupportPage = lazy(() =>
+  import('./components/GuidedCloudJobs').then((m) => ({ default: m.GuidedCloudJobs })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
-const PLANNING_TABS: readonly PlanningTab[] = ['cycle-time', 'dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+const PLANNING_TABS: readonly PlanningTab[] = ['roadmap', 'releases'];
 
 /** Tabs visible in the tab bar, in display order — used for permission-aware default/fallback. */
-const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['dev-stats', 'qa', 'ai-analysis', 'roadmap', 'releases'];
+const VISIBLE_PLANNING_TABS: readonly PlanningTab[] = ['roadmap', 'releases'];
 
 // data-testid-exempt — TypeScript Record<PlanningTab, …> generic, not JSX
 const PLANNING_TAB_PERMISSIONS: Record<PlanningTab, string> = {
-  'cycle-time':  'planning:view',
-  'dev-stats':   'planning:devstats',
-  'qa':          'planning:qa',
-  'ai-analysis': 'planning:ai-analysis',
-  'roadmap':     'planning:roadmap',
-  'releases':    'planning:releases',
+  'roadmap':  'planning:roadmap',
+  'releases': 'planning:releases',
 };
 
 const isPlanningTab = (value: string | undefined): value is PlanningTab => (
@@ -213,7 +208,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -249,6 +244,8 @@ function App() {
                     ? 'feature-requests'
                     : location.pathname.startsWith('/ui-lab')
                     ? 'ui-lab'
+                    : location.pathname === '/qa-lab'
+                    ? 'qa-lab'
                     : location.pathname === '/ai-cost'
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
@@ -267,6 +264,8 @@ function App() {
                     ? 'mcp-servers'
                     : location.pathname === '/brainstorm' || location.pathname.startsWith('/brainstorm/')
                     ? 'brainstorm'
+                    : location.pathname === '/prod-support'
+                    ? 'prod-support'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -350,6 +349,7 @@ function App() {
   const { flags: homeFlags, isLoading: homeFlagsLoading } = useFeatureFlags(selectedProject);
   const agentHomeFlag = homeFlags['agent-home'] ?? false;
   const interactiveWsEnabled = homeFlags['ai-runs-v2-transport'] === true;
+  const workflowEvaluationsEnabled = homeFlags[SKILL_LEARNING_FLAG] === true;
   const documentLink = useDocumentDeepLinkProject(location.pathname, location.search);
   const {
     data: selectableProjectList = [],
@@ -434,7 +434,8 @@ function App() {
   const menuConfigReady = isRestricted || !menuConfigLoading;
   const canAccessPlaybooks =
     menuConfigReady &&
-    (isSuperAdmin || (effectiveEnabledViews.includes('playbooks') && can('playbooks:view')));
+    effectiveEnabledViews.includes('playbooks') &&
+    can('playbooks:view');
   const canAccessMcpServers =
     mcpServersEnabled &&
     menuConfigReady &&
@@ -442,6 +443,15 @@ function App() {
     effectiveEnabledViews.includes('mcp-servers') &&
     (isSuperAdmin || can('mcp-servers:view'));
   const brainstormFlagOn = !homeFlagsLoading && homeFlags[BRAINSTORM_FLAG] === true;
+  const reportIssueEnabled = !homeFlagsLoading
+    && homeFlags[CLOUD_AGENT_GUIDED_LAUNCH_FLAG] === true
+    && homeFlags[MY_WORK_CLOUD_AGENT_FLAG] === true;
+  const canAccessReportIssue =
+    reportIssueEnabled &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('prod-support') &&
+    (isSuperAdmin || can('chat:create'));
   const canAccessBrainstorm =
     brainstormFlagOn &&
     menuConfigReady &&
@@ -606,6 +616,7 @@ function App() {
       });
       if (access === 'deny') navigate(fallback);
     }
+    if (currentView === 'qa-lab'        && !isSuperAdmin && (!effectiveEnabledViews.includes('qa-lab')    || !can('planning:qa')))       navigate(fallback);
     if (currentView === 'design-module' && !isSuperAdmin && (!effectiveEnabledViews.includes('design-module') || !can('design-module:view'))) navigate(fallback);
     if (currentView === 'load-tests'    && !isSuperAdmin && (!effectiveEnabledViews.includes('load-tests')    || !can('load-test:view')))    navigate(fallback);
     if (currentView === 'diagrams'      && !isSuperAdmin && (!effectiveEnabledViews.includes('diagrams')      || !can('diagram:view')))      navigate(fallback);
@@ -616,10 +627,12 @@ function App() {
         navigate(fallback);
       } else if (!isSuperAdmin && !can(PLANNING_TAB_PERMISSIONS[planningTab])) {
         const firstAccessible = VISIBLE_PLANNING_TABS.find((t) => can(PLANNING_TAB_PERMISSIONS[t]));
-        navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback);
+        navigate(firstAccessible ? `/planning/${firstAccessible}` : fallback, { replace: true });
+      } else if (!isPlanningTab(planningTabSegment)) {
+        navigate(`/planning/${planningTab}`, { replace: true });
       }
     }
-  }, [currentView, planningTab, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search, holdLinkedProjectRoute]);
+  }, [currentView, planningTab, planningTabSegment, permissionsLoaded, menuConfigReady, homeFlagsLoading, canAccessHome, can, isInAnyGroup, isSuperAdmin, isRestricted, effectiveEnabledViews, selectedProject, availableProjects, workBoardEnabled, hasUiLabShares, uiLabSharesLoading, uiLabSharesProject, navigate, location.pathname, location.search, holdLinkedProjectRoute]);
 
 
   const { data: skillRepos = [], isLoading: isLoadingSkillRepos } = useSkillRepos(selectedProject || null);
@@ -1007,7 +1020,11 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm)) {
+  if (currentView === 'prod-support' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1044,6 +1061,7 @@ function App() {
             onNavigateMyWork={() => navigateAwayFromHome('/my-work')}
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
             onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
@@ -1056,6 +1074,8 @@ function App() {
             buildsEnabled={buildsEnabled}
             onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
             brainstormEnabled={brainstormFlagOn}
+            onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
+            reportIssueEnabled={reportIssueEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
@@ -1105,6 +1125,7 @@ function App() {
             onNavigateStandup={() => navigateAwayFromHome('/standup')}
             onNavigateFeatureRequests={() => navigateAwayFromHome('/feature-requests')}
             onNavigateUiLab={() => navigateAwayFromHome('/ui-lab')}
+            onNavigateQaLab={() => navigateAwayFromHome('/qa-lab')}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
             onNavigateAiCost={() => navigateAwayFromHome('/ai-cost')}
             onNavigateDesignModule={() => navigateAwayFromHome('/design-module')}
@@ -1117,6 +1138,8 @@ function App() {
             buildsEnabled={buildsEnabled}
             onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
             brainstormEnabled={brainstormFlagOn}
+            onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
+            reportIssueEnabled={reportIssueEnabled}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -1412,6 +1435,24 @@ function App() {
                         API Keys
                       </button>
                     )}
+                    {/* @feature-flag:skill-learning start winner=enabled */}
+                    {workflowEvaluationsEnabled ? (
+                      /* @feature-flag:skill-learning enabled-start */
+                      <button
+                        className={`admin-tab${location.pathname === '/admin/workflow-evaluations' ? ' admin-tab-active' : ''}`}
+                        onClick={() => navigate('/admin/workflow-evaluations')}
+                        type="button"
+                        {...{ 'data-testid': 'admin-tab-workflow-evaluations' }}
+                      >
+                        Workflow evaluations
+                      </button>
+                      /* @feature-flag:skill-learning enabled-end */
+                    ) : (
+                      /* @feature-flag:skill-learning disabled-start */
+                      null
+                      /* @feature-flag:skill-learning disabled-end */
+                    )}
+                    {/* @feature-flag:skill-learning end */}
                   </div>
                   {location.pathname === '/admin/users' ? (
                     <AdminUsers selectedProject={selectedProject} />
@@ -1425,6 +1466,14 @@ function App() {
                     <LoadTestAllowlistSettings selectedProject={selectedProject} />
                   ) : location.pathname === '/admin/api-keys' ? (
                     <ApiKeysAdminView selectedProject={selectedProject} />
+                  // @feature-flag:skill-learning start winner=enabled
+                  ) : location.pathname === '/admin/workflow-evaluations' && homeFlagsLoading ? (
+                    <ViewSkeleton />
+                  ) : location.pathname === '/admin/workflow-evaluations' && workflowEvaluationsEnabled ? (
+                    // @feature-flag:skill-learning enabled-start
+                    <WorkflowEvaluationsPage selectedProject={selectedProject} />
+                    // @feature-flag:skill-learning enabled-end
+                  // @feature-flag:skill-learning end
                   ) : (
                     <AdminRoles selectedProject={selectedProject} />
                   )}
@@ -1506,6 +1555,12 @@ function App() {
                     hasWorkspaceAccess={uiLabWorkspaceAccess}
                   />
                 </div>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'qa-lab' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <QaLabView project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'design-module' ? (
@@ -1592,6 +1647,12 @@ function App() {
                     <BuildsView project={selectedProject} isSuperAdmin={isSuperAdmin} />
                   )}
                 </BuildsRouteGuard>
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'prod-support' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ProdSupportPage project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'brainstorm' ? (
@@ -1722,47 +1783,7 @@ function App() {
                   onNavigate={(tab) => navigate(`/planning/${tab}`)}
                 />
                 <div className="planning-content">
-                  {planningTab === 'cycle-time' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="cycle-time" />
-                        ) : (
-                          <CycleTimeAnalytics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'dev-stats' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="dev-stats" />
-                        ) : (
-                          <DevStats workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'qa' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="qa" />
-                        ) : (
-                          <QAMetrics workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'ai-analysis' ? (
-                    <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-                      <Suspense fallback={<ViewSkeleton />}>
-                        {usesBoardWorkItems ? (
-                          <BoardPlanningStats project={selectedProject} mode="ai-analysis" />
-                        ) : (
-                          <AIAnalysis workItems={workItems} project={selectedProject} areaPath={selectedAreaPath} onSelectItem={setSelectedItem} />
-                        )}
-                      </Suspense>
-                    </ErrorBoundary>
-                  ) : planningTab === 'roadmap' ? (
+                  {planningTab === 'roadmap' ? (
                     <ErrorBoundary FallbackComponent={ViewErrorFallback}>
                       <Suspense fallback={<ViewSkeleton />}>
                         {usesBoardWorkItems ? (

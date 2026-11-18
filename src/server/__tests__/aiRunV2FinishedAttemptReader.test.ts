@@ -198,7 +198,30 @@ describe('finished V2 attempt reader', () => {
     expect(text).toContain('artifact-harvest:');
     expect(text).toContain('processed_at');
     expect(text).toContain('newer.thread_id');
+    expect(text.replace(/\s+/g, ' ')).toContain(
+      "newer.execution_snapshot->>'workflowClass' = r.execution_snapshot->>'workflowClass'",
+    );
     expect(text).toContain('LIMIT');
+  });
+
+  it('reports a thread as pending while a document run not replaced by the same kind awaits harvest', async () => {
+    const execute = jest.fn().mockResolvedValue([{ pending: true }]);
+    const reader = createFinishedAttemptReader({
+      executor: { execute },
+      inbox: inbox(),
+    });
+
+    await expect(
+      reader.isThreadDocumentHarvestPending('thread-prd'),
+    ).resolves.toBe(true);
+
+    const text = sqlText(execute.mock.calls[0][0]).replace(/\s+/g, ' ');
+    expect(text).toContain('r.thread_id =');
+    expect(text).toContain("r.transport_version = 'servicebus-blob-v2'");
+    expect(text).toContain(
+      "newer.execution_snapshot->>'workflowClass' = r.execution_snapshot->>'workflowClass'",
+    );
+    expect(text).toContain('artifact-harvest:');
   });
 
   it('reports a terminal document run as pending until its harvest claim is processed', async () => {

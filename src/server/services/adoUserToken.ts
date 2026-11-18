@@ -5,13 +5,13 @@ import { ConfidentialClientApplication } from '@azure/msal-node';
  * Azure DevOps resource (app) ID. The "/.default" scope requests a token whose
  * audience is Azure DevOps, redeemable against the ADO REST API as the user.
  */
-const ADO_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
+export const ADO_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
 
 /** Refresh the cached token this many ms before it actually expires. */
 const EXPIRY_SKEW_MS = 5 * 60 * 1000;
 
 /** Sentinel refresh token issued by the dev-login mock user (auth.ts). */
-const DEV_MOCK_REFRESH_TOKEN = 'mock-refresh-token';
+export const DEV_MOCK_REFRESH_TOKEN = 'mock-refresh-token';
 
 /**
  * Thrown when an ADO write is attempted but no per-user Azure DevOps token can be
@@ -30,7 +30,7 @@ export class AdoUserAuthError extends Error {
 
 let cachedClient: ConfidentialClientApplication | null = null;
 
-function getMsalClient(): ConfidentialClientApplication | null {
+export function getMsalClient(): ConfidentialClientApplication | null {
   const clientId = process.env.AZURE_CLIENT_ID;
   const tenantId = process.env.AZURE_TENANT_ID;
   const clientSecret = process.env.AZURE_CLIENT_SECRET;

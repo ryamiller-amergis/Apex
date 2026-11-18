@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
 import styles from './PrdAssistantPanel.module.css';
 
@@ -45,11 +46,19 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   const [isDragging, setIsDragging] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const skipAutoCreateRef = useRef(false);
 
   const qc = useQueryClient();
 
   const session = useAgentChatSession(threadId);
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const {
     messages,
     streamingText,
@@ -138,12 +147,23 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     textareaRef.current?.focus();
   }, []);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text) return;
+    const outgoing = [...attachments];
+    if (!text && outgoing.length === 0) return;
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    await session.send(text);
-  }, [input, session]);
+    const sent = await session.send(
+      message,
+      outgoing.length > 0 ? { attachments: outgoing } : undefined,
+    );
+    if (sent && outgoing.length > 0) clearAttachments();
+  }, [attachments, clearAttachments, input, session]);
 
   const visibleMessages = messages.filter((m) => m.role !== 'tool' && !m.hidden && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
 
@@ -249,6 +269,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               disabled={isRunning || isSending || isCreating || !threadId}
               isRunning={isRunning}
               isSending={isSending}
+              allowEmptySend
               placeholder={
                 isCreating ? 'Starting assistant…' :
                 isRunning ? 'Agent is thinking…' :
@@ -256,6 +277,22 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               }
               testIdPrefix="prd-assistant"
               textareaRef={textareaRef}
+              attachments={attachments}
+              attachmentError={attachmentError}
+              onRemoveAttachment={removeAttachment}
+              onAttachClick={() => fileInputRef.current?.click()}
+              onPasteFiles={(files) => { void addFiles(files); }}
+              fileInput={(
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => { void handleAttachmentChange(event); }}
+                  disabled={isRunning || isSending || isCreating || !threadId}
+                  {...{ 'data-testid': 'prd-assistant-file-input' }}
+                />
+              )}
               {...{ 'data-testid': 'prd-assistant-composer' }}
             />
           )}

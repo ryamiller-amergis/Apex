@@ -41,9 +41,50 @@
     "assumptions": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "placement": { "$ref": "#/definitions/placement" },
+    "newPlacements": {
+      "type": "array",
+      "description": "Test Plans or suites to create because none in .ai-pilot/test-plans.md fits. QA approves each in Apex before it is created.",
+      "items": { "$ref": "#/definitions/newPlacement" }
     }
   },
   "definitions": {
+    "newPlacement": {
+      "type": "object",
+      "required": ["testPlan", "createPlan", "suiteType", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "testPlan": { "type": "string", "minLength": 1 },
+        "testSuite": { "type": "string", "description": "Static suite path `A > B`. Omit for requirement suites." },
+        "createPlan": { "type": "boolean" },
+        "suiteType": { "enum": ["static", "requirement"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "description": "Where Apex files published Test Cases in Azure DevOps. Omit to link each case to its requirement with Tested By. A case-level placement overrides this one; tags from both are combined.",
+      "additionalProperties": false,
+      "properties": {
+        "linkTo": {
+          "type": "string",
+          "enum": ["requirement", "parent", "root"],
+          "description": "requirement = the PBI/Bug that owns the case; parent = that item's parent (usually the Feature); root = the work item QA generated from"
+        },
+        "linkType": { "type": "string", "enum": ["tested-by", "hierarchy", "related"] },
+        "areaPath": { "type": "string", "maxLength": 256, "description": "Must be under the project, e.g. Project\\Team\\Module" },
+        "iterationPath": { "type": "string", "maxLength": 256, "description": "Must be under the project" },
+        "testPlan": { "type": "string", "maxLength": 256, "description": "Proposed Azure Test Plan name, copied from the Azure Test Plans list in the kickoff context. QA confirms it in Apex before publish." },
+        "testSuite": { "type": "string", "maxLength": 256, "description": "Proposed static suite path inside testPlan, e.g. Feature > Sub-feature. QA confirms it in Apex before publish." },
+        "requireSuite": { "type": "boolean", "description": "Set at the top level when the project files every case in a Test Plan suite. Apex then refuses to publish a case without a confirmed suite." },
+        "tags": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[^;]+$" }
+        }
+      }
+    },
     "moscowPriority": {
       "type": "string",
       "enum": ["Must Have", "Should Have", "Could Have", "Won't Have"]
@@ -111,6 +152,18 @@
         "rationale": { "type": "string" }
       }
     },
+    "existingCase": {
+      "type": "object",
+      "description": "Set when an Azure DevOps Test Case already covers this scenario. Ids come only from .ai-pilot/existing-test-cases.json or .ai-pilot/test-case-index.md.",
+      "required": ["adoTestCaseId", "status", "reason", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "adoTestCaseId": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["up-to-date", "needs-update"] },
+        "reason": { "type": "string" },
+        "source": { "enum": ["linked", "suite"] }
+      }
+    },
     "testCase": {
       "type": "object",
       "required": ["id", "title", "type", "tier", "priority", "persona", "preconditions", "steps", "expectedResult", "traceability", "automation"],
@@ -129,7 +182,9 @@
         "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/step" } },
         "expectedResult": { "type": "string" },
         "traceability": { "$ref": "#/definitions/traceability" },
-        "automation": { "$ref": "#/definitions/automation" }
+        "automation": { "$ref": "#/definitions/automation" },
+        "placement": { "$ref": "#/definitions/placement" },
+        "existing": { "$ref": "#/definitions/existingCase" }
       }
     },
     "suite": {

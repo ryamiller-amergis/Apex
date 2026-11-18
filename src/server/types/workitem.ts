@@ -1,3 +1,19 @@
+export interface WorkItemChildRollup {
+  totalItems: number;
+  greenItems: number;
+  amberItems: number;
+  redItems: number;
+  completionPercent: number;
+  childrenSummary?: Array<{
+    id: number;
+    state: string;
+    workItemType?: string;
+    tags?: string;
+    ancestorIds?: number[];
+    ancestorTags?: string;
+  }>;
+}
+
 export interface WorkItem {
   id: number;
   title: string;
@@ -20,6 +36,7 @@ export interface WorkItem {
   design?: string;
   discussions?: string;
   parentId?: number;
+  childRollup?: WorkItemChildRollup;
 }
 
 export interface StateTransition {

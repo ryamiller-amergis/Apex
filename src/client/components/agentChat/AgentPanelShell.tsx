@@ -18,6 +18,7 @@ interface AgentPanelShellProps {
   pageLayout?: boolean;
   /** Drops the header bar chrome and title, leaving only `actions`. */
   bareHeader?: boolean;
+  'data-testid'?: string;
   /**
    * Lifts the bare header out of the layout flow so it does not reserve a row.
    * Only safe when the content below it is centered with room to spare.
@@ -42,12 +43,13 @@ export const AgentPanelShell: React.FC<AgentPanelShellProps> = ({
   pageLayout = false,
   bareHeader = false,
   floatHeader = false,
+  'data-testid': dataTestId = 'agent-slideout-shell',
 }) => (
   <aside
     className={`${styles.shell} ${className ?? ''}`.trim()}
     style={pageLayout ? undefined : { width }}
     aria-label={ariaLabel}
-    {...{ 'data-testid': 'agent-slideout-shell' }}
+    {...{ 'data-testid': dataTestId }}
   >
     <div
       className={styles['overlay-mode-marker']}

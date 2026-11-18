@@ -1,0 +1,81 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.input,
+.textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.textarea {
+  min-height: 140px;
+  width: 100%;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8125rem;
+}
+
+.wide {
+  flex: 1 1 320px;
+}
+
+.error {
+  color: var(--danger-color, #dc2626);
+  font-size: 0.875rem;
+}
+
+.reasons {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-primary);
+}
+
+.diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.skillText {
+  max-height: 420px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border-color-light);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
+
+.verdict-promote {
+  color: var(--success-color, #16a34a);
+  font-weight: 600;
+}
+
+.verdict-keep_current,
+.verdict-insufficient_data {
+  color: var(--text-muted);
+  font-weight: 600;
+}

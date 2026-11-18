@@ -1,4 +1,5 @@
 import type { PlaybookGraph, PlaybookLayoutPositions } from '../../shared/types/playbook';
+import { defaultPlaybookConnectorConfig } from '../../shared/types/playbookConnectors';
 
 export type PlaybookFlowNodeData = {
   stepType: string;
@@ -6,6 +7,12 @@ export type PlaybookFlowNodeData = {
   config: Record<string, unknown>;
   readOnly?: boolean;
   runStatus?: string;
+  /** What is wrong with this step, as the server's check words it. Empty or absent when nothing is. */
+  issues?: string[];
+  /** Copied from the graph node so a canvas edit does not drop a parallel split. */
+  parallel?: boolean;
+  /** The author's name for the step. */
+  title?: string;
 };
 
 export type PlaybookFlowNode = {
@@ -23,6 +30,15 @@ export type PlaybookFlowEdge = {
 };
 
 const NODE_TYPE = 'playbookStep';
+const CONNECTOR_NODE_TYPE = 'playbookConnector';
+
+export function flowNodeType(stepType: string): string {
+  return stepType === 'connector' ? CONNECTOR_NODE_TYPE : NODE_TYPE;
+}
+
+export function initialStepConfig(stepType: string): Record<string, unknown> {
+  return stepType === 'connector' ? defaultPlaybookConnectorConfig() : {};
+}
 
 export function graphToFlow(
   graph: PlaybookGraph,
@@ -33,12 +49,14 @@ export function graphToFlow(
     const position = positions[node.id] ?? { x: 40 + (index % 4) * 340, y: 40 + Math.floor(index / 4) * 140 };
     return {
       id: node.id,
-      type: NODE_TYPE,
+      type: flowNodeType(node.stepType),
       position,
       data: {
         stepType: node.stepType,
         label: node.id,
         config: node.config ?? {},
+        ...(node.parallel ? { parallel: true } : {}),
+        ...(node.title ? { title: node.title } : {}),
       },
     };
   });
@@ -61,7 +79,9 @@ export function flowToGraph(
     nodes: nodes.map((node) => ({
       id: node.id,
       stepType: node.data.stepType,
+      ...(node.data.title ? { title: node.data.title } : {}),
       ...(Object.keys(node.data.config).length ? { config: node.data.config } : {}),
+      ...(node.data.parallel ? { parallel: true } : {}),
     })),
     edges: edges.map((edge) => {
       const source = nodes.find((node) => node.id === edge.source);

@@ -38,6 +38,11 @@ jest.mock('../services/projectSettingsService', () => ({
 // Stubbed so that pulling in the real stepRuns module below does not open a database connection.
 jest.mock('../db/drizzle', () => ({ db: {} }));
 
+const workItemPromptSection = jest.fn();
+jest.mock('../services/playbookSteps/workItemContext', () => ({
+  workItemPromptSection: (...a: unknown[]) => workItemPromptSection(...a),
+}));
+
 const suspendStepRun = jest.fn().mockResolvedValue(undefined);
 const failStepRun = jest.fn().mockResolvedValue(undefined);
 const failStepRunForHuman = jest.fn().mockResolvedValue(true);
@@ -51,11 +56,10 @@ jest.mock('../services/playbookSteps/stepRuns', () => ({
 import fs from 'fs';
 import path from 'path';
 import { executeCursorAgentStep } from '../services/playbookSteps/cursorAgentAdapter';
-import { PHASE_0_ALLOWED_AGENT_SKILLS } from '../services/playbookSteps/registry';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
 
 const INITIATOR = 'initiator-oid';
-const ALLOWED_SKILL = PHASE_0_ALLOWED_AGENT_SKILLS[0];
+const ALLOWED_SKILL = '.cursor/skills/app-knowledge/SKILL.md';
 
 function context(
   overrides: Partial<Record<string, unknown>> = {}
@@ -82,6 +86,38 @@ beforeEach(() => {
   });
   enqueue.mockResolvedValue({ runId: 'agent-run-1' });
   isFeatureEnabled.mockResolvedValue(false);
+  workItemPromptSection.mockResolvedValue(null);
+});
+
+describe('work item in the prompt', () => {
+  it('appends the run work item so the worker needs no Azure DevOps credential', async () => {
+    workItemPromptSection.mockResolvedValue('## Azure DevOps work item 60597\n\n**Title:** Clock-in fails');
+
+    await executeCursorAgentStep(context());
+
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe(
+      'Summarise the design docs\n\n## Azure DevOps work item 60597\n\n**Title:** Clock-in fails'
+    );
+  });
+
+  it('leaves the prompt alone when the run names no work item', async () => {
+    await executeCursorAgentStep(context());
+
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe('Summarise the design docs');
+  });
+
+  it('still runs the step, and tells the agent, when Azure DevOps cannot be read', async () => {
+    workItemPromptSection.mockRejectedValue(new Error('Work item 60597 was not found in Azure DevOps.'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await executeCursorAgentStep(context());
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toContain(
+      'Apex could not read the work item for this run: Work item 60597 was not found in Azure DevOps.'
+    );
+    warn.mockRestore();
+  });
 });
 
 describe('VT-09 — enqueue, correlate, suspend', () => {
@@ -137,14 +173,13 @@ describe('VT-09 — enqueue, correlate, suspend', () => {
     expect(stepDeadline).toBeGreaterThan(agentTimeout);
   });
 
-  it('refuses a Skill outside the allow-list before creating anything', async () => {
-    await expect(
-      executeCursorAgentStep(context({ skillPath: '.cursor/skills/build-test-push/SKILL.md' }))
-    ).rejects.toThrow(/may not run Skill/);
-
-    // The refusal has to cost nothing. Validating after the thread exists would mean cleaning up.
-    expect(createThread).not.toHaveBeenCalled();
-    expect(enqueue).not.toHaveBeenCalled();
+  it('does not refuse the investigation Skill for being unnamed by a list', async () => {
+    await executeCursorAgentStep(
+      context({ skillPath: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md' })
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).not.toMatch(/may not run Skill/);
+    });
   });
 });
 describe('VT-10 — a rejected enqueue leaves nothing dangling', () => {

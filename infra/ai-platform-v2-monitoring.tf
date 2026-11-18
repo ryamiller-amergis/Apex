@@ -54,5 +54,12 @@ resource "azurerm_monitor_diagnostic_setting" "ai_platform_v2_container_logs" {
     category = "ContainerAppSystemLogs"
   }
 
+  # Azure always returns the environment's AllMetrics category, disabled.
+  # Without this block every plan offers to remove it.
+  metric {
+    category = "AllMetrics"
+    enabled  = false
+  }
+
   depends_on = [azapi_resource_action.ai_platform_v2_container_logs_destination]
 }

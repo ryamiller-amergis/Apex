@@ -53,5 +53,5 @@ export interface RepoReader {
   readonly identity: RepositoryIdentity;
   readFile(filePath: string): Promise<string>;
   listDir(dirPath: string): Promise<RepoDirEntry[]>;
-  searchCode(query: string, limit?: number): Promise<RepoSearchResult[]>;
+  searchCode(query: string, limit?: number, path?: string): Promise<RepoSearchResult[]>;
 }

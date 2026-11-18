@@ -11,6 +11,12 @@ import os from 'node:os';
 import path from 'node:path';
 import type { BackgroundWorkflowClass } from '../../shared/types/backgroundWorkflow';
 import type { AiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
+import {
+  JUDGE_APPENDIX_FILE,
+  JUDGE_RESULT_FILE,
+  PROMPTFOO_RESULTS_FILE,
+  PROMPTFOO_SUMMARY_FILE,
+} from '../../shared/types/aiRunV2EvaluationSpec';
 import { WalkthroughAnchorSmartTaggingError } from '../../shared/types/walkthroughAnchorSmartTagging';
 import {
   ArtifactVerificationError,
@@ -27,15 +33,70 @@ import {
   applyV2SmartTaggingResult,
   markV2SmartTaggingFailure,
 } from './walkthroughAnchorSmartTaggingService';
+import {
+  createWorkflowEvaluationJobIngestService,
+  type WorkflowEvaluationJobIngestService,
+} from './workflowEvaluationJobIngestService';
+import {
+  applyReplayCompleted,
+  applyReplayFailed,
+  ownsReplayThread,
+} from './skillExperimentService';
+import {
+  applySkillLearningCompleted,
+  applySkillLearningFailed,
+  ownsSkillLearningThread,
+} from './skillLearningHarvest';
+import {
+  applyObservabilityPoDigestCompleted,
+  applyObservabilityPoDigestFailed,
+} from './observabilityPoDigestRuns';
+import {
+  OBSERVABILITY_PO_DIGEST_RESULT_FILE,
+  SKILL_LEARNING_RESULT_FILE,
+} from '../../shared/types/aiRunV2DocumentSpec';
 
 const HARVEST_BATCH_SIZE = 100;
 const MAX_HARVEST_FAILURES = 3;
+/** The worker attaches the agent's chat reply to every attempt; no document workflow reads it. */
+const AGENT_REPLY_ARTIFACT_PATH = 'output/agent-reply.md';
 
 export type DocumentWorkspaceApplyInput = Readonly<{
   attempt: FinishedV2DocumentAttempt;
   workspacePath: string;
   failureDetail?: string;
 }>;
+
+/**
+ * Skill experiment replays and other Skill Learning runs use their own threads; their output goes
+ * back to Skill Learning, not to a document.
+ */
+export type SkillReplayHarvest = Readonly<{
+  owns: (threadId: string) => boolean;
+  applyCompleted: (input: { runId: string; threadId: string; outputDir: string }) => Promise<void>;
+  applyFailed: (input: { runId: string; threadId: string; reason: string }) => Promise<void>;
+}>;
+
+const defaultSkillReplays: SkillReplayHarvest = {
+  owns: (threadId) => ownsReplayThread(threadId) || ownsSkillLearningThread(threadId),
+  applyCompleted: (input) => (ownsSkillLearningThread(input.threadId)
+    ? applySkillLearningCompleted(input)
+    : applyReplayCompleted(input)),
+  applyFailed: (input) => (ownsSkillLearningThread(input.threadId)
+    ? applySkillLearningFailed(input)
+    : applyReplayFailed(input)),
+};
+
+/** Product Owner digest syntheses; their output goes to `observability_po_digest_runs`. */
+export type ObservabilityDigestHarvest = Readonly<{
+  applyCompleted: (input: { runId: string; outputDir: string }) => Promise<void>;
+  applyFailed: (input: { runId: string; reason: string }) => Promise<void>;
+}>;
+
+const defaultObservabilityDigests: ObservabilityDigestHarvest = {
+  applyCompleted: applyObservabilityPoDigestCompleted,
+  applyFailed: applyObservabilityPoDigestFailed,
+};
 
 export type DocumentV2HarvestDependencies = Readonly<{
   finishedAttempts?: FinishedAttemptReader;
@@ -46,10 +107,13 @@ export type DocumentV2HarvestDependencies = Readonly<{
     runId: string;
     rawJson: string;
   }) => Promise<boolean>;
+  evaluationJobs?: Pick<WorkflowEvaluationJobIngestService, 'applyCompleted' | 'applyFailed'>;
   failWorkflow?: (
     attempt: FinishedV2DocumentAttempt,
     reason: string,
   ) => Promise<void>;
+  skillReplays?: SkillReplayHarvest;
+  observabilityDigests?: ObservabilityDigestHarvest;
   batchSize?: number;
   tempRoot?: string;
 }>;
@@ -106,10 +170,21 @@ function isExpectedArtifactPath(
         /\.test-cases\.json$/i.test(name)
         || /\.test-cases\.md$/i.test(name)
         || /\.backlog\.json$/i.test(name)
+        || /\.case\.json$/i.test(name)
       );
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
+    case 'evaluation-judge':
+      if (segments.length !== 1) return false;
+      return name === JUDGE_RESULT_FILE || name === JUDGE_APPENDIX_FILE;
+    case 'evaluation-promptfoo':
+      if (segments.length !== 1) return false;
+      return name === PROMPTFOO_SUMMARY_FILE || name === PROMPTFOO_RESULTS_FILE;
+    case 'skill-learning':
+      return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
+    case 'observability-po-digest':
+      return segments.length === 1 && name === OBSERVABILITY_PO_DIGEST_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -175,6 +250,7 @@ async function materializeManifest(
 ): Promise<void> {
   assertManifestIdentity(attempt, manifest);
   for (const entry of manifest.files) {
+    if (entry.path === AGENT_REPLY_ARTIFACT_PATH) continue;
     if (!isExpectedArtifactPath(attempt.workflowClass, entry.path)) {
       throw new ArtifactVerificationError(
         `Artifact manifest contains unexpected document output ${entry.path}`,
@@ -203,12 +279,24 @@ async function materializeManifest(
 
 async function applyAttempt(
   attempt: FinishedV2DocumentAttempt,
+  manifest: AiRunV2ArtifactManifest,
   workspacePath: string,
   applyWorkspace: (input: DocumentWorkspaceApplyInput) => Promise<void>,
   applySmartTagging: NonNullable<
     DocumentV2HarvestDependencies['applySmartTagging']
   >,
+  evaluationJobs: NonNullable<DocumentV2HarvestDependencies['evaluationJobs']>,
+  skillReplays: SkillReplayHarvest,
+  observabilityDigests: ObservabilityDigestHarvest,
 ): Promise<void> {
+  if (skillReplays.owns(attempt.threadId)) {
+    await skillReplays.applyCompleted({
+      runId: attempt.runId,
+      threadId: attempt.threadId,
+      outputDir: path.join(workspacePath, '.ai-pilot', 'output'),
+    });
+    return;
+  }
   switch (attempt.workflowClass) {
     case 'prd':
     case 'adr':
@@ -239,6 +327,26 @@ async function applyAttempt(
           'Smart-tagging output matched no pending or already-applied rows',
         );
       }
+      return;
+    case 'evaluation-judge':
+    case 'evaluation-promptfoo':
+      await evaluationJobs.applyCompleted({
+        runId: attempt.runId,
+        threadId: attempt.threadId,
+        workflowClass: attempt.workflowClass,
+        outputDir: path.join(workspacePath, '.ai-pilot', 'output'),
+        manifest,
+      });
+      return;
+    case 'skill-learning':
+      throw new PermanentHarvestApplicationError(
+        `Skill Learning run on thread ${attempt.threadId} has no owner`,
+      );
+    case 'observability-po-digest':
+      await observabilityDigests.applyCompleted({
+        runId: attempt.runId,
+        outputDir: path.join(workspacePath, '.ai-pilot', 'output'),
+      });
       return;
     default: {
       const unhandled: never = attempt.workflowClass;
@@ -283,13 +391,38 @@ export async function harvestFinishedV2Documents(
     dependencies.applyWorkspace ?? defaultApplyWorkspace;
   const applySmartTagging =
     dependencies.applySmartTagging ?? defaultApplySmartTagging;
+  const evaluationJobs =
+    dependencies.evaluationJobs ?? createWorkflowEvaluationJobIngestService();
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
+  const skillReplays = dependencies.skillReplays ?? defaultSkillReplays;
+  const observabilityDigests =
+    dependencies.observabilityDigests ?? defaultObservabilityDigests;
   const failWorkflow =
     dependencies.failWorkflow
     ?? (async (attempt, reason) => {
+      if (skillReplays.owns(attempt.threadId)) {
+        await skillReplays.applyFailed({ runId: attempt.runId, threadId: attempt.threadId, reason });
+        return;
+      }
+      if (attempt.workflowClass === 'observability-po-digest') {
+        await observabilityDigests.applyFailed({ runId: attempt.runId, reason });
+        return;
+      }
       if (attempt.workflowClass === 'walkthrough-smart-tagging') {
         await markV2SmartTaggingFailure({
           threadId: attempt.threadId,
+          reason,
+        });
+        return;
+      }
+      if (
+        attempt.workflowClass === 'evaluation-judge'
+        || attempt.workflowClass === 'evaluation-promptfoo'
+      ) {
+        await evaluationJobs.applyFailed({
+          runId: attempt.runId,
+          threadId: attempt.threadId,
+          workflowClass: attempt.workflowClass,
           reason,
         });
         return;
@@ -337,9 +470,13 @@ export async function harvestFinishedV2Documents(
         );
         await applyAttempt(
           attempt,
+          manifest,
           workspacePath,
           applyWorkspace,
           applySmartTagging,
+          evaluationJobs,
+          skillReplays,
+          observabilityDigests,
         );
       }
 
@@ -354,6 +491,9 @@ export async function harvestFinishedV2Documents(
             detail,
           );
       if (failureCount >= MAX_HARVEST_FAILURES) {
+        console.error(
+          `[documentV2Harvest] Giving up on run ${attempt.runId} (${attempt.workflowClass}): ${detail}`,
+        );
         try {
           await failWorkflow(
             attempt,

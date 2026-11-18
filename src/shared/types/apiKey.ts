@@ -21,7 +21,8 @@ export type ApiKeyScope =
   | 'feature-requests:view'
   | 'feature-requests:submit'
   | 'standup:summary:read'
-  | 'backlog:export';
+  | 'backlog:export'
+  | 'playbooks:trigger';
 
 export const API_KEY_SCOPES: readonly ApiKeyScope[] = [
   'flags:evaluate',
@@ -29,6 +30,7 @@ export const API_KEY_SCOPES: readonly ApiKeyScope[] = [
   'feature-requests:submit',
   'standup:summary:read',
   'backlog:export',
+  'playbooks:trigger',
 ] as const;
 
 export const API_KEY_SCOPE_LABELS: Record<ApiKeyScope, string> = {
@@ -37,6 +39,7 @@ export const API_KEY_SCOPE_LABELS: Record<ApiKeyScope, string> = {
   'feature-requests:submit': 'Feature requests — submit',
   'standup:summary:read': 'Standup — read summaries',
   'backlog:export': 'Backlog / PRD — export',
+  'playbooks:trigger': 'Playbooks — start from an external trigger',
 };
 
 export const API_KEY_SCOPE_HINTS: Record<ApiKeyScope, string> = {
@@ -45,6 +48,7 @@ export const API_KEY_SCOPE_HINTS: Record<ApiKeyScope, string> = {
   'feature-requests:submit': 'Create new feature requests.',
   'standup:summary:read': 'Read standup ceremony summaries.',
   'backlog:export': 'Export approved backlog / PRD artifacts.',
+  'playbooks:trigger': 'Deliver an external event that starts a Playbook.',
 };
 
 /** Derived lifecycle status — no separate revoked/disabled state (BR-008). */

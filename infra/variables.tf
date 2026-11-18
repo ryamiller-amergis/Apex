@@ -556,6 +556,38 @@ variable "ai_runs_runner_identity_name" {
   default     = null
 }
 
+variable "ai_runs_insights_reader_name" {
+  description = "Shared user-assigned identity for MaxView telemetry reads. Dev creates this identity. Prod attaches the same one. Do not create a second identity per environment."
+  type        = string
+  default     = "mi-apex-insights-reader-dev"
+}
+
+variable "ai_runs_insights_reader_resource_group_name" {
+  description = "Resource group of mi-apex-insights-reader-dev. The identity stays in the dev group when prod workers use it."
+  type        = string
+  default     = "rg-scrum-dev"
+}
+
+variable "ai_runs_insights_reader_location" {
+  description = "Region of mi-apex-insights-reader-dev. Must match the identity that already exists."
+  type        = string
+  default     = "East US"
+}
+
+variable "ai_runs_insights_reader_identity" {
+  description = "Resource ID and client ID of mi-apex-insights-reader-dev for environments other than dev. The deploy principal outside dev cannot read the dev subscription, so these are passed in rather than looked up."
+  type = object({
+    id        = string
+    client_id = string
+  })
+  default = null
+
+  validation {
+    condition     = var.environment == "dev" || var.ai_runs_insights_reader_identity != null
+    error_message = "Set ai_runs_insights_reader_identity for every environment except dev."
+  }
+}
+
 variable "ai_runs_max_in_flight" {
   description = "Global background in-flight cap. Must match App Service AI_RUNS_BACKGROUND_INFLIGHT_LIMIT and KEDA max_executions (Phase 1: 8–12; default 10)."
   type        = number
@@ -622,6 +654,12 @@ variable "ai_runs_key_vault_id" {
   description = "Existing Key Vault resource ID holding CURSOR_API_KEY. Null provisions a dedicated Apex AI-runs vault."
   type        = string
   default     = null
+}
+
+variable "ai_runs_key_vault_secrets_officer_ids" {
+  description = "Entra object IDs (people or pipeline identities that run apply) granted Key Vault Secrets Officer on the dedicated AI-runs vault, so Terraform can write CURSOR_API_KEY."
+  type        = set(string)
+  default     = []
 }
 
 variable "ai_runs_cursor_api_key_secret_id" {
@@ -1035,6 +1073,20 @@ variable "ai_platform_v2_documents_container_app_name" {
   default     = null
 }
 
+variable "ai_platform_v2_documents_aws_access_key_id" {
+  description = "AWS access key id the document worker uses for Bedrock to grade Promptfoo llm-rubric checks. Null leaves grading off."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "ai_platform_v2_documents_aws_secret_access_key" {
+  description = "AWS secret access key the document worker uses for Bedrock to grade Promptfoo llm-rubric checks."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 variable "ai_platform_v2_orchestrator_image" {
   description = "Full ACR image reference for the orchestrator (e.g. acrapexltdev.azurecr.io/apex-ai-orchestrator:latest)."
   type        = string
@@ -1333,9 +1385,15 @@ variable "ai_platform_v2_interactive_workspace_storage_name" {
 }
 
 variable "ai_platform_v2_interactive_workspace_mount_path" {
-  description = "Mount path for the shared actor-host workspace."
+  description = "Mount path for the shared actor-host workspace. AI_PILOT_DATA_DIR uses this path whether or not the share is mounted."
   type        = string
   default     = "/home/data/ai-pilot"
+}
+
+variable "ai_platform_v2_interactive_mount_workspace_share" {
+  description = "Mount the Azure Files workspace share on the V2 agentic and fast-interactive hosts. Set false once Brainstorm sources and grounding come from Blob bundles in this environment."
+  type        = bool
+  default     = true
 }
 
 variable "ai_platform_v2_interactive_grounding_container_name" {

@@ -53,6 +53,7 @@ const FEATURE_LABELS: Record<string, string> = {
   'design-plan': 'Design Plan',
   'design-prototype': 'Prototype',
   'my-work': 'My Work (Dev)',
+  'cloud-agent': 'Cloud Agent',
   standup: 'Standup',
   'test-case': 'Test Cases',
   'feature-request': 'Feature Requests',
@@ -60,6 +61,8 @@ const FEATURE_LABELS: Record<string, string> = {
   'backlog-generate': 'Backlog Generation',
   'home-chat': 'Home Chat (Ask Apex)',
   'ai-cost-insights': 'AI Cost Insights',
+  'workflow-evaluation': 'Workflow Evaluation',
+  'skill-learning': 'Skill Learning',
   other: 'Other',
 };
 
@@ -82,6 +85,7 @@ const FEATURE_COLORS: Record<string, string> = {
   'design-plan': '#f43f5e',
   'design-prototype': '#ef4444',
   'my-work': '#f97316',
+  'cloud-agent': '#0369a1',
   standup: '#eab308',
   'test-case': '#84cc16',
   'feature-request': '#22c55e',
@@ -89,6 +93,8 @@ const FEATURE_COLORS: Record<string, string> = {
   'backlog-generate': '#0ea5e9',
   'home-chat': '#3b82f6',
   'ai-cost-insights': '#64748b',
+  'workflow-evaluation': '#d946ef',
+  'skill-learning': '#a855f7',
   other: '#94a3b8',
 };
 

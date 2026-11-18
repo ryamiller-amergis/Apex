@@ -1,7 +1,8 @@
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { adrs, documentOwnerApprovals, interviews, prds, designDocs, designPrototypes } from '../db/schema';
+import { adrs, documentOwnerApprovals, interviews, prds, designDocs, designPrototypes, testCases } from '../db/schema';
 import type { DocumentOwnerApproval, OwnerApprovalDocumentType, OwnerApprovalStatus } from '../../shared/types/approvals';
+import { emitReviewDecisionSignal } from './reviewDecisionSignals';
 
 export async function getOwnerApproval(
   documentId: string,
@@ -55,6 +56,10 @@ export async function recordOwnerApproval(
     })
     .returning();
 
+  if (status === 'approved' || status === 'revision_requested') {
+    emitReviewDecisionSignal({ documentId, documentType, actorId: ownerUserId, role: 'owner', status, respondedAt: now, comment });
+  }
+
   return {
     id: row.id,
     documentId: row.documentId,
@@ -78,6 +83,15 @@ export async function isDocumentOwner(
 ): Promise<boolean> {
   const ownerId = await resolveDocumentOwnerId(documentId, documentType);
   return ownerId === userId;
+}
+
+/** Test case ownership is set per PRD, so a test case record is owned by its PRD's test case owner. */
+export async function isTestCaseRecordOwner(testCaseId: string, userId: string): Promise<boolean> {
+  const record = await db.query.testCases.findFirst({
+    where: eq(testCases.id, testCaseId),
+    columns: { prdId: true },
+  });
+  return record ? isDocumentOwner(record.prdId, 'test_case', userId) : false;
 }
 
 export async function resolveDocumentOwnerId(

@@ -64,7 +64,7 @@ import { APEX_ASSIGNEE_ID } from '../../shared/types/apexWorkItem';
 const MAX_BOARD_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 export { APEX_OWNER };
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function httpError(msg: string, status = 400): Error {
   const e = new Error(msg);
@@ -450,14 +450,14 @@ async function toApexWorkItem(
   };
 }
 
-// â”€â”€ Eligible owners â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Eligible owners ───────────────────────────────────────────────────────────
 
 export async function listEligibleOwners(project: string): Promise<WorkItemOwnerSummary[]> {
   const p = requireProject(project);
   return listProjectAssignees(p);
 }
 
-// â”€â”€ Releases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Releases ──────────────────────────────────────────────────────────────────
 
 export async function listReleases(project: string): Promise<ApexRelease[]> {
   const p = requireProject(project);
@@ -546,7 +546,7 @@ export async function deleteRelease(id: string, project: string): Promise<void> 
   await db.delete(apexReleases).where(eq(apexReleases.id, id));
 }
 
-// â”€â”€ Filter facets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Filter facets ─────────────────────────────────────────────────────────────
 
 export async function listFilterFacets(project: string): Promise<ApexWorkItemFacets> {
   const p = requireProject(project);
@@ -561,7 +561,7 @@ export async function listFilterFacets(project: string): Promise<ApexWorkItemFac
   return { epicTitles, featureTitles, owners, releases };
 }
 
-// â”€â”€ List â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── List ──────────────────────────────────────────────────────────────────────
 
 export async function listApexWorkItems(filters: ApexWorkItemFilters): Promise<ApexWorkItem[]> {
   const project = requireProject(filters.project);
@@ -618,7 +618,7 @@ export async function listApexWorkItems(filters: ApexWorkItemFilters): Promise<A
   return items;
 }
 
-// â”€â”€ Due-soon notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Due-soon notifications ────────────────────────────────────────────────────
 
 let lastDueSoonCheckAt = 0;
 const DUE_SOON_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -687,7 +687,7 @@ export async function notifyDueSoonWorkItems(): Promise<number> {
   return created;
 }
 
-// â”€â”€ Get by id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Get by id ─────────────────────────────────────────────────────────────────
 
 function toHierarchyNode(row: {
   id: string;
@@ -766,7 +766,7 @@ export async function getApexWorkItem(id: string, project?: string): Promise<Ape
   return item;
 }
 
-// â”€â”€ Create (standalone) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Create (standalone) ───────────────────────────────────────────────────────
 
 export async function createApexWorkItem(
   actorId: string,
@@ -832,14 +832,14 @@ export async function createApexWorkItem(
   return item;
 }
 
-// â”€â”€ Process 1 â€” Materialize from PRD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Process 1 — Materialize from PRD ─────────────────────────────────────────
 
 export async function materializeFromPrd(
   actorId: string,
   dto: MaterializeFromPrdDTO,
 ): Promise<ApexWorkItem[]> {
   if (!dto.backlogItemIds.length) throw httpError('No backlog items selected');
-  throw httpError('backlogItems metadata must be supplied via API payload â€” use materializeFromPrdWithItems', 400);
+  throw httpError('backlogItems metadata must be supplied via API payload — use materializeFromPrdWithItems', 400);
 }
 
 export interface BacklogItemMeta {
@@ -1045,7 +1045,7 @@ export async function materializeFromPrdWithItems(
     }
     if (plan?.action === 'choose') {
       throw httpError(
-        `Ambiguous match for "${item.title}" â€” choose a board item, Create new, or Skip`,
+        `Ambiguous match for "${item.title}" — choose a board item, Create new, or Skip`,
         400,
       );
     }
@@ -1186,7 +1186,7 @@ export async function materializeFromPrdWithItems(
   return { created, linked, skipped };
 }
 
-// â”€â”€ Process 2 â€” AI generate drafts from Feature Request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Process 2 — AI generate drafts from Feature Request ──────────────────────
 
 export function buildGenerateDraftPrompt(
   fr: { title: string; request: string; advantage: string | null },
@@ -1208,7 +1208,7 @@ export function buildGenerateDraftPrompt(
     '- outcome (description): MUST use Mike Cohn user-story format on one or three lines:',
     '  "As a <role>, I want <capability>, So that <benefit>"',
     '  Prefer three lines: "As a <role>\\nI want <capability>\\nSo that <benefit>"',
-    '  PBI â†’ end-user role; TBI â†’ developer/system role; Bug â†’ affected user role',
+    '  PBI → end-user role; TBI → developer/system role; Bug → affected user role',
     '- type: PBI for user-facing, TBI for technical, Bug for defect',
     '- acceptanceCriteria: 2-4 items; EACH item MUST use Given: / When: / Then: (with colons) on separate lines',
   ]
@@ -1264,7 +1264,7 @@ export async function generateDraftsFromFeatureRequest(
               `Given: a user working on "${fr.title}"`,
               `When: they complete the requested behavior (${given.slice(0, 160)})`,
               fr.advantage
-                ? `Then: the outcome is achieved â€” ${fr.advantage}`
+                ? `Then: the outcome is achieved — ${fr.advantage}`
                 : 'Then: the feature behaves as described and key steps are verifiable end-to-end',
             ].join('\n'),
             done: false,
@@ -1396,7 +1396,7 @@ export async function createFromDrafts(
                 : 'create';
 
       if (action === 'choose') {
-        throw httpError(`Ambiguous match for draft "${draft.title}" â€” choose Link, Create, or Skip`, 400);
+        throw httpError(`Ambiguous match for draft "${draft.title}" — choose Link, Create, or Skip`, 400);
       }
       if (action === 'skip') {
         skipped += 1;
@@ -1486,7 +1486,7 @@ export async function createFromDrafts(
   return { created, linked, skipped };
 }
 
-// â”€â”€ Update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Update ────────────────────────────────────────────────────────────────────
 
 export async function updateApexWorkItem(
   id: string,
@@ -1571,7 +1571,7 @@ export async function updateApexWorkItem(
   return item;
 }
 
-// â”€â”€ Move â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Move ──────────────────────────────────────────────────────────────────────
 
 export async function moveApexWorkItem(
   id: string,
@@ -1655,7 +1655,7 @@ export async function moveApexWorkItem(
   return item;
 }
 
-// â”€â”€ Bulk update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Bulk update ───────────────────────────────────────────────────────────────
 
 export async function bulkUpdateApexWorkItems(
   actorId: string,
@@ -1755,7 +1755,7 @@ export async function rankApexWorkItems(
   return { items: rankedItems, rankedAt };
 }
 
-// â”€â”€ Comments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Comments ──────────────────────────────────────────────────────────────────
 
 export async function listComments(workItemId: string, project: string): Promise<ApexWorkItemComment[]> {
   const rows = await db
@@ -1811,7 +1811,7 @@ export async function addComment(
 
   await appendEvent(db, workItemId, actorId, 'commented', { details: { commentId: row.id } });
 
-  // Mention detection: @DisplayName or bare emails â€” notify mentioned project members
+  // Mention detection: @DisplayName or bare emails — notify mentioned project members
   const mentionPattern = /@([A-Za-z0-9._+-]+(?:\s+[A-Za-z0-9._+-]+)?)/g;
   const owners = await listEligibleOwners(p);
   const actorName = await resolveActorName(actorId);
@@ -1860,7 +1860,7 @@ export async function addComment(
   };
 }
 
-// â”€â”€ Attachments (disk under data root, or external URL) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Attachments (disk under data root, or external URL) ───────────────────────
 
 function isExternalAttachmentUrl(storagePath: string): boolean {
   return /^https?:\/\//i.test(storagePath);
@@ -2071,7 +2071,7 @@ export async function removeAttachment(
   emitBoardChange(p, { action: 'attachment_removed', itemId: workItemId });
 }
 
-// â”€â”€ Materialized item ids for a PRD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Materialized item ids for a PRD ───────────────────────────────────────────
 
 export async function getMaterializedItemIds(prdId: string, project?: string): Promise<string[]> {
   const conditions = [
@@ -2086,7 +2086,7 @@ export async function getMaterializedItemIds(prdId: string, project?: string): P
   return rows.map((r) => r.backlogItemId!);
 }
 
-// â”€â”€ Analytics helpers (for Planning re-base) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Analytics helpers (for Planning re-base) ──────────────────────────────────
 
 export async function getBoardEventStats(project: string, fromIso?: string, toIso?: string) {
   const p = requireProject(project);

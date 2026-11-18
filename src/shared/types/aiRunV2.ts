@@ -127,7 +127,22 @@ export type AiRunV2TextDeltaProgress = Readonly<{
   text: string;
 }>;
 
-export type AiRunV2RunProgress = AiRunV2TextDeltaProgress;
+/**
+ * A summarized Cursor event emitted by a worker. It is persisted to
+ * agent_run_events so Playbook Agent tasks can replay their live activity.
+ */
+export type AiRunV2ActivityEventProgress = Readonly<{
+  kind: 'activity_event';
+  eventType: string;
+  phase: string;
+  status: string;
+  detail?: string;
+  event: Record<string, unknown>;
+}>;
+
+export type AiRunV2RunProgress =
+  | AiRunV2TextDeltaProgress
+  | AiRunV2ActivityEventProgress;
 
 export const AI_RUN_V2_RESULT_KINDS = ['terminal'] as const;
 export type AiRunV2ResultKind = (typeof AI_RUN_V2_RESULT_KINDS)[number];
@@ -248,12 +263,24 @@ function isNonNegativeNumber(value: unknown): value is number {
 function isAiRunV2RunProgress(value: unknown): value is AiRunV2RunProgress {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
-  return (
+  if (
     candidate.kind === 'text_delta'
     && Number.isSafeInteger(candidate.offset)
     && (candidate.offset as number) >= 0
     && isNonEmptyString(candidate.text)
     && new TextEncoder().encode(candidate.text).byteLength
+      <= AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES
+  ) return true;
+  return (
+    candidate.kind === 'activity_event'
+    && isNonEmptyString(candidate.eventType)
+    && isNonEmptyString(candidate.phase)
+    && isNonEmptyString(candidate.status)
+    && candidate.event !== null
+    && typeof candidate.event === 'object'
+    && !Array.isArray(candidate.event)
+    && (candidate.detail === undefined || typeof candidate.detail === 'string')
+    && new TextEncoder().encode(JSON.stringify(candidate)).byteLength
       <= AI_RUN_V2_MAX_PROGRESS_TEXT_BYTES
   );
 }

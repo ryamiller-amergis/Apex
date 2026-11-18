@@ -6,11 +6,14 @@ import {
 } from '@tanstack/react-query';
 import type {
   AddAdrLinkRequest,
+  AddBrainstormLinkRequest,
   AddDesignModuleLinkRequest,
+  AddReferenceRepositoryRequest,
   LinkCandidateType,
   LinkMutationResult,
   LinkedContextReadModel,
   PaginatedCandidates,
+  ReferenceRepositoriesReadModel,
 } from '../../shared/types/interviewLinks';
 
 const CANDIDATE_STALE_TIME_MS = 30_000;
@@ -53,6 +56,8 @@ export type PersistStagedLinksResult = {
 export const interviewLinkKeys = {
   links: (interviewId: string) =>
     ['interview-links', interviewId] as const,
+  referenceRepositories: (interviewId: string) =>
+    ['interview-reference-repositories', interviewId] as const,
   candidateRoot: (project: string, interviewId: string | null) =>
     ['interview-link-candidates', project, interviewId] as const,
   candidates: (
@@ -116,6 +121,23 @@ function candidatesUrl(
     ? `/api/interviews/${encodeURIComponent(interviewId)}/link-candidates`
     : '/api/interviews/link-candidates';
   return `${root}?${params.toString()}`;
+}
+
+function linkCount(
+  model: Pick<LinkedContextReadModel, 'adrLinks' | 'designModuleLinks' | 'brainstormLinks'>,
+): number {
+  return model.adrLinks.length + model.designModuleLinks.length + (model.brainstormLinks?.length ?? 0);
+}
+
+function linkPath(selection: StagedLinkSelection): { path: string; body: Record<string, string> } {
+  switch (selection.type) {
+    case 'adr':
+      return { path: 'adr', body: { adrId: selection.id } };
+    case 'design-module':
+      return { path: 'design-module', body: { designModuleId: selection.id } };
+    case 'brainstorm':
+      return { path: 'brainstorm', body: { brainstormSessionId: selection.id } };
+  }
 }
 
 function reconcileLinkedContext(
@@ -239,7 +261,7 @@ export function useRemoveAdrLink(interviewId: string, project: string) {
           return {
             ...current,
             adrLinks,
-            count: adrLinks.length + current.designModuleLinks.length,
+            count: linkCount({ ...current, adrLinks }),
           };
         },
       );
@@ -288,7 +310,7 @@ export function useRemoveDesignModuleLink(
           return {
             ...current,
             designModuleLinks,
-            count: current.adrLinks.length + designModuleLinks.length,
+            count: linkCount({ ...current, designModuleLinks }),
           };
         },
       );
@@ -309,6 +331,107 @@ export function useRemoveDesignModuleLink(
   });
 }
 
+export function useAddBrainstormLink(interviewId: string, project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<LinkMutationResult, Error, AddBrainstormLinkRequest>({
+    mutationFn: (body) =>
+      apiFetch(`/api/interviews/${encodeURIComponent(interviewId)}/links/brainstorm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (result) =>
+      reconcileLinkedContext(queryClient, interviewId, result),
+    onSettled: () =>
+      invalidateLinkedContext(queryClient, interviewId, project),
+  });
+}
+
+export function useRemoveBrainstormLink(interviewId: string, project: string) {
+  const queryClient = useQueryClient();
+  return useMutation<LinkMutationResult, Error, string, RemoveMutationContext>({
+    mutationFn: (brainstormSessionId) =>
+      apiFetch(
+        `/api/interviews/${encodeURIComponent(interviewId)}/links/brainstorm/${encodeURIComponent(brainstormSessionId)}`,
+        { method: 'DELETE' },
+      ),
+    onMutate: async (brainstormSessionId) => {
+      await queryClient.cancelQueries({
+        queryKey: interviewLinkKeys.links(interviewId),
+      });
+      const previous = queryClient.getQueryData<LinkedContextReadModel>(
+        interviewLinkKeys.links(interviewId),
+      );
+      queryClient.setQueryData<LinkedContextReadModel>(
+        interviewLinkKeys.links(interviewId),
+        (current) => {
+          if (!current) return current;
+          const brainstormLinks = (current.brainstormLinks ?? []).filter(
+            (link) => link.brainstormSessionId !== brainstormSessionId,
+          );
+          return {
+            ...current,
+            brainstormLinks,
+            count: linkCount({ ...current, brainstormLinks }),
+          };
+        },
+      );
+      return { previous };
+    },
+    onError: (_error, _brainstormSessionId, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(
+          interviewLinkKeys.links(interviewId),
+          context.previous,
+        );
+      }
+    },
+    onSuccess: (result) =>
+      reconcileLinkedContext(queryClient, interviewId, result),
+    onSettled: () =>
+      invalidateLinkedContext(queryClient, interviewId, project),
+  });
+}
+
+function referenceRepositoriesUrl(interviewId: string): string {
+  return `/api/interviews/${encodeURIComponent(interviewId)}/reference-repositories`;
+}
+
+export function useReferenceRepositories(interviewId: string, enabled: boolean) {
+  return useQuery<ReferenceRepositoriesReadModel, Error>({
+    queryKey: interviewLinkKeys.referenceRepositories(interviewId),
+    queryFn: () => apiFetch(referenceRepositoriesUrl(interviewId)),
+    enabled: enabled && Boolean(interviewId),
+  });
+}
+
+export function useAddReferenceRepository(interviewId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ReferenceRepositoriesReadModel, Error, AddReferenceRepositoryRequest>({
+    mutationFn: (body) =>
+      apiFetch(referenceRepositoriesUrl(interviewId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (result) =>
+      queryClient.setQueryData(interviewLinkKeys.referenceRepositories(interviewId), result),
+  });
+}
+
+export function useRemoveReferenceRepository(interviewId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ReferenceRepositoriesReadModel, Error, string>({
+    mutationFn: (catalogRepositoryId) =>
+      apiFetch(
+        `${referenceRepositoriesUrl(interviewId)}/${encodeURIComponent(catalogRepositoryId)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: (result) =>
+      queryClient.setQueryData(interviewLinkKeys.referenceRepositories(interviewId), result),
+  });
+}
+
 /**
  * Persists kickoff selections after Interview creation without rolling back the
  * Interview. Each artifact failure remains associated with its staged row.
@@ -326,10 +449,7 @@ export function usePersistStagedLinks(project: string) {
 
       for (const selection of selections) {
         try {
-          const path = selection.type === 'adr' ? 'adr' : 'design-module';
-          const body = selection.type === 'adr'
-            ? { adrId: selection.id }
-            : { designModuleId: selection.id };
+          const { path, body } = linkPath(selection);
           const result = await apiFetch<LinkMutationResult>(
             `/api/interviews/${encodeURIComponent(interviewId)}/links/${path}`,
             {

@@ -72,6 +72,7 @@ type BriefRow = {
 
 type InterviewLink = {
   id: string;
+  project: string;
   playbookRunId: string | null;
   playbookStepRunId: string | null;
 };
@@ -161,6 +162,7 @@ async function loadInterview(interviewId: string): Promise<InterviewLink> {
   const [row] = await db
     .select({
       id: interviews.id,
+      project: interviews.project,
       playbookRunId: interviews.playbookRunId,
       playbookStepRunId: interviews.playbookStepRunId,
     })
@@ -444,6 +446,24 @@ export async function approveInterviewBrief(input: {
       return resumeApprovedBrief(interview, concurrent, true);
     }
     throw new InterviewBriefError('The brief was no longer a draft.');
+  }
+
+  try {
+    const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
+    await publishPlaybookApexEvent({
+      project: interview.project,
+      type: 'interview.brief-completed',
+      entityId: interview.id,
+      actorUserId: input.approvedBy,
+      sourceRunId: interview.playbookRunId ?? undefined,
+      data: {
+        interviewId: interview.id,
+        briefId: approved.id,
+        briefVersion: approved.version,
+      },
+    });
+  } catch (error) {
+    console.error('[playbook-event] interview.brief-completed', error);
   }
 
   return resumeApprovedBrief(interview, approved, false);

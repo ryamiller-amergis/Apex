@@ -74,6 +74,14 @@ describe('AgentHome tabs', () => {
     expect(screen.getByTestId('home-view-chat')).toBeInTheDocument();
   });
 
+  it('does not put Prod Support on Home', () => {
+    render(<AgentHome selectedProject="Apex" />, { wrapper });
+    expect(screen.queryByTestId('home-guided-jobs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('home-view-status'));
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
+  });
+
   it('does not render the removed edge Chat toggle', () => {
     render(<AgentHome selectedProject="Apex" />, { wrapper });
     expect(screen.queryByTestId('home-chat-toggle-btn')).not.toBeInTheDocument();

@@ -94,6 +94,7 @@ export function labelUsageRun(opts: {
   if (feature === 'brainstorm') return 'Brainstorm';
   if (feature === 'design-prototype') return 'Prototype';
   if (feature === 'design-plan') return 'Design plan';
+  if (feature === 'cloud-agent') return 'Cloud Agent';
   return 'Agent run';
 }
 

@@ -9,11 +9,25 @@
  *
  * The database still backstops the part that matters most: a version any run pinned cannot be
  * hard-deleted, because `playbook_runs.definition_version_id` is a restrict-mode foreign key.
+ * Deleting a whole playbook is the exception: finished runs are removed first, and a run that is
+ * still going blocks the delete.
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { playbookDefinitions, playbookDefinitionVersions } from '../db/schema';
-import { assertGraphWithinGuards } from './playbookGuardService';
+import {
+  buildRuns,
+  interviews,
+  playbookDefinitions,
+  playbookDefinitionVersions,
+  playbookRuns,
+  playbookTriggerSubscriptions,
+} from '../db/schema';
+import {
+  assertGraphWithinGuards,
+  assertStepTitles,
+  PlaybookGraphNodeRuleError,
+} from './playbookGuardService';
+import { cloudAgentPlaybookSetupGap } from './cloudAgentDeliverySettings';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
@@ -87,6 +101,15 @@ export class PlaybookDefinitionNotFoundError extends Error {
       `Playbook definition ${definitionId} was not found in the requested project.`
     );
     this.name = 'PlaybookDefinitionNotFoundError';
+  }
+}
+
+export class PlaybookDefinitionBusyError extends Error {
+  constructor(definitionId: string) {
+    super(
+      `Playbook ${definitionId} still has a run in progress. Cancel it before deleting the playbook.`
+    );
+    this.name = 'PlaybookDefinitionBusyError';
   }
 }
 
@@ -285,6 +308,11 @@ interface PublishDraftInput {
   expectedDraftUpdatedAt: string;
   /** Used when an interview node's profileKey is a `${input.*}` binding. */
   sampleRunInput?: Record<string, unknown>;
+  /**
+   * Set when a person publishes from the builder: steps need titles and a Cloud agent step needs
+   * the project's PR settings. Graphs Apex builds itself skip these checks.
+   */
+  authoredInBuilder?: boolean;
 }
 
 interface DeprecateVersionInput {
@@ -551,6 +579,12 @@ export async function publishDraft(
       input.expectedDraftUpdatedAt
     );
     assertGraphWithinGuards(draft.graph);
+    if (input.authoredInBuilder) {
+      assertStepTitles(draft.graph);
+      const cloudNode = draft.graph.nodes.find((node) => node.stepType === 'cloud-agent');
+      const setupGap = cloudNode ? await cloudAgentPlaybookSetupGap(input.project) : null;
+      if (cloudNode && setupGap) throw new PlaybookGraphNodeRuleError(cloudNode.id, setupGap);
+    }
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
     const policies = await assertPlaybookCapabilitiesForPublish({
       graph: draft.graph,
@@ -776,5 +810,66 @@ export async function deprecateVersion(
       version: toPublishedSummary(deprecatedVersion),
       currentPublishedVersionId: current?.id ?? null,
     };
+  });
+}
+
+const ACTIVE_RUN_STATUSES = new Set(['running', 'suspended']);
+
+/**
+ * Removes one playbook and the history that would otherwise block the foreign keys.
+ * Interviews and builds the playbook started stay; only the link back to the run is cleared.
+ * A run that is still going is left alone and the delete is refused.
+ */
+export async function deleteDefinition(project: string, definitionId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [definition] = await tx
+      .select({ id: playbookDefinitions.id })
+      .from(playbookDefinitions)
+      .where(and(eq(playbookDefinitions.id, definitionId), eq(playbookDefinitions.project, project)))
+      .for('update')
+      .limit(1);
+    if (!definition) throw new PlaybookDefinitionNotFoundError(definitionId);
+
+    const versions = await tx
+      .select({ id: playbookDefinitionVersions.id })
+      .from(playbookDefinitionVersions)
+      .where(eq(playbookDefinitionVersions.definitionId, definitionId));
+    const versionIds = versions.map((version) => version.id);
+    const runs = versionIds.length === 0
+      ? []
+      : await tx
+        .select({ id: playbookRuns.id, status: playbookRuns.status })
+        .from(playbookRuns)
+        .where(inArray(playbookRuns.definitionVersionId, versionIds));
+
+    if (runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status))) {
+      throw new PlaybookDefinitionBusyError(definitionId);
+    }
+
+    const runIds = runs.map((run) => run.id);
+    if (runIds.length > 0) {
+      await tx
+        .update(interviews)
+        .set({
+          playbookRunId: null,
+          playbookStepRunId: null,
+          playbookInterviewMode: null,
+          playbookProfileKey: null,
+          playbookProfileSnapshot: null,
+        })
+        .where(inArray(interviews.playbookRunId, runIds));
+      await tx
+        .update(buildRuns)
+        .set({ playbookRunId: null, playbookStepRunId: null })
+        .where(inArray(buildRuns.playbookRunId, runIds));
+      await tx.delete(playbookRuns).where(inArray(playbookRuns.id, runIds));
+    }
+
+    await tx
+      .delete(playbookTriggerSubscriptions)
+      .where(eq(playbookTriggerSubscriptions.definitionId, definitionId));
+    await tx
+      .delete(playbookDefinitions)
+      .where(and(eq(playbookDefinitions.id, definitionId), eq(playbookDefinitions.project, project)));
   });
 }

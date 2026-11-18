@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useWorkflowEvaluationAccess } from '../useWorkflowEvaluationAccess';
 import { useAppShell } from '../useAppShell';
 import { useFeatureFlags } from '../useFeatureFlags';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../../../shared/types/featureFlags';
 import {
   WORKFLOW_EVALUATION_SUBMIT,
   WORKFLOW_EVALUATION_VIEW,
@@ -42,7 +42,7 @@ function mockFlags(options: {
   const isError = options.isError ?? false;
   const isSuccess = options.isSuccess ?? !isError;
   mockUseFeatureFlags.mockReturnValue({
-    flags: options.enabled ? { [WORKFLOW_HUMAN_EVALUATION_FLAG]: true } : {},
+    flags: options.enabled ? { [SKILL_LEARNING_FLAG]: true } : {},
     isSuccess,
     isError,
     isLoading: !isSuccess && !isError,

@@ -1,0 +1,19 @@
+.composerEmbed {
+  padding: 12px 16px 14px;
+}
+
+.starting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-style: italic;
+  padding: 16px;
+}
+
+.error {
+  margin: 16px;
+  font-size: 0.82rem;
+  color: var(--error-color);
+}

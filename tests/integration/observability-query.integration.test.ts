@@ -3,10 +3,15 @@
  * Requires a migrated TEST_DATABASE_URL / DATABASE_URL (`npm run test:integration`).
  */
 import './setup';
-import { eq, sql } from 'drizzle-orm';
+import { eq, like, sql } from 'drizzle-orm';
 import { db } from './setup';
 import pool from '../../src/server/db';
 import { appUsers, traceEvents, tracePathRollups } from '../../src/server/db/schema';
+import {
+  generateObservabilityPoDigest,
+  getObservabilityPoDigest,
+  resetObservabilityPoDigestForTests,
+} from '../../src/server/services/observabilityPoDigestService';
 import { createObservabilityQueryService } from '../../src/server/services/observabilityQueryService';
 
 const TRACE_A = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
@@ -21,8 +26,14 @@ function rowsOf<T>(result: { rows?: T[] } | T[]): T[] {
 }
 
 async function cleanup(): Promise<void> {
+  resetObservabilityPoDigestForTests();
   await db.delete(traceEvents).where(eq(traceEvents.traceId, TRACE_A));
   await db.delete(traceEvents).where(eq(traceEvents.traceId, TRACE_B));
+  await db.delete(traceEvents).where(like(traceEvents.traceId, 'e2e0b5%'));
+  const remaining = await db.select({ id: traceEvents.id }).from(traceEvents).limit(1);
+  if (remaining.length === 0) {
+    await db.execute(sql`TRUNCATE TABLE trace_events`);
+  }
   await db.delete(tracePathRollups).where(eq(tracePathRollups.fromRoute, ROLLUP_FROM));
 }
 
@@ -251,5 +262,111 @@ describe('Observability query PostgreSQL integration', () => {
       cursor: null,
     });
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('aggregates live PostgreSQL trace_events, trace_path_rollups, and app_users for the Product Owner Digest', async () => {
+    const users = await db
+      .select({ oid: appUsers.oid, displayName: appUsers.displayName })
+      .from(appUsers)
+      .limit(2);
+    const actorA = users[0]?.oid ?? null;
+    const actorB = users[1]?.oid ?? actorA;
+    if (!actorA) return;
+
+    const now = new Date();
+    const twoHoursAgo = new Date(now.getTime() - 2 * 3600 * 1000).toISOString();
+    const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 3600 * 1000).toISOString();
+
+    await db.insert(traceEvents).values([
+      {
+        eventType: 'ui_action',
+        occurredAt: twoHoursAgo,
+        actorUserId: actorA,
+        projectId: 'Apex',
+        traceId: TRACE_A,
+        sessionId: SESSION_ID,
+        routeTemplate: '/backlog/design-prototypes/:id',
+        httpMethod: 'GET',
+        statusCode: 200,
+        durationMs: 95,
+        severity: 'info',
+        details: {},
+      },
+      {
+        eventType: 'error',
+        occurredAt: twoHoursAgo,
+        actorUserId: actorA,
+        projectId: 'Apex',
+        traceId: TRACE_A,
+        sessionId: SESSION_ID,
+        routeTemplate: '/backlog/design-prototypes/:id',
+        httpMethod: 'POST',
+        statusCode: 504,
+        durationMs: 1200,
+        severity: 'error',
+        details: { message: 'PostgresIntegrationPrototypeTimeout: 504 gateway timeout' },
+      },
+      {
+        eventType: 'ui_action',
+        occurredAt: tenDaysAgo,
+        actorUserId: actorA,
+        projectId: 'Apex',
+        traceId: TRACE_B,
+        sessionId: SESSION_ID,
+        routeTemplate: '/backlog/design-prototypes/:id',
+        httpMethod: 'GET',
+        statusCode: 200,
+        durationMs: 80,
+        severity: 'info',
+        details: {},
+      },
+      {
+        eventType: 'ui_action',
+        occurredAt: tenDaysAgo,
+        actorUserId: actorB,
+        projectId: 'Apex',
+        traceId: TRACE_B,
+        sessionId: SESSION_ID,
+        routeTemplate: '/backlog/design-prototypes/:id',
+        httpMethod: 'GET',
+        statusCode: 200,
+        durationMs: 85,
+        severity: 'info',
+        details: {},
+      },
+    ]);
+
+    const digestRes = await generateObservabilityPoDigest(
+      {
+        project: 'Apex',
+        window: '7d',
+        model: 'composer-2.5',
+        effort: 'high',
+        slot: 'on_demand',
+      },
+      now,
+    );
+
+    expect(digestRes.digest.model).toBe('composer-2.5');
+    expect(digestRes.digest.effort).toBe('high');
+    expect(digestRes.digest.topUsers.some((u) => u.userId === actorA)).toBe(true);
+    expect(
+      digestRes.digest.commonExceptions.some((e) =>
+        e.signature.includes('PostgresIntegrationPrototypeTimeout'),
+      ),
+    ).toBe(true);
+    expect(
+      digestRes.digest.topModules.some((m) => m.module === 'Design Prototypes'),
+    ).toBe(true);
+
+    const getRes = await getObservabilityPoDigest({
+      project: 'Apex',
+      window: '60d',
+      model: 'composer-2.5',
+      effort: 'high',
+      now,
+    });
+    expect(getRes.digest.window).toBe('60d');
+    expect(getRes.digest.topUsers[0]?.windowComparison['60d']).toBeGreaterThanOrEqual(3);
   });
 });

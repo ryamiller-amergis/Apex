@@ -1,5 +1,4 @@
 import fs from 'fs';
-import path from 'path';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { adrs, featureRequestAdrs, featureRequests, chatThreads } from '../db/schema';
@@ -8,6 +7,7 @@ import {
   hydrateThread,
   createThread as createChatThread,
 } from './chatAgentService';
+import { readThreadOutput } from './chatThreadOutputStore';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import type { AgentModuleId } from '../../shared/types/chat';
@@ -67,18 +67,12 @@ export function isWatcherActive(requestId: string): boolean {
   return activeWatchers.has(requestId);
 }
 
-function resolveOutputPath(workspaceDir: string, type: WorkItemType): string {
-  return path.join(workspaceDir, '.ai-pilot', 'output', TYPE_CONFIG[type].outputFile);
-}
-
-function readOutputFromWorkspace(workspaceDir: string, type: WorkItemType): string | null {
-  const outputPath = resolveOutputPath(workspaceDir, type);
-  if (!fs.existsSync(outputPath)) return null;
-  try {
-    return fs.readFileSync(outputPath, 'utf-8');
-  } catch {
-    return null;
-  }
+function readOutput(threadId: string, workspaceDir: string, type: WorkItemType): Promise<string | null> {
+  return readThreadOutput({
+    threadId,
+    workspaceDir,
+    relativePath: ['.ai-pilot', 'output', TYPE_CONFIG[type].outputFile],
+  });
 }
 
 async function getWorkspaceDir(threadId: string): Promise<string | null> {
@@ -257,7 +251,7 @@ export function startWatcher(
       if (!workspaceDir) return;
     }
 
-    const raw = readOutputFromWorkspace(workspaceDir, type);
+    const raw = await readOutput(threadId, workspaceDir, type);
 
     if (!raw) {
       if (isThreadIdle(threadId)) {
@@ -294,6 +288,24 @@ export function startWatcher(
         aiRationale: result.rationale,
       });
       console.log(`[featureRequestAnalysis] Analysis synced — priority=${result.priority} risk=${result.risk} (requestId=${requestId})`);
+      try {
+        const request = await db.query.featureRequests.findFirst({
+          where: eq(featureRequests.id, requestId),
+          columns: { sourceProject: true, submittedBy: true },
+        });
+        if (request) {
+          const { publishPlaybookApexEvent } = await import('./playbookApexEventService');
+          await publishPlaybookApexEvent({
+            project: request.sourceProject,
+            type: 'feature-request.triaged',
+            entityId: requestId,
+            actorUserId: request.submittedBy,
+            data: { priority: result.priority, risk: result.risk },
+          });
+        }
+      } catch (eventError) {
+        console.error(`[featureRequestAnalysis] Failed to publish feature-request.triaged (requestId=${requestId})`, eventError);
+      }
       cleanupWorkspace(threadId);
     } catch (err) {
       console.error(`[featureRequestAnalysis] Failed to parse/sync output (requestId=${requestId})`, err);
@@ -357,7 +369,9 @@ export async function recoverAnalyzingFeatureRequests(): Promise<number> {
     }
 
     const workspaceDir = await getWorkspaceDir(request.aiThreadId);
-    const hasOutput = workspaceDir ? Boolean(readOutputFromWorkspace(workspaceDir, type)) : false;
+    const hasOutput = workspaceDir
+      ? Boolean(await readOutput(request.aiThreadId, workspaceDir, type))
+      : false;
 
     if (isThreadIdle(request.aiThreadId) && !hasOutput) {
       console.log(

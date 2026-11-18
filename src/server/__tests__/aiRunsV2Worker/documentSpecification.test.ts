@@ -121,6 +121,18 @@ describe('V2 document execution specification', () => {
       { path: '.ai-pilot/kickoff-context.md', content: '# Document' },
     ]))).toBe(true);
     expect(isAiRunV2DocumentSpecification(playbookStep([]))).toBe(false);
+    expect(isAiRunV2DocumentSpecification(specification({
+      workflowClass: 'playbook-step',
+      scratchInputs: [{ path: '.ai-pilot/kickoff-context.md', content: '# Document' }],
+      playbookAgentPolicy: playbookStep([]).playbookAgentPolicy,
+      skillCompanions: [{ path: 'RESOURCE_CATALOG.md', content: '# Catalog' }],
+    }))).toBe(true);
+    expect(isAiRunV2DocumentSpecification(specification({
+      workflowClass: 'playbook-step',
+      scratchInputs: [{ path: '.ai-pilot/kickoff-context.md', content: '# Document' }],
+      playbookAgentPolicy: playbookStep([]).playbookAgentPolicy,
+      skillCompanions: [{ path: '../SECRET.md', content: 'nope' }],
+    }))).toBe(false);
   });
 
   it('rejects arbitrary scratch files and missing workflow inputs', () => {

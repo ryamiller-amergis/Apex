@@ -31,6 +31,8 @@ export interface SourceManagerDeps {
   pollMs?: number;
   minFreeBytes?: number;
   track?: (name: string, properties: Record<string, string | number>) => void;
+  /** True when hosts fetch this source from Blob or repo-read, so no local copy is needed. */
+  isServedRemotely?: (row: SourceRecord) => boolean;
   files: {
     measure(dir: string): Promise<number>;
     remove(dir: string): Promise<void>;
@@ -101,6 +103,10 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
   const pollMs = deps.pollMs ?? 2_000;
   const minFreeBytes = deps.minFreeBytes ?? REPO_CACHE_MIN_FREE_BYTES;
   const track = deps.track ?? (() => {});
+
+  async function hasSourceCopy(row: SourceRecord, destination: string): Promise<boolean> {
+    return (deps.isServedRemotely?.(row) ?? false) || deps.files.exists(destination);
+  }
 
   async function fail(row: SourceRecord, reasonCode: string, reasonText: string, from: BrainstormSourceState[]): Promise<SourceRecord> {
     const destination = sourceWorkspacePath(deps.dataRoot, row.sessionId, row.id);
@@ -194,7 +200,7 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
         }
         if (row.kind !== 'mcp-server' && (row.state === 'cleaned' || row.state === 'unavailable') && row.commitSha) {
           const destination = sourceWorkspacePath(deps.dataRoot, sessionId, row.id);
-          if (await deps.files.exists(destination)) {
+          if (await hasSourceCopy(row, destination)) {
             const healed = await deps.store.compareAndSet(row.id, [row.state], {
               state: 'ready',
               reasonCode: null,
@@ -424,7 +430,7 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
       ));
       for (const row of pending) {
         const destination = sourceWorkspacePath(deps.dataRoot, sessionId, row.id);
-        const present = Boolean(row.commitSha) && await deps.files.exists(destination);
+        const present = Boolean(row.commitSha) && await hasSourceCopy(row, destination);
         if (present) {
           if (row.state !== 'ready') {
             await deps.store.compareAndSet(row.id, [row.state], {
@@ -439,40 +445,49 @@ export function createSourceWorkspaceManager(deps: SourceManagerDeps) {
         const restoring = await deps.store.compareAndSet(row.id, [row.state], { state: 'restoring', reasonCode: null, reasonText: null });
         if (!restoring) continue;
         try {
+          let identity: { provider: 'github' | 'ado'; project: string; repository: string };
           if (row.kind === 'project-repository' && row.refId) {
             const resolved = await deps.projects.resolve(project, row.refId);
             if (!resolved.ok) throw new Error('unreachable');
+            identity = {
+              provider: resolved.provider,
+              project: resolved.groundingProject,
+              repository: resolved.repository,
+            };
             await deps.git.cloneFromCache({
               cacheDir: resolved.cacheDir,
               destination,
               sha: row.commitSha,
               signal: AbortSignal.timeout(180_000),
-              identity: {
-                provider: resolved.provider,
-                project: resolved.groundingProject,
-                repository: resolved.repository,
-              },
+              identity,
             });
           } else if (row.cloneUrl) {
-            const provider = row.groundingProvider ?? (new URL(row.cloneUrl).hostname.toLowerCase().endsWith('github.com') ? 'github' : 'ado');
-            const repository = row.groundingRepository ?? (row.cloneUrl.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') || row.displayName);
+            identity = {
+              provider: row.groundingProvider ?? (new URL(row.cloneUrl).hostname.toLowerCase().endsWith('github.com') ? 'github' : 'ado'),
+              project: row.groundingProject || project,
+              repository: row.groundingRepository ?? (row.cloneUrl.split('/').filter(Boolean).pop()?.replace(/\.git$/, '') || row.displayName),
+            };
             const outcome = await deps.git.cloneTemporary({
               url: row.cloneUrl,
               sha: row.commitSha,
               destination,
               signal: AbortSignal.timeout(180_000),
-              identity: {
-                provider,
-                project: row.groundingProject || project,
-                repository,
-              },
+              identity,
             });
             if (outcome === 'moved') throw new Error('unreachable');
           } else {
             throw new Error('unreachable');
           }
           await deps.git.lockDown(destination);
-          await deps.store.compareAndSet(row.id, ['restoring'], { state: 'ready', commitSha: row.commitSha, reasonCode: null, reasonText: null });
+          await deps.store.compareAndSet(row.id, ['restoring'], {
+            state: 'ready',
+            commitSha: row.commitSha,
+            reasonCode: null,
+            reasonText: null,
+            groundingProvider: identity.provider,
+            groundingProject: identity.project,
+            groundingRepository: identity.repository,
+          });
         } catch {
           await deps.files.remove(destination).catch(() => {});
           await deps.store.compareAndSet(row.id, ['restoring'], {

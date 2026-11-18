@@ -46,8 +46,19 @@ describe('buildCloudAgentPullRequestText', () => {
       summary: 'Added the login form.',
     });
 
-    expect(text.title).toBe('[APEX] apex-42-implement-login');
+    expect(text.title).toBe('Work item 42: Implement login');
     expect(text.description).toBe(skeletonDescription(42, 'Implement login'));
+  });
+
+  it('uses the work item type in the title when it is known', () => {
+    const text = buildCloudAgentPullRequestText({
+      workItemId: 11855,
+      workItemTitle: 'Timecards manage page',
+      workItemType: 'Production issue',
+      sourceBranch: 'bug/11855-timecards-manage-page',
+    });
+
+    expect(text.title).toBe('Production issue 11855: Timecards manage page');
   });
 
   it('uses the required branch name for the title when the pushed branch differs', () => {

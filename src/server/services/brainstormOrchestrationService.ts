@@ -154,7 +154,7 @@ export function formatSourcesContext(sources: FrozenBrainstormTurn['sources']): 
     lines.push(
       `- Ready repository "${root.displayName}" (commit ${root.commitSha.slice(0, 12)}): `
         + `mounted read-only at \`sources/${root.sourceId}\`. `
-        + 'Use `search_repo_code`, `list_repo_dir`, and `get_skill_file` on `sources/...` paths (do not use `shell`, `grep`, or `glob`, which cannot traverse the mounted directory junction).',
+        + `Use \`search_repo_code\` (with \`path: "sources/${root.sourceId}"\`), \`list_repo_dir\`, and \`get_skill_file\` on \`sources/${root.sourceId}\` paths (do not use \`shell\`, \`grep\`, or \`glob\`, which cannot traverse the mounted directory junction).`,
     );
   }
   for (const server of sources.mcpServers) {
@@ -563,7 +563,16 @@ export function createBrainstormOrchestrationService(deps: BrainstormOrchestrati
       try {
         opened = await deps.ledger.openTurn({ sessionId: session.id, project: session.project, turnId, text });
       } catch (err) {
-        throw translateAdmissionError(err);
+        if (err instanceof BrainstormLedgerConflict) {
+          await deps.ledger.reconcileStreamingRows(session.id, session.chatThreadId).catch(() => {});
+          try {
+            opened = await deps.ledger.openTurn({ sessionId: session.id, project: session.project, turnId, text });
+          } catch (retryErr) {
+            throw translateAdmissionError(retryErr);
+          }
+        } else {
+          throw translateAdmissionError(err);
+        }
       }
       // A repeat of a turn whose row already closed without a run must not attach a new run to it.
       if (opened.existing && !opened.assistant.runId && opened.assistant.status !== 'streaming') {

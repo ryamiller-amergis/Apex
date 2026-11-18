@@ -19,7 +19,12 @@
  * failure and not a run that dies on its third step.
  */
 import { z } from 'zod';
-import { PLAYBOOK_STEP_SIDE_EFFECTS } from '../../../shared/types/playbook';
+import { PLAYBOOK_CONNECTOR_IDS } from '../../../shared/types/playbookConnectors';
+import {
+  PLAYBOOK_MAX_OUTCOMES,
+  PLAYBOOK_OUTCOME_PATTERN,
+  PLAYBOOK_STEP_SIDE_EFFECTS,
+} from '../../../shared/types/playbook';
 import type {
   ApprovalGateStepConfig,
   BranchStepConfig,
@@ -34,26 +39,6 @@ import type {
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
-
-/**
- * Skills a `cursor-agent` step may run in Phase 0.
- *
- * Default-deny: a step naming anything outside this list is refused before it enqueues. This is
- * narrower than the PRD's rule, which restricts agent steps to Skills whose MCP configuration is
- * read-only. Apex has no read-only capability model to check against — `ExecutionSnapshot.skillPath`
- * is a bare path, nothing reads SKILL.md frontmatter, and the lanes that look read-only still hand
- * the agent a writable working directory — so this constrains which Skills may be named rather than
- * what they can do. The real mechanism is recorded as a gap for FEAT-008 in
- * `design-docs/playbook-epic-1-phase-0.plan.md`.
- *
- * `app-knowledge` is here because answering questions from repo documentation is its whole job.
- * FEAT-006 chooses what the seeded demo definitions actually run and may add to this list
- * deliberately; nothing is added to it by accident.
- */
-export const PHASE_0_ALLOWED_AGENT_SKILLS: readonly string[] = [
-  '.cursor/skills/app-knowledge/SKILL.md',
-  '.cursor/skills/design-doc-validation/SKILL.md',
-];
 
 /**
  * Deadline defaults.
@@ -100,7 +85,7 @@ const READABLE_TIMESTAMP = z
  * carrying something the next step's condition could not be evaluated against.
  */
 const CURSOR_AGENT_INPUT_SCHEMA = z.object({
-  skillPath: z.string().min(1),
+  skillPath: z.string().min(1).optional(),
   prompt: z.string().min(1),
   model: z.string().optional(),
   // Optional for immutable Phase 0 history; every newly published graph is checked separately.
@@ -109,6 +94,13 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
   ),
   deadlineMs: z.number().positive().max(CURSOR_AGENT_DEADLINE_MS).optional(),
   threadId: z.string().min(1).optional(),
+  outcomes: z
+    .array(z.string().regex(PLAYBOOK_OUTCOME_PATTERN))
+    .min(2)
+    .max(PLAYBOOK_MAX_OUTCOMES)
+    .refine((values) => new Set(values).size === values.length, 'outcomes must be different')
+    .optional()
+    .describe('Results the agent picks from. A branch can route on the one it picked.'),
 });
 
 const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
@@ -117,6 +109,10 @@ const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
   threadId: z.string().optional(),
   scorecard: z.unknown().optional(),
   reportMd: z.string().optional(),
+  /** What the agent produced: a Skill's report if it wrote one, else its last reply. */
+  output: z.string().optional(),
+  /** The result the agent picked from the step's `outcomes`. */
+  outcome: z.string().optional(),
 });
 
 const APPROVAL_GATE_INPUT_SCHEMA = z.object({
@@ -127,11 +123,25 @@ const APPROVAL_GATE_INPUT_SCHEMA = z.object({
   // Optional only for Phase 1 rows. Production gates provide both values together.
   approverPool: z.enum(['prd', 'design_doc', 'design_prototype', 'test_case', 'adr']).optional(),
   gatedStepId: z.string().min(1).optional(),
+  notifyApprovers: z.boolean().optional(),
 });
 
 const APPROVAL_GATE_OUTPUT_SCHEMA = z.object({
   decision: z.enum(['approved', 'rejected']),
   decidedBy: z.string(),
+});
+
+const CONNECTOR_INPUT_SCHEMA = z.object({
+  integration: z.enum(PLAYBOOK_CONNECTOR_IDS),
+  operation: z.string().min(1),
+  parameters: z.record(z.string(), z.string()).optional(),
+});
+
+const CONNECTOR_OUTPUT_SCHEMA = z.object({
+  integration: z.string(),
+  operation: z.string(),
+  parameters: z.record(z.string(), z.string()).optional(),
+  recordedAt: READABLE_TIMESTAMP,
 });
 
 const NOTIFY_INPUT_SCHEMA = z.object({
@@ -166,7 +176,7 @@ const INGEST_ARTIFACT_OUTPUT_SCHEMA = z.object({
 const BRANCH_CONDITION_SCHEMA = z.object({
   sourceStepId: z.string().min(1),
   field: z.string().min(1),
-  operator: z.enum(['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte']),
+  operator: z.enum(['eq', 'neq', 'in', 'gt', 'gte', 'lt', 'lte', 'contains', 'exists', 'missing']),
   value: z.unknown(),
 });
 
@@ -226,6 +236,128 @@ const INTERVIEW_OUTPUT_SCHEMA = z.object({
     .refine((value) => Number.isFinite(value) && value >= 0, 'must be nonnegative'),
 });
 
+const APEX_ACTION_INPUT_SCHEMA = z.object({
+  operation: z.enum(['create-ado-items', 'create-work-item', 'post-ado-comment', 'set-document-status']),
+  parameters: z.record(z.string(), z.unknown()),
+}).superRefine((value, ctx) => {
+  const parsed = apexActionParameterSchema(value.operation).safeParse(value.parameters);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path.length ? `${issue.path.join('.')}: ` : '';
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: issue ? `${field}${issue.message}` : 'Check the action parameters.',
+      path: ['parameters', ...(issue?.path ?? [])],
+    });
+  }
+});
+
+const APEX_ACTION_OUTPUT_SCHEMA = z.object({
+  operation: z.string().min(1),
+  summary: z.string().min(1),
+  workItemId: z.number().int().positive().optional(),
+});
+
+const CLOUD_AGENT_DEADLINE_MS = 6 * HOUR_MS;
+
+const BINDING_STRING = z.string().regex(
+  /^\$\{(?:input\.[A-Za-z][A-Za-z0-9_]*|steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*)\}$/,
+);
+
+/**
+ * Every work item field is optional. Without `workItemId` the step uses the nearest earlier step
+ * that produced one, then the run input's `workItemId` (an Azure DevOps trigger sets it). Without
+ * type or state the step reads them from Azure DevOps.
+ */
+const CLOUD_AGENT_INPUT_SCHEMA = z.object({
+  workItemId: z.union([z.number().int().positive(), BINDING_STRING]).optional(),
+  /** Set when the author asked for a specific id. Absent means the step may infer one. */
+  workItemSource: z.enum(['automatic', 'manual']).optional(),
+  workItemType: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  tags: z.string().optional(),
+  prompt: z.string().optional(),
+  model: z.string().min(1).optional(),
+  deadlineMs: z.number().positive().optional(),
+});
+
+const CLOUD_AGENT_OUTPUT_SCHEMA = z.object({
+  runId: z.string().min(1),
+  status: z.string().min(1),
+  pullRequestUrl: z.string().nullable(),
+});
+
+const JOIN_INPUT_SCHEMA = z.object({
+  predecessors: z.array(z.string().min(1)).min(2),
+  policy: z.union([
+    z.literal('all'),
+    z.object({ atLeast: z.number().int().positive() }),
+  ]),
+});
+
+const JOIN_OUTPUT_SCHEMA = z.object({
+  arms: z.record(z.string(), z.record(z.string(), z.unknown())),
+});
+
+const LOOP_INPUT_SCHEMA = z.object({
+  maxIterations: z.number().int().positive(),
+});
+
+const FOREACH_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({
+  // A binding is resolved when the step runs, so the list can come from an earlier step.
+  items: z.union([z.array(z.unknown()), BINDING_STRING]),
+});
+
+const UNTIL_INPUT_SCHEMA = LOOP_INPUT_SCHEMA.extend({
+  // A binding lets the check read the body step, which runs before each check.
+  done: z.union([z.boolean(), BINDING_STRING]),
+  iteration: z.number().int().nonnegative(),
+});
+
+const LOOP_OUTPUT_SCHEMA = z.object({
+  iterations: z.number().int().nonnegative(),
+  /** False once an until condition is met. Absent on foreach, which uses `iterations`. */
+  continue: z.boolean().optional(),
+});
+
+export function apexActionParameterSchema(operation: string): z.ZodTypeAny {
+  if (operation === 'create-ado-items') {
+    return z.object({
+      epic: z.object({ id: z.string().min(1), title: z.string().min(1) }),
+      features: z.array(z.object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+      })).default([]),
+      pbis: z.array(z.object({
+        id: z.string().min(1),
+        parentId: z.string().min(1),
+        title: z.string().min(1),
+      })).default([]),
+    });
+  }
+  if (operation === 'create-work-item') {
+    return z.object({
+      workItemType: z.string().min(1),
+      title: z.string().min(1),
+      description: z.string().min(1),
+    });
+  }
+  if (operation === 'post-ado-comment') {
+    return z.object({
+      workItemId: z.union([z.number().int().positive(), BINDING_STRING]),
+      text: z.string().min(1),
+    });
+  }
+  if (operation === 'set-document-status') {
+    return z.object({
+      documentType: z.enum(['design_doc', 'prd']),
+      documentId: z.string().min(1),
+      status: z.literal('approved'),
+    });
+  }
+  return z.never();
+}
+
 /** The step types Apex ships. Adding a fourth is a change to this array and nowhere else. */
 export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
   {
@@ -236,7 +368,6 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     // A definition may shorten the observed ceiling, but never extend it.
     deadlineOverridable: true,
     suspendReason: 'agent_run',
-    allowedSkillPaths: PHASE_0_ALLOWED_AGENT_SKILLS,
     isAgentStep: true,
     // Hands work to Cursor, which Apex does not own and cannot roll back.
     sideEffect: 'leaves-apex',
@@ -292,6 +423,17 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     outputSchema: NOTIFY_OUTPUT_SCHEMA,
   },
   {
+    stepType: 'connector',
+    schemaVersion: 1,
+    canSuspend: false,
+    isAgentStep: false,
+    // Records the integration between two steps. It does not call that system.
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: CONNECTOR_INPUT_SCHEMA,
+    outputSchema: CONNECTOR_OUTPUT_SCHEMA,
+  },
+  {
     stepType: 'interview',
     schemaVersion: 1,
     canSuspend: true,
@@ -304,6 +446,59 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     requiredPermissions: ['playbooks:run'],
     inputSchema: INTERVIEW_INPUT_SCHEMA,
     outputSchema: INTERVIEW_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'apex-action',
+    schemaVersion: 1,
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'leaves-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: APEX_ACTION_INPUT_SCHEMA,
+    outputSchema: APEX_ACTION_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'cloud-agent',
+    schemaVersion: 1,
+    canSuspend: true,
+    defaultDeadlineMs: CLOUD_AGENT_DEADLINE_MS,
+    deadlineOverridable: true,
+    suspendReason: 'agent_run',
+    isAgentStep: true,
+    sideEffect: 'leaves-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: CLOUD_AGENT_INPUT_SCHEMA,
+    outputSchema: CLOUD_AGENT_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'join',
+    schemaVersion: 1,
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: JOIN_INPUT_SCHEMA,
+    outputSchema: JOIN_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'foreach',
+    schemaVersion: 1,
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: FOREACH_INPUT_SCHEMA,
+    outputSchema: LOOP_OUTPUT_SCHEMA,
+  },
+  {
+    stepType: 'until',
+    schemaVersion: 1,
+    canSuspend: false,
+    isAgentStep: false,
+    sideEffect: 'read',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: UNTIL_INPUT_SCHEMA,
+    outputSchema: LOOP_OUTPUT_SCHEMA,
   },
   {
     stepType: 'build',
@@ -480,6 +675,13 @@ export function requiredPermissionsForStep(
   config: Record<string, unknown>,
 ): readonly string[] {
   const declared = getStepTypeDescriptor(stepType).requiredPermissions;
+  if (stepType === 'apex-action' && config.operation === 'set-document-status') {
+    const parameters = config.parameters;
+    const documentType = parameters && typeof parameters === 'object'
+      ? (parameters as { documentType?: unknown }).documentType
+      : undefined;
+    return documentType === 'prd' ? ['prds:review'] : ['design-docs:review'];
+  }
   if (stepType !== 'ingest-artifact') return declared;
   return config.documentType === 'design_doc'
     ? ['design-docs:review']
@@ -526,7 +728,7 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
     );
   }
 
-  if (stepType === 'cursor-agent' && overrideMs > descriptor.defaultDeadlineMs) {
+  if ((stepType === 'cursor-agent' || stepType === 'cloud-agent') && overrideMs > descriptor.defaultDeadlineMs) {
     throw new PlaybookStepTypeError(
       `Deadline override for step type "${stepType}" may shorten the derived default but not exceed it.`
     );
@@ -592,18 +794,23 @@ export function requiresInitiatorPermissionRecheck(stepType: string): boolean {
 }
 
 /**
- * Refuses a Skill this step type may not run. Called before anything is enqueued, per TBI-017 —
- * validating after the agent run exists would mean the refusal has already cost a run.
+ * Refuses a Skill when this step type still names an explicit list.
+ *
+ * A missing list means the step type does not restrict the path. `cursor-agent` is in that
+ * group: which Skill runs is the graph author's choice, and the capability policy is what
+ * limits the run. An empty list still refuses every path.
  */
 export function assertSkillAllowed(stepType: string, skillPath: string): void {
-  const allowed = getStepTypeDescriptor(stepType).allowedSkillPaths ?? [];
-  // Project settings store repo-root paths with a leading '/'; the allow-list does not.
+  const allowed = getStepTypeDescriptor(stepType).allowedSkillPaths;
+  if (!allowed) return;
+
+  // Project settings store repo-root paths with a leading '/'; a declared list does not.
   const repoRelativePath = skillPath.startsWith('/') ? skillPath.slice(1) : skillPath;
 
   if (!allowed.includes(repoRelativePath)) {
     throw new PlaybookStepTypeError(
       `Step type "${stepType}" may not run Skill "${skillPath}". ` +
-        `Phase 0 permits: ${allowed.join(', ') || 'no Skills'}.`
+        `Permitted: ${allowed.join(', ') || 'no Skills'}.`
     );
   }
 }
@@ -623,7 +830,21 @@ export function assertSkillAllowed(stepType: string, skillPath: string): void {
 export function validateStepTypeRegistry(
   registry: { has(stepType: string): boolean } = stepTypeRegistry,
 ): void {
-  const expected = ['cursor-agent', 'approval-gate', 'notify', 'ingest-artifact', 'branch', 'interview', 'build'];
+  const expected = [
+    'cursor-agent',
+    'approval-gate',
+    'notify',
+    'connector',
+    'ingest-artifact',
+    'branch',
+    'interview',
+    'apex-action',
+    'cloud-agent',
+    'join',
+    'foreach',
+    'until',
+    'build',
+  ];
   const missing = expected.filter((stepType) => !registry.has(stepType));
 
   if (missing.length > 0) {

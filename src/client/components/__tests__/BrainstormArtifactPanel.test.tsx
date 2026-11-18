@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrainstormArtifactPanel, ARTIFACT_EMPTY_TEXT } from '../BrainstormArtifactPanel';
 import { BrainstormSuggestionChips } from '../BrainstormSuggestionChips';
@@ -19,6 +19,7 @@ jest.mock('react-markdown', () => ({
   },
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
+jest.mock('../SkillRating', () => ({ SkillRating: () => null }));
 jest.mock('../../hooks/useBrainstormArtifact', () => {
   const actual = jest.requireActual('../../hooks/useBrainstormArtifact');
   return {
@@ -341,5 +342,99 @@ describe('Next actions and chips (VT-26)', () => {
     const resultBadge = screen.getByTestId('brainstorm-action-result-keep-standalone');
     expect(resultBadge).toHaveTextContent('Kept');
     expect(resultBadge.tagName.toLowerCase()).toBe('span');
+  });
+
+  describe('Start Interview opens the new interview page', () => {
+    const interviewAction = {
+      id: 'start-interview' as const,
+      kind: 'start_workflow' as const,
+      targetModule: 'interview' as const,
+      label: 'Start an interview',
+      description: 'Start an interview grounded in this artifact.',
+      state: 'available' as const,
+      reasons: [],
+      missingInformation: [],
+      handoffId: null,
+      resultRef: null,
+    };
+
+    function LocationProbe() {
+      const location = useLocation();
+      return (
+        <div {...{ 'data-testid': 'location' }}>
+          {location.pathname}
+          {location.search}
+        </div>
+      );
+    }
+
+    function renderWithRoutes() {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/brainstorm/s-1']}>
+            <Routes>
+              <Route path="/brainstorm/:id" element={<BrainstormArtifactPanel project="Apex" session={session} turnRunning={false} />} />
+              <Route path="/backlog/interview/new" element={<LocationProbe />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    }
+
+    it('navigates with the session id instead of opening the preview modal', () => {
+      artifactHook.mockReturnValue(query(artifact({ type: 'technical_design' })));
+      actionsHook.mockReturnValue(query({ ...actions, actions: [...actions.actions, interviewAction] }));
+      renderWithRoutes();
+
+      const button = screen.getByTestId('brainstorm-action-start-start-interview');
+      expect(button).toHaveTextContent('Start');
+      fireEvent.click(button);
+
+      expect(screen.getByTestId('location')).toHaveTextContent('/backlog/interview/new?brainstormSessionId=s-1');
+      expect(screen.queryByTestId('brainstorm-handoff-modal')).not.toBeInTheDocument();
+    });
+
+    it('a chip request for Start Interview navigates too', () => {
+      artifactHook.mockReturnValue(query(artifact({ type: 'technical_design' })));
+      actionsHook.mockReturnValue(query({ ...actions, actions: [...actions.actions, interviewAction] }));
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const tree = (request: { actionId: 'start-interview'; nonce: number } | null) => (
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/brainstorm/s-1']}>
+            <Routes>
+              <Route
+                path="/brainstorm/:id"
+                element={<BrainstormArtifactPanel project="Apex" session={session} turnRunning={false} actionRequest={request} />}
+              />
+              <Route path="/backlog/interview/new" element={<LocationProbe />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+      const view = render(tree(null));
+      view.rerender(tree({ actionId: 'start-interview', nonce: 1 }));
+      expect(screen.getByTestId('location')).toHaveTextContent('/backlog/interview/new?brainstormSessionId=s-1');
+    });
+
+    it('a completed interview handoff shows an Open link to the interview', () => {
+      artifactHook.mockReturnValue(query(artifact({ type: 'technical_design' })));
+      actionsHook.mockReturnValue(query({
+        ...actions,
+        actions: [
+          ...actions.actions,
+          {
+            ...interviewAction,
+            state: 'completed' as const,
+            handoffId: 'h-1',
+            resultRef: { module: 'interview' as const, id: 'i-1', link: '/backlog/interview/i-1' },
+          },
+        ],
+      }));
+      renderPanel(<BrainstormArtifactPanel project="Apex" session={session} turnRunning={false} />);
+      const link = screen.getByTestId('brainstorm-action-result-start-interview');
+      expect(link).toHaveTextContent('Open');
+      expect(link).toHaveAttribute('href', '/backlog/interview/i-1');
+    });
   });
 });

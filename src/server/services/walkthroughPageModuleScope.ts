@@ -49,21 +49,6 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
   planning: {
     pageEntries: [
       {
-        component: 'src/client/components/DevStats.tsx',
-        routePattern: '/planning/dev-stats',
-        suggestedRoute: '/planning/dev-stats',
-      },
-      {
-        component: 'src/client/components/QAMetrics.tsx',
-        routePattern: '/planning/qa',
-        suggestedRoute: '/planning/qa',
-      },
-      {
-        component: 'src/client/components/AIAnalysis.tsx',
-        routePattern: '/planning/ai-analysis',
-        suggestedRoute: '/planning/ai-analysis',
-      },
-      {
         component: 'src/client/components/RoadmapView.tsx',
         routePattern: '/planning/roadmap',
         suggestedRoute: '/planning/roadmap',
@@ -174,6 +159,20 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'qa-lab': {
+    pageEntries: [
+      {
+        component: 'src/client/components/QaLabView.tsx',
+        routePattern: '/qa-lab',
+        suggestedRoute: '/qa-lab',
+      },
+      {
+        component: 'src/client/components/QaLabAssistantPanel.tsx',
+        routePattern: '/qa-lab',
+        suggestedRoute: '/qa-lab',
+      },
+    ],
+  },
   'feature-requests': {
     pageEntries: [
       {
@@ -276,6 +275,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
         component: 'src/client/components/BrainstormWorkspace.tsx',
         routePattern: '/brainstorm/:sessionId',
         suggestedRoute: '/brainstorm',
+      },
+    ],
+  },
+  'prod-support': {
+    pageEntries: [
+      {
+        component: 'src/client/components/GuidedCloudJobs.tsx',
+        routePattern: '/prod-support',
+        suggestedRoute: '/prod-support',
       },
     ],
   },

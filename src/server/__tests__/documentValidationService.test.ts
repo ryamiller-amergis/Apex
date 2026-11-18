@@ -28,6 +28,7 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
     await input.runInProcess();
     return { route: 'in-process', reason: 'flag-disabled' };
   }),
+  usesV2DocumentTransport: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../services/runGroundingService', () => ({
@@ -72,14 +73,18 @@ jest.mock('../services/appSettingsService', () => ({
 import {
   autoStartDocumentValidation,
   generateFallbackReport,
+  isDocumentValidationWatcherActive,
   stopDocumentValidationWatcher,
 } from '../services/documentValidationService';
 import type { ValidationScorecard } from '../../shared/types/interview';
 
 const agentSvc = jest.requireMock('../services/chatAgentService') as Record<string, jest.Mock>;
-const { routeBackgroundWorkflow: mockRouteBackgroundWorkflow } = jest.requireMock(
+const {
+  routeBackgroundWorkflow: mockRouteBackgroundWorkflow,
+  usesV2DocumentTransport: mockUsesV2DocumentTransport,
+} = jest.requireMock(
   '../services/backgroundWorkflowRouter',
-) as { routeBackgroundWorkflow: jest.Mock };
+) as { routeBackgroundWorkflow: jest.Mock; usesV2DocumentTransport: jest.Mock };
 const { getSkillConfig: mockGetSkillConfig } = jest.requireMock(
   '../services/projectSettingsService',
 ) as { getSkillConfig: jest.Mock };
@@ -245,6 +250,26 @@ describe('autoStartDocumentValidation background routing', () => {
   });
 
   afterEach(() => stopDocumentValidationWatcher('prd-1'));
+
+  it('starts no share watcher when validation goes to the V2 worker', async () => {
+    mockUsesV2DocumentTransport.mockResolvedValueOnce(true);
+    mockRouteBackgroundWorkflow.mockResolvedValueOnce({ route: 'worker', reason: 'flag-enabled' });
+
+    await autoStartDocumentValidation(makeAdapter());
+
+    expect(mockUsesV2DocumentTransport).toHaveBeenCalledWith({
+      userId: 'user-1',
+      project: 'proj-alpha',
+      workflowClass: 'validation',
+    });
+    expect(isDocumentValidationWatcherActive('prd-1')).toBe(false);
+  });
+
+  it('still starts the share watcher when validation does not use V2', async () => {
+    await autoStartDocumentValidation(makeAdapter());
+
+    expect(isDocumentValidationWatcherActive('prd-1')).toBe(true);
+  });
 
   it('AC-3 / DoD-1 routes disabled validation without worker preparation or propagation', async () => {
     const adapter = makeAdapter();

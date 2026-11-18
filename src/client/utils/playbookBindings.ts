@@ -1,0 +1,216 @@
+/**
+ * The values a step can read: any output field of a step that finishes before it, plus the run
+ * input. An approval in between only pauses the run; it does not hide earlier outputs.
+ */
+import type { PlaybookGraphNode, PlaybookStepTypePaletteItem } from '../../shared/types/playbook';
+import { stepMeta, SUPERSEDED_OUTPUT_FIELDS } from '../components/playbookStepCatalog';
+
+export interface PlaybookBindingOption {
+  token: string;
+  /** Empty for run input. */
+  stepId: string;
+  sourceLabel: string;
+  field: string;
+  fieldLabel: string;
+}
+
+const OUTPUT_FIELD_LABELS: Record<string, string> = {
+  output: 'Output',
+  reportMd: 'Report',
+  scorecard: 'Scorecard',
+  agentRunId: 'Agent run id',
+  threadId: 'Thread id',
+  completedAt: 'Finished at',
+  decision: 'Decision',
+  decidedBy: 'Decided by',
+  workItemId: 'Work item id',
+  workItemType: 'Work item type',
+  summary: 'Summary',
+  operation: 'Operation',
+  runId: 'Run id',
+  status: 'Status',
+  pullRequestUrl: 'Pull request link',
+  notificationId: 'Notification id',
+  recipientUserId: 'Recipient',
+  item: 'Current item',
+  index: 'Item number',
+  title: 'Title',
+  state: 'State',
+  outcome: 'Outcome',
+  verdict: 'Verdict',
+  isReady: 'Is ready',
+  matched: 'Condition matched',
+};
+
+/** Fields a trigger can put on the run input. An Azure DevOps trigger sets all four. */
+export const RUN_INPUT_FIELDS: readonly string[] = ['workItemId', 'workItemType', 'title', 'state'];
+
+const STEP_TOKEN = /\$\{steps\.([A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z][A-Za-z0-9_]*)\}/g;
+const INPUT_TOKEN = /\$\{input\.([A-Za-z][A-Za-z0-9_-]*)\}/g;
+export const ANY_TOKEN = /\$\{(?:steps\.[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_]*|input\.[A-Za-z][A-Za-z0-9_-]*)\}/g;
+
+export function fieldLabel(field: string): string {
+  if (OUTPUT_FIELD_LABELS[field]) return OUTPUT_FIELD_LABELS[field];
+  const words = field.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function outputFields(item: PlaybookStepTypePaletteItem | undefined): string[] {
+  const properties = (item?.outputJsonSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+  return Object.keys(properties ?? {});
+}
+
+function offeredOutputFields(item: PlaybookStepTypePaletteItem | undefined): string[] {
+  const superseded = SUPERSEDED_OUTPUT_FIELDS[item?.stepType ?? ''] ?? [];
+  return outputFields(item).filter((field) => !superseded.includes(field));
+}
+
+function stepLabel(node: PlaybookGraphNode): string {
+  const authored = node.title?.trim();
+  return authored ? `${authored} (${node.id})` : `${stepMeta(node.stepType).title} (${node.id})`;
+}
+
+export type PlaybookComparableKind = 'choice' | 'text' | 'number' | 'boolean';
+
+export interface PlaybookComparableField {
+  field: string;
+  label: string;
+  kind: PlaybookComparableKind;
+  /** The allowed values when `kind` is `choice`. */
+  choices: readonly string[];
+  /** The step may finish without this field, so a branch can ask whether it has a value. */
+  optional: boolean;
+}
+
+interface OutputPropertySchema {
+  type?: string | string[];
+  enum?: unknown[];
+}
+
+/**
+ * Output fields of a step a branch can test: text, a fixed list, a number, or yes/no.
+ * An agent's `outcome` becomes a list of the outcomes that step declares, and is left out when it
+ * declares none, because the agent is never asked to pick one.
+ */
+export function comparableOutputFields(
+  item: PlaybookStepTypePaletteItem | undefined,
+  node?: Pick<PlaybookGraphNode, 'config'>,
+): PlaybookComparableField[] {
+  const outputSchema = item?.outputJsonSchema as
+    | { properties?: Record<string, OutputPropertySchema>; required?: string[] }
+    | undefined;
+  const properties = outputSchema?.properties ?? {};
+  const required = new Set(outputSchema?.required ?? []);
+  const declaredOutcomes = Array.isArray(node?.config?.outcomes) ? node.config.outcomes.map(String) : [];
+  const fields: PlaybookComparableField[] = [];
+  for (const field of offeredOutputFields(item)) {
+    const schema = properties[field] ?? {};
+    const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+    const type = types.find((candidate) => candidate !== 'null');
+    const optional = !required.has(field) || types.includes('null');
+    if (field === 'outcome') {
+      if (declaredOutcomes.length === 0) continue;
+      fields.push({ field, label: fieldLabel(field), kind: 'choice', choices: declaredOutcomes, optional });
+      continue;
+    }
+    const kind: PlaybookComparableKind | null = Array.isArray(schema.enum)
+      ? 'choice'
+      : type === 'boolean'
+        ? 'boolean'
+        : type === 'number' || type === 'integer'
+          ? 'number'
+          : type === 'string'
+            ? 'text'
+            : null;
+    if (!kind) continue;
+    fields.push({
+      field,
+      label: fieldLabel(field),
+      kind,
+      choices: Array.isArray(schema.enum) ? schema.enum.map(String) : [],
+      optional,
+    });
+  }
+  return fields;
+}
+
+export function availableBindings(
+  priorNodeIds: readonly string[],
+  allNodes: readonly PlaybookGraphNode[],
+  paletteItems: readonly PlaybookStepTypePaletteItem[],
+): PlaybookBindingOption[] {
+  const options: PlaybookBindingOption[] = [];
+  for (const node of allNodes) {
+    if (!priorNodeIds.includes(node.id)) continue;
+    const item = paletteItems.find((candidate) => candidate.stepType === node.stepType);
+    for (const field of offeredOutputFields(item)) {
+      options.push({
+        token: `\${steps.${node.id}.${field}}`,
+        stepId: node.id,
+        sourceLabel: stepLabel(node),
+        field,
+        fieldLabel: fieldLabel(field),
+      });
+    }
+  }
+  for (const field of RUN_INPUT_FIELDS) {
+    options.push({
+      token: `\${input.${field}}`,
+      stepId: '',
+      sourceLabel: 'Trigger input',
+      field,
+      fieldLabel: fieldLabel(field),
+    });
+  }
+  return options;
+}
+
+export interface PlaybookTokenReference {
+  token: string;
+  label: string;
+  valid: boolean;
+}
+
+/** Every distinct placeholder in a config, with a readable name and whether it can resolve. */
+export function tokenReferences(
+  text: string,
+  priorNodeIds: readonly string[],
+  allNodes: readonly PlaybookGraphNode[],
+  paletteItems: readonly PlaybookStepTypePaletteItem[],
+): PlaybookTokenReference[] {
+  const seen = new Map<string, PlaybookTokenReference>();
+  for (const match of text.matchAll(STEP_TOKEN)) {
+    const node = allNodes.find((candidate) => candidate.id === match[1]);
+    const item = paletteItems.find((candidate) => candidate.stepType === node?.stepType);
+    seen.set(match[0], {
+      token: match[0],
+      label: `${node ? stepLabel(node) : match[1]} › ${fieldLabel(match[2])}`,
+      valid: Boolean(node && priorNodeIds.includes(node.id) && outputFields(item).includes(match[2])),
+    });
+  }
+  for (const match of text.matchAll(INPUT_TOKEN)) {
+    seen.set(match[0], { token: match[0], label: `Trigger input › ${fieldLabel(match[1])}`, valid: true });
+  }
+  return [...seen.values()];
+}
+
+/** The nearest earlier step whose output has the field, for "automatic" wiring. */
+export function nearestProducer(
+  field: string,
+  priorNodeIdsNearestFirst: readonly string[],
+  allNodes: readonly PlaybookGraphNode[],
+  paletteItems: readonly PlaybookStepTypePaletteItem[],
+): PlaybookGraphNode | undefined {
+  for (const id of priorNodeIdsNearestFirst) {
+    const node = allNodes.find((candidate) => candidate.id === id);
+    const item = paletteItems.find((candidate) => candidate.stepType === node?.stepType);
+    if (!node || !outputFields(item).includes(field)) continue;
+    if (
+      node.stepType === 'apex-action'
+      && field === 'workItemId'
+      && node.config?.operation !== 'create-work-item'
+    ) continue;
+    return node;
+  }
+  return undefined;
+}

@@ -746,11 +746,11 @@ describe('evaluateFlags', () => {
     expect(result['repo-grounding-workspace-profile']).toBe(false);
   });
 
-  it('TBI-005 VT-15 enables workflow-human-evaluation for Apex only, and for nobody when disabled', async () => {
+  it('TBI-005 VT-15 enables skill-learning for Apex only, and for nobody when disabled', async () => {
     mockDb.query.featureFlags.findMany.mockResolvedValue([
       {
         ...baseFlag,
-        key: 'workflow-human-evaluation',
+        key: 'skill-learning',
         enabled: true,
         rules: [{ type: 'project', value: 'Apex' }],
       },
@@ -759,13 +759,13 @@ describe('evaluateFlags', () => {
     const apex = await evaluateFlags({ userId: 'user-1', project: 'Apex', groupIds: [] });
     const beta = await evaluateFlags({ userId: 'user-1', project: 'Beta', groupIds: [] });
 
-    expect(apex['workflow-human-evaluation']).toBe(true);
-    expect(beta['workflow-human-evaluation']).toBe(false);
+    expect(apex['skill-learning']).toBe(true);
+    expect(beta['skill-learning']).toBe(false);
 
     mockDb.query.featureFlags.findMany.mockResolvedValue([
       {
         ...baseFlag,
-        key: 'workflow-human-evaluation',
+        key: 'skill-learning',
         enabled: false,
         rules: [{ type: 'project', value: 'Apex' }],
       },
@@ -774,8 +774,8 @@ describe('evaluateFlags', () => {
     const apexOff = await evaluateFlags({ userId: 'user-1', project: 'Apex', groupIds: [] });
     const betaOff = await evaluateFlags({ userId: 'user-1', project: 'Beta', groupIds: [] });
 
-    expect(apexOff['workflow-human-evaluation']).toBe(false);
-    expect(betaOff['workflow-human-evaluation']).toBe(false);
+    expect(apexOff['skill-learning']).toBe(false);
+    expect(betaOff['skill-learning']).toBe(false);
   });
 });
 

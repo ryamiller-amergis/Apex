@@ -302,10 +302,13 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
     min_replicas = local.ai_platform_v2_interactive_replica_bounds[each.key].min
     max_replicas = local.ai_platform_v2_interactive_replica_bounds[each.key].max
 
-    volume {
-      name         = "ai-pilot-data"
-      storage_type = "AzureFile"
-      storage_name = var.ai_platform_v2_interactive_workspace_storage_name
+    dynamic "volume" {
+      for_each = var.ai_platform_v2_interactive_mount_workspace_share ? [1] : []
+      content {
+        name         = "ai-pilot-data"
+        storage_type = "AzureFile"
+        storage_name = var.ai_platform_v2_interactive_workspace_storage_name
+      }
     }
 
     container {
@@ -314,9 +317,12 @@ resource "azurerm_container_app" "ai_platform_v2_interactive_class" {
       cpu    = local.ai_platform_v2_interactive_resources[each.key].cpu
       memory = local.ai_platform_v2_interactive_resources[each.key].memory
 
-      volume_mounts {
-        name = "ai-pilot-data"
-        path = var.ai_platform_v2_interactive_workspace_mount_path
+      dynamic "volume_mounts" {
+        for_each = var.ai_platform_v2_interactive_mount_workspace_share ? [1] : []
+        content {
+          name = "ai-pilot-data"
+          path = var.ai_platform_v2_interactive_workspace_mount_path
+        }
       }
 
       liveness_probe {

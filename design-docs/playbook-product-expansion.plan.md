@@ -13,7 +13,7 @@ scope:
 out_of_scope:
   - Additional interview specialists
   - Ordered-list authoring fallback
-  - Template catalog, triggers, action nodes, connectors, parallelism, authoring recommender, and SkillOpt (Part 2)
+  - Template catalog, triggers, action nodes, connectors, parallelism, and the authoring recommender (Part 2)
 ---
 
 # Playbook Product Expansion — Part 1: Runtime foundation
@@ -78,7 +78,7 @@ After this plan:
 This plan does not add interview specialists or an ordered-list editor.
 
 This plan does not build the template gallery, trigger subscriptions, `apex-action`, connectors,
-parallel splits, joins, loops, the authoring recommender, or a SkillOpt pilot. Those are Part 2.
+parallel splits, joins, loops, or the authoring recommender. Those are Part 2.
 Their design is already accepted. They wait on the contracts above.
 
 This plan does not replace Mastra or add another workflow engine.

@@ -29,12 +29,19 @@ import {
   isBranchStepType,
   isRegisteredStepType,
 } from './playbookSteps/registry';
-import { validateBranchCondition } from './playbookSteps/branchConditionEvaluator';
 import {
+  PlaybookBranchConditionError,
+  validateBranchCondition,
+} from './playbookSteps/branchConditionEvaluator';
+import {
+  PlaybookMcpCapabilityError,
+  assertCursorAgentsUseReadOnlyMcp,
   isReadOnlyCursorAgentNode,
 } from './playbookMcpCapabilityService';
 import {
   PLAYBOOK_GUARD_LIMITS,
+  playbookStepNeedsTitle,
+  type PlaybookDryRunIssue,
   type PlaybookGraph,
   type PlaybookGraphNode,
   type PlaybookGuardViolation,
@@ -51,17 +58,70 @@ import {
  */
 export class PlaybookGuardViolationError extends Error {
   readonly violation: PlaybookGuardViolation;
+  /** The step this violation is on, when it is on one. Not part of `violation`, which callers match exactly. */
+  readonly nodeId?: string;
+  /** The connection this violation is on, when it is on one. */
+  readonly edge?: { from: string; to: string };
 
-  constructor(kind: PlaybookGuardViolationKind, message: string) {
+  constructor(
+    kind: PlaybookGuardViolationKind,
+    message: string,
+    scope: { nodeId?: string; edge?: { from: string; to: string } } = {}
+  ) {
     super(message);
     this.name = 'PlaybookGuardViolationError';
     this.violation = { kind, message };
+    if (scope.nodeId !== undefined) this.nodeId = scope.nodeId;
+    if (scope.edge !== undefined) this.edge = scope.edge;
   }
+}
+
+/** The step id an error is about, when it carries one. */
+export function nodeIdOfError(error: unknown): string | undefined {
+  const nodeId = (error as { nodeId?: unknown } | null | undefined)?.nodeId;
+  return typeof nodeId === 'string' && nodeId ? nodeId : undefined;
 }
 
 /** How many nodes in this graph are agent turns. The registry decides which types those are. */
 export function countAgentSteps(graph: PlaybookGraph): number {
   return graph.nodes.filter((node) => isAgentStepType(node.stepType)).length;
+}
+
+function loopCap(node: PlaybookGraph['nodes'][number]): number {
+  const raw = node.config?.maxIterations;
+  const cap = typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : 1;
+  return cap;
+}
+
+/**
+ * Agent turns a published graph can reach, counting every parallel arm and every
+ * iteration a foreach or until step is allowed to run.
+ */
+export function worstCaseAgentSteps(graph: PlaybookGraph): number {
+  const multiplied = new Set<string>();
+  let total = 0;
+  for (const loop of graph.nodes) {
+    if (loop.stepType !== 'foreach' && loop.stepType !== 'until') continue;
+    const cap = loopCap(loop);
+    const pending = graph.edges.filter((edge) => edge.from === loop.id).map((edge) => edge.to);
+    const seen = new Set<string>([loop.id]);
+    while (pending.length > 0) {
+      const current = pending.shift()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const node = graph.nodes.find((candidate) => candidate.id === current);
+      if (!node || node.stepType === 'join') continue;
+      if (isAgentStepType(node.stepType)) {
+        total += cap;
+        multiplied.add(node.id);
+      }
+      pending.push(...graph.edges.filter((edge) => edge.from === node.id).map((edge) => edge.to));
+    }
+  }
+  for (const node of graph.nodes) {
+    if (isAgentStepType(node.stepType) && !multiplied.has(node.id)) total += 1;
+  }
+  return total;
 }
 
 /** The widest set of outbound edges from any single node. One means a linear graph. */
@@ -139,12 +199,26 @@ const registryLookup: PlaybookStepDescriptorLookup = (stepType) =>
 
 /** A graph node naming a step type the registry cannot resolve. */
 export class PlaybookGraphStepTypeError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
   constructor(nodeId: string, stepType: string) {
     super(
       `Playbook step "${nodeId}" names the step type "${stepType}", which no registered step ` +
         'type matches. A step nothing can execute must not reach a published version.'
     );
     this.name = 'PlaybookGraphStepTypeError';
+    this.nodeId = nodeId;
+  }
+}
+
+/** A rule that holds one step to account, such as an approval gate that names no step to protect. */
+export class PlaybookGraphNodeRuleError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
+  constructor(nodeId: string, message: string) {
+    super(message);
+    this.name = 'PlaybookGraphNodeRuleError';
+    this.nodeId = nodeId;
   }
 }
 
@@ -166,19 +240,25 @@ export class PlaybookGraphNodeConfigError extends PlaybookStepSchemaError {
 }
 
 export class PlaybookGraphBindingError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
   constructor(nodeId: string, placeholder: string, reason: string) {
     super(`Playbook step "${nodeId}" cannot use binding "${placeholder}": ${reason}.`);
     this.name = 'PlaybookGraphBindingError';
+    this.nodeId = nodeId;
   }
 }
 
 export class PlaybookGraphStepVersionError extends PlaybookStepTypeError {
+  readonly nodeId: string;
+
   constructor(nodeId: string, stepType: string, version: number, currentVersion: number) {
     super(
       `Playbook step "${nodeId}" uses ${stepType} contract version ${version}, but this Apex ` +
         `version supports contract versions 1 through ${currentVersion}.`
     );
     this.name = 'PlaybookGraphStepVersionError';
+    this.nodeId = nodeId;
   }
 }
 
@@ -192,16 +272,6 @@ export class PlaybookGraphStepVersionError extends PlaybookStepTypeError {
  */
 function isApprovalGate(descriptor: PlaybookStepTypeDescriptor | undefined): boolean {
   return descriptor?.canSuspend === true && descriptor.suspendReason === 'approval_gate';
-}
-
-function inboundEdges(graph: PlaybookGraph): Map<string, string[]> {
-  const inbound = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    const existing = inbound.get(edge.to);
-    if (existing) existing.push(edge.from);
-    else inbound.set(edge.to, [edge.from]);
-  }
-  return inbound;
 }
 
 function canReach(graph: PlaybookGraph, from: string, to: string): boolean {
@@ -229,14 +299,20 @@ function outputHasField(descriptor: PlaybookStepTypeDescriptor, field: string): 
   return schema instanceof z.ZodObject && field in schema.shape;
 }
 
-/** Every cross-step binding names an ancestor and a declared output field. */
+/**
+ * Every cross-step binding names an ancestor and a declared output field.
+ *
+ * `targets` narrows the check to some steps, so the issue collector can report each step's
+ * problem on its own. Publish passes none and checks them all.
+ */
 export function assertBindingsResolvable(
   graph: PlaybookGraph,
-  lookup: PlaybookStepDescriptorLookup = registryLookup
+  lookup: PlaybookStepDescriptorLookup = registryLookup,
+  targets: readonly PlaybookGraphNode[] = graph.nodes
 ): void {
   const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
 
-  for (const target of graph.nodes) {
+  for (const target of targets) {
     for (const binding of collectStepBindingReferences(target.config ?? {})) {
       const source = nodes.get(binding.stepId);
       if (!source) {
@@ -246,12 +322,43 @@ export function assertBindingsResolvable(
           `source step "${binding.stepId}" is absent`
         );
       }
-      if (source.id === target.id || !canReach(graph, source.id, target.id)) {
+      const untilReadsItsBody = target.stepType === 'until'
+        && graph.edges.filter((edge) => edge.from === target.id).length === 1
+        && graph.edges.some((edge) => edge.from === target.id && edge.to === source.id);
+      if (!untilReadsItsBody && (source.id === target.id || !canReach(graph, source.id, target.id))) {
         throw new PlaybookGraphBindingError(
           target.id,
           binding.placeholder,
           `source step "${binding.stepId}" is not a prior step`
         );
+      }
+      if (binding.armStepId) {
+        if (source.stepType !== 'join' || source.config?.policy !== 'all') {
+          throw new PlaybookGraphBindingError(
+            target.id,
+            binding.placeholder,
+            `arm "${binding.armStepId}" is only readable from a join that waits for every arm`
+          );
+        }
+        const predecessors = source.config?.predecessors;
+        const waited = Array.isArray(predecessors) && predecessors.includes(binding.armStepId);
+        const arm = nodes.get(binding.armStepId);
+        if (!waited || !arm || !canReach(graph, arm.id, source.id)) {
+          throw new PlaybookGraphBindingError(
+            target.id,
+            binding.placeholder,
+            `arm "${binding.armStepId}" is not an arm this join waits for`
+          );
+        }
+        const armDescriptor = lookup(arm.stepType);
+        if (!armDescriptor || !outputHasField(armDescriptor, binding.field)) {
+          throw new PlaybookGraphBindingError(
+            target.id,
+            binding.placeholder,
+            `field "${binding.field}" is not declared by arm "${binding.armStepId}"`
+          );
+        }
+        continue;
       }
       const descriptor = lookup(source.stepType);
       if (!descriptor || !outputHasField(descriptor, binding.field)) {
@@ -266,35 +373,71 @@ export function assertBindingsResolvable(
 }
 
 /**
- * Whether this node reaches outside Apex with something other than a gate in front of it.
+ * Every node reachable from a start node (nothing points into it) without the path crossing an
+ * approval gate.
  *
- * Edges, not array order. A graph whose nodes read gate-then-agent but whose edge skips the gate is
- * precisely the arrangement an order-based check waves through, and the step it lets run is the one
- * kind Apex cannot undo. An empty inbound set counts as ungated for the same reason: nothing can
- * precede a first step, so a first step can never be the one that leaves.
+ * A leaves-apex node outside this set has an approval gate somewhere on every path that reaches
+ * it — not necessarily as the step immediately before it. `gate → create-item → cloud-agent`
+ * protects the cloud-agent step the same way `gate → cloud-agent` would, because nothing between
+ * the gate and the cloud agent can act on its own; the create step runs deterministically from
+ * what the gate already approved. Reaching a gate consumes it for this traversal: once a path
+ * crosses one, that path stops contributing to the exposed set, so anything downstream of a gate
+ * is exposed again only if some other path reaches it without crossing a gate at all — which is
+ * exactly the one-gated-one-bypass case this rule still has to refuse.
+ *
+ * An empty inbound set makes a node a start by definition, so a first step is always exposed —
+ * nothing can precede it for a gate to have been on.
  */
+function nodesExposedWithoutGate(
+  graph: PlaybookGraph,
+  stepTypeById: Map<string, string>,
+  lookup: PlaybookStepDescriptorLookup
+): Set<string> {
+  const outbound = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const existing = outbound.get(edge.from);
+    if (existing) existing.push(edge.to);
+    else outbound.set(edge.from, [edge.to]);
+  }
+  const inboundCount = new Map<string, number>();
+  for (const node of graph.nodes) inboundCount.set(node.id, 0);
+  for (const edge of graph.edges) {
+    inboundCount.set(edge.to, (inboundCount.get(edge.to) ?? 0) + 1);
+  }
+
+  const exposed = new Set<string>();
+  const queue = graph.nodes
+    .filter((node) => (inboundCount.get(node.id) ?? 0) === 0)
+    .map((node) => node.id);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (exposed.has(current)) continue;
+    exposed.add(current);
+    if (isApprovalGate(lookup(stepTypeById.get(current) ?? ''))) continue;
+    for (const next of outbound.get(current) ?? []) {
+      if (!exposed.has(next)) queue.push(next);
+    }
+  }
+  return exposed;
+}
+
+/** Whether this node reaches outside Apex and sits in the exposed set computed above. */
 function isUngatedLeavesApexNode(
   node: PlaybookGraphNode,
-  inbound: Map<string, string[]>,
-  stepTypeById: Map<string, string>,
+  exposed: Set<string>,
   lookup: PlaybookStepDescriptorLookup
 ): boolean {
   // A server-verified read-only cursor profile does not leave Apex, despite the conservative
   // descriptor classification used for legacy/unknown agent configurations.
   if (isReadOnlyCursorAgentNode(node)) return false;
   if (lookup(node.stepType)?.sideEffect !== 'leaves-apex') return false;
-
-  const predecessors = inbound.get(node.id) ?? [];
-  if (predecessors.length === 0) return true;
-
-  // Every path in, not merely one of them. A predecessor naming an unresolvable type is not a gate.
-  return predecessors.some(
-    (predecessorId) => !isApprovalGate(lookup(stepTypeById.get(predecessorId) ?? ''))
-  );
+  return exposed.has(node.id);
 }
 
 /**
- * Every `leaves-apex` node in this graph that is not gated on all of its inbound edges, per TBI-034.
+ * Every `leaves-apex` node in this graph not protected by an approval gate somewhere upstream of
+ * it, per TBI-034.
  *
  * Pure, synchronous and network-free: it reads the graph it is handed and the descriptors the
  * lookup returns, and nothing else. It neither rewrites the graph nor inserts the missing gate —
@@ -305,11 +448,11 @@ export function findUngatedLeavesApexSteps(
   graph: PlaybookGraph,
   lookup: PlaybookStepDescriptorLookup = registryLookup
 ): string[] {
-  const inbound = inboundEdges(graph);
   const stepTypeById = new Map(graph.nodes.map((node) => [node.id, node.stepType]));
+  const exposed = nodesExposedWithoutGate(graph, stepTypeById, lookup);
 
   return graph.nodes
-    .filter((node) => isUngatedLeavesApexNode(node, inbound, stepTypeById, lookup))
+    .filter((node) => isUngatedLeavesApexNode(node, exposed, lookup))
     .map((node) => node.id);
 }
 
@@ -317,9 +460,11 @@ function ungatedViolation(nodeIds: string[]): PlaybookGuardViolationError {
   const named = nodeIds.map((nodeId) => `"${nodeId}"`).join(', ');
   return new PlaybookGuardViolationError(
     'ungated-leaves-apex',
-    `${nodeIds.length === 1 ? 'Step' : 'Steps'} ${named} act outside Apex, so every step that can ` +
-      'reach them must be an approval gate. Add a gate immediately before each one; a step that ' +
-      'leaves Apex cannot be the first step, because nothing precedes it.'
+    `${nodeIds.length === 1 ? 'Step' : 'Steps'} ${named} act outside Apex, so every path that ` +
+      'reaches them must cross an approval gate first. Add a gate upstream of each one, or route ' +
+      'every path into it through an existing gate; a step that leaves Apex cannot be the first ' +
+      'step, because nothing precedes it.',
+    nodeIds.length === 1 ? { nodeId: nodeIds[0] } : {}
   );
 }
 
@@ -344,7 +489,8 @@ export function assertStepGateSatisfied(
   }
 
   const stepTypeById = new Map(graph.nodes.map((candidate) => [candidate.id, candidate.stepType]));
-  if (isUngatedLeavesApexNode(node, inboundEdges(graph), stepTypeById, lookup)) {
+  const exposed = nodesExposedWithoutGate(graph, stepTypeById, lookup);
+  if (isUngatedLeavesApexNode(node, exposed, lookup)) {
     throw ungatedViolation([node.id]);
   }
 }
@@ -360,9 +506,10 @@ export function assertStepGateSatisfied(
  */
 export function assertGraphStepsResolvable(
   graph: PlaybookGraph,
-  lookup: PlaybookStepDescriptorLookup = registryLookup
+  lookup: PlaybookStepDescriptorLookup = registryLookup,
+  nodes: readonly PlaybookGraphNode[] = graph.nodes
 ): void {
-  for (const node of graph.nodes) {
+  for (const node of nodes) {
     const descriptor = lookup(node.stepType);
     if (!descriptor) throw new PlaybookGraphStepTypeError(node.id, node.stepType);
     const stepTypeVersion = node.stepTypeVersion ?? 1;
@@ -390,7 +537,8 @@ export function assertGraphStepsResolvable(
       const approverPool = node.config?.approverPool;
       const gatedStepId = node.config?.gatedStepId;
       if ((approverPool || gatedStepId) && !(approverPool && gatedStepId)) {
-        throw new PlaybookStepTypeError(
+        throw new PlaybookGraphNodeRuleError(
+          node.id,
           `Approval gate "${node.id}" must name both approverPool and gatedStepId.`,
         );
       }
@@ -399,7 +547,8 @@ export function assertGraphStepsResolvable(
       const gatesNextStep = typeof gatedStepId === 'string'
         && graph.edges.some((edge) => edge.from === node.id && edge.to === gatedStepId);
       if (gatedStepId && !reviewsPriorStep && !gatesNextStep) {
-        throw new PlaybookStepTypeError(
+        throw new PlaybookGraphNodeRuleError(
+          node.id,
           `Approval gate "${node.id}" must review a prior step or directly precede its gated ` +
             `step "${gatedStepId}".`,
         );
@@ -409,46 +558,99 @@ export function assertGraphStepsResolvable(
 }
 
 /**
+ * Every step an author adds, except flow steps, needs a title so a reader can tell steps apart.
+ * Checked when an author publishes and on the canvas. Graphs Apex builds itself are not checked.
+ */
+export function assertStepTitles(
+  graph: PlaybookGraph,
+  nodes: readonly PlaybookGraphNode[] = graph.nodes
+): void {
+  for (const node of nodes) {
+    if (!playbookStepNeedsTitle(node.stepType)) continue;
+    if (typeof node.title === 'string' && node.title.trim()) continue;
+    throw new PlaybookGraphNodeRuleError(node.id, `Give step "${node.id}" a title.`);
+  }
+}
+
+/**
  * Topology checks shared by publish and the authoring canvas.
  *
  * Step budgets and gate/MCP rules stay on the publish path only. The canvas must allow a
  * `cursor-agent` → `notify` draft with no gate while the author is still composing.
  */
-function assertGraphTopologyGuards(graph: PlaybookGraph): void {
+function findTopologyViolations(graph: PlaybookGraph): PlaybookGuardViolationError[] {
   const { maxFanOutWidth } = PLAYBOOK_GUARD_LIMITS;
+  const violations: PlaybookGuardViolationError[] = [];
 
-  const invalidFanOut = graph.nodes.find((node) => {
-    const outbound = graph.edges.filter((edge) => edge.from === node.id);
-    return outbound.length > (isBranchStepType(node.stepType) ? 2 : maxFanOutWidth);
-  });
-  if (invalidFanOut) {
-    const fanOut = graph.edges.filter((edge) => edge.from === invalidFanOut.id).length;
-    const step = `${invalidFanOut.stepType} step "${invalidFanOut.id}"`;
-    const message = isBranchStepType(invalidFanOut.stepType)
-      ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
-      : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
-    throw new PlaybookGuardViolationError('max-fan-out', message);
+  for (const node of graph.nodes) {
+    const fanOut = graph.edges.filter((edge) => edge.from === node.id).length;
+    const invalid = node.parallel
+      ? fanOut < 2 || fanOut > 8
+      : fanOut > (isBranchStepType(node.stepType) ? 2 : maxFanOutWidth);
+    if (!invalid) continue;
+    const step = `${node.stepType} step "${node.id}"`;
+    const message = node.parallel
+      ? `A parallel split needs 2 to 8 arms. The ${step} leads to ${fanOut}.`
+      : isBranchStepType(node.stepType)
+        ? `A branch can lead to at most two next steps. The ${step} already leads to ${fanOut}.`
+        : `The ${step} can lead to at most ${maxFanOutWidth} next step. Only a branch step can connect to more than one.`;
+    violations.push(new PlaybookGuardViolationError('max-fan-out', message, { nodeId: node.id }));
   }
 
   const inboundCounts = new Map<string, number>();
   for (const edge of graph.edges) {
     inboundCounts.set(edge.to, (inboundCounts.get(edge.to) ?? 0) + 1);
   }
-  const join = [...inboundCounts.entries()].find(([, count]) => count > 1);
-  if (join) {
-    throw new PlaybookGuardViolationError(
-      'join',
-      `Step "${join[0]}" has ${join[1]} inbound paths. Branch fan-out is supported, but joins are not.`
+  for (const [id, inbound] of inboundCounts) {
+    if (inbound <= 1) continue;
+    if (graph.nodes.find((candidate) => candidate.id === id)?.stepType === 'join') continue;
+    violations.push(
+      new PlaybookGuardViolationError(
+        'join',
+        `Step "${id}" has ${inbound} inbound paths. Only a join step can receive more than one.`,
+        { nodeId: id }
+      )
     );
   }
 
   const cycle = findCycle(graph);
   if (cycle) {
-    throw new PlaybookGuardViolationError(
-      'loop',
-      `This Playbook contains a loop: ${cycle.join(' → ')} → ${cycle[0]}. ` +
-        'Loops are not permitted; a Playbook must reach an end.'
+    violations.push(
+      new PlaybookGuardViolationError(
+        'loop',
+        `This Playbook contains a loop: ${cycle.join(' → ')} → ${cycle[0]}. ` +
+          'Loops are not permitted; a Playbook must reach an end.',
+        { nodeId: cycle[0] }
+      )
     );
+  }
+  return violations;
+}
+
+function assertGraphTopologyGuards(graph: PlaybookGraph): void {
+  const [first] = findTopologyViolations(graph);
+  if (first) throw first;
+}
+
+/** A connection whose start or end is not a step in the graph, or undefined when both are. */
+function danglingEdgeViolation(
+  edge: PlaybookGraph['edges'][number],
+  nodeIds: ReadonlySet<string>
+): PlaybookGuardViolationError | undefined {
+  if (nodeIds.has(edge.from) && nodeIds.has(edge.to)) return undefined;
+  const anchor = nodeIds.has(edge.from) ? edge.from : nodeIds.has(edge.to) ? edge.to : undefined;
+  return new PlaybookGuardViolationError(
+    'join',
+    `Connection from "${edge.from}" to "${edge.to}" references a step that is not on the canvas.`,
+    { edge: { from: edge.from, to: edge.to }, ...(anchor ? { nodeId: anchor } : {}) }
+  );
+}
+
+function assertEdgesReferenceSteps(graph: PlaybookGraph): void {
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const edge of graph.edges) {
+    const violation = danglingEdgeViolation(edge, nodeIds);
+    if (violation) throw violation;
   }
 }
 
@@ -458,20 +660,12 @@ function assertGraphTopologyGuards(graph: PlaybookGraph): void {
  * Publish still runs the full guard set, including ungated `leaves-apex` and read-only MCP.
  */
 export function assertCanvasConnection(graph: PlaybookGraph): void {
-  const nodeIds = new Set(graph.nodes.map((node) => node.id));
   for (const node of graph.nodes) {
     if (!isRegisteredStepType(node.stepType)) {
       throw new PlaybookGraphStepTypeError(node.id, node.stepType);
     }
   }
-  for (const edge of graph.edges) {
-    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
-      throw new PlaybookGuardViolationError(
-        'join',
-        `Connection from "${edge.from}" to "${edge.to}" references a step that is not on the canvas.`
-      );
-    }
-  }
+  assertEdgesReferenceSteps(graph);
   assertGraphTopologyGuards(graph);
   assertBindingsResolvable(graph);
 }
@@ -493,7 +687,7 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
     );
   }
 
-  const agentSteps = countAgentSteps(graph);
+  const agentSteps = worstCaseAgentSteps(graph);
   if (agentSteps > maxAgentStepsPerRun) {
     throw new PlaybookGuardViolationError(
       'max-agent-steps',
@@ -501,6 +695,7 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
     );
   }
 
+  assertEdgesReferenceSteps(graph);
   assertGraphTopologyGuards(graph);
 
   assertGraphStepsResolvable(graph);
@@ -508,6 +703,87 @@ export function assertGraphWithinGuards(graph: PlaybookGraph): void {
 
   const ungated = findUngatedLeavesApexSteps(graph);
   if (ungated.length > 0) throw ungatedViolation(ungated);
+}
+
+function issueFromError(error: unknown, fallbackNodeId: string): PlaybookDryRunIssue {
+  const edge = (error as { edge?: { from: string; to: string } } | null)?.edge;
+  return {
+    nodeId: nodeIdOfError(error) ?? fallbackNodeId,
+    kind:
+      error instanceof PlaybookBranchConditionError
+        ? 'branch'
+        : error instanceof PlaybookMcpCapabilityError
+          ? 'capability'
+          : 'graph',
+    message: error instanceof Error ? error.message : 'Graph validation failed.',
+    ...(edge ? { edge } : {}),
+  };
+}
+
+/**
+ * Every problem in the graph, each tied to the step or connection it is on.
+ *
+ * The assertions above stop at the first problem, which is right for publish: one reason is enough
+ * to refuse. An author fixing a draft needs the whole list, so this runs the same checks one step
+ * and one connection at a time and keeps what each throws. It covers every step type, connectors
+ * included, because it asks the registry rather than naming types.
+ */
+export function collectGraphIssues(
+  graph: PlaybookGraph,
+  lookup: PlaybookStepDescriptorLookup = registryLookup
+): PlaybookDryRunIssue[] {
+  const issues: PlaybookDryRunIssue[] = [];
+  const attempt = (check: () => void, fallbackNodeId = ''): void => {
+    try {
+      check();
+    } catch (error) {
+      issues.push(issueFromError(error, fallbackNodeId));
+    }
+  };
+
+  const { maxStepsPerRun, maxAgentStepsPerRun } = PLAYBOOK_GUARD_LIMITS;
+  attempt(() => {
+    if (graph.nodes.length > maxStepsPerRun) {
+      throw new PlaybookGuardViolationError(
+        'max-steps',
+        `This Playbook has ${graph.nodes.length} steps, above the limit of ${maxStepsPerRun} per run.`
+      );
+    }
+  });
+  attempt(() => {
+    const agentSteps = worstCaseAgentSteps(graph);
+    if (agentSteps > maxAgentStepsPerRun) {
+      throw new PlaybookGuardViolationError(
+        'max-agent-steps',
+        `This Playbook has ${agentSteps} agent steps, above the limit of ${maxAgentStepsPerRun} per run.`
+      );
+    }
+  });
+
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  for (const edge of graph.edges) {
+    attempt(() => {
+      const violation = danglingEdgeViolation(edge, nodeIds);
+      if (violation) throw violation;
+    });
+  }
+
+  for (const violation of findTopologyViolations(graph)) issues.push(issueFromError(violation, ''));
+
+  for (const node of graph.nodes) {
+    attempt(() => assertGraphStepsResolvable(graph, lookup, [node]), node.id);
+    attempt(() => assertBindingsResolvable(graph, lookup, [node]), node.id);
+    attempt(() => assertCursorAgentsUseReadOnlyMcp({ nodes: [node], edges: [] }), node.id);
+    attempt(() => assertStepTitles(graph, [node]), node.id);
+  }
+
+  for (const nodeId of findUngatedLeavesApexSteps(graph, lookup)) {
+    attempt(() => {
+      throw ungatedViolation([nodeId]);
+    }, nodeId);
+  }
+
+  return issues;
 }
 
 /**

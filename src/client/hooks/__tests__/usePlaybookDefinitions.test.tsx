@@ -115,3 +115,15 @@ it('preserves status and server error text for stale conflict handling', async (
     hook.result.current.mutateAsync({ expectedDraftUpdatedAt: 'old-revision' }),
   ).rejects.toMatchObject({ message: 'Draft revision is stale.', status: 409 });
 });
+
+it('keeps the step a validation error names so the canvas can select it', async () => {
+  (global.fetch as jest.Mock).mockResolvedValue(
+    response({ error: 'Branch step "branch-1" cannot use "approval-1.decision".', nodeId: 'branch-1' }, 400),
+  );
+  const { wrapper } = setup();
+  const hook = renderHook(() => usePublishPlaybookDraft(PROJECT, 'def-1'), { wrapper });
+
+  await expect(
+    hook.result.current.mutateAsync({ expectedDraftUpdatedAt: 'revision' }),
+  ).rejects.toMatchObject({ status: 400, nodeId: 'branch-1' });
+});

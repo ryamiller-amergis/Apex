@@ -23,6 +23,11 @@ locals {
     (var.ai_platform_v2_documents_termination_grace_seconds - 30) * 1000
   )
 
+  ai_platform_v2_documents_bedrock_enabled = (
+    var.ai_platform_v2_documents_aws_access_key_id != null
+    && var.ai_platform_v2_documents_aws_secret_access_key != null
+  )
+
   ai_platform_v2_orchestrator_interactive_fast_dispatch_url = (
     local.ai_platform_v2_split_interactive_enabled
     ? local.ai_platform_v2_interactive_dispatch_urls.fast
@@ -269,8 +274,11 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
   revision_mode                = "Single"
 
   identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.ai_platform_v2["document"].id]
+    type = "UserAssigned"
+    identity_ids = [
+      azurerm_user_assigned_identity.ai_platform_v2["document"].id,
+      local.ai_runs_insights_reader_id,
+    ]
   }
 
   registry {
@@ -298,6 +306,23 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
     content {
       name  = "repo-read-service-token"
       value = var.ai_platform_v2_interactive_repo_read_service_token
+    }
+  }
+
+  # Bedrock grades Promptfoo llm-rubric checks; model and region come on each run's specification.
+  dynamic "secret" {
+    for_each = local.ai_platform_v2_documents_bedrock_enabled ? [1] : []
+    content {
+      name  = "aws-access-key-id"
+      value = var.ai_platform_v2_documents_aws_access_key_id
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.ai_platform_v2_documents_bedrock_enabled ? [1] : []
+    content {
+      name  = "aws-secret-access-key"
+      value = var.ai_platform_v2_documents_aws_secret_access_key
     }
   }
 
@@ -334,6 +359,10 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.ai_platform_v2["document"].client_id
+      }
+      env {
+        name  = "AZURE_INSIGHTS_CLIENT_ID"
+        value = local.ai_runs_insights_reader_client_id
       }
       env {
         name  = "AZURE_TENANT_ID"
@@ -377,6 +406,22 @@ resource "azurerm_container_app" "ai_platform_v2_documents" {
         content {
           name        = "CURSOR_API_KEY"
           secret_name = "cursor-api-key"
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.ai_platform_v2_documents_bedrock_enabled ? [1] : []
+        content {
+          name        = "AWS_ACCESS_KEY_ID"
+          secret_name = "aws-access-key-id"
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.ai_platform_v2_documents_bedrock_enabled ? [1] : []
+        content {
+          name        = "AWS_SECRET_ACCESS_KEY"
+          secret_name = "aws-secret-access-key"
         }
       }
 

@@ -1,5 +1,6 @@
 import '@xyflow/react/dist/style.css';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TriangleAlert } from 'lucide-react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -20,8 +21,10 @@ import {
 } from '@xyflow/react';
 import type { PlaybookGraph, PlaybookLayoutPositions, PlaybookStepRunStatus } from '../../shared/types/playbook';
 import {
+  flowNodeType,
   flowToGraph,
   graphToFlow,
+  initialStepConfig,
   newPlaybookNodeId,
   positionsAfterDrag,
   positionsFromNodes,
@@ -51,16 +54,51 @@ function asFlowEdges(edges: Edge[]): PlaybookFlowEdge[] {
   }));
 }
 
-function decorateEdges<T extends Edge>(edges: T[]): T[] {
-  return edges.map((edge) => ({
-    ...edge,
-    type: 'smoothstep',
-    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'var(--text-muted)' },
-  }));
+const NO_EDGES: ReadonlySet<string> = new Set();
+
+export function edgeIssueKey(from: string, to: string): string {
+  return `${from}->${to}`;
+}
+
+/** Draws every connection with an arrow. A connection the server flagged is drawn in the error colour. */
+function decorateEdges<T extends Edge>(edges: T[], flagged: ReadonlySet<string> = NO_EDGES): T[] {
+  return edges.map((edge) => {
+    const bad = flagged.has(edgeIssueKey(edge.source, edge.target));
+    const color = bad ? 'var(--error-color)' : 'var(--text-muted)';
+    return {
+      ...edge,
+      type: 'smoothstep',
+      style: bad ? { stroke: color, strokeWidth: 2 } : undefined,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color },
+    };
+  });
+}
+
+function NodeIssueBadge({
+  issues,
+  testId,
+}: {
+  issues: string[] | undefined;
+  testId: string;
+}) {
+  if (!issues?.length) return null;
+  return (
+    <span
+      className={styles.nodeIssue}
+      role="img"
+      aria-label={`${issues.length} problem${issues.length === 1 ? '' : 's'}: ${issues.join(' ')}`}
+      title={issues.join('\n')}
+      {...{ 'data-testid': testId }}
+    >
+      <TriangleAlert size={12} aria-hidden />
+      {issues.length > 1 ? issues.length : null}
+    </span>
+  );
 }
 
 const nodeTypes = {
   playbookStep: PlaybookStepNode,
+  playbookConnector: PlaybookConnectorNode,
 };
 
 type PlaybookCanvasProps = {
@@ -74,7 +112,27 @@ type PlaybookCanvasProps = {
   onValidateConnection?: (graph: PlaybookGraph) => Promise<void>;
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string | null) => void;
+  /** Problems the server found, by step id. A flagged step shows a warning badge. */
+  nodeIssues?: Record<string, string[]>;
+  /** Connections the server found a problem on. They are drawn in the error colour. */
+  edgeIssues?: ReadonlyArray<{ from: string; to: string }>;
 };
+
+function NodeRunStatus({ status }: { status: string | undefined }) {
+  if (!status) return null;
+  if (status === 'running') {
+    return (
+      <span className={styles.nodeRunning} role="status" aria-label="Running" {...{ 'data-status': status }}>
+        <i /><i /><i />
+      </span>
+    );
+  }
+  return (
+    <span className={styles.nodeStatus} {...{ 'data-status': status }}>
+      {stepStatusLabel(status as PlaybookStepRunStatus)}
+    </span>
+  );
+}
 
 function PlaybookStepNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeData>>) {
   const statusClass = data.runStatus ? styles[`status_${data.runStatus}`] : '';
@@ -84,22 +142,53 @@ function PlaybookStepNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeDat
   const subtitle = nodeSubtitle({ id: data.label, config: data.config });
   return (
     <div
-      className={`${styles.flowNode} ${selected ? styles.flowNodeSelected : ''} ${statusClass}`}
+      className={`${styles.flowNode} ${selected ? styles.flowNodeSelected : ''} ${data.issues?.length ? styles.nodeInvalid : ''} ${statusClass}`}
       {...{ 'data-testid': `playbook-canvas-node-${data.stepType}`, 'data-group': meta.group }}
     >
+      <NodeIssueBadge
+        issues={data.issues}
+        testId={`playbook-canvas-node-issue-${data.label}`}
+        {...{ 'data-testid': `playbook-canvas-node-issue-${data.label}` }}
+      />
       <Handle className={styles.handle} type="target" position={Position.Left} isConnectable={!data.readOnly} />
       <span className={styles.nodeIcon} aria-hidden>
         <Icon size={16} strokeWidth={2} />
       </span>
       <span className={styles.nodeText}>
-        <span className={styles.nodeLabel}>{meta.title}</span>
-        <span className={summary || subtitle !== data.label ? styles.nodeMeta : styles.nodeId}>{subtitle}</span>
+        <span className={styles.nodeLabel}>{data.title?.trim() || meta.title}</span>
+        {data.title?.trim() ? (
+          <span className={styles.nodeMeta}>{meta.title}</span>
+        ) : (
+          <span className={summary || subtitle !== data.label ? styles.nodeMeta : styles.nodeId}>{subtitle}</span>
+        )}
       </span>
-      {data.runStatus ? (
-        <span className={styles.nodeStatus} {...{ 'data-status': data.runStatus }}>
-          {stepStatusLabel(data.runStatus as PlaybookStepRunStatus)}
-        </span>
-      ) : null}
+      <NodeRunStatus status={data.runStatus} />
+      <Handle className={styles.handle} type="source" position={Position.Right} isConnectable={!data.readOnly} />
+    </div>
+  );
+}
+
+function PlaybookConnectorNode({ data, selected }: NodeProps<Node<PlaybookFlowNodeData>>) {
+  const statusClass = data.runStatus ? styles[`status_${data.runStatus}`] : '';
+  const meta = stepMeta(data.stepType);
+  const Icon = meta.icon;
+  const summary = nodeSummary({ config: data.config });
+  return (
+    <div
+      className={`${styles.connectorNode} ${selected ? styles.flowNodeSelected : ''} ${data.issues?.length ? styles.nodeInvalid : ''} ${statusClass}`}
+      {...{ 'data-testid': `playbook-canvas-node-${data.stepType}`, 'data-group': meta.group }}
+    >
+      <NodeIssueBadge
+        issues={data.issues}
+        testId={`playbook-canvas-node-issue-${data.label}`}
+        {...{ 'data-testid': `playbook-canvas-node-issue-${data.label}` }}
+      />
+      <Handle className={styles.handle} type="target" position={Position.Left} isConnectable={!data.readOnly} />
+      <span className={styles.connectorIcon} aria-hidden>
+        <Icon size={16} strokeWidth={2} />
+      </span>
+      <span className={styles.connectorLabel}>{summary || meta.title}</span>
+      <NodeRunStatus status={data.runStatus} />
       <Handle className={styles.handle} type="source" position={Position.Right} isConnectable={!data.readOnly} />
     </div>
   );
@@ -116,8 +205,14 @@ function PlaybookCanvasInner({
   onValidateConnection,
   selectedNodeId,
   onSelectNode,
+  nodeIssues,
+  edgeIssues,
 }: PlaybookCanvasProps) {
   const { screenToFlowPosition } = useReactFlow();
+  const flaggedEdges = useMemo(
+    () => new Set((edgeIssues ?? []).map((edge) => edgeIssueKey(edge.from, edge.to))),
+    [edgeIssues],
+  );
   const initial = useMemo(
     () => graphToFlow(graph, positions, stepLabels),
     [graph, positions, stepLabels],
@@ -138,8 +233,14 @@ function PlaybookCanvasInner({
 
   useEffect(() => {
     const revision = JSON.stringify({ graph, positions, selectedNodeId });
-    const overlay = JSON.stringify({ readOnly, stepStatusByNodeId: stepStatusByNodeId ?? null });
-    // Status arrives on its own. Rebuilding the nodes from props would drop a drag still in progress.
+    const overlay = JSON.stringify({
+      readOnly,
+      stepStatusByNodeId: stepStatusByNodeId ?? null,
+      nodeIssues: nodeIssues ?? null,
+      edgeIssues: edgeIssues ?? null,
+    });
+    // Status and problems arrive on their own. Rebuilding the nodes from props would drop a drag
+    // still in progress.
     if (revision === graphRevision.current) {
       if (overlay === overlayRevision.current) return;
       overlayRevision.current = overlay;
@@ -151,9 +252,11 @@ function PlaybookCanvasInner({
             ...node.data,
             readOnly,
             runStatus: stepStatusByNodeId?.[node.id],
+            issues: nodeIssues?.[node.id],
           },
         })),
       );
+      setEdges((current) => decorateEdges(current, flaggedEdges));
       return;
     }
     graphRevision.current = revision;
@@ -166,12 +269,25 @@ function PlaybookCanvasInner({
           ...node.data,
           readOnly,
           runStatus: stepStatusByNodeId?.[node.id],
+          issues: nodeIssues?.[node.id],
         },
         selected: node.id === selectedNodeId,
       })),
     );
-    setEdges(decorateEdges(next.edges));
-  }, [graph, positions, stepLabels, readOnly, stepStatusByNodeId, selectedNodeId, setNodes, setEdges]);
+    setEdges(decorateEdges(next.edges, flaggedEdges));
+  }, [
+    graph,
+    positions,
+    stepLabels,
+    readOnly,
+    stepStatusByNodeId,
+    selectedNodeId,
+    nodeIssues,
+    edgeIssues,
+    flaggedEdges,
+    setNodes,
+    setEdges,
+  ]);
 
   const syncGraph = useCallback(
     (nextNodes: typeof nodes, nextEdges: typeof edges) => {
@@ -238,9 +354,9 @@ function PlaybookCanvasInner({
       const id = newPlaybookNodeId(stepType, nodes.map((node) => node.id));
       const newNode: Node<PlaybookFlowNodeData> = {
         id,
-        type: 'playbookStep',
+        type: flowNodeType(stepType),
         position,
-        data: { stepType, label: label || stepType, config: {}, readOnly: false },
+        data: { stepType, label: label || stepType, config: initialStepConfig(stepType), readOnly: false },
       };
       const nextNodes = [...nodes, newNode];
       setNodes(nextNodes);
@@ -318,7 +434,7 @@ function PlaybookCanvasInner({
         {...{ 'data-testid': 'playbook-canvas' }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} />
-        <Controls showInteractive={false} position="bottom-left" />
+        <Controls showInteractive={false} position={readOnly ? 'top-left' : 'bottom-left'} />
       </ReactFlow>
     </div>
   );

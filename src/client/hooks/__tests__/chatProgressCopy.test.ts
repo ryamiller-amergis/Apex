@@ -150,9 +150,18 @@ describe('friendlyChatErrorMessage', () => {
     ).toBe('Something went wrong while answering. Please retry.');
   });
 
-  it('passes readable messages through', () => {
-    expect(friendlyChatErrorMessage('Interactive agent did not start. Please retry.')).toBe(
+  it('shows one plain message when a lost turn could not be restarted', () => {
+    for (const raw of [
       'Interactive agent did not start. Please retry.',
+      'Interactive agent stopped responding. Please retry.',
+    ]) {
+      expect(friendlyChatErrorMessage(raw)).toBe("This answer didn't finish. Please try again.");
+    }
+  });
+
+  it('passes readable messages through', () => {
+    expect(friendlyChatErrorMessage('The selected repository is not available.')).toBe(
+      'The selected repository is not available.',
     );
     expect(friendlyChatErrorMessage('')).toBe('Something went wrong. Please retry.');
   });

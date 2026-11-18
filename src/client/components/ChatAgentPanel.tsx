@@ -20,14 +20,44 @@ import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSet
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
 import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentComposer, AgentPanelShell, AgentRetryBanner } from './agentChat';
 import { BrandLogo } from './BrandLogo';
 import { BuildAgentHomePill } from './BuildAgentHomePill';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
 import type { ChoiceBlock } from '../utils/parseAgentMessage';
 import { formatChoiceAnswers } from '../utils/formatChoiceAnswers';
 import { useFocusChatMessage } from '../hooks/useFocusChatMessage';
+import { useAppShell } from '../hooks/useAppShell';
+import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
+import { usePutWorkflowMessageFeedback, useWorkflowMessageFeedback } from '../hooks/useWorkflowMessageFeedback';
+import type { ChatMessageRating as ReplyRating } from '../../shared/types/workflowMessageFeedback';
+import { ChatMessageRating } from './ChatMessageRating';
+import { usePutSkillRating, useSkillRatings } from '../hooks/useSkillRatings';
+import type { SkillRatingSurface } from '../../shared/types/skillRating';
+import { RUN_STALLED_NOTICE, useRunStalled } from '../hooks/useRunStalled';
 import styles from './ChatAgentPanel.module.css';
+
+/** Assistant threads whose replies feed Skill Learning; other assistants are not rated. */
+export function assistantRatingSurface(
+  assistantType: ChatThread['kickoff']['assistantType'],
+): SkillRatingSurface | null {
+  switch (assistantType) {
+    case 'prd':
+      return 'prd_assistant';
+    case 'design-doc':
+      return 'design_doc_assistant';
+    case 'adr':
+      return 'adr_assistant';
+    case 'calendar-work-item':
+    case 'mcp-server':
+    case undefined:
+      return null;
+    default: {
+      const unhandled: never = assistantType;
+      return unhandled;
+    }
+  }
+}
 
 function isStatusOnlyStream(text: string): boolean {
   return /^(?:(?:searching|checking|trying|looking|working|finding|fetching|querying|reading|loading|analyzing)[.…\s]*)+$/i.test(
@@ -146,6 +176,8 @@ interface AgentMessageProps {
   onSend: (text: string) => void;
   isRunning: boolean;
   highlighted?: boolean;
+  /** Shown under the bubble, e.g. the reply rating. */
+  footer?: React.ReactNode;
 }
 
 interface QuestionState {
@@ -153,7 +185,7 @@ interface QuestionState {
   freeform: string;
 }
 
-const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, highlighted }) => {
+const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, highlighted, footer }) => {
   const parts = parseAgentMessage(msg.text);
   const choiceBlocks = parts.filter((p): p is ChoiceBlock => p.type === 'choices');
 
@@ -248,6 +280,7 @@ const AgentMessage: React.FC<AgentMessageProps> = ({ msg, onSend, isRunning, hig
           <div className={styles.choiceSentLabel}>✓ Answers sent</div>
         )}
       </div>
+      {footer}
     </div>
   );
 };
@@ -361,6 +394,29 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const sessionThreadId = thread?.id ?? activeThreadId ?? null;
   const inConversation = Boolean(sessionThreadId) || Boolean(pendingOutgoing);
 
+  // @feature-flag:skill-learning
+  const { userId } = useAppShell();
+  const ratingProject = thread?.kickoff.project ?? selectedProject;
+  const feedbackAccess = useWorkflowEvaluationAccess(ratingProject);
+  const canRateReplies = feedbackAccess.canSubmit
+    && Boolean(thread)
+    && thread?.userId === userId
+    && !thread?.kickoff.assistantType;
+  const replyRatings = useWorkflowMessageFeedback({
+    project: ratingProject,
+    surface: 'chat',
+    subjectId: thread?.id ?? '',
+    enabled: canRateReplies,
+  });
+  const putReplyRating = usePutWorkflowMessageFeedback({
+    project: ratingProject,
+    surface: 'chat',
+    subjectId: thread?.id ?? '',
+  });
+  const replyRatingByMessage = new Map(
+    (replyRatings.data?.entries ?? []).map((entry) => [entry.messageId, entry]),
+  );
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -408,7 +464,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     toolProgress,
     showTypingIndicator,
     sendError,
+    isRetrying,
+    retryReason,
+    lastProgressAt,
   } = session;
+  const isStalled = useRunStalled(isRunning && !isRetrying, lastProgressAt);
 
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   useAvailableModelSelection(selectedModel, setSelectedModel, availableModels);
@@ -426,7 +486,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const isHomeCompose = launchedFromHome && !inConversation;
   const isEmptyCompose = !inConversation;
 
-  // Skills for Home pill descriptions and the / picker on active threads
+  // Home chats run through their pill's skill, so the / picker is drawer-only.
+  const slashSkillsEnabled = !launchedFromHome;
+
   const { data: homeSkills = [] } = useSkillList(
     launchedFromHome ? selectedProject ?? null : null,
     launchedFromHome ? skillConfig?.skillRepo ?? null : null,
@@ -434,8 +496,8 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     skillConfig?.skillProvider ?? undefined,
   );
   const { data: threadSkills = [] } = useSkillList(
-    thread?.kickoff.project ?? null,
-    thread?.kickoff.repo ?? null,
+    slashSkillsEnabled ? thread?.kickoff.project ?? null : null,
+    slashSkillsEnabled ? thread?.kickoff.repo ?? null : null,
     thread?.kickoff.branch,
   );
 
@@ -643,6 +705,23 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     m.toolName !== '_reasoning' && m.toolName !== '_thinking'
   );
 
+  // @feature-flag:skill-learning
+  const assistantSurface = assistantRatingSurface(thread?.kickoff.assistantType);
+  const canRateAssistant = feedbackAccess.canSubmit
+    && Boolean(thread)
+    && thread?.userId === userId
+    && assistantSurface !== null;
+  const assistantReplyIds = canRateAssistant
+    ? visibleMessages.filter((m) => m.role === 'agent').map((m) => m.id)
+    : [];
+  const assistantRatings = useSkillRatings({
+    project: ratingProject,
+    surface: assistantSurface ?? 'prd_assistant',
+    subjectIds: assistantReplyIds,
+    enabled: canRateAssistant,
+  });
+  const putAssistantRating = usePutSkillRating({ project: ratingProject, surface: assistantSurface ?? 'prd_assistant' });
+
   const isStartingConversation =
     inConversation
     && (isStartingNewChat || Boolean(pendingOutgoing));
@@ -742,12 +821,14 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     }
   }, [newChatError]);
 
+  // Clear on any saved message, not an exact echo of the typed text: the saved
+  // text can differ, and the startup spinner would then never go away.
   useEffect(() => {
-    if (!pendingOutgoing) return;
-    if (visibleMessages.some((message) => message.role === 'user' && message.text === pendingOutgoing)) {
+    if (!pendingOutgoing || !sessionThreadId) return;
+    if (visibleMessages.length > 0) {
       setPendingOutgoing(null);
     }
-  }, [pendingOutgoing, visibleMessages]);
+  }, [pendingOutgoing, sessionThreadId, visibleMessages.length]);
 
   useEffect(() => {
     if (!sessionThreadId) {
@@ -947,6 +1028,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   attachmentError={attachmentError}
                   onRemoveAttachment={removeAttachment}
                   onAttachClick={openFilePicker}
+                  onPasteFiles={(files) => { void addFiles(files); }}
                   speech={{
                     isListening: speech.isListening,
                     isSpeechSupported: speech.isSpeechSupported,
@@ -1094,6 +1176,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                 attachmentError={attachmentError}
                 onRemoveAttachment={removeAttachment}
                 onAttachClick={openFilePicker}
+                onPasteFiles={(files) => { void addFiles(files); }}
                 speech={{
                   isListening: speech.isListening,
                   isSpeechSupported: speech.isSpeechSupported,
@@ -1239,6 +1322,35 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                   onSend={doSend}
                   isRunning={isRunning}
                   highlighted={highlighted}
+                  footer={canRateReplies ? (
+                    <ChatMessageRating
+                      messageId={msg.id}
+                      rating={(replyRatingByMessage.get(msg.id)?.rating as ReplyRating | undefined) ?? null}
+                      comment={replyRatingByMessage.get(msg.id)?.comment ?? null}
+                      pending={putReplyRating.isPending && putReplyRating.variables?.messageId === msg.id}
+                      error={putReplyRating.isError && putReplyRating.variables?.messageId === msg.id
+                        ? putReplyRating.error.message
+                        : null}
+                      onSave={(rating, comment) => putReplyRating.mutateAsync({ messageId: msg.id, rating, comment })}
+                    />
+                  ) : canRateAssistant ? (
+                    <ChatMessageRating
+                      messageId={msg.id}
+                      rating={assistantRatings.get(msg.id)?.rating ?? null}
+                      comment={assistantRatings.get(msg.id)?.comment ?? null}
+                      pending={putAssistantRating.isPending && putAssistantRating.variables?.subjectId === msg.id}
+                      error={putAssistantRating.isError && putAssistantRating.variables?.subjectId === msg.id
+                        ? putAssistantRating.error.message
+                        : null}
+                      onSave={(rating, comment) => putAssistantRating.mutateAsync({
+                        subjectType: 'assistant_reply',
+                        subjectId: msg.id,
+                        threadId: thread?.id ?? null,
+                        rating,
+                        comment,
+                      })}
+                    />
+                  ) : undefined}
                 />
               );
             })}
@@ -1320,6 +1432,22 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               </div>
             )}
 
+            <AgentRetryBanner
+              isRetrying={isRetrying}
+              retryReason={retryReason}
+              data-testid="chat-run-restarting"
+            />
+            {isStalled && (
+              <p
+                className={styles.stallNotice}
+                role="status"
+                aria-live="polite"
+                {...{ 'data-testid': 'chat-run-stalled' }}
+              >
+                {RUN_STALLED_NOTICE}
+              </p>
+            )}
+
             <div ref={messagesEndRef} />
           </div>
 
@@ -1351,7 +1479,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             value={input}
             onChange={(val) => {
               setInput(val);
-              const isSlash = /^\//.test(val);
+              const isSlash = slashSkillsEnabled && /^\//.test(val);
               setSkillPickerOpen(isSlash);
               if (isSlash) setSkillPickerIdx(0);
             }}
@@ -1364,7 +1492,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
               isRunning
                 ? 'Agent is thinking…'
                 : launchedFromHome
-                  ? 'Message agent · / for skills · Enter to send'
+                  ? 'Message agent · Enter to send'
                   : 'Message agent · type / to invoke a skill…'
             }
             testIdPrefix="chat-agent"
@@ -1374,6 +1502,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             attachmentError={attachmentError}
             onRemoveAttachment={removeAttachment}
             onAttachClick={openFilePicker}
+            onPasteFiles={(files) => { void addFiles(files); }}
             speech={{
               isListening: speech.isListening,
               isSpeechSupported: speech.isSpeechSupported,

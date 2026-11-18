@@ -13,15 +13,6 @@ const ROUTE_ENTRIES: readonly WalkthroughRouteCatalogEntry[] = Object.freeze([
   Object.freeze({ route: '/home', label: 'Home' }),
   Object.freeze({ route: '/calendar', label: 'Calendar' }),
   Object.freeze({ route: '/planning', label: 'Planning' }),
-  Object.freeze({
-    route: '/planning/dev-stats',
-    label: 'Planning — Developer stats',
-  }),
-  Object.freeze({ route: '/planning/qa', label: 'Planning — QA metrics' }),
-  Object.freeze({
-    route: '/planning/ai-analysis',
-    label: 'Planning — AI analysis',
-  }),
   Object.freeze({ route: '/planning/roadmap', label: 'Planning — Roadmap' }),
   Object.freeze({ route: '/planning/releases', label: 'Planning — Releases' }),
   Object.freeze({ route: '/cloud-cost', label: 'Cloud cost' }),
@@ -73,6 +64,7 @@ const ROUTE_ENTRIES: readonly WalkthroughRouteCatalogEntry[] = Object.freeze([
   Object.freeze({ route: '/standup-summary', label: 'Standup — Summary' }),
   Object.freeze({ route: '/feature-requests', label: 'Feature requests' }),
   Object.freeze({ route: '/ui-lab', label: 'UI Lab' }),
+  Object.freeze({ route: '/qa-lab', label: 'QA Lab' }),
   Object.freeze({ route: '/ai-cost', label: 'AI cost analytics' }),
   Object.freeze({ route: '/design-module', label: 'Design module' }),
   Object.freeze({ route: '/load-tests', label: 'Load tests' }),

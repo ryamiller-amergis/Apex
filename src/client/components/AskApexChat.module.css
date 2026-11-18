@@ -136,6 +136,29 @@
   word-wrap: break-word;
 }
 
+.run-notice {
+  align-self: flex-start;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.retry-btn {
+  align-self: flex-start;
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.retry-btn:hover {
+  border-color: var(--accent-color);
+}
+
 .typing-dots {
   display: inline-flex;
   gap: 4px;

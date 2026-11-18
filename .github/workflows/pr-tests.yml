@@ -46,15 +46,27 @@ jobs:
       ai_runs_worker: ${{ steps.image_publish.outputs.ai_runs_worker }}
       ai_runs_interactive: ${{ steps.image_publish.outputs.ai_runs_interactive }}
       ai_orchestrator: ${{ steps.image_publish.outputs.ai_orchestrator }}
+      ai_runs_documents_v2: ${{ steps.image_publish.outputs.ai_runs_documents_v2 }}
       load_test_runner_tag: ${{ steps.image_publish.outputs.load_test_runner_tag }}
       ai_runs_worker_tag: ${{ steps.image_publish.outputs.ai_runs_worker_tag }}
       ai_runs_interactive_tag: ${{ steps.image_publish.outputs.ai_runs_interactive_tag }}
       ai_orchestrator_tag: ${{ steps.image_publish.outputs.ai_orchestrator_tag }}
+      ai_runs_documents_v2_tag: ${{ steps.image_publish.outputs.ai_runs_documents_v2_tag }}
+      terraform: ${{ steps.terraform_changes.outputs.terraform }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Detect Terraform changes
+        id: terraform_changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
+          HEAD_SHA: ${{ github.sha }}
+          DIFF_MODE: branch
+          REQUIRE_UP_TO_DATE: 'true'
+        run: bash scripts/ci/has-terraform-changes.sh
 
       - name: Detect migration file changes
         id: detect
@@ -288,6 +300,52 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/aipilot
         run: node scripts/ci/validate-migrations.mjs
 
+  # Open PRs share dev: applying one PR's infra undoes any other open PR's
+  # unmerged infra until that PR runs again. This job has its own concurrency
+  # group so a newer push never cancels an apply part-way; deploy-dev waits for it.
+  terraform-dev:
+    needs:
+      [
+        test,
+        validate,
+        unit-test,
+        build,
+        integration-test,
+        detect-changes,
+        migrate-check,
+      ]
+    if: >-
+      always() && !cancelled() &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.terraform == 'true' &&
+      needs.detect-changes.outputs.markdown_only != 'true' &&
+      needs.test.result == 'success' &&
+      needs.validate.result == 'success' &&
+      needs.unit-test.result == 'success' &&
+      needs.build.result == 'success' &&
+      needs.integration-test.result == 'success' &&
+      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success')
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: terraform-dev
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Terraform apply (dev)
+        uses: ./.github/actions/terraform
+        with:
+          environment: dev
+          apply: 'true'
+          azure-credentials: ${{ secrets.AZURE_DEPLOY_CREDENTIALS }}
+
   deploy-dev:
     needs:
       [
@@ -298,6 +356,7 @@ jobs:
         integration-test,
         detect-changes,
         migrate-check,
+        terraform-dev,
       ]
     # always() is required: when the PR has no migration file changes, migrate-check
     # is skipped and GitHub would otherwise skip deploy-dev too — even though app-only
@@ -314,7 +373,8 @@ jobs:
       needs.unit-test.result == 'success' &&
       needs.build.result == 'success' &&
       needs.integration-test.result == 'success' &&
-      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success')
+      (needs.detect-changes.outputs.migrations != 'true' || needs.migrate-check.result == 'success') &&
+      (needs.terraform-dev.result == 'success' || needs.terraform-dev.result == 'skipped')
     runs-on: ubuntu-latest
     environment: dev
     concurrency:
@@ -379,16 +439,23 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp foundation-skills/catalog.json deploy/foundation-skills/catalog.json
           cp foundation-skills/catalog.json deploy/dist/foundation-skills/catalog.json
+          # Agent task Skills. The picker reads foundation-skills/foundation from the server.
+          mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
+          cp -r foundation-skills/foundation deploy/foundation-skills/foundation
+          cp -r foundation-skills/foundation deploy/dist/foundation-skills/foundation
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 
       - name: Verify packaged native dependencies
         run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
 
+      # AZURE_DEPLOY_CREDENTIALS (apex-dev-sp) deploys and runs Terraform.
+      # AZURE_CREDENTIALS (MaxView) is the dev app's sign-in registration, and
+      # is shared with another project; it stays only for the app settings below.
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          creds: ${{ secrets.AZURE_DEPLOY_CREDENTIALS || secrets.AZURE_CREDENTIALS }}
 
       - name: Extract Azure credentials
         run: |
@@ -646,6 +713,17 @@ jobs:
           AI_RUNS_INTERACTIVE_IMAGE_REPO: ${{ vars.AI_RUNS_INTERACTIVE_IMAGE_REPO }}
           IMAGE_TAG: ${{ needs.detect-changes.outputs.ai_runs_interactive_tag }}
         run: bash scripts/ci/publish-ai-runs-interactive.sh
+
+      - name: Publish AI-runs V2 document worker image
+        if: >-
+          needs.detect-changes.outputs.ai_runs_documents_v2 == 'true' &&
+          hashFiles('runners/ai-runs-documents-v2/Dockerfile') != ''
+        env:
+          AI_RUNS_ACR_NAME: ${{ vars.AI_RUNS_ACR_NAME }}
+          AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME: ${{ vars.AI_RUNS_DOCUMENTS_V2_CONTAINER_APP_NAME || 'ca-apex-ai-runs-documents-v2-dev' }}
+          AI_RUNS_RESOURCE_GROUP: ${{ vars.AI_RUNS_RESOURCE_GROUP || 'rg-scrum-dev' }}
+          IMAGE_TAG: ${{ needs.detect-changes.outputs.ai_runs_documents_v2_tag }}
+        run: bash scripts/ci/publish-ai-runs-documents-v2.sh
 
       - name: Publish AI orchestrator image
         if: >-

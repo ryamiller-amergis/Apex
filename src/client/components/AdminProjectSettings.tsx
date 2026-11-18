@@ -29,6 +29,7 @@ import {
 import styles from './AdminProjectSettings.module.css';
 import { PlaybookSpendPolicyCard } from './PlaybookSpendPolicyCard';
 import { BuildProfileSection } from './BuildProfileSection';
+import { ProjectQuickLinksSettings } from './ProjectQuickLinksSettings';
 import { BUILD_FROM_PROMPT_FLAG } from '../../shared/types/featureFlags';
 import type { UserWithRoles } from '../../shared/types/rbac';
 
@@ -284,7 +285,8 @@ type SkillPathKey =
   | 'issueSkillPath'
   | 'loadTestGenerationSkillPath'
   | 'designModuleSkillPath'
-  | 'designModuleScopingSkillPath';
+  | 'designModuleScopingSkillPath'
+  | 'releaseChangelogSkillPath';
 
 type ModelKey =
   | 'interviewModel'
@@ -302,7 +304,8 @@ type ModelKey =
   | 'issueModel'
   | 'loadTestGenerationModel'
   | 'designModuleModel'
-  | 'designModuleScopingModel';
+  | 'designModuleScopingModel'
+  | 'releaseChangelogModel';
 
 type EffortKey =
   | 'interviewEffort'
@@ -319,7 +322,8 @@ type EffortKey =
   | 'issueEffort'
   | 'loadTestGenerationEffort'
   | 'designModuleEffort'
-  | 'designModuleScopingEffort';
+  | 'designModuleScopingEffort'
+  | 'releaseChangelogEffort';
 
 interface PipelineStageDef {
   id: string;
@@ -336,6 +340,7 @@ interface PipelineStageDef {
   interviewOptions?: boolean;
   /** Nest the PRD validation score threshold under this stage. */
   prdValidationThreshold?: boolean;
+  /** Nest the workflow-evaluation judge model and effort under this stage. */
   /** Nest the design-doc validation score threshold under this stage. */
   designDocValidationThreshold?: boolean;
 }
@@ -511,6 +516,15 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     emptyLabel: 'Default (.cursor/skills/design-module-scoping/SKILL.md)',
     modelKey: 'designModuleScopingModel',
     effortKey: 'designModuleScopingEffort',
+  },
+  {
+    id: 'release-changelog',
+    label: 'Release Changelog',
+    desc: 'Generates platform-aware executive Markdown release notes from a release epic',
+    skillKey: 'releaseChangelogSkillPath',
+    emptyLabel: 'Default (.cursor/skills/release-changelog/SKILL.md)',
+    modelKey: 'releaseChangelogModel',
+    effortKey: 'releaseChangelogEffort',
   },
 ];
 
@@ -1205,6 +1219,8 @@ interface EditState {
   skillProvider: SkillProvider;
   skillRepo: string;
   skillBranch: string;
+  cloudAgentTargetBranch: string;
+  cloudAgentRequiredReviewers: string;
   interviewSkillPath: string;
   prdSkillPath: string;
   adrInterviewSkillPath: string;
@@ -1224,6 +1240,7 @@ interface EditState {
   loadTestGenerationSkillPath: string;
   designModuleSkillPath: string;
   designModuleScopingSkillPath: string;
+  releaseChangelogSkillPath: string;
   interviewModel: string;
   prdModel: string;
   adrModel: string;
@@ -1241,6 +1258,7 @@ interface EditState {
   loadTestGenerationModel: string;
   designModuleModel: string;
   designModuleScopingModel: string;
+  releaseChangelogModel: string;
   defaultModel: string;
   interviewEffort: EffortLevel | '';
   prdEffort: EffortLevel | '';
@@ -1261,8 +1279,10 @@ interface EditState {
   loadTestGenerationEffort: EffortLevel | '';
   designModuleEffort: EffortLevel | '';
   designModuleScopingEffort: EffortLevel | '';
+  releaseChangelogEffort: EffortLevel | '';
   defaultEffort: EffortLevel | '';
   prdReviewBedrockModelId: string;
+  releaseChangelogBedrockModelId: string;
   prdReviewBedrockMaxTokens: number;
   designPrototypeBedrockModelId: string;
   designPrototypeBedrockMaxTokens: number;
@@ -1297,18 +1317,19 @@ interface EditState {
 const emptyEdit = (): EditState => ({
   id: null, project: '', friendlyName: '', isDefault: false,
   skillProvider: 'ado', skillRepo: '', skillBranch: '',
+  cloudAgentTargetBranch: '', cloudAgentRequiredReviewers: '',
   interviewSkillPath: '', prdSkillPath: '', designDocSkillPath: '',
   adrInterviewSkillPath: '', adrFinalizeSkillPath: '', adrAssistantSkillPath: '',
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
   technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
-  designModuleScopingSkillPath: '',
+  designModuleScopingSkillPath: '', releaseChangelogSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
-  designModuleScopingModel: '',
+  designModuleScopingModel: '', releaseChangelogModel: '',
   defaultModel: '',
   interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
   designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
@@ -1316,8 +1337,10 @@ const emptyEdit = (): EditState => ({
   developmentEffort: '', standupEffort: '', featureRequestEffort: '',
   technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
   loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
+  releaseChangelogEffort: '',
   defaultEffort: '',
   prdReviewBedrockModelId: '',
+  releaseChangelogBedrockModelId: '',
   prdReviewBedrockMaxTokens: 16000,
   designPrototypeBedrockModelId: '',
   designPrototypeBedrockMaxTokens: 16000,
@@ -1864,6 +1887,8 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       skillProvider: config.skillProvider ?? 'ado',
       skillRepo: config.skillRepo,
       skillBranch: config.skillBranch,
+      cloudAgentTargetBranch: config.cloudAgentTargetBranch ?? '',
+      cloudAgentRequiredReviewers: (config.cloudAgentRequiredReviewers ?? []).join('\n'),
       interviewSkillPath: config.interviewSkillPath ?? '',
       prdSkillPath: config.prdSkillPath ?? '',
       adrInterviewSkillPath: config.adrInterviewSkillPath ?? '',
@@ -1883,6 +1908,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       loadTestGenerationSkillPath: config.loadTestGenerationSkillPath ?? '',
       designModuleSkillPath: config.designModuleSkillPath ?? '',
       designModuleScopingSkillPath: config.designModuleScopingSkillPath ?? '',
+      releaseChangelogSkillPath: config.releaseChangelogSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       adrModel: config.adrModel ?? '',
@@ -1900,6 +1926,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       loadTestGenerationModel: config.loadTestGenerationModel ?? '',
       designModuleModel: config.designModuleModel ?? '',
       designModuleScopingModel: config.designModuleScopingModel ?? '',
+      releaseChangelogModel: config.releaseChangelogModel ?? '',
       defaultModel: config.defaultModel ?? '',
       interviewEffort: config.interviewEffort ?? '',
       prdEffort: config.prdEffort ?? '',
@@ -1920,8 +1947,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       loadTestGenerationEffort: config.loadTestGenerationEffort ?? '',
       designModuleEffort: config.designModuleEffort ?? '',
       designModuleScopingEffort: config.designModuleScopingEffort ?? '',
+      releaseChangelogEffort: config.releaseChangelogEffort ?? '',
       defaultEffort: config.defaultEffort ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
+      releaseChangelogBedrockModelId: config.releaseChangelogBedrockModelId ?? '',
       prdReviewBedrockMaxTokens: config.prdReviewBedrockMaxTokens ?? 16000,
       designPrototypeBedrockModelId: config.designPrototypeBedrockModelId ?? '',
       designPrototypeBedrockMaxTokens: config.designPrototypeBedrockMaxTokens ?? 16000,
@@ -1989,6 +2018,11 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         skillProvider: edit.skillProvider,
         skillRepo: edit.skillRepo.trim(),
         skillBranch: edit.skillBranch.trim(),
+        cloudAgentTargetBranch: edit.cloudAgentTargetBranch.trim() || null,
+        cloudAgentRequiredReviewers: edit.cloudAgentRequiredReviewers
+          .split(/[\n,]/)
+          .map((name) => name.trim())
+          .filter(Boolean),
         interviewSkillPath: edit.interviewSkillPath || null,
         prdSkillPath: edit.prdSkillPath || null,
         adrInterviewSkillPath: edit.adrInterviewSkillPath || null,
@@ -2008,6 +2042,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         loadTestGenerationSkillPath: edit.loadTestGenerationSkillPath || null,
         designModuleSkillPath: edit.designModuleSkillPath || null,
         designModuleScopingSkillPath: edit.designModuleScopingSkillPath || null,
+        releaseChangelogSkillPath: edit.releaseChangelogSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         adrModel: edit.adrModel || null,
@@ -2025,6 +2060,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         loadTestGenerationModel: edit.loadTestGenerationModel || null,
         designModuleModel: edit.designModuleModel || null,
         designModuleScopingModel: edit.designModuleScopingModel || null,
+        releaseChangelogModel: edit.releaseChangelogModel || null,
         defaultModel: edit.defaultModel || null,
         interviewEffort: edit.interviewEffort || null,
         prdEffort: edit.prdEffort || null,
@@ -2045,8 +2081,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         loadTestGenerationEffort: edit.loadTestGenerationEffort || null,
         designModuleEffort: edit.designModuleEffort || null,
         designModuleScopingEffort: edit.designModuleScopingEffort || null,
+        releaseChangelogEffort: edit.releaseChangelogEffort || null,
         defaultEffort: edit.defaultEffort || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
+        releaseChangelogBedrockModelId: edit.releaseChangelogBedrockModelId || null,
         prdReviewBedrockMaxTokens: edit.prdReviewBedrockMaxTokens || null,
         designPrototypeBedrockModelId: edit.designPrototypeBedrockModelId || null,
         designPrototypeBedrockMaxTokens: edit.designPrototypeBedrockMaxTokens || null,
@@ -2386,6 +2424,32 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                     disabled={upsert.isPending || !edit.skillRepo}
                     onChange={(branch) => setEdit((prev) => prev ? { ...prev, skillBranch: branch } : prev)} {...{ 'data-testid': 'ps-branch-combobox' }} />
                 </div>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-cloud-agent-target">Cloud agent merge branch</label>
+                  <BranchCombobox
+                    value={edit.cloudAgentTargetBranch}
+                    branches={branches}
+                    isLoading={isLoadingBranches}
+                    disabled={upsert.isPending || !edit.skillRepo}
+                    onChange={(branch) => setEdit((prev) => prev ? { ...prev, cloudAgentTargetBranch: branch } : prev)}
+                    {...{ 'data-testid': 'ps-cloud-agent-target' }}
+                  />
+                  <span className={styles.modelDefault}>The cloud agent cuts its branch from this and opens the pull request into it. Leave blank to use the skill branch.</span>
+                </div>
+              </div>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="ps-cloud-agent-reviewers">Cloud agent required reviewers</label>
+                <textarea
+                  id="ps-cloud-agent-reviewers"
+                  className={styles.select}
+                  rows={3}
+                  value={edit.cloudAgentRequiredReviewers}
+                  placeholder={'Maxview - Dev'}
+                  disabled={upsert.isPending}
+                  onChange={(event) => setEdit((prev) => prev ? { ...prev, cloudAgentRequiredReviewers: event.target.value } : prev)}
+                  {...{ 'data-testid': 'ps-cloud-agent-reviewers' }}
+                />
+                <span className={styles.modelDefault}>One Azure DevOps team or group per line. Each cloud agent pull request in this project adds them as required reviewers.</span>
               </div>
 
               <div className={styles.formGrid}>
@@ -2955,6 +3019,29 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                   </select>
                 </div>
               </div>
+
+              <p className={styles.label} style={{ marginBottom: 6, marginTop: 24, fontWeight: 600 }}>Release Changelog (Fast Bedrock Path)</p>
+              <p className={styles.accordionHelp} style={{ marginTop: 0 }}>
+                Optional Bedrock model override for executive release changelogs when AWS Bedrock is configured. If unavailable or retired, Apex automatically falls back across active Bedrock inference profiles, then to the Sidecar Cursor model.
+              </p>
+              <div className={styles.fieldRow}>
+                <div className={styles.field}>
+                  <label className={styles.label} htmlFor="ps-changelog-bedrock-model">Bedrock Model</label>
+                  <select
+                    id="ps-changelog-bedrock-model"
+                    className={styles.select}
+                    value={edit.releaseChangelogBedrockModelId}
+                    onChange={(e) => setEdit((prev) => prev ? { ...prev, releaseChangelogBedrockModelId: e.target.value } : prev)}
+                    disabled={upsert.isPending}
+                    {...{ 'data-testid': 'ps-changelog-bedrock-model' }}
+                  >
+                    <option value="">Use fast service default (Haiku / active catalog)</option>
+                    {bedrockModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </AccordionSection>
 
             {/* Section 5: Reviewers */}
@@ -3428,6 +3515,10 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         )}
 
         {formError && !edit && <p className={styles.formError}>{formError}</p>}
+
+        {!edit && selectedProject && (
+          <ProjectQuickLinksSettings project={selectedProject} />
+        )}
 
         {/* ── Foundation Skills (read-only) ────────────────────────────── */}
         {!edit && selectedProject && (

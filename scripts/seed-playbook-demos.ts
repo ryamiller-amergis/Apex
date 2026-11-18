@@ -36,8 +36,8 @@ import { playbookAuthorGraphsMatch } from '../src/shared/utils/playbookGraph';
  *
  * Answering questions from repo documentation is its whole job, which is why it writes no pipeline
  * artifact — the property TBI-026's fourth criterion asserts by counting rows in the
- * pipeline-artifact tables before and after a full run. It is also already the sole entry in the
- * `cursor-agent` descriptor's allow-list, so neither definition needs a registry change to publish.
+ * pipeline-artifact tables before and after a full run. The cursor-agent step does not keep a
+ * Skill list, so neither definition needs a registry change to publish.
  */
 const DEMO_SKILL_PATH = '.cursor/skills/app-knowledge/SKILL.md';
 

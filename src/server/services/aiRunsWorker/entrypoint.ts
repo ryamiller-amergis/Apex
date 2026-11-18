@@ -9,7 +9,8 @@ import type { DispatchMessage } from '../../../shared/types/agentRunAdmission';
 import { getAiRunnerCallbackToken } from '../aiRunsCallbackToken';
 import { exitAfterFlush } from '../../utils/processExit';
 import { AiRunCallbackError, createAiRunsCallbackClient } from './callbackClient';
-import { createLocalCursorExecution } from './cursorExecution';
+import { ensureInsightsAzureLogin } from './azureCliSession';
+import { createLocalCursorExecution, playbookAgentNeedsAzureCli } from './cursorExecution';
 import { createAiRunsWorker } from './worker';
 import {
   flushWorkspaceArtifacts,
@@ -135,11 +136,13 @@ export async function main(): Promise<void> {
       return bootstrap as import('../../../shared/types/aiRunIngest').AiRunBootstrapResponse;
     },
     openCheckout: (snapshot) => openGroundedReader(snapshot),
-    createExecution: (snapshot, checkout) =>
-      createLocalCursorExecution(
+    createExecution: async (snapshot, checkout) => {
+      if (playbookAgentNeedsAzureCli(snapshot)) await ensureInsightsAzureLogin();
+      return createLocalCursorExecution(
         snapshot,
         checkout as Awaited<ReturnType<typeof openGroundedReader>>,
-      ),
+      );
+    },
     postIngest: (projectId, runId, body) =>
       callback.postIngest(projectId, runId, body),
     flushArtifacts: flushWorkspaceArtifacts,

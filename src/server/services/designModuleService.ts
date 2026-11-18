@@ -7,6 +7,7 @@ import { db } from '../db/drizzle';
 import { chatThreads, designModules } from '../db/schema';
 import { getDefaultModel } from './appSettingsService';
 import { createThread, isThreadIdle, sendMessage } from './chatAgentService';
+import { readThreadOutput } from './chatThreadOutputStore';
 import { resolveSkillConfig } from './projectSettingsService';
 import { AGENT_SKILL_ROOT, skillPathFor } from '../../shared/skillPaths';
 import {
@@ -389,13 +390,12 @@ function startRegenerationWatcher(
     if (!workspaceDir) workspaceDir = await getWorkspaceDir(threadId);
     if (!workspaceDir) return;
 
-    const outputPath = path.join(
+    const output = await readThreadOutput({
+      threadId,
       workspaceDir,
-      '.ai-pilot',
-      'output',
-      OUTPUT_FILE
-    );
-    if (!fs.existsSync(outputPath)) {
+      relativePath: ['.ai-pilot', 'output', OUTPUT_FILE],
+    });
+    if (output === null) {
       if (isThreadIdle(threadId)) {
         clearInterval(interval);
         activeWatchers.delete(moduleId);
@@ -403,7 +403,7 @@ function startRegenerationWatcher(
       return;
     }
 
-    const content = fs.readFileSync(outputPath, 'utf8').trim();
+    const content = output.trim();
     if (!content) return;
     clearInterval(interval);
     activeWatchers.delete(moduleId);

@@ -454,6 +454,63 @@ describe('AI-run V2 run attempt repository', () => {
     expect(statements).toContain('<html>');
   });
 
+  it('persists and fans out an accepted Cursor activity event', async () => {
+    const eventId = '6f44f6f1-ec42-4aa6-9df4-0d8ce8438491';
+    const execute = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 'attempt-1',
+          dispatch_message_id: 'dispatch-1',
+          last_checkpoint_sequence: 1,
+          status: 'running',
+          thread_id: 'playbook:thread-1',
+        },
+      ])
+      .mockResolvedValueOnce([{ event_id: eventId }])
+      .mockResolvedValue([]);
+    const repo = createRunAttemptRepository({
+      runInTransaction: async (work) => work({ execute }),
+    });
+
+    await expect(
+      repo.acceptCheckpoint({
+        schemaVersion: AI_RUN_V2_SCHEMA_VERSION,
+        eventId,
+        runId: 'run-1',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        dispatchMessageId: 'dispatch-1',
+        timestamp: '2026-09-18T12:00:00.000Z',
+        kind: 'progress',
+        checkpointSequence: 2,
+        phase: 'implementation',
+        status: 'running',
+        progress: {
+          kind: 'activity_event',
+          eventType: 'tool_call',
+          phase: 'implementation',
+          status: 'running',
+          detail: 'grep_search started',
+          event: {
+            type: 'tool_call',
+            toolName: 'grep_search',
+            input: { target: 'TimecardController' },
+          },
+        },
+      }),
+    ).resolves.toEqual({ status: 'accepted', checkpointSequence: 2 });
+
+    const statements = execute.mock.calls
+      .flatMap(([query]) => boundStrings(query))
+      .join('\n');
+    expect(statements).toContain('INSERT INTO agent_run_events');
+    expect(statements).toContain('pg_notify');
+    expect(statements).toContain('playbook:thread-1');
+    expect(statements).toContain('grep_search');
+    expect(statements).toContain('TimecardController');
+  });
+
   it('persists an empty durable marker when a text delta contains only NUL bytes', async () => {
     const eventId = '4f44f6f1-ec42-4aa6-9df4-0d8ce8438491';
     const execute = jest

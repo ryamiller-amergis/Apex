@@ -3,6 +3,7 @@
  * Candidate shapes are untrusted; only SafeTraceEventInput may be persisted.
  */
 import type { AgentRunHealth } from './chat';
+import type { EffortLevel } from './effort';
 
 export const TRACE_EVENT_TYPES = ['api_request', 'error', 'ui_action', 'agent_event'] as const;
 export type TraceEventType = (typeof TRACE_EVENT_TYPES)[number];
@@ -491,3 +492,310 @@ export interface JourneyTrailHandoff {
 }
 
 export type JourneyDatePreset = '7d' | '30d' | 'custom';
+
+/** Product Owner Observability Digest — skill-driven multi-window telemetry synthesis. */
+export const OBSERVABILITY_PO_SKILL_PATH = '.cursor/skills/observability-po-digest/SKILL.md';
+export const OBSERVABILITY_PO_DEFAULT_MODEL = 'composer-2.5';
+export const OBSERVABILITY_PO_DEFAULT_EFFORT: EffortLevel = 'medium';
+export const OBSERVABILITY_PO_SCHEDULE_HOURS = [6, 18] as const;
+
+export const OBSERVABILITY_TREND_WINDOWS = [
+  'today',
+  '1d',
+  '7d',
+  '14d',
+  '30d',
+  '60d',
+] as const;
+
+export type ObservabilityTrendWindow = (typeof OBSERVABILITY_TREND_WINDOWS)[number];
+
+export const OBSERVABILITY_TREND_WINDOW_LABELS: Record<ObservabilityTrendWindow, string> = {
+  today: 'Today',
+  '1d': 'Last day',
+  '7d': 'Last 7 days',
+  '14d': 'Last 14 days',
+  '30d': 'Last 30 days',
+  '60d': 'Last 60 days',
+};
+
+export type ObservabilityDigestSlot = 'morning_6am' | 'evening_6pm' | 'on_demand';
+export type ObservabilityTrendDirection = 'up' | 'down' | 'flat';
+
+export type ObservabilityWindowComparisonMap = Record<ObservabilityTrendWindow, number>;
+
+export interface ObservabilityTopUserItem {
+  userId: string;
+  displayName: string;
+  role: string;
+  interactions: number;
+  sessions: number;
+  modulesUsed: number;
+  topModule: string;
+  deltaPct: number;
+  trend: ObservabilityTrendDirection;
+  windowComparison: ObservabilityWindowComparisonMap;
+}
+
+export interface ObservabilityExceptionItem {
+  id: string;
+  signature: string;
+  module: string;
+  routeTemplate: string;
+  statusCode: number;
+  count: number;
+  affectedUsers: number;
+  deltaPct: number;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  windowComparison: ObservabilityWindowComparisonMap;
+}
+
+export interface ObservabilityModuleRetentionDropItem {
+  module: string;
+  routeTemplate: string;
+  previousRetentionPct: number;
+  currentRetentionPct: number;
+  dropPct: number;
+  returningUsers: number;
+  lostUsers: number;
+  primaryFriction: string;
+  windowComparison: ObservabilityWindowComparisonMap;
+}
+
+export interface ObservabilityDropReasonFinding {
+  id: string;
+  module: string;
+  title: string;
+  detail: string;
+  evidence: string;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export interface ObservabilityDropReasonsSummary {
+  headline: string;
+  narrative: string;
+  findings: ObservabilityDropReasonFinding[];
+}
+
+export interface ObservabilityTopModuleItem {
+  module: string;
+  routeTemplate: string;
+  activeUsers: number;
+  interactions: number;
+  sharePct: number;
+  retentionPct: number;
+  deltaPct: number;
+  trend: ObservabilityTrendDirection;
+  windowComparison: ObservabilityWindowComparisonMap;
+}
+
+export interface ObservabilityAdoptionPlay {
+  id: string;
+  module: string;
+  title: string;
+  action: string;
+  expectedLift: string;
+  impact: 'high' | 'medium' | 'low';
+}
+
+export interface ObservabilityAdoptionSummary {
+  headline: string;
+  narrative: string;
+  recommendations: ObservabilityAdoptionPlay[];
+}
+
+export type ObservabilityDynamicSectionTone = 'default' | 'accent' | 'warning' | 'danger';
+export type ObservabilityDynamicSectionDisplayType =
+  | 'insights'
+  | 'table'
+  | 'ranked_list'
+  | 'metrics'
+  | 'markdown'
+  | 'tracker';
+
+/** Section id of the skill's suggestion tracker (`suggestionTracker` in SKILL.md). */
+export const OBSERVABILITY_SUGGESTION_TRACKER_SECTION_ID = 'suggestiontracker';
+
+export const OBSERVABILITY_SUGGESTION_CATEGORIES = [
+  'enhance',
+  'consolidate',
+  'new_module',
+] as const;
+export type ObservabilitySuggestionCategory =
+  (typeof OBSERVABILITY_SUGGESTION_CATEGORIES)[number];
+
+export const OBSERVABILITY_SUGGESTION_CATEGORY_LABELS: Record<
+  ObservabilitySuggestionCategory,
+  string
+> = {
+  enhance: 'Enhance module',
+  consolidate: 'Consolidate / retire',
+  new_module: 'New module idea',
+};
+
+export const OBSERVABILITY_SUGGESTION_STAGES = [
+  'proposed',
+  'planned',
+  'in_progress',
+  'shipped',
+  'measured',
+  'dropped',
+] as const;
+export type ObservabilitySuggestionStage = (typeof OBSERVABILITY_SUGGESTION_STAGES)[number];
+
+export const OBSERVABILITY_SUGGESTION_STAGE_LABELS: Record<
+  ObservabilitySuggestionStage,
+  string
+> = {
+  proposed: 'Proposed',
+  planned: 'Planned',
+  in_progress: 'In progress',
+  shipped: 'Shipped',
+  measured: 'Impact measured',
+  dropped: 'Dropped',
+};
+
+/** Default progress for each stage when the skill does not return `progressPct`. */
+export const OBSERVABILITY_SUGGESTION_STAGE_PROGRESS: Record<
+  ObservabilitySuggestionStage,
+  number
+> = {
+  proposed: 10,
+  planned: 30,
+  in_progress: 55,
+  shipped: 80,
+  measured: 100,
+  dropped: 0,
+};
+
+export interface ObservabilityDynamicSkillSectionItem {
+  id?: string;
+  title: string;
+  subtitle?: string;
+  detail?: string;
+  meta?: string;
+  badge?: string;
+  metricLabel?: string;
+  metricValue?: string | number;
+  deltaPct?: number;
+  windowComparison?: ObservabilityWindowComparisonMap;
+  /** Suggestion tracker fields (`displayType: tracker`). */
+  module?: string;
+  category?: ObservabilitySuggestionCategory;
+  stage?: ObservabilitySuggestionStage;
+  progressPct?: number;
+  firstSuggestedAt?: string;
+  lastUpdatedAt?: string;
+}
+
+export interface ObservabilityDynamicSkillSection {
+  id: string;
+  number?: number;
+  title: string;
+  subtitle?: string;
+  badge?: string;
+  tone?: ObservabilityDynamicSectionTone;
+  displayType?: ObservabilityDynamicSectionDisplayType;
+  headline?: string;
+  narrative?: string;
+  items?: ObservabilityDynamicSkillSectionItem[];
+}
+
+export interface ObservabilityScheduleSlotStatus {
+  slot: 'morning_6am' | 'evening_6pm';
+  label: string;
+  scheduledTimeLabel: string;
+  lastRunAt: string | null;
+  nextRunAt: string;
+  model: string;
+  effort: EffortLevel;
+  status: 'ready' | 'scheduled';
+}
+
+export interface ObservabilityScheduleSummary {
+  cadenceLabel: string;
+  timezone: string;
+  skillPath: string;
+  configuredModel: string;
+  configuredEffort: EffortLevel;
+  morningSlot: ObservabilityScheduleSlotStatus;
+  eveningSlot: ObservabilityScheduleSlotStatus;
+}
+
+export interface ObservabilityPoDigestSnapshot {
+  id: string;
+  project: string;
+  window: ObservabilityTrendWindow;
+  windowLabel: string;
+  baselineLabel: string;
+  slot: ObservabilityDigestSlot;
+  skillPath: string;
+  model: string;
+  effort: EffortLevel;
+  generatedAt: string;
+  headline: string;
+  kpis: {
+    activeUsers: number;
+    activeUsersDeltaPct: number;
+    totalExceptions: number;
+    exceptionsDeltaPct: number;
+    avgModuleRetentionPct: number;
+    retentionDeltaPct: number;
+    topModuleName: string;
+    topModuleSharePct: number;
+  };
+  topUsers: ObservabilityTopUserItem[];
+  commonExceptions: ObservabilityExceptionItem[];
+  moduleRetentionDrops: ObservabilityModuleRetentionDropItem[];
+  dropReasonsSummary: ObservabilityDropReasonsSummary;
+  topModules: ObservabilityTopModuleItem[];
+  adoptionRecommendations: ObservabilityAdoptionSummary;
+  customSections?: ObservabilityDynamicSkillSection[];
+  sections?: ObservabilityDynamicSkillSection[];
+}
+
+/** The AI part of a digest, written by the V2 document worker. */
+export interface ObservabilityPoSkillSynthesis {
+  headline?: string;
+  dropReasonsSummary?: ObservabilityDropReasonsSummary;
+  adoptionRecommendations?: ObservabilityAdoptionSummary;
+  customSections?: ObservabilityDynamicSkillSection[];
+}
+
+export type ObservabilityPoDigestRunStatus = 'running' | 'completed' | 'failed';
+
+/** The latest AI synthesis run for one project and trend window. */
+export interface ObservabilityPoDigestSynthesisRun {
+  runId: string;
+  status: ObservabilityPoDigestRunStatus;
+  model: string;
+  effort: EffortLevel;
+  requestedAt: string;
+  completedAt: string | null;
+  failureDetail: string | null;
+}
+
+export interface ObservabilityPoDigestResponse {
+  digest: ObservabilityPoDigestSnapshot;
+  schedule: ObservabilityScheduleSummary;
+  history: Array<{
+    id: string;
+    slot: ObservabilityDigestSlot;
+    window: ObservabilityTrendWindow;
+    model: string;
+    effort: EffortLevel;
+    generatedAt: string;
+    headline: string;
+  }>;
+  /** Null when no AI synthesis has been requested for this window yet. */
+  synthesisRun?: ObservabilityPoDigestSynthesisRun | null;
+}
+
+export interface GenerateObservabilityPoDigestRequest {
+  project?: string;
+  window?: ObservabilityTrendWindow;
+  model?: string;
+  effort?: EffortLevel;
+  slot?: ObservabilityDigestSlot;
+}
+

@@ -1,3 +1,4 @@
+import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import type { ChatMessage, ChatThread, ChatTurnSkill } from '../../shared/types/chat';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import {
@@ -74,10 +75,13 @@ async function admittedSpecification(
     interviewContext?: string | null;
     resolveGrounding?: jest.Mock;
     loadSkill?: jest.Mock;
+    skillConfig?: Record<string, unknown> | null;
     resolveDeadlines?: jest.Mock;
     hasPinnedGrounding?: boolean;
     optionalGroundingWaitMs?: number;
     trackEvent?: jest.Mock;
+    referenceSources?: BrainstormTurnSources | null;
+    linkedContext?: string | null;
     /** Admits a turn with these messages first, on the same service. */
     priorTurnMessages?: ChatMessage[];
   } = {},
@@ -102,9 +106,11 @@ async function admittedSpecification(
         access: 'owner',
         thread: thread(messages, options.kickoff),
       }),
-    resolveSkillConfig: jest.fn().mockResolvedValue({
-      interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }],
-    }),
+    resolveSkillConfig: jest.fn().mockResolvedValue(
+      'skillConfig' in options
+        ? options.skillConfig
+        : { interviewSkillOptions: [{ path: SKILL_PATH, friendlyName: 'Grill with docs' }] },
+    ),
     loadSkill:
       options.loadSkill ??
       jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT }),
@@ -119,6 +125,8 @@ async function admittedSpecification(
       .fn()
       .mockResolvedValue(options.backgroundGrounding ?? false),
     loadInterviewContext: jest.fn().mockResolvedValue(options.interviewContext ?? null),
+    loadReferenceSources: jest.fn().mockResolvedValue(options.referenceSources ?? null),
+    loadLinkedContext: jest.fn().mockResolvedValue(options.linkedContext ?? null),
     resolveMaxviewCapability: jest.fn().mockResolvedValue('disabled'),
     resolveDeadlines:
       options.resolveDeadlines ??
@@ -181,6 +189,65 @@ describe('durable interactive turn prompt', () => {
     expect(specification.currentPrompt).toContain('governs this whole session, not only this turn');
     expect(specification.currentPrompt).not.toContain('Follow it for this turn');
     expect(specification.recreationPrompt).toContain('governs this whole session, not only this turn');
+  });
+
+  it('loads the thread skill from the project repo when the turn names that same path', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const loadSkill = jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' });
+
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+      turnSkill: { name: 'cab-release', path: cabPath },
+      skillConfig: null,
+      loadSkill,
+    });
+
+    expect(loadSkill).toHaveBeenCalledWith(expect.objectContaining({
+      registration: 'project',
+      skill: expect.objectContaining({ path: cabPath }),
+    }));
+    expect(specification.skill?.content).toContain('# cab-release');
+  });
+
+  it('grants only CAB wiki, snow, and conditional release-branch writes to the CAB skill', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const specification = await admittedSpecification([], {
+      workflowClass: 'home-chat',
+      kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+      turnSkill: { name: 'cab-release', path: cabPath },
+      skillConfig: null,
+      loadSkill: jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' }),
+    });
+
+    expect(specification.currentPrompt).toContain('explicitly requested CAB release workflow');
+    expect(specification.currentPrompt).toContain('update only `/Manual Release/{version}`');
+    expect(specification.currentPrompt).toContain('pipeline 670 for Dry-run or 595 for Run');
+    expect(specification.currentPrompt).toContain('only after the snow run succeeds');
+    expect(specification.currentPrompt).toContain('through the CAB broker');
+    expect(specification.currentPrompt).toContain('Do not git push.');
+    expect(specification.currentPrompt).not.toContain(
+      'Treat the repository checkout as read-only',
+    );
+  });
+
+  it('keeps the narrow CAB write grant on follow-up turns without reloading the skill', async () => {
+    const cabPath = '.cursor/skills/cab-release/SKILL.md';
+    const specification = await admittedSpecification(
+      [
+        message('user', 'Run the CAB dry-run', 1),
+        message('agent', 'The ADO request failed.', 2),
+      ],
+      {
+        workflowClass: 'home-chat',
+        kickoff: { skillPath: cabPath, pillLabel: 'Create CAB request' },
+        skillConfig: null,
+        loadSkill: jest.fn().mockResolvedValue({ path: cabPath, content: '# cab-release' }),
+      },
+    );
+
+    expect(specification.currentPrompt).toContain('explicitly requested CAB release workflow');
+    expect(specification.currentPrompt).not.toContain('# cab-release');
   });
 
   it('scopes a skill picked mid-thread to that turn only', async () => {
@@ -394,6 +461,96 @@ describe('durable guided interview turn', () => {
     expect(specification.mcpServers).toContainEqual(
       expect.objectContaining({ serverName: 'ado-skills' }),
     );
+  });
+
+  describe('reference repositories', () => {
+    const referenceSources: BrainstormTurnSources = {
+      readRoots: [{
+        sourceId: '10000000-0000-4000-8000-00000000000a',
+        kind: 'project-repository',
+        displayName: 'MaxView',
+        workspacePath: '/data/workspaces/brainstorm-repo-mirrors/10000000-0000-4000-8000-00000000000a',
+        commitSha: 'b'.repeat(40),
+        provider: 'ado',
+        project: 'MaxView',
+        repository: 'maxview-api',
+      }],
+      unavailableSources: [],
+      mcpServers: [],
+      instructions: '# Reference repositories\n- "MaxView": read under sources/10000000-0000-4000-8000-00000000000a/',
+    };
+
+    it('mounts them on a Technical turn and tells the agent where they are', async () => {
+      const specification = await admittedSpecification(
+        [
+          message('user', 'Begin.', 1),
+          message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+        ],
+        { guided: true, repositoryContext, referenceSources },
+      );
+
+      expect(specification.referenceSources).toEqual(referenceSources);
+      expect(specification.currentPrompt).toContain('# Reference repositories');
+    });
+
+    it('leaves them off Discovery and Delivery turns', async () => {
+      const specification = await admittedSpecification([], {
+        guided: true,
+        repositoryContext,
+        referenceSources,
+      });
+
+      expect(specification.guidedInterview?.phase).toBe('product');
+      expect(specification.referenceSources).toBeUndefined();
+      expect(specification.currentPrompt).not.toContain('# Reference repositories');
+    });
+
+    it('never looks them up for a non-interview turn', async () => {
+      const specification = await admittedSpecification([], {
+        workflowClass: 'home-chat',
+        referenceSources,
+      });
+
+      expect(specification.referenceSources).toBeUndefined();
+    });
+  });
+
+  describe('linked context', () => {
+    const linkedContext =
+      '# Linked Interview Grounding Context\n\n## Linked ADRs (accepted)\n\n### Use Postgres (`adr-1`)\n\nWe use Postgres.\n';
+
+    it('carries linked ADRs and Design Modules on a Discovery turn', async () => {
+      const specification = await admittedSpecification([], {
+        guided: true,
+        repositoryContext,
+        linkedContext,
+      });
+
+      expect(specification.guidedInterview?.phase).toBe('product');
+      expect(specification.currentPrompt).toContain('`.ai-pilot/linked-context.md`');
+      expect(specification.currentPrompt).toContain('### Use Postgres (`adr-1`)');
+    });
+
+    it('keeps carrying it on later Technical turns', async () => {
+      const specification = await admittedSpecification(
+        [
+          message('user', 'Begin.', 1),
+          message('agent', '[[interview-phase:technical:1:5]]\nFrontend, backend, or both?', 2),
+        ],
+        { guided: true, repositoryContext, linkedContext },
+      );
+
+      expect(specification.currentPrompt).toContain('### Use Postgres (`adr-1`)');
+    });
+
+    it('never adds it to a non-interview turn', async () => {
+      const specification = await admittedSpecification([], {
+        workflowClass: 'home-chat',
+        linkedContext,
+      });
+
+      expect(specification.currentPrompt).not.toContain('Linked Interview Grounding Context');
+    });
   });
 
   it('tells the interviewer to ask the person when no context.md is available', async () => {

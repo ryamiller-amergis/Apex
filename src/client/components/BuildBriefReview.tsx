@@ -14,6 +14,7 @@ import { BuildClassificationSummary } from './BuildClassificationSummary';
 import { BuildRequirementList } from './BuildRequirementList';
 import { BuildRequirementRows, type RequirementRowValue } from './BuildRequirementRows';
 import { BuildRiskDecisions } from './BuildRiskDecisions';
+import { SkillRating } from './SkillRating';
 import styles from './BuildBriefReview.module.css';
 
 const DRAFT_FAILED_MESSAGE = 'The brief could not be drafted. Try again, or keep chatting and draft it later.';
@@ -79,9 +80,11 @@ function formatDate(value: string): string {
 
 interface BuildBriefReviewProps {
   interviewId: string;
+  /** Enables the optional rating of the drafted brief. */
+  project?: string;
 }
 
-export const BuildBriefReview: React.FC<BuildBriefReviewProps> = ({ interviewId }) => {
+export const BuildBriefReview: React.FC<BuildBriefReviewProps> = ({ interviewId, project }) => {
   const briefQuery = useBuildBriefRecord(interviewId);
   const analysisQuery = useBuildBriefAnalysis(interviewId);
   const save = useSaveBuildBrief(interviewId);
@@ -178,6 +181,13 @@ export const BuildBriefReview: React.FC<BuildBriefReviewProps> = ({ interviewId 
       {brief && (
         <>
           {actingFor && editable && <BuildBriefTakeoverNotice requesterName={actingFor} />}
+          {/* data-testid-exempt — SkillRating renders chat-message-rating-build_intake-<interview>:<version> */}
+          <SkillRating
+            project={project}
+            surface="build_intake"
+            subjectType="build_brief_version"
+            subjectId={`${interviewId}:${brief.version}`}
+          />
           {approved && (
             <p className={styles.note} role="status" {...{ 'data-testid': 'build-brief-approved-note' }}>
               {alreadyApproved

@@ -5,8 +5,10 @@ import type { CaptureHealthResponse, TraceEventPage } from '../../../shared/type
 import {
   ObservabilityApiError,
   buildHealthQueryUrl,
+  buildPoDigestQueryUrl,
   buildTrailQueryUrl,
   useObservabilityHealth,
+  useObservabilityPoDigest,
   useObservabilityTrail,
 } from '../useObservabilityQueries';
 import type { AppliedWorkspaceFilters } from '../../observability/workspaceFilters';
@@ -148,5 +150,24 @@ describe('useObservabilityHealth', () => {
     renderHook(() => useObservabilityHealth('Apex', false), { wrapper });
     expect(global.fetch).not.toHaveBeenCalled();
     expect(buildHealthQueryUrl('Apex')).toBe('/api/platform-admin/observability/health?project=Apex');
+  });
+});
+
+describe('useObservabilityPoDigest', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('builds PO digest URL with project, trend window, model, and effort', async () => {
+    expect(buildPoDigestQueryUrl('Apex', '14d', 'composer-2.5', 'high')).toBe(
+      '/api/platform-admin/observability/po-digest?project=Apex&window=14d&model=composer-2.5&effort=high',
+    );
+
+    mockFetch(200, { digest: { window: '14d', model: 'composer-2.5', effort: 'high' }, schedule: {}, history: [] });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useObservabilityPoDigest('Apex', '14d', 'composer-2.5', 'high'),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.digest.model).toBe('composer-2.5');
   });
 });

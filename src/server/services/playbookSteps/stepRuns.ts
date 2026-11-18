@@ -18,6 +18,7 @@ import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
 import { assertSuspendedRunCapacity } from '../playbookGuardService';
 import { notifyPlaybookRunChanged } from '../playbookRunNotifyService';
+import { emitSkillSignalLater, type SkillSignalInput } from '../skillSignalService';
 import {
   createPlaybookStepOutputStore,
   inlineOutputMaxBytes,
@@ -398,9 +399,34 @@ export async function failStepRun(input: {
         inArray(playbookStepRuns.status, ['pending', 'running', 'suspended'])
       )
     )
-    .returning({ runId: playbookStepRuns.runId });
+    .returning({ runId: playbookStepRuns.runId, stepId: playbookStepRuns.stepId });
 
-  if (updated[0]) signalRunChanged(updated[0].runId);
+  if (!updated[0]) return;
+  signalRunChanged(updated[0].runId);
+  const step = updated[0];
+  emitSkillSignalLater(`playbook step ${input.stepRunId}`, () =>
+    stepFailureSignal(input.stepRunId, step, status, input.reason));
+}
+
+async function stepFailureSignal(
+  stepRunId: string,
+  step: { runId: string; stepId: string },
+  status: PlaybookStepRunStatus,
+  reason: string | undefined,
+): Promise<SkillSignalInput | null> {
+  const run = await db.query.playbookRuns.findFirst({
+    where: eq(playbookRuns.id, step.runId),
+    columns: { project: true },
+  });
+  if (!run) return null;
+  return {
+    project: run.project,
+    surface: 'playbook',
+    subjectType: 'playbook_step',
+    subjectId: stepRunId,
+    kind: 'run_failed',
+    metadata: { runId: step.runId, stepId: step.stepId, status, reason: reason ?? null },
+  };
 }
 
 /**

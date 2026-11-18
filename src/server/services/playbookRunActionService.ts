@@ -240,10 +240,7 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
     const context = await dependencies.loadContext(project, runId);
     if (!context) throw new PlaybookRunActionNotFoundError();
 
-    if (
-      actor.actorUserId !== context.initiatorUserId &&
-      !actor.isSuperAdmin
-    ) {
+    if (actor.actorUserId !== context.initiatorUserId) {
       const permissions = await dependencies.getUserPermissions(actor.actorUserId, context.project);
       if (!permissions.has('playbooks:admin')) {
         throw new PlaybookRunActionForbiddenError();

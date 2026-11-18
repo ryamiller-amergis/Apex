@@ -11,6 +11,14 @@ jest.mock('fs', () => ({
   rmSync: jest.fn(),
 }));
 
+const mockCreateThread = jest.fn();
+jest.mock('../services/chatAgentService', () => ({
+  createThread: (...args: unknown[]) => mockCreateThread(...args),
+}));
+const mockIsFeatureEnabled = jest.fn().mockResolvedValue(false);
+jest.mock('../services/featureFlagService', () => ({
+  isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+}));
 jest.mock('../services/projectSettingsService', () => ({
   listSkillConfigs: jest.fn().mockResolvedValue([]),
 }));
@@ -55,6 +63,7 @@ import {
   getSessionMessages,
   sendMessage,
   closeSession,
+  openAskApexThread,
 } from '../services/askApexService';
 import { v4 as uuidv4 } from 'uuid';
 import { Agent } from '@cursor/sdk';
@@ -507,5 +516,51 @@ describe('askApexService', () => {
       const sid = createSession('user-1');
       expect(closeSession(sid, 'user-2')).toBe(false);
     });
+  });
+});
+
+describe('openAskApexThread', () => {
+  beforeEach(() => {
+    mockCreateThread.mockReset();
+    mockIsFeatureEnabled.mockReset();
+  });
+
+  it('keeps the in-process session when Apex is not on the V2 transport', async () => {
+    mockIsFeatureEnabled.mockResolvedValue(false);
+
+    await expect(openAskApexThread('user-1')).resolves.toBeNull();
+    expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+
+  it('keeps the in-process session when the flag check fails', async () => {
+    mockIsFeatureEnabled.mockRejectedValue(new Error('db down'));
+
+    await expect(openAskApexThread('user-1')).resolves.toBeNull();
+    expect(mockCreateThread).not.toHaveBeenCalled();
+  });
+
+  it('opens an app-knowledge Ask Apex thread on the V2 transport', async () => {
+    mockIsFeatureEnabled.mockResolvedValue(true);
+    mockListSkillConfigs.mockResolvedValueOnce([
+      { skillProvider: 'github', isDefault: true, skillRepo: 'org/apex', skillBranch: 'main' },
+    ]);
+    mockCreateThread.mockResolvedValue({ id: 'thread-ask' });
+
+    await expect(openAskApexThread('user-1')).resolves.toEqual({ threadId: 'thread-ask' });
+    expect(mockIsFeatureEnabled).toHaveBeenCalledWith('ai-runs-v2-transport', {
+      userId: 'user-1',
+      project: 'Apex',
+      caller: 'ask-apex',
+    });
+    expect(mockCreateThread).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({
+        project: 'Apex',
+        repo: 'org/apex',
+        skillPath: '.cursor/skills/app-knowledge/SKILL.md',
+        askApex: true,
+      }),
+      { skipAutoKickoff: true },
+    );
   });
 });

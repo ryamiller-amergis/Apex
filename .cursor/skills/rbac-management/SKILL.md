@@ -32,10 +32,10 @@ This skill is loaded when the `rbac-governance` rule determines that an add, rem
 | `deployments:create` | deployments | Create deployments | ✓ | ✓ | |
 | `deployments:manage` | deployments | Manage existing deployments | ✓ | | |
 | `planning:view` | planning | View planning analytics pages | ✓ | ✓ | ✓ |
-| `playbooks:view` | playbooks | View Playbook definitions, runs and step status | ✓ | ✓ | ✓ |
-| `playbooks:run` | playbooks | Start Playbook runs; does not authorize the run's step effects | ✓ | ✓ | |
-| `playbooks:author` | playbooks | Author, publish, and deprecate Playbook definitions | | | |
-| `playbooks:admin` | playbooks | Administer Playbooks and cancel or retry any project run | ✓ | | |
+| `playbooks:view` | playbooks | View Playbook definitions, runs and step status. Granted only to a platform admin when the project menu includes Playbooks. | | | |
+| `playbooks:run` | playbooks | Start Playbook runs. Same module gate as view. | | | |
+| `playbooks:author` | playbooks | Author, publish, and deprecate Playbook definitions. Same module gate as view. | | | |
+| `playbooks:admin` | playbooks | Administer Playbooks and cancel or retry any project run. Same module gate as view. | | | |
 | `skills:manage` | skills | Manage agent skills | ✓ | | |
 | `wiki:write` | wiki | Create and edit wiki pages | ✓ | ✓ | |
 | `workitems:write` | workitems | Create and edit work items | ✓ | ✓ | |
@@ -83,6 +83,19 @@ router.get('/my-feature', requirePermission('<category>:<name>'), handler);
 
 // At least one of several (OR)
 router.get('/my-feature', requireAnyPermission('<category>:<name>', 'admin:roles'), handler);
+```
+
+When the route reads a project from the query, body, or path, also apply `requireProjectAccess`. Permission and group checks are global, so they do not stop a caller assigned to project A from naming project B.
+
+```typescript
+import { requirePermission, requireProjectAccess } from '../middleware/rbac';
+
+router.post(
+  '/my-feature',
+  requirePermission('<category>:<name>'),
+  requireProjectAccess((req) => req.body?.project ?? req.query.project),
+  handler,
+);
 ```
 
 ### 3. Wire client gating

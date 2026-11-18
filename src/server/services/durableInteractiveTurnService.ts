@@ -10,6 +10,7 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
+import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import type {
   DurableInteractiveTurnSpecification,
   FrozenBrainstormTurn,
@@ -35,11 +36,13 @@ import type {
 import { mcpServerChatInstructions } from '../../shared/types/mcpServers';
 import type { GroundingProfileId } from '../../shared/types/repoReader';
 import type { RepoReader } from '../../shared/types/repoReader';
+import { promptWithAttachments } from './attachmentPrompt';
 import { callerGroundingService } from './callerGroundingService';
 import { runGroundingService } from './runGroundingService';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { RepoReaderError } from './repoReader';
 import { isRepositorySyncingError } from './repoRead/mirrorHydration';
+import { readsThroughRepoReadService } from './repoRead/wholeProjectRepoRead';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
@@ -80,6 +83,12 @@ import {
   wrapGuidedInterviewPrompt,
 } from './guidedInterviewState';
 import { getSkillFile } from './skillCatalogFacade';
+import { loadInterviewReferenceSources } from './interviewLinkService';
+import {
+  INTERVIEW_REFERENCE_REPOSITORIES_FLAG,
+  LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH,
+} from '../../shared/types/interviewLinks';
+import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
 
@@ -123,6 +132,8 @@ const INLINE_THREAD_CONTEXT_REFERENCE = 'the `# Thread context` section of this 
 // The worker clears `.ai-pilot/kickoff-transcript.md` before each turn.
 const KICKOFF_TRANSCRIPT_NOTE =
   'This section is the full content of `.ai-pilot/kickoff-transcript.md`. That file is not on disk for this session; wherever the skill or request refers to it, read this section instead.';
+const LINKED_CONTEXT_NOTE =
+  `The section below is the full content of \`${LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH}\`. That file is not on disk for this session; wherever the skill refers to it, read this section instead.`;
 
 /**
  * Instructions an agent needs once per session: the chat UI contract, the
@@ -275,6 +286,14 @@ type ServiceDependencies = Readonly<{
   ) => Promise<boolean>;
   /** Raw `context.md` for the application brief when the grounded read had none. */
   loadInterviewContext: (thread: ChatThread) => Promise<string | null>;
+  /** Linked Brainstorm catalog repositories for an Interview thread, or null when none apply. */
+  loadReferenceSources: (
+    input: Readonly<{ threadId: string; userId: string; project: string }>,
+  ) => Promise<BrainstormTurnSources | null>;
+  /** Rendered linked ADRs and Design Modules for an Interview thread, or null when none apply. */
+  loadLinkedContext: (
+    input: Readonly<{ threadId: string; userId: string }>,
+  ) => Promise<string | null>;
   trackEvent: typeof trackEvent;
   now: () => Date;
 }>;
@@ -681,17 +700,18 @@ function registeredSkillName(
 
 function skillRegistration(
   thread: ChatThread,
-  turnSkill: ChatTurnSkill | undefined,
   skill: ChatTurnSkill | null,
   config: ProjectSkillConfigResponse | null,
   builtInRoots: ReadonlyArray<BuiltInSkillRoot>,
 ): DurableInteractiveSkillRegistration | null {
   if (!skill) return null;
   const normalized = strictPortableSkillPath(skill.path).toLowerCase();
-  const frozenOnThread =
-    !turnSkill &&
+  // The thread skill stays a project skill when the turn repeats that same path.
+  // A path under `.cursor/skills` is otherwise a built-in Apex skill, which would
+  // miss a skill that exists only in the project repository.
+  const matchesThreadSkill =
     normalizePath(thread.kickoff.skillPath ?? '').toLowerCase() === normalized;
-  if (frozenOnThread || configuredSkillPaths(config).has(normalized)) {
+  if (matchesThreadSkill || configuredSkillPaths(config).has(normalized)) {
     return 'project';
   }
   if (isAllowlistedBuiltInSkillPath(skill.path, builtInRoots)) {
@@ -715,6 +735,7 @@ function capabilityMetadata(
     thread.kickoff.webResearchEnabled ||
     thread.kickoff.assistantType === 'calendar-work-item' ||
     thread.kickoff.assistantType === 'mcp-server' ||
+    thread.kickoff.qaLabSuiteId ||
     resolveDocumentAssistantType(thread.kickoff)
   ) {
     capabilities.push('mcp');
@@ -839,27 +860,6 @@ function answersSoFar(
   ];
 }
 
-function promptWithAttachments(
-  text: string,
-  attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'],
-): string {
-  const messageText =
-    text.trim() || 'Please use the uploaded files as additional context.';
-  if (attachments.length === 0) return messageText;
-  return [
-    messageText,
-    '',
-    '# Uploaded context files for this turn',
-    'The user attached these files. Read them before responding when relevant.',
-    ...attachments.map((attachment) => {
-      const imageHint = attachment.contentType.startsWith('image/')
-        ? ' [IMAGE]'
-        : '';
-      return `- ${attachment.name} (${attachment.contentType}, ${attachment.sizeBytes} bytes): \`${attachment.materializedPath}\`${imageHint}`;
-    }),
-  ].join('\n');
-}
-
 function currentPrompt(
   text: string,
   skill: ChatTurnSkill | null,
@@ -868,10 +868,21 @@ function currentPrompt(
   instructions: ReadonlyArray<string>,
   skillScope: 'turn' | 'session',
   internalContext?: string,
+  policySkill: ChatTurnSkill | null = skill,
 ): string {
   const context = internalContext?.trim();
+  const writePolicyLines = isCabReleaseSkillPath(policySkill?.path)
+    ? [
+        '# Repository and Azure DevOps write policy',
+        '- This is the explicitly requested CAB release workflow.',
+        '- You may run the pre-loaded cab-release scripts, write their temporary files, update only `/Manual Release/{version}`, and queue only snow pipeline 670 for Dry-run or 595 for Run.',
+        '- You may create only `Release/{version}` through the CAB broker, only when the kickoff says to cut it, and only after the snow run succeeds. Do not git push.',
+        '- Do not make any other repository or Azure DevOps write.',
+        '',
+      ]
+    : CHAT_WRITE_POLICY_LINES;
   return [
-    ...CHAT_WRITE_POLICY_LINES,
+    ...writePolicyLines,
     ...instructions,
     ...(context ? [context, ''] : []),
     ...(skill ? [`Run skill: ${skill.name} (\`${skill.path}\`)`, ''] : []),
@@ -1036,8 +1047,9 @@ function frozenMcpDescriptors(
       enableRepoBrowse: false,
     });
   }
-  // Document assistants stage edits through ado-skills `update_*` tools.
-  if (hasAdoCapability || resolveDocumentAssistantType(thread.kickoff)) {
+  // Document assistants stage edits through ado-skills `update_*` tools, and
+  // QA Lab Ask Apex edits cases through its `qa_lab_*` tools.
+  if (hasAdoCapability || thread.kickoff.qaLabSuiteId || resolveDocumentAssistantType(thread.kickoff)) {
     descriptors.push({
       kind: 'internal-proxy',
       serverName: 'ado-skills',
@@ -1233,17 +1245,19 @@ async function resolveLightweightGroundingFallback(
 
   if (!sha) return null;
 
-  await runGroundingService
-    .activateGroundings({
-      run: { runType: 'chat', runId: input.thread.id, project },
-      target: {
-        provider: groundingProvider,
-        repository: bareRepo,
-        branch: repository.branch,
-        groundedSha: sha,
-      },
-    })
-    .catch(() => undefined);
+  if (!activeExisting) {
+    await runGroundingService
+      .activateGroundings({
+        run: { runType: 'chat', runId: input.thread.id, project },
+        target: {
+          provider: groundingProvider,
+          repository: bareRepo,
+          branch: repository.branch,
+          groundedSha: sha,
+        },
+      })
+      .catch(() => undefined);
+  }
 
   const runRef = `chat:${input.thread.id}`;
   const profile = groundingProfileResolver.registerConnectionProfile(
@@ -1274,7 +1288,7 @@ async function resolveLightweightGroundingFallback(
   };
 }
 
-async function defaultResolveGrounding(
+export async function defaultResolveGrounding(
   input: ResolveGroundingInput,
 ): Promise<FrozenGrounding> {
   const repository = {
@@ -1285,6 +1299,16 @@ async function defaultResolveGrounding(
       input.thread.kickoff.branch ??
       'main',
   } as const;
+  // The chat host checks out its own copy and every App Service read goes
+  // through repo-read, so an App Service checkout would never be read.
+  if (await readsThroughRepoReadService({
+    userId: input.userId,
+    project: input.thread.kickoff.project,
+    caller: 'durable-interactive',
+  })) {
+    const pinned = await resolveLightweightGroundingFallback(input, repository);
+    if (pinned) return pinned;
+  }
   const start = () =>
     callerGroundingService.start({
       caller: 'durable-interactive',
@@ -1371,6 +1395,36 @@ async function defaultIsGuidedInterviewEnabled(
   } catch {
     return false;
   }
+}
+
+async function defaultLoadReferenceSources(
+  input: Readonly<{ threadId: string; userId: string; project: string }>,
+): Promise<BrainstormTurnSources | null> {
+  const enabled = await isFeatureEnabled(INTERVIEW_REFERENCE_REPOSITORIES_FLAG, {
+    userId: input.userId,
+    project: input.project,
+  }).catch(() => false);
+  // @feature-flag:interview-reference-repos start winner=enabled
+  if (!enabled) {
+    // @feature-flag:interview-reference-repos disabled-start
+    return null;
+    // @feature-flag:interview-reference-repos disabled-end
+  }
+  // @feature-flag:interview-reference-repos enabled-start
+  return loadInterviewReferenceSources(input.threadId);
+  // @feature-flag:interview-reference-repos enabled-end
+  // @feature-flag:interview-reference-repos end
+}
+
+async function defaultLoadLinkedContext(
+  input: Readonly<{ threadId: string; userId: string }>,
+): Promise<string | null> {
+  // Dynamic import: the materializer reaches designModuleService, which imports
+  // the legacy chat service, which imports this module.
+  const { renderLinkedContextForInterviewThread } = await import(
+    './linkedContextMaterializerService'
+  );
+  return renderLinkedContextForInterviewThread(input);
 }
 
 async function defaultHasPinnedGrounding(thread: ChatThread): Promise<boolean> {
@@ -1464,6 +1518,8 @@ function defaultDependencies(): ServiceDependencies {
     isGuidedInterviewEnabled: defaultIsGuidedInterviewEnabled,
     isBackgroundGroundingEnabled: defaultIsBackgroundGroundingEnabled,
     loadInterviewContext: defaultLoadInterviewContext,
+    loadReferenceSources: defaultLoadReferenceSources,
+    loadLinkedContext: defaultLoadLinkedContext,
     trackEvent,
     now: () => new Date(),
   };
@@ -1537,6 +1593,22 @@ export function createDurableInteractiveTurnService(
           })
         : Promise.resolve('disabled' as const);
       const guidedInterviewLookup = resolveGuidedInterview(thread, input, deps);
+      const referenceSourcesLookup =
+        input.workflowClass === 'interview'
+          ? deps
+              .loadReferenceSources({
+                threadId: thread.id,
+                userId: input.userId,
+                project: thread.kickoff.project,
+              })
+              .catch(() => null)
+          : Promise.resolve(null);
+      const linkedContextLookup =
+        input.workflowClass === 'interview'
+          ? deps
+              .loadLinkedContext({ threadId: thread.id, userId: thread.userId })
+              .catch(() => null)
+          : Promise.resolve(null);
       // @feature-flag:interview-background-grounding start winner=enabled
       const backgroundGroundingLookup = guidedInterviewLookup.then(
         (guided) =>
@@ -1570,7 +1642,6 @@ export function createDurableInteractiveTurnService(
           : initiallySelectedSkill;
       const registration = skillRegistration(
         thread,
-        input.turnSkill,
         skill,
         config,
         deps.builtInSkillRoots,
@@ -1611,6 +1682,19 @@ export function createDurableInteractiveTurnService(
       const guidedInterview = await guidedInterviewLookup;
       // Discovery and Delivery carry the application brief instead of AGENTS.md.
       const productPhaseInterview = guidedInterview?.phase === 'product';
+      // Discovery and Delivery close repository tools, so they get no reference repositories either.
+      const referenceSources = productPhaseInterview
+        ? null
+        : await referenceSourcesLookup;
+      const linkedContext = await linkedContextLookup;
+      const turnInternalContext =
+        [
+          input.internalContext?.trim(),
+          linkedContext ? `${LINKED_CONTEXT_NOTE}\n\n${linkedContext.trim()}` : null,
+          referenceSources?.instructions,
+        ]
+          .filter(Boolean)
+          .join('\n\n') || undefined;
       const groundInBackground = await backgroundGroundingLookup;
       // Discovery and Delivery cannot read the repository, so their turns go
       // out on the branch-tip skill and brief while the thread's pin is prepared
@@ -1808,7 +1892,7 @@ export function createDurableInteractiveTurnService(
         immutableAttachments,
         resolvedSessionInstructions,
         input.turnSkill ? 'turn' : 'session',
-        input.internalContext,
+        turnInternalContext,
       );
       // A live or resumed agent already holds the thread skill from its first
       // turn. Resending it every turn makes step-by-step skills (interviews)
@@ -1831,7 +1915,8 @@ export function createDurableInteractiveTurnService(
                 : answersSoFar(transcript, input.workflowClass)),
             ],
             'session',
-            input.internalContext,
+            turnInternalContext,
+            skill,
           )
         : firstTurnPrompt;
       const specification: DurableInteractiveTurnSpecification = {
@@ -1882,6 +1967,7 @@ export function createDurableInteractiveTurnService(
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
         ...(input.brainstorm ? { brainstorm: input.brainstorm } : {}),
+        ...(referenceSources ? { referenceSources } : {}),
       };
       const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({

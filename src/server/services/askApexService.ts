@@ -17,10 +17,13 @@ import {
 import type { RepoReader } from '../../shared/types/repoReader';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
+import { createThread } from './chatAgentService';
+import { isFeatureEnabled } from './featureFlagService';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const GROUNDING_PREPARATION_TIMEOUT_MS = 2 * 60 * 1000;
 const MODEL_ID = 'composer-2.5';
+const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 
 const SYSTEM_PROMPT_BASE = `You are **Ask Apex** — a senior product owner who lives and breathes the Apex platform. You combine deep product knowledge with genuine enthusiasm for how Apex transforms the way teams build software. Think of yourself as the person who conceived many of these features, shepherded them through design and delivery, and now delights in helping people get the most out of the product.
 
@@ -431,6 +434,58 @@ function destroySession(sessionId: string): void {
   }
   sessions.delete(sessionId);
   void session.grounding?.release().catch(() => undefined);
+}
+
+const ASK_APEX_PROJECT = 'Apex';
+const ASK_APEX_SKILL_PATH = '.cursor/skills/app-knowledge/SKILL.md';
+
+/**
+ * Opens a chat thread for the Ask Apex panel when Apex runs on the V2
+ * transport, so turns run on the V2 chat host instead of this process.
+ * Returns null when the panel should keep its in-process session.
+ */
+export async function openAskApexThread(userId: string): Promise<{ threadId: string } | null> {
+  let v2Transport = false;
+  try {
+    v2Transport = await isFeatureEnabled(V2_TRANSPORT_FLAG, {
+      userId,
+      project: ASK_APEX_PROJECT,
+      caller: 'ask-apex',
+    });
+  } catch {
+    v2Transport = false;
+  }
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (!v2Transport) {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    return null;
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+
+  // @feature-flag:ai-runs-v2-transport enabled-start
+  const repoInfo = await resolveRepoInfo();
+  if (!repoInfo) return null;
+  const repo = `${repoInfo.org}/${repoInfo.repo}`;
+  const thread = await createThread(
+    userId,
+    {
+      project: ASK_APEX_PROJECT,
+      repo,
+      skillRepo: repo,
+      branch: repoInfo.branch,
+      skillBranch: repoInfo.branch,
+      skillProvider: 'github',
+      skillPath: ASK_APEX_SKILL_PATH,
+      skillPathIsAppDefault: true,
+      model: MODEL_ID,
+      pillLabel: 'Ask Apex',
+      askApex: true,
+    },
+    { skipAutoKickoff: true },
+  );
+  return { threadId: thread.id };
+  // @feature-flag:ai-runs-v2-transport enabled-end
+  // @feature-flag:ai-runs-v2-transport end
 }
 
 export function createSession(userId: string): string {

@@ -66,6 +66,28 @@ describe('cloud agent kickoff work-item updates', () => {
     expect(states).not.toContain('In Pull Request');
   });
 
+  it('tags the started work item and children that move to In Progress', async () => {
+    const ado = client({
+      addTag: jest.fn().mockResolvedValue(undefined),
+      getFeatureChildren: jest.fn().mockResolvedValue([
+        { id: 201, workItemType: 'Product Backlog Item', state: 'New' },
+        { id: 202, workItemType: 'Product Backlog Item', state: 'Done' },
+      ]),
+    });
+
+    await applyCloudAgentKickoff({
+      project: 'MaxView',
+      workItemId: 100,
+      workItemType: 'Feature',
+      state: 'In Progress',
+      tagAiCode: true,
+    }, ado);
+
+    expect(ado.addTag).toHaveBeenCalledWith(100, 'ai-code');
+    expect(ado.addTag).toHaveBeenCalledWith(201, 'ai-code');
+    expect(ado.addTag).not.toHaveBeenCalledWith(202, 'ai-code');
+  });
+
   it('moves only not-yet-started feature children when the feature is already in progress', () => {
     expect(kickoffInProgressIds({
       workItemId: 100,

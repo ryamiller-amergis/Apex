@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import type { PlaybookStepTypePaletteItem } from '../../../shared/types/playbook';
 import { PlaybookStepLibrary } from '../PlaybookStepLibrary';
 
+const NOT_ADDABLE = new Set(['interview', 'build']);
+
 function item(stepType: string): PlaybookStepTypePaletteItem {
   return {
     stepType,
@@ -13,10 +15,24 @@ function item(stepType: string): PlaybookStepTypePaletteItem {
     inputJsonSchema: {},
     outputJsonSchema: {},
     canSuspend: false,
+    addable: !NOT_ADDABLE.has(stepType),
   };
 }
 
-const ITEMS = ['cursor-agent', 'ingest-artifact', 'branch', 'approval-gate', 'notify', 'interview'].map(item);
+const ITEMS = [
+  'cursor-agent',
+  'ingest-artifact',
+  'branch',
+  'approval-gate',
+  'notify',
+  'interview',
+  'build',
+  'apex-action',
+  'cloud-agent',
+  'join',
+  'foreach',
+  'until',
+].map(item);
 
 function renderLibrary(usage: Record<string, number> = {}, onAdd = jest.fn()) {
   render(
@@ -42,14 +58,29 @@ describe('PlaybookStepLibrary', () => {
   });
 
   it('ranks most used steps by recorded usage', () => {
-    renderLibrary({ branch: 5, interview: 3 });
+    renderLibrary({ branch: 5, notify: 3 });
     const popular = screen.getByRole('region', { name: 'Most used' });
     const tiles = within(popular).getAllByRole('button').map((tile) => tile.getAttribute('data-testid'));
     expect(tiles).toEqual([
       'playbook-palette-top-branch',
-      'playbook-palette-top-interview',
+      'playbook-palette-top-notify',
       'playbook-palette-top-cursor-agent',
     ]);
+  });
+
+  it('leaves out interview and build, and files every other step under a named group', () => {
+    renderLibrary();
+    expect(screen.queryByTestId('playbook-palette-interview')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('playbook-palette-build')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Other' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'AI agents' })).getByTestId('playbook-palette-cloud-agent'))
+      .toBeInTheDocument();
+    const flow = screen.getByRole('region', { name: 'Flow' });
+    for (const stepType of ['branch', 'join', 'foreach', 'until']) {
+      expect(within(flow).getByTestId(`playbook-palette-${stepType}`)).toBeInTheDocument();
+    }
+    expect(within(screen.getByRole('region', { name: 'Actions' })).getByTestId('playbook-palette-apex-action'))
+      .toBeInTheDocument();
   });
 
   it('filters by title or description and says when nothing matches', async () => {

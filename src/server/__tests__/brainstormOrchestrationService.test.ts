@@ -281,12 +281,29 @@ describe('brainstormOrchestrationService.runTurn', () => {
     expect(deps.sendTurn).not.toHaveBeenCalled();
   });
 
-  it('maps the one-streaming-row conflict to turn_in_progress', async () => {
+  it('maps the one-streaming-row conflict to turn_in_progress after attempting reconciliation', async () => {
     const deps = makeDeps();
     deps.ledger.openTurn.mockRejectedValue(new BrainstormLedgerConflict('turn_in_progress'));
     await expect(
       createBrainstormOrchestrationService(deps).runTurn({ session, userId: 'creator', turnId: TURN_ID, text: 'x' }),
     ).rejects.toMatchObject({ code: 'turn_in_progress', status: 409 });
+    expect(deps.ledger.reconcileStreamingRows).toHaveBeenCalledWith(SESSION_ID, THREAD_ID);
+    expect(deps.ledger.openTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers and admits a turn when reconcileStreamingRows closes a stale streaming row', async () => {
+    const deps = makeDeps();
+    deps.ledger.openTurn
+      .mockRejectedValueOnce(new BrainstormLedgerConflict('turn_in_progress'))
+      .mockResolvedValueOnce({ assistant: row(), existing: false });
+    const result = await createBrainstormOrchestrationService(deps).runTurn({
+      session,
+      userId: 'creator',
+      turnId: TURN_ID,
+      text: 'Follow-up after source attach',
+    });
+    expect(deps.ledger.reconcileStreamingRows).toHaveBeenCalledWith(SESSION_ID, THREAD_ID);
+    expect(result).toEqual({ ...accepted, messageId: 'm-assistant' });
   });
 
   it('marks the open row failed with a fixed code when admission fails', async () => {

@@ -23,6 +23,7 @@ import {
 } from '../services/repoCacheLeaseService';
 import {
   cloneTemporaryAtSha,
+  isSourceServedRemotely,
   lockDownClone,
   measureDirectory,
   resolveTemporarySha,
@@ -41,11 +42,10 @@ import { createDrizzleSourceStore } from '../services/brainstorm/sourceWorkspace
 import { createWorkspaceCleanup } from '../services/brainstorm/workspaceCleanupService';
 import { resolveDataRoot } from '../utils/dataDir';
 import {
-  brainstormRepositoryMirrorDir,
+  catalogReadRoot,
   catalogReadiness,
   findBrainstormRepository,
   listBrainstormRepositories,
-  parseCloneUrlGroundingIdentity,
 } from '../services/brainstormRepositoryCatalog';
 
 const attachBody = z.union([
@@ -80,29 +80,16 @@ interface SessionRequest {
 async function resolveProjectSource(project: string, skillSettingsId: string) {
   const catalog = await findBrainstormRepository(project, skillSettingsId).catch(() => null);
   if (catalog) {
-    const readiness = catalogReadiness(catalog.status, catalog.error);
-    if (!readiness.ready || !catalog.commitSha) {
+    const root = catalogReadRoot(catalog, project);
+    if (!root.ok) {
       return {
         ok: false as const,
         status: 409 as const,
         code: 'PROJECT_REPOSITORY_NOT_READY',
-        error: readiness.text,
+        error: root.readinessText,
       };
     }
-    const parsed = parseCloneUrlGroundingIdentity(
-      catalog.cloneUrl,
-      project,
-      catalog.displayName,
-    );
-    return {
-      ok: true as const,
-      displayName: catalog.displayName,
-      sha: catalog.commitSha,
-      cacheDir: brainstormRepositoryMirrorDir(catalog.id),
-      provider: parsed.provider,
-      repository: parsed.repository,
-      groundingProject: parsed.project,
-    };
+    return root;
   }
   const configs = await listSkillConfigs();
   const config = configs.find((item) => item.id === skillSettingsId && item.project === project);
@@ -455,6 +442,7 @@ export function brainstormSourceRuntime(): BrainstormSourceRuntime {
   const manager = createSourceWorkspaceManager({
     store,
     dataRoot,
+    isServedRemotely: isSourceServedRemotely,
     files: {
       measure: (dir) => measureDirectory(dir),
       remove: async (dir) => { await fs.rm(dir, { recursive: true, force: true }); },
@@ -504,6 +492,7 @@ export function brainstormSourceRuntime(): BrainstormSourceRuntime {
     citations: createCitationService({
       store,
       dataRoot,
+      isServedRemotely: isSourceServedRemotely,
       files: {
         async lstat(filePath) {
           try {

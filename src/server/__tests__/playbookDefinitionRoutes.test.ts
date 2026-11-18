@@ -31,6 +31,7 @@ const getDefinitionDetail = jest.fn();
 const updateDraft = jest.fn();
 const publishDraft = jest.fn();
 const deprecateVersion = jest.fn();
+const deleteDefinition = jest.fn();
 jest.mock('../services/playbookDefinitionService', () => ({
   ...jest.requireActual('../services/playbookDefinitionService'),
   listDefinitions: (...args: unknown[]) => listDefinitions(...args),
@@ -39,6 +40,7 @@ jest.mock('../services/playbookDefinitionService', () => ({
   updateDraft: (...args: unknown[]) => updateDraft(...args),
   publishDraft: (...args: unknown[]) => publishDraft(...args),
   deprecateVersion: (...args: unknown[]) => deprecateVersion(...args),
+  deleteDefinition: (...args: unknown[]) => deleteDefinition(...args),
 }));
 
 const dryRunPlaybookDraft = jest.fn();
@@ -56,11 +58,15 @@ import express from 'express';
 import request from 'supertest';
 import playbooksRouter from '../routes/playbooks';
 import {
+  PlaybookDefinitionBusyError,
   PlaybookDefinitionNotFoundError,
   PlaybookDraftConflictError,
   PlaybookVersionNotFoundError,
   PlaybookVersionTransitionError,
 } from '../services/playbookDefinitionService';
+import { PlaybookBranchConditionError } from '../services/playbookSteps/branchConditionEvaluator';
+import { PlaybookExecutionCapabilityError } from '../services/playbookExecutionCapabilityService';
+import { PlaybookMcpCapabilityError } from '../services/playbookMcpCapabilityService';
 import { PlaybookGuardViolationError } from '../services/playbookGuardService';
 import { parseStepInput } from '../services/playbookSteps/descriptorValidation';
 import { UnknownPlaybookStepTypeError } from '../services/playbookSteps/registry';
@@ -107,6 +113,7 @@ beforeEach(() => {
   updateDraft.mockResolvedValue(SERVICE_RESULT);
   publishDraft.mockResolvedValue({ publishedVersion: { id: 'version-1' } });
   deprecateVersion.mockResolvedValue({ version: { id: 'version-1', status: 'deprecated' } });
+  deleteDefinition.mockResolvedValue(undefined);
 });
 
 describe('FEAT-007 S5 happy-path forwarding', () => {
@@ -179,7 +186,17 @@ describe('FEAT-007 S5 happy-path forwarding', () => {
       definitionId: 'def-1',
       publishedByUserId: USER_OID,
       expectedDraftUpdatedAt: '2026-09-22T11:00:00.000Z',
+      authoredInBuilder: true,
     });
+  });
+
+  it('deletes a same-project playbook with playbooks:author', async () => {
+    const res = await request(buildApp())
+      .delete('/api/playbooks/definitions/def-1')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(204);
+    expect(deleteDefinition).toHaveBeenCalledWith(PROJECT, 'def-1');
   });
 
   it('TBI-030 DoD-3 deprecates the named same-definition version', async () => {
@@ -208,6 +225,17 @@ describe('PBI-006 AC-4 / VT-05 and TBI-036 — real permission middleware', () =
     expect(res.status).toBe(403);
     expect(res.body.missing).toEqual(['playbooks:author']);
     expect(publishDraft).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 and does not delete when the caller lacks playbooks:author', async () => {
+    grantIn(PROJECT, 'playbooks:view');
+
+    const res = await request(buildApp())
+      .delete('/api/playbooks/definitions/def-1')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(403);
+    expect(deleteDefinition).not.toHaveBeenCalled();
   });
 
   it('allows author mutations without view but denies definition reads', async () => {
@@ -322,6 +350,17 @@ describe('TBI-031 AC-2 / VT-13 and lifecycle error mapping', () => {
     expect(res.status).toBe(409);
   });
 
+  it('maps a playbook that still has a run in progress to 409', async () => {
+    deleteDefinition.mockRejectedValue(new PlaybookDefinitionBusyError('def-1'));
+
+    const res = await request(buildApp())
+      .delete('/api/playbooks/definitions/def-1')
+      .query({ project: PROJECT });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/run in progress/);
+  });
+
   it('maps a duplicate definition name to 409', async () => {
     createDefinition.mockRejectedValue(Object.assign(new Error('duplicate'), { code: '23505' }));
 
@@ -330,6 +369,69 @@ describe('TBI-031 AC-2 / VT-13 and lifecycle error mapping', () => {
       .send({ project: PROJECT, name: 'Duplicate', graph: GRAPH });
 
     expect(res.status).toBe(409);
+  });
+
+  it('maps a branch condition that names a missing step to 400', async () => {
+    publishDraft.mockRejectedValue(
+      new PlaybookBranchConditionError(
+        'branch-1',
+        'approval-1',
+        'decision',
+        'no step on this Playbook has that id. Use the id shown under the step title',
+      ),
+    );
+
+    const res = await request(buildApp()).post('/api/playbooks/definitions/def-1/publish').send({
+      project: PROJECT,
+      expectedDraftUpdatedAt: 'revision',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error:
+        'Branch step "branch-1" cannot use "approval-1.decision": ' +
+        'no step on this Playbook has that id. Use the id shown under the step title.',
+      nodeId: 'branch-1',
+    });
+  });
+
+  it('maps an agent step without a read-only profile to 400 and names the step', async () => {
+    publishDraft.mockRejectedValue(new PlaybookMcpCapabilityError('cursor-agent-2', undefined, 'unknown'));
+
+    const res = await request(buildApp()).post('/api/playbooks/definitions/def-1/publish').send({
+      project: PROJECT,
+      expectedDraftUpdatedAt: 'revision',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.nodeId).toBe('cursor-agent-2');
+  });
+
+  it('maps a skill that cannot be read to 400', async () => {
+    publishDraft.mockRejectedValue(
+      new PlaybookExecutionCapabilityError('The Playbook Skill "x/SKILL.md" could not be read.'),
+    );
+
+    const res = await request(buildApp()).post('/api/playbooks/definitions/def-1/publish').send({
+      project: PROJECT,
+      expectedDraftUpdatedAt: 'revision',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/could not be read/);
+  });
+
+  it('answers with an error, not a hang, when publish fails in a way no route maps', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    publishDraft.mockRejectedValue(new Error('unexpected'));
+
+    const res = await request(buildApp()).post('/api/playbooks/definitions/def-1/publish').send({
+      project: PROJECT,
+      expectedDraftUpdatedAt: 'revision',
+    });
+
+    expect(res.status).toBe(500);
+    consoleError.mockRestore();
   });
 
   it('PBI-006 AC-2 / VT-03 maps structural guard errors to 400 with violation', async () => {
@@ -385,6 +487,41 @@ describe('TBI-031 AC-2 / VT-13 and lifecycle error mapping', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/notify.*invalid input.*title/i);
     expect(res.body).not.toHaveProperty('violation');
+  });
+});
+
+describe('graph validation endpoint', () => {
+  it('lists every problem in the graph the canvas sends', async () => {
+    const res = await request(buildApp()).post('/api/playbooks/graph/validate').send({
+      project: PROJECT,
+      graph: {
+        nodes: [{ id: 'mystery', stepType: 'not-a-step' }],
+        edges: [{ from: 'mystery', to: 'ghost' }],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.issues).toContainEqual(expect.objectContaining({ nodeId: 'mystery' }));
+    expect(res.body.issues).toContainEqual(
+      expect.objectContaining({ edge: { from: 'mystery', to: 'ghost' } }),
+    );
+  });
+
+  it('refuses a caller who cannot author', async () => {
+    grantIn(PROJECT, 'playbooks:view');
+
+    const res = await request(buildApp()).post('/api/playbooks/graph/validate').send({
+      project: PROJECT,
+      graph: GRAPH,
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses a body with no graph', async () => {
+    const res = await request(buildApp()).post('/api/playbooks/graph/validate').send({ project: PROJECT });
+
+    expect(res.status).toBe(400);
   });
 });
 

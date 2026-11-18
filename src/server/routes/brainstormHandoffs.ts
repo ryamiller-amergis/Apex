@@ -14,7 +14,7 @@ import { isCanonicalUuid } from '../../shared/types/durableInteractiveTurn';
 import { BrainstormHandoffError, type HandoffEngine, type HandoffSession } from '../services/brainstormHandoffEngine';
 
 export interface BrainstormHandoffRouteDeps {
-  engine: () => Pick<HandoffEngine, 'listActions' | 'preview' | 'confirm' | 'keepStandalone' | 'getHandoff'>;
+  engine: () => Pick<HandoffEngine, 'listActions' | 'preview' | 'confirm' | 'keepStandalone' | 'getHandoff' | 'recordInterview'>;
   read: RequestHandler;
   mutate: RequestHandler;
 }
@@ -26,6 +26,7 @@ interface SessionRequest {
 const expectedVersion = z.number().int().min(0);
 const previewBody = z.object({ actionId: z.string(), expectedVersion });
 const keepBody = z.object({ expectedVersion });
+const interviewBody = z.object({ interviewId: z.string().refine(isCanonicalUuid) });
 
 function sessionOf(req: unknown): HandoffSession {
   return (req as SessionRequest).brainstorm!.session;
@@ -77,6 +78,19 @@ export function createBrainstormHandoffsRouter(deps: BrainstormHandoffRouteDeps)
         return;
       }
       res.json(await deps.engine().keepStandalone(sessionOf(req), getUserId(req), body.data));
+    } catch (err) {
+      sendHandoffError(res, err, next);
+    }
+  });
+
+  router.post('/handoffs/interview', create, deps.mutate, async (req, res, next) => {
+    try {
+      const body = interviewBody.safeParse(req.body ?? {});
+      if (!body.success) {
+        invalid(res);
+        return;
+      }
+      res.json(await deps.engine().recordInterview(sessionOf(req), getUserId(req), body.data));
     } catch (err) {
       sendHandoffError(res, err, next);
     }

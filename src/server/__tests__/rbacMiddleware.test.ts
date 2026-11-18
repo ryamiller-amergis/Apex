@@ -60,7 +60,10 @@ function makeRes() {
 // ── requirePermission ──────────────────────────────────────────────────────────
 
 describe('requirePermission', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsSuperAdminRequest.mockReturnValue(false);
+  });
 
   describe.each([
     'playbooks:view',
@@ -99,6 +102,35 @@ describe('requirePermission', () => {
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.json).toHaveBeenCalledWith({ error: 'Forbidden', missing: [permission] });
     });
+
+    it('refuses a platform admin when the module gate did not grant the key', async () => {
+      mockIsSuperAdminRequest.mockReturnValue(true);
+      const req = makeReq(
+        { profile: { oid: 'playbook-user' } },
+        { body: { project: 'Apex' } },
+      );
+      const res = makeRes();
+      const next = jest.fn() as NextFunction;
+      mockGetUserPermissions.mockResolvedValue(new Set());
+
+      await requirePermission(permission)(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Forbidden', missing: [permission] });
+    });
+  });
+
+  it('still lets a platform admin through a non-Playbook permission', async () => {
+    mockIsSuperAdminRequest.mockReturnValue(true);
+    const req = makeReq({ profile: { oid: 'user-1' } });
+    const res = makeRes();
+    const next = jest.fn() as NextFunction;
+
+    await requirePermission('admin:roles')(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(mockGetUserPermissions).not.toHaveBeenCalled();
   });
 
   it('returns 401 when req.user is missing', async () => {
@@ -304,7 +336,10 @@ describe('requirePermission', () => {
 // ── requireAnyPermission ───────────────────────────────────────────────────────
 
 describe('requireAnyPermission', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsSuperAdminRequest.mockReturnValue(false);
+  });
 
   it('returns 401 when req.user is missing', async () => {
     const req = makeReq(undefined);
@@ -368,7 +403,10 @@ describe('requireAnyPermission', () => {
 // ── attachPermissions ──────────────────────────────────────────────────────────
 
 describe('attachPermissions', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsSuperAdminRequest.mockReturnValue(false);
+  });
 
   it('always calls next() on success', async () => {
     const req = makeReq({ profile: { oid: 'user-1' } });
@@ -593,7 +631,10 @@ describe('resolveRequestProject', () => {
 // ── attachPermissions with project ────────────────────────────────────────────
 
 describe('attachPermissions (project-aware)', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsSuperAdminRequest.mockReturnValue(false);
+  });
 
   it('passes resolved project to getUserPermissions', async () => {
     const req = makeReq({ profile: { oid: 'user-1' } }, { query: { project: 'ProjX' } });

@@ -11,8 +11,24 @@ const mockNotifyRunEvent = jest.fn();
 const mockWorkerTerminalReason = jest.fn();
 
 jest.mock('../services/pgNotifyService', () => ({
-  RUN_EVENT_SOURCE_INSTANCE: 'test-instance',
-  nextRunEventSequence: jest.fn().mockReturnValue(7),
+  buildRunDoneEnvelope: (input: {
+    runId: string;
+    threadId: string;
+    status: string;
+    detail?: string;
+  }) => ({
+    eventId: 'done-event',
+    threadId: input.threadId,
+    runId: input.runId,
+    sourceInstance: 'test-instance',
+    sequence: 7,
+    timestamp: new Date().toISOString(),
+    type: 'done',
+    phase: 'completion',
+    status: input.status,
+    detail: input.detail,
+    event: { type: 'done', runId: input.runId },
+  }),
   notifyRunEvent: (...args: unknown[]) => mockNotifyRunEvent(...args),
 }));
 

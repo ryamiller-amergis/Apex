@@ -5,6 +5,13 @@ import {
 import type { BackgroundWorkflowClass } from './backgroundWorkflow';
 import type { SkillProvider } from './projectSettings';
 import {
+  isJudgeOutputSchema,
+  isWorkflowEvaluationRunIdentity,
+  JUDGE_RESULT_FILE,
+  WORKFLOW_EVALUATION_SCRATCH_PATHS,
+  type WorkflowEvaluationRunIdentity,
+} from './aiRunV2EvaluationSpec';
+import {
   isPlaybookAgentRunPolicy,
   type PlaybookAgentRunPolicy,
 } from './playbookExecutionCapability';
@@ -17,7 +24,56 @@ export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'test-cases',
   'walkthrough-smart-tagging',
   'playbook-step',
+  'evaluation-judge',
+  'evaluation-promptfoo',
+  'skill-learning',
+  'observability-po-digest',
 ] as const satisfies readonly BackgroundWorkflowClass[];
+
+const JUDGE_SCRATCH_PATHS: readonly string[] = Object.values(WORKFLOW_EVALUATION_SCRATCH_PATHS);
+
+/** Inputs and the one result file of a `skill-learning` run (candidate drafts, sampled judging, check mining). */
+export const SKILL_LEARNING_SCRATCH_PATHS = {
+  input: '.ai-pilot/skill-learning/input.json',
+  outputSchema: '.ai-pilot/skill-learning/output-schema.json',
+} as const;
+export const SKILL_LEARNING_RESULT_FILE = 'skill-learning-result.json';
+const SKILL_LEARNING_SCRATCH_PATH_LIST: readonly string[] = Object.values(SKILL_LEARNING_SCRATCH_PATHS);
+
+/** Inputs and the one result file of an `observability-po-digest` run. */
+export const OBSERVABILITY_PO_DIGEST_SCRATCH_PATHS = {
+  input: '.ai-pilot/observability-po-digest/telemetry-rollup.md',
+  outputSchema: '.ai-pilot/observability-po-digest/output-schema.json',
+} as const;
+export const OBSERVABILITY_PO_DIGEST_RESULT_FILE = 'observability-po-digest.json';
+const OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST: readonly string[] = Object.values(
+  OBSERVABILITY_PO_DIGEST_SCRATCH_PATHS,
+);
+
+/** Workflows whose single JSON result the worker checks against `outputSchema` before upload. */
+export function documentWorkflowResultFile(workflowClass: BackgroundWorkflowClass): string | null {
+  switch (workflowClass) {
+    case 'evaluation-judge':
+      return JUDGE_RESULT_FILE;
+    case 'skill-learning':
+      return SKILL_LEARNING_RESULT_FILE;
+    case 'observability-po-digest':
+      return OBSERVABILITY_PO_DIGEST_RESULT_FILE;
+    case 'prd':
+    case 'adr':
+    case 'design-doc':
+    case 'validation':
+    case 'test-cases':
+    case 'walkthrough-smart-tagging':
+    case 'playbook-step':
+    case 'evaluation-promptfoo':
+      return null;
+    default: {
+      const unhandled: never = workflowClass;
+      throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
+    }
+  }
+}
 
 export type AiRunV2DocumentScratchInput = Readonly<{
   path: string;
@@ -38,6 +94,8 @@ export type AiRunV2DocumentSpecification = Readonly<{
   skillPath: string;
   skillContent: string;
   skillSha256: string;
+  /** Markdown files that sit next to SKILL.md. The worker writes them beside the frozen skill. */
+  skillCompanions?: ReadonlyArray<AiRunV2DocumentScratchInput>;
   workflowClass: BackgroundWorkflowClass;
   projectId: string;
   threadId: string;
@@ -46,6 +104,10 @@ export type AiRunV2DocumentSpecification = Readonly<{
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
+  /** Required for `evaluation-judge`, `skill-learning` and `observability-po-digest`; refused for every other workflow. */
+  outputSchema?: Record<string, unknown>;
+  /** Required for `evaluation-judge` and refused for every other workflow. */
+  evaluation?: WorkflowEvaluationRunIdentity;
   /** Required for Playbook steps; resolved on App Service and applied without worker defaults. */
   playbookAgentPolicy?: PlaybookAgentRunPolicy;
 }>;
@@ -75,6 +137,10 @@ export function documentWorkflowRequiresRepository(
     case 'validation':
     case 'walkthrough-smart-tagging':
     case 'playbook-step':
+    case 'evaluation-judge':
+    case 'evaluation-promptfoo':
+    case 'skill-learning':
+    case 'observability-po-digest':
       return false;
     default: {
       const unhandled: never = workflowClass;
@@ -109,13 +175,23 @@ export function isAllowedDocumentScratchInputPath(
       return value === '.ai-pilot/kickoff-transcript.md';
     case 'test-cases':
       return (
-        /^\.ai-pilot\/output\/[^/]+\.prd\.md$/i.test(value)
+        value === '.ai-pilot/test-plans.md'
+        || value === '.ai-pilot/existing-test-cases.json'
+        || value === '.ai-pilot/test-case-index.md'
+        || /^\.ai-pilot\/output\/[^/]+\.prd\.md$/i.test(value)
         || /^\.ai-pilot\/output\/[^/]+\.backlog\.json$/i.test(value)
       );
+    case 'evaluation-judge':
+      return JUDGE_SCRATCH_PATHS.includes(value);
+    case 'skill-learning':
+      return SKILL_LEARNING_SCRATCH_PATH_LIST.includes(value);
+    case 'observability-po-digest':
+      return OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST.includes(value);
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
     case 'playbook-step':
+    case 'evaluation-promptfoo':
       return false;
     default: {
       const unhandled: never = workflowClass;
@@ -124,7 +200,7 @@ export function isAllowedDocumentScratchInputPath(
   }
 }
 
-function hasRequiredScratchInputs(
+export function hasRequiredScratchInputs(
   workflowClass: BackgroundWorkflowClass,
   inputs: ReadonlyArray<AiRunV2DocumentScratchInput>,
 ): boolean {
@@ -144,6 +220,15 @@ function hasRequiredScratchInputs(
         && paths.some((value) => /\.prd\.md$/i.test(value))
         && paths.some((value) => /\.backlog\.json$/i.test(value))
       );
+    case 'evaluation-judge':
+      return JUDGE_SCRATCH_PATHS.every((value) => paths.includes(value));
+    case 'skill-learning':
+      return SKILL_LEARNING_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
+    case 'observability-po-digest':
+      return OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
+    case 'evaluation-promptfoo':
+      // Promptfoo has its own specification; the document guard never accepts it.
+      return false;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -153,6 +238,28 @@ function hasRequiredScratchInputs(
 
 function isSkillProvider(value: unknown): value is SkillProvider {
   return value === 'ado' || value === 'github';
+}
+
+const SKILL_COMPANION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/;
+
+function isSkillCompanionList(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') return false;
+    const companion = raw as Record<string, unknown>;
+    if (
+      typeof companion.path !== 'string'
+      || companion.path === 'SKILL.md'
+      || !SKILL_COMPANION_NAME.test(companion.path)
+      || seen.has(companion.path)
+    ) {
+      return false;
+    }
+    if (typeof companion.content !== 'string') return false;
+    seen.add(companion.path);
+  }
+  return true;
 }
 
 export function isAiRunV2DocumentSpecification(
@@ -170,6 +277,12 @@ export function isAiRunV2DocumentSpecification(
   if (
     typeof candidate.skillSha256 !== 'string'
     || !/^[a-f0-9]{64}$/i.test(candidate.skillSha256)
+  ) {
+    return false;
+  }
+  if (
+    candidate.skillCompanions !== undefined
+    && !isSkillCompanionList(candidate.skillCompanions)
   ) {
     return false;
   }
@@ -235,6 +348,25 @@ export function isAiRunV2DocumentSpecification(
       || !isSkillProvider(candidate.provider)
     )
   ) {
+    return false;
+  }
+  if (candidate.workflowClass === 'evaluation-judge') {
+    if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
+    if (!isWorkflowEvaluationRunIdentity(candidate.evaluation)) return false;
+    // The judge reads only its package, so it never opens a repository.
+    for (const field of ['groundedSha', 'repository', 'provider'] as const) {
+      if (candidate[field] !== undefined) return false;
+    }
+  } else if (
+    candidate.workflowClass === 'skill-learning'
+    || candidate.workflowClass === 'observability-po-digest'
+  ) {
+    if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
+    if (candidate.evaluation !== undefined) return false;
+    for (const field of ['groundedSha', 'repository', 'provider'] as const) {
+      if (candidate[field] !== undefined) return false;
+    }
+  } else if (candidate.outputSchema !== undefined || candidate.evaluation !== undefined) {
     return false;
   }
   return true;

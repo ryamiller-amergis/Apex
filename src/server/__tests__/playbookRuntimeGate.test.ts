@@ -42,6 +42,7 @@ import {
   retryStepRunOnEngine,
   translate,
 } from '../services/playbookEngine/runtime';
+import { owningLoop, preferredStepOutputs } from '../services/playbookLoopCursor';
 
 const context = {
   runId: 'run-1',
@@ -84,10 +85,17 @@ function translatedSteps(graph: PlaybookGraph): GeneratedStep[] {
     const workflow: {
       then: jest.Mock;
       branch: jest.Mock;
+      parallel: jest.Mock;
       commit: jest.Mock;
     } = {
       then: jest.fn((step: GeneratedStep) => {
         steps.push(step);
+        return workflow;
+      }),
+      parallel: jest.fn((arms: unknown[]) => {
+        for (const arm of arms) {
+          if (arm && typeof arm === 'object' && 'id' in arm) steps.push(arm as GeneratedStep);
+        }
         return workflow;
       }),
       branch: jest.fn((pairs: Array<[unknown, GeneratedStep | { committed: boolean }]>) => {
@@ -297,5 +305,129 @@ describe('branch translation keeps arm successors', () => {
       'after-ready',
     ]);
     expect(engineResumeStep(branched, 'run-1', 'revise')).toBe('revise');
+  });
+});
+
+describe('parallel translation keeps every arm step and the join', () => {
+  const parallel: PlaybookGraph = {
+    nodes: [
+      { id: 'split', stepType: 'notify', config: { title: 'Split' }, parallel: true },
+      { id: 'left', stepType: 'notify', config: { title: 'Left' } },
+      { id: 'left-2', stepType: 'notify', config: { title: 'Left 2' } },
+      { id: 'right', stepType: 'notify', config: { title: 'Right' } },
+      { id: 'join-1', stepType: 'join', config: { predecessors: ['left-2', 'right'], policy: 'all' } },
+      { id: 'after', stepType: 'notify', config: { title: 'After' } },
+    ],
+    edges: [
+      { from: 'split', to: 'left' },
+      { from: 'split', to: 'right' },
+      { from: 'left', to: 'left-2' },
+      { from: 'left-2', to: 'join-1' },
+      { from: 'right', to: 'join-1' },
+      { from: 'join-1', to: 'after' },
+    ],
+  };
+
+  it('registers the second step of an arm and the steps after the join', () => {
+    const ids = translatedSteps(parallel).map((step) => step.id);
+    expect(ids).toEqual(expect.arrayContaining(['split', 'left', 'left-2', 'right', 'join-1', 'after']));
+  });
+
+  it('resumes a nested arm step by its workflow path and the join by its node id', () => {
+    expect(engineResumeStep(parallel, 'run-1', 'left-2')).toEqual([
+      armWorkflowId('run-1', 'left'),
+      'left-2',
+    ]);
+    expect(engineResumeStep(parallel, 'run-1', 'right')).toEqual([
+      armWorkflowId('run-1', 'right'),
+      'right',
+    ]);
+    expect(engineResumeStep(parallel, 'run-1', 'join-1')).toBe('join-1');
+    expect(engineResumeStep(parallel, 'run-1', 'after')).toBe('after');
+  });
+});
+
+describe('loop translation repeats the body', () => {
+  const looped: PlaybookGraph = {
+    nodes: [
+      { id: 'loop', stepType: 'foreach', config: { items: ['a', 'b'], maxIterations: 2 } },
+      { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+      { id: 'join-1', stepType: 'join', config: { predecessors: ['work'], policy: 'all' } },
+      { id: 'after', stepType: 'notify', config: { title: 'After' } },
+    ],
+    edges: [
+      { from: 'loop', to: 'work' },
+      { from: 'work', to: 'join-1' },
+      { from: 'join-1', to: 'after' },
+    ],
+  };
+
+  it('registers one body step per allowed iteration and leaves the join outside', () => {
+    const ids = translatedSteps(looped).map((step) => step.id);
+    expect(ids).toEqual(['loop', 'work', 'work#1', 'join-1', 'after']);
+  });
+
+  it('resumes a later iteration by that iteration id', () => {
+    expect(engineResumeStep(looped, 'run-1', 'work#1')).toBe('work#1');
+  });
+
+  it('finds the foreach that owns a body step', () => {
+    expect(owningLoop(looped, 'work#1')).toEqual({ loopId: 'loop', kind: 'foreach', index: 1 });
+    expect(owningLoop(looped, 'after')).toBeNull();
+  });
+
+  it('repeats only the next step and runs the step after it once', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'loop', stepType: 'foreach', config: { items: ['a', 'b'], maxIterations: 2 } },
+        { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+        { id: 'after', stepType: 'notify', config: { title: 'After' } },
+      ],
+      edges: [
+        { from: 'loop', to: 'work' },
+        { from: 'work', to: 'after' },
+      ],
+    };
+    expect(translatedSteps(graph).map((step) => step.id)).toEqual(['loop', 'work', 'work#1', 'after']);
+    expect(owningLoop(graph, 'after')).toBeNull();
+  });
+
+  it('checks a one-pass until after its body', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'again', stepType: 'until', config: { done: false, iteration: 0, maxIterations: 1 } },
+        { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+      ],
+      edges: [{ from: 'again', to: 'work' }],
+    };
+    expect(translatedSteps(graph).map((step) => step.id)).toEqual(['work', 'again#1']);
+  });
+
+  it('runs an until check after each body pass and stops at the cap', () => {
+    const graph: PlaybookGraph = {
+      nodes: [
+        { id: 'again', stepType: 'until', config: { done: false, iteration: 0, maxIterations: 2 } },
+        { id: 'work', stepType: 'notify', config: { title: 'Work' } },
+        { id: 'after', stepType: 'notify', config: { title: 'After' } },
+      ],
+      edges: [
+        { from: 'again', to: 'work' },
+        { from: 'work', to: 'after' },
+      ],
+    };
+    expect(translatedSteps(graph).map((step) => step.id)).toEqual([
+      'work',
+      'again#1',
+      'work#1',
+      'again#2',
+      'after',
+    ]);
+  });
+
+  it('lets a later iteration output stand in for the base step id', () => {
+    expect(preferredStepOutputs([
+      { stepId: 'work', output: { reportMd: 'first' } },
+      { stepId: 'work#1', output: { reportMd: 'second' } },
+    ]).work).toEqual({ reportMd: 'second' });
   });
 });

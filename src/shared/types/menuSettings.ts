@@ -7,6 +7,7 @@ export type MenuItemKey =
   | 'my-work'
   | 'standup'
   | 'ui-lab'
+  | 'qa-lab'
   | 'feature-requests'
   | 'ai-cost'
   | 'design-module'
@@ -16,7 +17,8 @@ export type MenuItemKey =
   | 'playbooks'
   | 'builds'
   | 'mcp-servers'
-  | 'brainstorm';
+  | 'brainstorm'
+  | 'prod-support';
 
 export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'calendar', label: 'Calendar' },
@@ -27,6 +29,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'my-work', label: 'My Work' },
   { key: 'standup', label: 'Standup' },
   { key: 'ui-lab', label: 'UI Lab' },
+  { key: 'qa-lab', label: 'QA Lab' },
   { key: 'feature-requests', label: 'Apex Backlog' },
   { key: 'ai-cost', label: 'AI Cost Analytics' },
   { key: 'design-module', label: 'Design Module' },
@@ -37,6 +40,7 @@ export const CONFIGURABLE_MENU_ITEMS: { key: MenuItemKey; label: string }[] = [
   { key: 'builds', label: 'Builds' },
   { key: 'mcp-servers', label: 'MCP Servers' },
   { key: 'brainstorm', label: 'Brainstorm' },
+  { key: 'prod-support', label: 'Prod Support' },
 ];
 
 /** All configurable menu keys (includes opt-in-only keys such as Diagrams). */

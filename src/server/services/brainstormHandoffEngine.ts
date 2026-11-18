@@ -33,6 +33,7 @@ import {
 import type { BrainstormCitationDto } from '../../shared/types/brainstormSources';
 import {
   HANDOFF_TARGETS,
+  INTERVIEW_TARGET,
   buildHandoffContext,
   executeTarget,
   outlineArtifact,
@@ -43,6 +44,7 @@ import {
   type TargetServices,
 } from './brainstormHandoffTargets';
 import { trackEvent } from './telemetry';
+import { emitSkillSignal } from './skillSignalService';
 
 export class BrainstormHandoffError extends Error {
   constructor(
@@ -547,6 +549,55 @@ export function createHandoffEngine(deps: HandoffEngineDeps) {
       throw unavailable(action);
     },
 
+    /**
+     * Start Interview runs on the new interview page. Once that page creates the
+     * Interview, this records it as the completed start-interview handoff for the
+     * current artifact version, so the panel shows "Open" for it.
+     */
+    async recordInterview(session: HandoffSession, userId: string, input: { interviewId: string }): Promise<BrainstormHandoffResultDto> {
+      requireCreator(session, userId);
+      const artifact = await deps.artifacts.getArtifact(session.id, session.project);
+      if (!artifact.type || !INTERVIEW_TARGET.appliesTo(artifact.type) || !artifact.markdown.trim()) {
+        throw new BrainstormHandoffError('ACTION_UNAVAILABLE', 409);
+      }
+      const interview = await deps.services.findInterview?.(input.interviewId);
+      if (!interview || interview.project !== session.project || interview.authorId !== userId) {
+        throw new BrainstormHandoffError('INTERVIEW_NOT_FOUND', 404);
+      }
+
+      const existing = await persistence.findLive(session.id, INTERVIEW_TARGET.kind, artifact.version);
+      if (existing?.state === 'completed' && existing.resultRef) return result(existing, true);
+      if (existing?.state === 'executing') throw new BrainstormHandoffError('ACTION_UNAVAILABLE', 409, { state: 'in_progress' });
+      if (existing?.state === 'previewed') {
+        await persistence.fail(existing.id, null, 'SUPERSEDED', now().toISOString());
+      }
+
+      const resultRef: BrainstormResultRef = {
+        module: 'interview',
+        id: input.interviewId,
+        link: `/backlog/interview/${input.interviewId}`,
+      };
+      const inserted = await persistence.insert({
+        sessionId: session.id,
+        project: session.project,
+        actionKind: INTERVIEW_TARGET.kind,
+        targetModule: INTERVIEW_TARGET.module,
+        state: 'completed',
+        previewSnapshot: { actionId: INTERVIEW_TARGET.id, contentSha256: sha256(artifact.markdown), plan: null, preview: null },
+        idempotencyKey: newId(),
+        artifactVersion: artifact.version,
+        resultRef,
+        confirmedAt: now().toISOString(),
+      });
+      if (inserted) {
+        track('brainstorm.handoff.completed', { project: session.project, sessionId: session.id, targetModule: 'interview' });
+        return result(inserted, false);
+      }
+      const raced = await persistence.findLive(session.id, INTERVIEW_TARGET.kind, artifact.version);
+      if (raced?.state === 'completed' && raced.resultRef) return result(raced, true);
+      throw new BrainstormHandoffError('ACTION_UNAVAILABLE', 409);
+    },
+
     async getHandoff(session: HandoffSession, viewerId: string, handoffId: string): Promise<BrainstormHandoffSummaryDto> {
       const row = await persistence.findById(session.id, handoffId);
       if (!row || (session.creatorId !== viewerId && row.state !== 'completed')) {
@@ -678,7 +729,8 @@ export const drizzleHandoffPersistence: HandoffPersistence = {
       .update(brainstormActions)
       .set({ state: 'completed', resultRef: JSON.stringify(resultRef), confirmedAt: at, updatedAt: at })
       .where(and(eq(brainstormActions.id, id), eq(brainstormActions.claimToken, token), eq(brainstormActions.state, 'executing')))
-      .returning({ id: brainstormActions.id });
+      .returning(handoffSignalColumns);
+    if (rows[0]) emitHandoffSignal(rows[0], 'handoff_completed', {});
     return rows.length === 1;
   },
   async fail(id, token, code, at) {
@@ -689,7 +741,8 @@ export const drizzleHandoffPersistence: HandoffPersistence = {
       .update(brainstormActions)
       .set({ state: 'failed', failureCode: code, updatedAt: at })
       .where(guard)
-      .returning({ id: brainstormActions.id });
+      .returning(handoffSignalColumns);
+    if (rows[0]) emitHandoffSignal(rows[0], 'handoff_failed', { failureCode: code });
     return rows.length === 1;
   },
   async release(id, token) {
@@ -699,6 +752,36 @@ export const drizzleHandoffPersistence: HandoffPersistence = {
       .where(and(eq(brainstormActions.id, id), eq(brainstormActions.claimToken, token)));
   },
 };
+
+const handoffSignalColumns = {
+  id: brainstormActions.id,
+  project: brainstormActions.project,
+  sessionId: brainstormActions.sessionId,
+  actionKind: brainstormActions.actionKind,
+  targetModule: brainstormActions.targetModule,
+  artifactVersion: brainstormActions.artifactVersion,
+};
+
+function emitHandoffSignal(
+  row: { id: string; project: string; sessionId: string; actionKind: string; targetModule: string; artifactVersion: number | null },
+  kind: 'handoff_completed' | 'handoff_failed',
+  metadata: Record<string, unknown>,
+): void {
+  emitSkillSignal({
+    project: row.project,
+    surface: 'brainstorm',
+    subjectType: 'brainstorm_handoff',
+    subjectId: row.id,
+    kind,
+    metadata: {
+      ...metadata,
+      sessionId: row.sessionId,
+      actionKind: row.actionKind,
+      targetModule: row.targetModule,
+      artifactVersion: row.artifactVersion,
+    },
+  });
+}
 
 // ── Production wiring ─────────────────────────────────────────────────────────
 
@@ -750,6 +833,10 @@ export const defaultTargetServices: TargetServices = {
       skillSettingsId: input.repository.settingsId ?? undefined,
     }, { skipAutoKickoff: true });
     return thread.id;
+  },
+  async findInterview(interviewId) {
+    const interview = await (await import('./interviewService')).getInterview(interviewId);
+    return interview ? { project: interview.project, authorId: interview.authorId } : null;
   },
   async findRecordByThread(module, threadId) {
     if (module === 'feature-request') {

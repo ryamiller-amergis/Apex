@@ -304,6 +304,16 @@ output "ai_runs_runner_identity_id" {
   value       = azurerm_user_assigned_identity.ai_runs_runner.id
 }
 
+output "ai_runs_insights_reader_identity_client_id" {
+  description = "Shared insights-reader client id. Workers set this as AZURE_INSIGHTS_CLIENT_ID. AZURE_CLIENT_ID stays the worker identity."
+  value       = local.ai_runs_insights_reader_client_id
+}
+
+output "ai_runs_insights_reader_identity_id" {
+  description = "Resource id of mi-apex-insights-reader-dev. Prod attaches this identity; it does not create another."
+  value       = local.ai_runs_insights_reader_id
+}
+
 output "ai_runs_api_app_setting_names" {
   description = "App setting key contract for Apex API AI-runs dispatch (FEAT-002 publisher + governor)"
   value = {

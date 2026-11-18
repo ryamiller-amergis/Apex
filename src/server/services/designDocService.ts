@@ -9,18 +9,20 @@ const authorUser = alias(appUsers, 'author_user');
 const designDocOwnerUser = alias(appUsers, 'design_doc_owner_user');
 import type { ContentSnapshot, DesignDoc, DesignDocStatus, DesignDocSummary, DesignDocValidationOverride, ReviewDesignDocRequest, ValidationScorecard, ValidationScorecardGap } from '../../shared/types/interview';
 import type { EffortLevel } from '../../shared/types/effort';
-import type { PipelinePinPolicy, RunRef } from '../../shared/types/runGrounding';
+import type { PipelinePinPolicy, RunGrounding, RunRef } from '../../shared/types/runGrounding';
 import { stampGroundingProvenance } from '../../shared/utils/groundingProvenance';
 import { buildOverrideHistory } from '../../shared/utils/validationOverride';
-import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread } from './chatAgentService';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputValidationScorecard, readOutputValidationScorecardMd, readAllOutputDesignDocFeatures, isThreadIdle, isOutputWorkspaceReadable, createThread as createChatThread, sendMessage, cancelRun, prepareBackgroundWorkflowTurn, hydrateThread, updateThreadKickoffContext } from './chatAgentService';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import { isThreadRunAlive, canThisInstanceFailGeneration, getThreadRunStateSnapshot } from './agentRunReaperService';
 import { isAdminUser } from '../utils/rbacHelpers';
 import { assignApprovers, recordApproverResponse, isAssignedApprover, isApprovalComplete, propagateDesignDocApprovers, notifyApproversDocumentReady } from './documentApprovalService';
 import { getUnresolvedCount } from './reviewCommentService';
 import { notifyAiCompletion } from './aiCompletionNotifier';
 import { resolveSkillConfig, getSkillSettingsName } from './projectSettingsService';
+import { writeThreadFolderFile } from './threadFolder';
 import { getDefaultModel } from './appSettingsService';
+import { getThreadSkillSha256 } from './chatThreadRepository';
 import { getPrd } from './prdService';
 import { stampFeatureLinkId } from '../../shared/utils/backlogTransform';
 import { collectValidationGaps } from '../../shared/utils/validationReport';
@@ -253,6 +255,41 @@ export async function routeDesignDocGenerationKickoff(opts: {
       },
     );
   };
+  const findTargetGrounding = async (): Promise<RunGrounding | undefined> => {
+    const findActive = async () => (
+      await runGroundingService.getGroundings(destinationRun)
+    ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
+    const existing = await findActive();
+    if (existing) return existing;
+
+    let sourceRun: RunRef | null = opts.sourceThreadId
+      ? {
+          runType: 'chat',
+          runId: opts.sourceThreadId,
+          project: opts.project,
+        }
+      : null;
+    if (!sourceRun && opts.prdId) {
+      sourceRun = (await resolveRunGroundingSurface('prd', opts.prdId))?.run ?? null;
+    }
+    if (!sourceRun) return undefined;
+    try {
+      await propagatePipelineGrounding(
+        sourceRun,
+        destinationRun,
+        opts.userId,
+        {
+          deferMaterialization: true,
+          pinPolicy: opts.pinPolicy ?? 'inherit',
+        },
+      );
+    } catch {
+      console.warn(
+        `[run-grounding] Design Doc retry propagation unavailable (designDocId=${opts.designDocId})`,
+      );
+    }
+    return findActive();
+  };
 
   try {
     await routeBackgroundWorkflow({
@@ -260,50 +297,11 @@ export async function routeDesignDocGenerationKickoff(opts: {
       workflowClass: 'design-doc',
       destinationRun,
       threadId: opts.threadId,
-      prepareWorker: async () => {
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          opts.kickoffMessage,
-        );
-        let targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-
-        if (!targetGrounding) {
-          let sourceRun: RunRef | null = opts.sourceThreadId
-            ? {
-                runType: 'chat',
-                runId: opts.sourceThreadId,
-                project: opts.project,
-              }
-            : null;
-          if (!sourceRun && opts.prdId) {
-            sourceRun = (await resolveRunGroundingSurface('prd', opts.prdId))?.run ?? null;
-          }
-          if (sourceRun) {
-            try {
-              await propagatePipelineGrounding(
-                sourceRun,
-                destinationRun,
-                opts.userId,
-                {
-                  deferMaterialization: true,
-                  pinPolicy: opts.pinPolicy ?? 'inherit',
-                },
-              );
-            } catch {
-              console.warn(
-                `[run-grounding] Design Doc retry propagation unavailable (designDocId=${opts.designDocId})`,
-              );
-            }
-            targetGrounding = (
-              await runGroundingService.getGroundings(destinationRun)
-            ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-          }
-        }
-
-        return { ...prepared, targetGrounding };
-      },
+      prepareWorker: () => prepareBackgroundWorkflowTurn(
+        opts.threadId,
+        opts.kickoffMessage,
+        { findTargetGrounding },
+      ),
       runInProcess: () =>
         sendMessage(
           opts.threadId,
@@ -358,6 +356,71 @@ export async function listDesignDocs(
     rowToSummary(designDoc, reviewerDisplayName, prdTitle, authorDisplayName, designDocOwnerId, designDocOwnerDisplayName,
       designDoc.skillSettingsId ? settingsNameMap.get(designDoc.skillSettingsId) ?? null : null),
   );
+}
+
+export type DesignDocEvaluationInputs = {
+  id: string;
+  project: string;
+  status: string;
+  prdId: string;
+  interviewId: string | null;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  designContent: string;
+  techSpecContent: string;
+  assumptionsContent: string;
+};
+
+/** Read-only lineage and live content for an evaluation. Does not call getDesignDoc. */
+export async function getDesignDocEvaluationInputs(designDocId: string): Promise<DesignDocEvaluationInputs | null> {
+  const rows = await db
+    .select({
+      id: designDocs.id,
+      project: designDocs.project,
+      status: designDocs.status,
+      prdId: designDocs.prdId,
+      interviewId: prds.interviewId,
+      model: designDocs.model,
+      skillSha256: designDocs.skillSha256,
+      chatThreadId: designDocs.chatThreadId,
+      designContent: designDocs.designContent,
+      techSpecContent: designDocs.techSpecContent,
+      assumptionsContent: designDocs.assumptionsContent,
+    })
+    .from(designDocs)
+    .leftJoin(prds, eq(designDocs.prdId, prds.id))
+    .where(eq(designDocs.id, designDocId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+
+  let skillPath: string | null = null;
+  let model = row.model ?? null;
+  if (row.chatThreadId) {
+    const thread = await db.query.chatThreads.findFirst({
+      where: eq(chatThreads.id, row.chatThreadId),
+      columns: { kickoff: true },
+    });
+    if (thread) {
+      skillPath = thread.kickoff?.skillPath ?? null;
+      model = row.model ?? thread.kickoff?.model ?? null;
+    }
+  }
+
+  return {
+    id: row.id,
+    project: row.project,
+    status: row.status,
+    prdId: row.prdId,
+    interviewId: row.interviewId ?? null,
+    model,
+    skillPath,
+    skillVersion: row.skillSha256 ?? null,
+    designContent: row.designContent,
+    techSpecContent: row.techSpecContent,
+    assumptionsContent: row.assumptionsContent,
+  };
 }
 
 export async function getDesignDoc(id: string): Promise<DesignDoc | null> {
@@ -768,6 +831,15 @@ export function isDocWatcherActive(designDocId: string): boolean {
   return activeDocWatchers.has(designDocId);
 }
 
+async function generationSkillSha256(threadId: string): Promise<string | null> {
+  try {
+    return await getThreadSkillSha256(threadId);
+  } catch (err) {
+    console.warn(`[designDoc] Skill version lookup skipped (threadId=${threadId}):`, err);
+    return null;
+  }
+}
+
 function humanizeSlug(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -805,6 +877,7 @@ export async function syncPerFeatureDesignDocs(
     .where(and(eq(designDocs.prdId, prdId), eq(designDocs.project, project)));
   const existingTitles = new Set(existingRows.map((r) => r.title));
 
+  const skillSha256 = await generationSkillSha256(threadId);
   const createdIds: string[] = [];
   for (const feat of features) {
     const title = humanizeSlug(feat.slug);
@@ -823,6 +896,7 @@ export async function syncPerFeatureDesignDocs(
         model: seedModel,
         effort: seedModelRow?.effort ?? null,
         skillSettingsId: seedModelRow?.skillSettingsId ?? null,
+        skillSha256,
         designContent: feat.design,
         techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
         assumptionsContent: feat.assumptions,
@@ -937,6 +1011,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
       try {
         const skillConfig = await resolveSkillConfig({ project: seedDoc.project, settingsId: seedDoc.skillSettingsId ?? undefined });
         const finalStatus: DesignDocStatus = skillConfig?.designDocValidationSkillPath ? 'validating' : 'pending_review';
+        const skillSha256 = await generationSkillSha256(chatThreadId);
 
         for (const feat of newFeatures) {
           const stillActive = await db.query.designDocs.findFirst({
@@ -964,6 +1039,7 @@ export function startDesignDocWatcher(seedDocId: string, chatThreadId: string): 
               model: seedDoc.model ?? null,
               effort: seedDoc.effort ?? null,
               skillSettingsId: seedDoc.skillSettingsId ?? null,
+              skillSha256,
               designContent: feat.design,
               techSpecContent: stripPrototypeArtifactsFromTechSpec(feat.techSpec),
               assumptionsContent: feat.assumptions,
@@ -1212,12 +1288,14 @@ export async function finalizeSingleFeatureDoc(
     eq(designDocs.status, 'generating'),
     ...(leaseFenceCondition ? [leaseFenceCondition] : []),
   ];
+  const skillSha256 = await generationSkillSha256(chatThreadId);
   const query = db.update(designDocs)
     .set({
       designContent: design,
       techSpecContent: techSpec,
       assumptionsContent: assumptions,
       status: finalStatus,
+      skillSha256,
       generationError: null,
       updatedAt: new Date().toISOString(),
     })
@@ -1551,6 +1629,32 @@ export function startSingleFeatureDocWatcher(
   });
 }
 
+/** Starts the output watcher unless the run goes to the V2 worker, whose harvest applies the result. */
+export async function startDesignDocGenerationWatcher(input: {
+  designDocId: string;
+  chatThreadId: string;
+  prdId: string;
+  project: string;
+  userId: string;
+}): Promise<void> {
+  const v2Transport = await usesV2DocumentTransport({
+    userId: input.userId,
+    project: input.project,
+    workflowClass: 'design-doc',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing output.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startSingleFeatureDocWatcher(input.designDocId, input.chatThreadId, input.prdId, input.project);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
+}
+
 /**
  * Idempotently creates one design_docs row for a specific prototype+feature pair and
  * starts the generation watcher. The doc is grounded in interview transcript + PRD
@@ -1722,7 +1826,13 @@ export async function startSingleFeatureDesignDocWatcher(
   await db.update(prds).set({ backlogJson: updatedBacklog as any, updatedAt: new Date().toISOString() }).where(eq(prds.id, prdId));
 
   // Watcher must be started before the kickoff message fires.
-  startSingleFeatureDocWatcher(designDocId, thread.id, prdId, prd.project);
+  await startDesignDocGenerationWatcher({
+    designDocId,
+    chatThreadId: thread.id,
+    prdId,
+    project: prd.project,
+    userId: prd.authorId,
+  });
 
   // Now safe to start the agent — the row and watcher are in place.
   // Fire-and-forget kickoff so prototype approval / auto-start isn't blocked on
@@ -1937,8 +2047,22 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
     })
     .where(eq(designDocs.id, designDocId));
 
-
-  startValidationWatcher(designDocId, thread.id);
+  const v2Transport = await usesV2DocumentTransport({
+    userId: doc.authorId,
+    project: doc.project,
+    workflowClass: 'validation',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing scorecards.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startValidationWatcher(designDocId, thread.id);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 
   const kickoffMessage =
     'Score the design doc in `.ai-pilot/kickoff-context.md` using the validation skill. ' +
@@ -1988,14 +2112,11 @@ export async function autoStartValidation(designDocId: string): Promise<void> {
             );
           }
         }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          thread.id,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(thread.id, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () => {
         void sendMessage(
@@ -2355,8 +2476,14 @@ export async function triggerFixValidation(
       assistantType: 'design-doc',
     }, { skipAutoKickoff: true });
 
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, buildDocContext(thread.id), 'utf-8');
+    const realContext = buildDocContext(thread.id);
+    await writeThreadFolderFile({
+      project: doc.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realContext,
+    });
+    await updateThreadKickoffContext(thread.id, realContext);
 
     threadId = thread.id;
 
@@ -2370,31 +2497,32 @@ export async function triggerFixValidation(
       .from(chatThreads)
       .where(eq(chatThreads.id, threadId))
       .limit(1);
+    const context = [
+      '# Design Doc Assistant Context',
+      `doc_id: ${designDocId}`,
+      `thread_id: ${threadId}`,
+      `status: ${doc.status}`,
+      '',
+      '> Use the `update_design_doc` MCP tool to apply edits back to the database.',
+      '> Pass the doc_id and thread_id values above when calling the tool.',
+      '',
+      ...(prd ? ['## Source PRD', prd.content || '(empty)', ''] : []),
+      '## Design',
+      doc.designContent || '(empty)',
+      '',
+      '## Tech Spec',
+      doc.techSpecContent || '(empty)',
+      '',
+      '## Assumptions',
+      doc.assumptionsContent || '(empty)',
+    ].join('\n');
     if (threadRow?.workspaceDir) {
       const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-      const context = [
-        '# Design Doc Assistant Context',
-        `doc_id: ${designDocId}`,
-        `thread_id: ${threadId}`,
-        `status: ${doc.status}`,
-        '',
-        '> Use the `update_design_doc` MCP tool to apply edits back to the database.',
-        '> Pass the doc_id and thread_id values above when calling the tool.',
-        '',
-        ...(prd ? ['## Source PRD', prd.content || '(empty)', ''] : []),
-        '## Design',
-        doc.designContent || '(empty)',
-        '',
-        '## Tech Spec',
-        doc.techSpecContent || '(empty)',
-        '',
-        '## Assumptions',
-        doc.assumptionsContent || '(empty)',
-      ].join('\n');
       try {
         fs.writeFileSync(contextPath, context, 'utf-8');
       } catch { /* non-fatal */ }
     }
+    await updateThreadKickoffContext(threadId, context);
   }
 
   // Persist the baseline with the fix thread ID so recovery can find the

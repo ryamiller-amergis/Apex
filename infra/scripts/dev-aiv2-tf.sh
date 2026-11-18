@@ -58,6 +58,9 @@ TF_VAR_ai_platform_v2_interactive_callback_token=$(app_secret "$FAST_APP" ai-run
 TF_VAR_ai_platform_v2_interactive_repo_read_service_token=$(app_secret "$FAST_APP" repo-read-service-token)
 TF_VAR_ai_platform_v2_visual_aws_access_key_id=$(app_secret "$VISUAL_APP" aws-access-key-id)
 TF_VAR_ai_platform_v2_visual_aws_secret_access_key=$(app_secret "$VISUAL_APP" aws-secret-access-key)
+# The document worker grades llm-rubric checks with the same Bedrock credentials.
+TF_VAR_ai_platform_v2_documents_aws_access_key_id=$TF_VAR_ai_platform_v2_visual_aws_access_key_id
+TF_VAR_ai_platform_v2_documents_aws_secret_access_key=$TF_VAR_ai_platform_v2_visual_aws_secret_access_key
 TF_VAR_ai_platform_v2_database_url=$(app_secret "$ORCHESTRATOR_APP" database-url)
 TF_VAR_ai_platform_v2_application_insights_connection_string=$(
   az monitor app-insights component show -g "$RG" -a appi-app-scrum-dev \
@@ -72,7 +75,9 @@ export TF_VAR_ai_platform_v2_database_url \
   TF_VAR_ai_platform_v2_interactive_callback_token \
   TF_VAR_ai_platform_v2_interactive_repo_read_service_token \
   TF_VAR_ai_platform_v2_visual_aws_access_key_id \
-  TF_VAR_ai_platform_v2_visual_aws_secret_access_key
+  TF_VAR_ai_platform_v2_visual_aws_secret_access_key \
+  TF_VAR_ai_platform_v2_documents_aws_access_key_id \
+  TF_VAR_ai_platform_v2_documents_aws_secret_access_key
 
 VARS=(
   -var=github_token=placeholder

@@ -109,6 +109,7 @@ describe('artifactUsageContext', () => {
       }),
     ).toBe('Validation');
     expect(labelUsageRun({ feature: 'test-case' })).toBe('Test cases');
+    expect(labelUsageRun({ feature: 'cloud-agent' })).toBe('Cloud Agent');
     expect(labelUsageRun({ skillPath: '.cursor/skills/to-prd/SKILL.md' })).toBe('Generate');
   });
 });

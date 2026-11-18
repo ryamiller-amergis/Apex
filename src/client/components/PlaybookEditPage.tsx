@@ -4,6 +4,8 @@ import { ArrowLeft } from 'lucide-react';
 import { useAppShell } from '../hooks/useAppShell';
 import { usePlaybookDefinition } from '../hooks/usePlaybookDefinitions';
 import { PlaybookDraftEditor } from './PlaybookDraftEditor';
+import { PlaybookTemplateUpdateBanner } from './PlaybookTemplateUpdateBanner';
+import { PlaybookTriggersPanel } from './PlaybookTriggersPanel';
 import { PlaybookVersionList } from './PlaybookVersionList';
 import styles from './PlaybookEditPage.module.css';
 
@@ -18,6 +20,7 @@ export const PlaybookEditPage: React.FC<PlaybookEditPageProps> = ({
 }) => {
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
+  const canManageTriggers = can('playbooks:triggers:manage');
   const detail = usePlaybookDefinition(project, definitionId);
 
   if (!canAuthor) return <Navigate to={`/playbooks/${definitionId}`} replace />;
@@ -44,6 +47,8 @@ export const PlaybookEditPage: React.FC<PlaybookEditPageProps> = ({
         </Link>
       </header>
 
+      <PlaybookTemplateUpdateBanner project={project} detail={data} data-testid="playbook-template-update" />
+
       <section className={styles.section} aria-labelledby="playbook-edit-details">
         <h2 id="playbook-edit-details">Details</h2>
         <PlaybookDraftEditor
@@ -52,6 +57,15 @@ export const PlaybookEditPage: React.FC<PlaybookEditPageProps> = ({
           canAuthor
           reload={detail.refetch}
           advancedGraph
+        />
+      </section>
+
+      <section className={styles.section}>
+        <PlaybookTriggersPanel
+          project={project}
+          definitionId={definitionId}
+          canManage={canManageTriggers}
+          data-testid="playbook-triggers"
         />
       </section>
 

@@ -11,6 +11,7 @@ import { BrainstormCheckpointField } from './BrainstormCheckpointField';
 import { BrainstormNextActionsPanel, type BrainstormActionRequest } from './BrainstormNextActionsPanel';
 import { BrainstormVersionHistoryDrawer } from './BrainstormVersionHistoryDrawer';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
+import { SkillRating } from './SkillRating';
 import styles from './BrainstormArtifactPanel.module.css';
 
 export const ARTIFACT_EMPTY_TEXT = 'No artifact yet — ask the collaborator to draft one';
@@ -240,6 +241,16 @@ export const BrainstormArtifactPanel: React.FC<BrainstormArtifactPanelProps> = (
           version={artifact.version}
           checkpointName={artifact.checkpointName}
           disabled={turnRunning}
+        />
+      )}
+
+      {hasContent && artifact.version > 0 && !turnRunning && (
+        // data-testid-exempt — SkillRating renders chat-message-rating-brainstorm-<session>:<version>
+        <SkillRating
+          project={project}
+          surface="brainstorm"
+          subjectType="brainstorm_artifact_version"
+          subjectId={`${session.id}:${artifact.version}`}
         />
       )}
 

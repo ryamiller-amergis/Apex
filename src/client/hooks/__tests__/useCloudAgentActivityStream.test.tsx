@@ -69,6 +69,26 @@ describe('useCloudAgentActivityStream', () => {
     expect(result.current.events[0].detail).toBe('Updating the route.');
   });
 
+  it('joins consecutive reply chunks into one log row', () => {
+    const { result } = renderHook(() =>
+      useCloudAgentActivityStream('session-1', 'run-1', true));
+    const source = MockEventSource.instances[0];
+
+    act(() => {
+      source.emit({
+        type: 'activity',
+        event: { id: 'a1', kind: 'assistant', title: 'Assistant', detail: 'if' },
+      });
+      source.emit({
+        type: 'activity',
+        event: { id: 'a2', kind: 'assistant', title: 'Assistant', detail: 'needed' },
+      });
+    });
+
+    expect(result.current.events).toHaveLength(1);
+    expect(result.current.events[0].detail).toBe('if needed');
+  });
+
   it('closes after the server finishes replaying the run', () => {
     const { result } = renderHook(() =>
       useCloudAgentActivityStream('session-1', 'run-1', true));

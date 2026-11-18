@@ -3,7 +3,7 @@
  * Status, activity, and cancel read that same agent. This path does not
  * launch a container job.
  */
-import { Agent, type Run, type SDKMessage } from '@cursor/sdk';
+import { Agent, type Run, type SDKImage, type SDKMessage } from '@cursor/sdk';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { CloudAgentActivityEvent } from '../../shared/types/devWorkbench';
 // My Work cloud agents start with Agent.create. The container script
@@ -38,6 +38,10 @@ interface LaunchCloudAgentBase {
   skillName?: string;
   /** Azure DevOps token for the developer who started the run. Used only to open the pull request. */
   adoUserToken?: string | null;
+  /** False skips Cursor's autoCreatePR. Implementation runs and site reports leave it on. */
+  autoCreatePr?: boolean;
+  /** Small screenshots for a site report. The SDK receives the image bytes. */
+  images?: SDKImage[];
 }
 
 export interface LaunchMyWorkCloudAgentInput extends LaunchCloudAgentBase {
@@ -75,6 +79,13 @@ export interface LaunchCloudAgentResult {
   branchName?: string;
 }
 
+export interface CloudAgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
 export interface CloudAgentRunObservation {
   status: string;
   prUrl: string | null;
@@ -86,6 +97,16 @@ export interface CloudAgentRunObservation {
   noChanges?: boolean;
   /** The Cursor run has left the running state. */
   settled?: boolean;
+  /** Model the Cursor run reported. Absent until the handle has one. */
+  modelId?: string | null;
+  durationMs?: number | null;
+  /** Cumulative tokens. Absent when Cursor reported none. */
+  usage?: CloudAgentTokenUsage | null;
+  /**
+   * Cursor has finished the agent turn. Git metadata can still be missing, which
+   * keeps status as running until a pull request is found.
+   */
+  agentFinished?: boolean;
 }
 
 export function toCloudRepoUrl(remoteUrl: string): string {
@@ -139,6 +160,22 @@ function isTerminalStatus(status: Run['status']): boolean {
   return status === 'finished' || status === 'error' || status === 'cancelled';
 }
 
+function reportedUsage(run: Run): CloudAgentTokenUsage | null {
+  const usage = run.usage;
+  if (!usage) return null;
+  const total = usage.inputTokens
+    + usage.outputTokens
+    + usage.cacheReadTokens
+    + usage.cacheWriteTokens;
+  if (total <= 0) return null;
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  };
+}
+
 // function containerExecutionName(cloudAgentId: string, cursorRunId: string): string {
 //   if (isContainerAgentId(cursorRunId)) {
 //     return cursorRunId.slice('container-agent-'.length);
@@ -157,7 +194,8 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
   const resultText = run.status === 'error'
     ? (run.error?.message ?? run.result ?? null)
     : (run.result ?? null);
-  const gitPending = run.status === 'finished' && !gitKnown;
+  const agentFinished = run.status === 'finished';
+  const gitPending = agentFinished && !gitKnown;
   return {
     status: gitPending ? 'running' : run.status,
     prUrl,
@@ -165,8 +203,12 @@ export function observeCloudRun(run: Run): CloudAgentRunObservation {
     branchName,
     baseBranch: null,
     summary: run.result ?? null,
-    noChanges: run.status === 'finished' && gitKnown && !branchName && !prUrl,
+    noChanges: agentFinished && gitKnown && !branchName && !prUrl,
     settled: isTerminalStatus(run.status) && !gitPending,
+    modelId: run.model?.id ?? null,
+    durationMs: run.durationMs ?? null,
+    usage: reportedUsage(run),
+    agentFinished,
   };
 }
 
@@ -186,7 +228,7 @@ function resolveLaunchTarget(input: LaunchCloudAgentInput): ResolvedLaunchTarget
     return {
       model,
       startingRef: input.skillBranch,
-      autoCreatePR: input.openPullRequest !== false,
+      autoCreatePR: input.openPullRequest !== false && input.autoCreatePr !== false,
       prompt: input.prompt,
     };
   }
@@ -236,7 +278,11 @@ export async function launchCloudAgent(
     },
   });
   try {
-    const run = await agent.send(target.prompt);
+    const run = await agent.send(
+      input.images?.length
+        ? { text: target.prompt, images: input.images }
+        : target.prompt,
+    );
     return {
       cloudAgentId: agent.agentId,
       cursorRunId: run.id,
@@ -270,6 +316,13 @@ function clip(value: string, max: number): string {
   return `${trimmed.slice(0, max - 1)}…`;
 }
 
+/** Reply and thinking chunks keep a leading or trailing space so the log can join them. */
+function streamChunk(value: string, max: number): string {
+  const collapsed = value.replace(/\s+/g, ' ');
+  if (collapsed.length <= max) return collapsed;
+  return `${collapsed.slice(0, max - 1)}…`;
+}
+
 /** One Cursor SDK stream message becomes one drawer row. */
 export function sdkMessageToActivity(
   message: SDKMessage,
@@ -286,7 +339,7 @@ export function sdkMessageToActivity(
         id: `assistant:${message.run_id}:${index}`,
         kind: 'assistant',
         title: 'Assistant',
-        detail: clip(text, 500),
+        detail: streamChunk(text, 500),
       };
     }
     case 'thinking':
@@ -295,7 +348,7 @@ export function sdkMessageToActivity(
         id: `thinking:${message.run_id}:${index}`,
         kind: 'thinking',
         title: 'Thinking',
-        detail: clip(message.text, 500),
+        detail: streamChunk(message.text, 500),
       };
     case 'tool_call':
       return {

@@ -13,10 +13,12 @@ import {
 } from '../../shared/types/interviewLinks';
 import {
   useAddAdrLink,
+  useAddBrainstormLink,
   useAddDesignModuleLink,
   useLinkCandidates,
   useLinkedContext,
   useRemoveAdrLink,
+  useRemoveBrainstormLink,
   useRemoveDesignModuleLink,
 } from '../hooks/useLinkedContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
@@ -49,8 +51,20 @@ type DisplayLink = StagedLinkedContextSelection & {
 };
 
 function candidateLabel(candidate: LinkCandidate): string {
-  return candidate.type === 'adr' ? candidate.title : candidate.name;
+  return candidate.type === 'design-module' ? candidate.name : candidate.title;
 }
+
+const TYPE_LABELS: Record<LinkCandidateType, string> = {
+  adr: 'ADR',
+  'design-module': 'Design Module',
+  brainstorm: 'Brainstorm',
+};
+
+const FILTERS: Array<{ type: LinkCandidateType; label: string }> = [
+  { type: 'adr', label: 'ADRs' },
+  { type: 'design-module', label: 'Design Modules' },
+  { type: 'brainstorm', label: 'Brainstorms' },
+];
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unable to update linked context.';
@@ -78,7 +92,7 @@ export const LinkedContextLinkRow: React.FC<LinkedContextLinkRowProps> = ({
   >
     <div className={styles['link-details']}>
       <span className={styles['type-label']}>
-        {link.type === 'adr' ? 'ADR' : 'Design Module'}
+        {TYPE_LABELS[link.type]}
       </span>
       <span className={styles['item-label']}>{link.label}</span>
       {link.stale && (
@@ -174,7 +188,7 @@ export const LinkedContextCandidateList: React.FC<
           >
             <div className={styles['link-details']}>
               <span className={styles['type-label']}>
-                {candidate.type === 'adr' ? 'ADR' : 'Design Module'}
+                {TYPE_LABELS[candidate.type]}
               </span>
               <span className={styles['item-label']}>{label}</span>
             </div>
@@ -240,6 +254,8 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
     interviewId ?? '',
     project,
   );
+  const addBrainstorm = useAddBrainstormLink(interviewId ?? '', project);
+  const removeBrainstorm = useRemoveBrainstormLink(interviewId ?? '', project);
 
   // data-testid-exempt -- TypeScript generic, not JSX.
   const displayLinks = useMemo<DisplayLink[]>(() => {
@@ -263,6 +279,12 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
         type: 'design-module' as const,
         id: link.designModuleId,
         label: link.name,
+        stale: false,
+      })),
+      ...(linkedContext.brainstormLinks ?? []).map((link) => ({
+        type: 'brainstorm' as const,
+        id: link.brainstormSessionId,
+        label: link.title,
         stale: false,
       })),
     ];
@@ -293,7 +315,9 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
     addAdr.isPending ||
     addDesignModule.isPending ||
     removeAdr.isPending ||
-    removeDesignModule.isPending;
+    removeDesignModule.isPending ||
+    addBrainstorm.isPending ||
+    removeBrainstorm.isPending;
   const queryError =
     linkedContextQuery.error?.message ?? candidatesQuery.error?.message;
   const displayedError = actionError ?? initialError ?? queryError;
@@ -306,6 +330,15 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
     setCandidateType(type);
     setOffset(0);
   }, []);
+
+  const addLink = useCallback(
+    async (type: LinkCandidateType, id: string) => {
+      if (type === 'adr') await addAdr.mutateAsync({ adrId: id });
+      else if (type === 'design-module') await addDesignModule.mutateAsync({ designModuleId: id });
+      else await addBrainstorm.mutateAsync({ brainstormSessionId: id });
+    },
+    [addAdr, addBrainstorm, addDesignModule],
+  );
 
   const handleAdd = useCallback(
     async (candidate: LinkCandidate) => {
@@ -327,21 +360,14 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
           return;
         }
 
-        if (candidate.type === 'adr') {
-          await addAdr.mutateAsync({ adrId: candidate.id });
-        } else {
-          await addDesignModule.mutateAsync({
-            designModuleId: candidate.id,
-          });
-        }
+        await addLink(candidate.type, candidate.id);
         setStatusText(`Linked ${label}.`);
       } catch (error) {
         setActionError(errorMessage(error));
       }
     },
     [
-      addAdr,
-      addDesignModule,
+      addLink,
       atCapacity,
       canEdit,
       linkedIds,
@@ -371,8 +397,10 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
 
         if (link.type === 'adr') {
           await removeAdr.mutateAsync(link.id);
-        } else {
+        } else if (link.type === 'design-module') {
           await removeDesignModule.mutateAsync(link.id);
+        } else {
+          await removeBrainstorm.mutateAsync(link.id);
         }
         setUndoLink(link);
         setStatusText(`Removed ${link.label}. Undo is available.`);
@@ -385,6 +413,7 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
       mode,
       onStagedSelectionsChange,
       removeAdr,
+      removeBrainstorm,
       removeDesignModule,
       stagedSelections,
     ],
@@ -395,19 +424,13 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
     setActionError(null);
     setInitialError(null);
     try {
-      if (undoLink.type === 'adr') {
-        await addAdr.mutateAsync({ adrId: undoLink.id });
-      } else {
-        await addDesignModule.mutateAsync({
-          designModuleId: undoLink.id,
-        });
-      }
+      await addLink(undoLink.type, undoLink.id);
       setStatusText(`Restored ${undoLink.label}.`);
       setUndoLink(null);
     } catch (error) {
       setActionError(errorMessage(error));
     }
-  }, [addAdr, addDesignModule, mode, undoLink]);
+  }, [addLink, mode, undoLink]);
 
   const handleRetry = useCallback(() => {
     setActionError(null);
@@ -426,7 +449,7 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
         <div>
           <h2 className={styles.title}>Linked Context</h2>
           <p className={styles.description}>
-            Choose accepted ADRs and Design Modules to ground the Interview.
+            Choose accepted ADRs, Design Modules and Brainstorms to ground the Interview.
           </p>
         </div>
         {onClose && (
@@ -583,34 +606,22 @@ export const LinkedContextPicker: React.FC<LinkedContextPickerProps> = ({
             role="group"
             aria-label="Candidate type"
           >
-            <button
-              type="button"
-              className={
-                candidateType === 'adr'
-                  ? styles['filter-button-active']
-                  : styles['filter-button']
-              }
-              aria-pressed={candidateType === 'adr'}
-              onClick={() => handleTypeChange('adr')}
-              {...{ 'data-testid': 'linked-context-filter-adr' }}
-            >
-              ADRs
-            </button>
-            <button
-              type="button"
-              className={
-                candidateType === 'design-module'
-                  ? styles['filter-button-active']
-                  : styles['filter-button']
-              }
-              aria-pressed={candidateType === 'design-module'}
-              onClick={() => handleTypeChange('design-module')}
-              {...{
-                'data-testid': 'linked-context-filter-design-module',
-              }}
-            >
-              Design Modules
-            </button>
+            {FILTERS.map(({ type, label }) => (
+              <button
+                key={type}
+                type="button"
+                className={
+                  candidateType === type
+                    ? styles['filter-button-active']
+                    : styles['filter-button']
+                }
+                aria-pressed={candidateType === type}
+                onClick={() => handleTypeChange(type)}
+                {...{ 'data-testid': `linked-context-filter-${type}` }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <label className={styles['search-label']} htmlFor="linked-context-search">
             Search

@@ -9,9 +9,11 @@ import styles from './PlaybookRunActions.module.css';
 
 interface PlaybookRunActionsProps {
   run: PlaybookRunDetail;
+  /** Inline buttons for a page header, without the divider above them. */
+  variant?: 'section' | 'toolbar';
 }
 
-export const PlaybookRunActions: React.FC<PlaybookRunActionsProps> = ({ run }) => {
+export const PlaybookRunActions: React.FC<PlaybookRunActionsProps> = ({ run, variant = 'section' }) => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
@@ -62,7 +64,7 @@ export const PlaybookRunActions: React.FC<PlaybookRunActionsProps> = ({ run }) =
 
   return (
     <div
-      className={styles.actions}
+      className={`${styles.actions} ${variant === 'toolbar' ? styles.toolbar : ''}`}
       aria-label={`Actions for ${run.definitionName}`}
       {...{ 'data-testid': 'playbook-run-actions' }}
     >

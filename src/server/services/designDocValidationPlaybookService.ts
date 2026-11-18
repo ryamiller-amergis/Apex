@@ -7,6 +7,7 @@ import { getDesignDoc } from './designDocService';
 import { stopDocumentValidationWatcher } from './documentValidationService';
 import { createDefinition, publishDraft } from './playbookDefinitionService';
 import { startRun } from './playbookRunService';
+import { publishPlaybookApexEvent } from './playbookApexEventService';
 import { getDefaultModel } from './appSettingsService';
 import { getPrd } from './prdService';
 import { getSkillConfig, resolveSkillConfig } from './projectSettingsService';
@@ -55,6 +56,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'score',
         stepType: 'cursor-agent',
+        title: 'Score the design doc',
         config: {
           skillPath: options.skillPath,
           prompt:
@@ -69,6 +71,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'ingest',
         stepType: 'ingest-artifact',
+        title: 'Save the scorecard',
         config: {
           documentType: 'design_doc',
           documentId: '${input.documentId}',
@@ -94,6 +97,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'approve-ready',
         stepType: 'approval-gate',
+        title: 'Approve the ready design doc',
         config: {
           subject: 'Review ready design-doc validation result',
           approverPool: 'design_doc',
@@ -103,6 +107,7 @@ export function buildDesignDocValidationPlaybookGraph(
       {
         id: 'notify-revision',
         stepType: 'notify',
+        title: 'Ask the owner to revise',
         config: {
           title: 'Design doc needs revision',
           body: 'Validation did not reach the ready threshold. Review the scorecard and revise.',
@@ -196,16 +201,31 @@ export async function startDesignDocValidationPlaybook(input: {
   }
 
   const validationThreadId = await ensureValidationThread(document.id, document.ownerId);
+  const eventData = {
+    documentType: 'design_doc' as const,
+    documentId: document.id,
+    validationThreadId,
+    ownerUserId: document.ownerId,
+  };
+  const published = await publishPlaybookApexEvent({
+    project: input.project,
+    type: 'design-doc.validation-requested',
+    entityId: document.id,
+    actorUserId: input.callerUserId,
+    data: eventData,
+  });
+  if (published.started[0]) {
+    return {
+      runId: published.started[0].runId,
+      definitionVersionId: published.started[0].definitionVersionId,
+      outcome: 'started',
+    };
+  }
   const started = await startRun({
     project: input.project,
     definitionId: definition.id,
     initiatorUserId: document.ownerId,
-    runInput: {
-      documentType: 'design_doc',
-      documentId: document.id,
-      validationThreadId,
-      ownerUserId: document.ownerId,
-    },
+    runInput: eventData,
   });
 
   return {

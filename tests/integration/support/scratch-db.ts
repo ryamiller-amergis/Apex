@@ -13,6 +13,7 @@
  * verification suite must never create or drop databases on a shared or production server.
  */
 import pg from 'pg';
+import { readdirSync } from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import { execFile } from 'child_process';
@@ -147,6 +148,16 @@ export async function migrateUp(connectionString: string): Promise<void> {
  * Rolls back the most recent `count` migrations.
  * Scoped to a scratch database.
  */
+/** How many downs reach `fileName` and remove it. Later migrations roll back first. */
+export function migrationsFromFileThroughTip(fileName: string): number {
+  const names = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql')).sort();
+  const index = names.indexOf(fileName);
+  if (index < 0) {
+    throw new Error(`Migration ${fileName} is not in ${MIGRATIONS_DIR}`);
+  }
+  return names.length - index;
+}
+
 export async function migrateDown(connectionString: string, count: number): Promise<void> {
   await execFileAsync(
     process.execPath,

@@ -41,6 +41,16 @@ export function stripInterviewPhaseMarkers(text: string): string {
     .replace(/^\s+/, '');
 }
 
+/** Phases the agent has opened, read from its markers. A skipped Technical phase does not count. */
+export function startedInterviewPhases(texts: string[]): Set<InterviewPhaseId> {
+  const started = new Set<InterviewPhaseId>();
+  for (const match of texts.filter(Boolean).join('\n').matchAll(MARKER_RE)) {
+    if (match[2] === 'skipped') continue;
+    started.add(match[1] as InterviewPhaseId);
+  }
+  return started;
+}
+
 interface PhaseMarker {
   phase: InterviewPhaseId;
   token: 'done' | 'stopped' | 'skipped' | 'wrapup' | number;

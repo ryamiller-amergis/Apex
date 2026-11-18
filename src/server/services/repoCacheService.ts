@@ -176,10 +176,19 @@ async function readBaseSha(
   branch: string,
   abortSignal?: AbortSignal,
 ): Promise<string> {
-  return (await git(
-    safeArgs(cacheDir, ['rev-parse', `refs/heads/${branch}`]),
-    { cwd: cacheDir, abortSignal },
-  )).trim();
+  try {
+    return (await git(
+      safeArgs(cacheDir, ['rev-parse', `refs/heads/${branch}`]),
+      { cwd: cacheDir, abortSignal },
+    )).trim();
+  } catch (firstError) {
+    return (await git(
+      safeArgs(cacheDir, ['rev-parse', 'HEAD']),
+      { cwd: cacheDir, abortSignal },
+    ).catch(() => {
+      throw firstError;
+    })).trim();
+  }
 }
 
 /**

@@ -141,6 +141,7 @@ describe('workItemPrLinkService (PBI-009 / TBI-008)', () => {
         items: [{ fields: { 'System.WorkItemType': 'Feature' } }],
       }),
       getFeatureChildren: jest.fn().mockResolvedValue([
+        { id: 200, state: 'New' },
         { id: 201, state: 'In Progress' },
         { id: 202, state: 'Committed' },
         { id: 203, state: 'Done' },
@@ -151,6 +152,7 @@ describe('workItemPrLinkService (PBI-009 / TBI-008)', () => {
     await transitionWorkItemForPullRequest(ado, 100);
 
     expect(ado.setWorkItemState).toHaveBeenCalledWith(100, 'In Progress');
+    expect(ado.setWorkItemState).toHaveBeenCalledWith(200, 'In Pull Request');
     expect(ado.setWorkItemState).toHaveBeenCalledWith(201, 'In Pull Request');
     expect(ado.setWorkItemState).toHaveBeenCalledWith(202, 'In Pull Request');
     expect(ado.setWorkItemState).not.toHaveBeenCalledWith(203, 'In Pull Request');

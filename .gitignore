@@ -22,7 +22,6 @@ apryse-modules/
 
 # Terraform
 infra/.terraform/
-infra/.terraform.lock.hcl
 infra/terraform.tfstate
 infra/terraform.tfstate.backup
 infra/terraform.tfstate.d/
@@ -90,6 +89,12 @@ e2e-*.log
 # Captured SSO storageState for deployed-smoke runs — contains a live session,
 # never commit it (see tests/e2e/support/capture-storage-state.ts)
 tests/e2e/.auth/
+
+# Local cloud-agent scorecards. The export includes work-item text.
+evals/cloud-agent/cases.json
+evals/cloud-agent/summary.json
+evals/cloud-agent/results.json
+.promptfoo/
 
 # Local agent scratch state — per-machine, not shared
 .agents/

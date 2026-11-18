@@ -26,6 +26,7 @@ import {
   adoServiceForChatOrStandupWrite,
   adoServiceForChatThread,
   registerChatAdoWriteTurn,
+  withDurableChatAdoWriteGrant,
 } from '../services/chatAdoWriteAuth';
 
 describe('chat ADO write authorization', () => {
@@ -63,6 +64,34 @@ describe('chat ADO write authorization', () => {
 
     release();
     expect(() => adoServiceForChatThread('thread-1', 'Apex')).toThrow(
+      'explicit request in the current chat turn',
+    );
+  });
+
+  it('authorizes ADO writes only while a V2 tool-proxy call with a write grant runs', async () => {
+    const result = await withDurableChatAdoWriteGrant(
+      { threadId: 'thread-v2', userId: 'user-1', project: 'Apex', token: 'delegated-token' },
+      async () => adoServiceForChatOrStandupWrite('thread-v2', 'Apex'),
+    );
+
+    expect(result).toEqual({ kind: 'per-user-ado-service' });
+    expect(mockAdoWriteFromToken).toHaveBeenCalledWith('delegated-token', 'Apex', undefined);
+    expect(() => adoServiceForChatThread('thread-v2', 'Apex')).toThrow(
+      'explicit request in the current chat turn',
+    );
+  });
+
+  it('clears the V2 write grant when the proxied call fails', async () => {
+    await expect(
+      withDurableChatAdoWriteGrant(
+        { threadId: 'thread-v2-fail', userId: 'user-1', project: 'Apex', token: 'delegated-token' },
+        async () => {
+          throw new Error('MCP failed');
+        },
+      ),
+    ).rejects.toThrow('MCP failed');
+
+    expect(() => adoServiceForChatThread('thread-v2-fail', 'Apex')).toThrow(
       'explicit request in the current chat turn',
     );
   });

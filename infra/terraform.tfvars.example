@@ -158,11 +158,18 @@ shared_storage_account_name = null
 # ai_runs_container_app_env_name    = null  # derives "cae-apex-ai-dev"
 # ai_runs_container_app_job_name    = null  # derives "caj-apex-ai-runs-dev"
 # ai_runs_runner_identity_name      = null  # derives "mi-apex-ai-runs-runner-dev"
+# Insights reader is one identity in MSS-DevTest. Dev creates it. Prod attaches it.
+# Leave these at the defaults unless that identity moves.
+# ai_runs_insights_reader_name                = "mi-apex-insights-reader-dev"
+# ai_runs_insights_reader_resource_group_name = "rg-scrum-dev"
+# ai_runs_insights_reader_location            = "East US"
+# ai_runs_insights_reader_subscription_id     = "9d08693d-0c89-4f11-aa43-6cbdb89cf1cb"
 # ai_runs_max_in_flight             = 10    # must match App Service AI_RUNS_BACKGROUND_INFLIGHT_LIMIT
 # ai_runs_file_share_name           = null  # derives "ai-pilot-data"
 # ai_runs_workspace_mount_path      = "/home/data/ai-pilot/workspaces"
 # ai_runs_vnet_subnet_id            = null
 # ai_runs_key_vault_name            = null  # derives "kv-apex-ai-{environment}" and seeds cursor-api-key
+# ai_runs_key_vault_secrets_officer_ids = ["<object-id of each person or pipeline identity that runs apply>"]
 # To use an existing vault instead, set both:
 # ai_runs_key_vault_id              = "/subscriptions/.../vaults/kv-apex-dev"
 # ai_runs_cursor_api_key_secret_id  = "https://kv-apex-dev.vault.azure.net/secrets/cursor-api-key/<version>"
@@ -289,6 +296,9 @@ shared_storage_account_name = null
 # ai_platform_v2_documents_scale_message_count = 1
 # ai_platform_v2_documents_termination_grace_seconds = 600
 # ai_platform_v2_documents_scale_cooldown_seconds = 900
+# Bedrock key the document worker uses to grade Skill Learning llm-rubric checks (null = off).
+# ai_platform_v2_documents_aws_access_key_id = "<same as aws_access_key_id>"
+# ai_platform_v2_documents_aws_secret_access_key = "<same as aws_secret_access_key>"
 # ai_platform_v2_database_url = "<same as App Service DATABASE_URL>"
 # ai_platform_v2_application_insights_connection_string = "<existing App Insights connection string>"
 # ai_platform_v2_interactive_callback_base_url = "https://app-scrum-dev.azurewebsites.net"

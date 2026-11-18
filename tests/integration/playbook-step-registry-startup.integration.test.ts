@@ -53,7 +53,7 @@ describe('VT-03 — startup validation', () => {
       console.log('BOOTED ' + listStepTypeDescriptors().length);
     `);
 
-    expect(output).toContain('BOOTED 7');
+    expect(output).toContain('BOOTED 13');
     expect(status).toBe(0);
   }, 180_000);
 

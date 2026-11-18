@@ -37,12 +37,14 @@ describe('TBI-036 DoD-0/1 — Playbook permission catalog', () => {
     expect(down).not.toMatch(/DELETE FROM app_permissions[^;]*playbooks:run/);
   });
 
-  it('keeps the governance catalog synchronized with all four defaults', () => {
+  it('records Playbook access as the platform-admin module gate', () => {
     const governance = fs.readFileSync(governancePath, 'utf8');
+    const gate = 'platform admin, and Playbooks is enabled for the project';
 
-    expect(governance).toContain('| `playbooks:view` | playbooks | admin, member, viewer |');
-    expect(governance).toContain('| `playbooks:run` | playbooks | admin, member |');
-    expect(governance).toContain('| `playbooks:author` | playbooks | *(no default roles — assign explicitly)* |');
-    expect(governance).toContain('| `playbooks:admin` | playbooks | admin |');
+    expect(governance).toContain(`| \`playbooks:view\` | playbooks | ${gate} |`);
+    expect(governance).toContain(`| \`playbooks:run\` | playbooks | ${gate} |`);
+    expect(governance).toContain(`| \`playbooks:author\` | playbooks | ${gate} |`);
+    expect(governance).toContain(`| \`playbooks:admin\` | playbooks | ${gate} |`);
+    expect(governance).toContain(`| \`playbooks:triggers:manage\` | playbooks | ${gate} |`);
   });
 });

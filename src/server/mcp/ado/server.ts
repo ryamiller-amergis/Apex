@@ -24,6 +24,14 @@ import {
 } from '../../services/designDocService';
 import { resolvePrdCommentWithApply } from '../../services/prdService';
 import { addTestCaseToPrd } from '../../services/testCaseService';
+import { listAssistantCases, listAssistantSuites } from '../../services/qaLabAssistantService';
+import {
+  proposeAddCase,
+  proposeCommentCase,
+  proposeDeleteCase,
+  proposeEditCase,
+  proposeRegenerateCase,
+} from '../../services/qaLabAssistantProposalService';
 import { stageAdrProposedContent } from '../../services/adrService';
 import { db } from '../../db/drizzle';
 import { eq } from 'drizzle-orm';
@@ -350,6 +358,20 @@ export async function handleAddTestCase(params: {
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
     };
+  }
+}
+
+async function runQaLabTool(
+  name: string,
+  run: () => Promise<unknown>,
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+  try {
+    const result = await run();
+    return { content: [{ type: 'text', text: JSON.stringify({ ok: true, result }) }] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[MCP] ${name}: FAILED — ${message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
   }
 }
 
@@ -713,6 +735,93 @@ export function createAdoMcpServer(options?: {
         .describe('Business-rule IDs this case covers, e.g. ["BR-001"]'),
     },
     async (params) => handleAddTestCase(params)
+  );
+
+  // ── QA Lab Ask Apex ─────────────────────────────────────────────────────────
+  // Change tools only propose; QA confirms each change in the chat. A suite other
+  // than the thread's own must be in the same project.
+
+  const qaThreadId = z
+    .string()
+    .describe('The QA Lab Ask Apex thread ID (thread_id in .ai-pilot/kickoff-context.md)');
+  const qaSuiteId = z
+    .string()
+    .optional()
+    .describe('Another work item\'s suiteId from qa_lab_list_suites. Leave out for this chat\'s suite.');
+  const qaCaseId = z.string().describe('The case id, e.g. "PBI-58989-3"');
+  const qaCaseFields = z
+    .record(z.string(), z.unknown())
+    .describe('Case fields in the suite JSON format: title, persona, preconditions, steps [{order, action, expected}], placement, traceability, …');
+  const qaReason = z
+    .string()
+    .max(500)
+    .optional()
+    .describe('One sentence QA sees on the review card: why this change');
+
+  server.tool(
+    'qa_lab_list_suites',
+    'List every work item in this project\'s QA Lab with its suiteId, case count, and published count.',
+    { threadId: qaThreadId },
+    async ({ threadId }) => runQaLabTool('qa_lab_list_suites', () => listAssistantSuites(threadId))
+  );
+
+  server.tool(
+    'qa_lab_get_cases',
+    'List a QA Lab suite\'s current cases with publish status, test run results and Bugs, plus open review comments and your pending proposals.',
+    { threadId: qaThreadId, suiteId: qaSuiteId },
+    async ({ threadId, suiteId }) => runQaLabTool('qa_lab_get_cases', () => listAssistantCases(threadId, suiteId))
+  );
+
+  server.tool(
+    'qa_lab_update_case',
+    'Propose a change to one unpublished test case. Pass only the fields that change; steps replaces every step. QA reviews old and new text and confirms.',
+    { threadId: qaThreadId, suiteId: qaSuiteId, localCaseId: qaCaseId, patch: qaCaseFields, reason: qaReason },
+    async ({ threadId, suiteId, localCaseId, patch, reason }) =>
+      runQaLabTool('qa_lab_update_case', () => proposeEditCase({ threadId, suiteId, localCaseId, patch, reason }))
+  );
+
+  server.tool(
+    'qa_lab_add_case',
+    'Propose one new test case for a work item. Apex assigns the case id when QA confirms.',
+    {
+      threadId: qaThreadId,
+      suiteId: qaSuiteId,
+      pbiId: z.string().describe('The work item the case tests, as "PBI-58989" or "58989"'),
+      testCase: qaCaseFields,
+      reason: qaReason,
+    },
+    async ({ threadId, suiteId, pbiId, testCase, reason }) =>
+      runQaLabTool('qa_lab_add_case', () => proposeAddCase({ threadId, suiteId, pbiId, testCase, reason }))
+  );
+
+  server.tool(
+    'qa_lab_delete_case',
+    'Propose removing one unpublished test case. Use only when QA asks to delete that case.',
+    { threadId: qaThreadId, suiteId: qaSuiteId, localCaseId: qaCaseId, reason: qaReason },
+    async ({ threadId, suiteId, localCaseId, reason }) =>
+      runQaLabTool('qa_lab_delete_case', () => proposeDeleteCase({ threadId, suiteId, localCaseId, reason }))
+  );
+
+  server.tool(
+    'qa_lab_comment_case',
+    'Propose a review comment on one test case, for example before regenerating it.',
+    {
+      threadId: qaThreadId,
+      suiteId: qaSuiteId,
+      localCaseId: qaCaseId,
+      body: z.string().min(1).max(4000).describe('What should change in the case'),
+      reason: qaReason,
+    },
+    async ({ threadId, suiteId, localCaseId, body, reason }) =>
+      runQaLabTool('qa_lab_comment_case', () => proposeCommentCase({ threadId, suiteId, localCaseId, body, reason }))
+  );
+
+  server.tool(
+    'qa_lab_regenerate_case',
+    'Propose rewriting one unpublished test case from its open review comments with the project test-case skill. Once QA confirms, it runs in the background.',
+    { threadId: qaThreadId, suiteId: qaSuiteId, localCaseId: qaCaseId, reason: qaReason },
+    async ({ threadId, suiteId, localCaseId, reason }) =>
+      runQaLabTool('qa_lab_regenerate_case', () => proposeRegenerateCase({ threadId, suiteId, localCaseId, reason }))
   );
 
   // ── Wiki namespace ──────────────────────────────────────────────────────────

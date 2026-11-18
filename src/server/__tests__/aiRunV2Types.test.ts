@@ -269,6 +269,30 @@ describe('AI-run V2 shared types', () => {
     ).toBe(true);
   });
 
+  it('accepts a bounded Cursor activity event on a progress checkpoint', () => {
+    expect(
+      isAiRunV2Checkpoint({
+        ...envelopeBase,
+        kind: 'progress',
+        checkpointSequence: 3,
+        phase: 'implementation',
+        status: 'running',
+        progress: {
+          kind: 'activity_event',
+          eventType: 'tool_call',
+          phase: 'implementation',
+          status: 'running',
+          detail: 'grep_search started',
+          event: {
+            type: 'tool_call',
+            toolName: 'grep_search',
+            input: { target: 'TimecardController' },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it('rejects text progress that exceeds the message bound', () => {
     expect(
       isAiRunV2Checkpoint({

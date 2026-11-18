@@ -83,6 +83,33 @@ jest.mock('../../hooks/useFocusChatMessage', () => ({
   useFocusChatMessage: () => undefined,
 }));
 
+jest.mock('../../hooks/useAppShell', () => ({
+  useAppShell: () => ({ userId: 'user-1' }),
+}));
+
+const mockRatingAccess = { canSubmit: false };
+jest.mock('../../hooks/useWorkflowEvaluationAccess', () => ({
+  useWorkflowEvaluationAccess: () => mockRatingAccess,
+}));
+
+const mockPutReplyRating = jest.fn(async (_vars: unknown) => ({ entry: null }));
+let mockReplyRatings: { messageId: string; rating: string; comment: string | null }[] = [];
+jest.mock('../../hooks/useSkillRatings', () => ({
+  useSkillRatings: () => new Map(),
+  usePutSkillRating: () => ({ mutateAsync: jest.fn(), isPending: false, isError: false, error: null, variables: undefined }),
+}));
+
+jest.mock('../../hooks/useWorkflowMessageFeedback', () => ({
+  useWorkflowMessageFeedback: () => ({ data: { entries: mockReplyRatings } }),
+  usePutWorkflowMessageFeedback: () => ({
+    mutateAsync: mockPutReplyRating,
+    isPending: false,
+    isError: false,
+    error: null,
+    variables: undefined,
+  }),
+}));
+
 jest.mock('../ThreadHistorySidebar', () => ({
   ThreadHistorySidebar: () => <div {...{ 'data-testid': 'thread-history-sidebar-mock' }}>Full history</div>,
 }));
@@ -101,7 +128,9 @@ jest.mock('../agentChat', () => {
       canSend,
       isRunning,
       isCancelling,
+      before,
       after,
+      placeholder,
     }: {
       testIdPrefix: string;
       model?: string;
@@ -112,12 +141,16 @@ jest.mock('../agentChat', () => {
       canSend?: boolean;
       isRunning?: boolean;
       isCancelling?: boolean;
+      before?: React.ReactNode;
       after?: React.ReactNode;
+      placeholder?: string;
     }) => (
       <div {...{ 'data-testid': `${testIdPrefix}-composer-mock`, 'data-model': model }}>
         Composer
+        {before}
         <textarea
           data-testid={`${testIdPrefix}-message-input`}
+          placeholder={placeholder}
           value={value ?? ''}
           onChange={(event) => onChange?.(event.target.value)}
         />
@@ -219,6 +252,24 @@ describe('ChatAgentPanel shared Home shell', () => {
 
     fireEvent.click(screen.getByTestId('chat-agent-history-btn'));
     expect(screen.getByTestId('thread-history-sidebar-mock')).toBeInTheDocument();
+  });
+
+  it('does not put Prod Support in the home chat header', () => {
+    render(
+      <ChatAgentPanel
+        thread={null}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        onSelectThread={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    expect(screen.queryByTestId('home-guided-jobs')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prod Support' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-history-btn')).toBeInTheDocument();
   });
 
   it('PBI-007 AC-3 excludes Home-only content outside Home', () => {
@@ -520,6 +571,74 @@ describe('ChatAgentPanel shared Home shell', () => {
     expect(screen.getByText('Starting skill…')).toBeInTheDocument();
   });
 
+  it('drops the startup spinner once the new Home thread has a reply, even if the saved first message differs', () => {
+    mockSkillConfigState = {
+      data: { quickSkillPills: [], quickMcpPills: [], homePillsConfigured: false },
+      isLoading: false,
+      isError: false,
+    };
+    const onNewChat = jest.fn();
+    const props = {
+      isOpen: true,
+      onClose: jest.fn(),
+      onNewChat,
+      launchedFromHome: true,
+      selectedProject: 'Apex',
+    };
+    const { rerender } = render(<ChatAgentPanel thread={null} {...props} />);
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), {
+      target: { value: 'Flags are broken in prod' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send mock' }));
+
+    expect(onNewChat).toHaveBeenCalled();
+    expect(screen.getByTestId('chat-run-spinner')).toBeInTheDocument();
+
+    const startedThread: ChatThread = {
+      ...thread,
+      messages: [
+        { id: 'user-1', role: 'user', text: 'Flags are broken in prod.', ts: '2026-08-31T10:00:00Z' },
+        { id: 'agent-1', role: 'agent', text: 'Who is running into this?', ts: '2026-08-31T10:00:05Z' },
+      ],
+    };
+    rerender(<ChatAgentPanel thread={startedThread} activeThreadId={startedThread.id} {...props} />);
+
+    expect(screen.queryByTestId('chat-run-spinner')).not.toBeInTheDocument();
+    expect(screen.queryByText('Agent is thinking…')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Flags are broken in prod.')).toHaveLength(1);
+    expect(screen.queryByText('Flags are broken in prod')).not.toBeInTheDocument();
+  });
+
+  it('does not open the / skill picker in a Home chat', () => {
+    render(
+      <ChatAgentPanel
+        thread={thread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+
+    const input = screen.getByTestId('chat-agent-message-input');
+    expect(input).toHaveAttribute('placeholder', 'Message agent · Enter to send');
+    fireEvent.change(input, { target: { value: '/' } });
+
+    expect(screen.queryByText('to-prd')).not.toBeInTheDocument();
+    expect(screen.queryByText(/↑↓ navigate/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the / skill picker in the drawer chat', () => {
+    render(<ChatAgentPanel thread={thread} isOpen onClose={jest.fn()} onNewChat={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId('chat-agent-message-input'), { target: { value: '/' } });
+
+    expect(screen.getByText('to-prd')).toBeInTheDocument();
+    expect(screen.getByText(/↑↓ navigate/)).toBeInTheDocument();
+  });
+
   it('shows a refused first message inside the new thread', () => {
     const startingThread: ChatThread = { ...thread, messages: [] };
     render(
@@ -818,5 +937,83 @@ describe('ChatAgentPanel shared Home shell', () => {
     fireEvent.click(screen.getByTestId('chat-agent-message-retry-btn'));
     expect(mockRetryFailedRun).toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatAgentPanel reply ratings', () => {
+  function renderThread(overrides: Partial<ChatThread> = {}) {
+    render(
+      <ChatAgentPanel
+        thread={{ ...thread, ...overrides }}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+        launchedFromHome
+        selectedProject="Apex"
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    global.fetch = jest.fn();
+    mockSessionOverrides = {};
+    mockRatingAccess.canSubmit = true;
+    mockReplyRatings = [];
+    mockPutReplyRating.mockClear();
+  });
+
+  afterAll(() => {
+    mockRatingAccess.canSubmit = false;
+  });
+
+  it('saves Good straight away', () => {
+    renderThread();
+    fireEvent.click(screen.getByTestId('chat-message-rating-good-message-1'));
+    expect(mockPutReplyRating).toHaveBeenCalledWith({ messageId: 'message-1', rating: 'good', comment: null });
+  });
+
+  it('clears a saved Good on a second click', () => {
+    mockReplyRatings = [{ messageId: 'message-1', rating: 'good', comment: null }];
+    renderThread();
+    fireEvent.click(screen.getByTestId('chat-message-rating-good-message-1'));
+    expect(mockPutReplyRating).toHaveBeenCalledWith({ messageId: 'message-1', rating: null, comment: null });
+  });
+
+  it('asks for a comment before saving Bad', async () => {
+    renderThread();
+    fireEvent.click(screen.getByTestId('chat-message-rating-bad-message-1'));
+    const save = screen.getByTestId('chat-message-rating-save-message-1');
+    expect(save).toBeDisabled();
+    expect(mockPutReplyRating).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('chat-message-rating-comment-message-1'), {
+      target: { value: '  Missed the edge case  ' },
+    });
+    fireEvent.click(save);
+    expect(mockPutReplyRating).toHaveBeenCalledWith({
+      messageId: 'message-1',
+      rating: 'bad',
+      comment: 'Missed the edge case',
+    });
+    expect(await screen.findByTestId('chat-message-rating-message-1')).toBeInTheDocument();
+  });
+
+  it('shows the saved rating and pre-fills its comment when reopened', () => {
+    mockReplyRatings = [{ messageId: 'message-1', rating: 'needs_improvement', comment: 'Too long' }];
+    renderThread();
+    const needsImprovement = screen.getByTestId('chat-message-rating-needs_improvement-message-1');
+    expect(needsImprovement).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(needsImprovement);
+    expect(screen.getByTestId('chat-message-rating-comment-message-1')).toHaveValue('Too long');
+  });
+
+  it('hides ratings on a chat the viewer does not own', () => {
+    renderThread({ userId: 'someone-else' });
+    expect(screen.queryByTestId('chat-message-rating-message-1')).not.toBeInTheDocument();
+  });
+
+  it('hides ratings when the viewer cannot submit feedback', () => {
+    mockRatingAccess.canSubmit = false;
+    renderThread();
+    expect(screen.queryByTestId('chat-message-rating-message-1')).not.toBeInTheDocument();
   });
 });

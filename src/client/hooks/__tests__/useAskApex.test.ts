@@ -71,6 +71,30 @@ afterAll(() => {
   delete (global as any).EventSource;
 });
 
+const mockChatSend = jest.fn().mockResolvedValue(true);
+const mockRetryFailedRun = jest.fn();
+const mockChatSession = {
+  visibleMessages: [] as Array<Record<string, unknown>>,
+  streamingText: '',
+  status: 'idle',
+  isRunning: false,
+  isRetrying: false,
+  retryReason: null as string | null,
+  isPreparing: false,
+  preparationMessage: null,
+  isInteractionBusy: false,
+  retryableRunId: null as string | null,
+  lastProgressAt: null,
+  isConnected: true,
+  send: mockChatSend,
+  retryFailedRun: mockRetryFailedRun,
+};
+const mockUseAgentChatSession = jest.fn((_threadId: string | null, _options?: unknown) => mockChatSession);
+jest.mock('../useAgentChatSession', () => ({
+  useAgentChatSession: (threadId: string | null, options?: unknown) =>
+    mockUseAgentChatSession(threadId, options),
+}));
+
 import { useAskApex } from '../useAskApex';
 
 // ── Tests ───────────────────────────────────────────────────────────────────────
@@ -384,5 +408,72 @@ describe('useAskApex', () => {
       });
       expect(result.current.streamingText).toBe('');
     });
+  });
+});
+
+describe('useAskApex on the V2 chat host', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    MockEventSource.instances = [];
+    Object.assign(mockChatSession, {
+      visibleMessages: [],
+      isRetrying: false,
+      retryReason: null,
+      retryableRunId: null,
+      isInteractionBusy: false,
+      status: 'idle',
+    });
+  });
+
+  it('uses the chat thread instead of the in-process session stream', async () => {
+    mockFetchOk({ sessionId: 'thread-ask', threadId: 'thread-ask' });
+    const { result } = renderHook(() => useAskApex());
+
+    await act(async () => {
+      await result.current.startSession();
+    });
+
+    expect(MockEventSource.instances).toHaveLength(0);
+    // The thread waits for the user's first message; treating it as preparing
+    // would lock the composer.
+    expect(mockUseAgentChatSession).toHaveBeenLastCalledWith('thread-ask', undefined);
+
+    await act(async () => {
+      await result.current.sendMessage('What is a PBI?');
+    });
+    expect(mockChatSend).toHaveBeenCalledWith('What is a PBI?');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps thread messages and shows the restart notice and Try again', async () => {
+    mockFetchOk({ sessionId: 'thread-ask', threadId: 'thread-ask' });
+    const { result, rerender } = renderHook(() => useAskApex());
+    await act(async () => {
+      await result.current.startSession();
+    });
+
+    Object.assign(mockChatSession, {
+      visibleMessages: [
+        { id: 'm1', role: 'user', text: 'hi', ts: 't1' },
+        { id: 'm2', role: 'tool', text: 'read', ts: 't2' },
+        { id: 'm3', role: 'agent', text: 'hello', ts: 't3' },
+        { id: 'm4', role: 'system', text: 'Error: try again', ts: 't4' },
+      ],
+      isRetrying: true,
+      retryReason: 'Restarting your answer…',
+      retryableRunId: 'run-1',
+      status: 'error',
+    });
+    rerender();
+
+    expect(result.current.messages).toEqual([
+      { id: 'm1', role: 'user', text: 'hi', ts: 't1' },
+      { id: 'm3', role: 'assistant', text: 'hello', ts: 't3' },
+      { id: 'm4', role: 'assistant', text: 'Error: try again', ts: 't4' },
+    ]);
+    expect(result.current.status).toBe('error');
+    expect(result.current.notice).toBe('Restarting your answer…');
+    result.current.retryFailedRun?.();
+    expect(mockRetryFailedRun).toHaveBeenCalled();
   });
 });

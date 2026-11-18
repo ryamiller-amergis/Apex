@@ -63,6 +63,7 @@ function makeRequest(overrides: Partial<InteractiveTurnRequest> = {}): Interacti
 interface FakeAgentOptions {
   tokens?: string[];
   toolCall?: boolean;
+  toolName?: string;
   agentId?: string | null;
   waitGate?: Promise<void>;
   onCancel?: () => void;
@@ -82,7 +83,7 @@ function makeAgentHandle(options: FakeAgentOptions = {}): InteractiveCursorAgent
       capability === 'stream' || capability === 'cancel',
     async *stream(): AsyncIterable<CursorStreamEvent> {
       if (options.toolCall) {
-        yield { type: 'tool_call', name: 'ReadFile', status: 'running' };
+        yield { type: 'tool_call', name: options.toolName ?? 'ReadFile', status: 'running' };
       }
       for (const text of options.tokens ?? []) {
         yield { type: 'assistant', message: { content: [{ type: 'text', text }] } };
@@ -135,6 +136,7 @@ function makeTelemetry(): WorkerTierTelemetry {
     interactiveActorHealth: jest.fn(),
     interactiveReplay: jest.fn(),
     interactiveStage: jest.fn(),
+    interactiveHeartbeats: jest.fn(),
   } as unknown as WorkerTierTelemetry;
 }
 
@@ -675,6 +677,91 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(destinations[0]).toContain(THREAD_ID);
     expect(acquireAgent).toHaveBeenCalledTimes(1);
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it('re-acquires the Agent with the updated checkout reader when Brainstorm sources are attached mid-session without deleting the thread workspace', async () => {
+    const disposeWorkspace = jest.fn(async () => {});
+    const disposeFirstAgent = jest.fn(async () => {});
+    const materializeWorkspace = jest.fn(async (_bootstrap, destination: string) => ({
+      workspacePath: destination,
+      dispose: disposeWorkspace,
+    }));
+    const uploadAttemptArtifacts = jest.fn(async () => ({
+      container: 'artifacts',
+      key: 'runs/r/attempts/1/manifest.json',
+    }));
+    let acquireCount = 0;
+    const acquireDurableAgent = jest.fn(async (_bootstrap, checkout, options) => {
+      acquireCount += 1;
+      const handle = makeAgentHandle({
+        tokens: ['ok'],
+        agentId: 'agent-1',
+        workspaceRef: checkout.workspacePath,
+      });
+      if (acquireCount === 1) {
+        handle.dispose = disposeFirstAgent;
+      }
+      return {
+        mode: options.resumeAgentId ? ('resumed' as const) : ('recreated' as const),
+        handle,
+      };
+    });
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      materializeWorkspace,
+      uploadAttemptArtifacts,
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const first = makeDurableBootstrap({
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
+    const second = makeDurableBootstrap({
+      attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      dispatchMessageId: 'dispatch-durable-2',
+      runId: 'run-durable-2',
+      cursorAgentId: 'agent-1',
+      specification: {
+        ...first.specification,
+        workflowClass: 'brainstorm',
+        brainstorm: {
+          sessionId: '6235c06e-fe38-4ba2-a39f-8815bd5b66de',
+          creatorContext: { displayName: 'Ryan', roles: [], groups: [], bio: null },
+          sourceLimits: { workspaceMaxBytes: 1_000_000, maxConcurrentClones: 3, inactivityMs: 60_000 },
+          sources: {
+            readRoots: [
+              {
+                kind: 'project-repository',
+                sourceId: '3c0076d1-02bf-4914-bbd1-cdbc37b854f1',
+                displayName: 'Amego',
+                provider: 'ado',
+                project: 'Amego',
+                repository: 'Amego',
+                commitSha: 'f'.repeat(40),
+                workspacePath: '/tmp/amego',
+              },
+            ],
+            mcpServers: [],
+            unavailableSources: [],
+            instructions: '',
+          },
+          artifact: { type: null, version: 0, markdown: '' },
+          intent: { kind: 'chat' },
+        },
+      },
+    });
+
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: first });
+    await actor.handleDurableTurn({ threadId: THREAD_ID, bootstrap: second });
+
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: 'agent-1' });
+    expect(disposeFirstAgent).toHaveBeenCalledTimes(1);
+    // The thread workspace must stay intact so the newly mounted sources are not deleted.
+    expect(disposeWorkspace).not.toHaveBeenCalled();
   });
 
   it('sends each turn its own tool proxy URLs when the warm Agent is reused', async () => {
@@ -1555,6 +1642,65 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     setTimeoutSpy.mockRestore();
   }, 15_000);
 
+  it('lets a shell step run for the rest of the turn instead of the MCP stall limit', async () => {
+    const waitGate = deferred();
+    const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          toolCall: true,
+          toolName: 'shell',
+          tokens: [],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+          onCancel: () => waitGate.resolve(),
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: jest.fn(),
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const turnPromise = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        absoluteDeadlineAt: new Date(Date.now() + 120_000).toISOString(),
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 60_000,
+          toolCallMs: 40,
+        },
+      }),
+    });
+
+    const longTimers: Array<{ delay: number; cb: () => void }> = [];
+    for (let i = 0; i < 100 && longTimers.length < 2; i += 1) {
+      await new Promise((r) => setImmediate(r));
+      longTimers.length = 0;
+      for (const call of setTimeoutSpy.mock.calls) {
+        const delay = call[1];
+        if (typeof delay === 'number' && delay > 60_000) {
+          longTimers.push({ delay, cb: call[0] as () => void });
+        }
+      }
+    }
+    expect(longTimers.length).toBeGreaterThanOrEqual(2);
+    // Both timers count down to the same deadline and tie when armed in the same
+    // millisecond; the shell timer is armed later, so ties go to the later one.
+    const shellTimer = longTimers.reduce((shorter, timer) =>
+      timer.delay <= shorter.delay ? timer : shorter,
+    );
+    shellTimer.cb();
+    await expect(turnPromise).resolves.toEqual({
+      status: 'failed',
+      failureCategory: 'tool_timeout',
+    });
+    setTimeoutSpy.mockRestore();
+  }, 15_000);
+
   it('heartbeats from the start of a durable turn until it ends', async () => {
     const posted: AiRunIngestBody[] = [];
     const waitGate = deferred();
@@ -1598,6 +1744,56 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(beats).toBeGreaterThanOrEqual(3);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(posted.filter((body) => body.kind === 'heartbeat')).toHaveLength(beats);
+  });
+
+  it('reports the longest heartbeat gap and failed heartbeats when a durable turn ends', async () => {
+    const telemetry = makeTelemetry();
+    let clock = 0;
+    let heartbeatCalls = 0;
+    const waitGate = deferred();
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(async (_s, checkout) =>
+        makeAgentHandle({
+          tokens: ['ok'],
+          waitGate: waitGate.promise,
+          workspaceRef: checkout.workspacePath,
+        }),
+      ),
+      materializeWorkspace: async (_b, destination) => ({ workspacePath: destination }),
+      uploadAttemptArtifacts: jest.fn(async () => ({
+        container: 'artifacts',
+        key: 'runs/r/attempts/1/manifest.json',
+      })),
+      postIngest: async (_p, _r, body) => {
+        if (body.kind === 'heartbeat') {
+          heartbeatCalls += 1;
+          clock += 1_000;
+          if (heartbeatCalls === 2) throw new Error('ingest unavailable');
+        }
+        return { ok: true, cancelRequested: false };
+      },
+      durableHeartbeatMs: 20,
+      now: () => clock,
+      telemetry,
+    });
+
+    const turn = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+    for (let i = 0; i < 200 && heartbeatCalls < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    waitGate.resolve();
+    await turn;
+
+    expect(telemetry.interactiveHeartbeats).toHaveBeenCalledTimes(1);
+    const [context, measurements] = jest.mocked(telemetry.interactiveHeartbeats).mock.calls[0]!;
+    expect(context).toMatchObject({ lane: 'ai-runs-interactive' });
+    expect(measurements.failed).toBe(1);
+    expect(measurements.sent).toBeGreaterThanOrEqual(3);
+    expect(measurements.maxGapMs).toBeGreaterThanOrEqual(2_000);
   });
 
   it('fails with hard_timeout when the Cursor run never settles past the absolute deadline', async () => {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Agent } from '@cursor/sdk';
+import { Agent, type ToolName } from '@cursor/sdk';
 import type { LocalAgentOptions } from '@cursor/sdk/dist/cjs/options.js';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import { isPlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
@@ -16,6 +16,16 @@ export type WorkerCursorExecution = {
   run: WorkerCursorExecutionRun;
   dispose(): Promise<void>;
 };
+
+/** True when this step is expected to run Azure CLI, so the worker must sign the CLI in first. */
+export function playbookAgentNeedsAzureCli(snapshot: Readonly<ExecutionSnapshot>): boolean {
+  const rawPolicy: unknown = snapshot.playbookAgentPolicy;
+  const policy = rawPolicy && isPlaybookAgentRunPolicy(rawPolicy) ? rawPolicy : undefined;
+  const investigationSkill = [snapshot.skillPath, policy?.skill.path].some((skillPath) =>
+    (skillPath ?? '').replace(/\\/g, '/').includes('maxview-incident-investigation'),
+  );
+  return Boolean(policy?.capabilities.includes('azure-cli')) || investigationSkill;
+}
 
 function cursorStartupAbortError(): Error {
   const error = new Error('Cursor execution startup aborted');
@@ -100,11 +110,16 @@ export async function createLocalCursorExecution(
   const nativeReadsAllowed =
     policy?.enforcement !== 'enforce'
     || policy.localAgent.customTools === 'native-read-only';
+  // The worker container has no local sandbox. enabled: false also overrides
+  // ~/.cursor/sandbox.json, which otherwise requests sandboxing and fails the turn.
+  // A Skill that declared azure-cli, and the MaxView investigation skill, need the
+  // shell for `az`. Every other enforced Skill has the shell tool removed.
+  const shellAllowed = !enforcing || playbookAgentNeedsAzureCli(snapshot);
 
   const local = {
     cwd: snapshot.workspaceRef,
     settingSources: enforcing ? [] : ['project'],
-    ...(enforcing ? { sandboxOptions: { enabled: true } } : {}),
+    sandboxOptions: { enabled: false },
     ...(checkout && nativeReadsAllowed ? { customTools: createNativeReadTools(checkout) } : {}),
   } satisfies LocalAgentOptions;
 
@@ -114,6 +129,7 @@ export async function createLocalCursorExecution(
       local,
       // The worker never resolves live repository MCP servers.
       mcpServers: {},
+      ...(shellAllowed ? {} : { disallowedTools: ['shell' as ToolName] }),
     });
   const agent = await raceCursorStartup(
     createAgent,

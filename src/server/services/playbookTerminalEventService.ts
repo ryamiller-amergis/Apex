@@ -17,10 +17,11 @@
  */
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { playbookStepRuns } from '../db/schema';
+import { agentRuns, playbookStepRuns } from '../db/schema';
 import { subscribeAllRunEvents } from './pgNotifyService';
 import { advanceRun } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
+import { parseStepOutput } from './playbookSteps/descriptorValidation';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type {
   AgentRunEventEnvelope,
@@ -98,6 +99,22 @@ export async function handleTerminalAgentRunEvent(
 
   if (!step) return { handled: 'not-correlated' };
 
+  if (event.status === 'completed' && step.stepType === 'cloud-agent') {
+    const run = await db.query.agentRuns.findFirst({
+      where: eq(agentRuns.id, event.runId),
+      columns: { cloudPrUrl: true },
+    });
+    const output = parseStepOutput('cloud-agent', {
+      runId: event.runId,
+      status: 'completed',
+      pullRequestUrl: run?.cloudPrUrl ?? null,
+    });
+    const moved = await resumeStepRun({ stepRunId: step.id, output });
+    if (!moved) return { handled: 'already-moved', stepRunId: step.id };
+    await advanceRun(step.runId, step.stepId);
+    return { handled: 'resumed', stepRunId: step.id };
+  }
+
   if (event.status === 'completed') {
     const output = await cursorAgentCompletionOutput({
       stepType: step.stepType,
@@ -135,10 +152,17 @@ export async function handleTerminalAgentRunEvent(
     return { handled: 'already-moved', stepRunId: step.id };
   }
 
+  const failedRun = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.id, event.runId),
+    columns: { lastError: true },
+  });
+  const cause = failedRun?.lastError?.trim() || event.detail?.trim();
   await failStepRun({
     stepRunId: step.id,
     retryable: true,
-    reason: `Agent run ${event.runId} ended as ${event.status}.`,
+    reason: cause
+      ? `Agent run ${event.runId} ended as ${event.status}: ${cause}`
+      : `Agent run ${event.runId} ended as ${event.status}.`,
   });
 
   return { handled: 'failed', stepRunId: step.id };

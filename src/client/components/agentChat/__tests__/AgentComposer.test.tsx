@@ -1,5 +1,17 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen } from '@testing-library/react';
 import { AgentComposer } from '../AgentComposer';
+
+function pasteOnComposer(
+  clipboardData: {
+    items?: Array<{ kind: string; getAsFile: () => File | null }>;
+    files?: File[];
+  },
+) {
+  const input = screen.getByTestId('demo-message-input');
+  const event = createEvent.paste(input, { clipboardData });
+  fireEvent(input, event);
+  return event;
+}
 
 describe('AgentComposer', () => {
   it('renders the interview-style stacked shell with send control', () => {
@@ -75,5 +87,39 @@ describe('AgentComposer', () => {
     fireEvent.click(screen.getByTestId('demo-model-option-gemini-4-argon-medium'));
     expect(onModelChange).toHaveBeenCalledWith('gemini-4-argon-medium');
     expect(screen.queryByTestId('demo-model-menu')).not.toBeInTheDocument();
+  });
+
+  it('pastes a clipboard image as a screenshot file and leaves plain text alone', () => {
+    const onPasteFiles = jest.fn();
+    render(
+      <AgentComposer
+        value=""
+        onChange={jest.fn()}
+        onSend={jest.fn()}
+        onPasteFiles={onPasteFiles}
+        testIdPrefix="demo"
+      />,
+    );
+
+    const image = new File(['png'], 'image.png', { type: 'image/png' });
+    const imagePaste = pasteOnComposer({
+      items: [{ kind: 'file', getAsFile: () => image }],
+    });
+
+    expect(imagePaste.defaultPrevented).toBe(true);
+    expect(onPasteFiles).toHaveBeenCalledTimes(1);
+    const [files] = onPasteFiles.mock.calls[0] as [File[]];
+    expect(files).toHaveLength(1);
+    expect(files[0].name).toMatch(/^screenshot-\d+-1\.png$/);
+    expect(files[0].type).toBe('image/png');
+
+    onPasteFiles.mockClear();
+    const textPaste = pasteOnComposer({
+      items: [{ kind: 'string', getAsFile: () => null }],
+      files: [],
+    });
+
+    expect(textPaste.defaultPrevented).toBe(false);
+    expect(onPasteFiles).not.toHaveBeenCalled();
   });
 });

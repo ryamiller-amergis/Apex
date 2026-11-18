@@ -220,6 +220,61 @@ describe('useAgentChatSession', () => {
     ]);
   });
 
+  it('keeps the pending question above a reply that arrives before its echo', async () => {
+    const earlier: ChatMessage[] = [
+      { id: 'u1', role: 'user', text: 'Same question', ts: '2026-01-01T00:00:00Z' },
+      { id: 'a1', role: 'agent', text: 'First answer', ts: '2026-01-01T00:00:01Z' },
+    ];
+    currentStreamReturn = { ...mockStreamReturn, messages: earlier };
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 })
+    );
+
+    await act(async () => {
+      await result.current.send('Same question');
+    });
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      messages: [
+        ...earlier,
+        { id: 'a2', role: 'agent', text: 'Second answer', ts: '2026-01-01T00:00:03Z' },
+      ],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages.map((message) => message.id)).toEqual([
+      'u1',
+      'a1',
+      TURN_ID_1,
+      'a2',
+    ]);
+  });
+
+  it('treats a persisted message with the turn id as the echo', async () => {
+    const { result, rerender } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_1 })
+    );
+
+    await act(async () => {
+      await result.current.send('User answer');
+    });
+
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      messages: [
+        { id: TURN_ID_1, role: 'user', text: 'User answer', ts: '2026-01-01T00:00:00Z' },
+        { id: 'a1', role: 'agent', text: 'Answer', ts: '2026-01-01T00:00:01Z' },
+      ],
+    };
+    rerender();
+
+    expect(result.current.visibleMessages.map((message) => message.id)).toEqual([
+      TURN_ID_1,
+      'a1',
+    ]);
+  });
+
   it('send includes model and attachments when provided', async () => {
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
@@ -419,6 +474,7 @@ describe('useAgentChatSession', () => {
     const { result } = renderHook(() =>
       useAgentChatSession('thread-1', {
         enablePreparationState: true,
+        initialActiveRunId: 'run-queued',
         createTurnId: () => TURN_ID_1,
       }),
     );
@@ -443,13 +499,70 @@ describe('useAgentChatSession', () => {
     );
   });
 
-  it('computes isPreparing when enablePreparationState is true and no messages', () => {
+  it('computes isPreparing for an empty thread with a queued run', () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'idle' };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        initialActiveRunId: 'run-queued',
+      })
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.hasPreparationError).toBe(false);
+  });
+
+  it('computes isPreparing for an empty thread whose run is running', () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'running' };
     const { result } = renderHook(() =>
       useAgentChatSession('thread-1', { enablePreparationState: true })
     );
     expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
+  });
+
+  it('does not prepare an empty idle thread with no run, so the composer can send', async () => {
+    currentStreamReturn = { ...mockStreamReturn, status: 'idle', messages: [] };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', {
+        enablePreparationState: true,
+        initialStatus: 'idle',
+        initialActiveRunId: null,
+        createTurnId: () => TURN_ID_1,
+      })
+    );
+
+    expect(result.current.isPreparing).toBe(false);
     expect(result.current.hasPreparationError).toBe(false);
+    expect(result.current.preparationMessage).toBeNull();
+    expect(result.current.isInteractionBusy).toBe(false);
+
+    await act(async () => {
+      await result.current.send('Kick off the interview');
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('Kick off the interview'),
+      }),
+    );
+  });
+
+  it('still prepares an empty idle thread with no run while grounding is preparing', () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'idle',
+      groundingPreparation: {
+        status: 'preparing',
+        message: 'Preparing project repository…',
+        retryAfterMs: 1_000,
+      },
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { enablePreparationState: true })
+    );
+    expect(result.current.isPreparing).toBe(true);
+    expect(result.current.isInteractionBusy).toBe(true);
   });
 
   it('computes hasPreparationError on error status with no messages', () => {
@@ -880,5 +993,44 @@ describe('useAgentChatSession', () => {
     currentStreamReturn = { ...mockStreamReturn, status: 'closed' };
     rerender();
     expect(result.current.isAwaitingAgentResponse).toBe(false);
+  });
+
+  it('allows a follow-up send when ignoreStaleStreamBusy is true even if the stream is still busy', async () => {
+    currentStreamReturn = {
+      ...mockStreamReturn,
+      status: 'running',
+      messages: [
+        { id: '1', role: 'user', text: 'First turn', ts: '2026-01-01T00:00:00Z' },
+      ],
+    };
+    const { result } = renderHook(() =>
+      useAgentChatSession('thread-1', { createTurnId: () => TURN_ID_2 }),
+    );
+    expect(result.current.isInteractionBusy).toBe(true);
+
+    let sentWithoutFlag = true;
+    await act(async () => {
+      sentWithoutFlag = await result.current.send('Follow-up after attaching source');
+    });
+    expect(sentWithoutFlag).toBe(false);
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    let sentWithFlag = false;
+    await act(async () => {
+      sentWithFlag = await result.current.send('Follow-up after attaching source', {
+        ignoreStaleStreamBusy: true,
+      });
+    });
+    expect(sentWithFlag).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/chat/threads/thread-1/messages',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          turnId: TURN_ID_2,
+          text: 'Follow-up after attaching source',
+        }),
+      }),
+    );
   });
 });
