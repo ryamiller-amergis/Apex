@@ -1,9 +1,8 @@
-import fs from 'fs';
-import path from 'path';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chatThreads } from '../db/schema';
 import { createThread as createChatThread, cancelRun as cancelChatRun, isThreadIdle } from './chatAgentService';
+import { readThreadOutput } from './chatThreadOutputStore';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import type {
@@ -107,18 +106,8 @@ export async function startGeneration(
 
 // ── getGenerationResult ──────────────────────────────────────────────────────────
 
-function resolveOutputPath(workspaceDir: string): string {
-  return path.join(workspaceDir, ...OUTPUT_RELATIVE_PATH);
-}
-
-function readOutput(workspaceDir: string): string | null {
-  const outputPath = resolveOutputPath(workspaceDir);
-  if (!fs.existsSync(outputPath)) return null;
-  try {
-    return fs.readFileSync(outputPath, 'utf-8') as unknown as string;
-  } catch {
-    return null;
-  }
+function readOutput(threadId: string, workspaceDir: string): Promise<string | null> {
+  return readThreadOutput({ threadId, workspaceDir, relativePath: OUTPUT_RELATIVE_PATH });
 }
 
 function parseResult(raw: string): LoadTestAiGenerateResult {
@@ -169,7 +158,7 @@ export async function getGenerationResult(
     return { status: 'pending' };
   }
 
-  const raw = readOutput(row.workspaceDir);
+  const raw = await readOutput(threadId, row.workspaceDir);
   if (!raw) {
     if (isThreadIdle(threadId)) {
       return { status: 'failed', error: 'Agent completed without generating a script.' };

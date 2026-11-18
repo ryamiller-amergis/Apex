@@ -445,6 +445,14 @@ export const SeedApi = {
     await post(request, '/seed/brainstorm-flag', opts);
   },
 
+  /** Create an active Brainstorm session (and its thread) without the V2 transport. */
+  async seedBrainstormSession(
+    request: APIRequestContext,
+    opts: { project: string; creatorId: string; title: string; model?: string },
+  ): Promise<{ id: string; chatThreadId: string }> {
+    return post<{ id: string; chatThreadId: string }>(request, '/seed/brainstorm-session', opts);
+  },
+
   /** Write artifact versions for a session as if collaborator turns had made them. */
   async seedBrainstormArtifact(
     request: APIRequestContext,
@@ -463,5 +471,17 @@ export const SeedApi = {
     enabledViews: string[],
   ): Promise<void> {
     await post(request, '/seed/menu-settings', { project, enabledViews });
+  },
+
+  async seedObservabilityTelemetry(
+    request: APIRequestContext,
+    opts?: { project?: string; superAdminEmail?: string },
+  ): Promise<{
+    ok: boolean;
+    eventsInserted: number;
+    rollupsUpserted: number;
+    usersUpserted: number;
+  }> {
+    return post(request, '/seed/observability-telemetry', opts ?? {});
   },
 };

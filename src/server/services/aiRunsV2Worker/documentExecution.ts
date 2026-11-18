@@ -5,9 +5,15 @@ import path from 'node:path';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import {
   documentWorkflowRequiresRepository,
+  documentWorkflowResultFile,
   isAiRunV2DocumentSpecification,
+  SKILL_LEARNING_RESULT_FILE,
   type AiRunV2DocumentSpecification,
 } from '../../../shared/types/aiRunV2DocumentSpec';
+import {
+  JUDGE_APPENDIX_FILE,
+  JUDGE_RESULT_FILE,
+} from '../../../shared/types/aiRunV2EvaluationSpec';
 import type { BackgroundWorkflowClass } from '../../../shared/types/backgroundWorkflow';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import {
@@ -15,14 +21,17 @@ import {
   executeCursorExecutionCore,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
+import { ensureInsightsAzureLogin } from '../aiRunsWorker/azureCliSession';
 import {
   createLocalCursorExecution,
+  playbookAgentNeedsAzureCli,
   type WorkerCursorExecution,
 } from '../aiRunsWorker/cursorExecution';
 import {
   RepoServiceReader,
   resolveRepoReadServiceUrl,
 } from '../repoRead/repoServiceReader';
+import { checkJudgeOutput } from '../workflowEvaluationJudgeOutput';
 import type { ArtifactFile } from './artifactUploader';
 import { isTransientCursorConnectionError } from './transientCursorError';
 import type { ExecuteWorkload, ExecutionOutcome } from './worker';
@@ -45,6 +54,8 @@ export type DocumentExecutionDependencies = Readonly<{
     signal?: AbortSignal,
   ) => Promise<RepoReader>;
   createExecution?: CreateExecution;
+  /** Signs `az` in before a step that queries Azure. Tests pass a stub. */
+  signInAzure?: () => Promise<void>;
   tempRoot?: string;
   now?: () => number;
 }>;
@@ -101,6 +112,14 @@ function isExpectedOutputPath(
     case 'walkthrough-smart-tagging':
       if (segments.length !== 1) return false;
       return name === 'walkthrough-anchor-smart-tagging.json';
+    case 'evaluation-judge':
+      if (segments.length !== 1) return false;
+      return name === JUDGE_RESULT_FILE || name === JUDGE_APPENDIX_FILE;
+    case 'evaluation-promptfoo':
+      // The Promptfoo executor writes its own files; no agent output is collected.
+      return false;
+    case 'skill-learning':
+      return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -200,6 +219,22 @@ function assertExpectedOutputSet(
     case 'playbook-step':
       // The Playbook's ingest step owns a missing scorecard, as on the V1 path.
       return;
+    case 'evaluation-judge':
+      if (
+        names.length !== 2
+        || !names.includes(JUDGE_RESULT_FILE)
+        || !names.includes(JUDGE_APPENDIX_FILE)
+      ) {
+        throw new Error('Document workflow did not produce both judge result files');
+      }
+      return;
+    case 'evaluation-promptfoo':
+      throw new Error('The document executor does not run Promptfoo suites');
+    case 'skill-learning':
+      if (names.length !== 1 || names[0] !== SKILL_LEARNING_RESULT_FILE) {
+        throw new Error(`Document workflow did not produce ${SKILL_LEARNING_RESULT_FILE}`);
+      }
+      return;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -255,6 +290,20 @@ async function listDocumentOutputPaths(
 }
 
 /**
+ * A case rewrite writes one `.case.json` next to its PRD and backlog inputs,
+ * which share the output folder, so only the case is returned.
+ */
+function caseRewriteOutputs(
+  workflowClass: BackgroundWorkflowClass,
+  names: string[],
+): string[] {
+  if (workflowClass !== 'test-cases') return names;
+  const cases = names.filter((name) => /\.case\.json$/i.test(name));
+  const fullSets = names.filter((name) => /\.test-cases\.json$/i.test(name));
+  return cases.length === 1 && fullSets.length === 0 ? cases : names;
+}
+
+/**
  * Read only the named output contract. Inputs, repository data, `.git`, and
  * every unrelated workspace file remain local and are deleted with the attempt.
  */
@@ -263,9 +312,9 @@ export async function collectDocumentArtifacts(
   workflowClass: BackgroundWorkflowClass,
 ): Promise<ArtifactFile[]> {
   const outputDirectory = path.join(workspacePath, ...OUTPUT_DIRECTORY_PARTS);
-  const outputPaths = await listDocumentOutputPaths(
-    outputDirectory,
+  const outputPaths = caseRewriteOutputs(
     workflowClass,
+    await listDocumentOutputPaths(outputDirectory, workflowClass),
   );
   assertExpectedOutputSet(workflowClass, outputPaths);
 
@@ -287,6 +336,24 @@ export async function collectDocumentArtifacts(
     });
   }
   return artifacts;
+}
+
+function assertResultMatchesSchema(
+  files: readonly ArtifactFile[],
+  resultFile: string,
+  outputSchema: Record<string, unknown> | undefined,
+): void {
+  if (!outputSchema) {
+    throw new Error('Specification has no output schema');
+  }
+  const result = files.find((file) => file.path === `${ARTIFACT_OUTPUT_PREFIX}${resultFile}`);
+  if (!result) {
+    throw new Error(`The agent did not write ${resultFile}`);
+  }
+  const check = checkJudgeOutput(result.content.toString(), outputSchema);
+  if (!check.ok) {
+    throw new Error(`${resultFile} does not match the output schema: ${check.errors.join('; ')}`);
+  }
 }
 
 async function prepareDocumentWorkspace(
@@ -535,6 +602,7 @@ export function createDocumentExecute(
     dependencies.openRepository ?? openDocumentRepository;
   const createExecution =
     dependencies.createExecution ?? createLocalCursorExecution;
+  const signInAzure = dependencies.signInAzure ?? ensureInsightsAzureLogin;
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
   const now = dependencies.now ?? Date.now;
 
@@ -578,11 +646,22 @@ export function createDocumentExecute(
     let execution: WorkerCursorExecution | undefined;
     try {
       const snapshot = executionSnapshot(specification, workspacePath);
-      const repository = documentWorkflowRequiresRepository(
+      // A Playbook step is scratch-only unless its policy asked for the pinned
+      // repository. The investigation skill does, and without the reader the
+      // agent has no get_skill_file, list_repo_dir, or search_repo_code.
+      const readsPinnedRepository = documentWorkflowRequiresRepository(
         specification.workflowClass,
-      )
+      ) || (
+        specification.workflowClass === 'playbook-step'
+        && specification.playbookAgentPolicy?.localAgent.customTools === 'native-read-only'
+        && Boolean(specification.groundedSha && specification.repository && specification.provider)
+      );
+      const repository = readsPinnedRepository
         ? await raceOperation(openRepository(specification, signal), signal)
         : undefined;
+      if (playbookAgentNeedsAzureCli(snapshot)) {
+        await raceOperation(signInAzure(), signal);
+      }
       if (signal.aborted) throw abortError();
 
       await raceOperation(
@@ -673,6 +752,10 @@ export function createDocumentExecute(
         ),
         signal,
       );
+      const resultFile = documentWorkflowResultFile(specification.workflowClass);
+      if (resultFile) {
+        assertResultMatchesSchema(files, resultFile, specification.outputSchema);
+      }
       const reply = result.text.trim();
       if (reply) {
         files.push({

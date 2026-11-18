@@ -3,6 +3,28 @@ import path from 'node:path';
 import type { BrainstormTurnSources } from '../../../shared/types/brainstormSources';
 import type { DurableInteractiveTurnSpecification } from '../../../shared/types/durableInteractiveTurn';
 
+/** Read-only sources a turn mounts under `sources/<id>`: Brainstorm sources or Interview reference repositories. */
+export function turnReadSources(
+  specification: Pick<DurableInteractiveTurnSpecification, 'workflowClass' | 'brainstorm' | 'referenceSources'>,
+): BrainstormTurnSources | undefined {
+  switch (specification.workflowClass) {
+    case 'brainstorm':
+      return specification.brainstorm?.sources;
+    case 'interview':
+      return specification.referenceSources;
+    case 'adr':
+    case 'home-chat':
+    case 'ask-apex':
+    case 'assistant':
+      return undefined;
+    default: {
+      const unhandled: never = specification.workflowClass;
+      void unhandled;
+      return undefined;
+    }
+  }
+}
+
 type Checkout = (
   grounding: NonNullable<DurableInteractiveTurnSpecification['grounding']>,
   destination: string,

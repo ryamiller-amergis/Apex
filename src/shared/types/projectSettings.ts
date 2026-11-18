@@ -212,6 +212,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   prdAssistantSkillPath?: string | null;
   prdAssistantModel?: string | null;
   prdValidationModel?: string | null;
+  /** Model every workflow-evaluation judge uses; null falls back to PRD Validation, then the app default. */
+  evaluationJudgeModel?: string | null;
+  /** Effort for those judges; null falls back to PRD Validation effort. */
+  evaluationJudgeEffort?: EffortLevel | null;
   defaultModel?: string | null;
   prdReviewBedrockModelId?: string | null;
   prdReviewBedrockMaxTokens?: number | null;
@@ -294,6 +298,14 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   designModuleScopingSkillPath?: string | null;
   /** Model override for Design Module sourceGlob scoping. */
   designModuleScopingModel?: string | null;
+  /** Sidecar skill used to generate Release Management executive changelogs. */
+  releaseChangelogSkillPath?: string | null;
+  /** Cursor model override for Release Management executive changelogs. */
+  releaseChangelogModel?: string | null;
+  /** Reasoning effort override for Release Management executive changelogs. */
+  releaseChangelogEffort?: EffortLevel | null;
+  /** Optional AWS Bedrock model override for Release Management executive changelogs. */
+  releaseChangelogBedrockModelId?: string | null;
   /** Admin-managed repository checkout status for this configuration. */
   repositoryCheckoutStatus?: RepositoryCheckoutStatus;
   repositoryCheckoutSha?: string | null;
@@ -386,6 +398,10 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   designModuleModel?: string | null;
   designModuleScopingSkillPath?: string | null;
   designModuleScopingModel?: string | null;
+  releaseChangelogSkillPath?: string | null;
+  releaseChangelogModel?: string | null;
+  releaseChangelogEffort?: EffortLevel | null;
+  releaseChangelogBedrockModelId?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -482,6 +498,10 @@ export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   designModuleModel?: string | null;
   designModuleScopingSkillPath?: string | null;
   designModuleScopingModel?: string | null;
+  releaseChangelogSkillPath?: string | null;
+  releaseChangelogModel?: string | null;
+  releaseChangelogEffort?: EffortLevel | null;
+  releaseChangelogBedrockModelId?: string | null;
   repositoryCheckoutStatus?: RepositoryCheckoutStatus;
   repositoryCheckoutSha?: string | null;
   repositoryCheckoutError?: string | null;

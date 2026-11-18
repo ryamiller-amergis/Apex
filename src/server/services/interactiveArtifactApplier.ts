@@ -85,12 +85,14 @@ export function assertInteractiveArtifactManifestIdentity(
   }
 }
 
-/**
- * Download, checksum-verify, and write each manifest entry beneath the thread
- * workspace. Writes use exclusive create (`wx`) with mode 0600.
- */
-export async function applyInteractiveArtifacts(options: {
-  workspaceRoot: string;
+/** A manifest entry whose bytes matched its checksum. `path` starts with `.ai-pilot/`. */
+export interface VerifiedInteractiveArtifact {
+  path: string;
+  body: Buffer;
+}
+
+/** Download and checksum-verify each manifest entry. Writes nothing. */
+export async function readInteractiveArtifacts(options: {
   manifest: AiRunV2ArtifactManifest;
   expected: Readonly<{
     runId: string;
@@ -98,12 +100,12 @@ export async function applyInteractiveArtifacts(options: {
     attemptNumber: number;
   }>;
   reader: InteractiveArtifactReader;
-}): Promise<void> {
+}): Promise<VerifiedInteractiveArtifact[]> {
   assertInteractiveArtifactManifestIdentity(options.manifest, options.expected);
 
+  const files: VerifiedInteractiveArtifact[] = [];
   for (const entry of options.manifest.files) {
-    const target = resolveUnderWorkspace(
-      options.workspaceRoot,
+    const relativePath = assertAllowedPath(
       entry.path.startsWith('.ai-pilot/')
         ? entry.path
         : path.posix.join('.ai-pilot', entry.path),
@@ -115,9 +117,45 @@ export async function applyInteractiveArtifacts(options: {
         `Artifact checksum mismatch for ${entry.path}`,
       );
     }
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, body, { flag: 'wx', mode: 0o600 });
+    files.push({ path: relativePath, body });
   }
+  return files;
+}
+
+/** The agent's transcript among verified artifacts, if it wrote one. */
+export function interactiveTranscript(
+  files: readonly VerifiedInteractiveArtifact[],
+): string | null {
+  const transcript = files.find((file) => file.path === ALLOWED_TRANSCRIPT);
+  return transcript ? transcript.body.toString('utf8') : null;
+}
+
+/** Write verified artifacts beneath the thread workspace with exclusive create (`wx`), mode 0600. */
+export async function writeInteractiveArtifacts(
+  workspaceRoot: string,
+  files: readonly VerifiedInteractiveArtifact[],
+): Promise<void> {
+  for (const file of files) {
+    const target = resolveUnderWorkspace(workspaceRoot, file.path);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, file.body, { flag: 'wx', mode: 0o600 });
+  }
+}
+
+/** Download, checksum-verify, and write each manifest entry beneath the thread workspace. */
+export async function applyInteractiveArtifacts(options: {
+  workspaceRoot: string;
+  manifest: AiRunV2ArtifactManifest;
+  expected: Readonly<{
+    runId: string;
+    attemptId: string;
+    attemptNumber: number;
+  }>;
+  reader: InteractiveArtifactReader;
+}): Promise<{ transcript: string | null }> {
+  const files = await readInteractiveArtifacts(options);
+  await writeInteractiveArtifacts(options.workspaceRoot, files);
+  return { transcript: interactiveTranscript(files) };
 }
 
 /** Convenience: build a Blob-backed reader using an injectable download fn. */

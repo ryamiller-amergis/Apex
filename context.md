@@ -45,6 +45,7 @@ The default landing experience for AI-assisted work within a project.
 - **Streaming chat** — SSE-powered agent responses with attachment support
 - **MCP servers** — optional quick-launch pills for configured MCP servers
 - **Gated by** — `home:view` permission and the `agent-home` feature flag (both granted to all roles by default)
+- **Artifact cycle time** — a home dashboard card for how long work items take through the pipeline. It is not a Planning tab
 
 ### 1. AI-Guided Design Interviews
 
@@ -115,14 +116,12 @@ AI-facilitated daily standups where each team member interacts with a personal s
 
 ### 7. Planning & Analytics
 
-A suite of planning tools for delivery teams:
+Planning has two tabs:
 
-- **Developer Stats** — individual developer metrics and workload analysis
-- **QA Metrics** — QA team performance and testing throughput
-- **AI Analysis** — AI-powered analysis of work item patterns and delivery health
 - **Roadmap** — visual timeline with sticky work item columns and horizontal scrolling for 12+ months
-- **Releases** — release epic management with progress tracking, delete functionality, child item counts, and a flagged Create CAB request action that confirms dry-run vs prod snow then streams the project `cab-release` skill on the same page
-- **Cycle Time** — analytics for measuring how long work items take through the pipeline
+- **Releases** — release epic management with progress tracking, configurable target platforms, child item counts, an executive changelog, and a flagged Create CAB request action that confirms dry-run vs prod snow then streams the project `cab-release` skill on the same page
+
+Developer Stats, QA Metrics, and AI Analysis are not Planning tabs. `planning:qa` remains for QA Lab and test cases.
 
 ### 8. Cloud Cost Tracking
 
@@ -361,7 +360,7 @@ Per-user settings accessible from the header user menu.
 |----------|-------|------------|-------------|
 | Home | `/home` | `home:view` permission + `agent-home` feature flag (both granted to all roles by default) | Agent chat home with skill pills for guided conversations |
 | Calendar | `/calendar` | `calendar:view` + menu enabled | Work item calendar with drag-and-drop scheduling |
-| Planning | `/planning/*` | `planning:view` + menu enabled | Analytics tabs: Dev Stats, QA Metrics, AI Analysis, Roadmap, Releases |
+| Planning | `/planning/*` | `planning:view` + menu enabled | Roadmap and Releases. Releases includes target platforms and the executive changelog |
 | Cloud Cost | `/cloud-cost` | `cost:view` + menu enabled | Azure cloud cost visualization |
 | Interview | `/backlog` | `interviews:view` + menu enabled | Interview dashboard, PRD review, design docs, prototypes |
 | ADR | `/adr` | `adr:view` + menu enabled | Architecture decision interviews and MADR records |

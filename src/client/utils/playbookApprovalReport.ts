@@ -28,7 +28,7 @@ function ancestorsNearestFirst(edges: readonly PlaybookGraphEdge[], stepId: stri
 }
 
 function reportText(output: Record<string, unknown> | null): string | null {
-  const report = output?.reportMd;
+  const report = output?.reportMd ?? output?.output;
   return typeof report === 'string' && report.trim() ? report : null;
 }
 

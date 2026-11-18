@@ -146,12 +146,14 @@ function managerFor(
   store: SourceWorkspaceStore,
   gitOverrides: Partial<SourceManagerDeps['git']> = {},
   fileOverrides: Partial<SourceManagerDeps['files']> = {},
+  isServedRemotely?: SourceManagerDeps['isServedRemotely'],
 ) {
   const calls: string[] = [];
   return {
     calls,
     manager: createSourceWorkspaceManager({
       store,
+      isServedRemotely,
       dataRoot: path.join(os.tmpdir(), 'brainstorm-test'),
       now: () => new Date('2026-10-29T12:30:00.000Z'),
       pollMs: 5,
@@ -324,6 +326,40 @@ describe('FEAT-002 source manager — PBI-005 / PBI-006 / PBI-010', () => {
     expect(observed).toBe('restoring');
     expect(settled.ready[0]?.commitSha).toBe(SHA);
     expect(settled.ready[0]?.state).toBe('ready');
+  });
+
+  it('treats a remotely served source as ready without a local copy or a restore', async () => {
+    const store = memoryStore([row({
+      id: '10000000-0000-4000-8000-000000000033',
+      kind: 'project-repository',
+      state: 'cleaned',
+      commitSha: SHA,
+      refId: '20000000-0000-4000-8000-000000000002',
+      groundingProvider: 'github',
+      groundingRepository: 'org/apex',
+    })]);
+    const { manager, calls } = managerFor(store, {}, {}, (source) => Boolean(source.groundingRepository));
+    const settled = await manager.ensureSourcesReady(SESSION, PROJECT, LIMITS);
+    expect(calls).not.toContain('clone');
+    expect(settled.ready[0]?.state).toBe('ready');
+  });
+
+  it('records the repository identity when it restores an older source', async () => {
+    const store = memoryStore([row({
+      id: '10000000-0000-4000-8000-000000000034',
+      kind: 'project-repository',
+      state: 'cleaned',
+      commitSha: SHA,
+      refId: '20000000-0000-4000-8000-000000000002',
+    })]);
+    const { manager } = managerFor(store);
+    await manager.ensureSourcesReady(SESSION, PROJECT, LIMITS);
+    expect(store.rows[0]).toEqual(expect.objectContaining({
+      state: 'ready',
+      groundingProvider: 'github',
+      groundingProject: PROJECT,
+      groundingRepository: 'org/apex',
+    }));
   });
 
   it('PBI-010 (b) / VT-32 leaves an unrestorable source unavailable', async () => {

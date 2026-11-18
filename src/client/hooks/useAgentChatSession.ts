@@ -101,6 +101,12 @@ export interface SendOptions {
    * awaited reply still blocks.
    */
   duringPreparation?: boolean;
+  /**
+   * Allow sending when a caller-owned ledger already confirms the prior turn
+   * is settled (e.g. Brainstorm's `brainstorm_messages` ledger) even if the
+   * WebSocket stream has not yet emitted its terminal frame.
+   */
+  ignoreStaleStreamBusy?: boolean;
 }
 
 export interface AgentChatSession {
@@ -257,14 +263,30 @@ export function useAgentChatSession(
     optimisticUserMessage &&
     messages.some(
       (message) =>
-        message.role === 'user' &&
-        message.text === optimisticUserMessage.text &&
-        !optimisticBaselineIdsRef.current.has(message.id)
+        message.id === optimisticUserMessage.id ||
+        (message.role === 'user' &&
+          message.text === optimisticUserMessage.text &&
+          !optimisticBaselineIdsRef.current.has(message.id))
     )
   );
+  // The reply can stream in before the persisted user echo (V2 turns publish
+  // it on another channel), so keep the pending question ahead of anything
+  // that arrived after it was sent.
+  const firstMessageAfterSend =
+    optimisticUserMessage && !hasPersistedOptimisticEcho
+      ? messages.findIndex(
+          (message) => !optimisticBaselineIdsRef.current.has(message.id)
+        )
+      : -1;
   const displayedMessages =
     optimisticUserMessage && !hasPersistedOptimisticEcho
-      ? [...messages, optimisticUserMessage]
+      ? firstMessageAfterSend === -1
+        ? [...messages, optimisticUserMessage]
+        : [
+            ...messages.slice(0, firstMessageAfterSend),
+            optimisticUserMessage,
+            ...messages.slice(firstMessageAfterSend),
+          ]
       : messages;
   const visibleMessages = displayedMessages.filter(visibleMessageFilter);
   const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
@@ -279,9 +301,12 @@ export function useAgentChatSession(
   // Preparation state (opt-in)
   const isEmptyInProgress =
     enablePreparationState && visibleMessages.length === 0 && !streamingText;
+  // An empty idle thread with no queued or running run is waiting for its first
+  // message (threads created with skipAutoKickoff), not preparing.
+  const hasPendingRun = status === 'running' || Boolean(initialActiveRunId);
   const isPreparing = Boolean(
     groundingPreparation?.status === 'preparing' ||
-    (enablePreparationState && isEmptyInProgress && status !== 'error')
+    (enablePreparationState && isEmptyInProgress && hasPendingRun && status !== 'error')
   );
   const hasPreparationError = Boolean(
     groundingPreparation?.status === 'failed' ||
@@ -443,7 +468,10 @@ export function useAgentChatSession(
         !isRunning &&
         !isSending &&
         !isAwaitingAgentResponse;
-      if (isInteractionBusy && !preparationOnly) return false;
+      const staleStreamOnly =
+        opts.ignoreStaleStreamBusy === true &&
+        !isSending;
+      if (isInteractionBusy && !preparationOnly && !staleStreamOnly) return false;
 
       // beforeSend hook (e.g. syncToken)
       if (beforeSend) {

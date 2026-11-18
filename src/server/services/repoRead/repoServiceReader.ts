@@ -45,6 +45,10 @@ export function resolveRepoReadServiceToken(
   );
 }
 
+// Bounded so a cold hydration or slow remote search cannot outlive the
+// interactive actor's silence/tool deadline (90s/60s) and abort the whole turn.
+const DEFAULT_REQUEST_TIMEOUT_MS = 25_000;
+
 export class RepoServiceReader implements RepoReader {
   readonly identity: RepositoryIdentity;
   private readonly baseUrl: string;
@@ -54,8 +58,9 @@ export class RepoServiceReader implements RepoReader {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly signal?: AbortSignal;
+  private readonly requestTimeoutMs: number;
 
-  constructor(options: RepoServiceReaderOptions) {
+  constructor(options: RepoServiceReaderOptions & { requestTimeoutMs?: number }) {
     const baseUrl = options.baseUrl ?? resolveRepoReadServiceUrl();
     if (!baseUrl) {
       throw new RepoReaderError(
@@ -72,6 +77,7 @@ export class RepoServiceReader implements RepoReader {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? Date.now;
     this.signal = options.signal;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   async readFile(filePath: string): Promise<string> {
@@ -90,8 +96,12 @@ export class RepoServiceReader implements RepoReader {
     return body.entries;
   }
 
-  async searchCode(query: string, limit?: number): Promise<RepoSearchResult[]> {
-    const body = await this.request('search', { query, limit });
+  async searchCode(query: string, limit?: number, scopedPath?: string): Promise<RepoSearchResult[]> {
+    const body = await this.request('search', {
+      query,
+      limit,
+      ...(scopedPath?.trim() ? { path: scopedPath.trim() } : {}),
+    });
     if (!body.ok || body.operation !== 'search') {
       throw unavailable();
     }
@@ -110,11 +120,18 @@ export class RepoServiceReader implements RepoReader {
       headers.Authorization = `Bearer ${this.authToken}`;
     }
     let response: Response;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('timeout')), this.requestTimeoutMs);
+    const onParentAbort = () => controller.abort(this.signal?.reason);
+    if (this.signal) {
+      if (this.signal.aborted) controller.abort(this.signal.reason);
+      else this.signal.addEventListener('abort', onParentAbort, { once: true });
+    }
     try {
       response = await this.fetchImpl(`${this.baseUrl}/v1/${operation}`, {
         method: 'POST',
         headers,
-        signal: this.signal,
+        signal: controller.signal,
         body: JSON.stringify({
           provider: this.identity.provider,
           project: this.identity.project,
@@ -125,6 +142,9 @@ export class RepoServiceReader implements RepoReader {
       });
     } catch {
       throw unavailable();
+    } finally {
+      clearTimeout(timer);
+      this.signal?.removeEventListener('abort', onParentAbort);
     }
 
     const parsed = (await response.json().catch(() => null)) as

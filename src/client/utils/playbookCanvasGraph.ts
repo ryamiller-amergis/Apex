@@ -7,8 +7,12 @@ export type PlaybookFlowNodeData = {
   config: Record<string, unknown>;
   readOnly?: boolean;
   runStatus?: string;
+  /** What is wrong with this step, as the server's check words it. Empty or absent when nothing is. */
+  issues?: string[];
   /** Copied from the graph node so a canvas edit does not drop a parallel split. */
   parallel?: boolean;
+  /** The author's name for the step. */
+  title?: string;
 };
 
 export type PlaybookFlowNode = {
@@ -52,6 +56,7 @@ export function graphToFlow(
         label: node.id,
         config: node.config ?? {},
         ...(node.parallel ? { parallel: true } : {}),
+        ...(node.title ? { title: node.title } : {}),
       },
     };
   });
@@ -74,6 +79,7 @@ export function flowToGraph(
     nodes: nodes.map((node) => ({
       id: node.id,
       stepType: node.data.stepType,
+      ...(node.data.title ? { title: node.data.title } : {}),
       ...(Object.keys(node.data.config).length ? { config: node.data.config } : {}),
       ...(node.data.parallel ? { parallel: true } : {}),
     })),

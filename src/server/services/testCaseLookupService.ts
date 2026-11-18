@@ -221,6 +221,7 @@ function normalizeExisting(value: unknown): QaLabExistingCase | null {
     reason: asString(record.reason) ?? '',
     source: record.source === 'linked' ? 'linked' : 'suite',
     ...(current ? { current } : {}),
+    ...(typeof record.inTestPlan === 'boolean' ? { inTestPlan: record.inTestPlan } : {}),
   };
 }
 

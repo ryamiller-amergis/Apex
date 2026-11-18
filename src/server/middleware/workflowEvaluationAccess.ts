@@ -7,7 +7,7 @@ import {
 } from './rbac';
 import { isFeatureEnabled, isFeatureOperational } from '../services/featureFlagService';
 import { getUserId } from '../utils/requestUser';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../../shared/types/featureFlags';
 import {
   WORKFLOW_EVALUATION_SUBMIT,
   WORKFLOW_EVALUATION_VIEW,
@@ -19,7 +19,7 @@ export const BODY_PROJECT_ERROR = 'project must not be sent in the request body'
 export const MISSING_PROJECT_ERROR = 'project query or x-apex-project header is required';
 
 /**
- * Cleanup plan for `workflow-human-evaluation`: retain the enabled branch
+ * Cleanup plan for `skill-learning`: retain the enabled branch
  * after two stable sprints at full rollout.
  */
 export const rejectBodyProject: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
@@ -48,18 +48,18 @@ export const requireWorkflowEvaluationFlag: RequestHandler = async (
       return;
     }
     const userId = getUserId(req);
-    const enabled = await isFeatureEnabled(WORKFLOW_HUMAN_EVALUATION_FLAG, { userId, project });
-    // @feature-flag:workflow-human-evaluation start winner=enabled
+    const enabled = await isFeatureEnabled(SKILL_LEARNING_FLAG, { userId, project });
+    // @feature-flag:skill-learning start winner=enabled
     if (!enabled) {
-      // @feature-flag:workflow-human-evaluation disabled-start
+      // @feature-flag:skill-learning disabled-start
       res.status(404).json({ error: 'Not found' });
       return;
-      // @feature-flag:workflow-human-evaluation disabled-end
+      // @feature-flag:skill-learning disabled-end
     }
-    // @feature-flag:workflow-human-evaluation enabled-start
+    // @feature-flag:skill-learning enabled-start
     next();
-    // @feature-flag:workflow-human-evaluation enabled-end
-    // @feature-flag:workflow-human-evaluation end
+    // @feature-flag:skill-learning enabled-end
+    // @feature-flag:skill-learning end
   } catch (err) {
     next(err);
   }
@@ -71,18 +71,18 @@ export const requireWorkflowEvaluationOperational: RequestHandler = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const operational = await isFeatureOperational(WORKFLOW_HUMAN_EVALUATION_FLAG);
-    // @feature-flag:workflow-human-evaluation start winner=enabled
+    const operational = await isFeatureOperational(SKILL_LEARNING_FLAG);
+    // @feature-flag:skill-learning start winner=enabled
     if (!operational) {
-      // @feature-flag:workflow-human-evaluation disabled-start
+      // @feature-flag:skill-learning disabled-start
       res.status(404).json({ error: 'Not found' });
       return;
-      // @feature-flag:workflow-human-evaluation disabled-end
+      // @feature-flag:skill-learning disabled-end
     }
-    // @feature-flag:workflow-human-evaluation enabled-start
+    // @feature-flag:skill-learning enabled-start
     next();
-    // @feature-flag:workflow-human-evaluation enabled-end
-    // @feature-flag:workflow-human-evaluation end
+    // @feature-flag:skill-learning enabled-end
+    // @feature-flag:skill-learning end
   } catch (err) {
     next(err);
   }

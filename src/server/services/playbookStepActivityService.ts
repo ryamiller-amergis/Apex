@@ -15,11 +15,21 @@ import { getThread } from './chatAgentService';
 import { getRun } from './playbookRunProjectionService';
 
 const MAX_ENTRIES = 300;
+/** Streamed replies arrive a few words per event, so read far more rows than entries shown. */
+const MAX_EVENT_ROWS = 3000;
 const MAX_DETAIL_CHARS = 1200;
+const MAX_STREAM_CHARS = 12000;
 
-function clip(text: string): string {
+function clip(text: string, max = MAX_DETAIL_CHARS): string {
   const trimmed = text.trim();
-  return trimmed.length > MAX_DETAIL_CHARS ? `${trimmed.slice(0, MAX_DETAIL_CHARS - 1)}…` : trimmed;
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
+
+/** Joins two streamed chunks without losing or doubling the space between them. */
+export function joinStreamText(previous: string, next: string): string {
+  if (!previous) return next;
+  if (/\s$/.test(previous) || /^\s/.test(next) || /^[.,;:!?)\]}'"]/.test(next)) return previous + next;
+  return `${previous} ${next}`;
 }
 
 /** The argument a reader cares about for a tool call: a path, a command, or a query. */
@@ -38,6 +48,8 @@ export function runEventActivityEntries(
   rows: ReadonlyArray<{ eventId: string; detail: string | null; event: unknown; at: string }>,
 ): PlaybookStepActivityEntry[] {
   const entries: PlaybookStepActivityEntry[] = [];
+  // Raw text of each reply or thinking entry, joined across consecutive chunks before clipping.
+  const streamed = new Map<PlaybookStepActivityEntry, string>();
   for (const row of rows) {
     const event = row.event && typeof row.event === 'object'
       ? row.event as Record<string, unknown>
@@ -59,16 +71,25 @@ export function runEventActivityEntries(
       });
       continue;
     }
-    if (type === 'thinking') {
+    if (type === 'thinking' || type === 'token') {
       const text = typeof event.text === 'string' ? event.text : row.detail;
-      if (!text?.trim()) continue;
-      entries.push({ id: row.eventId, kind: 'thinking', title: 'Thinking', detail: clip(text), at: row.at });
-      continue;
-    }
-    if (type === 'token') {
-      const text = typeof event.text === 'string' ? event.text : row.detail;
-      if (!text?.trim()) continue;
-      entries.push({ id: row.eventId, kind: 'message', title: 'Agent', detail: clip(text), at: row.at });
+      if (!text) continue;
+      const kind = type === 'thinking' ? 'thinking' : 'message';
+      const previous = entries[entries.length - 1];
+      if (previous && previous.kind === kind && streamed.has(previous)) {
+        // Token rows are exact slices of the reply; thinking chunks may arrive without their spaces.
+        streamed.set(previous, kind === 'message' ? streamed.get(previous)! + text : joinStreamText(streamed.get(previous)!, text));
+        continue;
+      }
+      if (!text.trim()) continue;
+      const entry: PlaybookStepActivityEntry = {
+        id: row.eventId,
+        kind,
+        title: kind === 'thinking' ? 'Thinking' : 'Agent',
+        at: row.at,
+      };
+      streamed.set(entry, text);
+      entries.push(entry);
       continue;
     }
     if (type === 'error') {
@@ -84,7 +105,11 @@ export function runEventActivityEntries(
       entries.push({ id: row.eventId, kind: 'status', title, at: row.at });
     }
   }
-  return entries.slice(-MAX_ENTRIES);
+  for (const [entry, text] of streamed) {
+    const detail = clip(text, MAX_STREAM_CHARS);
+    if (detail) entry.detail = detail;
+  }
+  return entries.filter((entry) => !streamed.has(entry) || entry.detail).slice(-MAX_ENTRIES);
 }
 
 export function threadActivityEntries(messages: readonly ChatMessage[]): PlaybookStepActivityEntry[] {
@@ -180,7 +205,7 @@ export async function getPlaybookStepActivity(input: {
     .from(agentRunEvents)
     .where(eq(agentRunEvents.runId, step.agentRunId))
     .orderBy(desc(agentRunEvents.sequence))
-    .limit(MAX_ENTRIES);
+    .limit(MAX_EVENT_ROWS);
   const events = newestFirst.reverse();
   // A V2 worker records its detailed progress in agent_run_events while the thread
   // may contain only the prompt. Returning both prevents that prompt from hiding

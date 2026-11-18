@@ -12,6 +12,7 @@
 import express, { Request, Response } from 'express';
 import { requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
+import { forwardAsyncErrors } from '../utils/forwardAsyncErrors';
 import { isSuperAdminRequest } from '../utils/superAdmin';
 import { getRun, listRuns } from '../services/playbookRunProjectionService';
 import {
@@ -26,9 +27,18 @@ import {
 import {
   PlaybookGuardViolationError,
   assertCanvasConnection,
+  collectGraphIssues,
+  nodeIdOfError,
 } from '../services/playbookGuardService';
+import { PlaybookMcpCapabilityError } from '../services/playbookMcpCapabilityService';
+import { PlaybookExecutionCapabilityError } from '../services/playbookExecutionCapabilityService';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
+import {
+  CLOUD_AGENT_SETUP_REASON,
+  cloudAgentPlaybookSetupGap,
+} from '../services/cloudAgentDeliverySettings';
 import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { saveRequestAdoRefreshToken } from '../services/adoStoredUserToken';
 import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
 import {
   PlaybookRecommendationError,
@@ -62,6 +72,7 @@ import {
   ensurePlaybookRunNotifyListener,
   subscribePlaybookRunEvents,
 } from '../services/playbookRunNotifyService';
+import { PlaybookBranchConditionError } from '../services/playbookSteps/branchConditionEvaluator';
 import { PlaybookStepSchemaError } from '../services/playbookSteps/descriptorValidation';
 import {
   PlaybookStepTypeError,
@@ -118,7 +129,9 @@ import {
 } from '../services/playbookStepOutputService';
 import playbookTriggersRouter from './playbookTriggers';
 
-const router = express.Router();
+// Express 4 leaves a request open when an async handler throws. Forwarding the error lets the
+// app's error middleware answer it, so no Playbook route can hang on an error it forgot to map.
+const router = forwardAsyncErrors(express.Router());
 
 router.use('/triggers', playbookTriggersRouter);
 
@@ -177,17 +190,24 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 function sendDefinitionError(error: unknown, res: Response): boolean {
+  // `nodeId` names the step a validation error is about, so the canvas can select it.
+  const nodeId = nodeIdOfError(error);
+  const scope = nodeId ? { nodeId } : {};
+
   if (error instanceof PlaybookGuardViolationError) {
-    res.status(400).json({ error: error.message, violation: error.violation });
+    res.status(400).json({ error: error.message, violation: error.violation, ...scope });
     return true;
   }
 
   if (
+    error instanceof PlaybookBranchConditionError ||
+    error instanceof PlaybookMcpCapabilityError ||
+    error instanceof PlaybookExecutionCapabilityError ||
     error instanceof UnknownPlaybookStepTypeError ||
     error instanceof PlaybookStepSchemaError ||
     error instanceof PlaybookStepTypeError
   ) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...scope });
     return true;
   }
 
@@ -568,6 +588,7 @@ router.put(
       return;
     }
 
+    await saveRequestAdoRefreshToken(req);
     try {
       res.json(
         await updateDraft({
@@ -609,12 +630,14 @@ router.post(
       return;
     }
 
+    await saveRequestAdoRefreshToken(req);
     try {
       const result = await publishDraft({
         project,
         definitionId: req.params.definitionId,
         publishedByUserId,
         expectedDraftUpdatedAt,
+        authoredInBuilder: true,
         ...(isPlainRecord(sampleRunInput) ? { sampleRunInput } : {}),
       });
       res.status(201).json(result);
@@ -651,8 +674,16 @@ router.post(
 router.get(
   '/step-types',
   requirePermission('playbooks:view'),
-  async (_req: Request, res: Response): Promise<void> => {
-    res.json({ items: listPlaybookStepPaletteItems() });
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const cloudAgentGap = project
+      ? await cloudAgentPlaybookSetupGap(project).catch(() => CLOUD_AGENT_SETUP_REASON)
+      : null;
+    res.json({
+      items: listPlaybookStepPaletteItems().map((item) =>
+        item.stepType === 'cloud-agent' && cloudAgentGap ? { ...item, unavailableReason: cloudAgentGap } : item,
+      ),
+    });
   },
 );
 
@@ -661,6 +692,27 @@ router.get(
   requirePermission('playbooks:author'),
   async (_req: Request, res: Response): Promise<void> => {
     res.json({ skills: await listPlaybookSkillOptions() });
+  },
+);
+
+/**
+ * Every problem in a graph, for the canvas to mark on the steps and connections they are on.
+ * Takes the graph in the body, so it also checks edits that are not saved yet.
+ */
+router.post(
+  '/graph/validate',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { project, graph } = (req.body ?? {}) as RequestBody;
+    if (!isNonBlankString(project)) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!isPlaybookGraph(graph)) {
+      res.status(400).json({ error: 'graph must contain valid nodes and edges arrays' });
+      return;
+    }
+    res.json({ issues: collectGraphIssues(graph) });
   },
 );
 
@@ -1009,6 +1061,7 @@ router.post(
       return;
     }
 
+    await saveRequestAdoRefreshToken(req);
     try {
       const result = await startRun({
         project,

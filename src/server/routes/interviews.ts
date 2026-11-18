@@ -1,6 +1,4 @@
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import fs from 'fs';
-import path from 'path';
 import { requireAnyPermission, requirePermission, requireGroupMembership, resolveRequestProject } from '../middleware/rbac';
 import { getDisplayName, getUserId } from '../utils/requestUser';
 import { getAdoTokenForUser } from '../services/adoUserToken';
@@ -35,17 +33,27 @@ import {
 } from '../services/interviewService';
 import {
   addAdrLink,
+  addBrainstormLink,
   addDesignModuleLink,
+  addReferenceRepositoryLink,
   getLinkedContext,
+  getReferenceRepositories,
   listCandidates,
   listProjectCandidates,
   removeAdrLink,
+  removeBrainstormLink,
   removeDesignModuleLink,
+  removeReferenceRepositoryLink,
 } from '../services/interviewLinkService';
-import { InterviewLinkError } from '../../shared/types/interviewLinks';
+import {
+  INTERVIEW_REFERENCE_REPOSITORIES_FLAG,
+  InterviewLinkError,
+} from '../../shared/types/interviewLinks';
 import type {
   AddAdrLinkRequest,
+  AddBrainstormLinkRequest,
   AddDesignModuleLinkRequest,
+  AddReferenceRepositoryRequest,
   LinkCandidateType,
 } from '../../shared/types/interviewLinks';
 import { getActiveUsers, getUserPermissions } from '../services/rbacService';
@@ -84,6 +92,7 @@ import {
   dismissPrdFixSession,
   applyProposedPrdChanges,
 } from '../services/prdService';
+import { emitSkillSignal } from '../services/skillSignalService';
 import {
   acceptFixValidation,
   assertDesignDocApprovalReady,
@@ -164,6 +173,9 @@ import {
   restoreCaseRegeneration,
 } from '../services/qaCaseRegenerationService';
 import { openQaLabAssistantThread } from '../services/qaLabAssistantService';
+import qaCaseRunRouter from './qaCaseRuns';
+import qaLabAssistantProposalRouter from './qaLabAssistantProposals';
+import { publishSuiteRuns } from '../services/qaCaseRunService';
 import type {
   QaAdoSuiteSelection,
   QaLabAddCaseCommentRequest,
@@ -179,7 +191,8 @@ import {
   generateFallbackReport as generateFallbackValidationReport,
   ingestValidationScorecard,
 } from '../services/documentValidationService';
-import { isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import { isFeatureEnabled, isProjectRepositoryCheckoutReadinessEnabled } from '../services/featureFlagService';
+import { writeThreadFolderFile } from '../services/threadFolder';
 import {
   DesignDocValidationPlaybookConfigurationError,
   DesignDocValidationPlaybookForbiddenError,
@@ -195,6 +208,9 @@ import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
 import { resolveReviewerAvailability } from '../services/reviewerAvailabilityService';
 
 const router = Router();
+
+router.use(qaCaseRunRouter);
+router.use(qaLabAssistantProposalRouter);
 
 router.get('/reviewer-availability', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
@@ -621,7 +637,7 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
       return;
     }
     const adoService = await adoWriteForRequest(req, suite.project);
-    res.json(await publishAdoTestCases(suite.id, {
+    const published = await publishAdoTestCases(suite.id, {
       ado: adoService,
       ...(selections ? { selections } : {}),
       ...(localCaseIds ? { localCaseIds } : {}),
@@ -630,7 +646,8 @@ router.post('/ado-test-suites/:suiteId/publish', requirePermission('interviews:m
         ? { newPlacements: newPlacements.filter((entry): entry is QaLabNewPlacementApproval => entry !== null) }
         : {}),
       ...(newPlacementSelections ? { newPlacementSelections } : {}),
-    }));
+    });
+    res.json({ ...published, runs: await publishSuiteRuns(suite.id, adoService) });
   } catch (err) {
     if (isAdoUserAuthError(err)) {
       res.status(403).json({ error: err.message });
@@ -1481,14 +1498,18 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, prd.prdAssistantThreadId))
         .limit(1);
-      if (threadRow?.workspaceDir) {
-        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-        try {
-          fs.writeFileSync(contextPath, buildPrdContext(prd.prdAssistantThreadId), 'utf-8');
-        } catch {
-          // Non-fatal: workspace may have been cleaned up
-        }
+      const refreshedContext = buildPrdContext(prd.prdAssistantThreadId);
+      try {
+        await writeThreadFolderFile({
+          project: prd.project,
+          workspaceDir: threadRow?.workspaceDir,
+          relativePath: '.ai-pilot/kickoff-context.md',
+          content: refreshedContext,
+        });
+      } catch {
+        // Non-fatal: workspace may have been cleaned up
       }
+      await updateThreadKickoffContext(prd.prdAssistantThreadId, refreshedContext);
       res.json({ threadId: prd.prdAssistantThreadId });
       return;
     }
@@ -1510,9 +1531,13 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
     // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
     const realContext = buildPrdContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realContext);
+    await writeThreadFolderFile({
+      project: prd.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realContext,
+    });
+    await updateThreadKickoffContext(thread.id, realContext);
 
     await inheritAssistantPin({
       sourceThreadId: prd.chatThreadId,
@@ -1637,6 +1662,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
             : { proposedContent: revised, updatedAt: new Date().toISOString() }) as any,
         )
         .where(eq(prdsTable.id, prdId));
+      emitPrdAssistantRegenerated(prd, getUserId(req), body.section);
       const updated = await getPrd(prdId);
       res.json({
         proposedContent: fixMode ? (updated?.content ?? revised) : (updated?.proposedContent ?? revised),
@@ -1674,6 +1700,7 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
           : { proposedBacklogJson: revisedBacklog as any, updatedAt: new Date().toISOString() }) as any,
       )
       .where(eq(prdsTable.id, prdId));
+    emitPrdAssistantRegenerated(prd, getUserId(req), body.section);
     const updated = await getPrd(prdId);
     res.json({
       proposedContent: fixMode ? (updated?.content ?? null) : (updated?.proposedContent ?? null),
@@ -1690,6 +1717,24 @@ router.post('/prds/:prdId/regenerate-proposed-section', requirePermission('inter
   }
 });
 
+function emitPrdAssistantRegenerated(
+  prd: { id: string; project: string; prdAssistantThreadId?: string | null },
+  actorId: string,
+  section: string,
+): void {
+  emitSkillSignal({
+    project: prd.project,
+    surface: 'prd_assistant',
+    subjectType: 'prd_proposed_edit',
+    subjectId: prd.id,
+    threadId: prd.prdAssistantThreadId ?? null,
+    kind: 'regenerated',
+    actorId,
+    metadata: { section },
+    idempotencyKey: `prd_assistant:regenerated:${prd.id}:${Date.now()}`,
+  });
+}
+
 // POST /prds/:prdId/reject-proposed — discard proposed content
 router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage'), async (req, res, next) => {
   try {
@@ -1699,10 +1744,21 @@ router.post('/prds/:prdId/reject-proposed', requirePermission('interviews:manage
       return;
     }
 
+    const rejectedAt = new Date().toISOString();
     await db
       .update(prdsTable)
-      .set({ proposedContent: null, proposedBacklogJson: null, updatedAt: new Date().toISOString() } as any)
+      .set({ proposedContent: null, proposedBacklogJson: null, updatedAt: rejectedAt } as any)
       .where(eq(prdsTable.id, req.params.prdId));
+    emitSkillSignal({
+      project: prd.project,
+      surface: 'prd_assistant',
+      subjectType: 'prd_proposed_edit',
+      subjectId: prd.id,
+      threadId: prd.prdAssistantThreadId ?? null,
+      kind: 'rejected',
+      actorId: getUserId(req),
+      idempotencyKey: `prd_assistant:rejected:${prd.id}:${rejectedAt}`,
+    });
 
     res.json({ ok: true });
   } catch (err) {
@@ -2528,14 +2584,18 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
         .from(chatThreadsTable)
         .where(eq(chatThreadsTable.id, doc.docAssistantThreadId))
         .limit(1);
-      if (threadRow?.workspaceDir) {
-        const contextPath = path.join(threadRow.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-        try {
-          fs.writeFileSync(contextPath, buildDocContext(doc.docAssistantThreadId), 'utf-8');
-        } catch {
-          // Non-fatal: workspace may have been cleaned up; the thread can still run
-        }
+      const refreshedContext = buildDocContext(doc.docAssistantThreadId);
+      try {
+        await writeThreadFolderFile({
+          project: doc.project,
+          workspaceDir: threadRow?.workspaceDir,
+          relativePath: '.ai-pilot/kickoff-context.md',
+          content: refreshedContext,
+        });
+      } catch {
+        // Non-fatal: workspace may have been cleaned up; the thread can still run
       }
+      await updateThreadKickoffContext(doc.docAssistantThreadId, refreshedContext);
       res.json({ threadId: doc.docAssistantThreadId });
       return;
     }
@@ -2565,9 +2625,13 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
     // the correct thread_id into the system prompt (not the '__THREAD_ID__' placeholder).
     const realDocContext = buildDocContext(thread.id);
-    const contextPath = path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md');
-    fs.writeFileSync(contextPath, realDocContext, 'utf-8');
-    updateThreadKickoffContext(thread.id, realDocContext);
+    await writeThreadFolderFile({
+      project: doc.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: '.ai-pilot/kickoff-context.md',
+      content: realDocContext,
+    });
+    await updateThreadKickoffContext(thread.id, realDocContext);
 
     await inheritAssistantPin({
       sourceThreadId: doc.chatThreadId ?? prd?.chatThreadId,
@@ -3254,9 +3318,10 @@ router.post('/design-docs/:id/apply-proposed', requirePermission('interviews:man
     // Read the fixCommentId before the atomic update so we know which comment to resolve.
     const docRow = await db.query.designDocs.findFirst({
       where: eq(designDocsTable.id, docId),
-      columns: { fixCommentId: true },
+      columns: { id: true, fixCommentId: true, project: true, docAssistantThreadId: true },
     });
     const fixCommentId = docRow?.fixCommentId ?? null;
+    if (docRow) emitDesignDocAssistantSignal(docRow, 'accepted', userId, { editedBeforeApply: false });
 
     await db.execute(sql`
       UPDATE design_docs
@@ -3334,6 +3399,7 @@ router.post('/design-docs/:id/apply-proposed-selective', requirePermission('inte
       columns: { fixCommentId: true },
     });
     const fixCommentId = docRow?.fixCommentId ?? null;
+    emitDesignDocAssistantSignal(doc, 'accepted', userId, { editedBeforeApply: true });
 
     const now = new Date().toISOString();
     await db
@@ -3444,6 +3510,7 @@ router.post('/design-docs/:id/regenerate-proposed-section', requirePermission('i
       .update(designDocsTable)
       .set(updates as any)
       .where(eq(designDocsTable.id, docId));
+    emitDesignDocAssistantSignal(doc, 'regenerated', getUserId(req), { section: body.section });
 
     const updated = await getDesignDoc(docId);
     res.json({
@@ -3473,12 +3540,32 @@ router.post('/design-docs/:id/reject-proposed', requirePermission('interviews:ma
       .update(designDocsTable)
       .set({ proposedDesignContent: null, proposedTechSpecContent: null, proposedAssumptionsContent: null, updatedAt: new Date().toISOString() } as any)
       .where(eq(designDocsTable.id, req.params.id));
+    emitDesignDocAssistantSignal(doc, 'rejected', getUserId(req), {});
 
     res.json({ ok: true });
   } catch (err) {
     next(err);
   }
 });
+
+function emitDesignDocAssistantSignal(
+  doc: { id: string; project: string; docAssistantThreadId?: string | null },
+  kind: 'accepted' | 'rejected' | 'regenerated',
+  actorId: string,
+  metadata: Record<string, unknown>,
+): void {
+  emitSkillSignal({
+    project: doc.project,
+    surface: 'design_doc_assistant',
+    subjectType: 'design_doc_proposed_edit',
+    subjectId: doc.id,
+    threadId: doc.docAssistantThreadId ?? null,
+    kind,
+    actorId,
+    metadata,
+    idempotencyKey: `design_doc_assistant:${kind}:${doc.id}:${Date.now()}`,
+  });
+}
 
 router.get('/available-approvers/:project/:documentType', requirePermission('interviews:view'), async (req, res, next) => {
   try {
@@ -3537,6 +3624,14 @@ function actorFromRequest(req: Request) {
   };
 }
 
+const LINK_CANDIDATE_TYPES: readonly LinkCandidateType[] = ['adr', 'design-module', 'brainstorm'];
+
+function parseLinkCandidateType(value: unknown): LinkCandidateType | null {
+  return LINK_CANDIDATE_TYPES.find((type) => type === value) ?? null;
+}
+
+const LINK_CANDIDATE_TYPE_ERROR = 'Query parameter type must be "adr", "design-module" or "brainstorm"';
+
 /** Map InterviewLinkError → stable HTTP status + human-readable message (no artifact bodies). */
 function sendInterviewLinkError(res: Response, err: InterviewLinkError): void {
   const body = { error: err.message, code: err.code };
@@ -3547,6 +3642,7 @@ function sendInterviewLinkError(res: Response, err: InterviewLinkError): void {
       return;
     case 'ADR_NOT_ACCEPTED':
     case 'ARTIFACT_CROSS_PROJECT':
+    case 'REPOSITORY_NOT_READY':
     case 'INTERVIEW_NOT_IN_PROGRESS':
       res.status(422).json(body);
       return;
@@ -3577,12 +3673,11 @@ router.get(
         return;
       }
 
-      const typeRaw = String(req.query.type ?? '');
-      if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
-        res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+      const type = parseLinkCandidateType(req.query.type);
+      if (!type) {
+        res.status(400).json({ error: LINK_CANDIDATE_TYPE_ERROR });
         return;
       }
-      const type = typeRaw as LinkCandidateType;
       const search = typeof req.query.search === 'string' ? req.query.search : undefined;
       const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
       const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
@@ -3628,12 +3723,11 @@ router.get('/:interviewId/links', requirePermission('interviews:view'), async (r
 // GET /:interviewId/link-candidates — paginated candidates (offset/limit, pageSize=50)
 router.get('/:interviewId/link-candidates', requirePermission('interviews:view'), async (req, res, next) => {
   try {
-    const typeRaw = String(req.query.type ?? '');
-    if (typeRaw !== 'adr' && typeRaw !== 'design-module') {
-      res.status(400).json({ error: 'Query parameter type must be "adr" or "design-module"' });
+    const type = parseLinkCandidateType(req.query.type);
+    if (!type) {
+      res.status(400).json({ error: LINK_CANDIDATE_TYPE_ERROR });
       return;
     }
-    const type = typeRaw as LinkCandidateType;
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
     const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
     const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
@@ -3713,6 +3807,121 @@ router.delete(
         req.params.designModuleId,
       );
       res.json(result);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+router.post('/:interviewId/links/brainstorm', requirePermission('interviews:manage'), async (req, res, next) => {
+  try {
+    const body = req.body as AddBrainstormLinkRequest;
+    const result = await addBrainstormLink(req.params.interviewId, actorFromRequest(req), body);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof InterviewLinkError) {
+      sendInterviewLinkError(res, err);
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete(
+  '/:interviewId/links/brainstorm/:brainstormSessionId',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      const result = await removeBrainstormLink(
+        req.params.interviewId,
+        actorFromRequest(req),
+        req.params.brainstormSessionId,
+      );
+      res.json(result);
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+/** Sends 404 and returns false unless the reference-repositories flag is on for the Interview's project. */
+async function referenceRepositoriesEnabled(req: Request, res: Response): Promise<boolean> {
+  const interview = await getInterview(req.params.interviewId);
+  const enabled = interview
+    ? await isFeatureEnabled(INTERVIEW_REFERENCE_REPOSITORIES_FLAG, {
+        userId: getUserId(req),
+        project: interview.project,
+      }).catch(() => false)
+    : false;
+  // @feature-flag:interview-reference-repos start winner=enabled
+  if (!enabled) {
+    // @feature-flag:interview-reference-repos disabled-start
+    res.status(404).json({ error: 'Not found' });
+    return false;
+    // @feature-flag:interview-reference-repos disabled-end
+  }
+  // @feature-flag:interview-reference-repos enabled-start
+  return true;
+  // @feature-flag:interview-reference-repos enabled-end
+  // @feature-flag:interview-reference-repos end
+}
+
+router.get(
+  '/:interviewId/reference-repositories',
+  requirePermission('interviews:view'),
+  async (req, res, next) => {
+    try {
+      if (!(await referenceRepositoriesEnabled(req, res))) return;
+      res.json(await getReferenceRepositories(req.params.interviewId, actorFromRequest(req)));
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:interviewId/reference-repositories',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      if (!(await referenceRepositoriesEnabled(req, res))) return;
+      const body = req.body as AddReferenceRepositoryRequest;
+      res.json(await addReferenceRepositoryLink(req.params.interviewId, actorFromRequest(req), body));
+    } catch (err) {
+      if (err instanceof InterviewLinkError) {
+        sendInterviewLinkError(res, err);
+        return;
+      }
+      next(err);
+    }
+  },
+);
+
+router.delete(
+  '/:interviewId/reference-repositories/:catalogRepositoryId',
+  requirePermission('interviews:manage'),
+  async (req, res, next) => {
+    try {
+      if (!(await referenceRepositoriesEnabled(req, res))) return;
+      res.json(
+        await removeReferenceRepositoryLink(
+          req.params.interviewId,
+          actorFromRequest(req),
+          req.params.catalogRepositoryId,
+        ),
+      );
     } catch (err) {
       if (err instanceof InterviewLinkError) {
         sendInterviewLinkError(res, err);

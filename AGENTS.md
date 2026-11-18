@@ -27,7 +27,7 @@ Apex is an internal product-building and project-management platform. It central
 | AI Cost Analytics | — | — | `aiCostAnalyticsService.ts`, `aiUsageService.ts`, `aiCostScheduler.ts` | `AiCostAnalytics.tsx`, `AiCostComparison.tsx` |
 | Design Module | — | `.cursor/skills/design-module-scoping/SKILL.md`, `.cursor/skills/design-module-doc/SKILL.md` | `designModuleScopingService.ts` | `DesignModuleView.tsx`, `DesignModuleFormModal.tsx`, `DesignModuleFileTree.tsx` |
 | Load Testing | — | `.cursor/skills/k6-load-test-generation/SKILL.md` | `loadTestService.ts`, `loadTestAiGenerationService.ts` | `LoadTestsListPage.tsx`, `LoadTestDefinitionBuilderView.tsx`, `LoadTestRunDetailView.tsx` |
-| Planning & Analytics | — | — | `cursorAnalyticsService.ts` | `DevStats.tsx`, `QAMetrics.tsx`, `AIAnalysis.tsx`, `RoadmapView.tsx`, `ReleaseView.tsx`, `CreateCabRequestModal.tsx`, `CabReleaseAssistantPanel.tsx` |
+| Planning & Analytics | — | `.cursor/skills/release-changelog/SKILL.md` | `cursorAnalyticsService.ts`, `releaseChangelogService.ts`, `releasePlatformService.ts` | `RoadmapView.tsx`, `ReleaseView.tsx`, `ReleasePlatformModal.tsx`, `ReleaseChangelogModal.tsx`, `CreateCabRequestModal.tsx`, `CabReleaseAssistantPanel.tsx` |
 | Cloud Cost | — | — | `azureCost.ts` | `CloudCost.tsx` |
 | My Work (Dev Workbench) | `design-docs/my-work-feature-context-viewer.md` | — | `devWorkbenchFeatureContextService.ts`, `localDevContextService.ts` | `DevWorkbenchView.tsx`, `DevSessionView.tsx`, `FeatureContextModal.tsx`, `StartLocalDevModal.tsx` |
 | Document Approvals | `design-docs/document-approver-assignments.md`, `design-docs/interview-section-owners.md` | — | `documentApprovalService.ts`, `ownerApprovalService.ts` | `ApproverSelectModal.tsx`, `SectionOwnerModal.tsx` |
@@ -37,8 +37,11 @@ Apex is an internal product-building and project-management platform. It central
 | ADO Export | — | — | `azureDevOps.ts` | `CreateAdoItemsModal.tsx` |
 | Ask Apex (this agent) | — | `.cursor/skills/app-knowledge/SKILL.md` | `askApexService.ts` | `AskApexChat.tsx` |
 | User Profile | — | — | `profileService.ts`, `avatarResolverService.ts` | `ProfilePage.tsx`, `AvatarEditor.tsx`, `UserMenu.tsx` |
+| Skill Health | — | — | `skillHealthService.ts`, `skillHealthMetrics.ts`, `skillHealthEvaluationMetrics.ts`, `skillHealthWorkItemService.ts` | `SkillHealthAdmin.tsx`, `SkillHealthEvaluationPanel.tsx`, `SkillHealthWorkItemModal.tsx` |
+| Skill Learning (flag `skill-learning`) | — | — | `skillLearningRuns.ts` + `skillLearningHarvest.ts` (AI work runs on the V2 document worker as `skill-learning` runs), `skillSignalService.ts`, `skillRatingService.ts`, `skillExperimentService.ts`, `skillReplaySpec.ts`, `skillCandidateGenerator.ts`, `skillCandidateFrontier.ts`, `skillPromotionService.ts`, `skillPostRelease.ts`, `skillArtifactJudge.ts`, `skillMinedChecks.ts`, `skillSemanticChecks.ts`, `buildIntakeAbandonSweep.ts` | `SkillExperimentsPanel.tsx`, `SkillMinedChecksPanel.tsx`, `SkillSemanticChecksPanel.tsx`, `SkillHealthSignalsPanel.tsx`, `SkillRating.tsx` |
 | Brainstorm | — | `.cursor/skills/brainstorm/SKILL.md` | `brainstormSessionService.ts`, `brainstormOrchestrationService.ts`, `brainstormTurnLedger.ts`, `brainstormAccessPolicy.ts`, `brainstormArtifactVersionStore.ts`, `brainstormArtifactMcp.ts`, `brainstormHandoffEngine.ts`, `brainstormRepositoryCatalog.ts` | `BrainstormHomeEntry.tsx`, `BrainstormSessionsPage.tsx`, `BrainstormWorkspace.tsx`, `BrainstormChatPanel.tsx`, `BrainstormArtifactPanel.tsx`, `BrainstormNextActionsPanel.tsx`, `BrainstormRepositoryAdmin.tsx` |
 | Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md`, `design-docs/reusable-playbook-interview-step.md` | `.cursor/skills/interview-orchestrator/SKILL.md`, `.cursor/skills/interview-requirements-review/SKILL.md`, `.cursor/skills/interview-brief-draft/SKILL.md` | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
+| Observability (Product Owner Digest) | — | `.cursor/skills/observability-po-digest/SKILL.md` | `observabilityPoDigestService.ts`, `observabilityQueryService.ts` | `ObservabilityWorkspace.tsx`, `PlatformAdmin.tsx` |
 
 ## Key Terminology
 
@@ -71,6 +74,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Playbook** | A saved, versioned sequence of typed steps that Apex runs on a project's behalf. A step is a `cursor-agent` turn, an `approval-gate` that waits for a person, a `notify`, a `branch`, or an `ingest-artifact`. Steps that leave Apex sit behind a gate, so nothing reaches an external agent unapproved |
 | **Playbook definition / version** | A Playbook is edited as a retained draft and published as an immutable version. A run pins the version it started on, so editing a Playbook never changes a run already in flight |
 | **Playbook run** | One execution of a published version. It suspends at an approval gate or while waiting on an agent run, and resumes when the gate is decided or the agent finishes — a restart mid-run does not lose it, because the state is in Apex's own tables rather than in memory |
+| **Planning tabs** | Roadmap and Releases only. Developer Stats, QA Metrics, and AI Analysis are not Planning tabs. `planning:qa` stays for QA Lab and test cases. Roadmap bars load feature children with one `POST /api/roadmap/epic-features` call, and release percentages are counted per epic from one shared link graph in `getReleaseEpics`. Do not fetch children once per epic when the tab opens |
 
 ## Directory Structure
 

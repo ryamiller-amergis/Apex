@@ -205,6 +205,19 @@ export const PROJECT_SKILL_WORKFLOWS = [
       effort: 'designModuleScopingEffort',
     },
   },
+  {
+    key: 'evaluation_judge',
+    legacy: { model: 'evaluationJudgeModel', effort: 'evaluationJudgeEffort' },
+  },
+  {
+    key: 'release_changelog',
+    legacy: {
+      skillPath: 'releaseChangelogSkillPath',
+      model: 'releaseChangelogModel',
+      effort: 'releaseChangelogEffort',
+      bedrockModelId: 'releaseChangelogBedrockModelId',
+    },
+  },
 ] as const satisfies readonly ProjectSkillWorkflowDefinition[];
 
 export type ProjectSkillWorkflowKey = (typeof PROJECT_SKILL_WORKFLOWS)[number]['key'];

@@ -17,6 +17,16 @@ export type WorkerCursorExecution = {
   dispose(): Promise<void>;
 };
 
+/** True when this step is expected to run Azure CLI, so the worker must sign the CLI in first. */
+export function playbookAgentNeedsAzureCli(snapshot: Readonly<ExecutionSnapshot>): boolean {
+  const rawPolicy: unknown = snapshot.playbookAgentPolicy;
+  const policy = rawPolicy && isPlaybookAgentRunPolicy(rawPolicy) ? rawPolicy : undefined;
+  const investigationSkill = [snapshot.skillPath, policy?.skill.path].some((skillPath) =>
+    (skillPath ?? '').replace(/\\/g, '/').includes('maxview-incident-investigation'),
+  );
+  return Boolean(policy?.capabilities.includes('azure-cli')) || investigationSkill;
+}
+
 function cursorStartupAbortError(): Error {
   const error = new Error('Cursor execution startup aborted');
   error.name = 'AbortError';
@@ -104,12 +114,7 @@ export async function createLocalCursorExecution(
   // ~/.cursor/sandbox.json, which otherwise requests sandboxing and fails the turn.
   // A Skill that declared azure-cli, and the MaxView investigation skill, need the
   // shell for `az`. Every other enforced Skill has the shell tool removed.
-  const investigationSkill = [snapshot.skillPath, policy?.skill.path].some((skillPath) =>
-    (skillPath ?? '').replace(/\\/g, '/').includes('maxview-incident-investigation'),
-  );
-  const shellAllowed = !enforcing
-    || Boolean(policy?.capabilities.includes('azure-cli'))
-    || investigationSkill;
+  const shellAllowed = !enforcing || playbookAgentNeedsAzureCli(snapshot);
 
   const local = {
     cwd: snapshot.workspaceRef,

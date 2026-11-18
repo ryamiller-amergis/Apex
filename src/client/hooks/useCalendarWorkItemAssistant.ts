@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from './useAgentChatSession';
+import type { ChatAttachment } from '../../shared/types/chat';
 import type {
   WorkItemHierarchyNode,
   WorkItemAssistantSession,
@@ -166,8 +167,8 @@ export function useRejectProposal() {
 export function useCalendarAssistantChat(threadId: string | null) {
   const session = useAgentChatSession(threadId);
 
-  const sendMessage = useCallback(async (text: string) => {
-    await session.send(text);
+  const sendMessage = useCallback(async (text: string, attachments?: ChatAttachment[]) => {
+    return session.send(text, attachments?.length ? { attachments } : undefined);
   }, [session]);
 
   const cancelRun = useCallback(async () => {

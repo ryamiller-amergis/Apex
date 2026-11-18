@@ -28,6 +28,8 @@ export interface OpenCloudAgentPullRequestInput extends CloudAgentPullRequestTex
   targetBranch: string;
   /** Bearer token for the developer who started the run. Null uses the service PAT. */
   adoUserToken: string | null;
+  /** Open with the service PAT in production too when adoUserToken is null. */
+  allowServiceAccount?: boolean;
 }
 
 /** Thrown when a production run must wait for the starter's Azure DevOps token. */
@@ -53,7 +55,7 @@ export function buildCloudAgentPullRequestText(
 export async function openCloudAgentPullRequest(
   input: OpenCloudAgentPullRequestInput,
 ): Promise<string> {
-  if (!input.adoUserToken && process.env.NODE_ENV === 'production') {
+  if (!input.adoUserToken && !input.allowServiceAccount && process.env.NODE_ENV === 'production') {
     throw new CloudAgentPullRequestDeferred();
   }
   if (!input.adoUserToken) {

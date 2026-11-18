@@ -22,6 +22,7 @@ export type AgentModuleId =
   | 'loadTestGeneration'
   | 'designModule'
   | 'designModuleScoping'
+  | 'releaseChangelog'
   | 'brainstorm';
 
 export interface ChatMessage {
@@ -166,6 +167,8 @@ export interface ChatThread {
   groundingMode?: GroundingBinding['mode'];
   /** Commit bound to a local agent; null for remote and legacy threads */
   groundedSha?: string | null;
+  /** SHA-256 of the SKILL.md content loaded most recently; null before any skill load */
+  skillSha256?: string | null;
   /** Active run ID for the current turn */
   activeRunId?: string;
   /** Path to the temp workspace directory */

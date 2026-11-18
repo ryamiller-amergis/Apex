@@ -71,7 +71,26 @@ describe('BareRepoReader', () => {
         ]),
       );
 
-      await expect(reader.searchCode('definitely-not-present')).resolves.toEqual([]);
+      const multiWordMatches = await Promise.all([
+        reader.searchCode('ATS applicant tracking needle module'),
+        reader.searchCode('MatterWorx integration needle'),
+        reader.searchCode('definitely-not-present'),
+      ]);
+      expect(multiWordMatches[0]).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: '/src/index.ts',
+          }),
+        ]),
+      );
+      expect(multiWordMatches[1]).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: '/src/index.ts',
+          }),
+        ]),
+      );
+      expect(multiWordMatches[2]).toEqual([]);
       await expect(reader.readFile('../secret')).rejects.toMatchObject({
         code: 'ACCESS_DENIED',
       });

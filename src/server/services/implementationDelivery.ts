@@ -61,6 +61,26 @@ export function buildPullRequestDescriptionInstructions(input: {
   ].join('\n\n');
 }
 
+/**
+ * Prompt lines for a run whose pull request Apex opens as another person.
+ * The agent pushes the branch and returns the description in its final message.
+ */
+export function buildApexOpensPullRequestInstructions(input: { workItemId: number }): string {
+  const template = loadPullRequestDescriptionTemplate();
+  const lines = [
+    'Commit and push your work to the branch. Do not open a pull request: Apex opens it when you finish.',
+    `End your final message with the pull request description between ${DESCRIPTION_OPEN_TAG} and ${DESCRIPTION_CLOSE_TAG}. Name the work item as ${buildWorkItemReferenceText(input.workItemId)}. Stay under ${AGENT_DESCRIPTION_TARGET} characters.`,
+  ];
+  if (!template) return lines.join('\n\n');
+  return [
+    ...lines,
+    'Use the description below. Keep every heading, and replace each HTML comment with real content for this change.',
+    '```markdown',
+    template,
+    '```',
+  ].join('\n\n');
+}
+
 /** The description between the pr-description tags in the agent's final message. */
 export function extractAgentPullRequestDescription(text: string | null | undefined): string | null {
   if (!text) return null;

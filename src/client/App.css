@@ -28,12 +28,12 @@
 }
 
 :root {
-  /* â”€â”€ Responsive Breakpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  /* ── Responsive Breakpoints ──────────────────────
      Phone:        max-width 480px
      Tablet:       max-width 768px
      Small desktop: max-width 1024px
      Usage: @media (max-width: 768px) { ... }
-     â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+     ─────────────────────────────────────────────── */
 
   color-scheme: light;
   --brand-primary: #2747D9;
@@ -42,14 +42,14 @@
   --brand-surface: #D5DDEC;
   --brand-surface-dark: #18181B;
   --brand-text-inverse: #F9FAFB;
-  /* Softened cool slate â€” less glare than near-white, still AA with muted text. */
+  /* Softened cool slate — less glare than near-white, still AA with muted text. */
   --bg-primary: #E4EAF4;
   --bg-secondary: #D5DDEC;
   --bg-tertiary: #C8D2E4;
   --bg-page: #E4EAF4;
   --text-primary: #111827;
   --text-secondary: #3F4B5C;
-  /* #4B5563 keeps â‰¥4.5:1 on primary/secondary/tertiary (was failing on #EEF2FF). */
+  /* #4B5563 keeps ≥4.5:1 on primary/secondary/tertiary (was failing on #EEF2FF). */
   --text-muted: #4B5563;
   --border-color: #B8C3D9;
   --border-color-light: #C9D2E6;
@@ -57,7 +57,7 @@
   --accent-hover: #1C33A6;
   --accent-teal: #2747D9;
   --accent-teal-hover: #1C33A6;
-  /* Scrollbar â€” muted accent so thumbs match the active theme everywhere. */
+  /* Scrollbar — muted accent so thumbs match the active theme everywhere. */
   --scrollbar-thumb: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
   --scrollbar-thumb-hover: var(--accent-color);
   --success-color: #16A34A;
@@ -68,7 +68,7 @@
   --on-accent: #ffffff;
   --on-success: #0b1220;
   --error-color: #d32f2f;
-  /* Warning / pending â€” dark amber text on pale wash (AA on light surfaces). */
+  /* Warning / pending — dark amber text on pale wash (AA on light surfaces). */
   --warning-color: #f59e0b;
   --warning-text: #92400e;
   /* Mix % for success/error/warning surface washes (light needs less tint). */
@@ -891,7 +891,7 @@ body {
   overflow: hidden;
 }
 
-/* â”€â”€ Main Content Area (offset by sidebar) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Main Content Area (offset by sidebar) ────────────────────────────── */
 .app-main {
   display: flex;
   flex-direction: column;
@@ -1020,7 +1020,7 @@ body {
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--text-secondary);
-  /* Hide the Â· glyph; the CSS circle is optically centered with the type. */
+  /* Hide the · glyph; the CSS circle is optically centered with the type. */
   font-size: 0;
   line-height: 0;
   color: transparent;
@@ -1561,7 +1561,7 @@ body {
   height: 20px;
 }
 
-/* â”€â”€ Admin layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Admin layout ─────────────────────────────────────────────────────────── */
 
 .admin-container {
   flex: 1;
@@ -1603,7 +1603,7 @@ body {
   font-weight: 600;
 }
 
-/* â”€â”€ Responsive Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Responsive Utilities ──────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .hide-mobile { display: none !important; }
 }
@@ -1611,7 +1611,7 @@ body {
   .show-mobile-only { display: none !important; }
 }
 
-/* â”€â”€ Header â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Header — Tablet ───────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .app-header {
     padding: 8px 12px;
@@ -1640,7 +1640,7 @@ body {
   }
 }
 
-/* â”€â”€ Header â€” Phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Header — Phone ───────────────────────────────────────────────────── */
 @media (max-width: 480px) {
   .app-header {
     padding: 8px;
@@ -1660,7 +1660,7 @@ body {
   }
 }
 
-/* â”€â”€ Planning Tabs â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Planning Tabs — Tablet ────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .planning-tabs {
     overflow-x: auto;
@@ -1680,7 +1680,7 @@ body {
   }
 }
 
-/* â”€â”€ Admin Tabs â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Admin Tabs — Tablet ───────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .admin-tabs {
     overflow-x: auto;
@@ -1699,9 +1699,9 @@ body {
   }
 }
 
-/* â”€â”€ View Container Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── View Container Responsive ─────────────────────────────────────────── */
 
-/* â”€â”€ Calendar View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Calendar View — Tablet ────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .calendar-view {
     flex-direction: column;
@@ -1710,7 +1710,7 @@ body {
   }
 }
 
-/* â”€â”€ Planning View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Planning View — Tablet ────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .planning-view {
     padding: 0;
@@ -1721,35 +1721,35 @@ body {
   }
 }
 
-/* â”€â”€ Cloud Cost View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Cloud Cost View — Tablet ──────────────────────────────────────────── */
 @media (max-width: 768px) {
   .cloudcost-view {
     overflow-y: auto;
   }
 }
 
-/* â”€â”€ Backlog View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Backlog View — Tablet ─────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .backlog-view {
     overflow-y: auto;
   }
 }
 
-/* â”€â”€ My Work View â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── My Work View — Tablet ─────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .my-work-view {
     overflow-y: auto;
   }
 }
 
-/* â”€â”€ Admin Container â€” Tablet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Admin Container — Tablet ──────────────────────────────────────────── */
 @media (max-width: 768px) {
   .admin-container {
     overflow-y: auto;
   }
 }
 
-/* â”€â”€ Error Banner â€” Phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Error Banner — Phone ──────────────────────────────────────────────── */
 @media (max-width: 480px) {
   .error-banner {
     padding: 8px 12px;
@@ -1762,7 +1762,7 @@ body {
   }
 }
 
-/* â”€â”€ Loading Spinner â€” Phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Loading Spinner — Phone ───────────────────────────────────────────── */
 @media (max-width: 480px) {
   .loading-spinner-container {
     padding: 24px 16px;

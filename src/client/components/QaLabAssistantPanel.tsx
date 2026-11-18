@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
 import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
+import { QaLabAssistantProposals } from './QaLabAssistantProposals';
+import { SkillRating } from './SkillRating';
 import styles from './QaLabAssistantPanel.module.css';
 
 /** What owns the cases in view; the assistant thread is scoped to it. */
@@ -12,6 +15,8 @@ export type QaLabAssistantTarget =
 
 export interface QaLabAssistantPanelProps {
   target: QaLabAssistantTarget;
+  /** Enables the optional rating of the latest reply. */
+  project?: string;
   /** Shown in the panel header so QA knows which requirement is in context. */
   contextLabel?: string;
   open: boolean;
@@ -33,6 +38,7 @@ const PRD_SUGGESTIONS = [
 const SUITE_SUGGESTIONS = [
   'Review the unpublished cases against the skill and list the problems by case id. Do not change anything yet.',
   'Add a case for each acceptance criterion that no case covers yet',
+  'Which cases failed their last run, and are Bugs filed for them?',
   'Make each login step sign in as the role the case tests, and move other roles\' setup into the precondition step',
 ] as const;
 
@@ -68,8 +74,8 @@ function configFor(target: QaLabAssistantTarget): TargetConfig {
         storageKey: `qa-lab-assistant-thread:${target.suiteId}`,
         suggestions: SUITE_SUGGESTIONS,
         invalidateKeys: [['qa-lab']],
-        welcomeTitle: 'Change these cases in plain language',
-        welcomeBody: 'Ask Apex can explain, edit, add, delete, comment on, or regenerate the unpublished cases. Edits show what changed on the case and can be restored. Publishing stays with you.',
+        welcomeTitle: 'Ask about QA Lab or change cases in plain language',
+        welcomeBody: 'Ask Apex knows this work item\'s cases, runs, Bugs and publish status, every other work item in QA Lab, and how QA Lab works. Every edit, new case, deletion, comment or regenerate shows the old and new text here first, and changes nothing until you confirm. Publishing stays with you.',
         placeholder: 'Ask Apex to change the cases… (Enter to send)',
       };
     default: {
@@ -97,6 +103,7 @@ function storeThread(key: string | null, threadId: string): void {
 
 export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   target,
+  project,
   contextLabel,
   open,
   onClose,
@@ -111,6 +118,7 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   const [isDragging, setIsDragging] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const wasRunningRef = useRef(false);
   const dragStartXRef = useRef(0);
   const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
@@ -122,6 +130,13 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   const { data: globalDefaultModel } = useGlobalDefaultModel();
 
   const session = useAgentChatSession(threadId);
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const {
     messages,
     streamingText,
@@ -212,12 +227,23 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
     textareaRef.current?.focus();
   }, []);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text) return;
+    const outgoing = [...attachments];
+    if (!text && outgoing.length === 0) return;
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    await session.send(text, selectedModel ? { model: selectedModel } : undefined);
-  }, [input, session, selectedModel]);
+    const sent = await session.send(message, {
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
+    if (sent && outgoing.length > 0) clearAttachments();
+  }, [attachments, clearAttachments, input, selectedModel, session]);
 
   const visibleMessages = messages.filter(
     (message) =>
@@ -226,6 +252,7 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
       && message.toolName !== '_reasoning'
       && message.toolName !== '_thinking',
   );
+  const latestReplyId = [...visibleMessages].reverse().find((message) => message.role === 'agent')?.id ?? null;
 
   if (!open) return null;
 
@@ -248,30 +275,62 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
           </div>
         ) : undefined}
         composer={(
-          <AgentComposer
-            className={styles.composerEmbed}
-            value={input}
-            onChange={setInput}
-            onSend={() => void handleSend()}
-            onCancel={isRunning ? () => void session.cancel() : undefined}
-            disabled={composerBusy}
-            isRunning={isRunning}
-            isSending={isSending}
-            placeholder={
-              isCreating
-                ? 'Starting assistant…'
-                : isRunning
-                  ? 'Agent is thinking…'
-                  : config.placeholder
-            }
-            testIdPrefix="qa-lab-assistant"
-            textareaRef={textareaRef}
-            model={selectedModel}
-            models={availableModels}
-            modelsLoading={modelsLoading}
-            onModelChange={setSelectedModel}
-            {...{ 'data-testid': 'qa-lab-assistant-composer' }}
-          />
+          <>
+            {target.kind === 'suite' && threadId && (
+              <QaLabAssistantProposals threadId={threadId} isRunning={isRunning} />
+            )}
+            {latestReplyId && !isRunning && (
+              // data-testid-exempt — SkillRating renders chat-message-rating-qa_lab-<message>
+              <SkillRating
+                project={project}
+                surface="qa_lab"
+                subjectType="assistant_reply"
+                subjectId={latestReplyId}
+                threadId={threadId}
+              />
+            )}
+            <AgentComposer
+              className={styles.composerEmbed}
+              value={input}
+              onChange={setInput}
+              onSend={() => void handleSend()}
+              onCancel={isRunning ? () => void session.cancel() : undefined}
+              disabled={composerBusy}
+              isRunning={isRunning}
+              isSending={isSending}
+              allowEmptySend
+              placeholder={
+                isCreating
+                  ? 'Starting assistant…'
+                  : isRunning
+                    ? 'Agent is thinking…'
+                    : config.placeholder
+              }
+              testIdPrefix="qa-lab-assistant"
+              textareaRef={textareaRef}
+              attachments={attachments}
+              attachmentError={attachmentError}
+              onRemoveAttachment={removeAttachment}
+              onAttachClick={() => fileInputRef.current?.click()}
+              onPasteFiles={(files) => { void addFiles(files); }}
+              fileInput={(
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => { void handleAttachmentChange(event); }}
+                  disabled={composerBusy}
+                  {...{ 'data-testid': 'qa-lab-assistant-file-input' }}
+                />
+              )}
+              model={selectedModel}
+              models={availableModels}
+              modelsLoading={modelsLoading}
+              onModelChange={setSelectedModel}
+              {...{ 'data-testid': 'qa-lab-assistant-composer' }}
+            />
+          </>
         )}
       >
         <AssistantConversation

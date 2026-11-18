@@ -13,6 +13,7 @@ jest.mock('../db/drizzle', () => ({
     select: jest.fn().mockReturnValue({
       from: jest.fn().mockReturnValue({
         innerJoin: jest.fn().mockReturnValue({ where: mockLinkedAdrWhere }),
+        where: jest.fn().mockReturnValue({ limit: jest.fn().mockResolvedValue([]) }),
       }),
     }),
     update: jest.fn().mockReturnValue({

@@ -8,7 +8,12 @@ import type {
   PlaybookPublishResponse,
 } from '../../shared/types/playbook';
 export class PlaybookApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+    /** The step the server says the error is about, when it names one. */
+    readonly nodeId?: string,
+  ) {
     super(message);
     this.name = 'PlaybookApiError';
   }
@@ -18,9 +23,11 @@ async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { credentials: 'include', ...init });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
+    const { error, nodeId } = body as { error?: string; nodeId?: unknown };
     throw new PlaybookApiError(
-      (body as { error?: string }).error ?? `Request failed: ${response.status}`,
+      error ?? `Request failed: ${response.status}`,
       response.status,
+      typeof nodeId === 'string' && nodeId ? nodeId : undefined,
     );
   }
   if (response.status === 204) return undefined as T;

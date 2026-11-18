@@ -1,5 +1,18 @@
 export const DEFAULT_MODEL_ID = 'composer-2.5';
 
+export interface PlatformModelOption {
+  id: string;
+  displayName: string;
+}
+
+export const PLATFORM_MODEL_OPTIONS: readonly PlatformModelOption[] = [
+  { id: 'composer-2.5', displayName: 'Composer 2.5' },
+  { id: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' },
+  { id: 'claude-opus-4-6', displayName: 'Claude Opus 4.6' },
+  { id: 'gpt-5.4', displayName: 'GPT-5.4' },
+  { id: 'composer-2', displayName: 'Composer 2' },
+] as const;
+
 /** Return the model ID declared in a skill's frontmatter, or the default. */
 export function getDefaultModelForSkill(frontmatter?: Record<string, unknown>): string {
   const declared = frontmatter?.['model'];

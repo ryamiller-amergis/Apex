@@ -20,8 +20,14 @@ import type {
   WorkflowEvaluationRubric,
   WorkflowEvaluationSubjectType,
 } from '../../shared/types/workflowEvaluation';
+import {
+  WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE,
+  WORKFLOW_EVALUATION_PRD_OWNER_ROLE,
+  WORKFLOW_EVALUATION_TEST_CASES_OWNER_ROLE,
+} from '../../shared/types/workflowEvaluation';
 import { telemetryClient, trackEvent } from './telemetry';
 import { getUserGroupNamesForProject } from './groupService';
+import { isDocumentOwner, isTestCaseRecordOwner } from './ownerApprovalService';
 import { resolveCurrentArtifactBinding } from './artifactBindingResolver';
 import { WorkflowEvaluationError } from './workflowEvaluationError';
 import {
@@ -74,7 +80,36 @@ export function subjectForStageKey(stageKey: string): {
     return { subjectType: 'interview_phase', phaseIndex: Number(interview[1]) };
   }
   if (stageKey.startsWith('prd')) return { subjectType: 'prd', phaseIndex: null };
+  if (stageKey.startsWith('design_doc')) return { subjectType: 'design_doc', phaseIndex: null };
+  if (stageKey.startsWith('test_cases')) return { subjectType: 'test_cases', phaseIndex: null };
   return null;
+}
+
+/** The read-only owner role for subjects whose owner gives feedback before approving. */
+async function ownerRoleFor(
+  subject: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
+  userId: string,
+): Promise<{ key: string; label: string } | null> {
+  switch (subject.subjectType) {
+    case 'prd':
+      return (await isDocumentOwner(subject.subjectId, 'prd', userId))
+        ? { ...WORKFLOW_EVALUATION_PRD_OWNER_ROLE }
+        : null;
+    case 'design_doc':
+      return (await isDocumentOwner(subject.subjectId, 'design_doc', userId))
+        ? { ...WORKFLOW_EVALUATION_DESIGN_DOC_OWNER_ROLE }
+        : null;
+    case 'test_cases':
+      return (await isTestCaseRecordOwner(subject.subjectId, userId))
+        ? { ...WORKFLOW_EVALUATION_TEST_CASES_OWNER_ROLE }
+        : null;
+    case 'interview_phase':
+      return null;
+    default: {
+      const unhandled: never = subject.subjectType;
+      throw new Error(`Unsupported evaluation subject: ${String(unhandled)}`);
+    }
+  }
 }
 
 function correctedArtifactOutcomes(subjectType: WorkflowEvaluationSubjectType): readonly string[] {
@@ -138,7 +173,13 @@ export async function describeReviewerRole(
   userId: string,
   project: string,
   roles: readonly WorkflowEvaluationLabeledValue[],
+  subject?: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
 ): Promise<WorkflowEvaluationReviewerRoleState> {
+  const options = roles.map((role) => ({ key: role.key, label: role.label }));
+  const ownerRole = subject ? await ownerRoleFor(subject, userId) : null;
+  if (ownerRole) {
+    return { derivedRoleKey: ownerRole.key, options: [ownerRole, ...options], requiresSelection: false };
+  }
   const names = await getUserGroupNamesForProject(userId, project);
   const allowed = new Set(roles.map((role) => role.key));
   const matched = [...new Set(
@@ -146,7 +187,6 @@ export async function describeReviewerRole(
       .map((name) => GROUP_ROLE_KEYS[name])
       .filter((key): key is string => typeof key === 'string' && allowed.has(key)),
   )];
-  const options = roles.map((role) => ({ key: role.key, label: role.label }));
   if (matched.length === 1) {
     return { derivedRoleKey: matched[0], options, requiresSelection: false };
   }
@@ -156,14 +196,17 @@ export async function describeReviewerRole(
 export async function listEvaluationDefinitions(
   project: string,
   userId: string,
-  filter: { subjectType?: WorkflowEvaluationSubjectType; stageKey?: string } = {},
+  filter: { subjectType?: WorkflowEvaluationSubjectType; stageKey?: string; subjectId?: string } = {},
 ): Promise<GetWorkflowEvaluationDefinitionsResponse> {
   const definitions = (await listActiveDefinitions(filter.stageKey))
     .map(toDefinitionView)
     .filter((view): view is WorkflowEvaluationDefinitionView => view != null)
     .filter((view) => !filter.subjectType || view.subjectType === filter.subjectType);
   const roleSource = definitions[0]?.reviewerRoles ?? [];
-  const reviewer = await describeReviewerRole(userId, project, roleSource);
+  const subject = filter.subjectType && filter.subjectId
+    ? { subjectType: filter.subjectType, subjectId: filter.subjectId }
+    : undefined;
+  const reviewer = await describeReviewerRole(userId, project, roleSource, subject);
   return { definitions, reviewer };
 }
 
@@ -178,7 +221,7 @@ export async function listEvaluationEvents(
 ): Promise<ListWorkflowEvaluationEventsResponse> {
   const stage = query.stageKey ? subjectForStageKey(query.stageKey) : null;
   const phaseIndex = query.subjectType === 'interview_phase' ? (stage?.phaseIndex ?? null) : null;
-  const canResolveCurrent = query.subjectType === 'prd' || phaseIndex != null;
+  const canResolveCurrent = query.subjectType !== 'interview_phase' || phaseIndex != null;
 
   let currentArtifactHash: string | null = null;
   if (canResolveCurrent) {
@@ -232,6 +275,7 @@ export async function getEvaluationEvent(
       evaluatorKey: job.evaluatorKey,
       status: job.status,
       summary: job.summary,
+      errorDetail: job.errorDetail,
       updatedAt: job.updatedAt,
     })),
   };
@@ -311,7 +355,10 @@ async function storeEvaluation(
   });
   const artifactText = artifactTextFromPlan(artifactPlan, binding.prdMarkdown);
 
-  const role = await resolveReviewerRole(userId, project, request.reviewerRole, definition.rubric);
+  const role = await resolveReviewerRole(userId, project, request.reviewerRole, definition.rubric, {
+    subjectType: request.subjectType,
+    subjectId: request.subjectId,
+  });
   const eventId = randomUUID();
   let blobRef: AiRunBlobRef | null = null;
   if (artifactText != null) {
@@ -490,6 +537,18 @@ function planCorrectedArtifact(
       'Interview phases accept only pasted corrected text.',
     );
   }
+  if (subjectType === 'design_doc' && artifact.source === 'current_prd') {
+    throw new WorkflowEvaluationError(
+      'CORRECTED_ARTIFACT_REQUIRED',
+      'Design docs accept only pasted corrected text.',
+    );
+  }
+  if (subjectType === 'test_cases' && artifact.source === 'current_prd') {
+    throw new WorkflowEvaluationError(
+      'CORRECTED_ARTIFACT_REQUIRED',
+      'Test cases accept only pasted corrected text.',
+    );
+  }
   if (artifact.source === 'pasted') {
     const text = artifact.text ?? '';
     if (!text.trim()) {
@@ -535,8 +594,9 @@ async function resolveReviewerRole(
   project: string,
   requested: string | undefined,
   rubric: WorkflowEvaluationRubric,
+  subject: { subjectType: WorkflowEvaluationSubjectType; subjectId: string },
 ): Promise<{ key: string; label: string }> {
-  const described = await describeReviewerRole(userId, project, rubric.allowedReviewerRoles);
+  const described = await describeReviewerRole(userId, project, rubric.allowedReviewerRoles, subject);
   let key = described.derivedRoleKey;
   if (key) {
     if (requested && requested !== key) {

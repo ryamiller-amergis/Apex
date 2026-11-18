@@ -18,6 +18,9 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
+import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { readThreadOutput, saveThreadOutputs } from './chatThreadOutputStore';
+import { writeThreadFolderFile } from './threadFolder';
 import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   canThisInstanceFailGeneration,
@@ -662,10 +665,15 @@ export async function failGeneratingTestCasesForThread(
   await markTestCaseFailed(row.id, row.prdId, row.chatThreadId);
 }
 
-async function readQaLabScopePbiIds(
+async function readQaLabScopeFile(
   threadId: string,
   workspaceDirOverride?: string,
-): Promise<string[] | null> {
+): Promise<string | null> {
+  const saved = await readThreadOutput({
+    threadId,
+    relativePath: `.ai-pilot/output/${QA_LAB_SCOPE_FILE}`,
+  });
+  if (saved !== null) return saved;
   // A V2 worker harvest does not carry the scope file back, so fall back to
   // the thread workspace where triggerTestCaseGeneration wrote it.
   const candidates = [
@@ -676,9 +684,17 @@ async function readQaLabScopePbiIds(
     .filter((dir): dir is string => dir !== null)
     .map((dir) => path.join(dir, QA_LAB_SCOPE_FILE))
     .find((candidate) => fs.existsSync(candidate));
-  if (!file) return null;
+  return file ? fs.readFileSync(file, 'utf-8') : null;
+}
+
+async function readQaLabScopePbiIds(
+  threadId: string,
+  workspaceDirOverride?: string,
+): Promise<string[] | null> {
+  const raw = await readQaLabScopeFile(threadId, workspaceDirOverride).catch(() => null);
+  if (!raw) return null;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as { pbiIds?: unknown };
+    const parsed = JSON.parse(raw) as { pbiIds?: unknown };
     const pbiIds = normalizePbiIds(Array.isArray(parsed.pbiIds) ? parsed.pbiIds.filter((id): id is string => typeof id === 'string') : []);
     return pbiIds.length > 0 ? pbiIds : null;
   } catch {
@@ -838,14 +854,11 @@ export async function routeTestCaseGenerationKickoff(opts: {
             `[run-grounding] Test-case propagation unavailable (testCaseId=${opts.testCaseId})`,
           );
         }
-        const prepared = await prepareBackgroundWorkflowTurn(
-          opts.threadId,
-          kickoffMessage,
-        );
-        const targetGrounding = (
-          await runGroundingService.getGroundings(destinationRun)
-        ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive);
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(opts.threadId, kickoffMessage, {
+          findTargetGrounding: async () => (
+            await runGroundingService.getGroundings(destinationRun)
+          ).find((grounding) => grounding.repoRole === 'target' && grounding.isActive),
+        });
       },
       runInProcess: () =>
         sendMessage(
@@ -958,32 +971,34 @@ export async function triggerTestCaseGeneration(
     { skipAutoKickoff: true }
   );
 
-  const outputDir = path.join(thread.workspaceDir, '.ai-pilot', 'output');
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(outputDir, `${slug}.prd.md`),
-    prdRow.content || '',
-    'utf-8'
-  );
-  fs.writeFileSync(
-    path.join(outputDir, `${slug}.backlog.json`),
-    JSON.stringify(backlogJson, null, 2),
-    'utf-8'
-  );
-  fs.writeFileSync(
-    path.join(thread.workspaceDir, '.ai-pilot', 'kickoff-context.md'),
-    context,
-    'utf-8'
-  );
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${slug}.prd.md`, content: prdRow.content || '' },
+    { path: `.ai-pilot/output/${slug}.backlog.json`, content: JSON.stringify(backlogJson, null, 2) },
+  ];
+  for (const input of [...sourceInputs, { path: '.ai-pilot/kickoff-context.md', content: context }]) {
+    await writeThreadFolderFile({
+      project: prdRow.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: input.path,
+      content: input.content,
+    });
+  }
+  await saveDocumentInputSnapshot(thread.id, sourceInputs);
   const scopedPbiIds = normalizePbiIds(scope?.pbiIds);
   if (scopedPbiIds.length > 0) {
-    fs.writeFileSync(
-      path.join(outputDir, QA_LAB_SCOPE_FILE),
-      JSON.stringify({ pbiIds: scopedPbiIds }),
-      'utf-8',
-    );
+    const scopeFile = {
+      path: `.ai-pilot/output/${QA_LAB_SCOPE_FILE}`,
+      content: JSON.stringify({ pbiIds: scopedPbiIds }),
+    };
+    await writeThreadFolderFile({
+      project: prdRow.project,
+      workspaceDir: thread.workspaceDir,
+      relativePath: scopeFile.path,
+      content: scopeFile.content,
+    });
+    await saveThreadOutputs(thread.id, null, [scopeFile]);
   }
-  updateThreadKickoffContext(thread.id, context);
+  await updateThreadKickoffContext(thread.id, context);
 
   const [testCaseRow] = await db
     .insert(testCases)
@@ -1499,6 +1514,63 @@ export async function getTestCases(
     .orderBy(desc(testCases.createdAt))
     .limit(1);
   return row ? rowToRecord(row) : null;
+}
+
+export type TestCaseEvaluationInputs = {
+  id: string;
+  project: string;
+  status: string;
+  prdId: string;
+  interviewId: string | null;
+  model: string | null;
+  skillPath: string | null;
+  skillVersion: string | null;
+  testCasesMd: string | null;
+  testCasesJson: unknown;
+};
+
+/** Read-only lineage and live content for an evaluation of one test case record. */
+export async function getTestCaseEvaluationInputs(testCaseId: string): Promise<TestCaseEvaluationInputs | null> {
+  const [row] = await db
+    .select({
+      id: testCases.id,
+      project: prds.project,
+      status: testCases.status,
+      prdId: testCases.prdId,
+      interviewId: prds.interviewId,
+      chatThreadId: testCases.chatThreadId,
+      testCasesMd: testCases.testCasesMd,
+      testCasesJson: testCases.testCasesJson,
+    })
+    .from(testCases)
+    .innerJoin(prds, eq(testCases.prdId, prds.id))
+    .where(eq(testCases.id, testCaseId))
+    .limit(1);
+  if (!row) return null;
+
+  let skillPath: string | null = null;
+  let model: string | null = null;
+  if (row.chatThreadId) {
+    const thread = await db.query.chatThreads.findFirst({
+      where: eq(chatThreads.id, row.chatThreadId),
+      columns: { kickoff: true },
+    });
+    skillPath = thread?.kickoff?.skillPath ?? null;
+    model = thread?.kickoff?.model ?? null;
+  }
+
+  return {
+    id: row.id,
+    project: row.project,
+    status: row.status,
+    prdId: row.prdId,
+    interviewId: row.interviewId ?? null,
+    model,
+    skillPath,
+    skillVersion: null,
+    testCasesMd: row.testCasesMd ?? null,
+    testCasesJson: row.testCasesJson ?? null,
+  };
 }
 
 export async function listLatestTestCaseSummariesForPrds(

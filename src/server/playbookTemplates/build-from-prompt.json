@@ -8,6 +8,7 @@
       {
         "id": "intake",
         "stepType": "interview",
+        "title": "Gather the requirements",
         "config": {
           "mode": "human_led",
           "profileKey": "build-intake",
@@ -18,6 +19,7 @@
       {
         "id": "build",
         "stepType": "build",
+        "title": "Build the feature",
         "config": {
           "buildRunId": "${input.buildRunId}",
           "briefId": "${steps.intake.briefId}",

@@ -17,7 +17,7 @@ import {
   WORKFLOW_EVALUATION_SUBMIT,
   WORKFLOW_EVALUATION_VIEW,
 } from '../../shared/types/workflowEvaluationAccess';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../../shared/types/featureFlags';
 
 jest.mock('../services/rbacService', () => ({
   getUserPermissions: jest.fn(),
@@ -224,7 +224,7 @@ describe('workflow evaluation access guards', () => {
     const { terminal } = await runChain(workflowEvaluationReadGuard, req, res);
 
     expect(terminal).toHaveBeenCalledTimes(1);
-    expect(mockIsFeatureEnabled).toHaveBeenCalledWith(WORKFLOW_HUMAN_EVALUATION_FLAG, {
+    expect(mockIsFeatureEnabled).toHaveBeenCalledWith(SKILL_LEARNING_FLAG, {
       userId: 'user-1',
       project: 'Apex',
     });

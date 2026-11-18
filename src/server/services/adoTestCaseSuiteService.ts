@@ -21,6 +21,7 @@ import type {
   QaLabNewPlacement,
   QaLabNewPlacementApproval,
   QaLabPublishedCase,
+  QaLabTestCaseStep,
 } from '../../shared/types/qaLab';
 import { DEVELOPER_ONLY_AUTOMATION_TIERS } from '../../shared/types/qaLab';
 import type { SkillProvider } from '../../shared/types/projectSettings';
@@ -32,7 +33,7 @@ import {
 } from './agentRunReaperService';
 import { adoWriteForRequest, adoWriteFromToken } from './adoFactory';
 import { AzureDevOpsService } from './azureDevOps';
-import { routeBackgroundWorkflow } from './backgroundWorkflowRouter';
+import { routeBackgroundWorkflow, usesV2DocumentTransport } from './backgroundWorkflowRouter';
 import {
   createThread,
   isThreadIdle,
@@ -40,6 +41,10 @@ import {
   sendMessage,
   updateThreadKickoffContext,
 } from './chatAgentService';
+import { saveDocumentInputSnapshot } from './aiRunV2/documentInputSnapshot';
+import { saveThreadOutputs } from './chatThreadOutputStore';
+import { writeThreadFolderFile } from './threadFolder';
+import type { AiRunV2DocumentScratchInput } from '../../shared/types/aiRunV2DocumentSpec';
 import { resolveSkillConfig } from './projectSettingsService';
 import { readRemoteBranchTip } from './repoCacheService';
 import { existingAdoTestCaseId, rawTestCaseRecords } from './testCaseLookupService';
@@ -246,7 +251,13 @@ interface PublishableCase {
   parentWorkItemId: number;
   placement: QaAdoPlacement;
   placementError: string | null;
-  existing: { adoTestCaseId: number; status: QaLabExistingStatus } | null;
+  existing: {
+    adoTestCaseId: number;
+    status: QaLabExistingStatus;
+    /** Set when sync found the case in no Test Plan suite. */
+    notInTestPlan: boolean;
+    url: string | null;
+  } | null;
 }
 
 const PLACEMENT_LINK_TO: readonly QaAdoPlacementLinkTo[] = ['requirement', 'parent', 'root'];
@@ -461,7 +472,9 @@ export async function triggerAdoTestCaseGeneration(
     throw new Error('Test-case generation thread has no workspace');
   }
 
-  writeGenerationWorkspace({
+  const sourceInputs = await writeGenerationWorkspace({
+    project,
+    threadId: thread.id,
     workspaceDir: thread.workspaceDir,
     slug,
     prdMarkdown,
@@ -469,9 +482,10 @@ export async function triggerAdoTestCaseGeneration(
     pbiIds,
     freeformContext,
   });
-  writeTestPlanFile(thread.workspaceDir, testPlans);
-  writeExistingCaseFiles(thread.workspaceDir, existingCases);
-  updateThreadKickoffContext(thread.id, freeformContext);
+  const adoInputs = [...renderTestPlanFile(testPlans), ...renderExistingCaseFiles(existingCases)];
+  await writeScratchFiles(project, thread.workspaceDir, adoInputs);
+  await saveDocumentInputSnapshot(thread.id, [...sourceInputs, ...adoInputs]);
+  await updateThreadKickoffContext(thread.id, freeformContext);
 
   const [inserted] = await db
     .insert(qaAdoTestSuites)
@@ -521,7 +535,23 @@ async function dispatchAdoTestSuite(input: {
     logLabel: `suiteId=${input.suiteId}`,
     onPreparationFailure: () => markAdoTestSuiteFailed(input.suiteId, input.threadId, input.workspaceDir),
   });
-  if (dispatched) startAdoTestSuiteWatcher(input.suiteId, input.threadId);
+  if (!dispatched) return;
+  const v2Transport = await usesV2DocumentTransport({
+    userId: input.userId,
+    project: input.project,
+    workflowClass: 'test-cases',
+  });
+  // @feature-flag:ai-runs-v2-transport start winner=enabled
+  if (v2Transport) {
+    // @feature-flag:ai-runs-v2-transport enabled-start
+    // Harvest applies the V2 result, including failures and missing output.
+    // @feature-flag:ai-runs-v2-transport enabled-end
+  } else {
+    // @feature-flag:ai-runs-v2-transport disabled-start
+    startAdoTestSuiteWatcher(input.suiteId, input.threadId);
+    // @feature-flag:ai-runs-v2-transport disabled-end
+  }
+  // @feature-flag:ai-runs-v2-transport end
 }
 
 /**
@@ -639,13 +669,13 @@ export async function dispatchQaLabRun(input: {
             );
           }
         }
-        const prepared = await prepareBackgroundWorkflowTurn(input.threadId, input.kickoffMessage);
-        const targetGrounding = await pinBranchTipWhenUngrounded(
-          destinationRun,
-          input.repository,
-          input.logLabel,
-        );
-        return { ...prepared, targetGrounding };
+        return prepareBackgroundWorkflowTurn(input.threadId, input.kickoffMessage, {
+          findTargetGrounding: () => pinBranchTipWhenUngrounded(
+            destinationRun,
+            input.repository,
+            input.logLabel,
+          ),
+        });
       },
       runInProcess: () => sendMessage(
         input.threadId,
@@ -718,13 +748,13 @@ export async function publishAdoTestCases(
   const byId = new Map(cases.map((testCase) => [testCase.localCaseId, testCase]));
   const requested = [
     ...(options.localCaseIds ?? cases
-      .filter((testCase) => !testCase.developerOnly && !testCase.existing)
+      .filter((testCase) => !testCase.developerOnly && (!testCase.existing || testCase.existing.notInTestPlan))
       .map((testCase) => testCase.localCaseId)),
     ...updateIds,
   ];
   const writer = await resolveTestCaseWriter(row.project, row.sourceSnapshot, options);
   // A writer passed in may carry the server's default area, which can belong to another project.
-  const rootAreaPath = areaPathFromSnapshot(row.sourceSnapshot);
+  const rootAreaPath = projectAreaPath(row.project, row.sourceSnapshot);
   const context = generationContextFrom(row.sourceSnapshot);
   const published: QaAdoPublishedCase[] = [];
   const skippedLocalCaseIds: string[] = [];
@@ -797,17 +827,44 @@ export async function publishAdoTestCases(
       failures.push({ localCaseId, message: 'Only cases that need an update can update an existing Test Case' });
       continue;
     }
-    if (testCase.existing && !updateIds.has(localCaseId)) {
-      skippedLocalCaseIds.push(localCaseId);
-      continue;
-    }
     if (testCase.existing) {
-      const result = await applyExistingCaseUpdate(writer, testCase, testCase.existing.adoTestCaseId, context);
-      if ('error' in result) {
-        failures.push({ localCaseId, message: result.error });
+      const { existing: found } = testCase;
+      const placement = found.notInTestPlan
+        ? await selectionFor(localCaseId, testCase.parentWorkItemId)
+        : undefined;
+      if (placement !== undefined && 'error' in placement) {
+        failures.push({ localCaseId, message: placement.error });
+        continue;
+      }
+      const update = updateIds.has(localCaseId);
+      if (!update && !placement) {
+        skippedLocalCaseIds.push(localCaseId);
+        continue;
+      }
+      let entry: QaAdoPublishedCase;
+      if (update) {
+        const result = await applyExistingCaseUpdate(writer, testCase, found.adoTestCaseId, context);
+        if ('error' in result) {
+          failures.push({ localCaseId, message: result.error });
+          continue;
+        }
+        entry = result.entry;
       } else {
-        await savePublishedCase(suiteId, result.entry);
-        published.push(result.entry);
+        entry = {
+          localCaseId,
+          adoTestCaseId: found.adoTestCaseId,
+          adoTestCaseUrl: found.url ?? '',
+          parentWorkItemId: testCase.parentWorkItemId,
+          publishedAt: new Date().toISOString(),
+          action: 'placed',
+        };
+      }
+      if (placement) entry = await addToSuite(writer, entry, placement);
+      await savePublishedCase(suiteId, entry);
+      if (entry.suiteError) {
+        failures.push({ localCaseId, message: suiteFailureMessage(entry) });
+      } else {
+        published.push(entry);
       }
       continue;
     }
@@ -817,7 +874,7 @@ export async function publishAdoTestCases(
       continue;
     }
     const { placement } = testCase;
-    const outsideProject = [placement.areaPath, placement.iterationPath]
+    const outsideProject = [placement.iterationPath]
       .find((value) => value !== undefined && !isUnderProject(value, row.project));
     if (outsideProject !== undefined) {
       failures.push({
@@ -865,7 +922,7 @@ export async function publishAdoTestCases(
         stepsHtml: buildTestCaseStepsXml(testCase.steps),
         parentId: linkTarget.id,
         linkType,
-        ...((placement.areaPath ?? rootAreaPath) ? { areaPath: placement.areaPath ?? rootAreaPath } : {}),
+        areaPath: rootAreaPath,
         ...(placement.iterationPath ? { iterationPath: placement.iterationPath } : {}),
         ...(placement.tags?.length ? { tags: placement.tags } : {}),
         ...(options.assignedTo ? { assignedTo: options.assignedTo } : {}),
@@ -1091,7 +1148,8 @@ async function addToSuite(
 }
 
 function suiteFailureMessage(entry: QaAdoPublishedCase): string {
-  return `Created Test Case ${entry.adoTestCaseId} but could not add it to the suite: ${entry.suiteError}`;
+  const done = entry.action === 'placed' ? 'Found' : entry.action === 'updated' ? 'Updated' : 'Created';
+  return `${done} Test Case ${entry.adoTestCaseId} but could not add it to the suite: ${entry.suiteError}`;
 }
 
 /** Upserts one published case. A different Test Case already saved for the id wins. */
@@ -1361,11 +1419,13 @@ export async function syncAdoTestSuiteRunOutput(
 
 export interface ExistingCaseDetailsReader {
   getTestCasesById(ids: number[]): Promise<QaAdoExistingTestCase[]>;
+  listTestCasesInSuites?(ids: number[]): Promise<Set<number>>;
 }
 
 /**
- * Stores each flagged case's current Azure DevOps version on `existing.current`, and drops
- * the flag when the id is not a Test Case, so the case is treated as new.
+ * Stores each flagged case's current Azure DevOps version on `existing.current` and whether
+ * it is in any Test Plan suite on `existing.inTestPlan`. Drops the flag when the id is not a
+ * Test Case (for example, it was deleted), so the case is treated as new.
  */
 export async function attachExistingCaseDetails(
   testCasesJson: unknown,
@@ -1379,9 +1439,10 @@ export async function attachExistingCaseDetails(
   });
   if (flagged.length === 0) return;
 
+  const reader = createReader();
   let found: QaAdoExistingTestCase[];
   try {
-    found = await createReader().getTestCasesById([...new Set(flagged.map((entry) => entry.id))]);
+    found = await reader.getTestCasesById([...new Set(flagged.map((entry) => entry.id))]);
   } catch (error) {
     console.warn(
       `[adoTestSuite] Could not read existing Test Cases: ${error instanceof Error ? error.message : String(error)}`,
@@ -1389,13 +1450,32 @@ export async function attachExistingCaseDetails(
     return;
   }
   const byId = new Map(found.map((testCase) => [testCase.id, testCase]));
+  const inSuites = await readSuiteMembership(reader, [...byId.keys()]);
   for (const { record, id } of flagged) {
     const current = byId.get(id);
     if (current) {
-      (record.existing as Record<string, unknown>).current = current;
+      const existing = record.existing as Record<string, unknown>;
+      existing.current = current;
+      if (inSuites) existing.inTestPlan = inSuites.has(id);
     } else {
       delete record.existing;
     }
+  }
+}
+
+/** Null when membership cannot be read; callers then leave `inTestPlan` unset. */
+async function readSuiteMembership(
+  reader: ExistingCaseDetailsReader,
+  ids: number[],
+): Promise<Set<number> | null> {
+  if (!reader.listTestCasesInSuites || ids.length === 0) return null;
+  try {
+    return await reader.listTestCasesInSuites(ids);
+  } catch (error) {
+    console.warn(
+      `[adoTestSuite] Could not read Test Plan membership: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
   }
 }
 
@@ -1610,7 +1690,7 @@ function toAcceptanceCriteria(
   return criteria;
 }
 
-function renderSyntheticPrd(
+export function renderSyntheticPrd(
   context: QaAdoGenerationContext,
   pbiIds: string[],
 ): string {
@@ -1717,15 +1797,19 @@ export async function readExistingCaseContext(
   }
 }
 
-/** Writes the linked cases and the suite index the kickoff points at; no-op when unchecked. */
-export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingCaseContext): void {
-  if (!existing.checked) return;
-  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
-  fs.writeFileSync(
-    path.join(workspaceDir, EXISTING_CASES_FILE),
-    `${JSON.stringify(existing.linked, null, 2)}\n`,
-    'utf-8',
-  );
+async function writeScratchFiles(
+  project: string,
+  workspaceDir: string,
+  inputs: AiRunV2DocumentScratchInput[],
+): Promise<void> {
+  for (const input of inputs) {
+    await writeThreadFolderFile({ project, workspaceDir, relativePath: input.path, content: input.content });
+  }
+}
+
+/** The linked cases and the suite index the kickoff points at; empty when unchecked. */
+export function renderExistingCaseFiles(existing: ExistingCaseContext): AiRunV2DocumentScratchInput[] {
+  if (!existing.checked) return [];
   const lines = ['# Test Cases in static suites', '', '`{id} | {suite path} | {title}`, grouped by Test Plan.'];
   let plan: string | null = null;
   for (const entry of existing.index.entries) {
@@ -1735,7 +1819,10 @@ export function writeExistingCaseFiles(workspaceDir: string, existing: ExistingC
     }
     lines.push(`- ${entry.id} | ${entry.suitePath || '(plan root)'} | ${entry.title}`);
   }
-  fs.writeFileSync(path.join(workspaceDir, SUITE_CASE_INDEX_FILE), `${lines.join('\n')}\n`, 'utf-8');
+  return [
+    { path: EXISTING_CASES_FILE, content: `${JSON.stringify(existing.linked, null, 2)}\n` },
+    { path: SUITE_CASE_INDEX_FILE, content: `${lines.join('\n')}\n` },
+  ];
 }
 
 export function renderExistingCasesSection(existing: ExistingCaseContext): string[] {
@@ -1759,11 +1846,10 @@ export function renderExistingCasesSection(existing: ExistingCaseContext): strin
       : []),
     '',
     'When an existing case covers the scenario, set the case\'s `existing` to',
-    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`:',
-    '- `up-to-date`: it still matches the work item. Copy its title and steps exactly, even when they do not follow the case format.',
-    '- `needs-update`: it covers the scenario but no longer matches what the work item requires. Write the suggested title and steps, and say in `reason` what changed. A format difference alone is not a reason to update.',
-    'Cases with `existing` do not count toward the per-PBI case limit; never drop one to stay under it.',
-    'Write a new case only when no existing case covers the scenario. Only use ids from these two files.',
+    '`{ "adoTestCaseId": <id>, "status": "up-to-date" | "needs-update", "reason": "<one line>", "source": "linked" | "suite" }`.',
+    'For `up-to-date`, the case\'s title and steps are the existing case\'s. For `needs-update`, they are the',
+    'suggested change, which QA can apply in Apex. When each status applies is set by the skill.',
+    'Only use ids from these two files.',
     '',
   ];
 }
@@ -1789,9 +1875,9 @@ export function renderTestPlanSection(testPlans: QaAdoTestPlanOption[]): string[
   ];
 }
 
-/** Writes the full Test Plan list the kickoff context points at; no-op when there are none. */
-export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlanOption[]): void {
-  if (testPlans.length === 0) return;
+/** The full Test Plan list the kickoff context points at; empty when there are none. */
+export function renderTestPlanFile(testPlans: QaAdoTestPlanOption[]): AiRunV2DocumentScratchInput[] {
+  if (testPlans.length === 0) return [];
   const lines = ['# Azure Test Plans', ''];
   for (const plan of testPlans) {
     lines.push(`- ${plan.name}`);
@@ -1799,8 +1885,7 @@ export function writeTestPlanFile(workspaceDir: string, testPlans: QaAdoTestPlan
       if (suite.path) lines.push(`  - ${suite.path}${suite.requirementId !== undefined ? ' (requirement)' : ''}`);
     }
   }
-  fs.mkdirSync(path.join(workspaceDir, '.ai-pilot'), { recursive: true });
-  fs.writeFileSync(path.join(workspaceDir, TEST_PLANS_FILE), `${lines.join('\n')}\n`, 'utf-8');
+  return [{ path: TEST_PLANS_FILE, content: `${lines.join('\n')}\n` }];
 }
 
 function buildKickoffMessage(pbiIds: string[]): string {
@@ -1810,32 +1895,31 @@ function buildKickoffMessage(pbiIds: string[]): string {
   return `Generate QA test cases only for these backlog items: ${pbiIds.join(', ')}. Do not write cases for any other PBI. Write the required output files.`;
 }
 
-function writeGenerationWorkspace(input: {
+async function writeGenerationWorkspace(input: {
+  project: string;
+  threadId: string;
   workspaceDir: string;
   slug: string;
   prdMarkdown: string;
   backlog: SyntheticAdoBacklog;
   pbiIds: string[];
   freeformContext: string;
-}): void {
-  const outputDir = path.join(input.workspaceDir, '.ai-pilot', 'output');
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(path.join(outputDir, `${input.slug}.prd.md`), input.prdMarkdown, 'utf-8');
-  fs.writeFileSync(
-    path.join(outputDir, `${input.slug}.backlog.json`),
-    JSON.stringify(input.backlog, null, 2),
-    'utf-8',
-  );
-  fs.writeFileSync(
-    path.join(outputDir, QA_LAB_SCOPE_FILE),
-    JSON.stringify({ pbiIds: input.pbiIds }),
-    'utf-8',
-  );
-  fs.writeFileSync(
-    path.join(input.workspaceDir, '.ai-pilot', 'kickoff-context.md'),
-    input.freeformContext,
-    'utf-8',
-  );
+}): Promise<AiRunV2DocumentScratchInput[]> {
+  const sourceInputs = [
+    { path: `.ai-pilot/output/${input.slug}.prd.md`, content: input.prdMarkdown },
+    { path: `.ai-pilot/output/${input.slug}.backlog.json`, content: JSON.stringify(input.backlog, null, 2) },
+  ];
+  const scopeFile = {
+    path: `.ai-pilot/output/${QA_LAB_SCOPE_FILE}`,
+    content: JSON.stringify({ pbiIds: input.pbiIds }),
+  };
+  await writeScratchFiles(input.project, input.workspaceDir, [
+    ...sourceInputs,
+    scopeFile,
+    { path: '.ai-pilot/kickoff-context.md', content: input.freeformContext },
+  ]);
+  await saveThreadOutputs(input.threadId, null, [scopeFile]);
+  return sourceInputs;
 }
 
 function startAdoTestSuiteWatcher(suiteId: string, chatThreadId: string): void {
@@ -2020,7 +2104,7 @@ async function resolveTestCaseWriter(
   options: PublishAdoTestCasesOptions,
 ): Promise<AdoTestCaseWriter> {
   if (options.ado) return options.ado;
-  const areaPath = areaPathFromSnapshot(sourceSnapshot);
+  const areaPath = projectAreaPath(project, sourceSnapshot);
   if (options.req) return adoWriteForRequest(options.req, project, areaPath);
   if (options.adoToken !== undefined) return adoWriteFromToken(options.adoToken, project, areaPath);
   throw new Error(
@@ -2028,10 +2112,11 @@ async function resolveTestCaseWriter(
   );
 }
 
-function areaPathFromSnapshot(snapshot: unknown): string | undefined {
+/** QA keeps every published item at the project's top-level area, not the PBI's team area. */
+export function projectAreaPath(project: string, snapshot: unknown): string {
   const root = asRecord(asRecord(snapshot)?.root);
-  const areaPath = stringFrom(root?.areaPath)?.trim();
-  return areaPath ? areaPath : undefined;
+  const topLevel = stringFrom(root?.areaPath)?.trim().split('\\')[0]?.trim();
+  return topLevel || project;
 }
 
 function collectPublishableCases(testCasesJson: unknown): PublishableCase[] {
@@ -2097,7 +2182,8 @@ function toPublishableCase(
   const automationTier = stringFrom(asRecord(record.automation)?.recommendedTier)
     ?? stringFrom(record.automationTier);
   const existingId = existingAdoTestCaseId(record);
-  const existingStatus = asRecord(record.existing)?.status;
+  const existingRecord = asRecord(record.existing);
+  const existingStatus = existingRecord?.status;
   return {
     localCaseId,
     title,
@@ -2107,7 +2193,12 @@ function toPublishableCase(
     placement: mergePlacements(defaultPlacement.placement, casePlacement.placement),
     placementError: defaultPlacement.error ?? casePlacement.error,
     existing: existingId !== null && (existingStatus === 'up-to-date' || existingStatus === 'needs-update')
-      ? { adoTestCaseId: existingId, status: existingStatus }
+      ? {
+        adoTestCaseId: existingId,
+        status: existingStatus,
+        notInTestPlan: existingRecord?.inTestPlan === false,
+        url: stringFrom(asRecord(existingRecord?.current)?.url),
+      }
       : null,
   };
 }
@@ -2210,6 +2301,13 @@ function resolveLinkTarget(
   }
 }
 
+/** A case's steps numbered as `buildTestCaseStepsXml` publishes them. */
+export function caseRunSteps(testCase: Record<string, unknown>): QaLabTestCaseStep[] {
+  return stepsFrom(testCase.steps).map((step, index) => (typeof step === 'string'
+    ? { order: index + 1, action: step, expected: '' }
+    : { order: index + 1, action: step.action, expected: step.expected ?? '' }));
+}
+
 function stepsFrom(value: unknown): PublishableCase['steps'] {
   if (!Array.isArray(value)) return [];
   const steps: PublishableCase['steps'] = [];
@@ -2277,20 +2375,25 @@ export function publishedCasesFrom(value: unknown): QaAdoPublishedCase[] {
       ...(testPlanId !== null ? { testPlanId } : {}),
       ...(testSuiteId !== null ? { testSuiteId } : {}),
       ...(suiteError ? { suiteError } : {}),
-      ...(record?.action === 'updated' ? { action: 'updated' as const } : {}),
+      ...(record?.action === 'updated' || record?.action === 'placed' ? { action: record.action } : {}),
     });
   }
   return cases;
 }
 
-function buildTestCaseStepsXml(
+/** A formatted step string is HTML inside XML, so the text is escaped twice and line breaks become `<br/>`. */
+function stepHtml(text: string): string {
+  return escapeXml(escapeXml(text).replace(/\r?\n/g, '<br/>'));
+}
+
+export function buildTestCaseStepsXml(
   steps: Array<string | { action: string; expected?: string }>,
 ): string {
   if (steps.length === 0) return '';
   const stepElements = steps.map((step, index) => {
     const action = typeof step === 'string' ? step : step.action;
     const expected = typeof step === 'string' ? '' : (step.expected ?? '');
-    return `<step id="${index + 1}" type="ActionStep"><parameterizedString isformatted="true">${escapeXml(action)}</parameterizedString><parameterizedString isformatted="true">${escapeXml(expected)}</parameterizedString></step>`;
+    return `<step id="${index + 1}" type="ActionStep"><parameterizedString isformatted="true">${stepHtml(action)}</parameterizedString><parameterizedString isformatted="true">${stepHtml(expected)}</parameterizedString></step>`;
   });
   return `<steps id="0" last="${steps.length}">${stepElements.join('')}</steps>`;
 }

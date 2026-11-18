@@ -8,9 +8,12 @@ import type {
 import {
   interviewLinkKeys,
   useAddAdrLink,
+  useAddBrainstormLink,
   useLinkCandidates,
   useLinkedContext,
+  usePersistStagedLinks,
   useRemoveAdrLink,
+  useRemoveBrainstormLink,
 } from '../useLinkedContext';
 
 const INTERVIEW_ID = 'interview-1';
@@ -209,5 +212,94 @@ describe('useLinkedContext — TBI-003 DoD-2', () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: interviewLinkKeys.candidateRoot(PROJECT, INTERVIEW_ID),
     });
+  });
+});
+
+describe('Brainstorm links', () => {
+  const withBrainstorm: LinkedContextReadModel = {
+    ...initialContext,
+    brainstormLinks: [
+      {
+        brainstormSessionId: 'session-1',
+        title: 'Queue design',
+        artifactType: 'technical_design',
+        linkedBy: 'user-1',
+        linkedAt: '2026-11-17T00:00:00.000Z',
+      },
+    ],
+    count: 2,
+  };
+
+  it('adds a brainstorm link through the brainstorm route', async () => {
+    global.fetch = jest.fn().mockResolvedValue(response({ linkedContext: withBrainstorm }));
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => useAddBrainstormLink(INTERVIEW_ID, PROJECT), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ brainstormSessionId: 'session-1' });
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/interviews/${INTERVIEW_ID}/links/brainstorm`,
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ brainstormSessionId: 'session-1' }) }),
+    );
+  });
+
+  it('optimistically removes a brainstorm link and keeps the other links counted', async () => {
+    global.fetch = jest.fn().mockReturnValue(new Promise<Response>(() => undefined));
+    const { queryClient, wrapper } = createWrapper();
+    queryClient.setQueryData(interviewLinkKeys.links(INTERVIEW_ID), withBrainstorm);
+    const { result } = renderHook(() => useRemoveBrainstormLink(INTERVIEW_ID, PROJECT), { wrapper });
+
+    act(() => {
+      void result.current.mutateAsync('session-1').catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      const current = queryClient.getQueryData<LinkedContextReadModel>(interviewLinkKeys.links(INTERVIEW_ID));
+      expect(current?.brainstormLinks).toEqual([]);
+      expect(current?.count).toBe(1);
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/interviews/${INTERVIEW_ID}/links/brainstorm/session-1`,
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('counts brainstorm links when an ADR is optimistically removed', async () => {
+    global.fetch = jest.fn().mockReturnValue(new Promise<Response>(() => undefined));
+    const { queryClient, wrapper } = createWrapper();
+    queryClient.setQueryData(interviewLinkKeys.links(INTERVIEW_ID), withBrainstorm);
+    const { result } = renderHook(() => useRemoveAdrLink(INTERVIEW_ID, PROJECT), { wrapper });
+
+    act(() => {
+      void result.current.mutateAsync('adr-1').catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<LinkedContextReadModel>(interviewLinkKeys.links(INTERVIEW_ID))?.count,
+      ).toBe(1);
+    });
+  });
+
+  it('persists a staged brainstorm selection after the interview is created', async () => {
+    global.fetch = jest.fn().mockResolvedValue(response({ linkedContext: withBrainstorm }));
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(() => usePersistStagedLinks(PROJECT), { wrapper });
+
+    let outcome: Awaited<ReturnType<typeof result.current.mutateAsync>> | undefined;
+    await act(async () => {
+      outcome = await result.current.mutateAsync({
+        interviewId: INTERVIEW_ID,
+        selections: [{ type: 'brainstorm', id: 'session-1' }],
+      });
+    });
+
+    expect(outcome?.failures).toEqual([]);
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/interviews/${INTERVIEW_ID}/links/brainstorm`,
+      expect.objectContaining({ body: JSON.stringify({ brainstormSessionId: 'session-1' }) }),
+    );
   });
 });

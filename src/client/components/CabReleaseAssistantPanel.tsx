@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AgentComposer, AgentPanelShell, AgentTranscript } from './agentChat';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useStartChat } from '../hooks/useChatThreads';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
 import { DEFAULT_MODEL_ID } from '../config/models';
@@ -46,6 +47,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const kickoffSentRef = useRef(false);
   const dragStartXRef = useRef(0);
   const dragStartWidthRef = useRef(DEFAULT_WIDTH);
@@ -58,6 +60,13 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     error: skillConfigError,
   } = useProjectSkillConfig(project);
   const session = useAgentChatSession(threadId);
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
 
   const startChatMutate = startChat.mutateAsync;
 
@@ -163,12 +172,23 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     };
   }, [isDragging]);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text) return;
+    const outgoing = [...attachments];
+    if (!text && outgoing.length === 0) return;
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    await session.send(text);
-  }, [input, session]);
+    const sent = await session.send(
+      message,
+      outgoing.length > 0 ? { attachments: outgoing } : undefined,
+    );
+    if (sent && outgoing.length > 0) clearAttachments();
+  }, [attachments, clearAttachments, input, session]);
 
   return (
     <div {...{ 'data-testid': dataTestId }}>
@@ -191,6 +211,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
             disabled={session.isRunning || session.isSending || isCreating || !threadId}
             isRunning={session.isRunning}
             isSending={session.isSending}
+            allowEmptySend
             placeholder={
               isCreating || skillConfigPending ? 'Starting cab-release…'
                 : session.isRunning ? 'Agent is working…'
@@ -198,6 +219,22 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
             }
             testIdPrefix="cab-release-assistant"
             textareaRef={textareaRef}
+            attachments={attachments}
+            attachmentError={attachmentError}
+            onRemoveAttachment={removeAttachment}
+            onAttachClick={() => fileInputRef.current?.click()}
+            onPasteFiles={(files) => { void addFiles(files); }}
+            fileInput={(
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => { void handleAttachmentChange(event); }}
+                disabled={session.isRunning || session.isSending || isCreating || !threadId}
+                {...{ 'data-testid': 'cab-release-assistant-file-input' }}
+              />
+            )}
           />
         )}
       >

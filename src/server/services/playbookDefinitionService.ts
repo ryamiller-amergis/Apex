@@ -22,7 +22,12 @@ import {
   playbookRuns,
   playbookTriggerSubscriptions,
 } from '../db/schema';
-import { assertGraphWithinGuards } from './playbookGuardService';
+import {
+  assertGraphWithinGuards,
+  assertStepTitles,
+  PlaybookGraphNodeRuleError,
+} from './playbookGuardService';
+import { cloudAgentPlaybookSetupGap } from './cloudAgentDeliverySettings';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
@@ -303,6 +308,11 @@ interface PublishDraftInput {
   expectedDraftUpdatedAt: string;
   /** Used when an interview node's profileKey is a `${input.*}` binding. */
   sampleRunInput?: Record<string, unknown>;
+  /**
+   * Set when a person publishes from the builder: steps need titles and a Cloud agent step needs
+   * the project's PR settings. Graphs Apex builds itself skip these checks.
+   */
+  authoredInBuilder?: boolean;
 }
 
 interface DeprecateVersionInput {
@@ -569,6 +579,12 @@ export async function publishDraft(
       input.expectedDraftUpdatedAt
     );
     assertGraphWithinGuards(draft.graph);
+    if (input.authoredInBuilder) {
+      assertStepTitles(draft.graph);
+      const cloudNode = draft.graph.nodes.find((node) => node.stepType === 'cloud-agent');
+      const setupGap = cloudNode ? await cloudAgentPlaybookSetupGap(input.project) : null;
+      if (cloudNode && setupGap) throw new PlaybookGraphNodeRuleError(cloudNode.id, setupGap);
+    }
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
     const policies = await assertPlaybookCapabilitiesForPublish({
       graph: draft.graph,

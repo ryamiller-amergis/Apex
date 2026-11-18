@@ -2,7 +2,7 @@
  * Read and insert access for workflow evaluation rows.
  * This module has no update or delete path. Events are append-only.
  */
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, like, lt, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   appUsers,
@@ -128,6 +128,16 @@ export async function getActiveDefinition(stageKey: string): Promise<WorkflowEva
   return rows[0] ? toDefinition(rows[0]) : null;
 }
 
+/** The exact version an event was scored against, active or not. */
+export async function getDefinitionById(id: string): Promise<WorkflowEvaluationDefinition | null> {
+  const rows = await db
+    .select()
+    .from(workflowEvaluationDefinitions)
+    .where(eq(workflowEvaluationDefinitions.id, id))
+    .limit(1);
+  return rows[0] ? toDefinition(rows[0]) : null;
+}
+
 export async function listActiveDefinitions(stageKey?: string): Promise<WorkflowEvaluationDefinition[]> {
   const filters = [
     eq(workflowEvaluationDefinitions.active, true),
@@ -233,22 +243,100 @@ export async function getEventWithJobs(
     .from(workflowEvaluationJobs)
     .where(eq(workflowEvaluationJobs.eventId, eventId))
     .orderBy(asc(workflowEvaluationJobs.createdAt));
+  return { ...record, jobs: jobs.map(toJob) };
+}
+
+function toJob(job: typeof workflowEvaluationJobs.$inferSelect): WorkflowEvaluationJob {
   return {
-    ...record,
-    jobs: jobs.map((job) => ({
-      id: job.id,
-      eventId: job.eventId,
-      evaluatorKey: job.evaluatorKey,
-      status: job.status,
-      runId: job.runId,
-      specificationHash: job.specificationHash,
-      summary: job.summary,
-      resultBlobRefs: job.resultBlobRefs,
-      errorDetail: job.errorDetail,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-    })),
+    id: job.id,
+    eventId: job.eventId,
+    evaluatorKey: job.evaluatorKey,
+    status: job.status,
+    runId: job.runId,
+    specificationHash: job.specificationHash,
+    summary: job.summary,
+    resultBlobRefs: job.resultBlobRefs,
+    errorDetail: job.errorDetail,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
   };
+}
+
+export type ProjectEventFilters = {
+  stageKey?: string;
+  outcome?: WorkflowEvaluationOutcome;
+  reasonCode?: string;
+  subjectType?: WorkflowEvaluationSubjectType;
+  /** Inclusive lower bound, ISO timestamp. */
+  createdFrom?: string;
+  /** Exclusive upper bound, ISO timestamp. */
+  createdBefore?: string;
+  /** Event id prefix or exact subject id. */
+  search?: string;
+  eventId?: string;
+};
+
+export type ProjectEventCursor = { createdAt: string; id: string };
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+/** Newest first, keyed on (created_at, id) so paging is stable while new events arrive. */
+export async function listProjectEvents(query: {
+  project: string;
+  filters: ProjectEventFilters;
+  after?: ProjectEventCursor;
+  limit: number;
+}): Promise<WorkflowEvaluationEventRecord[]> {
+  const { filters, after } = query;
+  const events = workflowEvaluationEvents;
+  const conditions: SQL[] = [eq(events.project, query.project)];
+  if (filters.stageKey) conditions.push(eq(events.stageKey, filters.stageKey));
+  if (filters.outcome) conditions.push(eq(events.outcome, filters.outcome));
+  if (filters.subjectType) conditions.push(eq(events.subjectType, filters.subjectType));
+  if (filters.eventId) conditions.push(eq(events.id, filters.eventId));
+  if (filters.reasonCode) {
+    conditions.push(sql`${events.reasonCodes} @> ${JSON.stringify([filters.reasonCode])}::jsonb`);
+  }
+  if (filters.createdFrom) conditions.push(gte(events.createdAt, filters.createdFrom));
+  if (filters.createdBefore) conditions.push(lt(events.createdAt, filters.createdBefore));
+  if (filters.search) {
+    const search = or(
+      like(sql`${events.id}::text`, `${escapeLike(filters.search.toLowerCase())}%`),
+      eq(events.subjectId, filters.search),
+    );
+    if (search) conditions.push(search);
+  }
+  if (after) {
+    const page = or(
+      lt(events.createdAt, after.createdAt),
+      and(eq(events.createdAt, after.createdAt), lt(events.id, after.id)),
+    );
+    if (page) conditions.push(page);
+  }
+  const rows = await db
+    .select(eventJoin)
+    .from(events)
+    .innerJoin(
+      workflowEvaluationDefinitions,
+      eq(events.definitionId, workflowEvaluationDefinitions.id),
+    )
+    .leftJoin(appUsers, eq(events.reviewerUserId, appUsers.oid))
+    .where(and(...conditions))
+    .orderBy(desc(events.createdAt), desc(events.id))
+    .limit(query.limit);
+  return rows.map(toRecord);
+}
+
+export async function listJobsForEvents(eventIds: readonly string[]): Promise<WorkflowEvaluationJob[]> {
+  if (eventIds.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(workflowEvaluationJobs)
+    .where(inArray(workflowEvaluationJobs.eventId, [...eventIds]))
+    .orderBy(asc(workflowEvaluationJobs.createdAt));
+  return rows.map(toJob);
 }
 
 async function getEventRecord(

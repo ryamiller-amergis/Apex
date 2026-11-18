@@ -152,6 +152,7 @@ describe('VT-TEMPLATE-7 — publish route forwards sample run input', () => {
       definitionId: 'def-a',
       publishedByUserId: USER_OID,
       expectedDraftUpdatedAt: '2026-10-07T12:00:00.000Z',
+      authoredInBuilder: true,
       sampleRunInput,
     });
   });

@@ -3,6 +3,7 @@
  * The version tag lets a later canonical form coexist with stored hashes.
  */
 import { createHash } from 'crypto';
+import type { SkillRegressionArtifact } from '../../shared/types/skillRegressionCase';
 import type { WorkflowEvaluationSubjectType } from '../../shared/types/workflowEvaluation';
 import { WorkflowEvaluationError } from './workflowEvaluationError';
 
@@ -33,6 +34,8 @@ export type ArtifactBinding = {
   };
   /** Live PRD markdown when the subject is a ready PRD. The client cannot supply this. */
   prdMarkdown: string | null;
+  /** The parts `artifactHash` covers. */
+  artifact: SkillRegressionArtifact;
 };
 
 /** Sorted keys, stable arrays, no whitespace. `undefined` and `null` both become `null`. */
@@ -70,6 +73,43 @@ export function hashPrdArtifact(markdown: string, backlog: unknown): string {
     markdown ?? '',
     canonicalJson(backlog === undefined ? null : backlog),
   ]);
+}
+
+export type DesignDocArtifactParts = {
+  designContent: string;
+  techSpecContent: string;
+  assumptionsContent: string;
+};
+
+export function hashDesignDocArtifact(parts: DesignDocArtifactParts): string {
+  return sha256Parts([
+    ARTIFACT_HASH_TAG,
+    'design_doc',
+    parts.designContent ?? '',
+    parts.techSpecContent ?? '',
+    parts.assumptionsContent ?? '',
+  ]);
+}
+
+export type TestCaseArtifactParts = {
+  testCasesMd: string | null;
+  testCasesJson: unknown;
+};
+
+export function hashTestCasesArtifact(parts: TestCaseArtifactParts): string {
+  return sha256Parts([
+    ARTIFACT_HASH_TAG,
+    'test_cases',
+    parts.testCasesMd ?? '',
+    canonicalJson(parts.testCasesJson === undefined ? null : parts.testCasesJson),
+  ]);
+}
+
+/** The markdown handoff when there is one; otherwise the JSON suite, so older records still evaluate. */
+export function renderTestCasesMarkdown(parts: TestCaseArtifactParts): string {
+  if (parts.testCasesMd?.trim()) return parts.testCasesMd;
+  if (parts.testCasesJson === null || parts.testCasesJson === undefined) return '';
+  return `# Test Cases\n\n\`\`\`json\n${JSON.stringify(parts.testCasesJson, null, 2)}\n\`\`\`\n`;
 }
 
 export function hashInterviewPhaseArtifact(
@@ -118,6 +158,70 @@ export async function resolveCurrentArtifactBinding(input: {
         prdId: prd.id,
       },
       prdMarkdown: prd.content,
+      artifact: { subjectType: 'prd', markdown: prd.content, backlog: prd.backlogJson ?? null },
+    };
+  }
+
+  if (input.subjectType === 'design_doc') {
+    const { getDesignDocEvaluationInputs } = await import('./designDocService');
+    const doc = await getDesignDocEvaluationInputs(input.subjectId);
+    if (!doc || doc.project !== input.project) {
+      throw new WorkflowEvaluationError('SUBJECT_NOT_FOUND', 'Subject was not found in this project.');
+    }
+    if (!doc.designContent.trim() && !doc.techSpecContent.trim()) {
+      throw new WorkflowEvaluationError('ARTIFACT_NOT_READY', 'The design doc has no content yet.');
+    }
+    return {
+      project: doc.project,
+      subjectType: 'design_doc',
+      subjectId: doc.id,
+      phaseIndex: null,
+      artifactHash: hashDesignDocArtifact(doc),
+      lineage: {
+        skillPath: doc.skillPath,
+        skillVersion: doc.skillVersion,
+        model: doc.model,
+        interviewId: doc.interviewId,
+        prdId: doc.prdId,
+      },
+      prdMarkdown: null,
+      artifact: {
+        subjectType: 'design_doc',
+        designContent: doc.designContent,
+        techSpecContent: doc.techSpecContent,
+        assumptionsContent: doc.assumptionsContent,
+      },
+    };
+  }
+
+  if (input.subjectType === 'test_cases') {
+    const { getTestCaseEvaluationInputs } = await import('./testCaseService');
+    const record = await getTestCaseEvaluationInputs(input.subjectId);
+    if (!record || record.project !== input.project) {
+      throw new WorkflowEvaluationError('SUBJECT_NOT_FOUND', 'Subject was not found in this project.');
+    }
+    if (record.status !== 'ready' || !renderTestCasesMarkdown(record).trim()) {
+      throw new WorkflowEvaluationError('ARTIFACT_NOT_READY', 'The test cases are not ready yet.');
+    }
+    return {
+      project: record.project,
+      subjectType: 'test_cases',
+      subjectId: record.id,
+      phaseIndex: null,
+      artifactHash: hashTestCasesArtifact(record),
+      lineage: {
+        skillPath: record.skillPath,
+        skillVersion: record.skillVersion,
+        model: record.model,
+        interviewId: record.interviewId,
+        prdId: record.prdId,
+      },
+      prdMarkdown: null,
+      artifact: {
+        subjectType: 'test_cases',
+        testCasesMd: record.testCasesMd,
+        testCasesJson: record.testCasesJson ?? null,
+      },
     };
   }
 
@@ -144,5 +248,14 @@ export async function resolveCurrentArtifactBinding(input: {
       prdId: null,
     },
     prdMarkdown: null,
+    artifact: {
+      subjectType: 'interview_phase',
+      phaseIndex: phase.phaseIndex,
+      messages: phase.messages.map((message) => ({ role: message.role, text: message.text })),
+      linkedContextIds: {
+        adrIds: [...interview.linkedContextIds.adrIds],
+        designModuleIds: [...interview.linkedContextIds.designModuleIds],
+      },
+    },
   };
 }

@@ -106,7 +106,7 @@ export const PlaybookTriggersPanel: React.FC<PlaybookTriggersPanelProps> = ({
           ? { eventType: 'workitem.created', workItemType: workItemType.trim() }
           : null,
         versionPolicy: 'current_published',
-        concurrencyPolicy: 'skip_if_active',
+        concurrencyPolicy: kind === 'schedule' ? 'skip_if_active' : 'allow',
         dedupeKeyTemplate: kind === 'schedule'
           ? 'schedule:{occurrence}'
           : kind === 'apex_event'

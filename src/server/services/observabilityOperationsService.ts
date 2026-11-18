@@ -12,11 +12,12 @@ import {
 } from '../../shared/types/observability';
 import { getObservabilityCaptureService } from './observabilityCaptureService';
 import { isObservabilityCaptureEnabled } from './observabilityCaptureFlagSnapshot';
+import { observabilityPoDigestScheduler } from './observabilityPoDigestService';
 import { trackEvent } from './telemetry';
 import { createSingleFlight, stuckAfterForInterval } from '../utils/singleFlight';
 
 export const OBSERVABILITY_RETENTION_LOCK_KEY = 'apex:observability-retention';
-export const OBSERVABILITY_RETENTION_DAYS = 30;
+export const OBSERVABILITY_RETENTION_DAYS = 120;
 export const OBSERVABILITY_RETENTION_CHUNK_SIZE = 5_000;
 export const OBSERVABILITY_RETENTION_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 export const OBSERVABILITY_RETENTION_HOUR_UTC = 2;
@@ -217,7 +218,7 @@ export function createObservabilityOperationsService(
             WHERE id IN (
               SELECT id
               FROM trace_events
-              WHERE occurred_at < NOW() - INTERVAL '30 days'
+              WHERE occurred_at < NOW() - INTERVAL '120 days'
               ORDER BY occurred_at ASC
               LIMIT ${OBSERVABILITY_RETENTION_CHUNK_SIZE}
             )
@@ -312,11 +313,14 @@ export function runRetentionCycle(): Promise<RetentionCycleResult> {
 }
 
 export function startObservabilityOperations(): void {
-  getOperations().start({ e2eMode: process.env.E2E_MODE === 'true' });
+  const e2eMode = process.env.E2E_MODE === 'true';
+  getOperations().start({ e2eMode });
+  observabilityPoDigestScheduler.start({ e2eMode });
 }
 
 export function stopObservabilityOperations(): void {
   getOperations().stop();
+  observabilityPoDigestScheduler.stop();
 }
 
 export function resetObservabilityOperationsForTests(): void {

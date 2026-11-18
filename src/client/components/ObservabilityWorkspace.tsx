@@ -1,1052 +1,1124 @@
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ErrorBoundary } from 'react-error-boundary';
-import { Controller, useForm, useWatch } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import React, { useCallback, useMemo, useState } from 'react';
+import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
 import {
-  OBSERVABILITY_MAX_ROWS,
-  OBSERVABILITY_PAGE_SIZE,
-  OBSERVABILITY_RAW_RETENTION_DAYS,
-  W3C_TRACE_ID_PATTERN,
-  type CaptureHealthResponse,
-  type JourneyTrailHandoff,
-  type TraceEventView,
+  OBSERVABILITY_PO_DEFAULT_EFFORT,
+  OBSERVABILITY_PO_SKILL_PATH,
+  OBSERVABILITY_TREND_WINDOWS,
+  OBSERVABILITY_TREND_WINDOW_LABELS,
+  type ObservabilityAdoptionSummary,
+  type ObservabilityDropReasonsSummary,
+  type ObservabilityDynamicSkillSection,
+  type ObservabilityExceptionItem,
+  type ObservabilityModuleRetentionDropItem,
+  type ObservabilityScheduleSummary,
+  type ObservabilityTopModuleItem,
+  type ObservabilityTopUserItem,
+  type ObservabilityTrendWindow,
+  type ObservabilityWindowComparisonMap,
 } from '../../shared/types/observability';
+import { effortLabel } from '../../shared/utils/effort';
+import { buildFallbackPoDigestResponse } from '../../shared/utils/observabilityPoDigest';
+import { DEFAULT_MODEL_ID, PLATFORM_MODEL_OPTIONS } from '../config/models';
 import { useAppShell } from '../hooks/useAppShell';
-import { useObservabilityHealth, useObservabilityTrail } from '../hooks/useObservabilityQueries';
-import { usePlatformAdminUsers } from '../hooks/usePlatformAdmin';
-import { SessionTimelinePage } from './SessionTimelinePage';
-import { ViewErrorFallback } from './ViewErrorFallback';
-
-const InteractiveJourneyMapPage = lazy(() => import('./InteractiveJourneyMapPage'));
 import {
-  ACTOR_UUID_PATTERN,
-  TIME_RANGE_LABELS,
-  TIME_RANGE_PRESETS,
-  actorOptionLabel,
-  describeEventType,
-  emptyFilterDraft,
-  formatStoreBytes,
-  formatTrailDescription,
-  isBufferAtCapacity,
-  isRetentionBoundaryReached,
-  resolveTimeRange,
-  type AppliedWorkspaceFilters,
-  type TrailEventFilter,
-} from '../observability/workspaceFilters';
+  useGenerateObservabilityPoDigest,
+  useObservabilityPoDigest,
+} from '../hooks/useObservabilityQueries';
+import { useAvailableModels } from '../hooks/useProjectSkillConfig';
 import styles from './ObservabilityWorkspace.module.css';
 
-const filterSchema = z
-  .object({
-    timeRange: z.enum(TIME_RANGE_PRESETS),
-    customFrom: z.string(),
-    customTo: z.string(),
-    actorId: z
-      .string()
-      .trim()
-      .min(1, 'Actor is required — select a user')
-      .regex(ACTOR_UUID_PATTERN, 'Invalid actor — must be a valid user ID (UUID)'),
-    traceId: z
-      .string()
-      .trim()
-      .refine((value) => value.length === 0 || W3C_TRACE_ID_PATTERN.test(value), {
-        message: 'Malformed Trace ID — expected 32 hexadecimal characters',
-      }),
-  })
-  .superRefine((value, ctx) => {
-    const range = resolveTimeRange(value);
-    if ('error' in range) {
-      ctx.addIssue({ code: 'custom', path: ['timeRange'], message: range.error });
-    }
-  });
+function formatDelta(deltaPct: number, invertGood = false): { text: string; positive: boolean } {
+  const sign = deltaPct > 0 ? '+' : '';
+  const text = `${sign}${deltaPct.toFixed(1)}%`;
+  const positive = invertGood ? deltaPct <= 0 : deltaPct >= 0;
+  return { text, positive };
+}
 
-type FilterFormValues = z.infer<typeof filterSchema>;
-type WorkspaceView = 'trail' | 'timeline' | 'journey' | 'health';
+function formatTimestamp(iso: string | null): string {
+  if (!iso) return 'Pending first run';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
 
-function badgeClass(eventType: string): string {
-  if (eventType === 'ui_action') return `${styles.badge} ${styles.badgeUi}`;
-  if (eventType === 'api_request') return `${styles.badge} ${styles.badgeApi}`;
-  if (eventType === 'error') return `${styles.badge} ${styles.badgeError}`;
+function severityBadgeClass(severity: ObservabilityExceptionItem['severity']): string {
+  if (severity === 'critical' || severity === 'high') {
+    return `${styles.badge} ${styles.badgeError}`;
+  }
+  if (severity === 'medium') {
+    return `${styles.badge} ${styles.badgeUi}`;
+  }
   return `${styles.badge} ${styles.badgeAgent}`;
 }
 
-function toApplied(values: FilterFormValues, eventType: TrailEventFilter): AppliedWorkspaceFilters {
-  const range = resolveTimeRange(values);
-  if ('error' in range) {
-    throw new Error(range.error);
-  }
-  return {
-    from: range.from,
-    to: range.to,
-    actorId: values.actorId.trim().toLowerCase(),
-    traceId: values.traceId.trim() || null,
-    eventType: eventType === 'all' ? null : eventType,
-  };
+function impactBadgeClass(impact: 'high' | 'medium' | 'low'): string {
+  if (impact === 'high') return `${styles.badge} ${styles.badgeApi}`;
+  if (impact === 'medium') return `${styles.badge} ${styles.badgeUi}`;
+  return `${styles.badge} ${styles.badgeAgent}`;
 }
+
+interface WindowComparisonStripProps {
+  values: ObservabilityWindowComparisonMap;
+  activeWindow: ObservabilityTrendWindow;
+  suffix?: string;
+}
+
+const WindowComparisonStrip: React.FC<WindowComparisonStripProps> = ({
+  values,
+  activeWindow,
+  suffix = '',
+}) => (
+  <div className={styles.poWindowCompareStrip} aria-label="Multi-window trend comparison">
+    {OBSERVABILITY_TREND_WINDOWS.map((w) => (
+      <span
+        key={w}
+        className={w === activeWindow ? styles.poWindowMiniChipActive : styles.poWindowMiniChip}
+      >
+        {w}: {values[w].toLocaleString()}
+        {suffix}
+      </span>
+    ))}
+  </div>
+);
 
 interface ObservabilityWorkspaceProps {
   project?: string;
 }
 
 export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ project }) => {
+  const [selectedWindow, setSelectedWindow] = useState<ObservabilityTrendWindow>('7d');
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
+  const [selectedEffort, setSelectedEffort] = useState<EffortLevel>(OBSERVABILITY_PO_DEFAULT_EFFORT);
+
   const { selectedProject } = useAppShell();
-  const [activeView, setActiveView] = useState<WorkspaceView>('trail');
-  const [eventChip, setEventChip] = useState<TrailEventFilter>('all');
-  const [applied, setApplied] = useState<AppliedWorkspaceFilters | null>(null);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [cursorStack, setCursorStack] = useState<Array<string | null>>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [journeyHandoff, setJourneyHandoff] = useState<JourneyTrailHandoff | null>(null);
+  const resolvedProject = project ?? selectedProject ?? 'Apex';
 
-  const {
-    register,
-    handleSubmit,
-    control,
-    reset,
-    setValue,
-    formState: { errors },
-  } = useForm<FilterFormValues>({
-    resolver: zodResolver(filterSchema),
-    defaultValues: emptyFilterDraft(),
-    mode: 'onSubmit',
-  });
+  const modelsQuery = useAvailableModels();
+  const digestQuery = useObservabilityPoDigest(
+    resolvedProject,
+    selectedWindow,
+    selectedModel,
+    selectedEffort,
+  );
+  const generateMutation = useGenerateObservabilityPoDigest(resolvedProject);
 
-  const resolvedProject = project ?? selectedProject;
-  const timeRange = useWatch({ control, name: 'timeRange' });
-  const trailQuery = useObservabilityTrail(resolvedProject, applied, cursor);
-  const healthQuery = useObservabilityHealth(resolvedProject, activeView === 'health');
-  const { data: knownUsers = [], isLoading: usersLoading, isError: usersError } = usePlatformAdminUsers();
-  const actorOptions = useMemo(
+  const modelOptions = useMemo(() => {
+    const merged = new Map<string, string>();
+    for (const preset of PLATFORM_MODEL_OPTIONS) {
+      merged.set(preset.id, preset.displayName);
+    }
+    for (const remote of modelsQuery.data ?? []) {
+      if (remote.id && !merged.has(remote.id)) {
+        merged.set(remote.id, remote.displayName || remote.id);
+      }
+    }
+    if (!merged.has(selectedModel)) {
+      merged.set(selectedModel, selectedModel);
+    }
+    return Array.from(merged.entries()).map(([id, displayName]) => ({ id, displayName }));
+  }, [modelsQuery.data, selectedModel]);
+
+  const selectedModelDisplayName = useMemo(() => {
+    return (
+      modelOptions.find((opt) => opt.id === selectedModel)?.displayName ?? selectedModel
+    );
+  }, [modelOptions, selectedModel]);
+
+  const fallbackPayload = useMemo(
     () =>
-      [...knownUsers].sort((left, right) =>
-        actorOptionLabel(left).localeCompare(actorOptionLabel(right), undefined, { sensitivity: 'base' }),
-      ),
-    [knownUsers],
+      buildFallbackPoDigestResponse({
+        project: resolvedProject,
+        window: selectedWindow,
+        model: selectedModel,
+        effort: selectedEffort,
+      }),
+    [resolvedProject, selectedEffort, selectedModel, selectedWindow],
   );
 
-  const validationCount = Object.keys(errors).length;
-  const trailFailed = Boolean(applied && trailQuery.isError);
-  const healthFailed = activeView === 'health' && healthQuery.isError;
-  const degraded = trailFailed || healthFailed;
+  const activePayload = digestQuery.data ?? (digestQuery.isError ? null : fallbackPayload);
+  const digest = activePayload?.digest ?? null;
+  const schedule: ObservabilityScheduleSummary =
+    activePayload?.schedule ?? fallbackPayload.schedule;
+  const history = activePayload?.history ?? fallbackPayload.history;
 
-  const onApply = useCallback(
-    (values: FilterFormValues) => {
-      const next = toApplied(values, eventChip);
-      setApplied(journeyHandoff ? { ...next, routeTemplate: journeyHandoff.fromRoute } : next);
-      setCursor(null);
-      setCursorStack([]);
-      setPageIndex(0);
-    },
-    [eventChip, journeyHandoff],
-  );
-
-  const onClear = useCallback(() => {
-    reset(emptyFilterDraft());
-    setEventChip('all');
-    setApplied(null);
-    setCursor(null);
-    setCursorStack([]);
-    setPageIndex(0);
-    setSelectedSessionId(null);
-    setJourneyHandoff(null);
-  }, [reset]);
-
-  const applyEventChip = useCallback(
-    (chip: TrailEventFilter) => {
-      setEventChip(chip);
-      if (!applied) return;
-      setApplied({ ...applied, eventType: chip === 'all' ? null : chip });
-      setCursor(null);
-      setCursorStack([]);
-      setPageIndex(0);
-    },
-    [applied],
-  );
-
-  const openTrace = useCallback(
-    (traceId: string) => {
-      setValue('traceId', traceId);
-      if (!applied) return;
-      setApplied({ ...applied, traceId });
-      setCursor(null);
-      setCursorStack([]);
-      setPageIndex(0);
-      setActiveView('trail');
-    },
-    [applied, setValue],
-  );
-
-  const openSession = useCallback((sessionId: string) => {
-    setSelectedSessionId(sessionId);
-    setActiveView('timeline');
-  }, []);
-
-  const openJourneyTrail = useCallback((handoff: JourneyTrailHandoff) => {
-    const fromIso = /^\d{4}-\d{2}-\d{2}$/.test(handoff.from) ? `${handoff.from}T00:00:00.000Z` : handoff.from;
-    const toIso = /^\d{4}-\d{2}-\d{2}$/.test(handoff.to) ? `${handoff.to}T23:59:59.999Z` : handoff.to;
-    setValue('timeRange', 'custom');
-    setValue('customFrom', fromIso.slice(0, 16));
-    setValue('customTo', toIso.slice(0, 16));
-    setJourneyHandoff(handoff);
-    setActiveView('trail');
-    setApplied((current) => (
-      current
-        ? {
-          ...current,
-          from: fromIso,
-          to: toIso,
-          routeTemplate: handoff.fromRoute,
-        }
-        : current
-    ));
-    setCursor(null);
-    setCursorStack([]);
-    setPageIndex(0);
-  }, [setValue]);
-
-  const goNext = useCallback(() => {
-    const next = trailQuery.data?.nextCursor;
-    if (!next) return;
-    setCursorStack((stack) => [...stack, cursor]);
-    setCursor(next);
-    setPageIndex((index) => index + 1);
-  }, [cursor, trailQuery.data?.nextCursor]);
-
-  const goPrev = useCallback(() => {
-    setCursorStack((stack) => {
-      if (stack.length === 0) return stack;
-      const previous = stack[stack.length - 1] ?? null;
-      setCursor(previous);
-      setPageIndex((index) => Math.max(0, index - 1));
-      return stack.slice(0, -1);
+  const handleGenerateNow = useCallback(() => {
+    generateMutation.mutate({
+      project: resolvedProject,
+      window: selectedWindow,
+      model: selectedModel,
+      effort: selectedEffort,
+      slot: 'on_demand',
     });
-  }, []);
+  }, [generateMutation, resolvedProject, selectedEffort, selectedModel, selectedWindow]);
 
-  const items = trailQuery.data?.items ?? [];
-  const capReached = Boolean(trailQuery.data?.capReached);
-  const hasNext = Boolean(trailQuery.data?.nextCursor) && !capReached;
-  const pageStart = items.length === 0 ? 0 : pageIndex * OBSERVABILITY_PAGE_SIZE + 1;
-  const pageEnd = pageIndex * OBSERVABILITY_PAGE_SIZE + items.length;
+  const maxUserInteractions = useMemo(() => {
+    if (!digest || digest.topUsers.length === 0) return 1;
+    return Math.max(1, ...digest.topUsers.map((u) => u.interactions));
+  }, [digest]);
 
   return (
     <section className={styles.workspace} {...{ 'data-testid': 'observability-workspace' }}>
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <div>
-            <h2 className={styles.title}>Observability</h2>
-            <p className={styles.subtitle}>Unified workspace — shared filters apply across all views</p>
+            <h2 className={styles.title}>Product Owner Observability</h2>
+            <p className={styles.subtitle}>
+              Skill-driven adoption, retention, and exception digest ({OBSERVABILITY_PO_SKILL_PATH}) ·
+              Automated daily at 6:00 AM &amp; 6:00 PM
+            </p>
           </div>
-          <div className={degraded ? `${styles.status} ${styles.statusDegraded}` : styles.status}>
-            <span className={degraded ? `${styles.statusDot} ${styles.statusDotError}` : styles.statusDot} />
-            <span>{degraded ? '1 sub-view degraded' : 'All systems operational'}</span>
-          </div>
-        </div>
-
-        <form
-          className={styles.filterForm}
-          onSubmit={handleSubmit(onApply)}
-          noValidate
-          {...{ 'data-testid': 'observability-filter-form' }}
-        >
-          <div className={styles.filterGroup}>
-            <label className={styles.filterLabel} htmlFor="observability-time-range">Time Range</label>
-            <select
-              id="observability-time-range"
-              className={`${styles.filterInput} ${errors.timeRange ? styles.filterInputError : ''}`}
-              {...register('timeRange')}
-              {...{ 'data-testid': 'observability-time-range' }}
-            >
-              {TIME_RANGE_PRESETS.map((preset) => (
-                <option key={preset} value={preset}>{TIME_RANGE_LABELS[preset]}</option>
-              ))}
-            </select>
-            {errors.timeRange && <span className={styles.fieldError} role="alert">{errors.timeRange.message}</span>}
-          </div>
-
-          {timeRange === 'custom' && (
-            <>
-              <div className={styles.filterGroup}>
-                <label className={styles.filterLabel} htmlFor="observability-custom-from">From</label>
-                <input
-                  id="observability-custom-from"
-                  type="datetime-local"
-                  className={styles.filterInput}
-                  {...register('customFrom')}
-                  {...{ 'data-testid': 'observability-custom-from' }}
-                />
-              </div>
-              <div className={styles.filterGroup}>
-                <label className={styles.filterLabel} htmlFor="observability-custom-to">To</label>
-                <input
-                  id="observability-custom-to"
-                  type="datetime-local"
-                  className={styles.filterInput}
-                  {...register('customTo')}
-                  {...{ 'data-testid': 'observability-custom-to' }}
-                />
-              </div>
-            </>
-          )}
-
-          <div className={styles.filterGroup}>
-            <label className={styles.filterLabel} htmlFor="observability-actor-input">User</label>
-            <Controller
-              name="actorId"
-              control={control}
-              render={({ field }) => (
-                <ActorSearchDropdown
-                  id="observability-actor"
-                  value={field.value}
-                  onChange={field.onChange}
-                  users={actorOptions}
-                  disabled={usersLoading}
-                  invalid={Boolean(errors.actorId)}
-                  loading={usersLoading}
-                  {...{ 'data-testid': 'observability-actor-dropdown' }}
-                />
-              )}
+          <div
+            className={
+              digestQuery.isError ? `${styles.status} ${styles.statusDegraded}` : styles.status
+            }
+            {...{ 'data-testid': 'observability-schedule-status-badge' }}
+          >
+            <span
+              className={
+                digestQuery.isError
+                  ? `${styles.statusDot} ${styles.statusDotError}`
+                  : styles.statusDot
+              }
             />
-            {usersError && (
-              <span className={styles.fieldError} role="alert">Unable to load users</span>
-            )}
-            {errors.actorId && <span className={styles.fieldError} role="alert">{errors.actorId.message}</span>}
+            <span>
+              {digestQuery.isError
+                ? 'Digest service degraded'
+                : '6:00 AM & 6:00 PM Daily Digest Active'}
+            </span>
           </div>
-
-          <div className={styles.filterGroup}>
-            <label className={styles.filterLabel} htmlFor="observability-trace-id">Trace ID</label>
-            <input
-              id="observability-trace-id"
-              className={`${styles.filterInput} ${errors.traceId ? styles.filterInputError : ''}`}
-              placeholder="32-character hex trace ID"
-              autoComplete="off"
-              {...register('traceId')}
-              {...{ 'data-testid': 'observability-trace-id' }}
-            />
-            {errors.traceId && <span className={styles.fieldError} role="alert">{errors.traceId.message}</span>}
-          </div>
-
-          <button type="submit" className={styles.primaryButton} {...{ 'data-testid': 'observability-apply-filters' }}>
-            Apply Filters
-          </button>
-          <button type="button" className={styles.secondaryButton} onClick={onClear} {...{ 'data-testid': 'observability-clear-filters' }}>
-            Clear
-          </button>
-          <div className={styles.capBadge} {...{ 'data-testid': 'observability-cap-badge' }}>
-            {OBSERVABILITY_MAX_ROWS}-row cap active
-          </div>
-        </form>
-
-        {validationCount > 0 && (
-          <div className={styles.validationBanner} role="alert" {...{ 'data-testid': 'observability-validation-summary' }}>
-            {validationCount} validation error{validationCount === 1 ? '' : 's'} — search is blocked. Fix the highlighted fields to proceed. No Trace Event details are returned.
-          </div>
-        )}
-
-        <div className={styles.tabs} role="tablist" aria-label="Observability views">
-          <WorkspaceNav id="trail" label="User Activity Trail" active={activeView === 'trail'} onSelect={setActiveView} />
-          <WorkspaceNav id="timeline" label="Timeline" active={activeView === 'timeline'} onSelect={setActiveView} />
-          <WorkspaceNav id="journey" label="Journey Map" active={activeView === 'journey'} onSelect={setActiveView} />
-          <WorkspaceNav id="health" label="Capture Health" active={activeView === 'health'} onSelect={setActiveView} />
         </div>
       </div>
 
-      {activeView === 'trail' && (
-        <div
-          className={styles.panel}
-          role="tabpanel"
-          id="observability-panel-trail"
-          aria-labelledby="observability-tab-trail"
-          {...{ 'data-testid': 'observability-trail-panel' }}
-        >
-          <TrailView
-            applied={applied}
-            eventChip={eventChip}
-            items={items}
-            isLoading={trailQuery.isLoading}
-            isFetching={trailQuery.isFetching}
-            isError={trailQuery.isError}
-            errorMessage={trailQuery.error?.message ?? 'User Activity Trail service is unavailable'}
-            capReached={capReached}
-            hasNext={hasNext}
-            hasPrev={cursorStack.length > 0}
-            pageStart={pageStart}
-            pageEnd={pageEnd}
-            onChip={applyEventChip}
-            onRetry={() => { void trailQuery.refetch(); }}
-            onNext={goNext}
-            onPrev={goPrev}
-            onOpenTrace={openTrace}
-            onOpenSession={openSession}
-            journeyHandoff={journeyHandoff}
-          />
-        </div>
-      )}
+      <div className={styles.poSection}>
+        {/* Controls: Multi-window trend selector + AI Model & Effort selector + On-demand trigger */}
+        <div className={styles.poControlBar} {...{ 'data-testid': 'observability-po-controls' }}>
+          <div className={styles.poWindowGroup}>
+            <span className={styles.filterLabel}>Trend Window</span>
+            <div
+              className={styles.poWindowPills}
+              role="group"
+              aria-label="Observability trend window"
+              {...{ 'data-testid': 'observability-trend-window-group' }}
+            >
+              {OBSERVABILITY_TREND_WINDOWS.map((windowKey) => {
+                const active = selectedWindow === windowKey;
+                return (
+                  <button
+                    key={windowKey}
+                    type="button"
+                    aria-pressed={active}
+                    className={active ? `${styles.chip} ${styles.chipActive}` : styles.chip}
+                    onClick={() => setSelectedWindow(windowKey)}
+                    {...{ 'data-testid': `observability-window-${windowKey}` }}
+                  >
+                    {OBSERVABILITY_TREND_WINDOW_LABELS[windowKey]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-      {activeView === 'timeline' && (
+          <div className={styles.poAiControls}>
+            <div className={styles.filterGroup}>
+              <label className={styles.filterLabel} htmlFor="observability-model-select">
+                AI Model
+              </label>
+              <select
+                id="observability-model-select"
+                className={styles.filterInput}
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                {...{ 'data-testid': 'observability-model-select' }}
+              >
+                {modelOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className={styles.filterGroup}>
+              <label className={styles.filterLabel} htmlFor="observability-effort-select">
+                Thinking / Effort Level
+              </label>
+              <select
+                id="observability-effort-select"
+                className={styles.filterInput}
+                value={selectedEffort}
+                onChange={(e) => setSelectedEffort(e.target.value as EffortLevel)}
+                {...{ 'data-testid': 'observability-effort-select' }}
+              >
+                {EFFORT_LEVELS.map((level) => (
+                  <option key={level} value={level}>
+                    {effortLabel(level)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={generateMutation.isPending}
+              onClick={handleGenerateNow}
+              {...{ 'data-testid': 'observability-generate-digest' }}
+            >
+              {generateMutation.isPending ? 'Synthesizing Digest…' : 'Generate Digest Now'}
+            </button>
+          </div>
+        </div>
+
+        {/* Scheduled Twice-Daily Digest Strip (6:00 AM & 6:00 PM) */}
         <div
-          className={styles.panel}
-          role="tabpanel"
-          id="observability-panel-timeline"
-          aria-labelledby="observability-tab-timeline"
-          {...{ 'data-testid': 'observability-timeline-panel' }}
+          className={styles.poScheduleStrip}
+          {...{ 'data-testid': 'observability-schedule-strip' }}
         >
-        {selectedSessionId ? (
-          <SessionTimelinePage
-            project={resolvedProject}
-            sessionId={selectedSessionId}
-            onSessionChange={setSelectedSessionId}
-          />
-        ) : (
-          <PlaceholderView
-            title="Timeline View"
-            testId="observability-timeline-empty"
-            detail="Select a session from the User Activity Trail to open the matching Session Timeline."
-          />
+          <article
+            className={styles.poScheduleCard}
+            {...{ 'data-testid': 'observability-schedule-6am' }}
+          >
+            <div className={styles.poScheduleTitle}>
+              <span>Morning Scheduled Digest</span>
+              <span className={`${styles.badge} ${styles.badgeApi}`}>6:00 AM Daily</span>
+            </div>
+            <div className={styles.poScheduleMain}>{schedule.morningSlot.label}</div>
+            <div className={styles.poScheduleSub}>
+              Last run: {formatTimestamp(schedule.morningSlot.lastRunAt)} · Next:{' '}
+              {formatTimestamp(schedule.morningSlot.nextRunAt)}
+            </div>
+          </article>
+
+          <article
+            className={styles.poScheduleCard}
+            {...{ 'data-testid': 'observability-schedule-6pm' }}
+          >
+            <div className={styles.poScheduleTitle}>
+              <span>Evening Scheduled Digest</span>
+              <span className={`${styles.badge} ${styles.badgeApi}`}>6:00 PM Daily</span>
+            </div>
+            <div className={styles.poScheduleMain}>{schedule.eveningSlot.label}</div>
+            <div className={styles.poScheduleSub}>
+              Last run: {formatTimestamp(schedule.eveningSlot.lastRunAt)} · Next:{' '}
+              {formatTimestamp(schedule.eveningSlot.nextRunAt)}
+            </div>
+          </article>
+
+          <article
+            className={styles.poScheduleCard}
+            {...{ 'data-testid': 'observability-schedule-history' }}
+          >
+            <div className={styles.poScheduleTitle}>
+              <span>Skill &amp; Snapshot Provenance</span>
+              <span className={`${styles.badge} ${styles.badgeUi}`}>
+                {history.length} snapshots
+              </span>
+            </div>
+            <div className={styles.poScheduleMain}>
+              {selectedModelDisplayName} ({selectedModel}) · {effortLabel(selectedEffort)} effort
+            </div>
+            <div className={styles.poScheduleSub}>
+              Skill: <code>{schedule.skillPath}</code>
+            </div>
+          </article>
+        </div>
+
+        {digestQuery.isError && (
+          <div
+            className={styles.errorBanner}
+            role="alert"
+            {...{ 'data-testid': 'observability-po-error' }}
+          >
+            <div>
+              <p className={styles.errorTitle}>Unable to load Product Owner Observability Digest</p>
+              <p className={styles.errorDetail}>
+                {digestQuery.error?.message ?? 'Observability digest service is unavailable.'}
+              </p>
+              <button
+                type="button"
+                className={styles.retryButton}
+                onClick={() => {
+                  void digestQuery.refetch();
+                }}
+                {...{ 'data-testid': 'observability-po-retry' }}
+              >
+                Retry Digest
+              </button>
+            </div>
+          </div>
         )}
-        </div>
-      )}
 
-      {activeView === 'journey' && (
-        <div
-          className={styles.panel}
-          role="tabpanel"
-          id="observability-panel-journey"
-          aria-labelledby="observability-tab-journey"
-          {...{ 'data-testid': 'observability-journey-panel' }}
-        >
-          <ErrorBoundary FallbackComponent={ViewErrorFallback}>
-            <Suspense fallback={<div className={styles.loading} role="status">Loading Journey Map…</div>}>
-              <InteractiveJourneyMapPage
-                project={resolvedProject}
-                sharedRange={applied ? { from: applied.from, to: applied.to } : undefined}
-                onOpenTrail={openJourneyTrail}
+        {digest && (
+          <>
+            {/* Executive Headline & Model Provenance */}
+            <div
+              className={styles.poHeadlineBanner}
+              {...{ 'data-testid': 'observability-digest-headline' }}
+            >
+              <p className={styles.poHeadlineText}>{digest.headline}</p>
+              <span
+                className={styles.poProvenanceBadge}
+                {...{ 'data-testid': 'observability-active-model-badge' }}
+              >
+                {selectedModelDisplayName} ({digest.model}) · {effortLabel(digest.effort)} ·{' '}
+                {digest.windowLabel}
+              </span>
+            </div>
+
+            {/* Executive KPI Cards */}
+            <div className={styles.poKpiRow} {...{ 'data-testid': 'observability-kpi-row' }}>
+              <article className={styles.card}>
+                <div className={styles.cardLabel}>Active Users ({digest.windowLabel})</div>
+                <div className={styles.cardValue}>{digest.kpis.activeUsers.toLocaleString()}</div>
+                <div className={styles.cardSub}>
+                  <span className={styles.poDeltaPositive}>
+                    +{digest.kpis.activeUsersDeltaPct}%
+                  </span>{' '}
+                  {digest.baselineLabel}
+                </div>
+              </article>
+
+              <article className={styles.card}>
+                <div className={styles.cardLabel}>Exceptions ({digest.windowLabel})</div>
+                <div className={styles.cardValue}>
+                  {digest.kpis.totalExceptions.toLocaleString()}
+                </div>
+                <div className={styles.cardSub}>
+                  <span
+                    className={
+                      digest.kpis.exceptionsDeltaPct <= 0
+                        ? styles.poDeltaPositive
+                        : styles.poDeltaNegative
+                    }
+                  >
+                    {digest.kpis.exceptionsDeltaPct > 0 ? '+' : ''}
+                    {digest.kpis.exceptionsDeltaPct}%
+                  </span>{' '}
+                  {digest.baselineLabel}
+                </div>
+              </article>
+
+              <article className={styles.card}>
+                <div className={styles.cardLabel}>Avg Module Retention</div>
+                <div className={styles.cardValue}>{digest.kpis.avgModuleRetentionPct}%</div>
+                <div className={styles.cardSub}>
+                  <span className={styles.poDeltaPositive}>
+                    +{digest.kpis.retentionDeltaPct}%
+                  </span>{' '}
+                  cohort return rate
+                </div>
+              </article>
+
+              <article className={styles.card}>
+                <div className={styles.cardLabel}>Leading Module</div>
+                <div className={styles.cardValue}>{digest.kpis.topModuleSharePct}%</div>
+                <div className={styles.cardSub}>{digest.kpis.topModuleName}</div>
+              </article>
+            </div>
+
+            {/* Six Core Product Owner Signals Grid */}
+            <div className={styles.poSignalGrid} {...{ 'data-testid': 'observability-signals-grid' }}>
+              <TopUsersSignalCard
+                items={digest.topUsers}
+                maxInteractions={maxUserInteractions}
+                activeWindow={selectedWindow}
+                windowLabel={digest.windowLabel}
+                baselineLabel={digest.baselineLabel}
+                data-testid="observability-signal-top-users"
               />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      )}
 
-      {activeView === 'health' && (
-        <div
-          className={styles.panel}
-          role="tabpanel"
-          id="observability-panel-health"
-          aria-labelledby="observability-tab-health"
-          {...{ 'data-testid': 'observability-health-panel' }}
-        >
-          <HealthView
-            data={healthQuery.data}
-            isLoading={healthQuery.isLoading}
-            isError={healthQuery.isError}
-            errorMessage={healthQuery.error?.message ?? 'Health collection endpoint failed'}
-            capturedAt={healthQuery.dataUpdatedAt}
-            onRetry={() => { void healthQuery.refetch(); }}
-          />
-        </div>
-      )}
+              <CommonExceptionsSignalCard
+                items={digest.commonExceptions}
+                activeWindow={selectedWindow}
+                windowLabel={digest.windowLabel}
+                baselineLabel={digest.baselineLabel}
+                data-testid="observability-signal-common-exceptions"
+              />
+
+              <RetentionDropsSignalCard
+                items={digest.moduleRetentionDrops}
+                activeWindow={selectedWindow}
+                windowLabel={digest.windowLabel}
+                data-testid="observability-signal-retention-drops"
+              />
+
+              <DropReasonsAiSignalCard
+                summary={digest.dropReasonsSummary}
+                modelLabel={selectedModelDisplayName}
+                effort={digest.effort}
+                data-testid="observability-signal-drop-reasons"
+              />
+
+              <TopModulesSignalCard
+                items={digest.topModules}
+                activeWindow={selectedWindow}
+                windowLabel={digest.windowLabel}
+                baselineLabel={digest.baselineLabel}
+                data-testid="observability-signal-top-modules"
+              />
+
+              <DriveAdoptionAiSignalCard
+                summary={digest.adoptionRecommendations}
+                modelLabel={selectedModelDisplayName}
+                effort={digest.effort}
+                data-testid="observability-signal-drive-adoption"
+              />
+
+              {(digest.customSections ?? digest.sections ?? []).map((customSec, idx) => (
+                <DynamicSkillSectionCard
+                  key={customSec.id || `custom-sec-${idx}`}
+                  section={customSec}
+                  fallbackNumber={7 + idx}
+                  activeWindow={selectedWindow}
+                  data-testid={`observability-signal-custom-${customSec.id}`}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </section>
   );
 };
 
-interface ActorSearchUser {
-  userId: string;
-  displayName: string;
-  email: string;
+interface TopUsersSignalCardProps {
+  items: ObservabilityTopUserItem[];
+  maxInteractions: number;
+  activeWindow: ObservabilityTrendWindow;
+  windowLabel: string;
+  baselineLabel: string;
+  'data-testid': string;
 }
 
-interface ActorSearchDropdownProps {
-  id: string;
-  value: string;
-  onChange: (userId: string) => void;
-  users: ActorSearchUser[];
-  disabled?: boolean;
-  invalid?: boolean;
-  loading?: boolean;
-  'data-testid'?: string;
-}
-
-const ActorSearchDropdown: React.FC<ActorSearchDropdownProps> = ({
-  id,
-  value,
-  onChange,
-  users,
-  disabled = false,
-  invalid = false,
-  loading = false,
-  'data-testid': testId,
-}) => {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const [highlightIdx, setHighlightIdx] = useState(-1);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-
-  const selectedUser = useMemo(
-    () => users.find((user) => user.userId === value) ?? null,
-    [users, value],
-  );
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return users;
-    return users.filter((user) => {
-      const label = actorOptionLabel(user).toLowerCase();
-      return label.includes(needle)
-        || user.email.toLowerCase().includes(needle)
-        || user.userId.toLowerCase().includes(needle);
-    });
-  }, [query, users]);
-
-  const handleSelect = useCallback((userId: string) => {
-    onChange(userId);
-    setQuery('');
-    setOpen(false);
-  }, [onChange]);
-
-  const handleClear = useCallback(() => {
-    onChange('');
-    setQuery('');
-    setOpen(false);
-  }, [onChange]);
-
-  const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
-    if (!open && (event.key === 'ArrowDown' || event.key === 'Enter')) {
-      setOpen(true);
-      event.preventDefault();
-      return;
-    }
-    if (!open) return;
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setHighlightIdx((prev) => (prev < filtered.length - 1 ? prev + 1 : 0));
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setHighlightIdx((prev) => (prev > 0 ? prev - 1 : filtered.length - 1));
-    } else if (event.key === 'Enter' && highlightIdx >= 0 && filtered[highlightIdx]) {
-      event.preventDefault();
-      handleSelect(filtered[highlightIdx].userId);
-    } else if (event.key === 'Escape') {
-      setOpen(false);
-    }
-  }, [filtered, handleSelect, highlightIdx, open]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    setHighlightIdx(-1);
-  }, [query]);
-
-  useEffect(() => {
-    if (highlightIdx < 0 || !listRef.current) return;
-    const option = listRef.current.children[highlightIdx] as HTMLElement | undefined;
-    option?.scrollIntoView({ block: 'nearest' });
-  }, [highlightIdx]);
-
-  return (
-    <div
-      className={styles.actorCombo}
-      ref={wrapperRef}
-      {...{ 'data-testid': testId ?? `${id}-dropdown` }}
-    >
-      <input type="hidden" value={value} readOnly {...{ 'data-testid': id }} />
-      {selectedUser ? (
-        <div className={`${styles.actorChip} ${invalid ? styles.filterInputError : ''}`}>
-          <span className={styles.actorChipName}>{actorOptionLabel(selectedUser)}</span>
-          {!disabled && (
-            <button
-              type="button"
-              className={styles.actorChipClear}
-              onClick={handleClear}
-              aria-label="Clear selected user"
-              {...{ 'data-testid': `${id}-clear` }}
-            >
-              ×
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <input
-            id={`${id}-input`}
-            type="text"
-            className={`${styles.filterInput} ${styles.filterActor} ${invalid ? styles.filterInputError : ''}`}
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setOpen(true);
-            }}
-            onFocus={() => setOpen(true)}
-            onKeyDown={handleKeyDown}
-            placeholder={loading ? 'Loading users…' : 'Search users…'}
-            disabled={disabled}
-            autoComplete="off"
-            role="combobox"
-            aria-expanded={open}
-            aria-controls={`${id}-listbox`}
-            aria-autocomplete="list"
-            {...{ 'data-testid': `${id}-input` }}
-          />
-          {open && filtered.length > 0 && (
-            <ul
-              id={`${id}-listbox`}
-              className={styles.actorList}
-              role="listbox"
-              ref={listRef}
-              {...{ 'data-testid': `${id}-listbox` }}
-            >
-              {filtered.map((user, index) => (
-                <li
-                  key={user.userId}
-                  role="option"
-                  aria-selected={index === highlightIdx}
-                  className={`${styles.actorOption} ${index === highlightIdx ? styles.actorOptionActive : ''}`}
-                  onMouseDown={() => handleSelect(user.userId)}
-                  onMouseEnter={() => setHighlightIdx(index)}
-                  {...{ 'data-testid': `${id}-option-${user.userId}` }}
-                >
-                  <span className={styles.actorOptionName}>{actorOptionLabel(user)}</span>
-                  {user.email.trim() && actorOptionLabel(user) !== user.email.trim() && (
-                    <span className={styles.actorOptionEmail}>{user.email}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {open && query.trim() && filtered.length === 0 && (
-            <div className={styles.actorEmpty} role="status">No users match “{query}”</div>
-          )}
-        </>
-      )}
-    </div>
-  );
-};
-
-interface WorkspaceNavProps {
-  id: WorkspaceView;
-  label: string;
-  active: boolean;
-  onSelect: (id: WorkspaceView) => void;
-}
-
-const WorkspaceNav: React.FC<WorkspaceNavProps> = ({ id, label, active, onSelect }) => (
-  <button
-    type="button"
-    role="tab"
-    id={`observability-tab-${id}`}
-    aria-selected={active}
-    aria-controls={`observability-panel-${id}`}
-    className={active ? `${styles.tab} ${styles.tabActive}` : styles.tab}
-    onClick={() => onSelect(id)}
-    {...{ 'data-testid': `observability-tab-${id}` }}
-  >
-    {label}
-  </button>
-);
-
-interface PlaceholderViewProps {
-  title: string;
-  detail: string;
-  testId: string;
-}
-
-const PlaceholderView: React.FC<PlaceholderViewProps> = ({ title, detail, testId }) => (
-  <div className={styles.placeholder} {...{ 'data-testid': testId }}>
-    <p className={styles.placeholderTitle}>{title}</p>
-    <p className={styles.placeholderText}>{detail}</p>
-  </div>
-);
-
-interface TrailViewProps {
-  applied: AppliedWorkspaceFilters | null;
-  eventChip: TrailEventFilter;
-  items: TraceEventView[];
-  isLoading: boolean;
-  isFetching: boolean;
-  isError: boolean;
-  errorMessage: string;
-  capReached: boolean;
-  hasNext: boolean;
-  hasPrev: boolean;
-  pageStart: number;
-  pageEnd: number;
-  onChip: (chip: TrailEventFilter) => void;
-  onRetry: () => void;
-  onNext: () => void;
-  onPrev: () => void;
-  onOpenTrace: (traceId: string) => void;
-  onOpenSession: (sessionId: string) => void;
-  journeyHandoff: JourneyTrailHandoff | null;
-}
-
-function trailEmptyCopy(eventChip: TrailEventFilter): { title: string; text: string } {
-  if (eventChip === 'error') {
-    return {
-      title: 'No error events',
-      text: 'No errors match the current user and time range. Choose All to see other activity.',
-    };
-  }
-  if (eventChip === 'ui_action') {
-    return {
-      title: 'No UI actions',
-      text: 'No UI actions match the current user and time range. Choose All to see other activity.',
-    };
-  }
-  if (eventChip === 'api_request') {
-    return {
-      title: 'No API calls',
-      text: 'No API calls match the current user and time range. Choose All to see other activity.',
-    };
-  }
-  return {
-    title: 'No matching Trace Events',
-    text: 'No events match the current actor, time range, and filters.',
-  };
-}
-
-const TrailView: React.FC<TrailViewProps> = ({
-  applied,
-  eventChip,
+const TopUsersSignalCard: React.FC<TopUsersSignalCardProps> = ({
   items,
-  isLoading,
-  isFetching,
-  isError,
-  errorMessage,
-  capReached,
-  hasNext,
-  hasPrev,
-  pageStart,
-  pageEnd,
-  onChip,
-  onRetry,
-  onNext,
-  onPrev,
-  onOpenTrace,
-  onOpenSession,
-  journeyHandoff,
-}) => {
-  if (!applied) {
-    return (
-      <div className={styles.empty} {...{ 'data-testid': 'observability-trail-empty' }}>
-        <p className={styles.emptyTitle}>Search a user activity trail</p>
-        <p className={styles.emptyText}>
-          {journeyHandoff
-            ? `Journey pivot ready: ${journeyHandoff.fromRoute} → ${journeyHandoff.toRoute} (${journeyHandoff.from} to ${journeyHandoff.to}). Select a user and apply filters to search.`
-            : 'Select a user and apply shared filters to load chronological UI actions, API calls, and errors.'}
+  maxInteractions,
+  activeWindow,
+  windowLabel,
+  baselineLabel,
+  'data-testid': testId,
+}) => (
+  <section
+    className={styles.poSignalCard}
+    aria-labelledby="po-signal-top-users-heading"
+    data-testid={testId}
+  >
+    <div className={styles.poSignalHeader}>
+      <div>
+        <h3 id="po-signal-top-users-heading" className={styles.poSignalTitle}>
+          <span className={styles.poSignalNumber}>1</span>
+          Top users
+        </h3>
+        <p className={styles.poSignalSubtitle}>
+          Most engaged users in {windowLabel} ({baselineLabel})
         </p>
       </div>
-    );
-  }
+      <span className={`${styles.badge} ${styles.badgeUi}`}>{items.length} power users</span>
+    </div>
 
-  const showRange = !isError && !isLoading && !(isFetching && items.length === 0) && items.length > 0;
-  const emptyCopy = trailEmptyCopy(eventChip);
-
-  return (
-    <>
-      {journeyHandoff && (
-        <div className={styles.intact} {...{ 'data-testid': 'observability-journey-trail-handoff' }}>
-          Journey pivot: {journeyHandoff.fromRoute} → {journeyHandoff.toRoute} ({journeyHandoff.from} to {journeyHandoff.to})
-        </div>
-      )}
-      <div className={styles.toolbar}>
-        <span className={styles.filterHint}>Filter events:</span>
-        <EventFilterControl chip="all" label="All" active={eventChip === 'all'} onSelect={onChip} />
-        <EventFilterControl chip="ui_action" label="UI Actions" active={eventChip === 'ui_action'} onSelect={onChip} />
-        <EventFilterControl chip="api_request" label="API Calls" active={eventChip === 'api_request'} onSelect={onChip} />
-        <EventFilterControl chip="error" label="Errors" active={eventChip === 'error'} onSelect={onChip} />
-        {showRange && (
-          <span className={styles.pageMeta}>
-            Showing {pageStart}–{pageEnd}
-            {capReached ? ` of ${OBSERVABILITY_MAX_ROWS} (cap reached)` : ''}
-          </span>
-        )}
-      </div>
-
-      {isError ? (
-        <div>
-          <div className={styles.errorCard} role="alert" {...{ 'data-testid': 'observability-trail-error' }}>
-            <div>
-              <p className={styles.errorTitle}>User Activity Trail service is unavailable</p>
-              <p className={styles.errorDetail}>
-                {errorMessage}. No results are displayed. Stale data is not shown to avoid misleading investigation context. The error is isolated — other workspace sub-views remain functional.
-              </p>
-              <button type="button" className={styles.retryButton} onClick={onRetry} {...{ 'data-testid': 'observability-trail-retry' }}>
-                Retry
-              </button>
-            </div>
-          </div>
-          <div className={styles.intact}>Shared filters are preserved — Timeline, Journey Map, and Capture Health sub-views are unaffected by this error.</div>
-        </div>
-      ) : isLoading || (isFetching && items.length === 0) ? (
-        <div className={styles.loading} role="status" {...{ 'data-testid': 'observability-trail-loading' }}>
-          Loading User Activity Trail…
-        </div>
-      ) : items.length === 0 ? (
-        <div className={styles.empty} {...{ 'data-testid': 'observability-trail-empty' }}>
-          <p className={styles.emptyTitle}>{emptyCopy.title}</p>
-          <p className={styles.emptyText}>{emptyCopy.text}</p>
-        </div>
-      ) : null}
-
-      {showRange && (
-        <>
-      <div className={styles.tableWrap}>
-        <table className={styles.table} {...{ 'data-testid': 'observability-trail-table' }}>
-          <caption className="sr-only">Chronological user activity trail</caption>
-          <thead>
-            <tr>
-              <th scope="col">Timestamp</th>
-              <th scope="col">Event Type</th>
-              <th scope="col">Description</th>
-              <th scope="col">Actor</th>
-              <th scope="col">Trace ID</th>
-              <th scope="col">Session</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((event) => (
-              <tr key={event.id} {...{ 'data-testid': `observability-trail-row-${event.id}` }}>
+    <div className={styles.tableWrap}>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th scope="col">User</th>
+            <th scope="col">Interactions</th>
+            <th scope="col">Primary Module</th>
+            <th scope="col">Trend</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((user) => {
+            const delta = formatDelta(user.deltaPct);
+            const pct = Math.min(100, Math.round((user.interactions / maxInteractions) * 100));
+            return (
+              <tr key={user.userId}>
                 <td>
-                  <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toISOString().replace('T', ' ').replace('Z', ' UTC')}</time>
-                </td>
-                <td><span className={badgeClass(event.eventType)}>{describeEventType(event.eventType)}</span></td>
-                <td>{formatTrailDescription(event)}</td>
-                <td>{event.actorId ?? '—'}</td>
-                <td>
-                  <button
-                    type="button"
-                    className={styles.traceLink}
-                    onClick={() => onOpenTrace(event.traceId)}
-                    {...{ 'data-testid': `observability-trace-link-${event.traceId}` }}
-                  >
-                    {event.traceId.slice(0, 16)}
-                  </button>
+                  <strong>{user.displayName}</strong>
+                  <div className={styles.cardSub}>
+                    {user.role} · {user.sessions} sessions · {user.modulesUsed} modules
+                  </div>
                 </td>
                 <td>
-                  {event.sessionId ? (
-                    <button
-                      type="button"
-                      className={styles.sessionLink}
-                      onClick={() => onOpenSession(event.sessionId!)}
-                      {...{ 'data-testid': `observability-session-link-${event.sessionId}` }}
-                    >
-                      {event.sessionId.slice(0, 8)}
-                    </button>
-                  ) : '—'}
+                  <strong>{user.interactions.toLocaleString()}</strong>
+                  <div className={styles.progress}>
+                    <div className={styles.progressFill} style={{ width: `${pct}%` }} />
+                  </div>
+                  <WindowComparisonStrip
+                    values={user.windowComparison}
+                    activeWindow={activeWindow}
+                  />
+                </td>
+                <td>{user.topModule}</td>
+                <td>
+                  <span className={delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative}>
+                    {delta.text}
+                  </span>
                 </td>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className={styles.pagination}>
-        <p className={styles.paginationInfo} {...{ 'data-testid': 'observability-trail-pagination-info' }}>
-          {capReached
-            ? `Showing ${pageStart}–${pageEnd} of ${OBSERVABILITY_MAX_ROWS} (cap reached) — refine filters to narrow results`
-            : `Showing ${pageStart}–${pageEnd} — ${OBSERVABILITY_PAGE_SIZE} rows per page`}
-        </p>
-        <div className={styles.paginationControls}>
-          <button type="button" className={styles.pageButton} disabled={!hasPrev} onClick={onPrev} {...{ 'data-testid': 'observability-trail-prev' }}>
-            Prev
-          </button>
-          <button type="button" className={styles.pageButton} disabled={!hasNext} onClick={onNext} {...{ 'data-testid': 'observability-trail-next' }}>
-            Next
-          </button>
-        </div>
-      </div>
-        </>
-      )}
-    </>
-  );
-};
-
-interface EventFilterControlProps {
-  chip: TrailEventFilter;
-  label: string;
-  active: boolean;
-  onSelect: (chip: TrailEventFilter) => void;
-}
-
-const EventFilterControl: React.FC<EventFilterControlProps> = ({ chip, label, active, onSelect }) => (
-  <button
-    type="button"
-    className={active ? `${styles.chip} ${styles.chipActive}` : styles.chip}
-    aria-pressed={active}
-    onClick={() => onSelect(chip)}
-    {...{ 'data-testid': `observability-trail-chip-${chip}` }}
-  >
-    {label}
-  </button>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </section>
 );
 
-interface HealthViewProps {
-  data: CaptureHealthResponse | undefined;
-  isLoading: boolean;
-  isError: boolean;
-  errorMessage: string;
-  capturedAt: number;
-  onRetry: () => void;
+interface CommonExceptionsSignalCardProps {
+  items: ObservabilityExceptionItem[];
+  activeWindow: ObservabilityTrendWindow;
+  windowLabel: string;
+  baselineLabel: string;
+  'data-testid': string;
 }
 
-const HealthView: React.FC<HealthViewProps> = ({ data, isLoading, isError, errorMessage, capturedAt, onRetry }) => {
-  const health = useMemo(() => data ?? null, [data]);
-  const bufferAtCap = health ? isBufferAtCapacity(health.pipeline.bufferDepth, health.pipeline.bufferCapacity) : false;
-  const retentionHit = health ? isRetentionBoundaryReached(health.store.oldestRetainedEventAt) : false;
-  const bufferPct = health && health.pipeline.bufferCapacity > 0
-    ? Math.min(100, Math.round((health.pipeline.bufferDepth / health.pipeline.bufferCapacity) * 100))
-    : 0;
-
-  if (isLoading && !health) {
-    return (
-      <div className={styles.loading} role="status" {...{ 'data-testid': 'observability-health-loading' }}>
-        Loading Capture Health…
+const CommonExceptionsSignalCard: React.FC<CommonExceptionsSignalCardProps> = ({
+  items,
+  activeWindow,
+  windowLabel,
+  baselineLabel,
+  'data-testid': testId,
+}) => (
+  <section
+    className={styles.poSignalCard}
+    aria-labelledby="po-signal-exceptions-heading"
+    data-testid={testId}
+  >
+    <div className={styles.poSignalHeader}>
+      <div>
+        <h3 id="po-signal-exceptions-heading" className={styles.poSignalTitle}>
+          <span className={styles.poSignalNumber}>2</span>
+          Most common exceptions
+        </h3>
+        <p className={styles.poSignalSubtitle}>
+          Recurring client &amp; API failure signatures in {windowLabel} ({baselineLabel})
+        </p>
       </div>
-    );
+      <span className={`${styles.badge} ${styles.badgeError}`}>
+        {items.length} tracked signatures
+      </span>
+    </div>
+
+    <div className={styles.poInsightList}>
+      {items.map((exc) => {
+        const delta = formatDelta(exc.deltaPct, true);
+        return (
+          <article key={exc.id} className={styles.poInsightItem}>
+            <div className={styles.poInsightTop}>
+              <span className={styles.poInsightItemTitle}>{exc.signature}</span>
+              <span className={severityBadgeClass(exc.severity)}>
+                {exc.severity.toUpperCase()} · HTTP {exc.statusCode}
+              </span>
+            </div>
+            <p className={styles.poInsightDetail}>
+              Module: <strong>{exc.module}</strong> (<code>{exc.routeTemplate}</code>) ·{' '}
+              <strong>{exc.count.toLocaleString()}</strong> occurrences impacting{' '}
+              <strong>{exc.affectedUsers}</strong> users (
+              <span className={delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative}>
+                {delta.text}
+              </span>
+              )
+            </p>
+            <WindowComparisonStrip values={exc.windowComparison} activeWindow={activeWindow} />
+          </article>
+        );
+      })}
+    </div>
+  </section>
+);
+
+interface RetentionDropsSignalCardProps {
+  items: ObservabilityModuleRetentionDropItem[];
+  activeWindow: ObservabilityTrendWindow;
+  windowLabel: string;
+  'data-testid': string;
+}
+
+const RetentionDropsSignalCard: React.FC<RetentionDropsSignalCardProps> = ({
+  items,
+  activeWindow,
+  windowLabel,
+  'data-testid': testId,
+}) => (
+  <section
+    className={styles.poSignalCard}
+    aria-labelledby="po-signal-retention-drops-heading"
+    data-testid={testId}
+  >
+    <div className={styles.poSignalHeader}>
+      <div>
+        <h3 id="po-signal-retention-drops-heading" className={styles.poSignalTitle}>
+          <span className={styles.poSignalNumber}>3</span>
+          Retention dropped per module
+        </h3>
+        <p className={styles.poSignalSubtitle}>
+          Cohort return-rate contraction by module in {windowLabel}
+        </p>
+      </div>
+      <span className={`${styles.badge} ${styles.badgeError}`}>Cohort watch</span>
+    </div>
+
+    <div className={styles.poInsightList}>
+      {items.map((drop) => (
+        <article key={drop.module} className={styles.poInsightItem}>
+          <div className={styles.poInsightTop}>
+            <span className={styles.poInsightItemTitle}>
+              {drop.module} (<code>{drop.routeTemplate}</code>)
+            </span>
+            <span className={styles.poDeltaNegative}>
+              -{drop.dropPct}% ({drop.previousRetentionPct}% → {drop.currentRetentionPct}%)
+            </span>
+          </div>
+          <p className={styles.poInsightDetail}>
+            {drop.returningUsers} returning users · {drop.lostUsers} dropped users · Friction:{' '}
+            {drop.primaryFriction}
+          </p>
+          <div className={styles.progress}>
+            <div
+              className={`${styles.progressFill} ${
+                drop.currentRetentionPct < 66 ? styles.progressCritical : styles.progressWarn
+              }`}
+              style={{ width: `${drop.currentRetentionPct}%` }}
+            />
+          </div>
+          <WindowComparisonStrip
+            values={drop.windowComparison}
+            activeWindow={activeWindow}
+            suffix="%"
+          />
+        </article>
+      ))}
+    </div>
+  </section>
+);
+
+interface DropReasonsAiSignalCardProps {
+  summary: ObservabilityDropReasonsSummary;
+  modelLabel: string;
+  effort: EffortLevel;
+  'data-testid': string;
+}
+
+const DropReasonsAiSignalCard: React.FC<DropReasonsAiSignalCardProps> = ({
+  summary,
+  modelLabel,
+  effort,
+  'data-testid': testId,
+}) => (
+  <section
+    className={styles.poSignalCardAccent}
+    aria-labelledby="po-signal-drop-reasons-heading"
+    data-testid={testId}
+  >
+    <div className={styles.poSignalHeader}>
+      <div>
+        <h3 id="po-signal-drop-reasons-heading" className={styles.poSignalTitle}>
+          <span className={styles.poSignalNumber}>4</span>
+          AI summary of why there could be drops
+        </h3>
+        <p className={styles.poSignalSubtitle}>
+          Root-cause telemetry synthesis · {modelLabel} ({effortLabel(effort)} effort)
+        </p>
+      </div>
+      <span className={`${styles.badge} ${styles.badgeUi}`}>AI Diagnosis</span>
+    </div>
+
+    <div className={styles.poNarrativeBox}>
+      <p className={styles.poNarrativeHeadline}>{summary.headline}</p>
+      <p className={styles.poNarrativeCopy}>{summary.narrative}</p>
+    </div>
+
+    <div className={styles.poInsightList}>
+      {summary.findings.map((finding) => (
+        <article key={finding.id} className={styles.poInsightItem}>
+          <div className={styles.poInsightTop}>
+            <span className={styles.poInsightItemTitle}>
+              {finding.module}: {finding.title}
+            </span>
+            <span className={`${styles.badge} ${styles.badgeUi}`}>
+              {finding.confidence} confidence
+            </span>
+          </div>
+          <p className={styles.poInsightDetail}>{finding.detail}</p>
+          <div className={styles.poInsightMeta}>Evidence: {finding.evidence}</div>
+        </article>
+      ))}
+    </div>
+  </section>
+);
+
+interface TopModulesSignalCardProps {
+  items: ObservabilityTopModuleItem[];
+  activeWindow: ObservabilityTrendWindow;
+  windowLabel: string;
+  baselineLabel: string;
+  'data-testid': string;
+}
+
+const TopModulesSignalCard: React.FC<TopModulesSignalCardProps> = ({
+  items,
+  activeWindow,
+  windowLabel,
+  baselineLabel,
+  'data-testid': testId,
+}) => (
+  <section
+    className={styles.poSignalCard}
+    aria-labelledby="po-signal-top-modules-heading"
+    data-testid={testId}
+  >
+    <div className={styles.poSignalHeader}>
+      <div>
+        <h3 id="po-signal-top-modules-heading" className={styles.poSignalTitle}>
+          <span className={styles.poSignalNumber}>5</span>
+          Top modules
+        </h3>
+        <p className={styles.poSignalSubtitle}>
+          Module adoption, session share, and retention in {windowLabel} ({baselineLabel})
+        </p>
+      </div>
+      <span className={`${styles.badge} ${styles.badgeApi}`}>{items.length} core modules</span>
+    </div>
+
+    <div className={styles.tableWrap}>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th scope="col">Module</th>
+            <th scope="col">Interactions &amp; Share</th>
+            <th scope="col">Retention</th>
+            <th scope="col">Growth</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((mod) => {
+            const delta = formatDelta(mod.deltaPct);
+            return (
+              <tr key={mod.module}>
+                <td>
+                  <strong>{mod.module}</strong>
+                  <div className={styles.cardSub}>
+                    <code>{mod.routeTemplate}</code> · {mod.activeUsers} active users
+                  </div>
+                </td>
+                <td>
+                  <strong>
+                    {mod.interactions.toLocaleString()} ({mod.sharePct}% share)
+                  </strong>
+                  <div className={styles.progress}>
+                    <div
+                      className={styles.progressFill}
+                      style={{ width: `${Math.min(100, mod.sharePct * 2.5)}%` }}
+                    />
+                  </div>
+                  <WindowComparisonStrip
+                    values={mod.windowComparison}
+                    activeWindow={activeWindow}
+                  />
+                </td>
+                <td>{mod.retentionPct}%</td>
+                <td>
+                  <span className={delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative}>
+                    {delta.text}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </section>
+);
+
+interface DriveAdoptionAiSignalCardProps {
+  summary: ObservabilityAdoptionSummary;
+  modelLabel: string;
+  effort: EffortLevel;
+  'data-testid': string;
+}
+
+const DriveAdoptionAiSignalCard: React.FC<DriveAdoptionAiSignalCardProps> = ({
+  summary,
+  modelLabel,
+  effort,
+  'data-testid': testId,
+}) => (
+  <section
+    className={styles.poSignalCardAccent}
+    aria-labelledby="po-signal-drive-adoption-heading"
+    data-testid={testId}
+  >
+    <div className={styles.poSignalHeader}>
+      <div>
+        <h3 id="po-signal-drive-adoption-heading" className={styles.poSignalTitle}>
+          <span className={styles.poSignalNumber}>6</span>
+          AI summary of how we can drive adoption
+        </h3>
+        <p className={styles.poSignalSubtitle}>
+          Actionable growth &amp; recovery plays · {modelLabel} ({effortLabel(effort)} effort)
+        </p>
+      </div>
+      <span className={`${styles.badge} ${styles.badgeApi}`}>Growth Plays</span>
+    </div>
+
+    <div className={styles.poNarrativeBox}>
+      <p className={styles.poNarrativeHeadline}>{summary.headline}</p>
+      <p className={styles.poNarrativeCopy}>{summary.narrative}</p>
+    </div>
+
+    <div className={styles.poInsightList}>
+      {summary.recommendations.map((play) => (
+        <article key={play.id} className={styles.poInsightItem}>
+          <div className={styles.poInsightTop}>
+            <span className={styles.poInsightItemTitle}>
+              {play.module}: {play.title}
+            </span>
+            <span className={impactBadgeClass(play.impact)}>{play.impact} impact</span>
+          </div>
+          <p className={styles.poInsightDetail}>{play.action}</p>
+          <div className={styles.poInsightMeta}>Expected outcome: {play.expectedLift}</div>
+        </article>
+      ))}
+    </div>
+  </section>
+);
+
+function dynamicToneBadgeClass(tone: ObservabilityDynamicSkillSection['tone']): string {
+  if (tone === 'danger' || tone === 'warning') {
+    return `${styles.badge} ${styles.badgeError}`;
   }
+  if (tone === 'accent') {
+    return `${styles.badge} ${styles.badgeApi}`;
+  }
+  return `${styles.badge} ${styles.badgeUi}`;
+}
+
+interface DynamicSkillSectionCardProps {
+  section: ObservabilityDynamicSkillSection;
+  fallbackNumber: number;
+  activeWindow: ObservabilityTrendWindow;
+  'data-testid': string;
+}
+
+const DynamicSkillSectionCard: React.FC<DynamicSkillSectionCardProps> = ({
+  section,
+  fallbackNumber,
+  activeWindow,
+  'data-testid': testId,
+}) => {
+  const headingId = `po-signal-custom-${section.id}-heading`;
+  const displayType = section.displayType ?? 'insights';
+  const items = useMemo(() => section.items ?? [], [section.items]);
+  const cardClass =
+    section.tone === 'accent' ? styles.poSignalCardAccent : styles.poSignalCard;
+
+  const maxNumericMetric = useMemo(() => {
+    const nums = items
+      .map((item) => (typeof item.metricValue === 'number' ? item.metricValue : 0))
+      .filter((n) => n > 0);
+    return nums.length > 0 ? Math.max(...nums) : 1;
+  }, [items]);
 
   return (
-    <>
-      <div className={styles.metaRow}>
-        {isError && (
-          <span className={styles.staleBadge} {...{ 'data-testid': 'observability-health-stale' }}>
-            Stale — collection failed
-          </span>
+    <section className={cardClass} aria-labelledby={headingId} data-testid={testId}>
+      <div className={styles.poSignalHeader}>
+        <div>
+          <h3 id={headingId} className={styles.poSignalTitle}>
+            <span className={styles.poSignalNumber}>{section.number ?? fallbackNumber}</span>
+            {section.title}
+          </h3>
+          {section.subtitle && (
+            <p className={styles.poSignalSubtitle}>{section.subtitle}</p>
+          )}
+        </div>
+        {section.badge && (
+          <span className={dynamicToneBadgeClass(section.tone)}>{section.badge}</span>
         )}
-        {health && !isError && (
-          <span className={styles.metaText}>
-            Last refreshed: {new Date(capturedAt || health.capturedAt).toISOString().replace('T', ' ').replace('.000Z', ' UTC')}
-          </span>
-        )}
-        <button type="button" className={styles.refreshButton} onClick={onRetry} {...{ 'data-testid': 'observability-health-refresh' }}>
-          {isError ? 'Retry' : 'Refresh'}
-        </button>
       </div>
 
-      {isError && (
-        <div className={styles.errorBanner} role="alert" {...{ 'data-testid': 'observability-health-error' }}>
-          <div>
-            <p className={styles.errorTitle}>Health collection endpoint failed</p>
-            <p className={styles.errorDetail}>
-              {errorMessage}. Capture itself is unaffected — this is a monitoring endpoint failure only. Trail, Timeline, and Journey Map views remain available.
-            </p>
-            <button type="button" className={styles.retryButton} onClick={onRetry} {...{ 'data-testid': 'observability-health-retry' }}>
-              Retry collection
-            </button>
+      {(section.headline || section.narrative) && (
+        <div className={styles.poNarrativeBox}>
+          {section.headline && (
+            <p className={styles.poNarrativeHeadline}>{section.headline}</p>
+          )}
+          {section.narrative && (
+            <p className={styles.poNarrativeCopy}>{section.narrative}</p>
+          )}
+        </div>
+      )}
+
+      {displayType === 'table' && items.length > 0 && (
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th scope="col">Signal Item</th>
+                <th scope="col">Metric</th>
+                <th scope="col">Detail</th>
+                <th scope="col">Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => {
+                const delta =
+                  typeof item.deltaPct === 'number' ? formatDelta(item.deltaPct) : null;
+                return (
+                  <tr key={item.id ?? `${section.id}-row-${idx}`}>
+                    <td>
+                      <strong>{item.title}</strong>
+                      {item.subtitle && <div className={styles.cardSub}>{item.subtitle}</div>}
+                    </td>
+                    <td>
+                      {item.metricValue !== undefined ? (
+                        <strong>
+                          {typeof item.metricValue === 'number'
+                            ? item.metricValue.toLocaleString()
+                            : item.metricValue}
+                        </strong>
+                      ) : (
+                        '—'
+                      )}
+                      {item.metricLabel && (
+                        <div className={styles.cardSub}>{item.metricLabel}</div>
+                      )}
+                      {item.windowComparison && (
+                        <WindowComparisonStrip
+                          values={item.windowComparison}
+                          activeWindow={activeWindow}
+                        />
+                      )}
+                    </td>
+                    <td>{item.detail ?? item.meta ?? '—'}</td>
+                    <td>
+                      {delta ? (
+                        <span
+                          className={
+                            delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative
+                          }
+                        >
+                          {delta.text}
+                        </span>
+                      ) : (
+                        item.badge ?? '—'
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {displayType === 'metrics' && items.length > 0 && (
+        <div className={styles.grid}>
+          {items.map((item, idx) => {
+            const delta =
+              typeof item.deltaPct === 'number' ? formatDelta(item.deltaPct) : null;
+            return (
+              <article key={item.id ?? `${section.id}-metric-${idx}`} className={styles.card}>
+                <div className={styles.cardLabel}>{item.metricLabel ?? item.title}</div>
+                <div className={styles.cardValue}>
+                  {item.metricValue !== undefined
+                    ? typeof item.metricValue === 'number'
+                      ? item.metricValue.toLocaleString()
+                      : item.metricValue
+                    : item.badge ?? '—'}
+                </div>
+                <div className={styles.cardSub}>
+                  {delta && (
+                    <span
+                      className={
+                        delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative
+                      }
+                    >
+                      {delta.text}{' '}
+                    </span>
+                  )}
+                  {item.detail ?? item.subtitle ?? ''}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {(displayType === 'insights' ||
+        displayType === 'ranked_list' ||
+        displayType === 'markdown') &&
+        items.length > 0 && (
+          <div className={styles.poInsightList}>
+            {items.map((item, idx) => {
+              const delta =
+                typeof item.deltaPct === 'number' ? formatDelta(item.deltaPct) : null;
+              const numericVal =
+                typeof item.metricValue === 'number' ? item.metricValue : null;
+              const barPct =
+                numericVal !== null
+                  ? Math.min(100, Math.round((numericVal / maxNumericMetric) * 100))
+                  : null;
+              return (
+                <article
+                  key={item.id ?? `${section.id}-item-${idx}`}
+                  className={styles.poInsightItem}
+                >
+                  <div className={styles.poInsightTop}>
+                    <span className={styles.poInsightItemTitle}>{item.title}</span>
+                    <div className={styles.poWindowCompareStrip}>
+                      {item.metricValue !== undefined && (
+                        <strong>
+                          {item.metricLabel ? `${item.metricLabel}: ` : ''}
+                          {typeof item.metricValue === 'number'
+                            ? item.metricValue.toLocaleString()
+                            : item.metricValue}
+                        </strong>
+                      )}
+                      {delta && (
+                        <span
+                          className={
+                            delta.positive ? styles.poDeltaPositive : styles.poDeltaNegative
+                          }
+                        >
+                          {delta.text}
+                        </span>
+                      )}
+                      {item.badge && (
+                        <span className={dynamicToneBadgeClass(section.tone)}>
+                          {item.badge}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {item.subtitle && (
+                    <div className={styles.cardSub}>{item.subtitle}</div>
+                  )}
+                  {item.detail && (
+                    <p className={styles.poInsightDetail}>{item.detail}</p>
+                  )}
+                  {displayType === 'ranked_list' && barPct !== null && (
+                    <div className={styles.progress}>
+                      <div
+                        className={styles.progressFill}
+                        style={{ width: `${barPct}%` }}
+                      />
+                    </div>
+                  )}
+                  {item.meta && (
+                    <div className={styles.poInsightMeta}>{item.meta}</div>
+                  )}
+                  {item.windowComparison && (
+                    <WindowComparisonStrip
+                      values={item.windowComparison}
+                      activeWindow={activeWindow}
+                    />
+                  )}
+                </article>
+              );
+            })}
           </div>
-        </div>
-      )}
-
-      {health && !isError && (
-        <div className={styles.statusBar}>
-          <span className={bufferAtCap || retentionHit ? `${styles.statusDot} ${styles.statusDotWarn}` : styles.statusDot} />
-          {bufferAtCap || retentionHit
-            ? 'Capture operating with boundary warnings'
-            : 'Capture operating normally — no active incidents'}
-        </div>
-      )}
-
-      {health && !isError && bufferAtCap && (
-        <div className={styles.warnBanner} role="status" {...{ 'data-testid': 'observability-health-buffer-warning' }}>
-          <div>
-            <strong>Buffer depth at capacity ({health.pipeline.bufferDepth.toLocaleString()} / {health.pipeline.bufferCapacity.toLocaleString()})</strong>
-            <div>New events may be dropped. Consider disabling observability-capture before drop escalation affects Apex.</div>
-          </div>
-        </div>
-      )}
-
-      {health && !isError && retentionHit && (
-        <div className={styles.warnBanner} role="status" {...{ 'data-testid': 'observability-health-retention-warning' }}>
-          <div>
-            <strong>Oldest retained event has reached the {OBSERVABILITY_RAW_RETENTION_DAYS}-day boundary</strong>
-            <div>Raw Trace Events older than {OBSERVABILITY_RAW_RETENTION_DAYS} days are eligible for purge.</div>
-          </div>
-        </div>
-      )}
-
-      {health && (
-        <div className={isError ? `${styles.grid} ${styles.staleGrid}` : styles.grid} {...{ 'data-testid': 'observability-health-grid' }}>
-          <HealthMetric
-            testId="observability-health-dropped"
-            label="Dropped Events"
-            value={String(health.pipeline.droppedEvents)}
-            sub={`Rate: ${health.pipeline.droppedEventsPerSecond} / sec`}
-          />
-          <HealthMetric
-            testId="observability-health-buffer"
-            label="Buffer Depth"
-            value={health.pipeline.bufferDepth.toLocaleString()}
-            sub={`Cap: ${health.pipeline.bufferCapacity.toLocaleString()} — ${bufferPct}% full`}
-            warn={bufferAtCap}
-            progress={bufferPct}
-          />
-          <HealthMetric
-            testId="observability-health-throughput"
-            label="Throughput"
-            value={String(health.pipeline.ingestedEventsPerSecond)}
-            sub="events / sec (ingest)"
-          />
-          <HealthMetric
-            testId="observability-health-flush"
-            label="Flush Failures"
-            value={String(health.pipeline.flushErrorCount)}
-            sub={health.pipeline.latestFlushError?.occurredAt
-              ? `Latest: ${health.pipeline.latestFlushError.occurredAt}`
-              : 'No recent flush error'}
-          />
-          <HealthMetric
-            testId="observability-health-store"
-            label="Approx. Store Size"
-            value={formatStoreBytes(health.store.approximateStoreBytes)}
-            sub="across retained Trace Events"
-          />
-          <HealthMetric
-            testId="observability-health-oldest"
-            label="Oldest Retained Event"
-            value={health.store.oldestRetainedEventAt ?? 'None'}
-            sub={retentionHit ? `${OBSERVABILITY_RAW_RETENTION_DAYS}-day boundary reached` : `Within ${OBSERVABILITY_RAW_RETENTION_DAYS}-day retention`}
-            warn={retentionHit}
-          />
-        </div>
-      )}
-
-      {isError && (
-        <div className={styles.intact}>Capture pipeline is not affected. This error is limited to health monitoring only.</div>
-      )}
-    </>
+        )}
+    </section>
   );
 };
-
-interface HealthMetricProps {
-  testId: string;
-  label: string;
-  value: string;
-  sub: string;
-  warn?: boolean;
-  progress?: number;
-}
-
-const HealthMetric: React.FC<HealthMetricProps> = ({ testId, label, value, sub, warn = false, progress }) => (
-  <article className={warn ? `${styles.card} ${styles.cardWarn}` : styles.card} {...{ 'data-testid': testId }}>
-    <div className={styles.cardLabel}>{label}</div>
-    <div className={warn ? `${styles.cardValue} ${styles.cardValueWarn}` : styles.cardValue}>{value}</div>
-    <div className={styles.cardSub}>{sub}</div>
-    {progress != null && (
-      <div className={styles.progress}>
-        <div
-          className={`${styles.progressFill} ${progress >= 100 ? styles.progressCritical : progress >= 80 ? styles.progressWarn : ''}`}
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-    )}
-  </article>
-);
 
 export default ObservabilityWorkspace;

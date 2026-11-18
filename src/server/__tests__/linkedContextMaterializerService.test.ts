@@ -11,6 +11,17 @@ const mockGetLinkedContext = jest.fn();
 const mockGetAdr = jest.fn();
 const mockGetModuleById = jest.fn();
 const mockTrackEvent = jest.fn();
+const mockFindInterview = jest.fn();
+const mockFindBrainstormArtifact = jest.fn();
+
+jest.mock('../db/drizzle', () => ({
+  db: {
+    query: {
+      interviews: { findFirst: (...a: unknown[]) => mockFindInterview(...a) },
+      brainstormArtifacts: { findFirst: (...a: unknown[]) => mockFindBrainstormArtifact(...a) },
+    },
+  },
+}));
 
 jest.mock('../services/interviewLinkService', () => ({
   getLinkedContext: (...a: unknown[]) => mockGetLinkedContext(...a),
@@ -32,6 +43,7 @@ import {
   LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH,
   materializeLinkedContext,
   renderLinkedContextDocument,
+  renderLinkedContextForInterviewThread,
 } from '../services/linkedContextMaterializerService';
 import type { LinkedContextReadModel } from '../../shared/types/interviewLinks';
 
@@ -176,6 +188,74 @@ describe('renderLinkedContextDocument — DoD-0 / VT-01 template', () => {
 
     expect(markdown.indexOf(ADR_A)).toBeLessThan(markdown.indexOf(ADR_B));
     expect(markdown.indexOf(MOD_A)).toBeLessThan(markdown.indexOf(MOD_B));
+  });
+});
+
+describe('renderLinkedContextForInterviewThread — V2 prompt delivery', () => {
+  const THREAD_ID = '99999999-9999-4999-8999-999999999999';
+
+  it('renders accepted ADRs and modules for the thread interview without writing a file', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockResolvedValue(baseReadModel({
+      adrLinks: [
+        ...baseReadModel().adrLinks,
+        {
+          adrId: ADR_STALE,
+          title: 'Stale ADR',
+          isAccepted: true,
+          linkedBy: 'user-ba',
+          linkedAt: '2026-08-03T00:00:00.000Z',
+        },
+      ],
+    }));
+
+    const markdown = await renderLinkedContextForInterviewThread({
+      threadId: THREAD_ID,
+      userId: 'user-mgr',
+      now: () => new Date('2026-11-13T00:00:00.000Z'),
+    });
+
+    expect(mockGetLinkedContext).toHaveBeenCalledWith(INTERVIEW_ID, { userId: 'user-mgr' });
+    expect(markdown).toContain('Content of ADR A v1');
+    expect(markdown).toContain('Generated docs for Module B');
+    expect(markdown).not.toContain('Should never appear');
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      'interview.linked_context.materialize',
+      expect.objectContaining({ outcome: 'written', delivery: 'prompt' }),
+      expect.objectContaining({ adrCount: 2, designModuleCount: 2, staleAdrExcluded: 1 }),
+    );
+  });
+
+  it('returns null when nothing is linked', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockResolvedValue(baseReadModel({ adrLinks: [], designModuleLinks: [], count: 0 }));
+
+    await expect(
+      renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' }),
+    ).resolves.toBeNull();
+  });
+
+  it('returns null when the thread has no interview', async () => {
+    mockFindInterview.mockResolvedValue(undefined);
+
+    await expect(
+      renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' }),
+    ).resolves.toBeNull();
+    expect(mockGetLinkedContext).not.toHaveBeenCalled();
+  });
+
+  it('returns null and reports failure when link resolution throws', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockRejectedValue(new TypeError('boom'));
+
+    await expect(
+      renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' }),
+    ).resolves.toBeNull();
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      'interview.linked_context.materialize',
+      expect.objectContaining({ outcome: 'failed', delivery: 'prompt', errorName: 'TypeError' }),
+      expect.anything(),
+    );
   });
 });
 
@@ -381,5 +461,104 @@ describe('materializeLinkedContext — PBI-005 / TBI-004', () => {
     const body = fs.readFileSync(documentPath(workspaceDir), 'utf8');
     expect(body.startsWith('# Linked Interview Grounding Context')).toBe(true);
     expect(body).toContain('## Linked ADRs (accepted)');
+  });
+});
+
+describe('Linked brainstorm artifacts', () => {
+  const SESSION_ID = '12121212-1212-4212-8212-121212121212';
+  const EMPTY_SESSION_ID = '13131313-1313-4313-8313-131313131313';
+  const THREAD_ID = '99999999-9999-4999-8999-999999999999';
+  const brainstormOnly = () => baseReadModel({
+    adrLinks: [],
+    designModuleLinks: [],
+    brainstormLinks: [
+      {
+        brainstormSessionId: SESSION_ID,
+        title: 'Queue design',
+        artifactType: 'technical_design',
+        linkedBy: 'user-ba',
+        linkedAt: '2026-11-17T00:00:00.000Z',
+      },
+      {
+        brainstormSessionId: EMPTY_SESSION_ID,
+        title: 'Empty chat',
+        artifactType: null,
+        linkedBy: 'user-ba',
+        linkedAt: '2026-11-17T00:00:00.000Z',
+      },
+    ],
+    count: 2,
+  });
+
+  beforeEach(() => {
+    mockFindBrainstormArtifact.mockImplementation(async () => undefined);
+    mockFindBrainstormArtifact
+      .mockResolvedValueOnce({
+        sessionId: SESSION_ID,
+        artifactType: 'technical_design',
+        markdown: '# Queue design\n\nWorkers poll E2E-LINKED-ZEBRA-42.',
+        version: 3,
+      })
+      .mockResolvedValueOnce({ sessionId: EMPTY_SESSION_ID, artifactType: null, markdown: '   ', version: 1 });
+  });
+
+  it('renders brainstorm artifacts only when present, keeping the ADR/module document unchanged otherwise', () => {
+    const base = {
+      interviewId: INTERVIEW_ID,
+      materializedAt: '2026-08-06T12:00:00.000Z',
+      adrs: [{ id: ADR_A, title: 'ADR A', content: 'Body A' }],
+      designModules: [],
+    };
+    const withoutBrainstorms = renderLinkedContextDocument(base);
+    expect(renderLinkedContextDocument({ ...base, brainstorms: [] })).toBe(withoutBrainstorms);
+    expect(withoutBrainstorms).not.toContain('Brainstorm');
+
+    const markdown = renderLinkedContextDocument({
+      ...base,
+      brainstorms: [
+        { id: SESSION_ID, title: 'Queue design', artifactType: 'technical_design', version: 3, markdown: '# Queue design\n\nBody' },
+      ],
+    });
+    expect(markdown).toContain('Brainstorm-Count: 1');
+    expect(markdown).toContain('## Linked Brainstorm Artifacts');
+    expect(markdown).toContain(`### Queue design (\`${SESSION_ID}\`)`);
+    expect(markdown).toContain('Artifact type: technical_design · version 3');
+    expect(markdown).toContain('Body');
+  });
+
+  it('V1: writes the latest brainstorm artifact into linked-context.md and skips empty artifacts', async () => {
+    const workspaceDir = makeWorkspace();
+    mockGetLinkedContext.mockResolvedValue(brainstormOnly());
+
+    const result = await materializeLinkedContext(INTERVIEW_ID, { workspaceDir, actor: ACTOR });
+
+    expect(result.outcome).toBe('written');
+    const body = fs.readFileSync(documentPath(workspaceDir), 'utf8');
+    expect(body).toContain('## Linked Brainstorm Artifacts');
+    expect(body).toContain('E2E-LINKED-ZEBRA-42');
+    expect(body).not.toContain('Empty chat');
+    expect(mockFindBrainstormArtifact).toHaveBeenCalledTimes(2);
+  });
+
+  it('V1: omits the document when every linked brainstorm artifact is empty', async () => {
+    const workspaceDir = makeWorkspace();
+    mockFindBrainstormArtifact.mockReset();
+    mockFindBrainstormArtifact.mockResolvedValue(undefined);
+    mockGetLinkedContext.mockResolvedValue(brainstormOnly());
+
+    const result = await materializeLinkedContext(INTERVIEW_ID, { workspaceDir, actor: ACTOR });
+
+    expect(result.outcome).toBe('omitted');
+    expect(fs.existsSync(documentPath(workspaceDir))).toBe(false);
+  });
+
+  it('V2: renders the brainstorm artifact into the interview prompt', async () => {
+    mockFindInterview.mockResolvedValue({ id: INTERVIEW_ID });
+    mockGetLinkedContext.mockResolvedValue(brainstormOnly());
+
+    const markdown = await renderLinkedContextForInterviewThread({ threadId: THREAD_ID, userId: 'user-mgr' });
+
+    expect(markdown).toContain('## Linked Brainstorm Artifacts');
+    expect(markdown).toContain('E2E-LINKED-ZEBRA-42');
   });
 });

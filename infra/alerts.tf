@@ -340,7 +340,8 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "app_logs" {
   auto_mitigation_enabled = true
 
   criteria {
-    query                   = each.value.query
+    # Windows checkouts (core.autocrlf) put CRLF in the heredocs; CI uses LF.
+    query                   = replace(each.value.query, "\r\n", "\n")
     time_aggregation_method = "Count"
     operator                = "GreaterThan"
     threshold               = each.value.threshold

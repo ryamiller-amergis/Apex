@@ -227,6 +227,7 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           !file.includes('__tests__') &&
           file !== 'src/server/routes/e2eSetup.ts' &&
           file !== 'src/server/services/designDocValidationPlaybookService.ts' &&
+          file !== 'src/server/services/skillApprovalPlaybook.ts' &&
           file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
           // Only a cursor-agent node loads a repository Skill. Cloud-agent steps are agent steps too.
           file !== 'src/server/services/playbookExecutionCapabilityService.ts' &&
@@ -355,7 +356,7 @@ describe('FEAT-008 VT-04 (TBI-033 a) — the approved classification and permiss
     expect(notify.requiredPermissions).toEqual(['playbooks:run']);
   });
 
-  it('holds cursor-agent to a named Skill and a prompt, with an optional model', () => {
+  it('holds cursor-agent to a prompt, with an optional Skill and model', () => {
     const { inputSchema, outputSchema } = getStepTypeDescriptor('cursor-agent');
 
     expect(inputSchema.safeParse({ skillPath: 'a', prompt: 'b', model: 'auto' }).success).toBe(
@@ -363,7 +364,7 @@ describe('FEAT-008 VT-04 (TBI-033 a) — the approved classification and permiss
     );
     expect(inputSchema.safeParse({ skillPath: '', prompt: 'b' }).success).toBe(false);
     expect(inputSchema.safeParse({ skillPath: 'a', prompt: '' }).success).toBe(false);
-    expect(inputSchema.safeParse({ prompt: 'b' }).success).toBe(false);
+    expect(inputSchema.safeParse({ prompt: 'b' }).success).toBe(true);
 
     expect(
       outputSchema.safeParse({ agentRunId: 'run-1', completedAt: '2026-09-22T10:00:00.000Z' })

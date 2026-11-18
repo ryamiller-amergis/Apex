@@ -54,6 +54,28 @@ function renderGate(config: Record<string, unknown>, onChange = jest.fn()) {
   return onChange;
 }
 
+function renderBranch(issues?: string[]) {
+  render(
+    <PlaybookStepInspector
+      project="Apex"
+      node={{ id: 'branch-1', stepType: 'branch', config: {} }}
+      paletteItem={undefined}
+      otherNodeIds={['approval-gate-1']}
+      priorNodeIds={['approval-gate-1']}
+      allNodes={[
+        { id: 'approval-gate-1', stepType: 'approval-gate' },
+        { id: 'branch-1', stepType: 'branch' },
+      ]}
+      paletteItems={palette}
+      issues={issues}
+      canAuthor
+      onChange={jest.fn()}
+      onDelete={jest.fn()}
+      onClose={jest.fn()}
+    />,
+  );
+}
+
 it('names each value a step reads and whether it is available', () => {
   renderGate({
     body: '${input.releaseName} ${steps.notify.notificationId} ${steps.later.notificationId}',
@@ -65,6 +87,24 @@ it('names each value a step reads and whether it is available', () => {
   expect(reads).toHaveTextContent('Notify (later) › Notification id');
   expect(reads).toHaveTextContent('not available before this step');
   expect(reads).not.toHaveTextContent('${steps');
+});
+
+it('lists every problem the server found on the step', () => {
+  renderBranch([
+    'Branch step "branch-1" cannot use "approval-1.decision": no step on this Playbook has that id.',
+    'Branch step "branch-1" has no continuation.',
+  ]);
+
+  const problems = screen.getByTestId('playbook-inspector-issues');
+  expect(problems).toHaveTextContent('2 problems to fix before publishing');
+  expect(problems).toHaveTextContent('"approval-1.decision"');
+  expect(problems).toHaveTextContent('has no continuation');
+});
+
+it('shows no problem card for a step with nothing wrong', () => {
+  renderBranch(undefined);
+
+  expect(screen.queryByTestId('playbook-inspector-issues')).not.toBeInTheDocument();
 });
 
 it('leaves approver routing unset until the author asks for a reviewer group', () => {

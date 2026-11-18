@@ -10,6 +10,7 @@ import {
   useScopeSelection,
 } from '../hooks/useCalendarWorkItemAssistant';
 import { CalendarWorkItemChangesReview } from './CalendarWorkItemChangesReview';
+import { useChatAttachments } from '../hooks/useChatAttachments';
 import { AgentComposer, AgentPanelShell } from './agentChat';
 import type { WorkItemHierarchyNode } from '../../shared/types/calendarWorkItemAssistant';
 import styles from './CalendarWorkItemAssistantPanel.module.css';
@@ -66,6 +67,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const qc = useQueryClient();
 
@@ -90,6 +92,13 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
   const latestProposal = sessionData?.latestProposal ?? null;
 
   const chat = useCalendarAssistantChat(threadId);
+  const {
+    attachments,
+    attachmentError,
+    addFiles,
+    removeAttachment,
+    clearAttachments,
+  } = useChatAttachments();
   const isRunning = chat.status === 'running';
 
   // Refresh session query when a run completes (proposal may have appeared)
@@ -173,17 +182,25 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     }
   }, [project, areaPath, anchorWorkItemId, selectedArray, createSession]);
 
+  const handleAttachmentChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(event.currentTarget.files);
+    event.currentTarget.value = '';
+  }, [addFiles]);
+
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || isSending || !threadId) return;
+    const outgoing = [...attachments];
+    if ((!text && outgoing.length === 0) || isRunning || isSending || !threadId) return;
+    const message = text || 'Please use the attached files as additional context.';
     setInput('');
     setIsSending(true);
     try {
-      await chat.sendMessage(text);
+      const sent = await chat.sendMessage(message, outgoing);
+      if (sent && outgoing.length > 0) clearAttachments();
     } finally {
       setIsSending(false);
     }
-  }, [input, isRunning, isSending, threadId, chat]);
+  }, [attachments, chat, clearAttachments, input, isRunning, isSending, threadId]);
 
   const handleNewConversation = useCallback(async () => {
     setShowNewConvConfirm(false);
@@ -571,10 +588,27 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
               disabled={isRunning || isSending}
               isRunning={isRunning}
               isSending={isSending}
+              allowEmptySend
               placeholder="Message the assistant… (Enter to send)"
               testIdPrefix="calendar-assistant"
               {...{ 'data-testid': 'calendar-assistant-composer' }}
               textareaRef={textareaRef}
+              attachments={attachments}
+              attachmentError={attachmentError}
+              onRemoveAttachment={removeAttachment}
+              onAttachClick={() => fileInputRef.current?.click()}
+              onPasteFiles={(files) => { void addFiles(files); }}
+              fileInput={(
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => { void handleAttachmentChange(event); }}
+                  disabled={isRunning || isSending}
+                  {...{ 'data-testid': 'calendar-assistant-file-input' }}
+                />
+              )}
             />
           </div>
         )}

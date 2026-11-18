@@ -1,0 +1,30 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.toneSuccess {
+  color: var(--success-color);
+}
+
+.toneError {
+  color: var(--error-color);
+}
+
+.toneWarning {
+  color: var(--warning-color);
+}
+
+.toneInfo {
+  color: var(--accent-color);
+}
+
+.toneNeutral {
+  color: var(--text-secondary);
+}

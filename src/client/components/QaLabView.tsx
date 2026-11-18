@@ -23,6 +23,7 @@ import { env } from '../config/env';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { QaLabAssistantPanel, type QaLabAssistantTarget } from './QaLabAssistantPanel';
 import { QaLabCaseComments } from './QaLabCaseComments';
+import { QaLabCaseRun } from './QaLabCaseRun';
 import { QaLabCaseDiff } from './QaLabCaseDiff';
 import { QaLabGenerationStatus } from './QaLabGenerationStatus';
 import {
@@ -135,6 +136,11 @@ function uniqueValues(cases: QaLabTestCase[], key: FilterKey): string[] {
 
 type ExistingFilter = 'all' | 'new' | 'existing';
 
+/** New cases, and existing ones Azure DevOps has in no Test Plan, still need publishing. */
+function needsPublish(testCase: QaLabTestCase): boolean {
+  return !testCase.existing || testCase.existing.inTestPlan === false;
+}
+
 const EXISTING_FILTERS: Array<{ key: ExistingFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'new', label: 'New' },
@@ -197,6 +203,11 @@ const ExistingCaseNote: React.FC<{ testCase: QaLabTestCase; existing: QaLabExist
         {existing.source === 'linked' ? ' (linked to this work item)' : ' (in a Test Plan suite)'}
         {existing.reason ? `: ${existing.reason}` : ''}
       </p>
+      {existing.inTestPlan === false && (
+        <p className={styles.existingReason}>
+          It is not in any Test Plan suite. Publishing adds this existing case to the suite you choose; nothing new is created.
+        </p>
+      )}
       {existing.status === 'needs-update' && current && (
         <QaLabCaseDiff
           localCaseId={testCase.id}
@@ -226,6 +237,8 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
   const openComments = comments.filter((comment) => comment.status === 'open').length;
   const regeneration = review?.regenerationByCase.get(testCase.id) ?? null;
   const isRegenerating = regeneration?.status === 'generating';
+  const canRun = review !== null && isQaCase(testCase);
+  const [runOpen, setRunOpen] = useState(false);
 
   return (
     <div
@@ -261,6 +274,9 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
               >
                 {testCase.existing.status === 'needs-update' ? 'Existing · Needs update' : 'Existing'}
               </span>
+            )}
+            {testCase.existing?.inTestPlan === false && (
+              <span className={`${styles.badge} ${styles.badgeNeedsUpdate}`}>Not in a Test Plan</span>
             )}
             {isRegenerating && <span className={`${styles.badge} ${styles.badgeAutomation}`}>Regenerating…</span>}
             {testCase.tier && <span className={styles.badge}>{testCase.tier}</span>}
@@ -311,35 +327,48 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
       {expanded && (
         <div className={styles.cardBody}>
           {testCase.existing && <ExistingCaseNote testCase={testCase} existing={testCase.existing} />}
-          <dl className={styles.metaGrid}>
-            {testCase.persona && (
-              <>
-                <dt>Persona</dt>
-                <dd>{testCase.persona}</dd>
-              </>
+          <div className={styles.metaRow}>
+            <dl className={styles.metaGrid}>
+              {testCase.persona && (
+                <>
+                  <dt>Persona</dt>
+                  <dd>{testCase.persona}</dd>
+                </>
+              )}
+              {testCase.priority && (
+                <>
+                  <dt>Priority</dt>
+                  <dd>{testCase.priority}</dd>
+                </>
+              )}
+              {testCase.featureFlag && (
+                <>
+                  <dt>Feature flag</dt>
+                  <dd>
+                    {testCase.featureFlag}
+                    {testCase.featureFlagState ? ` (${testCase.featureFlagState})` : ''}
+                  </dd>
+                </>
+              )}
+              {traceBits.length > 0 && (
+                <>
+                  <dt>Traces to</dt>
+                  <dd>{traceBits.join(', ')}</dd>
+                </>
+              )}
+            </dl>
+            {canRun && (
+              <button
+                type="button"
+                className={`${styles.secondaryBtn} ${styles.runToggle}`}
+                onClick={() => setRunOpen((open) => !open)}
+                aria-expanded={runOpen}
+                {...{ 'data-testid': `qa-lab-run-${testCase.id}-open` }}
+              >
+                {runOpen ? 'Hide test run' : 'Run this test'}
+              </button>
             )}
-            {testCase.priority && (
-              <>
-                <dt>Priority</dt>
-                <dd>{testCase.priority}</dd>
-              </>
-            )}
-            {testCase.featureFlag && (
-              <>
-                <dt>Feature flag</dt>
-                <dd>
-                  {testCase.featureFlag}
-                  {testCase.featureFlagState ? ` (${testCase.featureFlagState})` : ''}
-                </dd>
-              </>
-            )}
-            {traceBits.length > 0 && (
-              <>
-                <dt>Traces to</dt>
-                <dd>{traceBits.join(', ')}</dd>
-              </>
-            )}
-          </dl>
+          </div>
 
           {testCase.preconditions.length > 0 && (
             <section className={styles.section}>
@@ -414,6 +443,15 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
               isPublished={isPublished}
             />
           )}
+
+          {canRun && review && (
+            <QaLabCaseRun
+              suiteId={review.suiteId}
+              localCaseId={testCase.id}
+              open={runOpen}
+              onClose={() => setRunOpen(false)}
+            />
+          )}
         </div>
       )}
     </div>
@@ -422,8 +460,15 @@ const TestCaseCard: React.FC<TestCaseCardProps> = ({ testCase, expanded, onToggl
 
 /* ── Suite group ─────────────────────────────────────────────────────────── */
 
+function suiteWorkItemUrl(suite: QaLabSuite, urlFor: (id: number) => string): string | null {
+  if (suite.adoWorkItemUrl) return suite.adoWorkItemUrl;
+  const id = suite.adoWorkItemId ?? Number(/^PBI-(\d+)$/i.exec(suite.pbiId)?.[1]);
+  return Number.isInteger(id) && id > 0 ? urlFor(id) : null;
+}
+
 interface SuiteGroupProps {
   suite: QaLabSuite;
+  pbiUrl: string | null;
   cases: QaLabTestCase[];
   /** All- or Manual-tab cases for this suite, used for the coverage strip. */
   manualCases: QaLabTestCase[] | null;
@@ -466,6 +511,7 @@ const ManualCoverage: React.FC<{ suiteId: string; cases: QaLabTestCase[] }> = ({
 
 const SuiteGroup: React.FC<SuiteGroupProps> = ({
   suite,
+  pbiUrl,
   cases,
   manualCases,
   expandedIds,
@@ -480,7 +526,19 @@ const SuiteGroup: React.FC<SuiteGroupProps> = ({
       <header className={styles.suiteHeader}>
         <div className={styles.suiteTitleRow}>
           <span className={styles.suitePbiId}>{suite.pbiId}</span>
-          <h3 className={styles.suiteTitle}>{suite.pbiTitle}</h3>
+          <h3 className={styles.suiteTitle}>
+            {pbiUrl ? (
+              <a
+                href={pbiUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.suiteTitleLink}
+                {...{ 'data-testid': `qa-lab-suite-title-link-${suite.pbiId}` }}
+              >
+                {suite.pbiTitle}
+              </a>
+            ) : suite.pbiTitle}
+          </h3>
           <span className={styles.suiteCount}>
             {cases.length} {cases.length === 1 ? 'case' : 'cases'}
           </span>
@@ -575,9 +633,11 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
   }, [saveSidebarWidth, sidebarWidth]);
 
   const workItemDetail = useQaLabWorkItemDetail(project, selectedWorkItemId, detailsOpen);
-  const adoWorkItemUrl = selectedWorkItemId
-    ? `https://dev.azure.com/${encodeURIComponent(env.VITE_ADO_ORG)}/${encodeURIComponent(project)}/_workitems/edit/${selectedWorkItemId}`
-    : null;
+  const workItemUrlFor = useCallback(
+    (id: number) => `https://dev.azure.com/${encodeURIComponent(env.VITE_ADO_ORG)}/${encodeURIComponent(project)}/_workitems/edit/${id}`,
+    [project],
+  );
+  const adoWorkItemUrl = selectedWorkItemId ? workItemUrlFor(selectedWorkItemId) : null;
 
   const {
     data: workItemList,
@@ -703,7 +763,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
     [externalSuite?.publishedCases],
   );
   const unpublishedCount = allCases
-    .filter((entry) => !entry.existing && !publishedCaseIds.has(entry.id)).length;
+    .filter((entry) => needsPublish(entry) && !publishedCaseIds.has(entry.id)).length;
   const reviewCases = useMemo<QaLabPublishReviewCase[]>(() => {
     const suiteErrors = new Map(
       (externalSuite?.publishedCases ?? [])
@@ -711,7 +771,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         .map((entry) => [entry.localCaseId, entry.suiteError]),
     );
     return allCases
-      .filter((entry) => !entry.existing)
+      .filter(needsPublish)
       .filter((entry) => !publishedCaseIds.has(entry.id) || suiteErrors.has(entry.id))
       .map((entry) => ({
         id: entry.id,
@@ -720,6 +780,12 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         proposedTestSuite: entry.proposedTestSuite,
         placementReason: entry.placementReason,
         suiteError: suiteErrors.get(entry.id),
+        ...(entry.existing
+          ? {
+            existingAdoTestCaseId: entry.existing.adoTestCaseId,
+            ...(entry.existing.current?.url ? { existingAdoTestCaseUrl: entry.existing.current.url } : {}),
+          }
+          : {}),
       }));
   }, [allCases, publishedCaseIds, externalSuite?.publishedCases]);
   const canSelectCases = externalSuite?.status === 'ready' && !isGenerating;
@@ -1578,6 +1644,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
               <SuiteGroup
                 key={`${suite.pbiId}-${suite.adoWorkItemId ?? 'unlinked'}`}
                 suite={suite}
+                pbiUrl={suiteWorkItemUrl(suite, workItemUrlFor)}
                 cases={suite.testCases.filter(
                   (entry) => isOnTab(entry, activeTab) && matchesUserType(entry) && matchesFilters(entry),
                 )}
@@ -1601,6 +1668,7 @@ export const QaLabView: React.FC<QaLabViewProps> = ({ project }) => {
         <QaLabAssistantPanel
           key={assistantTarget.kind === 'suite' ? assistantTarget.suiteId : assistantTarget.prdId}
           target={assistantTarget}
+          project={project}
           contextLabel={selectedWorkItem?.title ?? `Work item #${selectedWorkItemId}`}
           open={assistantOpen}
           onClose={() => setAssistantOpen(false)}

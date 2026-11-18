@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { WORKFLOW_HUMAN_EVALUATION_FLAG } from '../../shared/types/featureFlags';
+import { SKILL_LEARNING_FLAG } from '../../shared/types/featureFlags';
 import {
   WORKFLOW_EVALUATION_SUBMIT,
   WORKFLOW_EVALUATION_VIEW,
@@ -32,7 +32,7 @@ export function useWorkflowEvaluationAccess(project: string | undefined): Workfl
   const ready = permissionsLoaded && flagsSettled;
   const flagEnabled = ready
     && !flagsQuery.isError
-    && (flagsQuery.flags[WORKFLOW_HUMAN_EVALUATION_FLAG] ?? false);
+    && (flagsQuery.flags[SKILL_LEARNING_FLAG] ?? false);
 
   const onRefused = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['feature-flags', 'evaluate', project] });

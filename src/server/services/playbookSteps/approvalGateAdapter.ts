@@ -28,6 +28,7 @@ import {
 } from './stepRuns';
 import type { ApprovalGateStepConfig } from '../../../shared/types/playbook';
 import { snapshotGateAtSuspend } from '../playbookGateService';
+import { createNotification } from '../notificationService';
 import { resolveRunStepConfig } from '../playbookStepBindings';
 
 const STEP_TYPE = 'approval-gate';
@@ -93,6 +94,7 @@ export async function executeApprovalGateStep(
   // out-of-range or disallowed override is refused there rather than quietly clamped here.
   const expiresAt = deadlineFromNow(resolveDeadlineMs(STEP_TYPE, config.deadlineMs));
 
+  let approverUserIds = [context.initiatorUserId];
   if (config.approverPool || config.gatedStepId) {
     if (!config.approverPool || !config.gatedStepId) {
       throw new Error('Production approval gates require both approverPool and gatedStepId.');
@@ -107,16 +109,46 @@ export async function executeApprovalGateStep(
       stepType: gatedNode.stepType,
       inputInline: await resolveRunStepConfig(context.runId, gatedNode.config ?? {}),
     });
-    await snapshotGateAtSuspend({
+    ({ approverUserIds } = await snapshotGateAtSuspend({
       project: context.project,
       stepRunId: context.stepRunId,
       config,
-    });
+    }));
   }
 
   await suspendStepRun({ stepRunId: context.stepRunId, expiresAt });
+  if (config.notifyApprovers) await notifyApprovers(context, config, approverUserIds);
 
   return { kind: 'suspended', expiresAt };
+}
+
+/** A failed notification is logged and does not stop the gate from waiting. */
+async function notifyApprovers(
+  context: PlaybookStepExecutionContext,
+  config: ApprovalGateStepConfig,
+  approverUserIds: readonly string[],
+): Promise<void> {
+  const node = context.graph?.nodes.find((candidate) => candidate.id === context.stepId);
+  const stepName = node?.title?.trim() || 'A Playbook approval';
+  const results = await Promise.allSettled(
+    approverUserIds.map((userId) =>
+      createNotification(
+        userId,
+        {
+          type: 'user-action',
+          title: `Approval needed: ${stepName}`,
+          body: config.subject?.trim() || 'A Playbook run is waiting for your decision.',
+          link: `/playbooks/runs/${context.runId}`,
+        },
+        { dedupeKey: `playbook-gate:${context.stepRunId}:${userId}` },
+      ),
+    ),
+  );
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.warn(`[playbook] approval notification failed for step run ${context.stepRunId}:`, result.reason);
+    }
+  }
 }
 
 /**

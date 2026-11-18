@@ -128,7 +128,7 @@ export const PlaybookLiveRunPage: React.FC<PlaybookLiveRunPageProps> = ({ projec
               {...{ 'data-testid': "playbook-live-run-watch" }}
             >
               <span className={styles.liveDot} aria-hidden />
-              {activeStep.status === 'suspended' ? 'Waiting on' : 'Running'} {stepMeta(activeStep.stepType).title}
+              {activeStep.status === 'suspended' ? 'Waiting on' : 'Running'} {activeStep.title ?? stepMeta(activeStep.stepType).title}
               {' · '}View log
             </button>
           ) : null}

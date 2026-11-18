@@ -69,4 +69,25 @@ describe('RepoServiceReader', () => {
       () => new RepoServiceReader({ identity, baseUrl: '' }),
     ).toThrow(RepoReaderError);
   });
+
+  it('bounds requests with a timeout signal so a stalled remote repo-read cannot hang a turn', async () => {
+    const fetchImpl = jest.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(init.signal?.reason ?? new Error('aborted'));
+        });
+      }),
+    );
+
+    const reader = new RepoServiceReader({
+      identity,
+      baseUrl: 'https://repo-read.test',
+      requestTimeoutMs: 25,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(reader.searchCode('needle')).rejects.toMatchObject({
+      code: 'LOCAL_READ_UNAVAILABLE',
+    });
+  });
 });

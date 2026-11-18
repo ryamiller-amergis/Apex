@@ -3,6 +3,8 @@
  * Consumed by the Interview Link Service, typed API, and FEAT-002 picker.
  */
 
+import type { BrainstormArtifactType } from './brainstormArtifact';
+
 /** Workspace-relative path for the live linked-context grounding document (FEAT-003). */
 export const LINKED_CONTEXT_DOCUMENT_RELATIVE_PATH = '.ai-pilot/linked-context.md' as const;
 
@@ -12,7 +14,7 @@ export const LINK_CANDIDATE_DEFAULT_PAGE_SIZE = 50 as const;
 
 export type AdrStaleReason = 'no_longer_accepted';
 
-export type LinkCandidateType = 'adr' | 'design-module';
+export type LinkCandidateType = 'adr' | 'design-module' | 'brainstorm';
 
 export interface LinkedAdr {
   adrId: string;
@@ -30,10 +32,20 @@ export interface LinkedDesignModule {
   linkedAt: string;
 }
 
+/** A Brainstorm session whose latest artifact grounds the Interview. */
+export interface LinkedBrainstorm {
+  brainstormSessionId: string;
+  title: string;
+  artifactType: BrainstormArtifactType | null;
+  linkedBy: string;
+  linkedAt: string;
+}
+
 export interface LinkedContextReadModel {
   interviewId: string;
   adrLinks: LinkedAdr[];
   designModuleLinks: LinkedDesignModule[];
+  brainstormLinks?: LinkedBrainstorm[];
   count: number;
   capacity: typeof LINKED_CONTEXT_CAPACITY;
 }
@@ -52,7 +64,13 @@ export interface DesignModuleLinkCandidate {
   name: string;
 }
 
-export type LinkCandidate = AdrLinkCandidate | DesignModuleLinkCandidate;
+export interface BrainstormLinkCandidate {
+  type: 'brainstorm';
+  id: string;
+  title: string;
+}
+
+export type LinkCandidate = AdrLinkCandidate | DesignModuleLinkCandidate | BrainstormLinkCandidate;
 
 export interface PaginatedCandidates<T = LinkCandidate> {
   items: T[];
@@ -69,8 +87,45 @@ export interface AddDesignModuleLinkRequest {
   designModuleId: string;
 }
 
+export interface AddBrainstormLinkRequest {
+  brainstormSessionId: string;
+}
+
 export interface LinkMutationResult {
   linkedContext: LinkedContextReadModel;
+}
+
+export const INTERVIEW_REFERENCE_REPOSITORIES_FLAG = 'interview-reference-repos' as const;
+
+export const REFERENCE_REPOSITORY_CAPACITY = 3 as const;
+
+/** A Brainstorm catalog repository mounted read-only on the Interview's Technical turns. */
+export interface LinkedReferenceRepository {
+  catalogRepositoryId: string;
+  displayName: string;
+  ready: boolean;
+  readinessText: string;
+  linkedBy: string;
+  linkedAt: string;
+}
+
+export interface ReferenceRepositoryCandidate {
+  catalogRepositoryId: string;
+  displayName: string;
+  ready: boolean;
+  readinessText: string;
+}
+
+export interface ReferenceRepositoriesReadModel {
+  interviewId: string;
+  links: LinkedReferenceRepository[];
+  /** Catalog repositories of the Interview's project that are not linked yet. */
+  candidates: ReferenceRepositoryCandidate[];
+  capacity: typeof REFERENCE_REPOSITORY_CAPACITY;
+}
+
+export interface AddReferenceRepositoryRequest {
+  catalogRepositoryId: string;
 }
 
 export type InterviewLinkErrorCode =
@@ -78,6 +133,7 @@ export type InterviewLinkErrorCode =
   | 'LINK_DUPLICATE'
   | 'ADR_NOT_ACCEPTED'
   | 'ARTIFACT_CROSS_PROJECT'
+  | 'REPOSITORY_NOT_READY'
   | 'INTERVIEW_NOT_IN_PROGRESS'
   | 'ARTIFACT_NOT_FOUND'
   | 'INTERVIEW_NOT_FOUND'

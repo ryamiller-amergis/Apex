@@ -13,7 +13,12 @@ const V2_SCORECARD_JSON_PATH = 'output/review-scorecard.json';
 const V2_SCORECARD_MD_PATH = 'output/review-scorecard.md';
 const V2_AGENT_REPLY_PATH = 'output/agent-reply.md';
 
-export type StepScorecardFiles = { scorecard: string | null; reportMd: string | null };
+export type StepScorecardFiles = {
+  scorecard: string | null;
+  reportMd: string | null;
+  /** The agent's last reply. Null when the run saved none. */
+  reply?: string | null;
+};
 
 /** Returns undefined when the agent run has no V2 attempt, i.e. it ran on the V1 path. */
 export async function readV2ScorecardFiles(
@@ -34,8 +39,10 @@ export async function readV2ScorecardFiles(
     manifest.files.some((file) => file.path === path)
       ? artifacts.readText(manifest, path)
       : null;
+  const reply = await read(V2_AGENT_REPLY_PATH);
   return {
     scorecard: await read(V2_SCORECARD_JSON_PATH),
-    reportMd: (await read(V2_SCORECARD_MD_PATH)) ?? (await read(V2_AGENT_REPLY_PATH)),
+    reportMd: (await read(V2_SCORECARD_MD_PATH)) ?? reply,
+    reply,
   };
 }

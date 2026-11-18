@@ -54,12 +54,26 @@ const SUPER_ADMIN_EMAILS_BY_ENV: Record<AppEnvironment, string[]> = {
   ],
 };
 
+const e2eSuperAdminEmails = new Set<string>();
+
+export function grantE2eSuperAdminEmail(email: string): void {
+  if (process.env.E2E_MODE !== 'true') return;
+  e2eSuperAdminEmails.add(email.trim().toLowerCase());
+}
+
+export function clearE2eSuperAdminEmails(): void {
+  e2eSuperAdminEmails.clear();
+}
+
 export function getSuperAdminEmails(env: AppEnvironment = getAppEnvironment()): string[] {
   return SUPER_ADMIN_EMAILS_BY_ENV[env];
 }
 
 export function isSuperAdminEmail(email: string, env: AppEnvironment = getAppEnvironment()): boolean {
   const lower = email.toLowerCase();
+  if (process.env.E2E_MODE === 'true' && e2eSuperAdminEmails.has(lower)) {
+    return true;
+  }
   return getSuperAdminEmails(env).some((e) => e.toLowerCase() === lower);
 }
 

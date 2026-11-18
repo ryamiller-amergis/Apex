@@ -68,6 +68,8 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
       'merge',
       'reset',
       'init',
+      'grep',
+      'ls-tree',
     ]);
     const commandName =
       args.find(
@@ -141,8 +143,18 @@ export function git(args: string[], options: GitOptions = {}): Promise<string> {
 
     child.stdout.on('data', (chunk: Buffer) => {
       resetIdleTimer();
+      if (totalBytes < maxBuffer) {
+        const remaining = maxBuffer - totalBytes;
+        stdout.push(chunk.length <= remaining ? chunk : chunk.subarray(0, remaining));
+      }
       totalBytes += chunk.length;
-      if (totalBytes <= maxBuffer) stdout.push(chunk);
+      if (commandName === 'grep' && totalBytes >= maxBuffer && !settled) {
+        settled = true;
+        killed = true;
+        clearTimers();
+        killProcessTree();
+        resolve(Buffer.concat(stdout).toString('utf-8'));
+      }
     });
 
     child.stderr.on('data', (chunk: Buffer) => {

@@ -17,10 +17,12 @@ import {
 } from '../LinkedContextPicker';
 import {
   useAddAdrLink,
+  useAddBrainstormLink,
   useAddDesignModuleLink,
   useLinkCandidates,
   useLinkedContext,
   useRemoveAdrLink,
+  useRemoveBrainstormLink,
   useRemoveDesignModuleLink,
 } from '../../hooks/useLinkedContext';
 
@@ -35,6 +37,8 @@ jest.mock('../../hooks/useLinkedContext', () => ({
   useAddDesignModuleLink: jest.fn(),
   useRemoveAdrLink: jest.fn(),
   useRemoveDesignModuleLink: jest.fn(),
+  useAddBrainstormLink: jest.fn(),
+  useRemoveBrainstormLink: jest.fn(),
 }));
 
 const mockUseLinkedContext = useLinkedContext as jest.MockedFunction<
@@ -74,11 +78,17 @@ const moduleCandidate: LinkCandidate = {
   name: 'Interview orchestration',
 };
 
+const brainstormCandidate: LinkCandidate = {
+  type: 'brainstorm',
+  id: 'brainstorm-2',
+  title: 'Queue design',
+};
+
 let linkedContext: LinkedContextReadModel;
 let setLinkedContext:
   | React.Dispatch<React.SetStateAction<LinkedContextReadModel>>
   | undefined;
-let candidatesByType: Record<'adr' | 'design-module', LinkCandidate[]>;
+let candidatesByType: Record<'adr' | 'design-module' | 'brainstorm', LinkCandidate[]>;
 let candidateTotal: number;
 let linksLoading: boolean;
 let linksError: Error | null;
@@ -91,6 +101,8 @@ const addAdr = jest.fn();
 const addDesignModule = jest.fn();
 const removeAdr = jest.fn();
 const removeDesignModule = jest.fn();
+const addBrainstorm = jest.fn();
+const removeBrainstorm = jest.fn();
 const refetchLinks = jest.fn();
 const refetchCandidates = jest.fn();
 
@@ -237,6 +249,36 @@ function installHookMocks(): void {
     mutateAsync: removeDesignModule,
     isPending: false,
   } as unknown as ReturnType<typeof useRemoveDesignModuleLink>);
+
+  addBrainstorm.mockImplementation(async ({ brainstormSessionId }: { brainstormSessionId: string }) => {
+    const candidate = candidatesByType.brainstorm.find((item) => item.id === brainstormSessionId);
+    const next = {
+      ...linkedContext,
+      brainstormLinks: [
+        ...(linkedContext.brainstormLinks ?? []),
+        {
+          brainstormSessionId,
+          title: candidate?.type === 'brainstorm' ? candidate.title : 'Restored brainstorm',
+          artifactType: null,
+          linkedBy: 'user-1',
+          linkedAt: LINKED_AT,
+        },
+      ],
+      count: linkedContext.count + 1,
+    };
+    publish(next);
+    return { linkedContext: next };
+  });
+  removeBrainstorm.mockImplementation(async (brainstormSessionId: string) => {
+    const brainstormLinks = (linkedContext.brainstormLinks ?? []).filter(
+      (link) => link.brainstormSessionId !== brainstormSessionId,
+    );
+    const next = { ...linkedContext, brainstormLinks, count: linkedContext.count - 1 };
+    publish(next);
+    return { linkedContext: next };
+  });
+  (useAddBrainstormLink as jest.Mock).mockReturnValue({ mutateAsync: addBrainstorm, isPending: false });
+  (useRemoveBrainstormLink as jest.Mock).mockReturnValue({ mutateAsync: removeBrainstorm, isPending: false });
 }
 
 function renderPersisted(
@@ -261,6 +303,7 @@ describe('TBI-003 LinkedContextPicker', () => {
     candidatesByType = {
       adr: [adrCandidate],
       'design-module': [moduleCandidate],
+      brainstorm: [brainstormCandidate],
     };
     candidateTotal = 1;
     linksLoading = false;
@@ -568,5 +611,67 @@ describe('TBI-003 LinkedContextPicker', () => {
       INTERVIEW_ID,
       expect.objectContaining({ offset: 50, limit: 50 }),
     );
+  });
+
+  describe('Brainstorm linked context', () => {
+    it('filters to brainstorm candidates and links one in persisted mode', async () => {
+      renderPersisted();
+
+      const filter = screen.getByTestId('linked-context-filter-brainstorm');
+      expect(filter).toHaveTextContent('Brainstorms');
+      fireEvent.click(filter);
+      expect(mockUseLinkCandidates).toHaveBeenLastCalledWith(
+        PROJECT,
+        INTERVIEW_ID,
+        expect.objectContaining({ type: 'brainstorm', offset: 0, limit: 50 }),
+      );
+
+      fireEvent.click(screen.getByTestId('linked-context-add-brainstorm-brainstorm-2'));
+      const row = await screen.findByTestId('linked-context-link-brainstorm-brainstorm-2');
+      expect(row).toHaveTextContent('Queue design');
+      expect(row).toHaveTextContent('Brainstorm');
+      expect(addBrainstorm).toHaveBeenCalledWith({ brainstormSessionId: 'brainstorm-2' });
+    });
+
+    it('lists and removes a persisted brainstorm link', async () => {
+      linkedContext = makeLinkedContext({
+        brainstormLinks: [
+          {
+            brainstormSessionId: 'brainstorm-1',
+            title: 'Linked brainstorm',
+            artifactType: 'technical_design',
+            linkedBy: 'user-1',
+            linkedAt: LINKED_AT,
+          },
+        ],
+        count: 2,
+      });
+      renderPersisted();
+
+      expect(screen.getByTestId('linked-context-link-brainstorm-brainstorm-1')).toHaveTextContent('Linked brainstorm');
+      fireEvent.click(screen.getByTestId('linked-context-remove-brainstorm-brainstorm-1'));
+      await waitFor(() =>
+        expect(screen.queryByTestId('linked-context-link-brainstorm-brainstorm-1')).not.toBeInTheDocument(),
+      );
+      expect(removeBrainstorm).toHaveBeenCalledWith('brainstorm-1');
+    });
+
+    it('stages a brainstorm with its title as the label', () => {
+      const onStagedSelectionsChange = jest.fn();
+      render(
+        <LinkedContextPicker
+          mode="staged"
+          project={PROJECT}
+          canManage
+          stagedSelections={[]}
+          onStagedSelectionsChange={onStagedSelectionsChange}
+        />,
+      );
+      fireEvent.click(screen.getByTestId('linked-context-filter-brainstorm'));
+      fireEvent.click(screen.getByTestId('linked-context-add-brainstorm-brainstorm-2'));
+      expect(onStagedSelectionsChange).toHaveBeenCalledWith([
+        { type: 'brainstorm', id: 'brainstorm-2', label: 'Queue design' },
+      ]);
+    });
   });
 });

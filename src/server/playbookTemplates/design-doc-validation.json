@@ -8,6 +8,7 @@
       {
         "id": "score",
         "stepType": "cursor-agent",
+        "title": "Score the design doc",
         "config": {
           "skillPath": ".cursor/skills/design-doc-validation/SKILL.md",
           "prompt": "Score the bound design doc with the design-doc validation skill. Write review-scorecard.json and review-scorecard.md to .ai-pilot/output/.",
@@ -19,6 +20,7 @@
       {
         "id": "ingest",
         "stepType": "ingest-artifact",
+        "title": "Save the scorecard",
         "config": {
           "documentType": "design_doc",
           "documentId": "${input.documentId}",
@@ -44,6 +46,7 @@
       {
         "id": "approve-ready",
         "stepType": "approval-gate",
+        "title": "Approve the ready design doc",
         "config": {
           "subject": "Review ready design-doc validation result",
           "approverPool": "design_doc",
@@ -53,6 +56,7 @@
       {
         "id": "notify-revision",
         "stepType": "notify",
+        "title": "Ask the owner to revise",
         "config": {
           "title": "Design doc needs revision",
           "body": "Validation did not reach the ready threshold. Review the scorecard and revise.",

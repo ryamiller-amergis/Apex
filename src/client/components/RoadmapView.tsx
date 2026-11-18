@@ -81,34 +81,6 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
         return next;
       });
 
-      // If this is an Epic, also fetch children for all Features to calculate their completion
-      if (item.workItemType === 'Epic') {
-        const features = children.filter(child => child.workItemType === 'Feature');
-        features.forEach(feature => {
-          if (!childrenCache.has(feature.id)) {
-            fetchChildren({
-              id: feature.id,
-              title: feature.title,
-              workItemType: feature.workItemType,
-              targetDate: feature.targetDate || '',
-              assignedTo: feature.assignedTo,
-              state: feature.state,
-              createdDate: feature.createdDate,
-              completionPercentage: 0,
-              childCount: 0,
-              completedCount: 0,
-              greenCount: 0,
-              amberCount: 0,
-              redCount: 0,
-              healthStatus: 'on-track',
-              daysRemaining: 0,
-              timeElapsedPercentage: 0,
-              children: []
-            } as RoadmapItem);
-          }
-        });
-      }
-
       return children;
     } catch (error) {
       console.error(`Error fetching children for ${item.workItemType} ${item.id}:`, error);
@@ -193,14 +165,49 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
     });
     
     setRoadmapItems(itemsWithCachedData);
-    
-    // Fetch children for Epics that don't have cached data
-    items.forEach(item => {
-      if (!updatedCache.has(item.id)) {
-        fetchChildren(item);
-      }
+
+    const missingIds = items.filter((item) => !updatedCache.has(item.id)).map((item) => item.id);
+    if (missingIds.length === 0) return;
+
+    setLoadingChildren((prev) => {
+      const next = new Set(prev);
+      for (const id of missingIds) next.add(id);
+      return next;
     });
-  }, [workItems, selectedStatuses]);
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch('/api/roadmap/epic-features', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project, areaPath, epicIds: missingIds }),
+        });
+        if (!response.ok || cancelled) return;
+        const data = (await response.json()) as Record<string, WorkItem[]>;
+        if (cancelled) return;
+        setChildrenCache((prev) => {
+          const next = new Map(prev);
+          for (const [id, children] of Object.entries(data)) {
+            next.set(Number(id), children);
+          }
+          return next;
+        });
+      } catch (error) {
+        console.error('Error fetching roadmap features:', error);
+      } finally {
+        setLoadingChildren((prev) => {
+          const next = new Set(prev);
+          for (const id of missingIds) next.delete(id);
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workItems, selectedStatuses, project, areaPath]);
 
   // Update roadmap items with completion data from children
   useEffect(() => {
@@ -333,6 +340,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
           <h2>Roadmap</h2>
           <div 
             className="info-icon"
+            data-testid="roadmap-info-icon"
             onClick={() => setShowInfoPanel(!showInfoPanel)}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -345,6 +353,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
           <div className="control-group">
             <label>Timeline:</label>
             <select 
+              data-testid="roadmap-granularity-select"
               value={granularity} 
               onChange={(e) => setGranularity(e.target.value as TimelineGranularity)}
             >
@@ -356,6 +365,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
           <div className="control-group">
             <label>Months Ahead:</label>
             <select 
+              data-testid="roadmap-months-ahead-select"
               value={timelineMonths} 
               onChange={(e) => setTimelineMonths(parseInt(e.target.value))}
             >
@@ -372,6 +382,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ workItems, project, areaPath,
                 <label key={status} className="status-checkbox-label">
                   <input
                     type="checkbox"
+                    data-testid={`roadmap-status-filter-${status.toLowerCase().replace(/\s+/g, '-')}`}
                     checked={selectedStatuses.has(status)}
                     onChange={(e) => {
                       const newStatuses = new Set(selectedStatuses);

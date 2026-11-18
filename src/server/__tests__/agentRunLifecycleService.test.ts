@@ -339,6 +339,26 @@ describe('enqueue + frozen snapshot (PBI-001 AC-0 / AC-3 / VT-01 / VT-04 / DoD-2
     expect(stored.cloudAgent?.customPrompt).toBe('Leave the tests green.');
   });
 
+  it('keeps the Playbook pull request author in the frozen snapshot', async () => {
+    await enqueue({
+      threadId: 'thread-1',
+      projectId: 'proj-1',
+      snapshot: {
+        ...snapshot,
+        cloudAgent: {
+          workItemId: 42,
+          baseBranch: 'development',
+          pullRequestAuthorId: 'author-oid',
+        },
+      },
+      timeoutAt: '2026-08-05T14:00:00.000Z',
+      runId: 'run-author-1',
+    });
+    const stored = (mockInsertValues.mock.calls[0][0] as { executionSnapshot: ExecutionSnapshot })
+      .executionSnapshot;
+    expect(stored.cloudAgent?.pullRequestAuthorId).toBe('author-oid');
+  });
+
   it('freezes branch name and guided delivery on the original run', async () => {
     await enqueue({
       threadId: 'thread-1',
