@@ -250,21 +250,17 @@ describe('sharedReadCheckoutService', () => {
     const holder = makeService(dataRoot).service;
     const otherHost = makeService(dataRoot).service;
     const tree = await holder.materialize(IDENTITY);
-    jest.useFakeTimers({ doNotFake: ['Date', 'nextTick', 'setImmediate', 'queueMicrotask'] });
+    jest.useFakeTimers({ doNotFake: ['Date'] });
     try {
       holder.retain(IDENTITY);
       const sidecar = `${tree.workspacePath}.lastused`;
       const old = Date.now() - SHARED_READ_IDLE_TTL_MS - 60_000;
-      // Let retain's own touch land first, then age the sidecar past the TTL.
-      await new Promise((resolve) => setImmediate(resolve));
-      await fsp.writeFile(sidecar, String(old), 'utf-8');
+      // Age the sidecar after retain's own touch, then let the heartbeat refresh it.
+      fs.writeFileSync(sidecar, String(old));
 
       jest.advanceTimersByTime(SHARED_READ_RETAIN_HEARTBEAT_MS);
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (Number(await fsp.readFile(sidecar, 'utf-8')) > old) break;
-        await new Promise((resolve) => setImmediate(resolve));
-      }
 
+      expect(Number(fs.readFileSync(sidecar, 'utf-8'))).toBeGreaterThan(old);
       const result = await otherHost.evictIdle();
       expect(result.evicted).toBe(0);
       expect(fs.existsSync(tree.workspacePath)).toBe(true);
