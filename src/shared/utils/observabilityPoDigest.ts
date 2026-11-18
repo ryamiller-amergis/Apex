@@ -1764,6 +1764,118 @@ export function computeSlotTimestamps(now = new Date()): {
   };
 }
 
+/** Turn a model value into text. A nested exception stat must not reach JSX as an object. */
+export function textForDisplay(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (Array.isArray(value)) {
+    return value.map((entry) => textForDisplay(entry)).filter(Boolean).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof record.count === 'number') parts.push(`${record.count} occurrences`);
+    if (typeof record.statusCode === 'number') parts.push(`HTTP ${record.statusCode}`);
+    if (typeof record.affectedUsers === 'number') parts.push(`${record.affectedUsers} users`);
+    if (
+      parts.length > 0
+      && Object.keys(record).every((key) => key === 'count' || key === 'statusCode' || key === 'affectedUsers')
+    ) {
+      return parts.join(', ');
+    }
+    const flat = Object.values(record)
+      .filter((entry) => typeof entry === 'string' || typeof entry === 'number')
+      .map((entry) => String(entry));
+    if (flat.length > 0) return flat.join(', ');
+  }
+  return '';
+}
+
+function displayString(value: unknown): string {
+  return typeof value === 'string' ? value : textForDisplay(value);
+}
+
+function displayMetric(value: unknown): string | number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') return value;
+  if (value == null) return undefined;
+  const text = textForDisplay(value);
+  return text || undefined;
+}
+
+/** Copy a digest so every field the page prints is a string or a number. */
+export function sanitizeObservabilityDigestForDisplay(
+  snapshot: ObservabilityPoDigestSnapshot,
+): ObservabilityPoDigestSnapshot {
+  const sections = (snapshot.customSections ?? snapshot.sections ?? []).map((section) => ({
+    ...section,
+    id: displayString(section.id),
+    title: displayString(section.title),
+    subtitle: section.subtitle == null ? section.subtitle : displayString(section.subtitle),
+    badge: section.badge == null ? section.badge : displayString(section.badge),
+    headline: section.headline == null ? section.headline : displayString(section.headline),
+    narrative: section.narrative == null ? section.narrative : displayString(section.narrative),
+    items: section.items?.map((item) => ({
+      ...item,
+      id: item.id == null ? item.id : displayString(item.id),
+      title: displayString(item.title),
+      subtitle: item.subtitle == null ? item.subtitle : displayString(item.subtitle),
+      detail: item.detail == null ? item.detail : displayString(item.detail),
+      meta: item.meta == null ? item.meta : displayString(item.meta),
+      badge: item.badge == null ? item.badge : displayString(item.badge),
+      metricLabel: item.metricLabel == null ? item.metricLabel : displayString(item.metricLabel),
+      metricValue: displayMetric(item.metricValue),
+      module: item.module == null ? item.module : displayString(item.module),
+    })),
+  }));
+
+  return {
+    ...snapshot,
+    headline: displayString(snapshot.headline),
+    commonExceptions: snapshot.commonExceptions.map((item) => ({
+      ...item,
+      signature: displayString(item.signature),
+      module: displayString(item.module),
+      routeTemplate: displayString(item.routeTemplate),
+    })),
+    moduleRetentionDrops: snapshot.moduleRetentionDrops.map((item) => ({
+      ...item,
+      module: displayString(item.module),
+      routeTemplate: displayString(item.routeTemplate),
+      primaryFriction: displayString(item.primaryFriction),
+    })),
+    dropReasonsSummary: {
+      ...snapshot.dropReasonsSummary,
+      headline: displayString(snapshot.dropReasonsSummary?.headline),
+      narrative: displayString(snapshot.dropReasonsSummary?.narrative),
+      findings: (snapshot.dropReasonsSummary?.findings ?? []).map((finding) => ({
+        ...finding,
+        id: displayString(finding.id),
+        module: displayString(finding.module),
+        title: displayString(finding.title),
+        detail: displayString(finding.detail),
+        evidence: displayString(finding.evidence),
+      })),
+    },
+    adoptionRecommendations: {
+      ...snapshot.adoptionRecommendations,
+      headline: displayString(snapshot.adoptionRecommendations?.headline),
+      narrative: displayString(snapshot.adoptionRecommendations?.narrative),
+      recommendations: (snapshot.adoptionRecommendations?.recommendations ?? []).map((play) => ({
+        ...play,
+        id: displayString(play.id),
+        module: displayString(play.module),
+        title: displayString(play.title),
+        action: displayString(play.action),
+        expectedLift: displayString(play.expectedLift),
+      })),
+    },
+    customSections: sections,
+    sections,
+  };
+}
+
 export function buildDigestSnapshotFromAggregates(options: {
   project: string;
   window: ObservabilityTrendWindow;
@@ -1825,7 +1937,7 @@ export function buildDigestSnapshotFromAggregates(options: {
 
   const defaultHeadline = `${slotBadge} (${windowLabel}): ${aggregated.kpis.activeUsers} active users across ${aggregated.topModules.length} core modules, led by ${aggregated.kpis.topModuleName} (${aggregated.kpis.topModuleSharePct}% share) — analyzed with ${model} (${effortLabel(effort)} effort).`;
 
-  return {
+  return sanitizeObservabilityDigestForDisplay({
     id: `po-digest-${project.toLowerCase()}-${window}-${slot}-${now.getTime()}`,
     project,
     window,
@@ -1836,7 +1948,10 @@ export function buildDigestSnapshotFromAggregates(options: {
     model,
     effort,
     generatedAt: now.toISOString(),
-    headline: options.aiSynthesis?.headline?.trim() || defaultHeadline,
+    headline:
+      (typeof options.aiSynthesis?.headline === 'string'
+        ? options.aiSynthesis.headline.trim()
+        : '') || defaultHeadline,
     kpis: aggregated.kpis,
     topUsers: aggregated.topUsers,
     commonExceptions: aggregated.commonExceptions,
@@ -1846,7 +1961,7 @@ export function buildDigestSnapshotFromAggregates(options: {
     adoptionRecommendations,
     customSections,
     sections: customSections,
-  };
+  });
 }
 
 export function synthesizePoDigestSnapshot(options: {

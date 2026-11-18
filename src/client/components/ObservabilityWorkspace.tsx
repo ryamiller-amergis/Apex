@@ -24,7 +24,10 @@ import {
   type ObservabilityWindowComparisonMap,
 } from '../../shared/types/observability';
 import { effortLabel } from '../../shared/utils/effort';
-import { buildFallbackPoDigestResponse } from '../../shared/utils/observabilityPoDigest';
+import {
+  buildFallbackPoDigestResponse,
+  sanitizeObservabilityDigestForDisplay,
+} from '../../shared/utils/observabilityPoDigest';
 import { DEFAULT_MODEL_ID, PLATFORM_MODEL_OPTIONS } from '../config/models';
 import { ApexLoader } from './ApexLoader';
 import { useAppShell } from '../hooks/useAppShell';
@@ -144,7 +147,10 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
   );
 
   const activePayload = digestQuery.data ?? (digestQuery.isError ? null : fallbackPayload);
-  const digest = activePayload?.digest ?? null;
+  const digest = useMemo(
+    () => (activePayload?.digest ? sanitizeObservabilityDigestForDisplay(activePayload.digest) : null),
+    [activePayload?.digest],
+  );
   const schedule: ObservabilityScheduleSummary =
     activePayload?.schedule ?? fallbackPayload.schedule;
   const history = activePayload?.history ?? fallbackPayload.history;

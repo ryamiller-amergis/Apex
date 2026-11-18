@@ -244,6 +244,59 @@ describe('ObservabilityWorkspace (Product Owner Digest)', () => {
     expect(card8).toHaveTextContent('1,420');
   });
 
+  it('renders exception stats as text when the model returns them as an object', () => {
+    const baseResponse = digestState();
+    const stats = { count: 4, statusCode: 502, affectedUsers: 2 };
+    const digest = {
+      ...baseResponse.digest,
+      moduleRetentionDrops: baseResponse.digest.moduleRetentionDrops.map((drop, index) =>
+        index === 0 ? { ...drop, primaryFriction: stats as unknown as string } : drop,
+      ),
+      dropReasonsSummary: {
+        ...baseResponse.digest.dropReasonsSummary,
+        findings: baseResponse.digest.dropReasonsSummary.findings.map((finding, index) =>
+          index === 0 ? { ...finding, detail: stats as unknown as string } : finding,
+        ),
+      },
+      customSections: [
+        {
+          id: 'exception-watch',
+          number: 7,
+          title: 'Exception watch',
+          displayType: 'insights' as const,
+          items: [
+            {
+              id: 'exc-object',
+              title: 'API failures',
+              detail: stats as unknown as string,
+              metricValue: stats as unknown as string,
+            },
+          ],
+        },
+      ],
+    };
+    mockUseObservabilityPoDigest.mockReturnValue({
+      data: { ...baseResponse, digest },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    expect(screen.getByTestId('observability-workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('observability-signal-retention-drops')).toHaveTextContent(
+      '4 occurrences, HTTP 502, 2 users',
+    );
+    expect(screen.getByTestId('observability-signal-drop-reasons')).toHaveTextContent(
+      '4 occurrences, HTTP 502, 2 users',
+    );
+    expect(screen.getByTestId('observability-signal-custom-exception-watch')).toHaveTextContent(
+      '4 occurrences, HTTP 502, 2 users',
+    );
+  });
+
   it('renders the suggestion tracker with stage, progress, and category filters', async () => {
     const user = userEvent.setup();
     const baseResponse = digestState();
