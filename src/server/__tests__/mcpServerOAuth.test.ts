@@ -8,8 +8,10 @@ import {
   discoverMcpOAuth,
   ensureFreshOAuthCredential,
   exchangeAuthorizationCode,
+  openIdConfigurationUrl,
   parseResourceMetadataUrl,
   refreshOAuthTokens,
+  resolveOAuthClient,
   safeAppOrigin,
   wellKnownResourceMetadataUrl,
 } from '../services/mcpServerOAuth';
@@ -164,5 +166,87 @@ describe('MCP OAuth', () => {
     expect(JSON.stringify(publicRemoteConfig(fresh))).not.toContain('new-access');
     expect(publicRemoteConfig(fresh).oauthConnected).toBe(true);
     await expect(refreshOAuthTokens({ ...oauth }, fetchImpl)).rejects.toThrow('Sign in with OAuth again.');
+  });
+
+  it('falls back to OpenID Connect discovery and URI scopes for Microsoft Entra ID / Azure DevOps MCP', async () => {
+    const issuer = 'https://login.microsoftonline.com/4ecc6f49-04fd-4b4a-9ee4-c4e679a141d7/v2.0';
+    expect(openIdConfigurationUrl(issuer)).toBe(
+      'https://login.microsoftonline.com/4ecc6f49-04fd-4b4a-9ee4-c4e679a141d7/v2.0/.well-known/openid-configuration',
+    );
+    const fetchImpl = jest.fn(async (url: string) => {
+      if (url === 'https://mcp.dev.azure.com/amergis') {
+        return jsonResponse(401, {}, {
+          'www-authenticate': 'Bearer resource_metadata="https://mcp.dev.azure.com/.well-known/oauth-protected-resource/amergis"',
+        });
+      }
+      if (url === 'https://mcp.dev.azure.com/.well-known/oauth-protected-resource/amergis') {
+        return jsonResponse(200, {
+          resource: 'https://mcp.dev.azure.com/amergis',
+          authorization_servers: [issuer],
+          scopes_supported: ['https://mcp.dev.azure.com/.default'],
+        });
+      }
+      if (url.includes('/.well-known/oauth-authorization-server')) {
+        return jsonResponse(404, {});
+      }
+      if (url === `${issuer}/.well-known/openid-configuration`) {
+        return jsonResponse(200, {
+          authorization_endpoint: 'https://login.microsoftonline.com/4ecc6f49-04fd-4b4a-9ee4-c4e679a141d7/oauth2/v2.0/authorize',
+          token_endpoint: 'https://login.microsoftonline.com/4ecc6f49-04fd-4b4a-9ee4-c4e679a141d7/oauth2/v2.0/token',
+          scopes_supported: ['openid', 'profile', 'email', 'offline_access'],
+          token_endpoint_auth_methods_supported: ['client_secret_post'],
+        });
+      }
+      return jsonResponse(404, {});
+    });
+
+    const discovered = await discoverMcpOAuth('https://mcp.dev.azure.com/amergis', fetchImpl);
+    expect(discovered.authorizationEndpoint).toBe(
+      'https://login.microsoftonline.com/4ecc6f49-04fd-4b4a-9ee4-c4e679a141d7/oauth2/v2.0/authorize',
+    );
+    expect(discovered.scopes).toEqual(['https://mcp.dev.azure.com/.default', 'offline_access']);
+
+    const client = await resolveOAuthClient(
+      discovered,
+      'http://localhost:3000/callback',
+      { clientId: 'entra-client-id', clientSecret: 'entra-secret' },
+      fetchImpl,
+    );
+    expect(client).toEqual({ clientId: 'entra-client-id', clientSecret: 'entra-secret' });
+
+    const authUrl = new URL(buildOAuthAuthorizationUrl({
+      authorizationEndpoint: discovered.authorizationEndpoint,
+      clientId: client.clientId,
+      redirectUri: 'http://localhost:3000/callback',
+      scopes: discovered.scopes,
+      resource: discovered.resource,
+      state: 'state-1',
+      codeChallenge: 'challenge-1',
+    }));
+    expect(authUrl.searchParams.get('scope')).toBe('https://mcp.dev.azure.com/.default offline_access');
+    expect(authUrl.searchParams.get('resource')).toBeNull();
+
+    const tokenFetch = jest.fn(async () => jsonResponse(200, {
+      access_token: 'entra-access-token',
+      refresh_token: 'entra-refresh-token',
+      expires_in: 3600,
+    }));
+    await exchangeAuthorizationCode(
+      {
+        resource: discovered.resource,
+        authorizationEndpoint: discovered.authorizationEndpoint,
+        tokenEndpoint: discovered.tokenEndpoint,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        redirectUri: 'http://localhost:3000/callback',
+        scopes: discovered.scopes,
+      },
+      'code-1',
+      'verifier-1',
+      tokenFetch,
+    );
+    const tokenBody = String((tokenFetch.mock.calls[0] as unknown as [string, RequestInit])[1].body);
+    expect(tokenBody).toContain('scope=https%3A%2F%2Fmcp.dev.azure.com%2F.default+offline_access');
+    expect(tokenBody).not.toContain('resource=');
   });
 });
