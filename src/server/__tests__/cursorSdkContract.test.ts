@@ -13,7 +13,7 @@ const fixturePath = path.join(
   repoRoot,
   'scripts',
   'cursor-sdk-contract',
-  'cursor-sdk-1.0.37.contract.json'
+  'cursor-sdk-1.4.0.contract.json'
 );
 
 function readJson(filePath: string): unknown {
@@ -21,7 +21,7 @@ function readJson(filePath: string): unknown {
 }
 
 describe('Cursor SDK installed contract (TBI-001)', () => {
-  it('DoD-0 — manifest and lock pin SDK 1.0.37 exactly', () => {
+  it('DoD-0 VT-01 — manifest and lock pin SDK 1.4.0 exactly', () => {
     const manifest = readJson(path.join(repoRoot, 'package.json')) as {
       dependencies: Record<string, string>;
     };
@@ -32,12 +32,23 @@ describe('Cursor SDK installed contract (TBI-001)', () => {
       >;
     };
 
-    expect(manifest.dependencies['@cursor/sdk']).toBe('1.0.37');
-    expect(lock.packages[''].dependencies?.['@cursor/sdk']).toBe('1.0.37');
-    expect(lock.packages['node_modules/@cursor/sdk'].version).toBe('1.0.37');
+    expect(manifest.dependencies['@cursor/sdk']).toBe('1.4.0');
+    expect(lock.packages[''].dependencies?.['@cursor/sdk']).toBe('1.4.0');
+    expect(lock.packages['node_modules/@cursor/sdk'].version).toBe('1.4.0');
   });
 
-  it('DoD-2 — generated Agent/LocalAgent/sandbox/settings snapshot matches fixture', () => {
+  it('DoD-0 — 1.4.0 drops CursorSDK and exports Agent and Cursor', async () => {
+    const sdk = (await import('@cursor/sdk')) as {
+      CursorSDK?: unknown;
+      Agent?: unknown;
+      Cursor?: unknown;
+    };
+    expect(sdk.CursorSDK).toBeUndefined();
+    expect(typeof sdk.Agent).toBe('function');
+    expect(typeof sdk.Cursor).toBe('function');
+  });
+
+  it('VT-02 — generated Agent/LocalAgent/sandbox/settings snapshot matches fixture', () => {
     const generated = spawnSync(process.execPath, [generatorPath, '--stdout'], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -56,7 +67,7 @@ describe('Cursor SDK installed contract (TBI-001)', () => {
     expect(snapshot).toEqual(readJson(fixturePath));
     expect(snapshot.package).toEqual({
       name: '@cursor/sdk',
-      version: '1.0.37',
+      version: '1.4.0',
     });
 
     for (const area of ['Agent', 'LocalAgent', 'sandbox', 'trustedSettings']) {

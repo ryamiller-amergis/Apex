@@ -179,6 +179,12 @@ export type InteractiveActorBootstrap = Readonly<{
     Record<string, Readonly<{ url: string; headers?: Readonly<Record<string, string>> }>>
   >;
   projectId: string;
+  /** Explicit Cursor execution fields resolved on App Service (optional only for legacy test fixtures). */
+  requestId?: string;
+  toolAllowlist?: readonly string[] | null;
+  disallowedTools?: readonly string[];
+  settingSources?: readonly string[];
+  sandbox?: Readonly<{ enabled: boolean; omitSandbox?: boolean }>;
 }>;
 
 export type AiRunBootstrapResult =
@@ -193,11 +199,52 @@ export type AiRunIngestResponse = Readonly<{
 export function isInteractiveActorBootstrap(
   value: unknown,
 ): value is InteractiveActorBootstrap {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    (value as InteractiveActorBootstrap).kind === 'interactive-actor-v2'
-  );
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'interactive-actor-v2') return false;
+  if (
+    candidate.requestId !== undefined
+    && (typeof candidate.requestId !== 'string' || candidate.requestId.trim().length === 0)
+  ) {
+    return false;
+  }
+  if (
+    candidate.toolAllowlist !== undefined
+    && candidate.toolAllowlist !== null
+    && !(
+      Array.isArray(candidate.toolAllowlist)
+      && candidate.toolAllowlist.every((entry) => typeof entry === 'string')
+    )
+  ) {
+    return false;
+  }
+  if (
+    candidate.disallowedTools !== undefined
+    && (
+      !Array.isArray(candidate.disallowedTools)
+      || !candidate.disallowedTools.every((entry) => typeof entry === 'string')
+    )
+  ) {
+    return false;
+  }
+  if (
+    candidate.settingSources !== undefined
+    && (
+      !Array.isArray(candidate.settingSources)
+      || !candidate.settingSources.every((entry) => typeof entry === 'string')
+    )
+  ) {
+    return false;
+  }
+  if (candidate.sandbox !== undefined) {
+    if (!candidate.sandbox || typeof candidate.sandbox !== 'object') return false;
+    const sandbox = candidate.sandbox as Record<string, unknown>;
+    if (typeof sandbox.enabled !== 'boolean') return false;
+    if (sandbox.omitSandbox !== undefined && typeof sandbox.omitSandbox !== 'boolean') {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function isAiRunIngestKind(value: unknown): value is AiRunIngestKind {

@@ -10,8 +10,18 @@ import type {
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 
 export type CursorAssistantBlock =
-  | { type: 'text'; text: string }
-  | { type: 'tool_use'; id?: string; name: string; input?: unknown };
+  | { type: 'text'; text: string; groupId?: string; group_id?: string }
+  | {
+      type: 'tool_use';
+      id?: string;
+      name: string;
+      input?: unknown;
+      groupId?: string;
+      group_id?: string;
+    };
+
+export const HEARTBEAT_SILENCE_MS = 1_500;
+export const HEARTBEAT_STATUS_DETAIL = 'Still working';
 
 export type CursorStreamEvent =
   | {
@@ -280,6 +290,83 @@ export interface CursorExecutionHooks {
     phase: AgentRunPhase;
   }): Promise<void> | void;
   onHeartbeat?(): Promise<void> | void;
+  onSummaryCompleted?(input: {
+    text: string;
+    fallback: boolean;
+  }): Promise<void> | void;
+}
+
+export interface StreamWithHeartbeatOptions {
+  silenceMs?: number;
+  schedule?: (callback: () => void, delayMs: number) => () => void;
+}
+
+/**
+ * Outermost stream wrapper for BR-011 / PBI-002.
+ * Keeps one pending `iterator.next()` and races it against a silence timer;
+ * yields `{ type: 'apex_heartbeat' }` every `silenceMs` until a real event
+ * arrives or the inner stream finishes, throws, or returns.
+ */
+export async function* streamWithHeartbeat(
+  stream: AsyncIterable<CursorStreamEvent>,
+  options: StreamWithHeartbeatOptions = {},
+): AsyncGenerator<CursorStreamEvent, void, void> {
+  const silenceMs = options.silenceMs ?? HEARTBEAT_SILENCE_MS;
+  if (!(silenceMs > 0)) {
+    for await (const item of stream) {
+      yield item;
+    }
+    return;
+  }
+  const schedule =
+    options.schedule
+    ?? ((callback: () => void, delayMs: number) => {
+      const timer = setTimeout(callback, delayMs);
+      return () => clearTimeout(timer);
+    });
+
+  const iterator = stream[Symbol.asyncIterator]();
+  let pendingNext: Promise<IteratorResult<CursorStreamEvent>> | null = null;
+  let cancelTimer: (() => void) | null = null;
+
+  const stopTimer = (): void => {
+    const cancel = cancelTimer;
+    cancelTimer = null;
+    if (cancel) cancel();
+  };
+
+  const armTimer = (): Promise<{ kind: 'heartbeat' }> =>
+    new Promise((resolve) => {
+      cancelTimer = schedule(() => {
+        cancelTimer = null;
+        resolve({ kind: 'heartbeat' });
+      }, silenceMs);
+    });
+
+  try {
+    pendingNext = iterator.next();
+    while (true) {
+      const timerPromise = armTimer();
+      const outcome = await Promise.race([
+        pendingNext.then((result) => ({ kind: 'item' as const, result })),
+        timerPromise,
+      ]);
+      stopTimer();
+      if (outcome.kind === 'heartbeat') {
+        yield { type: 'apex_heartbeat' };
+        continue;
+      }
+      if (outcome.result.done) {
+        pendingNext = null;
+        return;
+      }
+      yield outcome.result.value;
+      pendingNext = iterator.next();
+    }
+  } finally {
+    stopTimer();
+    void iterator.return?.().catch(() => {});
+  }
 }
 
 export class ThinkingPhaseCoalescer {
@@ -321,6 +408,7 @@ function inferRunEventType(event: SseEvent): AgentRunEventType {
 function inferRunEventPhase(event: SseEvent): AgentRunPhase {
   if (event.type === 'phase') return event.phase;
   if (event.type === 'health' || event.type === 'done') return 'completion';
+  if (event.type === 'summary') return 'analysis';
   if (event.type === 'tool_call' || event.type === 'tool_status') {
     const toolName = event.toolName.toLowerCase();
     if (/test|jest|vitest|playwright/.test(toolName)) return 'testing';
@@ -333,6 +421,11 @@ function inferRunEventPhase(event: SseEvent): AgentRunPhase {
 
 function inferRunEventStatus(event: SseEvent): AgentRunEventStatus {
   if (event.type === 'phase') return event.status;
+  if (event.type === 'summary') {
+    if (event.status === 'error') return 'failed';
+    if (event.status === 'completed' || event.status === 'fallback') return 'completed';
+    return 'running';
+  }
   if (event.type === 'health') {
     return event.health === 'worker_lost'
       || event.health === 'hard_timeout'
@@ -399,6 +492,8 @@ function inferRunEventDetail(event: SseEvent): string | undefined {
   } else if (event.type === 'error') detail = event.error;
   else if (event.type === 'retrying') {
     detail = `Retrying (${event.attempt}/${event.maxAttempts})`;
+  } else if (event.type === 'summary') {
+    detail = `Summary ${event.status}`;
   } else if (event.type === 'done') detail = 'Run completed';
   if (!detail) return undefined;
   if (event.type === 'error') return sanitizeCursorTerminalDetail(detail);
@@ -414,6 +509,7 @@ export function createCursorRunEventEnvelope(input: {
   timestamp?: string;
   event: SseEvent;
   phase?: AgentRunPhase;
+  ephemeral?: boolean;
 }): AgentRunEventEnvelope {
   return {
     eventId: input.eventId ?? uuidv4(),
@@ -426,6 +522,7 @@ export function createCursorRunEventEnvelope(input: {
     phase: input.phase ?? inferRunEventPhase(input.event),
     status: inferRunEventStatus(input.event),
     detail: inferRunEventDetail(input.event),
+    ...(input.ephemeral ? { ephemeral: true } : {}),
     event: input.event,
   };
 }
@@ -538,6 +635,8 @@ export interface ExecuteCursorExecutionCoreInput {
    * `wait()` pending forever.
    */
   failIfStreamEndsBeforeTurnEnd?: boolean;
+  /** Silence threshold in ms for synthetic Still working phase events (defaults to 1500 ms). */
+  heartbeatSilenceMs?: number;
 }
 
 export class CursorStreamClosedBeforeTurnEndError extends Error {
@@ -613,8 +712,13 @@ export async function executeCursorExecutionCore(
   let terminalStatusMessage: string | undefined;
   const identicalToolCallCounts = new Map<string, number>();
   let thinkingSeq = 0;
+  let currentPhase: AgentRunPhase = 'analysis';
 
-  const publish = async (event: SseEvent, phase?: AgentRunPhase): Promise<void> => {
+  const publish = async (
+    event: SseEvent,
+    phase?: AgentRunPhase,
+    ephemeral = false,
+  ): Promise<void> => {
     const envelope = createCursorRunEventEnvelope({
       eventId: createEventId(),
       threadId: snapshot.threadId,
@@ -624,6 +728,7 @@ export async function executeCursorExecutionCore(
       timestamp: now(),
       event,
       phase,
+      ephemeral,
     });
     await sink.publish(event, envelope);
   };
@@ -644,15 +749,31 @@ export async function executeCursorExecutionCore(
   };
 
   if (run.supports('stream')) {
-    const stream = input.turnEnd
+    const baseStream = input.turnEnd
       ? streamUntilTurnEnd(
           run.stream(),
           input.turnEnd,
           input.failIfStreamEndsBeforeTurnEnd ? waitAfterStreamEnd : undefined,
         )
       : run.stream();
+    const stream = streamWithHeartbeat(baseStream, {
+      silenceMs: input.heartbeatSilenceMs ?? HEARTBEAT_SILENCE_MS,
+    });
     for await (const event of stream) {
       await hooks.beforeStreamEvent?.();
+      if (event.type === 'apex_heartbeat') {
+        await publish(
+          {
+            type: 'phase',
+            phase: currentPhase,
+            status: 'running',
+            detail: HEARTBEAT_STATUS_DETAIL,
+          },
+          currentPhase,
+          true,
+        );
+        continue;
+      }
       if (!firstStreamEventSeen) {
         firstStreamEventSeen = true;
         await hooks.onFirstStreamEvent?.();
@@ -695,11 +816,32 @@ export async function executeCursorExecutionCore(
       } else if (event.type === 'assistant') {
         const assistantEvent = event as {
           type: 'assistant';
+          groupId?: unknown;
+          group_id?: unknown;
+          modelCallId?: unknown;
+          model_call_id?: unknown;
           message: { content: CursorAssistantBlock[] };
         };
+        const toolBlocks = assistantEvent.message.content.filter(
+          (b): b is Extract<CursorAssistantBlock, { type: 'tool_use' }> =>
+            b.type === 'tool_use',
+        );
+        const explicitAssistantGroupId =
+          typeof assistantEvent.groupId === 'string' && assistantEvent.groupId.trim()
+            ? assistantEvent.groupId.trim()
+            : typeof assistantEvent.group_id === 'string' && assistantEvent.group_id.trim()
+              ? assistantEvent.group_id.trim()
+              : typeof assistantEvent.modelCallId === 'string' && assistantEvent.modelCallId.trim()
+                ? assistantEvent.modelCallId.trim()
+                : typeof assistantEvent.model_call_id === 'string' && assistantEvent.model_call_id.trim()
+                  ? assistantEvent.model_call_id.trim()
+                  : toolBlocks.length > 1
+                    ? `tool-group:${nextSequence()}`
+                    : undefined;
         for (const block of assistantEvent.message.content) {
           if (block.type === 'text') {
             await flushThinkingPhase();
+            currentPhase = 'implementation';
             textBuffer += block.text;
             for (const textChunk of block.text.match(/[\s\S]{1,3000}/g) ?? []) {
               await publish({ type: 'token', text: textChunk });
@@ -734,6 +876,13 @@ export async function executeCursorExecutionCore(
               ? block.id
               : `tool_use:${block.name}:${anonymousToolUseCount++}`;
             const phase = inferCursorToolPhase(block.name, block.input);
+            currentPhase = phase;
+            const blockGroupId =
+              typeof block.groupId === 'string' && block.groupId.trim()
+                ? block.groupId.trim()
+                : typeof block.group_id === 'string' && block.group_id.trim()
+                  ? block.group_id.trim()
+                  : explicitAssistantGroupId;
             await hooks.onToolUse?.({
               key,
               name: block.name,
@@ -744,6 +893,7 @@ export async function executeCursorExecutionCore(
               type: 'tool_call',
               toolName: block.name,
               input: summarizeCursorToolInput(block.input),
+              ...(blockGroupId ? { groupId: blockGroupId } : {}),
             }, phase);
             await hooks.onToolUsePublished?.({
               key,
@@ -768,6 +918,7 @@ export async function executeCursorExecutionCore(
           break;
         }
       } else if (event.type === 'thinking') {
+        currentPhase = 'analysis';
         const thinkingEvent = event as {
           type: 'thinking';
           text?: string;
@@ -794,6 +945,10 @@ export async function executeCursorExecutionCore(
           type: 'tool_call';
           name?: string;
           call_id?: string;
+          group_id?: unknown;
+          groupId?: unknown;
+          modelCallId?: unknown;
+          model_call_id?: unknown;
           status?: string;
           args?: unknown;
           result?: unknown;
@@ -810,6 +965,17 @@ export async function executeCursorExecutionCore(
         const name = toolCallEvent.name ?? '';
         const key = toolCallEvent.call_id || toolCallEvent.name || 'unknown';
         const phase = inferCursorToolPhase(name, toolCallEvent.args);
+        currentPhase = phase;
+        const groupId =
+          typeof toolCallEvent.groupId === 'string' && toolCallEvent.groupId.trim()
+            ? toolCallEvent.groupId.trim()
+            : typeof toolCallEvent.group_id === 'string' && toolCallEvent.group_id.trim()
+              ? toolCallEvent.group_id.trim()
+              : typeof toolCallEvent.modelCallId === 'string' && toolCallEvent.modelCallId.trim()
+                ? toolCallEvent.modelCallId.trim()
+                : typeof toolCallEvent.model_call_id === 'string' && toolCallEvent.model_call_id.trim()
+                  ? toolCallEvent.model_call_id.trim()
+                  : undefined;
         await hooks.onToolStatus?.({
           key,
           callId: toolCallEvent.call_id,
@@ -826,7 +992,43 @@ export async function executeCursorExecutionCore(
           status,
           args: summarizeCursorToolInput(toolCallEvent.args),
           result: summarizeCursorToolResult(toolCallEvent.result),
+          ...(groupId ? { groupId } : {}),
         }, phase);
+        await hooks.onHeartbeat?.();
+      } else if (event.type === 'summary') {
+        const summaryEvent = event as {
+          type: 'summary';
+          status?: unknown;
+          fallback?: unknown;
+          summary?: unknown;
+          text?: unknown;
+        };
+        const fallback = summaryEvent.fallback === true;
+        const rawStatus = summaryEvent.status;
+        const normalizedStatus: 'running' | 'completed' | 'error' | 'fallback' =
+          rawStatus === 'error'
+            ? 'error'
+            : rawStatus === 'completed' || rawStatus === 'fallback'
+              ? fallback || rawStatus === 'fallback'
+                ? 'fallback'
+                : 'completed'
+              : 'running';
+        await publish({
+          type: 'summary',
+          status: normalizedStatus,
+        }, 'analysis');
+        if (normalizedStatus === 'completed' || normalizedStatus === 'fallback') {
+          const summaryText =
+            typeof summaryEvent.summary === 'string'
+              ? summaryEvent.summary
+              : typeof summaryEvent.text === 'string'
+                ? summaryEvent.text
+                : '';
+          await hooks.onSummaryCompleted?.({
+            text: summaryText,
+            fallback: normalizedStatus === 'fallback',
+          });
+        }
         await hooks.onHeartbeat?.();
       } else if (event.type === 'usage') {
         // Emitted once per turn at turn end. Summing turns gives the run total

@@ -15,6 +15,8 @@ import type {
 import { friendlyChatErrorMessage, friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { createChatTurnId } from '../utils/chatTurnId';
 import type { ThreadStreamTransport } from '../utils/threadEventStream';
+import type { ChatAreaId } from '../../shared/types/chatHarness';
+import { emitChatTiming } from '../services/chatTimingTelemetry';
 
 function mapSendErrorMessage(raw: string): string {
   return friendlyChatErrorMessage(raw);
@@ -88,6 +90,12 @@ export interface AgentChatSessionOptions {
 
   /** Force the live event transport. Omit to keep the shared auto choice. */
   streamTransport?: ThreadStreamTransport;
+
+  /** Optional canonical chat area id for baseline / harness timing telemetry. */
+  area?: ChatAreaId;
+
+  /** Optional project identifier for baseline / harness timing telemetry. */
+  projectId?: string | null;
 }
 
 export interface SendOptions {
@@ -203,6 +211,8 @@ export function useAgentChatSession(
     initialActiveRunId,
     createTurnId = createChatTurnId,
     streamTransport,
+    area,
+    projectId,
   } = options;
 
   // --- useChatStream (the SSE subscription) ---
@@ -242,6 +252,23 @@ export function useAgentChatSession(
   const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const sendRejectedRef = useRef(false);
+  const timingRef = useRef<{
+    sendStartedAt: number | null;
+    feedbackRecorded: boolean;
+    firstTokenRecorded: boolean;
+    lastActivityAt: number | null;
+    longestGapMs: number;
+    wasDisconnected: boolean;
+    disconnectedAt: number | null;
+  }>({
+    sendStartedAt: null,
+    feedbackRecorded: false,
+    firstTokenRecorded: false,
+    lastActivityAt: null,
+    longestGapMs: 0,
+    wasDisconnected: false,
+    disconnectedAt: null,
+  });
   const [optimisticUserMessage, setOptimisticUserMessage] =
     useState<ChatMessage | null>(null);
   /** Immediate Queued/Dispatched from the 202 acceptance before stream events. */
@@ -457,6 +484,90 @@ export function useAgentChatSession(
     if (status !== 'running') setIsStopConfirmed(false);
   }, [status]);
 
+  // --- Baseline / harness timing telemetry (TBI-004 / PBI-003 AC-3) ---
+  useEffect(() => {
+    const t = timingRef.current;
+    if (t.sendStartedAt === null) return;
+    const nowMs = Date.now();
+    const hasVisibleFeedback = Boolean(
+      optimisticUserMessage || progressLabel || streamingText || thinkingText,
+    );
+    if (!t.feedbackRecorded && hasVisibleFeedback) {
+      t.feedbackRecorded = true;
+      emitChatTiming('send_to_feedback', {
+        area,
+        projectId,
+        threadId,
+        durationMs: Math.max(0, nowMs - t.sendStartedAt),
+        status: 'ok',
+      });
+    }
+    if (!t.firstTokenRecorded && streamingText) {
+      t.firstTokenRecorded = true;
+      emitChatTiming('first_token', {
+        area,
+        projectId,
+        threadId,
+        durationMs: Math.max(0, nowMs - t.sendStartedAt),
+        status: 'ok',
+      });
+    }
+    if (lastProgressAt !== null || streamingText || thinkingText || progressLabel) {
+      if (t.lastActivityAt !== null) {
+        t.longestGapMs = Math.max(t.longestGapMs, nowMs - t.lastActivityAt);
+      }
+      t.lastActivityAt = nowMs;
+    }
+    if (!isRunning && !isSending && !isAwaitingAgentResponse && t.feedbackRecorded) {
+      emitChatTiming('longest_gap', {
+        area,
+        projectId,
+        threadId,
+        durationMs: t.longestGapMs,
+        status: status === 'error' ? 'error' : 'ok',
+      });
+      t.sendStartedAt = null;
+    }
+  }, [
+    area,
+    projectId,
+    threadId,
+    optimisticUserMessage,
+    progressLabel,
+    streamingText,
+    thinkingText,
+    lastProgressAt,
+    isRunning,
+    isSending,
+    isAwaitingAgentResponse,
+    status,
+  ]);
+
+  useEffect(() => {
+    const t = timingRef.current;
+    if (!threadId) return;
+    if (hasConnectionError || !isConnected) {
+      if (!t.wasDisconnected) {
+        t.wasDisconnected = true;
+        t.disconnectedAt = Date.now();
+      }
+      return;
+    }
+    if (t.wasDisconnected && isConnected) {
+      const durationMs =
+        t.disconnectedAt !== null ? Math.max(0, Date.now() - t.disconnectedAt) : 0;
+      t.wasDisconnected = false;
+      t.disconnectedAt = null;
+      emitChatTiming('reconnect_restored', {
+        area,
+        projectId,
+        threadId,
+        durationMs,
+        status: 'ok',
+      });
+    }
+  }, [area, projectId, threadId, isConnected, hasConnectionError]);
+
   // --- Send ---
   const send = useCallback(
     async (text: string, opts: SendOptions = {}): Promise<boolean> => {
@@ -483,6 +594,14 @@ export function useAgentChatSession(
       setSendError(null);
       setIsStopConfirmed(false);
       setIsSending(true);
+      timingRef.current = {
+        ...timingRef.current,
+        sendStartedAt: Date.now(),
+        feedbackRecorded: false,
+        firstTokenRecorded: false,
+        lastActivityAt: Date.now(),
+        longestGapMs: 0,
+      };
       const turnId = createTurnId();
       optimisticBaselineIdsRef.current = new Set(
         messages.map((message) => message.id)
@@ -712,6 +831,7 @@ export function useAgentChatSession(
   // --- Cancel ---
   const cancel = useCallback(async () => {
     if (!threadId || isCancelling) return;
+    const stopStartedAt = Date.now();
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
     setSendError(null);
     setIsCancelling(true);
@@ -732,12 +852,26 @@ export function useAgentChatSession(
         }
         setSendError(message);
         setIsCancelling(false);
+        emitChatTiming('stop', {
+          area,
+          projectId,
+          threadId,
+          durationMs: Math.max(0, Date.now() - stopStartedAt),
+          status: 'error',
+        });
       } else {
         // The endpoint returns only after the server has persisted the idle
         // thread state. Do not leave the composer blocked on a delayed stream.
         clearAwaitingAgentResponse();
         setIsStopConfirmed(true);
         setIsCancelling(false);
+        emitChatTiming('stop', {
+          area,
+          projectId,
+          threadId,
+          durationMs: Math.max(0, Date.now() - stopStartedAt),
+          status: 'ok',
+        });
       }
     } catch (error) {
       setSendError(
@@ -746,8 +880,15 @@ export function useAgentChatSession(
           : 'Failed to stop the agent. Please try again.'
       );
       setIsCancelling(false);
+      emitChatTiming('stop', {
+        area,
+        projectId,
+        threadId,
+        durationMs: Math.max(0, Date.now() - stopStartedAt),
+        status: 'error',
+      });
     }
-  }, [threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse, clearRetryableRunId]);
+  }, [area, projectId, threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse, clearRetryableRunId]);
 
   // --- Clear send error ---
   const clearSendError = useCallback(() => setSendError(null), []);

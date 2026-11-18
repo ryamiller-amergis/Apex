@@ -63,6 +63,8 @@ import type { RecordUsageInput } from '../../shared/types/aiCostAnalytics';
 import type { InteractiveTerminalInput } from './brainstormTurnLedger';
 import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
 import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
+import { deriveInteractiveCursorExecutionFields } from './cursorExecutionSpecification';
+import { resolveChatAreaId } from '../../shared/types/chatHarness';
 import {
   createBlobInteractiveArtifactReader,
   interactiveTranscript,
@@ -156,6 +158,7 @@ function trackInteractiveTurnStages(
   const specification =
     snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot : null;
   const agentMode = timings.agentMode;
+  const area = resolveChatAreaId(specification?.workflowClass ?? null);
   trackEvent(
     'InteractiveTurnStages',
     {
@@ -165,6 +168,7 @@ function trackInteractiveTurnStages(
           ? agentMode
           : 'unknown',
       workflowClass: specification?.workflowClass ?? 'unknown',
+      ...(area ? { area } : {}),
       interviewPhase: specification?.guidedInterview?.phase ?? 'none',
       grounded: specification?.grounding ? 'true' : 'false',
     },
@@ -686,6 +690,18 @@ async function getInteractiveActorBootstrap(
   const { getCursorAgentId } = await import('./chatThreadRepository');
   const cursorAgentId = (await getCursorAgentId(existing.threadId)) ?? null;
 
+  const mcpServers = buildInteractiveProxyMcpServers({
+    runId: existing.id,
+    attemptId: attempt.id,
+    dispatchMessageId,
+    absoluteDeadlineAt,
+    specification: attempt.specSnapshot,
+  });
+  const explicitExecution = deriveInteractiveCursorExecutionFields({
+    mcpServerNames: Object.keys(mcpServers),
+    interviewPhase: attempt.specSnapshot.guidedInterview?.phase ?? null,
+  });
+
   return {
     kind: 'interactive-actor-v2',
     specification: attempt.specSnapshot,
@@ -697,14 +713,10 @@ async function getInteractiveActorBootstrap(
     absoluteDeadlineAt,
     effectiveDeadlines,
     cursorAgentId,
-    mcpServers: buildInteractiveProxyMcpServers({
-      runId: existing.id,
-      attemptId: attempt.id,
-      dispatchMessageId,
-      absoluteDeadlineAt,
-      specification: attempt.specSnapshot,
-    }),
+    mcpServers,
     projectId: existing.projectId,
+    requestId: existing.id,
+    ...explicitExecution,
   };
 }
 
@@ -1217,6 +1229,39 @@ async function terminalizeDaprActorV2(input: {
       console.error(
         '[aiRunIngest] interactive terminal effect failed:',
         err instanceof Error ? err.message : 'Unexpected error',
+      );
+    });
+  } else if (
+    existing.lane === INTERACTIVE_LANE
+    && snapshot
+    && isDurableInteractiveSnapshot(snapshot)
+    && (body.inputTokens !== undefined || body.outputTokens !== undefined)
+  ) {
+    const usageStatus =
+      status === 'completed'
+        ? 'success'
+        : status === 'cancelled'
+          ? 'cancelled'
+          : 'error';
+    await (dependencies.recordCursorChatUsage ?? recordCursorChatUsage)({
+      kickoff: {
+        project: snapshot.projectId,
+        ...(snapshot.skill?.path ? { skillPath: snapshot.skill.path } : {}),
+      },
+      modelId: snapshot.model,
+      threadId: existing.threadId,
+      runId,
+      inputTokens: body.inputTokens ?? 0,
+      outputTokens: body.outputTokens ?? 0,
+      cacheReadTokens: body.cacheReadTokens,
+      cacheWriteTokens: body.cacheWriteTokens,
+      tokenSource: 'exact',
+      durationMs: body.durationMs ?? 0,
+      status: usageStatus,
+    }).catch((err: unknown) => {
+      console.error(
+        `[aiRunIngest] Failed to record interactive usage (runId=${runId})`,
+        err,
       );
     });
   }

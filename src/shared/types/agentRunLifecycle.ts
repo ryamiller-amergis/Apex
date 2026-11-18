@@ -152,6 +152,16 @@ export interface ExecutionSnapshot {
   threadId: string;
   /** Present on new Playbook agent runs; legacy queued snapshots may omit it. */
   playbookAgentPolicy?: PlaybookAgentRunPolicy;
+  /** Forwarded on every SDK send (`idempotencyKey` in 1.4.0); resolved by App Service. */
+  requestId?: string;
+  /** Explicit built-in tool allowlist (`null` keeps the standard toolset). */
+  toolAllowlist?: readonly string[] | null;
+  /** Explicit built-in tool disallow list. */
+  disallowedTools?: readonly string[];
+  /** Explicit Cursor setting sources (for example `[]` or `['project']`). */
+  settingSources?: readonly string[];
+  /** Explicit sandbox decision (`omitSandbox` preserves legacy non-interview interactive behavior). */
+  sandbox?: Readonly<{ enabled: boolean; omitSandbox?: boolean }>;
 }
 
 export type AgentRunExecutionSnapshot =
@@ -192,4 +202,52 @@ export function isAgentRunTerminalStatus(status: string): status is Extract<
 
 export function isAgentRunTerminalReason(value: string): value is AgentRunTerminalReason {
   return AGENT_RUN_TERMINAL_REASONS.has(value as AgentRunTerminalReason);
+}
+
+/**
+ * Type guard verifying that an execution specification carries explicit
+ * App Service-resolved Cursor execution fields (`v2-worker-no-policy` rule 5).
+ */
+export function hasExplicitCursorExecutionFields(
+  value: unknown,
+): value is {
+  requestId: string;
+  toolAllowlist: readonly string[] | null;
+  disallowedTools: readonly string[];
+  settingSources: readonly string[];
+  sandbox: Readonly<{ enabled: boolean; omitSandbox?: boolean }>;
+} {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.requestId !== 'string' || candidate.requestId.trim().length === 0) {
+    return false;
+  }
+  if (
+    candidate.toolAllowlist !== null
+    && !(
+      Array.isArray(candidate.toolAllowlist)
+      && candidate.toolAllowlist.every((entry) => typeof entry === 'string')
+    )
+  ) {
+    return false;
+  }
+  if (
+    !Array.isArray(candidate.disallowedTools)
+    || !candidate.disallowedTools.every((entry) => typeof entry === 'string')
+  ) {
+    return false;
+  }
+  if (
+    !Array.isArray(candidate.settingSources)
+    || !candidate.settingSources.every((entry) => typeof entry === 'string')
+  ) {
+    return false;
+  }
+  if (!candidate.sandbox || typeof candidate.sandbox !== 'object') return false;
+  const sandbox = candidate.sandbox as Record<string, unknown>;
+  if (typeof sandbox.enabled !== 'boolean') return false;
+  if (sandbox.omitSandbox !== undefined && typeof sandbox.omitSandbox !== 'boolean') {
+    return false;
+  }
+  return true;
 }

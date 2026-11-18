@@ -199,6 +199,7 @@ export type SseEventType =
   | 'tool_status' // tool execution progress (running/completed/error)
   | 'status' // thread status changed
   | 'grounding' // repository checkout preparation progress
+  | 'summary' // SDK 1.4.0 conversation summarization status
   | 'error' // run-level error
   | 'retrying' // server is transparently retrying a transient failure
   | 'done'; // turn completed
@@ -223,6 +224,8 @@ export interface SseToolCallEvent {
   type: 'tool_call';
   toolName: string;
   input: unknown;
+  /** Optional group identifier when one model step issues multiple tool requests. */
+  groupId?: string;
 }
 
 export interface SseStatusEvent {
@@ -344,6 +347,15 @@ export interface SseToolStatusEvent {
   status: 'running' | 'completed' | 'error';
   args?: unknown;
   result?: string;
+  /** Optional group identifier when one model step issues multiple tool requests. */
+  groupId?: string;
+}
+
+export type SseSummaryStatus = 'running' | 'completed' | 'error' | 'fallback';
+
+export interface SseSummaryEvent {
+  type: 'summary';
+  status: SseSummaryStatus;
 }
 
 export interface SseDurableEventMetadata {
@@ -364,6 +376,7 @@ type SseEventPayload =
   | SseToolStatusEvent
   | SseStatusEvent
   | SseGroundingEvent
+  | SseSummaryEvent
   | SseErrorEvent
   | SseRetryingEvent
   | SseDoneEvent;
@@ -380,6 +393,7 @@ export type AgentRunEventType =
   | 'tool'
   | 'status'
   | 'grounding'
+  | 'summary'
   | 'retrying'
   | 'error'
   | 'done'
@@ -405,6 +419,8 @@ export interface AgentRunEventEnvelope {
   status: AgentRunEventStatus;
   /** Sanitized, user-safe diagnostic. Never raw model thinking or secret values. */
   detail?: string;
+  /** True when the event is live-only (e.g. Still working heartbeat) and must not be persisted for replay. */
+  ephemeral?: boolean;
   event: SseEvent | AgentRunCancelEvent;
 }
 

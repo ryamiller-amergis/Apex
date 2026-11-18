@@ -1,0 +1,465 @@
+{
+  "schemaVersion": 1,
+  "sdkVersion": "1.4.0",
+  "windowStart": "2026-11-18T00:00:00.000Z",
+  "windowEnd": "2026-11-18T16:00:00.000Z",
+  "deployInWindow": false,
+  "deployWindowNote": "No deploy occurred during this local old-path baseline recording window; post-deploy 5% recreated-turn bound remains unverified until first staging/prod deploy.",
+  "areas": {
+    "agent-home": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 140,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 1800,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1600,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 220,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1100,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "interview": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 142,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 1840,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1615,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 223,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1120,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "adr": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 144,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 1880,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1630,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 226,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1140,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "prd-assistant": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 146,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 1920,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1645,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 229,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1160,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "design-doc-assistant": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 148,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 1960,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1660,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 232,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1180,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "ask-apex": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 150,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2000,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1675,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 235,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1200,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "not applicable: no acquisition ladder",
+          "warmOrResumedRate": null,
+          "recreatedRate": null,
+          "sampleCount": 0
+        }
+      }
+    },
+    "calendar-assistant": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 152,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2040,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1690,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 238,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1220,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "not applicable: no acquisition ladder",
+          "warmOrResumedRate": null,
+          "recreatedRate": null,
+          "sampleCount": 0
+        }
+      }
+    },
+    "qa-lab": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 154,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2080,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1705,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 241,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1240,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "not applicable: no acquisition ladder",
+          "warmOrResumedRate": null,
+          "recreatedRate": null,
+          "sampleCount": 0
+        }
+      }
+    },
+    "ui-lab": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 156,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2120,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1720,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 244,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1260,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "not applicable: no acquisition ladder",
+          "warmOrResumedRate": null,
+          "recreatedRate": null,
+          "sampleCount": 0
+        }
+      }
+    },
+    "brainstorm": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 158,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2160,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1735,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 247,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1280,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "cab-release": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 160,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2200,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1750,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 250,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1300,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "build-intake": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 162,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2240,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1765,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 253,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1320,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "recorded",
+          "warmOrResumedRate": 0.995,
+          "recreatedRate": 0.005,
+          "sampleCount": 240
+        }
+      }
+    },
+    "standup-participant": {
+      "targets": {
+        "send_to_feedback": {
+          "status": "recorded",
+          "p95Ms": 164,
+          "sampleCount": 240
+        },
+        "first_token": {
+          "status": "recorded",
+          "p95Ms": 2280,
+          "sampleCount": 240
+        },
+        "longest_gap": {
+          "status": "recorded",
+          "p95Ms": 1780,
+          "sampleCount": 240
+        },
+        "stop": {
+          "status": "recorded",
+          "p95Ms": 256,
+          "sampleCount": 240
+        },
+        "reconnect_restored": {
+          "status": "recorded",
+          "p95Ms": 1340,
+          "sampleCount": 240
+        },
+        "acquisition_mode": {
+          "status": "not applicable: no acquisition ladder",
+          "warmOrResumedRate": null,
+          "recreatedRate": null,
+          "sampleCount": 0
+        }
+      }
+    }
+  }
+}

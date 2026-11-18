@@ -1,4 +1,4 @@
-import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
+import type { SDKCustomTool, SDKJsonValue } from './cursorSdkAdapter/types';
 import type { RepoReader } from '../../shared/types/repoReader';
 
 const pathInputSchema: Record<string, SDKJsonValue> = {

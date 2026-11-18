@@ -1,44 +1,23 @@
 /**
- * FEAT-007 / TBI-011 — resume-capable Cursor execution for the interactive
- * actor host.
+ * FEAT-001 / TBI-002 — Interactive actor host caller over `cursorSdkAdapter`.
  *
- * Agent acquisition/resume is separated from `agent.send` so the session actor
- * can keep one live Agent object per thread across serialized turns (warm
- * cache). On cold start we `Agent.create`; after process restart we
- * `Agent.resume` by the previously persisted agent id. The grounded checkout
- * is opened by the caller and reused; this module owns only the Agent handle.
- *
- * Model, effort, workspace, native tools, and MCP servers are supplied by the
- * caller from the frozen bootstrap. This module does not resolve model, effort,
- * deadline, skill, or MCP policy locally.
+ * Imports zero symbols from `@cursor/sdk` directly; all SDK creation, resume,
+ * and execution go through `src/server/services/cursorSdkAdapter/`.
  */
-import { Agent, type ToolName } from '@cursor/sdk';
-import type {
-  LocalAgentOptions,
-  McpServerConfig,
-} from '@cursor/sdk/dist/cjs/options.js';
 import type { EffortLevel } from '../../../shared/types/effort';
 import type { InterviewRepositoryPhase } from '../../../shared/types/interview';
 import type { RepoReader } from '../../../shared/types/repoReader';
-import type {
-  WorkerCursorExecution,
-  WorkerCursorExecutionRun,
-} from '../aiRunsWorker/cursorExecution';
+import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
 import { guidedInterviewRepositoryTools } from '../interviewGroundingPolicy';
 import { buildCursorModelSelection } from '../agentEffortResolver';
+import {
+  createCursorSdkAdapter,
+  deriveInteractiveCursorExecutionFields,
+  type AdapterSandboxSpecification,
+  type McpServerConfig,
+} from '../cursorSdkAdapter';
 
-/**
- * The remote agent is gone — reaped after an idle gap, or not visible under the
- * resolved `cwd`. Matched structurally rather than with `instanceof` because the
- * error crosses the actor-host transport boundary, where the class identity is
- * lost but the stable `agent_not_found` code survives.
- */
-function isAgentNotFound(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const { code, name } = error as { code?: unknown; name?: unknown };
-  return code === 'agent_not_found' || name === 'AgentNotFoundError';
-}
 /** Live Cursor Agent handle that can serve multiple serialized `send` calls. */
 export interface InteractiveCursorAgentHandle {
   agentId: string | null;
@@ -50,6 +29,10 @@ export interface InteractiveCursorAgentHandle {
     prompt: string,
     options?: InteractiveSendOptions,
   ): Promise<WorkerCursorExecutionRun>;
+  steer?(text: string): Promise<unknown>;
+  summarize?(): Promise<unknown>;
+  cancel?(): Promise<void>;
+  readUsage?(): Promise<unknown>;
   dispose(): Promise<void>;
 }
 
@@ -57,12 +40,10 @@ export type InteractiveSendOptions = {
   onDelta?(update: unknown): Promise<void> | void;
   /** Tool proxy URLs carry a per-attempt token, so a reused agent needs this turn's set. */
   mcpServers?: Readonly<Record<string, McpServerConfig>>;
+  /** Per-turn request id so warm cached handles forward the current run's id on every send. */
+  requestId?: string;
 };
 
-/**
- * Acquisition outcome. The session actor owns `warm` for a compatible cache
- * hit; this module returns only `resumed` / `recreated`.
- */
 export type InteractiveAgentAcquisition =
   | Readonly<{ mode: 'warm'; handle: InteractiveCursorAgentHandle }>
   | Readonly<{ mode: 'resumed'; handle: InteractiveCursorAgentHandle }>
@@ -74,138 +55,99 @@ export type InteractiveCursorAcquireInput = Readonly<{
   workspaceRef: string;
   /** Null outside guided interviews; selects the phase's repository tools. */
   interviewPhase: InterviewRepositoryPhase | null;
+  sessionKey?: string;
+  compatibilityKey?: string;
+  requestId?: string;
+  toolAllowlist?: readonly string[] | null;
+  disallowedTools?: readonly string[];
+  settingSources?: readonly string[];
+  sandbox?: AdapterSandboxSpecification;
 }>;
 
 export type InteractiveCursorAcquireOptions = Readonly<{
   resumeAgentId?: string | null;
   mcpServers: Readonly<Record<string, McpServerConfig>>;
+  signal?: AbortSignal;
+  onProgress?: (label: string) => void;
 }>;
-
-function wrapHandle(
-  agent:
-    | Awaited<ReturnType<typeof Agent.create>>
-    | Awaited<ReturnType<typeof Agent.resume>>,
-  input: InteractiveCursorAcquireInput,
-  fallbackAgentId: string | null,
-): InteractiveCursorAgentHandle {
-  const agentId =
-    (agent as unknown as { id?: string | null }).id ?? fallbackAgentId ?? null;
-
-  let disposed = false;
-  return {
-    agentId,
-    model: input.model,
-    workspaceRef: input.workspaceRef,
-    interviewPhase: input.interviewPhase,
-    async send(
-      prompt: string,
-      options?: InteractiveSendOptions,
-    ): Promise<WorkerCursorExecutionRun> {
-      if (disposed) throw new Error('Interactive Cursor agent is disposed');
-      const onDelta = options?.onDelta;
-      const mcpServers = options?.mcpServers;
-      const run = onDelta || mcpServers
-        ? await agent.send(prompt, {
-            ...(onDelta ? { onDelta: ({ update }) => onDelta(update) } : {}),
-            ...(mcpServers ? { mcpServers: { ...mcpServers } } : {}),
-          })
-        : await agent.send(prompt);
-      return run as unknown as WorkerCursorExecutionRun;
-    },
-    async dispose(): Promise<void> {
-      if (disposed) return;
-      disposed = true;
-      await agent[Symbol.asyncDispose]().catch(() => {});
-    },
-  };
-}
 
 export async function acquireInteractiveCursorAgent(
   input: InteractiveCursorAcquireInput,
   checkout: RepoReader,
   options: InteractiveCursorAcquireOptions,
 ): Promise<InteractiveAgentAcquisition> {
-  const apiKey = process.env.CURSOR_API_KEY?.trim();
-  if (!apiKey) throw new Error('CURSOR_API_KEY is required');
+  // Stateless single-turn adapter instance (cacheMax: 0) when called directly;
+  // the session actor holds its own warm cache lifecycle.
+  const adapter = createCursorSdkAdapter({ cacheMax: 0 });
+  const mcpServerNames = Object.keys(options.mcpServers);
+  const derived = deriveInteractiveCursorExecutionFields({
+    mcpServerNames,
+    interviewPhase: input.interviewPhase,
+  });
+  const toolAllowlist =
+    input.toolAllowlist !== undefined ? input.toolAllowlist : derived.toolAllowlist;
+  const disallowedTools =
+    input.disallowedTools !== undefined ? input.disallowedTools : derived.disallowedTools;
+  const settingSources =
+    input.settingSources !== undefined ? input.settingSources : derived.settingSources;
+  const sandbox = input.sandbox ?? derived.sandbox;
 
-  const resumeAgentId = options.resumeAgentId?.trim() || undefined;
   const mcpOnly =
-    Object.keys(options.mcpServers).length === 1
-    && Object.prototype.hasOwnProperty.call(options.mcpServers, 'mcp-server');
-  // The workspace can be a real checkout whose committed `.cursor` config
-  // (hooks, MCP servers) must not run inside a chat turn.
-  const local = {
-    cwd: input.workspaceRef,
-    settingSources: [],
-    ...(mcpOnly
-      ? {}
-      : input.interviewPhase
-      ? {
-          customTools: guidedInterviewRepositoryTools(input.interviewPhase, checkout),
-          sandboxOptions: { enabled: false },
-        }
-      : { customTools: createNativeReadTools(checkout) }),
-  } satisfies LocalAgentOptions;
-  // Disallow subagents (`task`) only when repository tools are closed
-  // (product-phase guided interviews or MCP-only connection chats) so a
-  // subagent's default toolset cannot bypass the parent's tool boundary.
-  const disallowSubagents = mcpOnly || input.interviewPhase === 'product';
-  const agentOptions = {
-    apiKey,
-    model: buildCursorModelSelection(input.model, input.effort ?? undefined),
-    local,
-    mcpServers: { ...options.mcpServers },
-    ...(disallowSubagents ? { disallowedTools: ['task' as ToolName] } : {}),
-    // A connection chat gets the connected MCP only: no shell, files, web, or tasks.
-    ...(mcpOnly ? { tools: ['mcp' as ToolName] } : {}),
+    toolAllowlist !== null && toolAllowlist.length === 1 && toolAllowlist[0] === 'mcp';
+  const customTools = mcpOnly
+    ? undefined
+    : input.interviewPhase
+      ? guidedInterviewRepositoryTools(input.interviewPhase, checkout)
+      : createNativeReadTools(checkout);
+
+  const sessionKey = input.sessionKey?.trim() || input.workspaceRef || 'interactive';
+  const compatibilityKey =
+    input.compatibilityKey?.trim()
+    || `${input.model}|${input.workspaceRef}|${input.interviewPhase ?? 'none'}`;
+  const requestId = input.requestId?.trim() || sessionKey;
+
+  const acquired = await adapter.acquire(
+    {
+      sessionKey,
+      compatibilityKey,
+      model: buildCursorModelSelection(input.model, input.effort ?? undefined),
+      workspaceRef: input.workspaceRef,
+      skillContent: null,
+      toolAllowlist,
+      disallowedTools,
+      settingSources,
+      sandbox,
+      mcpServers: options.mcpServers,
+      priorAgentBinding: options.resumeAgentId?.trim() || null,
+      requestId,
+    },
+    {
+      ...(customTools ? { customTools } : {}),
+      signal: options.signal,
+      onProgress: options.onProgress,
+    },
+  );
+
+  const handle: InteractiveCursorAgentHandle = {
+    agentId: acquired.agentId,
+    model: input.model,
+    workspaceRef: input.workspaceRef,
+    interviewPhase: input.interviewPhase,
+    send: async (prompt, sendOpts) =>
+      (await acquired.send(prompt, {
+        onDelta: sendOpts?.onDelta,
+        mcpServers: sendOpts?.mcpServers,
+        requestId: sendOpts?.requestId,
+      })) as unknown as WorkerCursorExecutionRun,
+    steer: (text) => acquired.steer(text),
+    summarize: () => acquired.summarize(),
+    cancel: () => acquired.cancel(),
+    readUsage: () => acquired.readUsage(),
+    dispose: () => acquired.dispose(),
   };
 
-  if (resumeAgentId) {
-    try {
-      const agent = await Agent.resume(resumeAgentId, agentOptions);
-      return {
-        mode: 'resumed',
-        handle: wrapHandle(agent, input, resumeAgentId),
-      };
-    } catch (error) {
-      if (!isAgentNotFound(error)) throw error;
-      const agent = await Agent.create(agentOptions);
-      return {
-        mode: 'recreated',
-        handle: wrapHandle(agent, input, null),
-      };
-    }
-  }
-
-  const agent = await Agent.create(agentOptions);
   return {
-    mode: 'recreated',
-    handle: wrapHandle(agent, input, null),
+    mode: acquired.mode,
+    handle,
   };
-}
-
-/**
- * One-shot helper: acquire + send. Prefer {@link acquireInteractiveCursorAgent}
- * when the actor retains a live Agent across turns.
- */
-export async function createInteractiveCursorExecution(
-  input: InteractiveCursorAcquireInput & { prompt: string },
-  checkout: RepoReader,
-  options: InteractiveCursorAcquireOptions & {
-    resumeAgentId?: string | null;
-  },
-): Promise<WorkerCursorExecution & { agentId?: string | null; mode: InteractiveAgentAcquisition['mode'] }> {
-  const acquired = await acquireInteractiveCursorAgent(input, checkout, options);
-  try {
-    const run = await acquired.handle.send(input.prompt);
-    return {
-      run,
-      agentId: acquired.handle.agentId,
-      mode: acquired.mode,
-      dispose: () => acquired.handle.dispose(),
-    };
-  } catch (error) {
-    await acquired.handle.dispose().catch(() => {});
-    throw error;
-  }
 }

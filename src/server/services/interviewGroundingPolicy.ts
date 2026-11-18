@@ -1,7 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
-import type { LocalAgentOptions, McpServerConfig } from '@cursor/sdk/dist/cjs/options.js';
+import type {
+  LocalAgentOptions,
+  McpServerConfig,
+  SDKCustomTool,
+  SDKJsonValue,
+} from './cursorSdkAdapter/types';
 import type { InterviewRepositoryPhase } from '../../shared/types/interview';
 import type { RepoReader } from '../../shared/types/repoReader';
 import { createNativeReadTools } from './nativeReadToolAdapter';

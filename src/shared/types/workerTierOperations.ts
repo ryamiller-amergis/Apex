@@ -52,7 +52,8 @@ export type WorkerTierSafePropertyKey =
   | 'project'
   | 'lane'
   | 'terminalReason'
-  | 'stage';
+  | 'stage'
+  | 'area';
 
 export interface WorkerTierTelemetryEventProperties {
   runId?: string;
@@ -62,6 +63,8 @@ export interface WorkerTierTelemetryEventProperties {
   terminalReason?: string;
   /** Allowlisted InteractiveStageName only — sanitized at emit time. */
   stage?: InteractiveStageName;
+  /** Canonical chat area id (e.g. `agent-home`, `brainstorm`). */
+  area?: string;
 }
 
 /**

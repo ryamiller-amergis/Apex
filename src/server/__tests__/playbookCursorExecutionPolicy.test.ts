@@ -80,7 +80,10 @@ it('keeps the previous worker path while enforcement is observe', async () => {
   expect(options.local?.settingSources).toEqual(['project']);
   expect(options.local?.sandboxOptions).toEqual({ enabled: false });
   expect(options.disallowedTools).toBeUndefined();
-  expect(send).toHaveBeenCalledWith('Run the check');
+  expect(send).toHaveBeenCalledWith(
+    'Run the check',
+    expect.objectContaining({ idempotencyKey: 'thread-1' }),
+  );
 });
 
 it('restricts the worker and supplies the Skill only when enforcement is on', async () => {
@@ -95,7 +98,10 @@ it('restricts the worker and supplies the Skill only when enforcement is on', as
   expect(options.local?.settingSources).toEqual([]);
   expect(options.local?.sandboxOptions).toEqual({ enabled: false });
   expect(options.disallowedTools).toEqual(['shell']);
-  expect(send).toHaveBeenCalledWith(`${skillContent}\n\n---\n\nRun the check`);
+  expect(send).toHaveBeenCalledWith(
+    `${skillContent}\n\n---\n\nRun the check`,
+    expect.objectContaining({ idempotencyKey: 'thread-1' }),
+  );
 });
 
 it('leaves the shell available when the Skill declared azure-cli', async () => {
@@ -146,7 +152,10 @@ it('does not prepend Skill content the V2 prompt already carries', async () => {
     skillSha256,
   });
 
-  expect(send).toHaveBeenCalledWith(prompt);
+  expect(send).toHaveBeenCalledWith(
+    prompt,
+    expect.objectContaining({ idempotencyKey: 'thread-1' }),
+  );
 });
 
 it('refuses an enforce-mode policy that grants built-in writes', async () => {
