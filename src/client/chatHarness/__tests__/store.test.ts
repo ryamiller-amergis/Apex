@@ -851,5 +851,147 @@ describe('S3 chatHarness store and eventReducer', () => {
         expect(store.getState().retryReason).toBeNull();
       }
     });
+
+    it('clears settled send/retry/cancel pendingCommands on done, terminal status, and error without dropping queued steers, and ignores stale accepted receipts or idle state frames afterward', () => {
+      const store = createChatHarnessStore(FIXTURE_THREAD_ID);
+
+      // 1. Send -> accepted -> running -> assistant message -> done
+      store.recordOptimisticSend(FIXTURE_CMD_ID_1, 'Summarize the open PRs');
+      store.applyReceipt(
+        makeReceipt({
+          commandId: FIXTURE_CMD_ID_1,
+          kind: 'send',
+          status: 'accepted',
+          runId: FIXTURE_RUN_ID,
+        }),
+      );
+      expect(store.getState().activeRunId).toBe(FIXTURE_RUN_ID);
+      expect(store.getState().pendingCommands).toEqual([
+        expect.objectContaining({
+          commandId: FIXTURE_CMD_ID_1,
+          kind: 'send',
+          status: 'accepted',
+        }),
+      ]);
+
+      // Queue a follow-up steer that should survive the current turn finishing
+      store.applyReceipt(
+        makeReceipt({
+          commandId: FIXTURE_CMD_ID_2,
+          kind: 'steer',
+          status: 'queued',
+        }),
+      );
+
+      store.applyStateFrame(
+        makeThreadState({
+          threadStatus: 'running',
+          activeRunId: FIXTURE_RUN_ID,
+          phase: 'running',
+          pendingCommands: [
+            { commandId: FIXTURE_CMD_ID_1, kind: 'send', status: 'accepted' },
+            { commandId: FIXTURE_CMD_ID_2, kind: 'steer', status: 'queued' },
+          ],
+        }),
+      );
+
+      store.applyEvent(
+        {
+          type: 'message',
+          message: makeMessage({
+            id: 'agent-final-1',
+            role: 'agent',
+            text: 'Here are the open PRs.',
+          }),
+        },
+        'ev-msg-final',
+      );
+      store.applyEvent({ type: 'done', runId: FIXTURE_RUN_ID }, 'ev-done-final');
+
+      const afterDone = store.getState();
+      expect(afterDone.status).toBe('idle');
+      expect(afterDone.activeRunId).toBeNull();
+      expect(afterDone.progressLabel).toBeNull();
+      expect(afterDone.pendingCommands).toEqual([
+        expect.objectContaining({
+          commandId: FIXTURE_CMD_ID_2,
+          kind: 'steer',
+          status: 'queued',
+        }),
+      ]);
+
+      // Late accepted receipt for the already-completed send must not resurrect it
+      store.applyReceipt(
+        makeReceipt({
+          commandId: FIXTURE_CMD_ID_1,
+          kind: 'send',
+          status: 'accepted',
+          runId: FIXTURE_RUN_ID,
+        }),
+      );
+      expect(
+        store.getState().pendingCommands.some((c) => c.commandId === FIXTURE_CMD_ID_1),
+      ).toBe(false);
+
+      // Stale idle state frame or snapshot carrying an old accepted send must not resurrect it
+      store.applyStateFrame(
+        makeThreadState({
+          threadStatus: 'idle',
+          activeRunId: null,
+          phase: 'idle',
+          pendingCommands: [
+            { commandId: FIXTURE_CMD_ID_1, kind: 'send', status: 'accepted' },
+          ],
+        }),
+      );
+      expect(store.getState().pendingCommands).toEqual([]);
+
+      store.applySnapshot(
+        makeSnapshot({
+          state: makeThreadState({
+            threadStatus: 'idle',
+            activeRunId: null,
+            phase: 'idle',
+            pendingCommands: [
+              { commandId: '10000000-0000-4000-8000-000000000999', kind: 'send', status: 'accepted' },
+            ],
+          }),
+        }),
+      );
+      expect(store.getState().pendingCommands).toEqual([]);
+    });
+
+    it('clears send/retry pendingCommands on terminal status:idle after running and on fatal error', () => {
+      const store = createChatHarnessStore(FIXTURE_THREAD_ID);
+      store.recordOptimisticSend(FIXTURE_CMD_ID_1, 'Check status');
+      store.applyStateFrame(
+        makeThreadState({
+          threadStatus: 'running',
+          activeRunId: FIXTURE_RUN_ID,
+          phase: 'running',
+        }),
+      );
+      store.applyEvent({ type: 'status', status: 'idle' }, 'ev-status-idle');
+      expect(store.getState().status).toBe('idle');
+      expect(store.getState().activeRunId).toBeNull();
+      expect(store.getState().pendingCommands).toEqual([]);
+
+      store.recordPendingCommand(FIXTURE_CMD_ID_2, 'retry');
+      store.applyReceipt(
+        makeReceipt({
+          commandId: FIXTURE_CMD_ID_2,
+          kind: 'retry',
+          status: 'accepted',
+          runId: FIXTURE_RUN_ID,
+        }),
+      );
+      store.applyEvent(
+        { type: 'error', error: 'Agent crashed', runId: FIXTURE_RUN_ID },
+        'ev-err-1',
+      );
+      expect(store.getState().status).toBe('error');
+      expect(store.getState().activeRunId).toBeNull();
+      expect(store.getState().pendingCommands).toEqual([]);
+    });
   });
 });

@@ -244,12 +244,17 @@ function isStateChangingEvent(
   }
   if (!envelope) return false;
   const envType = envelope.type as string;
+  const envStatus = envelope.status as string | undefined;
   return (
     envType === 'done' ||
     envType === 'error' ||
     envType === 'status' ||
     envType === 'phase' ||
-    envType === 'summary'
+    envType === 'summary' ||
+    envType === 'cancel' ||
+    envStatus === 'completed' ||
+    envStatus === 'failed' ||
+    envStatus === 'cancelled'
   );
 }
 

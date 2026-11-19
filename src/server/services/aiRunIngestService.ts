@@ -6,7 +6,7 @@
  * established PostgreSQL event spine; terminal writes delegate to lifecycle.
  */
 import { randomUUID } from 'crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import {
   agentRuns,
@@ -1367,6 +1367,43 @@ async function terminalizeDaprActorV2(input: {
         .update(chatThreads)
         .set({ cursorAgentId })
         .where(eq(chatThreads.id, existing.threadId));
+    }
+
+    // 5.5. Settle harness commands owned by this run so state frames and
+    // reload snapshots never keep a finished send/retry (or queued follow-up
+    // steer) stuck as pending.
+    if (existing.lane === INTERACTIVE_LANE) {
+      const commandConditions = [
+        and(
+          inArray(chatThreadCommands.kind, ['send', 'retry']),
+          eq(chatThreadCommands.status, 'accepted'),
+        ),
+        and(
+          eq(chatThreadCommands.kind, 'steer'),
+          eq(chatThreadCommands.status, 'queued'),
+        ),
+        ...(status === 'cancelled'
+          ? [
+              and(
+                inArray(chatThreadCommands.kind, ['cancel', 'summarize']),
+                eq(chatThreadCommands.status, 'accepted'),
+              ),
+            ]
+          : []),
+      ];
+      await tx
+        .update(chatThreadCommands)
+        .set({
+          status: 'applied',
+          updatedAt: nowIso,
+        })
+        .where(
+          and(
+            eq(chatThreadCommands.threadId, existing.threadId),
+            eq(chatThreadCommands.runId, runId),
+            or(...commandConditions),
+          ),
+        );
     }
 
     // 6. Persist error/done (and completed) terminal events.

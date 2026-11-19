@@ -500,6 +500,16 @@ function clearTurnProgressFields(
   };
 }
 
+/** Drop turn-owning commands once the turn reaches a terminal event. */
+function clearSettledTurnPendingCommands(
+  pendingCommands: RuntimeState['pendingCommands'],
+): RuntimeState['pendingCommands'] {
+  const next = pendingCommands.filter(
+    (item) => item.kind !== 'send' && item.kind !== 'retry' && item.kind !== 'cancel',
+  );
+  return next.length === pendingCommands.length ? pendingCommands : next;
+}
+
 function buildFailedEnding(
   state: RuntimeState,
   meta: EventReducerMeta,
@@ -528,7 +538,9 @@ function buildFailedEnding(
     ...state,
     ...cleared,
     status: 'error',
+    activeRunId: null,
     stopping: false,
+    pendingCommands: clearSettledTurnPendingCommands(state.pendingCommands),
     retryableRunId: runId,
     messages: nextMessages,
     lastFailure: {
@@ -917,20 +929,27 @@ export function reduceHarnessEvent(
         event.status === 'idle' ||
         event.status === 'error' ||
         event.status === 'closed';
+      const transitionedFromRunning =
+        isTerminalStatus && state.status === 'running';
       const cleared = isTerminalStatus
         ? clearTurnProgressFields(state, meta)
         : {};
-      const nextTerminalRevision =
-        isTerminalStatus && state.status === 'running'
-          ? state.terminalRevision + 1
-          : state.terminalRevision;
+      const nextTerminalRevision = transitionedFromRunning
+        ? state.terminalRevision + 1
+        : state.terminalRevision;
+      const shouldClearTurnCommands =
+        transitionedFromRunning || event.status === 'error';
 
       state = {
         ...state,
         ...cleared,
         runHealth,
         status: event.status,
+        activeRunId: isTerminalStatus ? null : state.activeRunId,
         stopping: isTerminalStatus ? false : state.stopping,
+        pendingCommands: shouldClearTurnCommands
+          ? clearSettledTurnPendingCommands(state.pendingCommands)
+          : state.pendingCommands,
         terminalRevision: nextTerminalRevision,
       };
       return { state, changed: true };
@@ -1040,7 +1059,9 @@ export function reduceHarnessEvent(
           ...cleared,
           lastProgressAt: now,
           retryableRunId: null,
+          activeRunId: null,
           stopping: false,
+          pendingCommands: clearSettledTurnPendingCommands(state.pendingCommands),
           status: 'error',
           messages: [...state.messages, authMsg],
           terminalRevision: state.terminalRevision + 1,
@@ -1093,7 +1114,9 @@ export function reduceHarnessEvent(
           ...cleared,
           lastProgressAt: now,
           status: 'idle',
+          activeRunId: null,
           stopping: false,
+          pendingCommands: clearSettledTurnPendingCommands(state.pendingCommands),
           terminalRevision: state.terminalRevision + 1,
         };
       }

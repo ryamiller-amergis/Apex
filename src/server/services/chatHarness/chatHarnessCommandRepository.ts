@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
-import { chatThreadCommands } from '../../db/schema';
+import { agentRuns, chatThreadCommands } from '../../db/schema';
 import {
   isHarnessReceiptReason,
   type HarnessCommandBody,
@@ -392,8 +392,11 @@ export function createChatHarnessCommandRepository(
           commandId: chatThreadCommands.commandId,
           kind: chatThreadCommands.kind,
           status: chatThreadCommands.status,
+          runId: chatThreadCommands.runId,
+          runStatus: agentRuns.status,
         })
         .from(chatThreadCommands)
+        .leftJoin(agentRuns, eq(agentRuns.id, chatThreadCommands.runId))
         .where(
           and(
             eq(chatThreadCommands.threadId, threadId),
@@ -402,11 +405,23 @@ export function createChatHarnessCommandRepository(
         )
         .orderBy(asc(chatThreadCommands.createdAt));
 
+      const activeRunStatuses = new Set(['queued', 'dispatched', 'running']);
       return rows
-        .filter(
-          (row): row is typeof row & { status: 'accepted' | 'queued' } =>
-            row.status === 'accepted' || row.status === 'queued',
-        )
+        .filter((row): row is typeof row & { status: 'accepted' | 'queued' } => {
+          if (row.status !== 'accepted' && row.status !== 'queued') {
+            return false;
+          }
+          // Un-acked mid-turn steers remain pending until the actor acks them
+          // or the maintenance scheduler reconciles them into follow-up turns.
+          if (row.kind === 'steer' && row.status === 'accepted') {
+            return true;
+          }
+          // Commands attached to a run are only pending while that run is active.
+          if (row.runId && row.runStatus && !activeRunStatuses.has(row.runStatus)) {
+            return false;
+          }
+          return true;
+        })
         .map((row) => ({
           commandId: row.commandId,
           kind: row.kind,

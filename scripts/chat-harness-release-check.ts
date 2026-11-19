@@ -355,13 +355,16 @@ export function evaluateChatHarnessReleaseCheck(
             message: `Area ${area}: contract suite failed${scenarioSuffix}`,
           });
         }
-        if (ciArea.noLostOrDoubledMessages === false) {
+        if (ciArea.noLostOrDoubledMessages !== true) {
           failures.push({
             gate: 'ci',
             area,
             target: 'no_lost_or_doubled_messages',
             code: 'MESSAGE_INTEGRITY_FAILED',
-            message: `Area ${area}: lost or doubled messages detected`,
+            message:
+              ciArea.noLostOrDoubledMessages === false
+                ? `Area ${area}: lost or doubled messages detected`
+                : `Area ${area}: missing noLostOrDoubledMessages verification`,
           });
         }
       }
@@ -380,9 +383,11 @@ export function evaluateChatHarnessReleaseCheck(
             : 'FAIL';
         const integrityStatus = !ciArea
           ? 'MISSING'
-          : ciArea.noLostOrDoubledMessages === false
-            ? 'FAIL'
-            : 'PASS';
+          : ciArea.noLostOrDoubledMessages === true
+            ? 'PASS'
+            : ciArea.noLostOrDoubledMessages === false
+              ? 'FAIL'
+              : 'MISSING';
         lines.push(
           `=== Area: ${area}${aliasNote} | contract=${contractStatus} | messageIntegrity=${integrityStatus} ===`,
         );

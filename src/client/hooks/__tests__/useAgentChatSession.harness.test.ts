@@ -749,4 +749,164 @@ describe('S5 useAgentChatSession harness delegation', () => {
       unmount();
     });
   });
+
+  describe('completed turn clears awaiting/working/stop state', () => {
+    it('stops showing awaiting/busy state once the assistant message and done event finish an accepted send', async () => {
+      const rig = createRuntimeTestRig(
+        makeSnapshot({
+          state: makeThreadState({
+            harnessArea: 'agent-home',
+            threadStatus: 'idle',
+            canWrite: true,
+          }),
+        }),
+      );
+
+      const { result, unmount } = renderHook(() =>
+        useAgentChatSession(FIXTURE_THREAD_ID, {
+          harnessArea: 'agent-home',
+          createTurnId: () => FIXTURE_CMD_ID_1,
+          runtimeDeps: rig.runtimeDeps,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.snapshotLoaded).toBe(true);
+      });
+
+      act(() => {
+        rig.sockets[0].simulateOpen();
+        rig.sockets[0].simulateMessage({
+          type: 'state',
+          state: makeThreadState({
+            harnessArea: 'agent-home',
+            threadStatus: 'idle',
+            activeRunId: null,
+            phase: 'idle',
+            pendingCommands: [],
+          }),
+        });
+      });
+
+      // Send a message: becomes awaiting immediately
+      let sendPromise: Promise<boolean>;
+      act(() => {
+        sendPromise = result.current.send('What should we prioritize?');
+      });
+      expect(result.current.isAwaitingAgentResponse).toBe(true);
+      await act(async () => {
+        await sendPromise!;
+      });
+
+      // Server accepts send and enters running state
+      act(() => {
+        rig.sockets[0].simulateMessage({
+          type: 'receipt',
+          receipt: makeReceipt({
+            commandId: FIXTURE_CMD_ID_1,
+            kind: 'send',
+            status: 'accepted',
+            runId: FIXTURE_RUN_ID,
+          }),
+        });
+        rig.sockets[0].simulateMessage({
+          type: 'state',
+          state: makeThreadState({
+            harnessArea: 'agent-home',
+            threadStatus: 'running',
+            activeRunId: FIXTURE_RUN_ID,
+            phase: 'running',
+            pendingCommands: [
+              { commandId: FIXTURE_CMD_ID_1, kind: 'send', status: 'accepted' },
+            ],
+          }),
+        });
+      });
+      expect(result.current.isRunning).toBe(true);
+
+      // Assistant message arrives, turn finishes, and trailing idle state frame arrives
+      act(() => {
+        rig.sockets[0].simulateMessage({
+          type: 'event',
+          id: 'ev-msg-agent',
+          data: {
+            type: 'message',
+            message: makeMessage({
+              id: 'agent-reply-complete',
+              role: 'agent',
+              text: 'Here are three options to consider.',
+              ts: '2026-11-19T00:01:00.000Z',
+            }),
+          },
+        });
+        rig.sockets[0].simulateMessage({
+          type: 'event',
+          id: 'ev-done-complete',
+          data: { type: 'done', runId: FIXTURE_RUN_ID },
+        });
+        // Even if a stale state frame still echoes the finished send command,
+        // an idle thread with no activeRunId must not stay stuck awaiting.
+        rig.sockets[0].simulateMessage({
+          type: 'state',
+          state: makeThreadState({
+            harnessArea: 'agent-home',
+            threadStatus: 'idle',
+            activeRunId: null,
+            phase: 'idle',
+            pendingCommands: [
+              { commandId: FIXTURE_CMD_ID_1, kind: 'send', status: 'accepted' },
+            ],
+          }),
+        });
+      });
+
+      expect(result.current.status).toBe('idle');
+      expect(result.current.isRunning).toBe(false);
+      expect(result.current.isAwaitingAgentResponse).toBe(false);
+      expect(result.current.isInteractionBusy).toBe(false);
+      expect(result.current.showTypingIndicator).toBe(false);
+      expect(result.current.pendingCommands).toEqual([]);
+
+      unmount();
+    });
+
+    it('never marks an idle reloaded thread as awaiting when a snapshot includes a stale accepted send', async () => {
+      const rig = createRuntimeTestRig(
+        makeSnapshot({
+          messages: [
+            makeMessage({ id: 'u-1', role: 'user', text: 'First question' }),
+            makeMessage({ id: 'a-1', role: 'agent', text: 'Finished answer' }),
+          ],
+          state: makeThreadState({
+            harnessArea: 'agent-home',
+            threadStatus: 'idle',
+            activeRunId: null,
+            phase: 'idle',
+            pendingCommands: [
+              { commandId: FIXTURE_CMD_ID_1, kind: 'send', status: 'accepted' },
+            ],
+          }),
+        }),
+      );
+
+      const { result, unmount } = renderHook(() =>
+        useAgentChatSession(FIXTURE_THREAD_ID, {
+          harnessArea: 'agent-home',
+          runtimeDeps: rig.runtimeDeps,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.snapshotLoaded).toBe(true);
+      });
+
+      expect(result.current.status).toBe('idle');
+      expect(result.current.isRunning).toBe(false);
+      expect(result.current.isAwaitingAgentResponse).toBe(false);
+      expect(result.current.isInteractionBusy).toBe(false);
+      expect(result.current.pendingCommands).toEqual([]);
+
+      unmount();
+    });
+  });
 });

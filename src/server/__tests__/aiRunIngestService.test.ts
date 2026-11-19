@@ -1162,6 +1162,9 @@ describe('dapr-actor-v2 bootstrap + terminal remediation', () => {
     expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(mockMarkTerminal).not.toHaveBeenCalled();
     expect(result.run.status).toBe('failed');
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'applied' }),
+    );
     expect(mockTrackEvent).toHaveBeenCalledWith(
       'InteractiveTurnStages',
       expect.objectContaining({ status: 'failed', agentMode: 'resumed' }),

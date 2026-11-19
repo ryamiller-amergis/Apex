@@ -907,4 +907,72 @@ describe('Chat harness gateway frames & HTTP routes (S7 / TBI-010 / PBI-008)', (
     expect(snapRes.body.latestSummary.summaryText).toBeUndefined();
     expect(snapRes.body.canWrite).toBe(true);
   });
+
+  it('emits a refreshed state frame when a durable completed message envelope arrives even without a separate done event', async () => {
+    const { socket, frames } = makeFakeSocket();
+    let emitDurable: (env: AgentRunEventEnvelope) => void = () => {};
+    let threadStatus: 'running' | 'idle' = 'running';
+    let activeRunId: string | null = RUN_ID_1;
+
+    const { deps } = makeGatewayDeps({
+      loadThreadSnapshot: async () => ({
+        messages: [],
+        status: 'running',
+        activeRunId: RUN_ID_1,
+        eventDrivenTermination: true,
+      }),
+      loadThreadState: jest.fn(async (): Promise<HarnessThreadState> => ({
+        threadStatus,
+        activeRunId,
+        phase: threadStatus === 'running' ? 'running' : 'idle',
+        harnessArea: 'agent-home',
+        pendingCommands: [],
+        latestSummary: null,
+        canWrite: true,
+      })),
+      subscribeDurableEvents: (_tid, cb) => {
+        emitDurable = cb;
+        return () => {};
+      },
+    });
+
+    await attachInteractiveThreadStream(socket, THREAD_ID, {}, deps);
+    const stateFramesBefore = frames.filter((f) => f.type === 'state').length;
+
+    threadStatus = 'idle';
+    activeRunId = null;
+    emitDurable({
+      eventId: '20000000-0000-4000-8000-000000000901',
+      threadId: THREAD_ID,
+      runId: RUN_ID_1,
+      sourceInstance: 'test-instance',
+      sequence: 10,
+      timestamp: '2026-11-19T00:02:00.000Z',
+      type: 'message',
+      phase: 'completion',
+      status: 'completed',
+      event: {
+        type: 'message',
+        message: {
+          id: 'agent-done-msg-1',
+          role: 'agent',
+          text: 'Final response',
+          ts: '2026-11-19T00:02:00.000Z',
+        },
+      },
+    });
+    await flushAsync();
+
+    const stateFramesAfter = frames.filter((f) => f.type === 'state');
+    expect(stateFramesAfter.length).toBeGreaterThan(stateFramesBefore);
+    expect(stateFramesAfter[stateFramesAfter.length - 1]).toMatchObject({
+      type: 'state',
+      state: {
+        threadStatus: 'idle',
+        activeRunId: null,
+        phase: 'idle',
+        pendingCommands: [],
+      },
+    });
+  });
 });

@@ -280,6 +280,29 @@ describe('scripts/chat-harness-release-check (S11 / PBI-019 VT-33..VT-37)', () =
     expect(result.report).toContain('steer-mid-turn');
   });
 
+  it('VT-34 / PBI-019 AC-1: fails with exitCode 1 when an area omits noLostOrDoubledMessages', () => {
+    const { evaluateChatHarnessReleaseCheck } = loadReleaseCheckModule();
+    const ci = makePassingCiInput();
+    const { noLostOrDoubledMessages: _omitted, ...rest } = ci.areas['agent-home']!;
+    ci.areas['agent-home'] = rest;
+
+    const result = evaluateChatHarnessReleaseCheck({
+      baseline: loadCheckedInBaseline(),
+      ci,
+      production: makePassingProdInput(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(
+      result.failures.some(
+        (f) => f.area === 'agent-home' && f.code === 'MESSAGE_INTEGRITY_FAILED',
+      ),
+    ).toBe(true);
+    expect(result.report).toContain('agent-home');
+    expect(result.report).toContain('messageIntegrity=MISSING');
+  });
+
   it('VT-35 / PBI-019 AC-2: flags "post-deploy 5% bound is not yet verified" and sets postDeployVerified=false when deployInWindow is false', () => {
     const { evaluateChatHarnessReleaseCheck } = loadReleaseCheckModule();
 

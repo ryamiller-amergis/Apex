@@ -141,12 +141,28 @@ function mergePendingCommands(
   serverPending: HarnessThreadState['pendingCommands'],
   settledCommandIds: ReadonlySet<string>,
   now: number,
-  dropLocalCancel: boolean,
+  options: {
+    dropLocalCancel: boolean;
+    dropLocalTurnCommands: boolean;
+    hasActiveRun: boolean;
+  },
 ): PendingCommand[] {
   const existingById = new Map(current.map((item) => [item.commandId, item]));
-  const serverIds = new Set(serverPending.map((item) => item.commandId));
+  const filteredServer = serverPending.filter((item) => {
+    if (settledCommandIds.has(item.commandId)) return false;
+    // A thread with no active run cannot still have an in-flight accepted send/retry.
+    if (
+      !options.hasActiveRun &&
+      item.status === 'accepted' &&
+      (item.kind === 'send' || item.kind === 'retry')
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const serverIds = new Set(filteredServer.map((item) => item.commandId));
 
-  const merged: PendingCommand[] = serverPending.map((item) => ({
+  const merged: PendingCommand[] = filteredServer.map((item) => ({
     commandId: item.commandId,
     kind: item.kind,
     status: item.status,
@@ -157,7 +173,13 @@ function mergePendingCommands(
     if (serverIds.has(item.commandId)) continue;
     if (item.status !== 'pending') continue;
     if (settledCommandIds.has(item.commandId)) continue;
-    if (dropLocalCancel && item.kind === 'cancel') continue;
+    if (options.dropLocalCancel && item.kind === 'cancel') continue;
+    if (
+      options.dropLocalTurnCommands &&
+      (item.kind === 'send' || item.kind === 'retry')
+    ) {
+      continue;
+    }
     merged.push(item);
   }
 
@@ -293,11 +315,21 @@ export function createChatHarnessStore(
       snapshot.state.pendingCommands,
       settledIds,
       now,
-      !isRunning,
+      {
+        dropLocalCancel: !isRunning,
+        dropLocalTurnCommands: transitionedToTerminal,
+        hasActiveRun: isRunning || Boolean(snapshot.state.activeRunId),
+      },
     );
 
     if (transitionedToTerminal) {
       clearTurnBufferMeta(meta);
+      const remainingIds = new Set(nextPending.map((item) => item.commandId));
+      for (const item of state.pendingCommands) {
+        if (!remainingIds.has(item.commandId)) {
+          recordSettledReceipt(item.commandId, 'applied');
+        }
+      }
     }
 
     setState({
@@ -366,11 +398,21 @@ export function createChatHarnessStore(
       serverState.pendingCommands,
       new Set<string>(settledReceipts.keys()),
       now,
-      !isRunning,
+      {
+        dropLocalCancel: !isRunning,
+        dropLocalTurnCommands: transitionedToTerminal,
+        hasActiveRun: isRunning || Boolean(serverState.activeRunId),
+      },
     );
 
     if (transitionedToTerminal) {
       clearTurnBufferMeta(meta);
+      const remainingIds = new Set(nextPending.map((item) => item.commandId));
+      for (const item of state.pendingCommands) {
+        if (!remainingIds.has(item.commandId)) {
+          recordSettledReceipt(item.commandId, 'applied');
+        }
+      }
     }
 
     const nextProgressLabel = isRunning
@@ -415,8 +457,10 @@ export function createChatHarnessStore(
     const isTerminal =
       receipt.status === 'applied' || receipt.status === 'rejected';
 
-    // Idempotent per settled (commandId, status)
-    if (isTerminal && settledReceipts.get(receipt.commandId) === receipt.status) {
+    // Never regress an already-settled command back to accepted/queued, and stay
+    // idempotent per settled (commandId, status).
+    const priorSettled = settledReceipts.get(receipt.commandId);
+    if (priorSettled !== undefined && (!isTerminal || priorSettled === receipt.status)) {
       return;
     }
 
@@ -461,6 +505,7 @@ export function createChatHarnessStore(
     let nextStopping = state.stopping;
     let nextRetryableRunId = state.retryableRunId;
     let nextSummaryNotice = state.summaryNotice;
+    let nextActiveRunId = state.activeRunId;
 
     if (receipt.kind === 'send' && receipt.status === 'rejected') {
       let matchedMessageId: string | undefined;
@@ -492,6 +537,9 @@ export function createChatHarnessStore(
         nextLastFailure = null;
       }
       nextRetryableRunId = null;
+      if (receipt.status === 'accepted' && receipt.runId) {
+        nextActiveRunId = receipt.runId;
+      }
     } else if (receipt.kind === 'retry' && receipt.status === 'rejected') {
       nextLastFailure = {
         commandId: receipt.commandId,
@@ -522,6 +570,9 @@ export function createChatHarnessStore(
     ) {
       nextLastFailure = null;
       nextRetryableRunId = null;
+      if (receipt.status === 'accepted' && receipt.runId) {
+        nextActiveRunId = receipt.runId;
+      }
     } else if (receipt.kind === 'cancel' && receipt.status === 'rejected') {
       nextStopping = false;
     } else if (receipt.kind === 'summarize' && receipt.status === 'rejected') {
@@ -537,6 +588,7 @@ export function createChatHarnessStore(
 
     setState({
       ...state,
+      activeRunId: nextActiveRunId,
       pendingCommands: nextPending,
       lastReceipt: formatted,
       optimisticMessages: nextOptimistic,
@@ -550,8 +602,19 @@ export function createChatHarnessStore(
   }
 
   function applyEvent(event: SseEvent, eventId: string): void {
+    const prevPending = state.pendingCommands;
     const result = reduceHarnessEvent(state, meta, event, eventId);
     if (!result.changed) return;
+    if (result.state.pendingCommands !== prevPending) {
+      const remainingIds = new Set(
+        result.state.pendingCommands.map((item) => item.commandId),
+      );
+      for (const item of prevPending) {
+        if (!remainingIds.has(item.commandId)) {
+          recordSettledReceipt(item.commandId, 'applied');
+        }
+      }
+    }
     setState(result.state);
   }
 

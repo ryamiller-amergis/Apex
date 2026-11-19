@@ -469,7 +469,11 @@ export function useAgentChatSession(
     isHarnessCommandMode &&
     !runtimeState.stopping &&
     runtimeState.pendingCommands.some(
-      (cmd) => cmd.kind === 'send' || cmd.kind === 'retry',
+      (cmd) =>
+        (cmd.kind === 'send' || cmd.kind === 'retry') &&
+        (cmd.status === 'pending' ||
+          runtimeState.status === 'running' ||
+          Boolean(runtimeState.activeRunId)),
     );
   const effectiveIsAwaitingAgentResponse = isHarnessCommandMode
     ? hasPendingHarnessSend
