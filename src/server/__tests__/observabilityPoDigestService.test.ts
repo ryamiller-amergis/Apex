@@ -1,20 +1,78 @@
 import {
-  buildObservabilityPoSkillPrompt,
+  buildObservabilityPoTelemetryInput,
   generateObservabilityPoDigest,
   getObservabilityPoDigest,
   isObservabilityTrendWindow,
   loadObservabilityPoSkillMarkdown,
   observabilityPoDigestScheduler,
   resetObservabilityPoDigestForTests,
-  setObservabilityPoAiProviderForTests,
+  setObservabilityPoDigestRunStoreForTests,
   setObservabilityPoSkillMarkdownForTests,
   setObservabilityPoTelemetrySourceForTests,
 } from '../services/observabilityPoDigestService';
-import { parseSkillSectionsFromMarkdown } from '../../shared/utils/observabilityPoDigest';
+import {
+  buildObservabilityPoDigestSpecification,
+  type ObservabilityPoDigestRunRecord,
+  type ObservabilityPoDigestRunRequest,
+  type ObservabilityPoDigestRunStore,
+} from '../services/observabilityPoDigestRuns';
+import {
+  mergeSynthesisSuggestions,
+  parseSkillSectionsFromMarkdown,
+} from '../../shared/utils/observabilityPoDigest';
+import { isAiRunV2DocumentSpecification } from '../../shared/types/aiRunV2DocumentSpec';
 import {
   OBSERVABILITY_PO_SKILL_PATH,
   OBSERVABILITY_TREND_WINDOWS,
+  type ObservabilityPoSkillSynthesis,
 } from '../../shared/types/observability';
+
+/** In-memory stand-in for the run table; `complete` mirrors what the document harvest stores. */
+function createFakeRunStore() {
+  const runs: ObservabilityPoDigestRunRecord[] = [];
+  const requests: ObservabilityPoDigestRunRequest[] = [];
+  const store: ObservabilityPoDigestRunStore = {
+    async start(request) {
+      requests.push(request);
+      const runId = `run-${requests.length}`;
+      runs.unshift({
+        runId,
+        project: request.project,
+        window: request.window,
+        slot: request.slot,
+        model: request.model,
+        effort: request.effort,
+        status: 'running',
+        previousSuggestions: request.previousSuggestions,
+        synthesis: null,
+        failureDetail: null,
+        requestedAt: new Date().toISOString(),
+        completedAt: null,
+      });
+      return { status: 'admitted', runId };
+    },
+    async latestRun(project, window) {
+      return runs.find((run) => run.project === project && run.window === window) ?? null;
+    },
+    async latestCompleted(project, window) {
+      return runs.find(
+        (run) => run.project === project && run.window === window && run.status === 'completed',
+      ) ?? null;
+    },
+  };
+  function complete(runId: string, synthesis: ObservabilityPoSkillSynthesis, now: Date): void {
+    const run = runs.find((candidate) => candidate.runId === runId);
+    if (!run) throw new Error(`no run ${runId}`);
+    run.synthesis = mergeSynthesisSuggestions({
+      synthesis,
+      previous: run.previousSuggestions,
+      now,
+    }).synthesis;
+    run.status = 'completed';
+    run.completedAt = now.toISOString();
+  }
+  return { store, requests, complete };
+}
 
 describe('observabilityPoDigestService & scheduler', () => {
   beforeEach(() => {
@@ -184,8 +242,48 @@ describe('observabilityPoDigestService & scheduler', () => {
     expect(res.digest.adoptionRecommendations.recommendations[0]?.module).toBe('UI Lab');
   });
 
-  it('invokes the skill AI provider with skill markdown, model, and effort when configured', async () => {
-    const synthesizeDigest = jest.fn().mockResolvedValue({
+  it('admits a V2 document run with the skill, model, effort, and telemetry, then shows the harvested synthesis', async () => {
+    const fake = createFakeRunStore();
+    setObservabilityPoDigestRunStoreForTests(fake.store);
+
+    const generated = await generateObservabilityPoDigest({
+      project: 'Apex',
+      window: '30d',
+      model: 'composer-2.5',
+      effort: 'high',
+      slot: 'on_demand',
+    });
+
+    expect(fake.requests).toHaveLength(1);
+    const request = fake.requests[0]!;
+    expect(request).toMatchObject({
+      project: 'Apex',
+      window: '30d',
+      slot: 'on_demand',
+      model: 'composer-2.5',
+      effort: 'high',
+    });
+    expect(request.skillMarkdown).toContain('Observability Product Owner Digest');
+    expect(request.telemetryInput).toContain('Aggregated Telemetry Signals from PostgreSQL');
+    expect(request.telemetryInput).not.toContain('# Observability Product Owner Digest');
+
+    const specification = buildObservabilityPoDigestSpecification(request);
+    expect(isAiRunV2DocumentSpecification(specification)).toBe(true);
+    expect(specification).toMatchObject({
+      workflowClass: 'observability-po-digest',
+      threadId: 'observability-po-digest:Apex:30d',
+      skillPath: OBSERVABILITY_PO_SKILL_PATH,
+      model: 'composer-2.5',
+      effort: 'high',
+    });
+
+    // The worker has not finished: the page shows the telemetry-only synthesis.
+    expect(generated.synthesisRun).toMatchObject({ runId: 'run-1', status: 'running' });
+    expect(generated.digest.headline).not.toBe('Custom AI Headline from Composer 2.5 Skill Execution');
+    expect(generated.schedule.configuredModel).toBe('composer-2.5');
+    expect(generated.schedule.configuredEffort).toBe('high');
+
+    fake.complete('run-1', {
       headline: 'Custom AI Headline from Composer 2.5 Skill Execution',
       dropReasonsSummary: {
         headline: 'Skill-synthesized drop root cause',
@@ -215,41 +313,31 @@ describe('observabilityPoDigestService & scheduler', () => {
           },
         ],
       },
-    });
+    }, new Date());
 
-    setObservabilityPoAiProviderForTests({ synthesizeDigest });
-
-    const generated = await generateObservabilityPoDigest({
-      project: 'Apex',
-      window: '30d',
-      model: 'composer-2.5',
-      effort: 'high',
-      slot: 'on_demand',
-    });
-
-    expect(synthesizeDigest).toHaveBeenCalledTimes(1);
-    expect(synthesizeDigest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'composer-2.5',
-        effort: 'high',
-        project: 'Apex',
-        window: '30d',
-        skillMarkdown: expect.stringContaining('Observability Product Owner Digest'),
-        prompt: expect.stringContaining('Aggregated Telemetry Signals from PostgreSQL'),
-      }),
-    );
-
-    expect(generated.digest.headline).toBe(
+    const afterHarvest = await getObservabilityPoDigest({ project: 'Apex', window: '30d' });
+    expect(afterHarvest.synthesisRun).toMatchObject({ runId: 'run-1', status: 'completed' });
+    expect(afterHarvest.digest.headline).toBe(
       'Custom AI Headline from Composer 2.5 Skill Execution',
     );
-    expect(generated.digest.dropReasonsSummary.headline).toBe(
+    expect(afterHarvest.digest.dropReasonsSummary.headline).toBe(
       'Skill-synthesized drop root cause',
     );
-    expect(generated.digest.adoptionRecommendations.headline).toBe(
+    expect(afterHarvest.digest.adoptionRecommendations.headline).toBe(
       'Skill-synthesized adoption plan',
     );
-    expect(generated.schedule.configuredModel).toBe('composer-2.5');
-    expect(generated.schedule.configuredEffort).toBe('high');
+    expect(afterHarvest.digest.model).toBe('composer-2.5');
+    expect(afterHarvest.digest.effort).toBe('high');
+  });
+
+  it('starts no run and calls no model when the page only reads the digest', async () => {
+    const fake = createFakeRunStore();
+    setObservabilityPoDigestRunStoreForTests(fake.store);
+
+    const res = await getObservabilityPoDigest({ project: 'Apex', window: '7d' });
+
+    expect(fake.requests).toHaveLength(0);
+    expect(res.synthesisRun).toBeNull();
   });
 
   it('runs scheduled digests at 06:00 UTC (6 AM) and 18:00 UTC (6 PM)', async () => {
@@ -272,32 +360,37 @@ describe('observabilityPoDigestService & scheduler', () => {
       now: eveningTime,
     });
     expect(afterEvening.schedule.eveningSlot.lastRunAt).toBe(eveningTime.toISOString());
-    expect(typeof buildObservabilityPoSkillPrompt).toBe('function');
+    expect(typeof buildObservabilityPoTelemetryInput).toBe('function');
   });
 
-  it('dynamically parses and synthesizes 7th and 8th sections added to SKILL.md without code changes', async () => {
+  it('dynamically parses and synthesizes 8th and 9th sections added to SKILL.md without code changes', async () => {
     const baseMarkdown = loadObservabilityPoSkillMarkdown();
     const extendedSkillMarkdown = [
       baseMarkdown,
       '',
-      '7. **Cross-module journey drop-offs** (`journeyDropoffs`)',
+      '8. **Cross-module journey drop-offs** (`journeyDropoffs`)',
       '   - Rank route transitions with the highest session abandonment rate in a ranked leaderboard.',
       '',
-      '### 8. API Latency & Slow Routes (`apiLatencyTable`)',
+      '### 9. API Latency & Slow Routes (`apiLatencyTable`)',
       '- Present a table of slowest API routes and their p95 latency impact on user retention.',
     ].join('\n');
 
     const parsed = parseSkillSectionsFromMarkdown(extendedSkillMarkdown);
-    expect(parsed.customSignals).toHaveLength(2);
+    expect(parsed.customSignals).toHaveLength(3);
     expect(parsed.customSignals[0]).toMatchObject({
-      id: 'journeydropoffs',
+      id: 'suggestiontracker',
       number: 7,
-      title: 'Cross-module journey drop-offs',
       isCoreSignal: false,
     });
     expect(parsed.customSignals[1]).toMatchObject({
-      id: 'apilatencytable',
+      id: 'journeydropoffs',
       number: 8,
+      title: 'Cross-module journey drop-offs',
+      isCoreSignal: false,
+    });
+    expect(parsed.customSignals[2]).toMatchObject({
+      id: 'apilatencytable',
+      number: 9,
       title: 'API Latency & Slow Routes',
       isCoreSignal: false,
     });
@@ -311,21 +404,113 @@ describe('observabilityPoDigestService & scheduler', () => {
       effort: 'high',
     });
 
-    expect(res.digest.customSections).toHaveLength(2);
-    expect(res.digest.customSections?.[0]).toMatchObject({
+    expect(res.digest.customSections).toHaveLength(3);
+    expect(res.digest.customSections?.[1]).toMatchObject({
       id: 'journeydropoffs',
-      number: 7,
+      number: 8,
       title: 'Cross-module journey drop-offs',
       displayType: 'ranked_list',
     });
-    expect(res.digest.customSections?.[0]?.items?.length).toBeGreaterThan(0);
+    expect(res.digest.customSections?.[1]?.items?.length).toBeGreaterThan(0);
 
-    expect(res.digest.customSections?.[1]).toMatchObject({
+    expect(res.digest.customSections?.[2]).toMatchObject({
       id: 'apilatencytable',
-      number: 8,
+      number: 9,
       title: 'API Latency & Slow Routes',
       displayType: 'table',
     });
-    expect(res.digest.customSections?.[1]?.items?.length).toBeGreaterThan(0);
+    expect(res.digest.customSections?.[2]?.items?.length).toBeGreaterThan(0);
+  });
+
+  it('builds the suggestion tracker from telemetry when the AI skill is unavailable', async () => {
+    const res = await getObservabilityPoDigest({ project: 'Apex', window: '7d' });
+
+    const tracker = res.digest.customSections?.find((sec) => sec.id === 'suggestiontracker');
+    expect(tracker).toMatchObject({
+      number: 7,
+      title: 'Product innovation & suggestion tracker',
+      displayType: 'tracker',
+    });
+    const categories = new Set(tracker?.items?.map((item) => item.category));
+    expect(categories).toEqual(new Set(['enhance', 'consolidate', 'new_module']));
+    for (const item of tracker?.items ?? []) {
+      expect(item).toMatchObject({ stage: 'proposed', progressPct: 10, badge: 'Proposed' });
+      expect(item.firstSuggestedAt).toEqual(expect.any(String));
+    }
+  });
+
+  it('carries suggestion ids, stages, and first-suggested dates forward between digests', async () => {
+    const firstRun = new Date('2026-11-10T06:00:00.000Z');
+    const secondRun = new Date('2026-11-12T06:00:00.000Z');
+    const fake = createFakeRunStore();
+    setObservabilityPoDigestRunStoreForTests(fake.store);
+
+    await generateObservabilityPoDigest({ project: 'Apex', window: '7d' }, firstRun);
+    fake.complete('run-1', {
+        customSections: [
+          {
+            id: 'suggestionTracker',
+            title: 'Product innovation & suggestion tracker',
+            items: [
+              {
+                id: 'credentialing-orchestrator',
+                title: 'Credentialing & onboarding orchestrator',
+                category: 'new_module',
+                stage: 'proposed',
+              },
+              {
+                id: 'merge-cost-views',
+                title: 'Merge Cloud Cost into AI Cost Analytics',
+                module: 'Cloud Cost',
+                category: 'consolidate',
+                stage: 'proposed',
+              },
+            ],
+          },
+        ],
+      }, firstRun);
+
+    await generateObservabilityPoDigest({ project: 'Apex', window: '7d' }, secondRun);
+    const secondInput = fake.requests[1]?.telemetryInput ?? '';
+    expect(secondInput).toContain('Previously Tracked Suggestions');
+    expect(secondInput).toContain('credentialing-orchestrator');
+
+    fake.complete('run-2', {
+        customSections: [
+          {
+            id: 'suggestionTracker',
+            title: 'Product innovation & suggestion tracker',
+            items: [
+              {
+                id: 'credentialing-orchestrator',
+                title: 'Credentialing & onboarding orchestrator',
+                category: 'new_module',
+                stage: 'in_progress',
+                meta: 'New /credentialing routes appeared in telemetry',
+              },
+            ],
+          },
+        ],
+      }, secondRun);
+
+    const second = await getObservabilityPoDigest({ project: 'Apex', window: '7d', now: secondRun });
+
+    const items =
+      second.digest.customSections?.find((sec) => sec.id === 'suggestiontracker')?.items ?? [];
+    expect(items.map((item) => item.id)).toEqual([
+      'credentialing-orchestrator',
+      'merge-cost-views',
+    ]);
+    expect(items[0]).toMatchObject({
+      stage: 'in_progress',
+      progressPct: 55,
+      badge: 'In progress',
+      firstSuggestedAt: firstRun.toISOString(),
+      lastUpdatedAt: secondRun.toISOString(),
+    });
+    expect(items[1]).toMatchObject({
+      stage: 'proposed',
+      firstSuggestedAt: firstRun.toISOString(),
+    });
   });
 });

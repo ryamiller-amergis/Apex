@@ -47,7 +47,14 @@ import {
   applySkillLearningFailed,
   ownsSkillLearningThread,
 } from './skillLearningHarvest';
-import { SKILL_LEARNING_RESULT_FILE } from '../../shared/types/aiRunV2DocumentSpec';
+import {
+  applyObservabilityPoDigestCompleted,
+  applyObservabilityPoDigestFailed,
+} from './observabilityPoDigestRuns';
+import {
+  OBSERVABILITY_PO_DIGEST_RESULT_FILE,
+  SKILL_LEARNING_RESULT_FILE,
+} from '../../shared/types/aiRunV2DocumentSpec';
 
 const HARVEST_BATCH_SIZE = 100;
 const MAX_HARVEST_FAILURES = 3;
@@ -80,6 +87,17 @@ const defaultSkillReplays: SkillReplayHarvest = {
     : applyReplayFailed(input)),
 };
 
+/** Product Owner digest syntheses; their output goes to `observability_po_digest_runs`. */
+export type ObservabilityDigestHarvest = Readonly<{
+  applyCompleted: (input: { runId: string; outputDir: string }) => Promise<void>;
+  applyFailed: (input: { runId: string; reason: string }) => Promise<void>;
+}>;
+
+const defaultObservabilityDigests: ObservabilityDigestHarvest = {
+  applyCompleted: applyObservabilityPoDigestCompleted,
+  applyFailed: applyObservabilityPoDigestFailed,
+};
+
 export type DocumentV2HarvestDependencies = Readonly<{
   finishedAttempts?: FinishedAttemptReader;
   artifacts?: ArtifactReader;
@@ -95,6 +113,7 @@ export type DocumentV2HarvestDependencies = Readonly<{
     reason: string,
   ) => Promise<void>;
   skillReplays?: SkillReplayHarvest;
+  observabilityDigests?: ObservabilityDigestHarvest;
   batchSize?: number;
   tempRoot?: string;
 }>;
@@ -164,6 +183,8 @@ function isExpectedArtifactPath(
       return name === PROMPTFOO_SUMMARY_FILE || name === PROMPTFOO_RESULTS_FILE;
     case 'skill-learning':
       return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
+    case 'observability-po-digest':
+      return segments.length === 1 && name === OBSERVABILITY_PO_DIGEST_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -266,6 +287,7 @@ async function applyAttempt(
   >,
   evaluationJobs: NonNullable<DocumentV2HarvestDependencies['evaluationJobs']>,
   skillReplays: SkillReplayHarvest,
+  observabilityDigests: ObservabilityDigestHarvest,
 ): Promise<void> {
   if (skillReplays.owns(attempt.threadId)) {
     await skillReplays.applyCompleted({
@@ -320,6 +342,12 @@ async function applyAttempt(
       throw new PermanentHarvestApplicationError(
         `Skill Learning run on thread ${attempt.threadId} has no owner`,
       );
+    case 'observability-po-digest':
+      await observabilityDigests.applyCompleted({
+        runId: attempt.runId,
+        outputDir: path.join(workspacePath, '.ai-pilot', 'output'),
+      });
+      return;
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -367,11 +395,17 @@ export async function harvestFinishedV2Documents(
     dependencies.evaluationJobs ?? createWorkflowEvaluationJobIngestService();
   const tempRoot = dependencies.tempRoot ?? os.tmpdir();
   const skillReplays = dependencies.skillReplays ?? defaultSkillReplays;
+  const observabilityDigests =
+    dependencies.observabilityDigests ?? defaultObservabilityDigests;
   const failWorkflow =
     dependencies.failWorkflow
     ?? (async (attempt, reason) => {
       if (skillReplays.owns(attempt.threadId)) {
         await skillReplays.applyFailed({ runId: attempt.runId, threadId: attempt.threadId, reason });
+        return;
+      }
+      if (attempt.workflowClass === 'observability-po-digest') {
+        await observabilityDigests.applyFailed({ runId: attempt.runId, reason });
         return;
       }
       if (attempt.workflowClass === 'walkthrough-smart-tagging') {
@@ -442,6 +476,7 @@ export async function harvestFinishedV2Documents(
           applySmartTagging,
           evaluationJobs,
           skillReplays,
+          observabilityDigests,
         );
       }
 

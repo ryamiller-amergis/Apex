@@ -7,6 +7,7 @@ import {
   documentWorkflowRequiresRepository,
   documentWorkflowResultFile,
   isAiRunV2DocumentSpecification,
+  OBSERVABILITY_PO_DIGEST_RESULT_FILE,
   SKILL_LEARNING_RESULT_FILE,
   type AiRunV2DocumentSpecification,
 } from '../../../shared/types/aiRunV2DocumentSpec';
@@ -120,6 +121,8 @@ function isExpectedOutputPath(
       return false;
     case 'skill-learning':
       return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
+    case 'observability-po-digest':
+      return segments.length === 1 && name === OBSERVABILITY_PO_DIGEST_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -233,6 +236,11 @@ function assertExpectedOutputSet(
     case 'skill-learning':
       if (names.length !== 1 || names[0] !== SKILL_LEARNING_RESULT_FILE) {
         throw new Error(`Document workflow did not produce ${SKILL_LEARNING_RESULT_FILE}`);
+      }
+      return;
+    case 'observability-po-digest':
+      if (names.length !== 1 || names[0] !== OBSERVABILITY_PO_DIGEST_RESULT_FILE) {
+        throw new Error(`Document workflow did not produce ${OBSERVABILITY_PO_DIGEST_RESULT_FILE}`);
       }
       return;
     default: {

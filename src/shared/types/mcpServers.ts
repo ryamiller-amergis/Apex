@@ -282,6 +282,8 @@ export interface McpServerConnectionPublic {
   toolNames: string[];
   authMode: McpServerAuthMode;
   oauthConnected: boolean;
+  oauthClientId?: string;
+  hasOAuthClientSecret?: boolean;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -302,6 +304,8 @@ export interface CreateMcpServerRequest {
   headers?: Record<string, string>;
   secrets?: Array<{ name: string; value: string }>;
   authMode?: McpServerAuthMode;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
 }
 
 export interface UpdateMcpServerRequest {
@@ -314,6 +318,8 @@ export interface UpdateMcpServerRequest {
   headers?: Record<string, string>;
   toolNames?: string[];
   authMode?: McpServerAuthMode;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
   baseUrl?: string;
   operations?: McpServerOperation[];
   openApiDocument?: unknown;
