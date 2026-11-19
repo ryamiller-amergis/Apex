@@ -1,4 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  AiExperienceGranularity,
+  AiExperienceResponse,
+  AiExperienceWindow,
+} from '../../shared/types/aiExperience';
 import type { EffortLevel } from '../../shared/types/effort';
 import type {
   CaptureHealthResponse,
@@ -144,5 +149,38 @@ export function useGenerateObservabilityPoDigest(project: string | undefined) {
           query.queryKey[2] !== data.digest.window,
       });
     },
+  });
+}
+
+export function buildAiExperienceQueryUrl(
+  flagProject: string,
+  scopeProject: string,
+  window: AiExperienceWindow,
+  granularity: AiExperienceGranularity,
+): string {
+  const params = new URLSearchParams({
+    project: flagProject,
+    scopeProject,
+    window,
+    granularity,
+  });
+  return `/api/platform-admin/observability/ai-experience?${params.toString()}`;
+}
+
+export function useObservabilityAiExperience(
+  flagProject: string | undefined,
+  scopeProject: string,
+  window: AiExperienceWindow,
+  granularity: AiExperienceGranularity,
+  enabled = true,
+) {
+  return useQuery<AiExperienceResponse, ObservabilityApiError>({
+    queryKey: ['observability-ai-experience', flagProject, scopeProject, window, granularity],
+    queryFn: () =>
+      observabilityFetch<AiExperienceResponse>(
+        buildAiExperienceQueryUrl(flagProject!, scopeProject, window, granularity),
+      ),
+    enabled: Boolean(flagProject && enabled),
+    staleTime: 30_000,
   });
 }

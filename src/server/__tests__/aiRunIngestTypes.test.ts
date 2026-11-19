@@ -9,12 +9,13 @@ import {
 } from '../../shared/types/aiRunIngest';
 
 describe('AI-run ingest shared types', () => {
-  it('TBI-005 DoD-0: exposes the four closed ingest variants', () => {
+  it('TBI-005 DoD-0: exposes the closed ingest variants (including summary)', () => {
     expect(AI_RUN_INGEST_KINDS).toEqual([
       'heartbeat',
       'progress',
       'cancel_ack',
       'terminal',
+      'summary',
     ]);
     for (const kind of AI_RUN_INGEST_KINDS) {
       expect(isAiRunIngestKind(kind)).toBe(true);

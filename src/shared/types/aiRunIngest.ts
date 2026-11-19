@@ -4,6 +4,10 @@ import type {
   SseEvent,
 } from './chat';
 import type {
+  HarnessPendingControl,
+  HarnessRecreateReason,
+} from './chatHarness';
+import type {
   AgentRunCancelState,
   AgentRunExecutionSnapshot,
   AgentRunLane,
@@ -16,6 +20,7 @@ export const AI_RUN_INGEST_KINDS = [
   'progress',
   'cancel_ack',
   'terminal',
+  'summary',
 ] as const;
 
 export type AiRunIngestKind = (typeof AI_RUN_INGEST_KINDS)[number];
@@ -55,6 +60,16 @@ export type AiRunCancelAckIngest = AiRunIngestBase & {
   kind: 'cancel_ack';
 };
 
+export type AiRunSummaryIngestStatus = 'running' | 'completed' | 'error' | 'fallback';
+
+export type AiRunSummaryIngest = AiRunIngestBase & {
+  kind: 'summary';
+  status: AiRunSummaryIngestStatus;
+  text?: string;
+  commandId?: string;
+  coversThroughOrdinal?: number;
+};
+
 /**
  * S6 owns enforcing artifact durability before unchanged completion. S3/S4
  * establish and safely parse the flag without claiming that final ordering.
@@ -71,6 +86,10 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
    * Only applied on successful `completed` terminals for the interactive lane.
    */
   cursorAgentId?: string | null;
+  /** Clears `chat_threads.cursor_agent_id` through fenced ingest after a stalled resume. */
+  clearCursorAgentId?: boolean;
+  /** Reason a recreated interactive turn could not resume its prior agent. */
+  recreateReason?: HarnessRecreateReason;
   /**
    * Optional actor-uploaded artifact manifest ref. Verified/applied before
    * terminal success for dapr-actor-v2.
@@ -100,6 +119,7 @@ export type InteractiveTurnStageTimings = Readonly<{
   workspaceMs?: number;
   agentAcquireMs?: number;
   agentMode?: 'warm' | 'resumed' | 'recreated';
+  recreateReason?: HarnessRecreateReason;
   /** From `send` to the first SDK delta or stream event. */
   firstEventMs?: number;
   /** From `send` to the first assistant text token. */
@@ -111,7 +131,8 @@ export type AiRunIngestBody =
   | AiRunHeartbeatIngest
   | AiRunProgressIngest
   | AiRunCancelAckIngest
-  | AiRunTerminalIngest;
+  | AiRunTerminalIngest
+  | AiRunSummaryIngest;
 
 export type AiRunIngestErrorCode =
   | 'AI_RUN_VALIDATION'
@@ -194,6 +215,8 @@ export type AiRunBootstrapResult =
 export type AiRunIngestResponse = Readonly<{
   ok: boolean;
   cancelRequested: boolean;
+  /** Slow-path pending control commands when a Redis control message was missed. */
+  pendingControl?: ReadonlyArray<HarnessPendingControl>;
 }>;
 
 export function isInteractiveActorBootstrap(

@@ -218,9 +218,62 @@ export const chatThreads = pgTable('chat_threads', {
   flagged: boolean('flagged').notNull().default(false),
   flaggedAt: timestamp('flagged_at', { withTimezone: true, mode: 'string' }),
   activeRunId: text('active_run_id'),
+  harnessArea: text('harness_area'),
+  harnessVersion: integer('harness_version'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
 });
+
+export const chatThreadSummaries = pgTable('chat_thread_summaries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  runId: text('run_id').notNull(),
+  summaryText: text('summary_text').notNull(),
+  source: text('source').$type<'auto' | 'user'>().notNull(),
+  isFallback: boolean('is_fallback').notNull().default(false),
+  coversThroughOrdinal: integer('covers_through_ordinal').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  sourceCheck: check(
+    'chat_thread_summaries_source_check',
+    sql`${t.source} IN ('auto', 'user')`,
+  ),
+  latestFullIdx: index('idx_chat_thread_summaries_latest_full')
+    .on(t.threadId, t.createdAt.desc())
+    .where(sql`${t.isFallback} = false`),
+  threadCreatedIdx: index('idx_chat_thread_summaries_thread_created')
+    .on(t.threadId, t.createdAt.desc()),
+}));
+
+export const chatThreadCommands = pgTable('chat_thread_commands', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => chatThreads.id, { onDelete: 'cascade' }),
+  commandId: uuid('command_id').notNull(),
+  runId: text('run_id'),
+  kind: text('kind').$type<'send' | 'steer' | 'summarize' | 'cancel' | 'retry'>().notNull(),
+  status: text('status').$type<'accepted' | 'applied' | 'rejected' | 'queued'>().notNull(),
+  reason: text('reason'),
+  payload: jsonb('payload').$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  threadCommandUq: unique('uq_chat_thread_commands_thread_command').on(t.threadId, t.commandId),
+  kindCheck: check(
+    'chat_thread_commands_kind_check',
+    sql`${t.kind} IN ('send', 'steer', 'summarize', 'cancel', 'retry')`,
+  ),
+  statusCheck: check(
+    'chat_thread_commands_status_check',
+    sql`${t.status} IN ('accepted', 'applied', 'rejected', 'queued')`,
+  ),
+  steerCountIdx: index('idx_chat_thread_commands_steer_count').on(t.threadId, t.runId, t.kind),
+  payloadPurgeIdx: index('idx_chat_thread_commands_payload_purge')
+    .on(t.createdAt)
+    .where(sql`${t.payload} IS NOT NULL`),
+  staleAcceptedIdx: index('idx_chat_thread_commands_stale_accepted')
+    .on(t.updatedAt)
+    .where(sql`${t.status} = 'accepted'`),
+}));
 
 /** Files a V2 chat turn wrote under `.ai-pilot/`, so App Service reads them without the share. */
 export const chatThreadOutputs = pgTable('chat_thread_outputs', {
@@ -263,10 +316,26 @@ export const chatMessageAttachments = pgTable('chat_message_attachments', {
 
 export const threadsRelations = relations(chatThreads, ({ many }) => ({
   messages: many(chatMessages),
+  summaries: many(chatThreadSummaries),
+  commands: many(chatThreadCommands),
   interviews: many(interviews),
   prds: many(prds),
   testCases: many(testCases),
   designDocs: many(designDocs, { relationName: 'designDocChatThread' }),
+}));
+
+export const chatThreadSummariesRelations = relations(chatThreadSummaries, ({ one }) => ({
+  thread: one(chatThreads, {
+    fields: [chatThreadSummaries.threadId],
+    references: [chatThreads.id],
+  }),
+}));
+
+export const chatThreadCommandsRelations = relations(chatThreadCommands, ({ one }) => ({
+  thread: one(chatThreads, {
+    fields: [chatThreadCommands.threadId],
+    references: [chatThreads.id],
+  }),
 }));
 
 export const messagesRelations = relations(chatMessages, ({ one, many }) => ({
@@ -2444,6 +2513,43 @@ export const agentRunEvents = pgTable('agent_run_events', {
   sourceSequenceUniq: unique('agent_run_events_source_sequence_key').on(t.runId, t.sourceInstance, t.sequence),
   threadOrdinalIdx: index('idx_agent_run_events_thread_ordinal').on(t.threadId, t.ordinal),
   runSequenceIdx: index('idx_agent_run_events_run_sequence').on(t.runId, t.sequence),
+}));
+
+export type AiTurnStageAgentMode = 'warm' | 'resumed' | 'recreated' | 'unknown';
+export type AiTurnStageStatus = 'completed' | 'failed' | 'cancelled';
+
+export const aiTurnStageTimings = pgTable('ai_turn_stage_timings', {
+  runId: text('run_id').primaryKey().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull(),
+  projectId: text('project_id'),
+  area: text('area'),
+  workflowClass: text('workflow_class'),
+  status: text('status').$type<AiTurnStageStatus>().notNull(),
+  agentMode: text('agent_mode').$type<AiTurnStageAgentMode>().notNull().default('unknown'),
+  recreateReason: text('recreate_reason'),
+  grounded: boolean('grounded').notNull().default(false),
+  workspaceMs: integer('workspace_ms'),
+  agentAcquireMs: integer('agent_acquire_ms'),
+  firstEventMs: integer('first_event_ms'),
+  firstTokenMs: integer('first_token_ms'),
+  workerTurnMs: integer('worker_turn_ms'),
+  admittedToTerminalMs: integer('admitted_to_terminal_ms'),
+  dispatchedToTerminalMs: integer('dispatched_to_terminal_ms'),
+  recordedAt: timestamp('recorded_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  recordedIdx: index('idx_ai_turn_stage_timings_recorded').on(t.recordedAt),
+  areaRecordedIdx: index('idx_ai_turn_stage_timings_area_recorded').on(t.area, t.recordedAt),
+  projectRecordedIdx: index('idx_ai_turn_stage_timings_project_recorded')
+    .on(t.projectId, t.recordedAt)
+    .where(sql`${t.projectId} IS NOT NULL`),
+  statusCheck: check(
+    'ai_turn_stage_timings_status_check',
+    sql`${t.status} IN ('completed', 'failed', 'cancelled')`,
+  ),
+  agentModeCheck: check(
+    'ai_turn_stage_timings_agent_mode_check',
+    sql`${t.agentMode} IN ('warm', 'resumed', 'recreated', 'unknown')`,
+  ),
 }));
 
 // ── AI Run V2 control plane (Task 3 persistence contracts) ─────────────────────

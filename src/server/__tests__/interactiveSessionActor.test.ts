@@ -2341,6 +2341,18 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       maxAttempts: 1,
       reason: 'reconnecting',
     });
+    const retryingIdx = live.findIndex(
+      (e) => e.event.type === 'retrying' && e.event.reason === 'reconnecting',
+    );
+    const thinkingAfterRetry = live
+      .slice(retryingIdx + 1)
+      .find(
+        (e) =>
+          e.event.type === 'phase' &&
+          e.event.phase === 'analysis' &&
+          e.event.status === 'running',
+      );
+    expect(thinkingAfterRetry).toBeDefined();
     expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
       status: 'completed',
       cursorAgentId: 'agent-recreated-fresh',
@@ -2431,5 +2443,17 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
       maxAttempts: 1,
       reason: 'reconnecting',
     });
+    const retryingIdx = live.findIndex(
+      (e) => e.event.type === 'retrying' && e.event.reason === 'reconnecting',
+    );
+    const thinkingAfterRetry = live
+      .slice(retryingIdx + 1)
+      .find(
+        (e) =>
+          e.event.type === 'phase' &&
+          e.event.phase === 'analysis' &&
+          e.event.status === 'running',
+      );
+    expect(thinkingAfterRetry).toBeDefined();
   }, 15_000);
 });

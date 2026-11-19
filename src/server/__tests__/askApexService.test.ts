@@ -560,7 +560,7 @@ describe('openAskApexThread', () => {
         skillPath: '.cursor/skills/app-knowledge/SKILL.md',
         askApex: true,
       }),
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true, harness: { area: 'ask-apex', version: 1 } },
     );
   });
 });

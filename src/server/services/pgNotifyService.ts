@@ -17,8 +17,10 @@ import os from 'os';
 import { randomUUID } from 'crypto';
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import type { AgentRunTerminalReason } from '../../shared/types/agentRunLifecycle';
+import type { HarnessReceipt } from '../../shared/types/chatHarness';
 
 const CHANNEL = 'agent_run_events';
+const THREAD_COMMANDS_CHANNEL = 'thread_commands';
 const RECONNECT_DELAY_MS = 3_000;
 const PAYLOAD_MAX_BYTES = 7_500; // PG NOTIFY payload limit is ~8000 bytes
 const MAX_DELIVERED_EVENT_IDS = 2_000;
@@ -59,9 +61,16 @@ interface ChannelPayload {
   event?: AgentRunEventEnvelope;
 }
 
+interface ThreadCommandChannelPayload {
+  threadId: string;
+  receipt: HarnessReceipt;
+}
+
 type EventCallback = (event: AgentRunEventEnvelope) => void;
+type ThreadCommandCallback = (receipt: HarnessReceipt) => void;
 
 const subscribers = new Map<string, Set<EventCallback>>();
+const threadCommandSubscribers = new Map<string, Set<ThreadCommandCallback>>();
 /** Readers that want every thread's events. See `subscribeAllRunEvents`. */
 const globalSubscribers = new Set<EventCallback>();
 const deliveredEventIds = new Set<string>();
@@ -123,8 +132,12 @@ async function acquireListenConnection(): Promise<void> {
     listenClient = await pool.connect();
 
     listenClient.on('notification', (msg) => {
-      if (msg.channel !== CHANNEL || !msg.payload) return;
-      void handleNotificationPayload(msg.payload);
+      if (!msg.payload) return;
+      if (msg.channel === CHANNEL) {
+        void handleNotificationPayload(msg.payload);
+      } else if (msg.channel === THREAD_COMMANDS_CHANNEL) {
+        handleThreadCommandPayload(msg.payload);
+      }
     });
 
     listenClient.on('error', (err) => {
@@ -140,6 +153,7 @@ async function acquireListenConnection(): Promise<void> {
     });
 
     await listenClient.query(`LISTEN ${CHANNEL}`);
+    await listenClient.query(`LISTEN ${THREAD_COMMANDS_CHANNEL}`);
     console.log('[pgNotify] LISTEN connection established');
   } catch (err) {
     console.error('[pgNotify] Failed to acquire LISTEN connection:', (err as Error).message);
@@ -201,6 +215,22 @@ async function handleNotificationPayload(payload: string): Promise<void> {
   }
 }
 
+function handleThreadCommandPayload(payload: string): void {
+  try {
+    const parsed = JSON.parse(payload) as ThreadCommandChannelPayload;
+    if (
+      parsed &&
+      typeof parsed.threadId === 'string' &&
+      parsed.receipt &&
+      typeof parsed.receipt.commandId === 'string'
+    ) {
+      dispatchThreadCommandForTest(parsed.threadId, parsed.receipt);
+    }
+  } catch {
+    // Ignore malformed notifications.
+  }
+}
+
 function releaseAndReconnect(): void {
   if (listenClient) {
     try { listenClient.release(true); } catch { /* already released */ }
@@ -237,6 +267,7 @@ export async function shutdownPgNotify(): Promise<void> {
   if (listenClient) {
     try {
       await listenClient.query(`UNLISTEN ${CHANNEL}`);
+      await listenClient.query(`UNLISTEN ${THREAD_COMMANDS_CHANNEL}`);
       listenClient.release();
     } catch { /* best effort */ }
     listenClient = null;
@@ -627,5 +658,62 @@ export function dispatchRunEventForTest(event: AgentRunEventEnvelope): void {
   if (!subs) return;
   for (const callback of subs) {
     try { callback(event); } catch { /* subscriber error */ }
+  }
+}
+
+/**
+ * Fan out a text-free harness command receipt update across App Service instances.
+ * Payload contains ONLY `{ threadId, receipt }` — never command text or payloads.
+ */
+export async function notifyThreadCommand(
+  threadId: string,
+  receipt: HarnessReceipt,
+): Promise<void> {
+  const sanitizedReceipt: HarnessReceipt = {
+    commandId: receipt.commandId,
+    kind: receipt.kind,
+    status: receipt.status,
+    ...(receipt.reason ? { reason: receipt.reason } : {}),
+    ...(receipt.runId ? { runId: receipt.runId } : {}),
+    updatedAt: receipt.updatedAt,
+  };
+  const payload = JSON.stringify({
+    threadId,
+    receipt: sanitizedReceipt,
+  } satisfies ThreadCommandChannelPayload);
+  await pool.query(`SELECT pg_notify($1, $2)`, [THREAD_COMMANDS_CHANNEL, payload]);
+}
+
+/**
+ * Subscribe to cross-instance harness command receipt updates for a thread.
+ */
+export function subscribeThreadCommands(
+  threadId: string,
+  callback: ThreadCommandCallback,
+): () => void {
+  let subs = threadCommandSubscribers.get(threadId);
+  if (!subs) {
+    subs = new Set();
+    threadCommandSubscribers.set(threadId, subs);
+  }
+  subs.add(callback);
+
+  return () => {
+    subs!.delete(callback);
+    if (subs!.size === 0) {
+      threadCommandSubscribers.delete(threadId);
+    }
+  };
+}
+
+/** Exported dispatch helper for unit testing `thread_commands` LISTEN delivery. */
+export function dispatchThreadCommandForTest(
+  threadId: string,
+  receipt: HarnessReceipt,
+): void {
+  const subs = threadCommandSubscribers.get(threadId);
+  if (!subs) return;
+  for (const callback of subs) {
+    try { callback(receipt); } catch { /* subscriber error */ }
   }
 }

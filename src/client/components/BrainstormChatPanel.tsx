@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { QueryClientContext } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  BRAINSTORM_FAILURE_SUMMARIES,
   BRAINSTORM_MESSAGE_MAX_LENGTH,
   type BrainstormActivityItem,
   type BrainstormMessageDto,
@@ -18,21 +20,24 @@ import {
   type BrainstormActionId,
   type BrainstormComposerMode,
 } from '../../shared/types/brainstormArtifact';
+import type { AgentActivityItem } from '../chatHarness/types';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { useAvailableModelSelection } from '../hooks/useAvailableModelSelection';
 import { useBrainstormArtifact } from '../hooks/useBrainstormArtifact';
 import { useBrainstormChat } from '../hooks/useBrainstormChat';
 import type { AgentChatSession } from '../hooks/useAgentChatSession';
-import { useBrainstormMessages } from '../hooks/useBrainstormSessions';
+import { brainstormKeys, useBrainstormMessages } from '../hooks/useBrainstormSessions';
 import { useBrainstormCitations, useBrainstormSources } from '../hooks/useBrainstormSources';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useAvailableModels } from '../hooks/useProjectSkillConfig';
 import { useSpeechInput } from '../hooks/useSpeechInput';
-import { AgentComposer } from './agentChat';
-import { ChatRunProgressLabel } from './ChatRunProgressLabel';
-import { friendlyToolActivityLabel } from '../../shared/utils/chatProgressCopy';
+import {
+  AgentHarnessPanel,
+  AgentLiveWorkBox,
+  AgentMessageFailure,
+  AgentThoughtProcess,
+} from './agentChat';
 import { BrainstormCitationsRow } from './BrainstormCitationsRow';
-import { BrainstormMessageFailure } from './BrainstormMessageFailure';
 import { BrainstormReadOnlyBanner } from './BrainstormReadOnlyBanner';
 import { BrainstormSuggestionChips } from './BrainstormSuggestionChips';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
@@ -72,34 +77,27 @@ export function orderBrainstormMessages(messages: readonly BrainstormMessageDto[
   });
 }
 
+const BRAINSTORM_THOUGHT_PROCESS_TEST_IDS = {
+  drawer: 'brainstorm-thought-process',
+  toggle: 'brainstorm-thought-process-toggle',
+  thinking: 'brainstorm-agent-thinking',
+  steps: 'brainstorm-agent-steps',
+  toolGroup: 'brainstorm-tool-group',
+} as const;
+
+const BRAINSTORM_LIVE_WORK_TEST_IDS = {
+  progress: 'brainstorm-agent-progress',
+  busy: 'brainstorm-agent-busy',
+  thinking: 'brainstorm-agent-thinking',
+  steps: 'brainstorm-agent-steps',
+  toolGroup: 'brainstorm-tool-group',
+} as const;
+
 function toolTarget(args: unknown): string | null {
   if (!args || typeof args !== 'object') return null;
   const record = args as { target?: unknown; args?: unknown };
   if (typeof record.target === 'string' && record.target.trim()) return record.target.trim();
   return record.args ? toolTarget(record.args) : null;
-}
-
-function cleanTargetLabel(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const sourcesIdx = trimmed.replace(/\\/g, '/').indexOf('sources/');
-  if (sourcesIdx >= 0) {
-    return trimmed.replace(/\\/g, '/').slice(sourcesIdx);
-  }
-  return trimmed;
-}
-
-function activitySummaryLabel(items: BrainstormActivityItem[]): string {
-  const toolCount = items.filter((item) => item.kind === 'tool').length;
-  const hasThinking = items.some((item) => item.kind === 'thinking');
-  if (toolCount > 0 && hasThinking) {
-    return `Thought process · ${toolCount} ${toolCount === 1 ? 'step' : 'steps'}`;
-  }
-  if (toolCount > 0) {
-    return `${toolCount} ${toolCount === 1 ? 'step' : 'steps'} evaluated`;
-  }
-  return 'Thought process';
 }
 
 function ModeIcon({ mode }: { mode: BrainstormComposerMode }) {
@@ -268,112 +266,6 @@ function BrainstormModePicker({
   );
 }
 
-function BrainstormActivityLog({
-  items,
-}: {
-  items: BrainstormActivityItem[];
-}) {
-  const scrollerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [items]);
-
-  return (
-    <div ref={scrollerRef} className={styles.activityScroller}>
-      {items.map((item) => {
-        if (item.kind === 'thinking') {
-          if (!item.text) return null;
-          return (
-            <p
-              key={item.id}
-              className={styles.thinking}
-              {...{ 'data-testid': 'brainstorm-agent-thinking' }}
-            >
-              {item.text}
-            </p>
-          );
-        }
-        const target = cleanTargetLabel(item.target);
-        const label = friendlyToolActivityLabel(item.toolName ?? 'tool', {
-          ...(item.target ? { target: item.target } : {}),
-        });
-        const status = item.status === 'running'
-          ? 'Working: '
-          : item.status === 'error'
-            ? 'Could not finish: '
-            : 'Finished: ';
-        return (
-          <div key={item.id} className={styles.stepRow}>
-            <span className={styles.stepBullet} aria-hidden="true">•</span>
-            <span className={styles.stepItem}>
-              <span className={styles.stepStatus}>{status}</span>
-              <span className={styles.stepLabel}>{label}</span>
-              {target ? <code className={styles.stepTarget}>{` — ${target}`}</code> : null}
-            </span>
-          </div>
-        );
-      })}
-      {items.some((item) => item.kind === 'tool') ? (
-        <ul className={styles.srOnlySteps} {...{ 'data-testid': 'brainstorm-agent-steps' }}>
-          {items
-            .filter((item) => item.kind === 'tool')
-            .map((tool) => {
-              const target = cleanTargetLabel(tool.target);
-              const label = friendlyToolActivityLabel(tool.toolName ?? 'tool', {
-                ...(tool.target ? { target: tool.target } : {}),
-              });
-              const status = tool.status === 'running'
-                ? 'Working: '
-                : tool.status === 'error'
-                  ? 'Could not finish: '
-                  : 'Finished: ';
-              return (
-                <li key={tool.id}>
-                  {status}
-                  {label}
-                  {target ? ` — ${target}` : ''}
-                </li>
-              );
-            })}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
-function BrainstormCollapsibleTrace({
-  items,
-  defaultOpen = false,
-}: {
-  items: BrainstormActivityItem[];
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  if (items.length === 0) return null;
-  return (
-    <details
-      className={styles.traceDrawer}
-      open={open}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-      {...{ 'data-testid': 'brainstorm-thought-process' }}
-    >
-      <summary
-        className={styles.traceSummary}
-        {...{ 'data-testid': 'brainstorm-thought-process-toggle' }}
-      >
-        <span className={styles.traceChevron} aria-hidden="true">
-          {open ? '▼' : '▶'}
-        </span>
-        <span>{activitySummaryLabel(items)}</span>
-      </summary>
-      <BrainstormActivityLog items={items} />
-    </details>
-  );
-}
-
 function BrainstormAgentWork({
   chat,
   text,
@@ -386,7 +278,14 @@ function BrainstormAgentWork({
   restoringSources?: boolean;
 }) {
   const toolProgress = useMemo(() => chat.toolProgress ?? [], [chat.toolProgress]);
-  const toolRunning = toolProgress.some((tool) => tool.status === 'running');
+  const harnessActivity = useMemo(() => chat.activity ?? [], [chat.activity]);
+  const toolRunning =
+    toolProgress.some((tool) => tool.status === 'running') ||
+    harnessActivity.some(
+      (item) =>
+        (item.kind === 'tool' && item.status === 'running') ||
+        (item.kind === 'tool-group' && item.tools?.some((tool) => tool.status === 'running')),
+    );
   const writing = Boolean(text && text.trim()) && !toolRunning;
   const activityLabel =
     chat.progressLabel ||
@@ -457,28 +356,34 @@ function BrainstormAgentWork({
     });
   }, [toolProgress]);
 
-  const items =
-    liveItems.length > 0
-      ? liveItems
-      : persistedActivity && persistedActivity.length > 0
-        ? persistedActivity
-        : [];
+  const items: ReadonlyArray<AgentActivityItem> =
+    harnessActivity.length > 0
+      ? harnessActivity
+      : liveItems.length > 0
+        ? liveItems
+        : persistedActivity && persistedActivity.length > 0
+          ? persistedActivity
+          : [];
+
   return (
     <div aria-live="polite" aria-busy="true" {...{ 'data-testid': 'brainstorm-streaming' }}>
       {!writing ? (
-        <div className={styles.liveWorkBox} {...{ 'data-testid': 'brainstorm-agent-progress' }}>
-          <p className={styles.activity}>
-            <span className={styles.spinner} aria-hidden="true" {...{ 'data-testid': 'brainstorm-agent-busy' }} />
-            <ChatRunProgressLabel
-              fallbackLabel={activityLabel}
-              progressPhase={chat.progressPhase ?? null}
-              toolProgress={toolProgress}
-            />
-          </p>
-          {items.length > 0 ? <BrainstormActivityLog items={items} /> : null}
-        </div>
+        <AgentLiveWorkBox
+          activity={items}
+          progressLabel={chat.progressLabel ?? null}
+          progressPhase={chat.progressPhase ?? null}
+          toolProgress={toolProgress}
+          fallbackLabel={activityLabel}
+          testIdPrefix="brainstorm"
+          testIds={BRAINSTORM_LIVE_WORK_TEST_IDS}
+          className={styles.liveWorkBox}
+        />
       ) : items.length > 0 ? (
-        <BrainstormCollapsibleTrace items={items} />
+        <AgentThoughtProcess
+          items={items}
+          testIdPrefix="brainstorm"
+          testIds={BRAINSTORM_THOUGHT_PROCESS_TEST_IDS}
+        />
       ) : null}
       {text ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown> : null}
     </div>
@@ -486,6 +391,7 @@ function BrainstormAgentWork({
 }
 
 export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ project, session, onSuggestion }) => {
+  const queryClient = useContext(QueryClientContext);
   const messagesQuery = useBrainstormMessages(project, session.id);
   const chat = useBrainstormChat(project, session);
   const [draft, setDraft] = useState('');
@@ -576,23 +482,53 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
     if (canMutate) inputRef.current?.focus();
   }, [canMutate, session.id]);
 
-  const chatMessageCount = chat.messages?.length ?? 0;
-
-  // Stream status flips or the final message arrives; reread the ledger so the
-  // completed row replaces the streaming row immediately.
-  useEffect(() => {
+  const invalidateLedger = useCallback(() => {
+    if (queryClient) {
+      const messagesKey = brainstormKeys?.messages
+        ? brainstormKeys.messages(project, session.id)
+        : (['brainstorm', project, 'messages', session.id] as const);
+      const sessionKey = brainstormKeys?.session
+        ? brainstormKeys.session(project, session.id)
+        : (['brainstorm', project, 'session', session.id] as const);
+      void queryClient.invalidateQueries({ queryKey: messagesKey });
+      void queryClient.invalidateQueries({ queryKey: sessionKey });
+      return;
+    }
     void refetch();
-  }, [chat.status, chatMessageCount, refetch]);
+  }, [project, queryClient, refetch, session.id]);
 
-  // If the ledger still shows a streaming row, poll lightly until the terminal
-  // write lands so the thinking header never lingers on a finished reply.
+  const trackedSessionIdRef = useRef<string>(session.id);
+  const lastTerminalRevisionRef = useRef<number>(chat.terminalRevision ?? 0);
+  const prevStatusRef = useRef<AgentChatSession['status']>(chat.status);
+
+  // Event-driven ledger refresh: invalidate Brainstorm queries once per terminal
+  // run transition (driven by harness terminalRevision, or status leaving running
+  // when mocked tests omit terminalRevision).
   useEffect(() => {
-    if (!hasStreamingRow) return;
-    const timer = window.setInterval(() => {
-      void refetch();
-    }, 1_500);
-    return () => window.clearInterval(timer);
-  }, [hasStreamingRow, refetch]);
+    if (trackedSessionIdRef.current !== session.id) {
+      trackedSessionIdRef.current = session.id;
+      lastTerminalRevisionRef.current = chat.terminalRevision ?? 0;
+      prevStatusRef.current = chat.status;
+      return;
+    }
+
+    const hasTerminalRevision = typeof chat.terminalRevision === 'number';
+    const revisionAdvanced =
+      hasTerminalRevision && chat.terminalRevision > lastTerminalRevisionRef.current;
+    const statusLeftRunning =
+      !hasTerminalRevision &&
+      prevStatusRef.current === 'running' &&
+      chat.status !== 'running';
+
+    if (hasTerminalRevision) {
+      lastTerminalRevisionRef.current = chat.terminalRevision;
+    }
+    prevStatusRef.current = chat.status;
+
+    if (revisionAdvanced || statusLeftRunning) {
+      invalidateLedger();
+    }
+  }, [chat.status, chat.terminalRevision, invalidateLedger, session.id]);
 
   const showPending = pendingText !== null
     && !ledger.some((message) => message.role === 'user' && message.content === pendingText);
@@ -633,11 +569,12 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
     setComposerMode(nextMode);
   };
 
-  const handleSend = async () => {
-    if (!canSend) return;
+  const handleSend = async (incomingText?: string) => {
+    if (!canSend) return false;
     const outgoingAttachments = [...attachments];
     const previousDraft = draft;
-    const text = trimmed || 'Please use the attached files as additional context.';
+    const rawTrimmed = typeof incomingText === 'string' ? incomingText.trim() : trimmed;
+    const text = rawTrimmed || 'Please use the attached files as additional context.';
     speech.stop();
     setPendingText(text);
     setDraft('');
@@ -656,6 +593,7 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
         setDraft(previousDraft);
       }
       await refetch();
+      return sent;
     } finally {
       setPendingText(null);
     }
@@ -671,6 +609,21 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
       setRetryingId(null);
     }
   };
+
+  const effectiveIsRunning = busy && Boolean(chat.isRunning);
+  const effectiveIsSending = pendingText !== null || Boolean(chat.isSending) || retryingId !== null;
+  const harnessSession = useMemo(
+    () => ({
+      ...chat,
+      isRunning: effectiveIsRunning,
+      isSending: effectiveIsSending,
+      isAwaitingAgentResponse: busy && Boolean(chat.isAwaitingAgentResponse),
+      canWrite: canMutate && (chat.canWrite ?? true),
+      snapshotLoaded: true,
+      snapshotError: null,
+    }),
+    [busy, canMutate, chat, effectiveIsRunning, effectiveIsSending],
+  );
 
   let thread: React.ReactNode;
   if (messagesQuery.isLoading) {
@@ -712,6 +665,9 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
           const isStreaming = message.status === 'streaming';
           const text = isStreaming ? chat.streamingText || message.content : message.content;
           const incomplete = !isUser && (message.status === 'failed' || message.status === 'cancelled');
+          const failureReason =
+            message.failureSummary
+            ?? BRAINSTORM_FAILURE_SUMMARIES[message.failureCode ?? 'unknown'];
           return (
             <article
               key={message.id}
@@ -728,14 +684,22 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
               ) : text ? (
                 <div className={incomplete ? styles.incomplete : undefined}>
                   {!isUser && message.activity && message.activity.length > 0 ? (
-                    <BrainstormCollapsibleTrace items={message.activity} />
+                    <AgentThoughtProcess
+                      items={message.activity}
+                      testIdPrefix="brainstorm"
+                      testIds={BRAINSTORM_THOUGHT_PROCESS_TEST_IDS}
+                    />
                   ) : null}
                   {/* data-testid-exempt — MarkdownWithMermaid renders message body inside BrainstormChatPanel */}
                   <MarkdownWithMermaid content={text} skipHtml />
                   {incomplete && <span className={styles.incompleteLabel}>Incomplete response</span>}
                 </div>
               ) : !isUser && message.activity && message.activity.length > 0 ? (
-                <BrainstormCollapsibleTrace items={message.activity} />
+                <AgentThoughtProcess
+                  items={message.activity}
+                  testIdPrefix="brainstorm"
+                  testIds={BRAINSTORM_THOUGHT_PROCESS_TEST_IDS}
+                />
               ) : null}
               {!isUser && message.status === 'completed' && (
                 <BrainstormCitationsRow
@@ -747,11 +711,19 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
                 <BrainstormSuggestionChips project={project} sessionId={session.id} onSelect={onSuggestion} />
               )}
               {incomplete && (
-                <BrainstormMessageFailure
-                  message={message}
+                <AgentMessageFailure
+                  reason={failureReason}
+                  status={message.status === 'cancelled' ? 'cancelled' : 'failed'}
+                  failedAt={message.createdAt}
                   canRetry={canMutate && retryable?.id === message.id}
                   isRetrying={retryingId === message.id}
                   onRetry={() => { void handleRetry(message); }}
+                  testIdPrefix="brainstorm"
+                  testIds={{
+                    root: `brainstorm-message-failure-${message.id}`,
+                    badge: 'brainstorm-message-failed',
+                    retry: 'brainstorm-retry',
+                  }}
                 />
               )}
             </article>
@@ -778,96 +750,106 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
           Restoring sources
         </p>
       )}
-      <div
-        ref={threadRef}
-        onScroll={handleThreadScroll}
-        className={styles.thread}
-        {...{ 'data-testid': 'brainstorm-chat-thread' }}
-      >
-        {thread}
-      </div>
-      {canMutate ? (
-        <div className={styles.composerWrap}>
-          {chat.sendError && (
+      <AgentHarnessPanel
+        area="brainstorm"
+        session={harnessSession}
+        testIdPrefix="brainstorm"
+        testIds={{
+          root: 'brainstorm-harness-panel',
+          streaming: 'brainstorm-streaming',
+          progress: 'brainstorm-agent-progress',
+          busy: 'brainstorm-agent-busy',
+          thinking: 'brainstorm-agent-thinking',
+          steps: 'brainstorm-agent-steps',
+          toolGroup: 'brainstorm-tool-group',
+          thoughtProcess: 'brainstorm-thought-process',
+          thoughtProcessToggle: 'brainstorm-thought-process-toggle',
+          failureBadge: 'brainstorm-message-failed',
+          retry: 'brainstorm-retry',
+          composer: 'brainstorm-composer',
+          composerInput: 'brainstorm-composer-input',
+          composerSend: 'brainstorm-composer-send',
+          composerStop: 'brainstorm-composer-stop',
+          composerAttach: 'brainstorm-composer-attach',
+          composerAttachments: 'brainstorm-composer-attachments',
+          composerMicrophone: 'brainstorm-composer-microphone',
+          composerModel: 'brainstorm-composer-model',
+        }}
+        draft={draft}
+        onDraftChange={(value) => setDraft(value.slice(0, BRAINSTORM_MESSAGE_MAX_LENGTH))}
+        onSend={(text) => handleSend(text)}
+        onCancel={() => { void chat.cancel(); }}
+        locked={!canMutate}
+        renderTranscript={() => (
+          <div
+            ref={threadRef}
+            onScroll={handleThreadScroll}
+            className={styles.thread}
+            {...{ 'data-testid': 'brainstorm-chat-thread' }}
+          >
+            {thread}
+          </div>
+        )}
+        composer={{
+          hideComposer: !canMutate,
+          textareaRef: inputRef,
+          disabled: !canMutate,
+          canSend,
+          allowEmptySend: true,
+          maxLength: BRAINSTORM_MESSAGE_MAX_LENGTH,
+          rows: 3,
+          maxHeight: 160,
+          autoFocus: canMutate,
+          placeholder:
+            composerMode === BRAINSTORM_EXPLORE_MODE
+              ? 'Explore an idea, ask a question, or paste a screenshot…'
+              : `Describe what to draft or update in your ${BRAINSTORM_ARTIFACT_TYPE_LABELS[composerMode].toLowerCase()}, or switch back to Explore…`,
+          before: chat.sendError ? (
             <p className={styles.sendError} role="alert">
               {chat.sendError}
             </p>
-          )}
-          {/* data-testid-exempt — AgentComposer owns brainstorm-composer and control testids */}
-          <AgentComposer
-            className={styles.composerEmbed}
-            shellClassName={styles.composerShell}
-            textareaRef={inputRef}
-            value={draft}
-            onChange={(value) => setDraft(value.slice(0, BRAINSTORM_MESSAGE_MAX_LENGTH))}
-            onSend={() => { void handleSend(); }}
-            onCancel={() => { void chat.cancel(); }}
-            disabled={!canMutate}
-            isRunning={busy && chat.isRunning}
-            isSending={pendingText !== null || chat.isSending}
-            isBusy={busy}
-            isCancelling={chat.isCancelling}
-            canSend={canSend}
-            allowEmptySend
-            rows={3}
-            maxHeight={160}
-            // eslint-disable-next-line jsx-a11y/no-autofocus -- creator chat composer focuses on session open by design
-            autoFocus={canMutate}
-            placeholder={
-              composerMode === BRAINSTORM_EXPLORE_MODE
-                ? 'Explore an idea, ask a question, or paste a screenshot…'
-                : `Describe what to draft or update in your ${BRAINSTORM_ARTIFACT_TYPE_LABELS[composerMode].toLowerCase()}, or switch back to Explore…`
-            }
-            testIdPrefix="brainstorm-composer"
-            data-testid="brainstorm-composer"
-            testIds={{
-              input: 'brainstorm-composer-input',
-              send: 'brainstorm-composer-send',
-              stop: 'brainstorm-composer-stop',
-              attach: 'brainstorm-composer-attach',
-              microphone: 'brainstorm-composer-microphone',
-              model: 'brainstorm-composer-model',
-            }}
-            modeBadge={
-              // data-testid-exempt — BrainstormModePicker owns brainstorm-composer-mode-badge and option testids
-              <BrainstormModePicker
-                value={composerMode}
-                disabled={!canMutate || busy}
-                onChange={handleModeChange}
-              />
-            }
-            model={selectedModel}
-            models={availableModels}
-            modelsLoading={modelsLoading}
-            onModelChange={setSelectedModel}
-            attachments={attachments}
-            attachmentError={attachmentError}
-            onRemoveAttachment={removeAttachment}
-            onAttachClick={openFilePicker}
-            onPasteFiles={(files) => { void addFiles(files); }}
-            speech={{
-              isListening: speech.isListening,
-              isSpeechSupported: speech.isSpeechSupported,
-              speechError: speech.speechError,
-              onToggle: () => speech.toggle(draft),
-            }}
-            fileInput={
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".txt,.md,.json,.csv,.ts,.tsx,.js,.jsx,.py,.sql,.yml,.yaml,.xml,.html,.css,.docx,.png,.jpg,.jpeg,.gif,.webp"
-                onChange={(event) => { void handleAttachmentChange(event); }}
-                style={{ display: 'none' }}
-                {...{ 'data-testid': 'brainstorm-composer-file-input' }}
-              />
-            }
-          />
-        </div>
-      ) : (
+          ) : undefined,
+          modeBadge: (
+            // data-testid-exempt — BrainstormModePicker owns brainstorm-composer-mode-badge and option testids
+            <BrainstormModePicker
+              value={composerMode}
+              disabled={!canMutate || busy}
+              onChange={handleModeChange}
+            />
+          ),
+          model: selectedModel,
+          models: availableModels,
+          modelsLoading,
+          onModelChange: setSelectedModel,
+          attachments,
+          attachmentError,
+          onRemoveAttachment: removeAttachment,
+          onAttachClick: openFilePicker,
+          onPasteFiles: (files) => { void addFiles(files); },
+          speech: {
+            isListening: speech.isListening,
+            isSpeechSupported: speech.isSpeechSupported,
+            speechError: speech.speechError,
+            onToggle: () => speech.toggle(draft),
+          },
+          fileInput: (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.md,.json,.csv,.ts,.tsx,.js,.jsx,.py,.sql,.yml,.yaml,.xml,.html,.css,.docx,.png,.jpg,.jpeg,.gif,.webp"
+              onChange={(event) => { void handleAttachmentChange(event); }}
+              style={{ display: 'none' }}
+              {...{ 'data-testid': 'brainstorm-composer-file-input' }}
+            />
+          ),
+        }}
+        {...{ 'data-testid': 'brainstorm-harness-panel' }}
+      />
+      {!canMutate ? (
         // data-testid-exempt — BrainstormReadOnlyBanner owns brainstorm-readonly-banner
         <BrainstormReadOnlyBanner />
-      )}
+      ) : null}
     </section>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AgentComposer, AgentPanelShell, AgentTranscript } from './agentChat';
+import { AgentHarnessPanel, AgentPanelShell } from './agentChat';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useStartChat } from '../hooks/useChatThreads';
@@ -44,6 +44,9 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [input, setInput] = useState('');
+  const [activeSnowMode, setActiveSnowMode] = useState<CabSnowMode>(snowMode);
+  const [prodConfirmed, setProdConfirmed] = useState(false);
+  const [showProdConfirm, setShowProdConfirm] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -59,7 +62,10 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     isError: skillConfigFailed,
     error: skillConfigError,
   } = useProjectSkillConfig(project);
-  const session = useAgentChatSession(threadId);
+  const session = useAgentChatSession(threadId, {
+    harnessArea: 'cab-release',
+    area: 'cab-release',
+  });
   const {
     attachments,
     attachmentError,
@@ -133,21 +139,30 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
       apexReleaseEpicId,
       relatedWorkItemIds,
       previousReleaseBranch,
-      snowMode,
+      snowMode: activeSnowMode,
       cutReleaseBranch,
     });
   } catch (err: unknown) {
     kickoffError = err instanceof Error ? err.message : 'Could not start cab-release.';
   }
   const shownError = createError ?? (threadId ? kickoffError ?? session.sendError : null);
+  const awaitingProdConfirmation = activeSnowMode === 'run' && !prodConfirmed;
 
   useEffect(() => {
-    if (!threadId || kickoffSentRef.current || session.isPreparing || !kickoffText) return;
+    if (
+      !threadId
+      || kickoffSentRef.current
+      || session.isPreparing
+      || !kickoffText
+      || awaitingProdConfirmation
+    ) {
+      return;
+    }
     kickoffSentRef.current = true;
     void sendKickoff(kickoffText, {
       skill: { name: CAB_RELEASE_SKILL_NAME, path: CAB_RELEASE_SKILL_PATH },
     });
-  }, [threadId, kickoffText, sendKickoff, session.isPreparing]);
+  }, [threadId, kickoffText, sendKickoff, session.isPreparing, awaitingProdConfirmation]);
 
   const handleResizeMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -177,18 +192,109 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     event.currentTarget.value = '';
   }, [addFiles]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (text: string) => {
+    const trimmed = text.trim();
     const outgoing = [...attachments];
-    if (!text && outgoing.length === 0) return;
-    const message = text || 'Please use the attached files as additional context.';
-    setInput('');
+    if (!trimmed && outgoing.length === 0) return false;
+    const message = trimmed || 'Please use the attached files as additional context.';
     const sent = await session.send(
       message,
       outgoing.length > 0 ? { attachments: outgoing } : undefined,
     );
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, clearAttachments, input, session]);
+    return sent;
+  }, [attachments, clearAttachments, session]);
+
+  const handleConfirmProdPromotion = useCallback(() => {
+    if (!threadId || session.isRunning || session.isSending) return;
+    setActiveSnowMode('run');
+    setProdConfirmed(true);
+    setShowProdConfirm(false);
+    void session.send(
+      `Confirmed: proceed with Production SNOW CAB request (definition 595 / mv-application-prod-snow.yml) for ${targetVersion}.`,
+    );
+  }, [session, targetVersion, threadId]);
+
+  const composerDisabled = session.isRunning || session.isSending || isCreating || !threadId;
+
+  const proposalContent = awaitingProdConfirmation ? (
+    <div
+      role="status"
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.82rem' }}
+      {...{ 'data-testid': 'cab-release-proposal-banner' }}
+    >
+      <div>
+        <strong>Production CAB confirmation required</strong> — Prod SNOW (definition 595)
+        {cutReleaseBranch ? ` and Release/${targetVersion} branch cut` : ''} will not run until you confirm.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          disabled={composerDisabled}
+          onClick={() => setProdConfirmed(true)}
+          {...{ 'data-testid': 'cab-release-confirm-prod-apply' }}
+        >
+          Confirm production CAB run
+        </button>
+        <button
+          type="button"
+          disabled={composerDisabled}
+          onClick={() => setActiveSnowMode('dry-run')}
+          {...{ 'data-testid': 'cab-release-confirm-dry-run-btn' }}
+        >
+          Switch to dry-run
+        </button>
+      </div>
+    </div>
+  ) : activeSnowMode === 'dry-run' ? (
+    <div
+      role="status"
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.82rem' }}
+      {...{ 'data-testid': 'cab-release-proposal-banner' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <span>
+          <strong>Dry-run mode</strong> — QA SNOW (definition 670). Production writes require confirmation.
+        </span>
+        {!showProdConfirm ? (
+          <button
+            type="button"
+            disabled={composerDisabled}
+            onClick={() => setShowProdConfirm(true)}
+            {...{ 'data-testid': 'cab-release-confirm-prod-btn' }}
+          >
+            Promote to Production CAB
+          </button>
+        ) : (
+          <span style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              disabled={composerDisabled}
+              onClick={handleConfirmProdPromotion}
+              {...{ 'data-testid': 'cab-release-confirm-prod-apply' }}
+            >
+              Confirm production run
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowProdConfirm(false)}
+              {...{ 'data-testid': 'cab-release-confirm-prod-cancel' }}
+            >
+              Cancel
+            </button>
+          </span>
+        )}
+      </div>
+    </div>
+  ) : (
+    <div
+      role="status"
+      style={{ fontSize: '0.82rem' }}
+      {...{ 'data-testid': 'cab-release-proposal-banner' }}
+    >
+      <strong>Production mode confirmed</strong> — Prod SNOW (definition 595)
+    </div>
+  );
 
   return (
     <div {...{ 'data-testid': dataTestId }}>
@@ -201,56 +307,58 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
         closeTestId="cab-release-assistant-close"
         width={panelWidth}
         onResizeMouseDown={handleResizeMouseDown}
-        composer={(
-          <AgentComposer
-            className={styles.composerEmbed}
-            value={input}
-            onChange={setInput}
-            onSend={() => void handleSend()}
-            onCancel={session.isRunning ? () => void session.cancel() : undefined}
-            disabled={session.isRunning || session.isSending || isCreating || !threadId}
-            isRunning={session.isRunning}
-            isSending={session.isSending}
-            allowEmptySend
-            placeholder={
-              isCreating || skillConfigPending ? 'Starting cab-release…'
-                : session.isRunning ? 'Agent is working…'
-                  : 'Reply to cab-release… (Enter to send)'
-            }
-            testIdPrefix="cab-release-assistant"
-            textareaRef={textareaRef}
-            attachments={attachments}
-            attachmentError={attachmentError}
-            onRemoveAttachment={removeAttachment}
-            onAttachClick={() => fileInputRef.current?.click()}
-            onPasteFiles={(files) => { void addFiles(files); }}
-            fileInput={(
+      >
+        <AgentHarnessPanel
+          area="cab-release"
+          session={session}
+          testIdPrefix="cab-release-assistant"
+          {...{ 'data-testid': 'cab-release-harness-panel' }}
+          draft={input}
+          onDraftChange={setInput}
+          onSend={handleSend}
+          onCancel={session.isRunning ? () => void session.cancel() : undefined}
+          onChoiceSelect={(text) => { void session.send(text); }}
+          slots={{
+            header: (isCreating || skillConfigPending || shownError) ? (
+              <>
+                {(isCreating || skillConfigPending) && (
+                  <div className={styles.starting}>Starting cab-release…</div>
+                )}
+                {shownError && (
+                  <div className={styles.error} {...{ 'data-testid': 'cab-release-assistant-error' }}>
+                    {shownError}
+                  </div>
+                )}
+              </>
+            ) : undefined,
+            proposal: proposalContent,
+          }}
+          composer={{
+            disabled: composerDisabled,
+            allowEmptySend: true,
+            placeholder: isCreating || skillConfigPending
+              ? 'Starting cab-release…'
+              : session.isRunning
+                ? 'Agent is working…'
+                : 'Reply to cab-release… (Enter to send)',
+            textareaRef,
+            attachments,
+            attachmentError,
+            onRemoveAttachment: removeAttachment,
+            onAttachClick: () => fileInputRef.current?.click(),
+            onPasteFiles: (files) => { void addFiles(files); },
+            fileInput: (
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
                 hidden
                 onChange={(event) => { void handleAttachmentChange(event); }}
-                disabled={session.isRunning || session.isSending || isCreating || !threadId}
+                disabled={composerDisabled}
                 {...{ 'data-testid': 'cab-release-assistant-file-input' }}
               />
-            )}
-          />
-        )}
-      >
-        {(isCreating || skillConfigPending) && (
-          <div className={styles.starting}>Starting cab-release…</div>
-        )}
-        {shownError && (
-          <div className={styles.error} {...{ 'data-testid': 'cab-release-assistant-error' }}>
-            {shownError}
-          </div>
-        )}
-        <AgentTranscript
-          messages={session.visibleMessages}
-          streamingText={session.streamingText}
-          isRunning={session.isRunning || session.showTypingIndicator}
-          onChoiceSubmit={(text) => { void session.send(text); }}
+            ),
+          }}
         />
       </AgentPanelShell>
     </div>

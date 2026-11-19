@@ -33,9 +33,9 @@ import {
 } from '../hooks/useAdrs';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
-import { AgentComposer } from './agentChat';
+import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
+import type { HarnessTranscriptItem } from '../chatHarness/types';
 import { AdrAssistantPanel } from './AdrAssistantPanel';
-import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
 import { AdrReviewerModal } from './AdrReviewerModal';
 import { AnnotationLayer } from './AnnotationLayer';
@@ -458,6 +458,9 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     isError: isChatThreadError,
   } = useChatThread(adr?.chatThreadId ?? null);
   const session = useAgentChatSession(adr?.chatThreadId ?? null, {
+    area: 'adr',
+    harnessArea: 'adr',
+    projectId: adr?.project ?? null,
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
     enablePreparationState: adr?.status === 'in_progress',
@@ -474,7 +477,6 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     thinkingText,
     progressLabel,
     progressPhase,
-    toolProgress,
     isPreparing,
     hasPreparationError,
     showTypingIndicator,
@@ -517,15 +519,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     };
     return [...filtered, seed];
   }, [sessionVisibleMessages, seededKickoffPrompt]);
+  const effectiveSessionError =
+    session.sendError
+    ?? session.lastFailure?.reason
+    ?? (session.lastReceipt?.status === 'rejected' ? session.lastReceipt.text : null);
   const lastVisibleRole = visibleMessages[visibleMessages.length - 1]?.role;
   const agentReplySettled = lastVisibleRole === 'agent' && !streamingText && !thinkingText;
-  const isRunning = session.isRunning || (thread?.status === 'running' && !agentReplySettled);
-  const isInteractionBusy = session.isInteractionBusy || isRunning;
+  const isRunning = (session.isRunning || thread?.status === 'running') && !agentReplySettled;
+  const isInteractionBusy = agentReplySettled
+    ? (session.isSending || session.isAwaitingAgentResponse || session.isPreparing)
+    : (session.isInteractionBusy || isRunning);
   const kickoffFailed = Boolean(
     seededKickoffPrompt
     && !session.isSending
     && !session.isAwaitingAgentResponse
-    && (session.sendError || kickoffSendFailed),
+    && (effectiveSessionError || kickoffSendFailed),
   );
   const resumeGate = useGroundingResumeGate(
     'adr',
@@ -547,21 +555,21 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [kickoffFromNav, location.pathname, navigate]);
 
   useEffect(() => {
-    if (session.sendError) setError(session.sendError);
-  }, [session.sendError]);
+    if (effectiveSessionError) setError(effectiveSessionError);
+  }, [effectiveSessionError]);
 
   useEffect(() => {
     if (!seededKickoffPrompt) {
       setKickoffSendFailed(false);
       return;
     }
-    if (session.sendError) setKickoffSendFailed(true);
-  }, [seededKickoffPrompt, session.sendError]);
+    if (effectiveSessionError) setKickoffSendFailed(true);
+  }, [seededKickoffPrompt, effectiveSessionError]);
 
   useEffect(() => {
     // A failed POST sets sendError and waits for Retry. Resetting the sent
     // flag on that false return must not start another request.
-    if (session.sendError) return;
+    if (effectiveSessionError) return;
     if (kickoffSentRef.current || !seededKickoffPrompt || !adr?.chatThreadId || chatLocked) return;
     const alreadyPersisted = messages.some(
       (message) => message.role === 'user' && message.text === seededKickoffPrompt,
@@ -583,6 +591,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [
     adr?.chatThreadId,
     chatLocked,
+    effectiveSessionError,
     kickoffAttachments,
     kickoffModel,
     messages,
@@ -671,6 +680,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
     kickoffSentRef.current = true;
     setError(null);
     session.clearSendError();
+    session.clearReceipt?.();
     void session.send(seededKickoffPrompt, {
       model: kickoffModel ?? model,
       ...(kickoffAttachments.length ? { attachments: kickoffAttachments } : {}),
@@ -693,12 +703,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
   }, [addFiles]);
 
   useEffect(() => {
-    if (!seededKickoffPrompt || session.sendError || session.isSending) return;
+    if (!seededKickoffPrompt || effectiveSessionError || session.isSending) return;
     const hasKickoffEcho = sessionVisibleMessages.some(
       (message) => message.role === 'user' && message.text === seededKickoffPrompt,
     );
     if (hasKickoffEcho) setSeededKickoffPrompt(null);
-  }, [seededKickoffPrompt, session.isSending, session.sendError, sessionVisibleMessages]);
+  }, [effectiveSessionError, seededKickoffPrompt, session.isSending, sessionVisibleMessages]);
 
   if (isLoading) {
     return (
@@ -971,6 +981,7 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
               onClick={() => {
                 setError(null);
                 session.clearSendError();
+                session.clearReceipt?.();
               }}
               aria-label="Dismiss"
               {...{ 'data-testid': 'adr-error-dismiss-btn' }}
@@ -1060,186 +1071,205 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       )}
       {!adr.content && adr.status !== 'generating' && (
-        <div className={styles.messages}>
-          <div className={styles.messageList}>
-            {hasPreparationError && (
-              <div className={styles.preparationState} role="alert">
-                <div className={styles.preparationErrorIcon}>!</div>
-                <h2 className={styles.preparationTitle}>Unable to prepare this ADR interview</h2>
-                <p className={styles.preparationDetail}>
-                  {thread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
-                </p>
-              </div>
-            )}
-
-            {visibleMessages.map((message, index) => {
-              if (message.role === 'agent') {
-                return (
-                  <InterviewAgentMessage
-                    key={message.id}
-                    text={message.text}
-                    onSend={(text) => void send(text)}
-                    isRunning={isInteractionBusy}
-                    questionOffset={messageQOffsets.get(message.id) ?? 0}
-                    interviewLocked={chatLocked}
-                    alreadyAnswered={isChoiceMessageAnswered(message.id, index)}
-                  />
-                );
-              }
-              if (message.role === 'user') {
-                return <div key={message.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>{message.text}</div>;
-              }
-              const isError = message.text.startsWith('Error:');
-              if (isError && !chatLocked) {
-                return (
-                  <div key={message.id} className={styles.systemErrorMsg}>
-                    <span
-                      className={styles.systemErrorText}
-                      role="alert"
-                      {...{ 'data-testid': 'chat-run-terminal' }}
-                    >
-                      {message.text}
-                    </span>
-                    <button
-                      className={styles.retryBtn}
-                      onClick={() => {
-                        void session.retryFailedRun();
-                      }}
-                      disabled={isInteractionBusy || !session.retryableRunId}
-                      type="button"
-                      {...{ 'data-testid': 'adr-retry-message' }}
-                    >
-                      ↺ Try again
-                    </button>
+        <AgentHarnessPanel
+          area="adr"
+          session={{
+            ...session,
+            isRunning: composerRunning,
+            isSending: kickoffFailed ? false : session.isSending,
+            isAwaitingAgentResponse: kickoffFailed ? false : session.isAwaitingAgentResponse,
+            snapshotLoaded:
+              showPreparationState || hasPreparationError || Boolean(thread) || Boolean(seededKickoffPrompt)
+                ? true
+                : session.snapshotLoaded,
+          }}
+          items={visibleMessages}
+          testIdPrefix="adr"
+          testIds={{
+            root: 'adr-harness-panel',
+            progress: 'adr-agent-processing',
+            progressLabel: 'adr-progress-label',
+            busy: 'chat-run-spinner',
+            composer: 'adr-chat-composer',
+          }}
+          fallbackProgressLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
+          draft={input}
+          onDraftChange={setInput}
+          onSend={(text) => void send(text)}
+          onCancel={() => void cancelActiveRun()}
+          onRetry={() => void session.retryFailedRun()}
+          locked={chatLocked}
+          renderTranscript={({ liveWorkBox }) => (
+            <div className={styles.messages}>
+              <div className={styles.messageList}>
+                {hasPreparationError && (
+                  <div className={styles.preparationState} role="alert">
+                    <div className={styles.preparationErrorIcon}>!</div>
+                    <h2 className={styles.preparationTitle}>Unable to prepare this ADR interview</h2>
+                    <p className={styles.preparationDetail}>
+                      {thread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
+                    </p>
                   </div>
-                );
-              }
-              return <div key={message.id} className={styles.messageBubbleSystem}>{message.text}</div>;
-            })}
+                )}
 
-            {showPreparationState && (
-              <div
-                className={styles.preparationState}
-                {...{ 'data-testid': 'adr-preparation-state' }}
-              >
-                <div className={styles.preparationSpinner} />
-                <h2 className={styles.preparationTitle}>
-                  {visibleMessages.some((message) => message.role === 'user')
-                    ? 'Architect is preparing a response'
-                    : 'Preparing your ADR interview'}
-                </h2>
-                <p
-                  className={styles.preparationDetail}
-                  role="status"
-                  aria-live="polite"
-                  {...{ 'data-testid': 'agent-run-status-label' }}
-                >
-                  {progressPhase === 'queued' ? (
-                    <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                      Queued
-                    </span>
-                  ) : progressPhase === 'dispatched' ? (
-                    <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                      Dispatched
-                    </span>
-                  ) : progressLabel ? (
-                    friendlyChatProgressLabel(progressLabel, progressPhase)
-                  ) : isChatThreadError ? (
-                    'The ADR service is reconnecting after a temporary interruption…'
-                  ) : isChatThreadLoading ? (
-                    'Connecting to the ADR service…'
-                  ) : (
-                    'Setting up the workspace and repository context so your ADR interview starts grounded…'
-                  )}
-                </p>
-              </div>
-            )}
+                {visibleMessages.map((message, index) => {
+                  if (message.role === 'agent') {
+                    const harnessItem = message as HarnessTranscriptItem;
+                    return (
+                      <React.Fragment key={message.id}>
+                        {harnessItem.activity?.length || harnessItem.activityUnavailable ? (
+                          <AgentThoughtProcess
+                            items={harnessItem.activity}
+                            isUnavailable={harnessItem.activityUnavailable}
+                            testIdPrefix="adr"
+                            testIds={{
+                              drawer: 'adr-thought-process',
+                              toggle: 'adr-thought-process-toggle',
+                              thinking: `adr-saved-thinking-${message.id}`,
+                              steps: `adr-saved-steps-${message.id}`,
+                              toolGroup: `adr-saved-tool-group-${message.id}`,
+                            }}
+                          />
+                        ) : null}
+                        <InterviewAgentMessage
+                          text={message.text}
+                          onSend={(text) => void send(text)}
+                          isRunning={isInteractionBusy}
+                          questionOffset={messageQOffsets.get(message.id) ?? 0}
+                          interviewLocked={chatLocked}
+                          alreadyAnswered={isChoiceMessageAnswered(message.id, index)}
+                        />
+                      </React.Fragment>
+                    );
+                  }
+                  if (message.role === 'user') {
+                    return <div key={message.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>{message.text}</div>;
+                  }
+                  const isError = message.text.startsWith('Error:');
+                  if (isError && !chatLocked) {
+                    return (
+                      <div key={message.id} className={styles.systemErrorMsg}>
+                        <span
+                          className={styles.systemErrorText}
+                          role="alert"
+                          {...{ 'data-testid': 'chat-run-terminal' }}
+                        >
+                          {message.text}
+                        </span>
+                        <button
+                          className={styles.retryBtn}
+                          onClick={() => {
+                            void session.retryFailedRun();
+                          }}
+                          disabled={isInteractionBusy || !session.retryableRunId}
+                          type="button"
+                          {...{ 'data-testid': 'adr-retry-message' }}
+                        >
+                          ↺ Try again
+                        </button>
+                      </div>
+                    );
+                  }
+                  return <div key={message.id} className={styles.messageBubbleSystem}>{message.text}</div>;
+                })}
 
-            {streamingText && (
-              <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                {showPreparationState && (
+                  <div
+                    className={styles.preparationState}
+                    {...{ 'data-testid': 'adr-preparation-state' }}
+                  >
+                    <div className={styles.preparationSpinner} />
+                    <h2 className={styles.preparationTitle}>
+                      {visibleMessages.some((message) => message.role === 'user')
+                        ? 'Architect is preparing a response'
+                        : 'Preparing your ADR interview'}
+                    </h2>
+                    <p
+                      className={styles.preparationDetail}
+                      role="status"
+                      aria-live="polite"
+                      {...{ 'data-testid': 'agent-run-status-label' }}
+                    >
+                      {progressPhase === 'queued' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-queued' }}>
+                          Queued
+                        </span>
+                      ) : progressPhase === 'dispatched' ? (
+                        <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
+                          Dispatched
+                        </span>
+                      ) : progressLabel ? (
+                        friendlyChatProgressLabel(progressLabel, progressPhase)
+                      ) : isChatThreadError ? (
+                        'The ADR service is reconnecting after a temporary interruption…'
+                      ) : isChatThreadLoading ? (
+                        'Connecting to the ADR service…'
+                      ) : (
+                        'Setting up the workspace and repository context so your ADR interview starts grounded…'
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {streamingText && (
+                  <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                  </div>
+                )}
+                {!showPreparationState &&
+                  (showTypingIndicator || session.isRetrying || (session.activity?.length ?? 0) > 0) &&
+                  liveWorkBox}
+                <div ref={messagesEndRef} />
               </div>
-            )}
-            {showTypingIndicator && !showPreparationState && (
-              <div
-                className={styles.typingIndicator}
-                role="status"
-                aria-live="polite"
-                aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Architect is processing your response'}
-                {...{ 'data-testid': 'adr-agent-processing' }}
-              >
-                <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingProgressLabel} {...{ 'data-testid': 'adr-progress-label' }}>
-                  <ChatRunProgressLabel
-                    fallbackLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
-                    progressPhase={progressPhase}
-                    toolProgress={toolProgress}
-                  />
-                </span>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
+            </div>
+          )}
+          composer={{
+            hideComposer: chatLocked,
+            disabled: composerBusy || resumeGate.composerBlocked,
+            placeholder: showPreparationState
+              ? 'Preparing the workspace…'
+              : isAgentProcessing
+                ? 'Architect is thinking…'
+                : 'Continue the ADR interview… (Enter to send)',
+            allowEmptySend: true,
+            attachments,
+            attachmentError,
+            onRemoveAttachment: removeAttachment,
+            onAttachClick: () => fileInputRef.current?.click(),
+            onPasteFiles: (files) => { void addFiles(files); },
+            speech: {
+              isListening: speech.isListening,
+              isSpeechSupported: speech.isSpeechSupported,
+              speechError: speech.speechError,
+              onToggle: () => speech.toggle(input),
+            },
+            model,
+            models,
+            modelsLoading,
+            onModelChange: setModel,
+            fileInput: (
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+                className={styles.fileInput}
+                onChange={handleAttachmentChange}
+                disabled={composerBusy}
+                {...{ 'data-testid': 'adr-file-input' }}
+              />
+            ),
+          }}
+          {...{ 'data-testid': 'adr-harness-panel' }}
+        />
       )}
       {!adr.content && adr.status === 'generating' ? (
         <div className={styles.generationNotice}>
           You can leave this page safely. Return to the ADR dashboard to check its status.
         </div>
-      ) : !adr.content && (chatLocked ? (
+      ) : !adr.content && chatLocked ? (
         <div className={styles.lockedNotice}>This ADR conversation is read-only.</div>
-      ) : (
-        <>
-        <AgentComposer
-          value={input}
-          onChange={setInput}
-          onSend={() => void send(input)}
-          onCancel={() => void cancelActiveRun()}
-          disabled={composerBusy || resumeGate.composerBlocked}
-          isRunning={composerRunning}
-          isSending={kickoffFailed ? false : session.isSending}
-          isBusy={composerBusy}
-          isCancelling={session.isCancelling}
-          placeholder={showPreparationState
-            ? 'Preparing the workspace…'
-            : isAgentProcessing
-              ? 'Architect is thinking…'
-              : 'Continue the ADR interview… (Enter to send)'}
-          testIdPrefix="adr"
-          allowEmptySend
-          attachments={attachments}
-          attachmentError={attachmentError}
-          onRemoveAttachment={removeAttachment}
-          onAttachClick={() => fileInputRef.current?.click()}
-          onPasteFiles={(files) => { void addFiles(files); }}
-          speech={{
-            isListening: speech.isListening,
-            isSpeechSupported: speech.isSpeechSupported,
-            speechError: speech.speechError,
-            onToggle: () => speech.toggle(input),
-          }}
-          model={model}
-          models={models}
-          modelsLoading={modelsLoading}
-          onModelChange={setModel}
-          {...{ 'data-testid': 'adr-chat-composer' }}
-          fileInput={(
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
-              className={styles.fileInput}
-              onChange={handleAttachmentChange}
-              disabled={composerBusy}
-            />
-          )}
-        />
-        </>
-      ))}
+      ) : null}
       {pendingSelector && (
         <div
           className={styles.commentModal}

@@ -81,6 +81,7 @@ import {
   ApplyProposalRequestSchema,
   RejectProposalRequestSchema,
 } from '../../shared/types/calendarWorkItemAssistant';
+import { getAreaProfile } from '../services/chatHarness/areaProfiles';
 
 import { checkStorageHealth } from '../services/storageHealthService';
 import runGroundingsRouter from './runGroundings';
@@ -4991,6 +4992,7 @@ router.post(
 
         const contextMd = buildContextMarkdown(session.contextSnapshot);
 
+        const calendarProfile = getAreaProfile('calendar-work-item');
         const thread = await createThread(userId, {
           project,
           agentModule: 'calendarAssistant',
@@ -5004,7 +5006,10 @@ router.post(
           calendarAnchorWorkItemId: anchorWorkItemId,
           calendarSelectedWorkItemIds: selectedWorkItemIds,
           calendarAssistantSessionId: session.id,
-        }, { skipAutoKickoff: true });
+        }, {
+          skipAutoKickoff: true,
+          harness: { area: calendarProfile.area, version: calendarProfile.version },
+        });
 
         threadId = thread.id;
         await setSessionThread(session.id, threadId);

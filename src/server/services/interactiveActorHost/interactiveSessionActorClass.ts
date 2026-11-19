@@ -23,6 +23,10 @@ import {
 } from '../../../shared/types/aiRunIngest';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
 import type { AiRunsCallbackClient } from '../aiRunsWorker/callbackClient';
+import type {
+  HarnessCancelDisposition,
+  HarnessSteerDisposition,
+} from '../interactiveControlBus';
 import { workerTierTelemetry } from '../workerTierTelemetry';
 import type {
   InteractiveSessionActor,
@@ -62,6 +66,15 @@ export interface IInteractiveSessionActor {
   handleTurn(
     payload: InteractiveDispatchPayload,
   ): Promise<InteractiveTurnOutcome>;
+  steer?(input: {
+    runId: string;
+    commandId: string;
+    text: string;
+  }): Promise<HarnessSteerDisposition>;
+  cancel?(input: {
+    runId: string;
+    commandId: string;
+  }): Promise<HarnessCancelDisposition>;
 }
 
 function priorOutcomeForTerminalAttempt(
@@ -215,6 +228,42 @@ export class InteractiveSessionActorImpl
       dispatchMessageId: payload.dispatchMessageId,
       snapshot,
       cursorAgentId: bootstrap.cursorAgentId ?? null,
+    });
+  }
+
+  async steer(input: {
+    runId: string;
+    commandId: string;
+    text: string;
+  }): Promise<HarnessSteerDisposition> {
+    const active = runtime;
+    if (!active) {
+      throw new Error('Interactive actor runtime is not initialized');
+    }
+    const threadId = this.getActorId().getId();
+    if (!active.logic.steer) return 'turn-ended';
+    return active.logic.steer({
+      threadId,
+      runId: input.runId,
+      commandId: input.commandId,
+      text: input.text,
+    });
+  }
+
+  async cancel(input: {
+    runId: string;
+    commandId: string;
+  }): Promise<HarnessCancelDisposition> {
+    const active = runtime;
+    if (!active) {
+      throw new Error('Interactive actor runtime is not initialized');
+    }
+    const threadId = this.getActorId().getId();
+    if (!active.logic.cancel) return 'turn-ended';
+    return active.logic.cancel({
+      threadId,
+      runId: input.runId,
+      commandId: input.commandId,
     });
   }
 }

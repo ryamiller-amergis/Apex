@@ -29,6 +29,7 @@ import {
   sanitizeObservabilityDigestForDisplay,
 } from '../../shared/utils/observabilityPoDigest';
 import { DEFAULT_MODEL_ID, PLATFORM_MODEL_OPTIONS } from '../config/models';
+import { AiExperienceDashboard } from './AiExperienceDashboard';
 import { ApexLoader } from './ApexLoader';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -97,6 +98,7 @@ interface ObservabilityWorkspaceProps {
 }
 
 export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ project }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'po-digest' | 'ai-experience'>('po-digest');
   const [selectedWindow, setSelectedWindow] = useState<ObservabilityTrendWindow>('7d');
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
   const [selectedEffort, setSelectedEffort] = useState<EffortLevel>(OBSERVABILITY_PO_DEFAULT_EFFORT);
@@ -173,8 +175,66 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
   }, [digest]);
 
   return (
-    <section className={styles.workspace} {...{ 'data-testid': 'observability-workspace' }}>
-      <div className={styles.header}>
+    <div className={styles.subTabShell} {...{ 'data-testid': 'observability-shell' }}>
+      <div
+        className={styles.subTabBar}
+        role="tablist"
+        aria-label="Observability views"
+        {...{ 'data-testid': 'observability-subtabs' }}
+      >
+        <button
+          type="button"
+          role="tab"
+          id="observability-subtab-po-digest"
+          aria-selected={activeSubTab === 'po-digest'}
+          aria-controls="observability-subpanel-po-digest"
+          className={
+            activeSubTab === 'po-digest'
+              ? `${styles.subTabButton} ${styles.subTabButtonActive}`
+              : styles.subTabButton
+          }
+          onClick={() => setActiveSubTab('po-digest')}
+          {...{ 'data-testid': 'observability-subtab-po-digest' }}
+        >
+          Product Owner Digest
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="observability-subtab-ai-experience"
+          aria-selected={activeSubTab === 'ai-experience'}
+          aria-controls="observability-subpanel-ai-experience"
+          className={
+            activeSubTab === 'ai-experience'
+              ? `${styles.subTabButton} ${styles.subTabButtonActive}`
+              : styles.subTabButton
+          }
+          onClick={() => setActiveSubTab('ai-experience')}
+          {...{ 'data-testid': 'observability-subtab-ai-experience' }}
+        >
+          AI Experience
+        </button>
+      </div>
+
+      {activeSubTab === 'ai-experience' ? (
+        <section
+          id="observability-subpanel-ai-experience"
+          role="tabpanel"
+          aria-labelledby="observability-subtab-ai-experience"
+          className={styles.aiExperienceSurface}
+          {...{ 'data-testid': 'observability-ai-experience-panel' }}
+        >
+          <AiExperienceDashboard flagProject={resolvedProject} />
+        </section>
+      ) : (
+        <section
+          id="observability-subpanel-po-digest"
+          role="tabpanel"
+          aria-labelledby="observability-subtab-po-digest"
+          className={styles.workspace}
+          {...{ 'data-testid': 'observability-workspace' }}
+        >
+          <div className={styles.header}>
         <div className={styles.titleRow}>
           <div>
             <h2 className={styles.title}>Product Owner Observability</h2>
@@ -517,7 +577,9 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
           </>
         )}
       </div>
-    </section>
+        </section>
+      )}
+    </div>
   );
 };
 

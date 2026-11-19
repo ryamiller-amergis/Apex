@@ -18,6 +18,7 @@ import type { RepoReader } from '../../shared/types/repoReader';
 import { groundingProfileResolver } from './groundingProfileResolver';
 import { createNativeReadTools } from './nativeReadToolAdapter';
 import { createThread } from './chatAgentService';
+import { getAreaProfile } from './chatHarness/areaProfiles';
 import { isFeatureEnabled } from './featureFlagService';
 
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -466,6 +467,7 @@ export async function openAskApexThread(userId: string): Promise<{ threadId: str
   const repoInfo = await resolveRepoInfo();
   if (!repoInfo) return null;
   const repo = `${repoInfo.org}/${repoInfo.repo}`;
+  const askApexProfile = getAreaProfile('ask-apex');
   const thread = await createThread(
     userId,
     {
@@ -481,7 +483,10 @@ export async function openAskApexThread(userId: string): Promise<{ threadId: str
       pillLabel: 'Ask Apex',
       askApex: true,
     },
-    { skipAutoKickoff: true },
+    {
+      skipAutoKickoff: true,
+      harness: { area: askApexProfile.area, version: askApexProfile.version },
+    },
   );
   return { threadId: thread.id };
   // @feature-flag:ai-runs-v2-transport enabled-end

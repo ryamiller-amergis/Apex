@@ -15,8 +15,25 @@ import type {
 import { friendlyChatErrorMessage, friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
 import { createChatTurnId } from '../utils/chatTurnId';
 import type { ThreadStreamTransport } from '../utils/threadEventStream';
-import type { ChatAreaId } from '../../shared/types/chatHarness';
+import type { ChatAreaId, HarnessAreaId } from '../../shared/types/chatHarness';
 import { emitChatTiming } from '../services/chatTimingTelemetry';
+import {
+  useChatRuntime,
+  type AgentActivityItem,
+  type ConnectionState,
+  type CreateChatRuntimeDeps,
+  type HarnessMessageFailureState,
+  type HarnessReceiptView,
+  type HarnessSummaryNoticeState,
+  type PendingCommand,
+} from '../chatHarness';
+
+const EMPTY_ACTIVITY: AgentActivityItem[] = [];
+const EMPTY_PENDING_COMMANDS: PendingCommand[] = [];
+const EMPTY_MESSAGES: ChatMessage[] = [];
+const EMPTY_TOOL_PROGRESS: ToolProgress[] = [];
+const EMPTY_PHASE_EVENTS: RunPhaseProgress[] = [];
+const DISABLED_STREAM_OPTIONS = {};
 
 function mapSendErrorMessage(raw: string): string {
   return friendlyChatErrorMessage(raw);
@@ -96,6 +113,18 @@ export interface AgentChatSessionOptions {
 
   /** Optional project identifier for baseline / harness timing telemetry. */
   projectId?: string | null;
+
+  /** Marks this surface as a governed harness area (activates the harness runtime). */
+  harnessArea?: HarnessAreaId;
+
+  /**
+   * Explicit opt-in to the harness runtime even when `harnessArea` is determined
+   * from the server snapshot.
+   */
+  useHarness?: boolean;
+
+  /** Optional injectable dependencies for the harness runtime (e.g. tests). */
+  runtimeDeps?: CreateChatRuntimeDeps;
 }
 
 export interface SendOptions {
@@ -169,6 +198,26 @@ export interface AgentChatSession {
   // --- Errors ---
   sendError: string | null;
   clearSendError: () => void;
+
+  // --- Harness controls & state ---
+  steer: (text: string) => Promise<boolean>;
+  summarize: () => Promise<boolean>;
+  connectionState: ConnectionState;
+  pendingCommands: PendingCommand[];
+  lastReceipt: HarnessReceiptView | null;
+  clearReceipt: () => void;
+  activity: AgentActivityItem[];
+  summaryNotice: HarnessSummaryNoticeState | null;
+  canWrite: boolean;
+  lastFailure: HarnessMessageFailureState | null;
+  snapshotLoaded: boolean;
+  snapshotError: string | null;
+  snapshotStatusCode: number | null;
+  retrySnapshot: () => Promise<void>;
+  terminalRevision: number;
+  harnessArea: HarnessAreaId | null;
+  isSteerSupported: boolean;
+  isSummarizeSupported: boolean;
 }
 
 // Default visible-message filter: hide hidden internal prompts
@@ -213,37 +262,120 @@ export function useAgentChatSession(
     streamTransport,
     area,
     projectId,
+    harnessArea,
+    useHarness,
+    runtimeDeps,
   } = options;
 
-  // --- useChatStream (the SSE subscription) ---
-  const stream = useChatStream(threadId, {
-    initialMessages,
-    initialStatus,
-    initialPrdReady,
-    streamTransport,
-  });
+  const useHarnessRuntime = Boolean(harnessArea || useHarness);
+  const httpFetchImpl = runtimeDeps?.fetchImpl;
 
-  const {
-    messages,
-    streamingText,
-    thinkingText,
-    toolProgress,
-    status,
-    isConnected,
-    hasConnectionError,
-    lastProgressAt,
-    phaseEvents,
-    runHealth,
-    progressLabel,
-    progressPhase,
-    prdReady,
-    backlogReady,
-    isRetrying,
-    retryReason,
-    retryableRunId,
-    clearRetryableRunId,
-    groundingPreparation,
-  } = stream;
+  // --- useChatStream (the legacy SSE subscription; disabled when harness runtime is active) ---
+  const stream = useChatStream(
+    useHarnessRuntime ? null : threadId,
+    useHarnessRuntime
+      ? DISABLED_STREAM_OPTIONS
+      : {
+          initialMessages,
+          initialStatus,
+          initialPrdReady,
+          streamTransport,
+        },
+  );
+
+  // --- useChatRuntime (the governed harness runtime; disabled on legacy callers) ---
+  const { runtime, state: runtimeState } = useChatRuntime(
+    useHarnessRuntime ? threadId : null,
+    {
+      enabled: useHarnessRuntime,
+      area: harnessArea ?? area,
+      initialMessages,
+      initialStatus,
+      initialPrdReady,
+      initialHarnessArea: harnessArea ?? null,
+      ...runtimeDeps,
+    },
+  );
+
+  const effectiveHarnessArea: HarnessAreaId | null = useHarnessRuntime
+    ? (runtimeState.harnessArea ??
+        (runtimeState.snapshotLoaded ? null : (harnessArea ?? null)))
+    : null;
+  const isHarnessCommandMode =
+    useHarnessRuntime && effectiveHarnessArea !== null;
+  const isForbiddenSnapshot =
+    useHarnessRuntime &&
+    (runtimeState.snapshotStatusCode === 403 ||
+      runtimeState.snapshotStatusCode === 401);
+  const effectiveCanWrite = useHarnessRuntime
+    ? !locked && runtimeState.canWrite
+    : !locked;
+
+  const messages = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? EMPTY_MESSAGES
+      : runtime
+        ? runtime.getDisplayedMessages()
+        : runtimeState.messages
+    : stream.messages;
+  const streamingText = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? ''
+      : runtimeState.streamingText
+    : stream.streamingText;
+  const thinkingText = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? ''
+      : runtimeState.thinkingText
+    : stream.thinkingText;
+  const toolProgress = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? EMPTY_TOOL_PROGRESS
+      : runtimeState.toolProgress
+    : stream.toolProgress;
+  const status = useHarnessRuntime ? runtimeState.status : stream.status;
+  const isConnected = useHarnessRuntime
+    ? runtimeState.isConnected
+    : stream.isConnected;
+  const hasConnectionError = useHarnessRuntime
+    ? runtimeState.hasConnectionError
+    : stream.hasConnectionError;
+  const lastProgressAt = useHarnessRuntime
+    ? runtimeState.lastProgressAt
+    : stream.lastProgressAt;
+  const phaseEvents = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? EMPTY_PHASE_EVENTS
+      : runtimeState.phaseEvents
+    : stream.phaseEvents;
+  const runHealth = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? null
+      : runtimeState.runHealth
+    : stream.runHealth;
+  const progressLabel = useHarnessRuntime
+    ? runtimeState.progressLabel
+    : stream.progressLabel;
+  const progressPhase = useHarnessRuntime
+    ? runtimeState.progressPhase
+    : stream.progressPhase;
+  const prdReady = useHarnessRuntime ? runtimeState.prdReady : stream.prdReady;
+  const backlogReady = useHarnessRuntime
+    ? runtimeState.backlogReady
+    : stream.backlogReady;
+  const isRetrying = useHarnessRuntime
+    ? runtimeState.isRetrying
+    : stream.isRetrying;
+  const retryReason = useHarnessRuntime
+    ? runtimeState.retryReason
+    : stream.retryReason;
+  const retryableRunId = useHarnessRuntime
+    ? runtimeState.retryableRunId
+    : stream.retryableRunId;
+  const clearRetryableRunId = stream.clearRetryableRunId;
+  const groundingPreparation = useHarnessRuntime
+    ? runtimeState.groundingPreparation
+    : stream.groundingPreparation;
 
   // --- Local state ---
   const [isSending, setIsSending] = useState(false);
@@ -251,6 +383,7 @@ export function useAgentChatSession(
   const [isStopConfirmed, setIsStopConfirmed] = useState(false);
   const [isAwaitingAgentResponse, setIsAwaitingAgentResponse] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [snapshotErrorDismissed, setSnapshotErrorDismissed] = useState(false);
   const sendRejectedRef = useRef(false);
   const timingRef = useRef<{
     sendStartedAt: number | null;
@@ -322,8 +455,25 @@ export function useAgentChatSession(
   // actor lane; do not keep answers and the composer locked during that gap.
   const isWaitingForUser =
     lastVisibleRole === 'agent' && !streamingText && !thinkingText;
-  const isRunning =
-    streamIsRunning && !isStopConfirmed && !isWaitingForUser;
+  const isRunning = useHarnessRuntime
+    ? runtimeState.status === 'running' &&
+      !runtimeState.stopping &&
+      !isStopConfirmed
+    : streamIsRunning && !isStopConfirmed && !isWaitingForUser;
+
+  const effectiveIsCancelling = useHarnessRuntime
+    ? runtimeState.stopping || isCancelling
+    : isCancelling;
+
+  const hasPendingHarnessSend =
+    isHarnessCommandMode &&
+    !runtimeState.stopping &&
+    runtimeState.pendingCommands.some(
+      (cmd) => cmd.kind === 'send' || cmd.kind === 'retry',
+    );
+  const effectiveIsAwaitingAgentResponse = isHarnessCommandMode
+    ? hasPendingHarnessSend
+    : isAwaitingAgentResponse;
 
   // Preparation state (opt-in)
   const isEmptyInProgress =
@@ -347,10 +497,10 @@ export function useAgentChatSession(
         : null;
 
   const isInteractionBusy =
-    isRunning || isSending || isAwaitingAgentResponse || isPreparing;
+    isRunning || isSending || effectiveIsAwaitingAgentResponse || isPreparing;
 
   const showTypingIndicator = shouldShowAgentTypingIndicator({
-    isBusy: isRunning || isSending || isAwaitingAgentResponse,
+    isBusy: isRunning || isSending || effectiveIsAwaitingAgentResponse,
     streamingText,
     lastVisibleRole: visibleMessages[visibleMessages.length - 1]?.role,
     isRetrying,
@@ -484,8 +634,13 @@ export function useAgentChatSession(
     if (status !== 'running') setIsStopConfirmed(false);
   }, [status]);
 
+  useEffect(() => {
+    setSnapshotErrorDismissed(false);
+  }, [runtimeState.snapshotError, threadId]);
+
   // --- Baseline / harness timing telemetry (TBI-004 / PBI-003 AC-3) ---
   useEffect(() => {
+    if (useHarnessRuntime) return;
     const t = timingRef.current;
     if (t.sendStartedAt === null) return;
     const nowMs = Date.now();
@@ -541,9 +696,11 @@ export function useAgentChatSession(
     isSending,
     isAwaitingAgentResponse,
     status,
+    useHarnessRuntime,
   ]);
 
   useEffect(() => {
+    if (useHarnessRuntime) return;
     const t = timingRef.current;
     if (!threadId) return;
     if (hasConnectionError || !isConnected) {
@@ -566,13 +723,48 @@ export function useAgentChatSession(
         status: 'ok',
       });
     }
-  }, [area, projectId, threadId, isConnected, hasConnectionError]);
+  }, [area, projectId, threadId, isConnected, hasConnectionError, useHarnessRuntime]);
 
   // --- Send ---
   const send = useCallback(
     async (text: string, opts: SendOptions = {}): Promise<boolean> => {
-      if (locked || !threadId) return false;
+      if (!effectiveCanWrite || !threadId) return false;
       if (!text && !opts.attachments?.length) return false;
+
+      if (isHarnessCommandMode) {
+        if (!runtime) return false;
+        if (beforeSend) {
+          const result = await beforeSend(text);
+          if (result === false) return false;
+        }
+        sendRejectedRef.current = false;
+        setSendError(null);
+        setIsSending(true);
+        try {
+          const turnId = createTurnId();
+          const receipt = await runtime.send(turnId, text, {
+            attachments: opts.attachments,
+            model: opts.model,
+            skill: opts.skill,
+          });
+          if (receipt?.status === 'rejected') {
+            sendRejectedRef.current = true;
+            return false;
+          }
+          const failure = runtime.getState().lastFailure;
+          if (failure && failure.commandId === turnId) {
+            sendRejectedRef.current = true;
+            return false;
+          }
+          if (afterSend) {
+            await afterSend();
+          }
+          return true;
+        } finally {
+          setIsSending(false);
+        }
+      }
+
       const preparationOnly =
         opts.duringPreparation === true &&
         isPreparing &&
@@ -637,10 +829,11 @@ export function useAgentChatSession(
             ? { attachments: opts.attachments }
             : {}),
         });
+        const activeFetch = httpFetchImpl ?? fetch;
         let res: Response | null = null;
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
-            res = await fetch(endpoint, {
+            res = await activeFetch(endpoint, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               credentials: 'include',
@@ -714,8 +907,11 @@ export function useAgentChatSession(
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- send callback intentionally omits transient progressPhase
     [
-      locked,
+      effectiveCanWrite,
       threadId,
+      isHarnessCommandMode,
+      runtime,
+      httpFetchImpl,
       isInteractionBusy,
       isPreparing,
       isRunning,
@@ -732,20 +928,86 @@ export function useAgentChatSession(
     ]
   );
 
+  // --- Harness-only steer & summarize ---
+  const steer = useCallback(
+    async (text: string): Promise<boolean> => {
+      if (!isHarnessCommandMode || !runtime || !effectiveCanWrite) {
+        return false;
+      }
+      if (!text.trim()) return false;
+      const commandId = createTurnId();
+      const receipt = await runtime.steer(commandId, text);
+      if (receipt?.status === 'rejected') return false;
+      const failure = runtime.getState().lastFailure;
+      if (failure && failure.commandId === commandId) return false;
+      return true;
+    },
+    [isHarnessCommandMode, runtime, effectiveCanWrite, createTurnId],
+  );
+
+  const summarize = useCallback(async (): Promise<boolean> => {
+    if (!isHarnessCommandMode || !runtime || !effectiveCanWrite) {
+      return false;
+    }
+    const commandId = createTurnId();
+    const receipt = await runtime.summarize(commandId);
+    if (receipt?.status === 'rejected') return false;
+    const failure = runtime.getState().lastFailure;
+    if (failure && failure.commandId === commandId) return false;
+    return true;
+  }, [isHarnessCommandMode, runtime, effectiveCanWrite, createTurnId]);
+
+  const clearReceipt = useCallback(() => {
+    runtime?.clearReceipt();
+  }, [runtime]);
+
+  const retrySnapshot = useCallback(async () => {
+    if (!runtime) return;
+    setSnapshotErrorDismissed(false);
+    await runtime.refreshSnapshot();
+  }, [runtime]);
+
   // Legacy blind resend of the last user message. Prefer retryFailedRun for
   // durable failed runs so the server retries by identity without resending text.
   const retryLast = useCallback(() => {
-    if (locked || !threadId || isInteractionBusy) return;
+    if (!effectiveCanWrite || !threadId || isInteractionBusy) return;
     const lastUserMsg = [...visibleMessages]
       .reverse()
       .find((m) => m.role === 'user');
     if (!lastUserMsg) return;
     void send(lastUserMsg.text);
-  }, [locked, threadId, isInteractionBusy, visibleMessages, send]);
+  }, [effectiveCanWrite, threadId, isInteractionBusy, visibleMessages, send]);
 
   // --- Retry failed durable run by identity (no text / optimistic message) ---
   const retryFailedRun = useCallback(async (runIdOverride?: string) => {
-    if (locked || !threadId || isInteractionBusy) return;
+    if (!effectiveCanWrite || !threadId) return;
+
+    if (isHarnessCommandMode) {
+      if (!runtime) return;
+      const runId =
+        runIdOverride ??
+        runtimeState.retryableRunId ??
+        runtimeState.lastFailure?.runId ??
+        null;
+      if (!runId) return;
+      setSendError(null);
+      setIsSending(true);
+      try {
+        const commandId = createTurnId();
+        const receipt = await runtime.retry(commandId, runId);
+        if (receipt?.status === 'rejected') return;
+        const failure = runtime.getState().lastFailure;
+        if (failure && failure.commandId === commandId) return;
+        if (afterSend) {
+          await afterSend();
+        }
+      } finally {
+        setIsSending(false);
+      }
+      return;
+    }
+
+    if (isInteractionBusy) return;
     const runId = runIdOverride ?? retryableRunId;
     if (!runId) return;
 
@@ -758,10 +1020,11 @@ export function useAgentChatSession(
       const endpoint = retryEndpoint
         ? retryEndpoint(runId)
         : `/api/chat/threads/${threadId}/runs/${runId}/retry`;
+      const activeFetch = httpFetchImpl ?? fetch;
       let res: Response | null = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          res = await fetch(endpoint, {
+          res = await activeFetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -817,8 +1080,14 @@ export function useAgentChatSession(
       setIsSending(false);
     }
   }, [
-    locked,
+    effectiveCanWrite,
     threadId,
+    isHarnessCommandMode,
+    runtime,
+    runtimeState.retryableRunId,
+    runtimeState.lastFailure?.runId,
+    createTurnId,
+    httpFetchImpl,
     isInteractionBusy,
     retryableRunId,
     retryEndpoint,
@@ -830,7 +1099,17 @@ export function useAgentChatSession(
 
   // --- Cancel ---
   const cancel = useCallback(async () => {
-    if (!threadId || isCancelling) return;
+    if (!threadId) return;
+
+    if (isHarnessCommandMode) {
+      if (!effectiveCanWrite || !runtime) return;
+      setSendError(null);
+      await runtime.cancel(createTurnId());
+      return;
+    }
+
+    if (useHarnessRuntime && !effectiveCanWrite) return;
+    if (isCancelling) return;
     const stopStartedAt = Date.now();
     const endpoint = cancelEndpoint ?? `/api/chat/threads/${threadId}/cancel`;
     setSendError(null);
@@ -838,7 +1117,8 @@ export function useAgentChatSession(
     clearRetryableRunId();
     skipThinkingRestoreRef.current = true;
     try {
-      const response = await fetch(endpoint, {
+      const activeFetch = httpFetchImpl ?? fetch;
+      const response = await activeFetch(endpoint, {
         method: 'POST',
         credentials: 'include',
       });
@@ -888,15 +1168,53 @@ export function useAgentChatSession(
         status: 'error',
       });
     }
-  }, [area, projectId, threadId, cancelEndpoint, isCancelling, clearAwaitingAgentResponse, clearRetryableRunId]);
+  }, [
+    area,
+    projectId,
+    threadId,
+    isHarnessCommandMode,
+    useHarnessRuntime,
+    effectiveCanWrite,
+    runtime,
+    createTurnId,
+    httpFetchImpl,
+    cancelEndpoint,
+    isCancelling,
+    clearAwaitingAgentResponse,
+    clearRetryableRunId,
+  ]);
 
   // --- Clear send error ---
-  const clearSendError = useCallback(() => setSendError(null), []);
+  const clearSendError = useCallback(() => {
+    setSendError(null);
+    setSnapshotErrorDismissed(true);
+    runtime?.clearFailure();
+  }, [runtime]);
+
+  const effectiveSendError =
+    sendError ??
+    (useHarnessRuntime && !snapshotErrorDismissed
+      ? runtimeState.snapshotError
+      : null);
+
+  const connectionState: ConnectionState = useHarnessRuntime
+    ? runtimeState.connectionState
+    : isConnected
+      ? 'open'
+      : hasConnectionError
+        ? 'unavailable'
+        : 'connecting';
+
+  const activity = useHarnessRuntime
+    ? isForbiddenSnapshot
+      ? EMPTY_ACTIVITY
+      : runtimeState.activity
+    : EMPTY_ACTIVITY;
 
   return {
     // Messages & streaming
-    messages: displayedMessages,
-    visibleMessages,
+    messages: isForbiddenSnapshot ? EMPTY_MESSAGES : displayedMessages,
+    visibleMessages: isForbiddenSnapshot ? EMPTY_MESSAGES : visibleMessages,
     streamingText,
     thinkingText,
     toolProgress,
@@ -916,8 +1234,8 @@ export function useAgentChatSession(
     status,
     isRunning,
     isSending,
-    isCancelling,
-    isAwaitingAgentResponse,
+    isCancelling: effectiveIsCancelling,
+    isAwaitingAgentResponse: effectiveIsAwaitingAgentResponse,
     isPreparing,
     hasPreparationError,
     preparationMessage,
@@ -932,8 +1250,32 @@ export function useAgentChatSession(
     cancel,
 
     // Errors
-    sendError,
+    sendError: effectiveSendError,
     clearSendError,
     sendRejectedRef,
+
+    // Harness controls & state
+    steer,
+    summarize,
+    connectionState,
+    pendingCommands: useHarnessRuntime
+      ? runtimeState.pendingCommands
+      : EMPTY_PENDING_COMMANDS,
+    lastReceipt: useHarnessRuntime ? runtimeState.lastReceipt : null,
+    clearReceipt,
+    activity,
+    summaryNotice: useHarnessRuntime ? runtimeState.summaryNotice : null,
+    canWrite: effectiveCanWrite,
+    lastFailure: useHarnessRuntime ? runtimeState.lastFailure : null,
+    snapshotLoaded: useHarnessRuntime ? runtimeState.snapshotLoaded : true,
+    snapshotError: useHarnessRuntime ? runtimeState.snapshotError : null,
+    snapshotStatusCode: useHarnessRuntime
+      ? runtimeState.snapshotStatusCode
+      : null,
+    retrySnapshot,
+    terminalRevision: useHarnessRuntime ? runtimeState.terminalRevision : 0,
+    harnessArea: effectiveHarnessArea,
+    isSteerSupported: isHarnessCommandMode,
+    isSummarizeSupported: isHarnessCommandMode,
   };
 }

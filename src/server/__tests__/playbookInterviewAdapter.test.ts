@@ -211,7 +211,7 @@ describe('VT-STEP-5 — a valid profile starts one interview and suspends on its
           },
         },
       }),
-      { skipAutoKickoff: true }
+      { skipAutoKickoff: true, harness: { area: 'interview', version: 1 } }
     );
     expect(createInterview).toHaveBeenCalledTimes(1);
     expect(createInterview).toHaveBeenCalledWith({
@@ -266,7 +266,7 @@ describe('VT-STEP-5 — a valid profile starts one interview and suspends on its
           snapshot: expect.objectContaining({ mode: 'multi_agent_assisted', key: 'ba-discovery' }),
         }),
       }),
-      { skipAutoKickoff: true }
+      { skipAutoKickoff: true, harness: { area: 'interview', version: 1 } }
     );
     expect(suspendStepRun).toHaveBeenCalledWith({
       stepRunId: 'step-run-1',
@@ -326,7 +326,7 @@ describe('VT-ASSIST-7 — assisted interviews use the Lead skill on the main thr
     expect(createThread).toHaveBeenCalledWith(
       'initiator-1',
       expect.objectContaining({ skillPath: PROFILE.path }),
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true, harness: { area: 'interview', version: 1 } },
     );
 
     createThread.mockClear();
@@ -345,7 +345,7 @@ describe('VT-ASSIST-7 — assisted interviews use the Lead skill on the main thr
           }),
         }),
       }),
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true, harness: { area: 'interview', version: 1 } },
     );
   });
 });

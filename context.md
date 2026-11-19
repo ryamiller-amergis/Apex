@@ -34,6 +34,30 @@ Apex (formerly AI-Pilot) is an internal product-building and project-management 
 - **Use when:** Deciding which Approved PRD features appear on My Work Feature Backlog — only features whose design-doc owner is the signed-in user.
 - **Don't confuse with:** PRD reviewers, prototype reviewers, or the Apex Backlog assignee.
 
+### Area profile
+
+- **Definition:** A typed declaration in code (`areaProfiles.ts`) that configures one chat area for the shared Chat Harness: its workflow class, existing RBAC permission, project settings lane, allowed context kinds, tool allowlist, custom tools, write-confirmation rules, safety rules, recreation cap, and rating storage.
+- **Use when:** Adding or configuring an interactive chat area on the shared harness.
+- **Don't confuse with:** Project settings stored in PostgreSQL (which supply the concrete skill and model when App Service resolves the profile).
+
+### Session binding
+
+- **Definition:** The stored link (`cursor_agent_id`) connecting a chat thread in PostgreSQL to its Cursor SDK agent store.
+- **Use when:** Tracking whether a follow-up turn can resume the existing SDK agent; preserved on idle reap and cleared on stalled resume, explicit stop, or new chat.
+- **Don't confuse with:** The thread id (`chat_threads.id`) or a single turn's run id (`agent_runs.id`).
+
+### Acquisition mode
+
+- **Definition:** How the SDK adapter (`cursorSdkAdapter`) obtained the agent for a turn: `warm` (reused from host memory), `resumed` (reloaded from the agent store via session binding), or `recreated` (started fresh with a bounded handoff).
+- **Use when:** Reading turn telemetry or diagnosing whether a deploy, replica move, or idle eviction forced an agent rebuild.
+- **Don't confuse with:** Turn status (`running`, `completed`, `failed`).
+
+### Steer
+
+- **Definition:** A mid-turn instruction a user sends while an agent is working (up to 5 per turn).
+- **Use when:** Redirecting a running agent without stopping the turn; the harness applies it at the next safe step, holds it while summarizing, merges it if the agent is still starting, or queues it as a follow-up message if the turn already ended.
+- **Don't confuse with:** Cancel (which stops the active turn) or a regular send (which starts a new turn).
+
 ## Key Features
 
 ### 0. Agent Home
@@ -230,6 +254,16 @@ Per-user settings accessible from the header user menu.
 - **Bio and display name** — plain-text profile fields with validation
 - **Theme** — Light, Dark, or Amergis theme selection
 - **Notification preferences** — per-type notification and toast toggles
+
+### 20. Chat Harness
+
+Shared server and adapter layer that runs every interactive chat area in Apex through one contract instead of per-area SDK code.
+
+- **Area profiles** — 12 interactive chat areas (Agent Home, Interview, ADR, PRD Assistant, Design Doc Assistant, Ask Apex, Calendar work-item assistant, QA Lab, Brainstorm, CAB release assistant, Build intake, and Standup participant) declare their permissions, tools, write confirmation, safety rules, and rating storage in code; App Service resolves project settings into the execution specification with no defaults in workers
+- **Single SDK adapter** — V2 hosts and new chat areas call `@cursor/sdk` only through `cursorSdkAdapter` (only listed non-chat App Service helpers import the SDK directly)
+- **Commands and receipts** — one command handler serves `send`, `steer`, `summarize`, `cancel`, and `retry` over the two-way thread socket and an HTTP fallback, with once-only deduplication by command id and a receipt for every command
+- **Session memory and summaries** — stores auto, user-requested, and fallback summaries; when an agent must be recreated, App Service builds a bounded handoff from the area skill, the latest non-fallback summary, recent turns, and key area context rather than sending the full transcript
+- **Confirmed writes** — custom tools marked as writes stage proposals and wait for explicit user confirmation through each area's existing confirm endpoint
 
 ## User Workflows
 

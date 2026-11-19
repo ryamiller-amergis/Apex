@@ -656,7 +656,7 @@ describe('POST /api/chat/threads — happy path', () => {
     expect(mockChatService.createThread).toHaveBeenCalledWith(
       'user-1',
       kickoff,
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true, harness: { area: 'agent-home', version: 1 } },
     );
   });
 
@@ -710,7 +710,7 @@ describe('POST /api/chat/threads — happy path', () => {
         skillPath: '/.cursor/skills/grill-with-docs/SKILL.md',
         agentModule: 'interview',
       },
-      { skipAutoKickoff: false },
+      { skipAutoKickoff: false, harness: { area: 'interview', version: 1 } },
     );
   });
 });
@@ -886,7 +886,7 @@ describe('POST /api/chat/threads — Home pill admission (TBI-005)', () => {
     expect(mockChatService.createThread).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({ agentModule: 'interview' }),
-      { skipAutoKickoff: false },
+      { skipAutoKickoff: false, harness: { area: 'interview', version: 1 } },
     );
   });
 

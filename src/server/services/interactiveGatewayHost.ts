@@ -1,16 +1,14 @@
 /**
- * FEAT-007 / TBI-008 — WebSocket agent gateway host mount.
+ * FEAT-007 / TBI-008 + FEAT-002 / TBI-010 — WebSocket agent gateway host mount.
  *
  * Adapts real `ws` upgrade requests on `/api/interactive/threads/:id/stream`
  * to the transport-agnostic {@link attachInteractiveThreadStream} core. The
  * upgrade is authenticated by replaying the SAME express-session + passport
- * chain the HTTP routes use, then authorized against thread access and the
- * canonical `ai-runs-v2-transport` flag or the interim legacy
- * `ai-runs-interactive` flag. Fail-closed: any auth/flag failure destroys the
- * socket without leaking thread existence (BR-017, BR-019).
+ * chain the HTTP routes use, then authorized against thread read access.
  *
- * The mount is only attached when {@link isInteractiveGatewayEnabled} is true,
- * so default deployments keep the existing SSE transport unchanged.
+ * The gateway is unconditionally active in all deployments (no env var or
+ * feature-flag gates); any auth or thread-access failure destroys the socket
+ * without leaking thread existence (BR-017, BR-019).
  */
 import http from 'http';
 import type { IncomingMessage } from 'http';
@@ -19,19 +17,24 @@ import type { RequestHandler, Request } from 'express';
 import { WebSocketServer } from 'ws';
 import { getUserId } from '../utils/requestUser';
 import { resolveThreadAccess } from './threadAccessService';
-import { isFeatureEnabled } from './featureFlagService';
-import { INTERACTIVE_WORKFLOW_FLAG } from '../../shared/types/interactiveWorkflow';
+import { getAdoTokenForUser } from './adoUserToken';
 import {
   attachInteractiveThreadStream,
+  createInteractiveGatewayDependencies,
   type InteractiveGatewaySocket,
 } from './interactiveGatewayService';
+import { getAreaProfile } from './chatHarness/areaProfiles';
+import {
+  canCommandThread,
+  chatHarnessCommandHandler,
+  inferHarnessAreaFromThread,
+} from './chatHarness/chatHarnessCommandHandler';
 
 const GATEWAY_PATH = /^\/api\/interactive\/threads\/([^/]+)\/stream$/;
-const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 
-/** Off by default — flip on per environment during interactive rollout. */
+/** Always enabled (TBI-010 removed the env-var and feature-flag rollout gates). */
 export function isInteractiveGatewayEnabled(): boolean {
-  return process.env.AI_RUNS_INTERACTIVE_GATEWAY === 'true';
+  return true;
 }
 
 export interface InteractiveGatewayHostDependencies {
@@ -53,6 +56,15 @@ function runMiddleware(
       err ? reject(err instanceof Error ? err : new Error(String(err))) : resolve(),
     );
   });
+}
+
+function rawWsDataToString(
+  raw: Buffer | ArrayBuffer | Buffer[] | string,
+): string {
+  if (typeof raw === 'string') return raw;
+  if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+  if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
+  return Buffer.from(raw).toString('utf8');
 }
 
 /**
@@ -94,23 +106,12 @@ export function mountInteractiveGateway(
           return;
         }
 
-        const project = access.thread.kickoff?.project;
-        const flagContext = {
+        const area = inferHarnessAreaFromThread(access.thread);
+        const canWrite = await canCommandThread(
           userId,
-          project,
-        };
-        const v2Enabled = await isFeatureEnabled(
-          V2_TRANSPORT_FLAG,
-          flagContext,
+          access,
+          getAreaProfile(area),
         ).catch(() => false);
-        const enabled = v2Enabled || await isFeatureEnabled(
-          INTERACTIVE_WORKFLOW_FLAG,
-          flagContext,
-        ).catch(() => false);
-        if (!enabled) {
-          socket.destroy();
-          return;
-        }
 
         wss.handleUpgrade(req, socket, head, (ws) => {
           const lastEventId =
@@ -125,11 +126,34 @@ export function mountInteractiveGateway(
               ws.on('close', handler);
               ws.on('error', handler);
             },
+            onMessage: (handler: (data: string) => void) => {
+              ws.on('message', (raw: Buffer | ArrayBuffer | Buffer[] | string) => {
+                handler(rawWsDataToString(raw));
+              });
+            },
           };
 
-          void attachInteractiveThreadStream(gatewaySocket, threadId, {
-            lastEventId,
+          const gatewayDeps = createInteractiveGatewayDependencies({
+            onCommand: async (body) => {
+              const requestAdoToken = await getAdoTokenForUser(
+                req as unknown as Request,
+              ).catch(() => null);
+              return chatHarnessCommandHandler.handle({
+                userId,
+                threadId,
+                body,
+                transport: 'socket',
+                requestAdoToken,
+              });
+            },
           });
+
+          void attachInteractiveThreadStream(
+            gatewaySocket,
+            threadId,
+            { lastEventId, canWrite },
+            gatewayDeps,
+          );
         });
       } catch {
         // Never leak details on the upgrade path.

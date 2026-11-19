@@ -6,6 +6,7 @@ import {
 } from './aiRunV2BrainstormSpec';
 import type { BrainstormTurnSources } from './brainstormSources';
 import type { BrainstormTurnIntent, FrozenBrainstormArtifact } from './brainstormArtifact';
+import { isHarnessAreaId, type HarnessAreaId } from './chatHarness';
 import { isEffortLevel, type EffortLevel } from './effort';
 import {
   INTERACTIVE_WORKFLOW_CLASSES,
@@ -75,7 +76,45 @@ export type FrozenInteractiveMcpDescriptor =
       serverName: string;
       url: string;
       headerEnvRefs: Readonly<Record<string, string>>;
+    }>
+  | Readonly<{
+      kind: 'custom-tool';
+      serverName: string;
+      toolName: string;
+      proxyTarget: string;
+      writes: boolean;
+      enableRepoBrowse: false;
     }>;
+
+export type FrozenHarnessCustomTool = Readonly<{
+  name: string;
+  description: string;
+  inputSchema: Readonly<Record<string, unknown>>;
+  writes: boolean;
+  proxyTarget: string;
+}>;
+
+export type FrozenHarnessWriteConfirmation = Readonly<{
+  tool: string;
+  writes: boolean;
+  mode: 'ask' | 'allow';
+}>;
+
+export type FrozenHarnessSafety = Readonly<{
+  repositoryCode: 'none' | 'read';
+  shell: 'none' | 'scrubbed';
+  settingSources: readonly [];
+}>;
+
+export type FrozenHarnessSpec = Readonly<{
+  area: HarnessAreaId;
+  version: number;
+  operation?: 'summarize';
+  toolAllowlist: ReadonlyArray<string>;
+  customTools: ReadonlyArray<FrozenHarnessCustomTool>;
+  writeConfirmation: ReadonlyArray<FrozenHarnessWriteConfirmation>;
+  safety?: FrozenHarnessSafety;
+}>;
 
 export type FrozenInteractiveToolGrant = Readonly<{
   userId: string;
@@ -176,6 +215,8 @@ export type DurableInteractiveTurnSpecification = Readonly<{
    * `sources/<id>` the same way as Brainstorm sources. Never set with `brainstorm`.
    */
   referenceSources?: BrainstormTurnSources;
+  /** Shared chat harness specification block resolved on App Service. */
+  harness?: FrozenHarnessSpec;
 }>;
 
 export type InteractiveDispatchOutboxPayload = Readonly<{
@@ -403,7 +444,68 @@ function isMcpDescriptor(
     );
   }
 
+  if (value.kind === 'custom-tool') {
+    return (
+      isNonEmptyString(value.serverName) &&
+      isNonEmptyString(value.toolName) &&
+      isNonEmptyString(value.proxyTarget) &&
+      typeof value.writes === 'boolean' &&
+      value.enableRepoBrowse === false
+    );
+  }
+
   return false;
+}
+
+function isFrozenHarnessCustomTool(
+  value: unknown
+): value is FrozenHarnessCustomTool {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.name) &&
+    typeof value.description === 'string' &&
+    isRecord(value.inputSchema) &&
+    typeof value.writes === 'boolean' &&
+    isNonEmptyString(value.proxyTarget)
+  );
+}
+
+function isFrozenHarnessWriteConfirmation(
+  value: unknown
+): value is FrozenHarnessWriteConfirmation {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.tool) &&
+    typeof value.writes === 'boolean' &&
+    (value.mode === 'ask' || value.mode === 'allow')
+  );
+}
+
+function isFrozenHarnessSafety(value: unknown): value is FrozenHarnessSafety {
+  if (!isRecord(value)) return false;
+  return (
+    (value.repositoryCode === 'none' || value.repositoryCode === 'read') &&
+    (value.shell === 'none' || value.shell === 'scrubbed') &&
+    Array.isArray(value.settingSources) &&
+    value.settingSources.length === 0
+  );
+}
+
+export function isFrozenHarnessSpec(value: unknown): value is FrozenHarnessSpec {
+  if (!isRecord(value)) return false;
+  return (
+    isHarnessAreaId(value.area) &&
+    Number.isSafeInteger(value.version) &&
+    (value.version as number) > 0 &&
+    (value.operation === undefined || value.operation === 'summarize') &&
+    Array.isArray(value.toolAllowlist) &&
+    value.toolAllowlist.every(isNonEmptyString) &&
+    Array.isArray(value.customTools) &&
+    value.customTools.every(isFrozenHarnessCustomTool) &&
+    Array.isArray(value.writeConfirmation) &&
+    value.writeConfirmation.every(isFrozenHarnessWriteConfirmation) &&
+    (value.safety === undefined || isFrozenHarnessSafety(value.safety))
+  );
 }
 
 function isToolGrant(value: unknown): value is FrozenInteractiveToolGrant {
@@ -591,7 +693,8 @@ export function isDurableInteractiveTurnSpecification(
       : value.brainstorm === undefined) &&
     (value.referenceSources === undefined ||
       (value.workflowClass === 'interview' &&
-        isBrainstormTurnSources(value.referenceSources)))
+        isBrainstormTurnSources(value.referenceSources))) &&
+    (value.harness === undefined || isFrozenHarnessSpec(value.harness))
   );
 }
 

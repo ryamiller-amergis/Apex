@@ -1,8 +1,17 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
-import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
+import {
+  AgentHarnessPanel,
+  AgentMessage,
+  AgentPanelShell,
+  AgentThoughtProcess,
+  AssistantConversation,
+} from './agentChat';
+import chatStyles from './agentChat/agentChat.module.css';
 import styles from './PrdAssistantPanel.module.css';
 
 const PRD_ASSISTANT_SUGGESTIONS = [
@@ -22,6 +31,8 @@ export interface PrdAssistantPanelProps {
   open: boolean;
   onClose: () => void;
   existingThreadId?: string | null;
+  /** Optional PRD diff review controls rendered in the AgentHarnessPanel proposal slot (BR-001). */
+  proposal?: React.ReactNode;
 }
 
 const MIN_PANEL_WIDTH = 280;
@@ -33,6 +44,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
   open,
   onClose,
   existingThreadId,
+  proposal,
 }) => {
   const [threadId, setThreadId] = useState<string | null>(existingThreadId ?? null);
   // Only a thread this panel just created is known to be empty; an existing
@@ -51,7 +63,10 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
 
   const qc = useQueryClient();
 
-  const session = useAgentChatSession(threadId);
+  const session = useAgentChatSession(threadId, {
+    harnessArea: 'prd-assistant',
+    area: 'prd-assistant',
+  });
   const {
     attachments,
     attachmentError,
@@ -64,7 +79,6 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     streamingText,
     isRunning,
     isSending,
-    showTypingIndicator,
     progressLabel,
     progressPhase,
     toolProgress,
@@ -152,20 +166,59 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     event.currentTarget.value = '';
   }, [addFiles]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (textFromHarness: string) => {
+    const text = textFromHarness.trim();
     const outgoing = [...attachments];
-    if (!text && outgoing.length === 0) return;
+    if (!text && outgoing.length === 0) return false;
     const message = text || 'Please use the attached files as additional context.';
-    setInput('');
     const sent = await session.send(
       message,
       outgoing.length > 0 ? { attachments: outgoing } : undefined,
     );
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, clearAttachments, input, session]);
+    return sent;
+  }, [attachments, clearAttachments, session]);
 
-  const visibleMessages = messages.filter((m) => m.role !== 'tool' && !m.hidden && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
+  const rawMessages = session.visibleMessages ?? messages;
+  const visibleMessages = useMemo(
+    () =>
+      rawMessages.filter(
+        (m) =>
+          m.role !== 'tool' &&
+          !m.hidden &&
+          m.toolName !== '_reasoning' &&
+          m.toolName !== '_thinking',
+      ),
+    [rawMessages],
+  );
+
+  const harnessSession = useMemo(
+    () => ({
+      ...session,
+      visibleMessages,
+      snapshotLoaded:
+        !threadId || Boolean(createError) || threadId === createdThreadId
+          ? true
+          : session.snapshotLoaded,
+    }),
+    [session, visibleMessages, threadId, createError, createdThreadId],
+  );
+
+  const cachedPrd = qc.getQueryData<{
+    proposedContent?: string | null;
+    proposedBacklogJson?: string | null;
+  }>(['prd', prdId]);
+  const hasCachedProposal = Boolean(
+    cachedPrd &&
+      (cachedPrd.proposedContent != null || cachedPrd.proposedBacklogJson != null),
+  );
+  const resolvedProposal =
+    proposal ??
+    (hasCachedProposal ? (
+      <div {...{ 'data-testid': 'prd-assistant-proposal-notice' }}>
+        Proposed PRD changes are ready for your review. Accept or reject them in the document review banner — edits are never applied automatically.
+      </div>
+    ) : undefined);
 
   if (!open) return null;
 
@@ -259,30 +312,31 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               </svg>
             </button>
           )}
-          composer={(
-            <AgentComposer
-              className={styles.composerEmbed}
-              value={input}
-              onChange={setInput}
-              onSend={() => void handleSend()}
-              onCancel={isRunning ? () => void session.cancel() : undefined}
-              disabled={isRunning || isSending || isCreating || !threadId}
-              isRunning={isRunning}
-              isSending={isSending}
-              allowEmptySend
-              placeholder={
-                isCreating ? 'Starting assistant…' :
-                isRunning ? 'Agent is thinking…' :
-                'Ask about this PRD… (Enter to send)'
-              }
-              testIdPrefix="prd-assistant"
-              textareaRef={textareaRef}
-              attachments={attachments}
-              attachmentError={attachmentError}
-              onRemoveAttachment={removeAttachment}
-              onAttachClick={() => fileInputRef.current?.click()}
-              onPasteFiles={(files) => { void addFiles(files); }}
-              fileInput={(
+        >
+          <AgentHarnessPanel
+            area="prd-assistant"
+            session={harnessSession}
+            testIdPrefix="prd-assistant"
+            draft={input}
+            onDraftChange={setInput}
+            onSend={handleSend}
+            slots={resolvedProposal ? { proposal: resolvedProposal } : undefined}
+            fallbackProgressLabel="Starting agent…"
+            composer={{
+              allowEmptySend: true,
+              disabled: isCreating || !threadId,
+              placeholder: isCreating
+                ? 'Starting assistant…'
+                : isRunning
+                  ? 'Steer the agent… (Enter to steer)'
+                  : 'Ask about this PRD… (Enter to send)',
+              textareaRef,
+              attachments,
+              attachmentError,
+              onRemoveAttachment: removeAttachment,
+              onAttachClick: () => fileInputRef.current?.click(),
+              onPasteFiles: (files) => { void addFiles(files); },
+              fileInput: (
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -292,27 +346,105 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
                   disabled={isRunning || isSending || isCreating || !threadId}
                   {...{ 'data-testid': 'prd-assistant-file-input' }}
                 />
-              )}
-              {...{ 'data-testid': 'prd-assistant-composer' }}
-            />
-          )}
-        >
-          <AssistantConversation
-            messages={visibleMessages}
-            streamingText={streamingText}
-            isWorking={showTypingIndicator}
-            isStarting={isCreating}
-            startError={createError}
-            progressLabel={progressLabel}
-            progressPhase={progressPhase}
-            toolProgress={toolProgress}
-            welcome={threadId && threadId === createdThreadId ? {
-              title: 'Ask about this PRD',
-              description: 'Apex can answer questions, edit the PRD or backlog, add test cases, and resolve review comments. Edits come back as a proposed change for the owner to accept.',
-              suggestions: PRD_ASSISTANT_SUGGESTIONS,
-              onSuggestion: fillComposer,
-            } : undefined}
-            testIdPrefix="prd-assistant"
+              ),
+            }}
+            renderTranscript={({ items, isWorking, liveWorkBox, streamingPreview, messageFailure }) => {
+              const showAssistantChrome =
+                isCreating ||
+                Boolean(createError) ||
+                (items.length === 0 && !isWorking && !streamingText && !messageFailure);
+
+              if (showAssistantChrome) {
+                return (
+                  <AssistantConversation
+                    messages={[]}
+                    streamingText=""
+                    isWorking={false}
+                    isStarting={isCreating}
+                    startError={createError}
+                    progressLabel={progressLabel}
+                    progressPhase={progressPhase}
+                    toolProgress={toolProgress}
+                    welcome={
+                      threadId && threadId === createdThreadId
+                        ? {
+                            title: 'Ask about this PRD',
+                            description:
+                              'Apex can answer questions, edit the PRD or backlog, add test cases, and resolve review comments. Edits come back as a proposed change for the owner to accept.',
+                            suggestions: PRD_ASSISTANT_SUGGESTIONS,
+                            onSuggestion: fillComposer,
+                          }
+                        : undefined
+                    }
+                    testIdPrefix="prd-assistant"
+                  />
+                );
+              }
+
+              return (
+                <div
+                  className={chatStyles.conversation}
+                  {...{ 'data-testid': 'prd-assistant-conversation' }}
+                >
+                  {items.map((item) => {
+                    if (item.role === 'user') {
+                      return (
+                        <div key={item.id} data-message-id={item.id} className={chatStyles.userBubble}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
+                          {item.failed ? (
+                            <span
+                              className={chatStyles.messageFailureBadge}
+                              {...{ 'data-testid': `prd-assistant-message-failed-${item.id}` }}
+                            >
+                              Failed
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    }
+                    if (item.role === 'system') {
+                      return (
+                        <div key={item.id} data-message-id={item.id} className={chatStyles.systemBubble}>
+                          {item.text}
+                        </div>
+                      );
+                    }
+                    if (item.role === 'agent') {
+                      return (
+                        <div key={item.id} data-message-id={item.id}>
+                          {item.activity?.length || item.activityUnavailable ? (
+                            <AgentThoughtProcess
+                              items={item.activity}
+                              isUnavailable={item.activityUnavailable}
+                              testIdPrefix="prd-assistant"
+                              testIds={{
+                                drawer: 'prd-assistant-thought-process',
+                                toggle: 'prd-assistant-thought-process-toggle',
+                                thinking: `prd-assistant-saved-thinking-${item.id}`,
+                                steps: `prd-assistant-saved-steps-${item.id}`,
+                                toolGroup: `prd-assistant-saved-tool-group-${item.id}`,
+                              }}
+                            />
+                          ) : null}
+                          <AgentMessage
+                            text={item.text}
+                            ts={item.ts}
+                            messageId={item.id}
+                            locked
+                            className={chatStyles.assistantReply}
+                          />
+                        </div>
+                      );
+                    }
+                    return null;
+                  })}
+                  {liveWorkBox}
+                  {streamingPreview}
+                  {messageFailure}
+                </div>
+              );
+            }}
+            {...{ 'data-testid': 'prd-assistant-harness-panel' }}
           />
         </AgentPanelShell>
       </div>

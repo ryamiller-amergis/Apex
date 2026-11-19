@@ -333,7 +333,7 @@ describe('POST /api/interviews/design-docs/:id/assistant-thread — new thread c
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.any(Object),
-      { skipAutoKickoff: true },
+      { skipAutoKickoff: true, harness: { area: 'design-doc-assistant', version: 1 } },
     );
   });
 

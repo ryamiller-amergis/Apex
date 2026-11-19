@@ -3,7 +3,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useAvailableModels, useGlobalDefaultModel } from '../hooks/useProjectSkillConfig';
-import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
+import { useAssistantProposals } from '../hooks/useQaLab';
+import { AgentHarnessPanel, AgentPanelShell } from './agentChat';
+import chatStyles from './agentChat/agentChat.module.css';
 import { QaLabAssistantProposals } from './QaLabAssistantProposals';
 import { SkillRating } from './SkillRating';
 import styles from './QaLabAssistantPanel.module.css';
@@ -129,7 +131,10 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   const { data: availableModels, isLoading: modelsLoading } = useAvailableModels();
   const { data: globalDefaultModel } = useGlobalDefaultModel();
 
-  const session = useAgentChatSession(threadId);
+  const session = useAgentChatSession(threadId, {
+    harnessArea: 'qa-lab',
+    area: 'qa-lab',
+  });
   const {
     attachments,
     attachmentError,
@@ -139,14 +144,13 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
   } = useChatAttachments();
   const {
     messages,
-    streamingText,
     isRunning,
     isSending,
-    showTypingIndicator,
-    progressLabel,
-    progressPhase,
-    toolProgress,
   } = session;
+  const { data: proposals = [] } = useAssistantProposals(
+    target.kind === 'suite' ? threadId : null,
+    isRunning,
+  );
 
   // Seed the picker from the global default once models resolve.
   useEffect(() => {
@@ -232,18 +236,18 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
     event.currentTarget.value = '';
   }, [addFiles]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (text: string) => {
+    const trimmed = text.trim();
     const outgoing = [...attachments];
-    if (!text && outgoing.length === 0) return;
-    const message = text || 'Please use the attached files as additional context.';
-    setInput('');
+    if (!trimmed && outgoing.length === 0) return false;
+    const message = trimmed || 'Please use the attached files as additional context.';
     const sent = await session.send(message, {
       ...(selectedModel ? { model: selectedModel } : {}),
       ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
     });
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, clearAttachments, input, selectedModel, session]);
+    return sent;
+  }, [attachments, clearAttachments, selectedModel, session]);
 
   const visibleMessages = messages.filter(
     (message) =>
@@ -274,12 +278,50 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
             <span className={styles.contextValue}>{contextLabel}</span>
           </div>
         ) : undefined}
-        composer={(
-          <>
-            {target.kind === 'suite' && threadId && (
+      >
+        <AgentHarnessPanel
+          area="qa-lab"
+          session={session}
+          testIdPrefix="qa-lab-assistant"
+          {...{ 'data-testid': 'qa-lab-harness-panel' }}
+          items={visibleMessages}
+          isLoading={isCreating}
+          loadError={createError}
+          draft={input}
+          onDraftChange={setInput}
+          onSend={handleSend}
+          onCancel={isRunning ? () => void session.cancel() : undefined}
+          emptyState={(
+            <div className={chatStyles.welcome} {...{ 'data-testid': 'qa-lab-assistant-welcome' }}>
+              <h3 className={chatStyles.welcomeTitle}>{config.welcomeTitle}</h3>
+              <p className={chatStyles.welcomeDescription}>{config.welcomeBody}</p>
+              {config.suggestions.length > 0 && (
+                <div className={chatStyles.suggestionList}>
+                  {config.suggestions.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className={chatStyles.suggestionBtn}
+                      onClick={() => fillComposer(prompt)}
+                      {...{ 'data-testid': 'qa-lab-assistant-suggestion' }}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          slots={{
+            header: createError ? (
+              <div className={chatStyles.systemBubble} role="alert" {...{ 'data-testid': 'qa-lab-assistant-error' }}>
+                {createError}
+              </div>
+            ) : undefined,
+            proposal: target.kind === 'suite' && threadId && proposals.length > 0 ? (
               <QaLabAssistantProposals threadId={threadId} isRunning={isRunning} />
-            )}
-            {latestReplyId && !isRunning && (
+            ) : undefined,
+            composerAccessory: latestReplyId && !isRunning ? (
               // data-testid-exempt — SkillRating renders chat-message-rating-qa_lab-<message>
               <SkillRating
                 project={project}
@@ -288,67 +330,38 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
                 subjectId={latestReplyId}
                 threadId={threadId}
               />
-            )}
-            <AgentComposer
-              className={styles.composerEmbed}
-              value={input}
-              onChange={setInput}
-              onSend={() => void handleSend()}
-              onCancel={isRunning ? () => void session.cancel() : undefined}
-              disabled={composerBusy}
-              isRunning={isRunning}
-              isSending={isSending}
-              allowEmptySend
-              placeholder={
-                isCreating
-                  ? 'Starting assistant…'
-                  : isRunning
-                    ? 'Agent is thinking…'
-                    : config.placeholder
-              }
-              testIdPrefix="qa-lab-assistant"
-              textareaRef={textareaRef}
-              attachments={attachments}
-              attachmentError={attachmentError}
-              onRemoveAttachment={removeAttachment}
-              onAttachClick={() => fileInputRef.current?.click()}
-              onPasteFiles={(files) => { void addFiles(files); }}
-              fileInput={(
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={(event) => { void handleAttachmentChange(event); }}
-                  disabled={composerBusy}
-                  {...{ 'data-testid': 'qa-lab-assistant-file-input' }}
-                />
-              )}
-              model={selectedModel}
-              models={availableModels}
-              modelsLoading={modelsLoading}
-              onModelChange={setSelectedModel}
-              {...{ 'data-testid': 'qa-lab-assistant-composer' }}
-            />
-          </>
-        )}
-      >
-        <AssistantConversation
-          messages={visibleMessages}
-          streamingText={streamingText}
-          isWorking={showTypingIndicator}
-          isStarting={isCreating}
-          startError={createError}
-          progressLabel={progressLabel}
-          progressPhase={progressPhase}
-          toolProgress={toolProgress}
-          welcome={{
-            title: config.welcomeTitle,
-            description: config.welcomeBody,
-            suggestions: config.suggestions,
-            onSuggestion: fillComposer,
+            ) : undefined,
           }}
-          testIdPrefix="qa-lab-assistant"
+          composer={{
+            disabled: composerBusy,
+            allowEmptySend: true,
+            placeholder: isCreating
+              ? 'Starting assistant…'
+              : isRunning
+                ? 'Agent is thinking…'
+                : config.placeholder,
+            textareaRef,
+            attachments,
+            attachmentError,
+            onRemoveAttachment: removeAttachment,
+            onAttachClick: () => fileInputRef.current?.click(),
+            onPasteFiles: (files) => { void addFiles(files); },
+            fileInput: (
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => { void handleAttachmentChange(event); }}
+                disabled={composerBusy}
+                {...{ 'data-testid': 'qa-lab-assistant-file-input' }}
+              />
+            ),
+            model: selectedModel,
+            models: availableModels,
+            modelsLoading,
+            onModelChange: setSelectedModel,
+          }}
         />
       </AgentPanelShell>
     </div>
