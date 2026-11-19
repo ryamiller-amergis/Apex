@@ -34,6 +34,10 @@ import {
   playbookSkillPath,
   resolvePlaybookAgentRunPolicy,
 } from '../playbookExecutionCapabilityService';
+import {
+  loadStoredProjectSkill,
+  projectSkillVersionIdFromPath,
+} from '../playbookProjectSkillService';
 import { parseStepInput } from './descriptorValidation';
 import { promptWithOutcomes } from './agentOutcome';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
@@ -185,8 +189,12 @@ export async function executeCursorAgentStep(
   const stepExpiresAt = deadlineFromNow(deadlineMs);
 
   const skillConfig = await getSkillConfig(context.project);
-  const skillContent = await loadPlaybookSkillContent(skillPath);
-  const skillCompanions = await loadPlaybookSkillCompanions(skillPath);
+  const versionId = projectSkillVersionIdFromPath(skillPath);
+  const stored = versionId ? await loadStoredProjectSkill(versionId) : null;
+  const skillContent = stored?.content ?? await loadPlaybookSkillContent(skillPath);
+  const skillCompanions = stored
+    ? stored.companions.map((companion) => ({ path: companion.path, content: companion.content }))
+    : await loadPlaybookSkillCompanions(skillPath);
   const resolvedPolicy = resolvePlaybookAgentRunPolicy({
     nodeId: context.stepId,
     skillPath,
@@ -195,6 +203,9 @@ export async function executeCursorAgentStep(
     repository: skillConfig?.skillRepo ?? context.project,
     provider: skillConfig?.skillProvider,
     enforce: true,
+    ...(stored && versionId
+      ? { bundle: { skillVersionId: versionId, companions: stored.companions } }
+      : {}),
   });
   const frozenPolicy = context.graph?.nodes.find(
     (node) => node.id === context.stepId
@@ -204,6 +215,10 @@ export async function executeCursorAgentStep(
     && (
       frozenPolicy.skill.path !== resolvedPolicy.skill.path
       || frozenPolicy.skill.sha256 !== resolvedPolicy.skill.sha256
+      || (
+        (frozenPolicy.bundleSha256 ?? resolvedPolicy.bundleSha256) !== undefined
+        && frozenPolicy.bundleSha256 !== resolvedPolicy.bundleSha256
+      )
     )
   ) {
     throw new PlaybookExecutionCapabilityError(

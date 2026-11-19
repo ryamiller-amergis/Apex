@@ -232,6 +232,7 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
     description: skill.description,
     badges: skill.capabilities ?? [],
     disabled: !skill.runnable,
+    ...(skill.group ? { group: skill.group } : {}),
     ...(skill.unavailableReason ? { disabledReason: skill.unavailableReason } : {}),
   }));
   const modelOptions: PlaybookPickerOption[] = (models.data ?? []).map((model) => ({
@@ -321,6 +322,23 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           {...{ 'data-testid': "playbook-inspector-field-mcpProfile" }}
         />
       </Field>
+      {node.stepType === 'interactive-agent' ? (
+        <Field
+          label="Assignee"
+          htmlFor={`${node.id}-assignee`}
+          required
+          hint="The person who chats with the agent and approves its result."
+          {...{ 'data-testid': `playbook-field-${node.id}-assignee` }}
+        >
+          <input
+            id={`${node.id}-assignee`}
+            value={typeof config.assigneeUserId === 'string' ? config.assigneeUserId : ''}
+            disabled={disabled}
+            onChange={(event) => setField('assigneeUserId', event.target.value)}
+            {...{ 'data-testid': 'playbook-inspector-field-assigneeUserId' }}
+          />
+        </Field>
+      ) : null}
       <Field label="Deadline" htmlFor={`${node.id}-deadline`} hint="Blank uses the step's default." {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}>
         <DeadlineField
           id={`${node.id}-deadline`}
@@ -1241,6 +1259,10 @@ export const STEP_FIELD_RENDERERS: Record<string, {
 }> = {
   'cursor-agent': {
     handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes'],
+    Component: CursorAgentFields,
+  },
+  'interactive-agent': {
+    handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes', 'assigneeUserId'],
     Component: CursorAgentFields,
   },
   'approval-gate': {

@@ -106,6 +106,7 @@ const PlaybookStatusView = lazy(() => import('./components/PlaybookStatusView'))
 const PlaybookCanvasPage = lazy(() => import('./components/PlaybookCanvasPage'));
 const PlaybookLiveRunPage = lazy(() => import('./components/PlaybookLiveRunPage'));
 const PlaybooksManagePage = lazy(() => import('./components/PlaybooksManagePage'));
+const ProjectSkillLibraryPage = lazy(() => import('./components/ProjectSkillLibraryPage'));
 const PlaybookDashboardPage = lazy(() => import('./components/PlaybookDashboardPage'));
 const PlaybookEditPage = lazy(() => import('./components/PlaybookEditPage'));
 const LoadTestsListPage = lazy(() => import('./components/LoadTestsListPage').then(m => ({ default: m.LoadTestsListPage })));
@@ -1599,6 +1600,9 @@ function App() {
                         runId={segments[2]}
                       />
                     );
+                  }
+                  if (segments[0] === 'playbooks' && segments[1] === 'skills' && !segments[2]) {
+                    return <ProjectSkillLibraryPage project={selectedProject} />;
                   }
                   if (segments[0] === 'playbooks' && segments[1] && segments[2] === 'edit') {
                     return (

@@ -122,7 +122,7 @@ export type PlaybookStepRunStatus = (typeof PLAYBOOK_STEP_RUN_STATUSES)[number];
 export const PLAYBOOK_STEP_RUN_OPEN_STATUSES = ['pending', 'running', 'suspended'] as const;
 
 /** Why a run is parked. Every kind resumes through the same path, per BR-008. */
-export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview' | 'build';
+export type PlaybookSuspendReason = 'approval_gate' | 'agent_run' | 'interview' | 'build' | 'interactive_agent';
 
 // ── Definition graph ──────────────────────────────────────────────────────────
 
@@ -208,6 +208,8 @@ export interface PlaybookSkillOption {
   capabilities: string[] | null;
   /** False only when the capability list names something Apex does not recognize. */
   runnable: boolean;
+  /** Base skills are shared files. Project skills belong to one project. */
+  group?: 'base' | 'project';
   unavailableReason?: string;
 }
 

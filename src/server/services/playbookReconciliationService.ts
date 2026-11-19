@@ -25,6 +25,7 @@ import { db } from '../db/drizzle';
 import { agentRuns, interviews, playbookRuns, playbookStepRuns } from '../db/schema';
 import { advanceStalledRuns } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
+import { recordInteractiveTurnFinished, warnInteractiveExpiring } from './playbookSteps/interactiveAgentAdapter';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { PlaybookSweepOutcome } from '../../shared/types/playbook';
 import { failGatesWithEmptyCurrentPools } from './playbookGateService';
@@ -92,6 +93,18 @@ async function resumeMissedTerminalEvents(): Promise<number> {
 
   let moved = 0;
   for (const row of stranded) {
+    if (row.stepType === 'interactive-agent') {
+      const recorded = await recordInteractiveTurnFinished({
+        stepRunId: row.stepRunId,
+        agentRunId: row.agentRunId,
+        threadId: row.threadId,
+        failedReason: row.agentRunStatus === 'completed'
+          ? undefined
+          : `Agent run ended as ${row.agentRunStatus}; found by the reconciliation sweep.`,
+      });
+      if (recorded) moved += 1;
+      continue;
+    }
     if (row.agentRunStatus === 'completed') {
       // Same output and conditional update the event path uses, so a missed NOTIFY still
       // hands ingest-artifact a scorecard instead of an empty payload.
@@ -237,6 +250,7 @@ export async function runReconciliationPass(
 
   try {
     const resumed = await resumeMissedTerminalEvents();
+    await warnInteractiveExpiring(clock());
     await failGatesWithEmptyCurrentPools();
     const expired = await expireOverdueSuspensions(clock());
     const orphaned = await countOrphans();

@@ -3749,6 +3749,68 @@ export const playbookGateApprovers = pgTable('playbook_gate_approvers', {
   stepIdx: index('idx_playbook_gate_approvers_step').on(t.stepRunId),
 }));
 
+export const projectPlaybookSkills = pgTable('project_playbook_skills', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  name: text('name').notNull(),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectNameUq: uniqueIndex('uq_project_playbook_skills_project_name')
+    .on(t.project, sql`lower(btrim(${t.name}))`),
+}));
+
+export const projectPlaybookSkillVersions = pgTable('project_playbook_skill_versions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  skillId: uuid('skill_id').notNull()
+    .references(() => projectPlaybookSkills.id, { onDelete: 'cascade' }),
+  versionNumber: integer('version_number').notNull(),
+  content: text('content').notNull(),
+  skillType: text('skill_type'),
+  outputKind: text('output_kind'),
+  contentSha256: text('content_sha256').notNull(),
+  bundleSha256: text('bundle_sha256').notNull(),
+  status: text('status').$type<'draft' | 'published'>().notNull().default('draft'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  skillVersionUq: unique('uq_project_playbook_skill_versions_number').on(t.skillId, t.versionNumber),
+}));
+
+export const projectPlaybookSkillFiles = pgTable('project_playbook_skill_files', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  versionId: uuid('version_id').notNull()
+    .references(() => projectPlaybookSkillVersions.id, { onDelete: 'cascade' }),
+  fileName: text('file_name').notNull(),
+  content: text('content').notNull(),
+  classification: text('classification').$type<'instruction' | 'reference'>().notNull(),
+  approvalStatus: text('approval_status').$type<'pending' | 'approved'>().notNull().default('pending'),
+}, (t) => ({
+  versionFileUq: unique('uq_project_playbook_skill_files_name').on(t.versionId, t.fileName),
+}));
+
+export const projectPlaybookSkillsRelations = relations(projectPlaybookSkills, ({ many }) => ({
+  versions: many(projectPlaybookSkillVersions),
+}));
+
+export const projectPlaybookSkillVersionsRelations = relations(
+  projectPlaybookSkillVersions,
+  ({ one, many }) => ({
+    skill: one(projectPlaybookSkills, {
+      fields: [projectPlaybookSkillVersions.skillId],
+      references: [projectPlaybookSkills.id],
+    }),
+    files: many(projectPlaybookSkillFiles),
+  }),
+);
+
+export const projectPlaybookSkillFilesRelations = relations(projectPlaybookSkillFiles, ({ one }) => ({
+  version: one(projectPlaybookSkillVersions, {
+    fields: [projectPlaybookSkillFiles.versionId],
+    references: [projectPlaybookSkillVersions.id],
+  }),
+}));
+
 // Relations exist so the projection can load a run with its steps and pinned version in one
 // round trip through db.query.*, per .cursor/rules/postgresql-db.mdc.
 

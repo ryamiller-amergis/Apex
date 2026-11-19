@@ -3,12 +3,12 @@
     {
       "name": "Project Admin",
       "type": "Admin",
-      "description": "Authors Playbooks and project skills, and reviews preset updates before a draft uses them."
+      "description": "Authors Playbooks and the project's own skills. Selects base skills and cannot change them."
     },
     {
       "name": "Platform Admin",
       "type": "Admin",
-      "description": "Approves capability and skill-type changes on a forked skill, and can approve a reference file when a project has no second approver."
+      "description": "Can approve a reference file when a project has no second approver."
     },
     {
       "name": "Developer",
@@ -24,8 +24,8 @@
     },
     {
       "id": "BR-002",
-      "rule": "A preset update reaches a draft only after someone accepts the diff. Publish does not pick up a new preset version on its own.",
-      "appliesTo": "Review a preset update before publish"
+      "rule": "A project cannot edit a foundation skill. A published Playbook that names a foundation path keeps today's file check.",
+      "appliesTo": "Choose a skill in the builder"
     },
     {
       "id": "BR-003",
@@ -34,12 +34,12 @@
     },
     {
       "id": "BR-004",
-      "rule": "The author of a reference-file version cannot approve it. A fork cannot be published while a capability or skill-type change is unapproved.",
+      "rule": "The author of a reference-file version cannot approve it.",
       "appliesTo": "Approve a reference file"
     },
     {
       "id": "BR-005",
-      "rule": "A new project skill cannot declare capabilities. A new publish names a skill version. A bare repo path is accepted only from a Playbook published before Part 3.",
+      "rule": "A new project skill cannot declare capabilities, and its name cannot match a foundation skill. A new publish names a foundation skill or a project skill version. Any other repo path is accepted only from a Playbook published before Part 3.",
       "appliesTo": "Create a project skill"
     },
     {
@@ -52,17 +52,21 @@
     {
       "title": "Skill Library and Skill Contracts",
       "priority": "Must Have",
-      "description": "Give each project versioned skills, shared presets, and an interactive agent task, without changing the bytes a published Playbook already pinned. This is Playbooks Part 3.",
+      "description": "Keep foundation skills as the shared base every project can select and none can edit. Give each project a library for skills it writes. Move only the MaxView incident skill into MaxView's library. Let authors pick from both groups without scanning one long list. This is Playbooks Part 3.",
       "successMetrics": [
-        "A published Playbook still runs after its preset file changes on disk, and the run uses the pinned bytes.",
-        "Approving a MaxView resource catalog changes the next incident run without republishing the Playbook.",
+        "A published Playbook that names a foundation skill keeps today's file check, and that file is not copied into the store.",
+        "MaxView can select the incident skill as its own, and other projects are not offered it as a base skill.",
+        "An author can find a skill by name when both groups contain many skills.",
         "An interactive agent task does not resume until the assignee approves a valid result."
       ],
       "outOfScope": [
         "Write profiles on agent steps",
         "Creating reader identities for projects other than MaxView",
         "A timeout branch on an interactive step",
-        "Slot placeholders, custom output fields, AI-assisted forks, and promoting a project skill to a preset",
+        "Copying existing foundation skills into the version store",
+        "Letting a project edit or fork a foundation skill",
+        "A production inventory as a merge gate",
+        "Slot placeholders, custom output fields, AI-assisted editing, and promoting a project skill to a foundation skill",
         "Reassigning an interactive step",
         "Turning package skill copies into presets",
         "The SkillOpt pilot",
@@ -72,7 +76,7 @@
         "The accepted Part 3 ADR is the scope.",
         "Playbooks menu visibility remains the project switch. No new feature flag.",
         "MaxView already has a reader identity. Part 3 records it and creates none.",
-        "The production inventory is a migration gate and its results are not known yet."
+        "Existing foundation skills stay files. Only the MaxView incident skill is copied into a project library."
       ],
       "dependencies": [
         "None"
@@ -80,9 +84,9 @@
       "features": [
         {
           "id": "FEAT-001",
-          "title": "Versioned skills that published Playbooks pin",
+          "title": "Base skills and project skills that published Playbooks pin",
           "priority": "Must Have",
-          "description": "Project Admins publish a Playbook against a skill version. A later preset edit becomes a new version a draft can review, and Playbooks already published keep running.",
+          "description": "A Playbook author picks a foundation skill or one of the project's own skills. Foundation skills stay shared files. A project skill is pinned as a version. The skill control shows the two groups separately.",
           "affectedPersonas": ["Project Admin"],
           "outOfScope": [
             "The Skill Library page",
@@ -98,7 +102,7 @@
               "priority": "Must Have",
               "dependsOn": [],
               "parallelGroup": null,
-              "description": "Add the skill version store for presets, forks, project skills, and companion files. Parse skill frontmatter as YAML, copy type and kind to columns, and hash the skill version plus instruction files. Publish freezes that version. A run of a Part 3 policy checks the bundle hash. A run of an older policy checks the single-file hash and is never rehashed. Reference files stay out of the hash. A preset is keyed by its frontmatter name, with a rename map so a renamed preset continues. After Part 3, a new publish names a skill version.",
+              "description": "Add the skill version store for project skills and their companion files. Do not copy foundation skills into it. Parse skill frontmatter as YAML, copy type and kind to columns, and hash the project skill version plus its instruction files. Publish of a project skill freezes that version. A run of that policy checks the bundle hash. A run that names a foundation skill checks today's single-file hash and is never rehashed. Reference files stay out of the hash. A new publish names a foundation skill or a project skill version.",
               "technicalDependencies": [
                 "Playbook publish and the current agent-run policy",
                 "The background agent worker that checks the skill hash",
@@ -109,34 +113,35 @@
                 "Two saves cannot overwrite a stored version"
               ],
               "definitionOfDone": [
-                "A published Playbook still runs after the preset file on disk changes, and the run uses the pinned bytes.",
-                "An instruction-file change is not visible to a published Playbook until that Playbook is republished.",
-                "A second preset source with an existing preset key is refused.",
+                "A published Playbook that names a foundation skill still checks that file. The file is not copied into the store.",
+                "A published Playbook that names a project skill keeps its pinned bytes after the project skill is edited.",
+                "An instruction-file change on a project skill is not visible to a published Playbook until that Playbook is republished.",
+                "A project skill whose name matches a foundation skill is refused.",
                 "A node with a kind is checked against the loose result first and the kind second. A node with no kind keeps today's loose check."
               ]
             },
             {
               "type": "TBI",
               "id": "TBI-002",
-              "title": "Import current skills without breaking published Playbooks",
+              "title": "Move the MaxView incident skill into the MaxView project",
               "priority": "Must Have",
               "dependsOn": ["TBI-001"],
               "parallelGroup": null,
-              "description": "Run the production inventory first and attach it to the change. It lists every pinned skill path and hash, every incident policy missing the cloud-shell capability, and every project whose published Playbook uses the incident skill. Import those bytes as version 1 before any skill file is edited. On startup, insert a new preset version when a preset source hash is new, including the renamed project-neutral incident skill as version 2 of the same preset. Map the three old incident paths to that version 1 entry and compare the path string the policy froze. Point the recommender at the new incident path and remove only the worker's old-name shell check. Record the shell capability on any version 1 incident entry whose frozen policy lacks it. Import the MaxView catalog as MaxView's first approved reference file. Pause incident schedules in any other project until that project has a reader identity. Carry the project's reader client ID on the run specification. The worker has no fallback identity.",
+              "description": "Copy only the MaxView incident investigation skill, including its guide and catalog, into MaxView's project skill library. Remove it from the shared foundation list. Do not copy any other existing skill. A published MaxView Playbook that still names one of the three old incident paths resolves to that project skill. Other projects are not offered it as a base skill. Point the recommender at the project skill for MaxView only, and remove only the worker's old-name shell check. Carry the project's reader client ID on the run specification. The worker has no fallback identity.",
               "technicalDependencies": [
                 "TBI-001 skill version store",
-                "Production Playbook versions for the inventory",
-                "Git history of the current skill files",
+                "The current incident skill files",
                 "The existing MaxView reader identity"
               ],
               "nonFunctionalRequirements": [
-                "The startup import runs on one instance at a time",
-                "A preset source over 200,000 bytes is skipped, logged, and does not create a version"
+                "The move runs once",
+                "A source file over 200,000 bytes is skipped, logged, and does not create a version"
               ],
               "definitionOfDone": [
-                "The migration does not merge until the inventory is attached.",
-                "A published incident Playbook runs against its version 1 bytes after the preset is renamed.",
-                "Drafts of that preset show a reviewable diff and nothing is republished automatically.",
+                "MaxView can select the incident skill under This project.",
+                "Other projects do not see it under Base skills.",
+                "A published MaxView Playbook whose frozen path is one of the three old incident paths still resolves to the moved skill.",
+                "No other existing skill file is copied into the store.",
                 "The SkillOpt plan is renumbered to Part 4 in its own doc edit.",
                 "An incident run in a project with no reader identity fails with a clear message instead of using another project's identity."
               ]
@@ -144,48 +149,48 @@
             {
               "type": "PBI",
               "id": "PBI-001",
-              "title": "Review a preset update before publish",
+              "title": "Choose a skill from base skills and this project's skills",
               "priority": "Must Have",
               "dependsOn": ["TBI-001"],
               "parallelGroup": null,
               "userStory": {
                 "persona": "Project Admin",
-                "iWant": "review a preset change and accept it on a draft before I publish",
-                "soThat": "a published Playbook keeps the skill bytes I already approved"
+                "iWant": "browse base skills and my project's skills as two groups and search both",
+                "soThat": "I can pick a skill when the combined list is long"
               },
               "businessRules": [
-                "BR-001: A saved skill version never changes a published Playbook.",
-                "BR-002: A preset update applies only after an explicit accept, and accept re-checks the graph."
+                "BR-002: A project cannot edit a foundation skill. A published Playbook that names a foundation path keeps today's file check.",
+                "BR-005: A new publish names a foundation skill or a project skill version."
               ],
               "nonFunctionalRequirements": {
-                "performance": "The diff opens within 2 seconds at P95 for a skill under the file size limit.",
-                "accessibility": "The accept and dismiss actions are keyboard reachable and named for a screen reader.",
-                "security": "Only a Project Admin for that project can accept a preset update onto a draft."
+                "performance": "Opening the control and filtering it stay within 1 second at P95 for a list of 100 skills.",
+                "accessibility": "Search, group headings, and options are keyboard reachable. Arrows move, and Enter selects.",
+                "security": "The list shows only foundation skills and skills that belong to the Playbook's project."
               },
               "outOfScope": [
-                "Editing the preset body in place",
-                "Automatic publish of every Playbook that uses the skill"
+                "Editing a foundation skill from the control",
+                "A separate page just to pick a skill"
               ],
               "acceptanceCriteria": [
                 {
-                  "given": "a published Playbook pins a preset version and a newer version exists",
-                  "when": "the Project Admin opens the draft and accepts the diff",
-                  "then": "the draft pins the new version and the published Playbook still pins the old one until republish"
+                  "given": "the project has foundation skills and at least one of its own skills",
+                  "when": "the Project Admin opens the skill control",
+                  "then": "Base skills and This project are separate groups, and each row shows the name and description"
                 },
                 {
-                  "given": "the newer preset version changes the skill type",
-                  "when": "the Project Admin accepts it",
-                  "then": "the graph is checked again and an invalid graph is refused with the reason"
+                  "given": "both groups contain many skills",
+                  "when": "the Project Admin types part of a name or description",
+                  "then": "both groups narrow to the matches and the panel scrolls"
                 },
                 {
-                  "given": "a preset version is deprecated",
-                  "when": "the Project Admin opens the skill picker",
-                  "then": "the deprecated version is hidden and any published Playbook that pins it still runs"
+                  "given": "the Project Admin selects a skill",
+                  "when": "the control closes",
+                  "then": "it shows the skill name and whether it is a base skill or a project skill"
                 },
                 {
-                  "given": "the Project Admin publishes without accepting the newer version",
-                  "when": "publish completes",
-                  "then": "the published Playbook stays on the previous version"
+                  "given": "the project has no skills of its own",
+                  "when": "the Project Admin opens the control",
+                  "then": "This project says none yet and Base skills remain selectable"
                 }
               ]
             }
@@ -195,11 +200,12 @@
           "id": "FEAT-002",
           "title": "Project skill library",
           "priority": "Must Have",
-          "description": "Project Admins create project skills, fork presets, and approve reference files. Platform Admins approve capability and skill-type changes on a fork. A Playbook author can see skill names, types, and kinds in the builder.",
+          "description": "Project Admins create project skills and approve reference files. A project cannot edit a foundation skill. A Playbook author can see both groups in the builder.",
           "affectedPersonas": ["Project Admin", "Platform Admin"],
           "outOfScope": [
-            "AI-assisted editing of a fork",
-            "Promoting a project skill to a preset",
+            "AI-assisted editing",
+            "Promoting a project skill to a foundation skill",
+            "Forking a foundation skill",
             "Write capabilities on a new project skill"
           ],
           "dependsOn": ["FEAT-001"],
@@ -211,7 +217,7 @@
               "priority": "Must Have",
               "dependsOn": [],
               "parallelGroup": null,
-              "description": "Add the view and reference-approval permissions, and start checking the existing manage permission. Review who already holds that permission, globally and per project. A project role overrides a global role. The library menu appears only where Playbooks are enabled. Reference-file contents require author or approver permission. Generate and save reject capabilities, a reference-file key, invalid YAML, an unknown kind, and invalid decision labels. Names are unique in the project and cannot reuse a preset key. A project file whose name matches a preset file is rejected. A fork cannot change which files are reference files. A fork with a capability or skill-type change cannot be published until a Platform Admin approves it.",
+              "description": "Add the view and reference-approval permissions, and start checking the existing manage permission. Review who already holds that permission, globally and per project. A project role overrides a global role. The library menu appears only where Playbooks are enabled. Reference-file contents require author or approver permission. Generate and save reject capabilities, a reference-file key, invalid YAML, an unknown kind, and invalid decision labels. Names are unique in the project and cannot match a foundation skill name. A project skill whose file name matches a foundation skill is rejected. A project cannot edit a foundation skill.",
               "technicalDependencies": [
                 "FEAT-001 skill version store",
                 "The existing role and menu-visibility checks",
@@ -239,7 +245,7 @@
               "userStory": {
                 "persona": "Project Admin",
                 "iWant": "create a project skill from a short description and approve reference files separately from the skill text",
-                "soThat": "my project can tailor a shared skill without changing what other projects run"
+                "soThat": "my project can keep a skill that other projects do not see"
               },
               "businessRules": [
                 "BR-003: Instruction files stay pinned. Reference files apply at the next run after approval.",
@@ -268,7 +274,7 @@
                 },
                 {
                   "given": "a required reference file has no approved version",
-                  "when": "a Project Admin publishes a Playbook that uses the preset",
+                  "when": "a Project Admin publishes a Playbook that uses the project skill",
                   "then": "publish is refused"
                 },
                 {
@@ -376,14 +382,14 @@
     {
       "phase": 1,
       "epics": ["Skill Library and Skill Contracts"],
-      "rationale": "There is one epic. FEAT-001 is the version store the library and the interactive step both pin. FEAT-002 and FEAT-003 depend on it and can proceed after that store exists. They do not depend on each other."
+      "rationale": "There is one epic. FEAT-001 keeps foundation skills as shared files, stores project skills, moves the MaxView incident skill, and groups the skill control. FEAT-002 and FEAT-003 depend on that store and can proceed after it exists. They do not depend on each other."
     }
   ],
   "assumptionsMade": [
     "The accepted ADR \"Playbooks Part 3: Skill Library and Skill Contracts\" is the scope. This PRD does not add decisions.",
     "Playbooks menu visibility stays the way a project turns Playbooks on. The library does not need its own flag.",
     "MaxView already has a reader identity. Part 3 records it and does not create identities.",
-    "The production inventory is a gate for the migration, and its results are not known yet. The allow-list of preset paths outside the foundation folder grows from that inventory.",
+    "Existing foundation skills stay files. Only the MaxView incident skill is copied into a project library. Published Playbooks that name any other current skill path keep today's file check.",
     "Each interactive turn runs as a Playbook agent run on the step's thread, not through the Agent Home chat path.",
     "A Playbook author sees skill names, types, and kinds in the builder without the skill-view permission."
   ]

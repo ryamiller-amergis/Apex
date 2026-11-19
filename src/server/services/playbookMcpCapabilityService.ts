@@ -31,7 +31,7 @@ export class PlaybookMcpCapabilityError extends Error {
 
   constructor(nodeId: string, profile: string | undefined, mode: PlaybookMcpCapabilityMode) {
     super(
-      `Cursor-agent step "${nodeId}" MCP profile must be server-verified read-only; ` +
+      `Agent step "${nodeId}" MCP profile must be server-verified read-only; ` +
         `${profile ? `"${profile}" resolves to ${mode}` : 'no MCP profile was configured'}.`,
     );
     this.name = 'PlaybookMcpCapabilityError';
@@ -55,14 +55,14 @@ export function resolvePlaybookMcpCapability(profile: unknown): PlaybookMcpCapab
 export function isReadOnlyCursorAgentNode(
   node: PlaybookGraph['nodes'][number],
 ): boolean {
-  return node.stepType === 'cursor-agent'
+  return (node.stepType === 'cursor-agent' || node.stepType === 'interactive-agent')
     && resolvePlaybookMcpCapability(node.config?.mcpProfile).mode === 'read';
 }
 
-/** Publish-time project-wide rule for every cursor-agent node. */
+/** Publish-time project-wide rule for every cursor-agent and interactive-agent node. */
 export function assertCursorAgentsUseReadOnlyMcp(graph: PlaybookGraph): void {
   for (const node of graph.nodes) {
-    if (node.stepType !== 'cursor-agent') continue;
+    if (node.stepType !== 'cursor-agent' && node.stepType !== 'interactive-agent') continue;
     const profile = typeof node.config?.mcpProfile === 'string'
       ? node.config.mcpProfile
       : undefined;

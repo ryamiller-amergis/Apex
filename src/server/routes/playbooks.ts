@@ -10,7 +10,7 @@
  * project the caller names rather than to the platform.
  */
 import express, { Request, Response } from 'express';
-import { requirePermission, resolveRequestProject } from '../middleware/rbac';
+import { requireAnyPermission, requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { forwardAsyncErrors } from '../utils/forwardAsyncErrors';
 import { isSuperAdminRequest } from '../utils/superAdmin';
@@ -38,6 +38,16 @@ import {
   cloudAgentPlaybookSetupGap,
 } from '../services/cloudAgentDeliverySettings';
 import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import {
+  approveProjectSkillReferenceFile,
+  ensureMaxviewIncidentProjectSkill,
+  listProjectPlaybookSkillOptions,
+  listProjectSkillLibrary,
+  ProjectPlaybookSkillError,
+  saveProjectPlaybookSkill,
+} from '../services/playbookProjectSkillService';
+import { PlaybookSkillFrontmatterError } from '../services/playbookSkillFrontmatter';
+import type { SkillBundleCompanion } from '../services/playbookSkillBundle';
 import { saveRequestAdoRefreshToken } from '../services/adoStoredUserToken';
 import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
 import {
@@ -78,6 +88,11 @@ import {
   PlaybookStepTypeError,
   UnknownPlaybookStepTypeError,
 } from '../services/playbookSteps/registry';
+import {
+  decideInteractiveProposal,
+  InteractiveAgentStepError,
+  sendInteractiveTurn,
+} from '../services/playbookSteps/interactiveAgentAdapter';
 import { advanceRun } from '../services/playbookAdvanceService';
 import {
   ApprovalMissingDeadlineError,
@@ -436,7 +451,7 @@ router.post(
       res.status(400).json({ error: 'goal is required' });
       return;
     }
-    const plan = recommendPlaybookSteps(goal);
+    const plan = recommendPlaybookSteps(goal, resolveRequestProject(req));
     console.info('[playbook-recommender]', JSON.stringify({
       event: plan.kind === 'suggestions' ? 'suggest' : 'gap',
       definitionId: req.params.definitionId,
@@ -690,8 +705,124 @@ router.get(
 router.get(
   '/skills',
   requirePermission('playbooks:author'),
-  async (_req: Request, res: Response): Promise<void> => {
-    res.json({ skills: await listPlaybookSkillOptions() });
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const base = await listPlaybookSkillOptions();
+    if (!project) {
+      res.json({ skills: base });
+      return;
+    }
+    const userId = getUserId(req);
+    if (userId) {
+      await ensureMaxviewIncidentProjectSkill(project, userId).catch(() => undefined);
+    }
+    const projectSkills = await listProjectPlaybookSkillOptions(project).catch(() => []);
+    const skills = projectSkills.length > 0
+      ? [...base, ...projectSkills]
+      : [
+          ...base,
+          {
+            path: 'project-skills/none',
+            name: 'No project skills yet',
+            description: 'Skills this project writes show up here.',
+            capabilities: null,
+            runnable: false,
+            unavailableReason: 'This project has no skills yet.',
+            group: 'project' as const,
+          },
+        ];
+    res.json({ skills });
+  },
+);
+
+function readSkillCompanions(value: unknown): SkillBundleCompanion[] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new ProjectPlaybookSkillError('companions must be a list.');
+  }
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') {
+      throw new ProjectPlaybookSkillError('Each companion needs a path, content, and classification.');
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.path !== 'string' || typeof record.content !== 'string') {
+      throw new ProjectPlaybookSkillError('Each companion needs a path and content.');
+    }
+    if (record.classification !== 'instruction' && record.classification !== 'reference') {
+      throw new ProjectPlaybookSkillError('A companion is an instruction or a reference.');
+    }
+    return { path: record.path, content: record.content, classification: record.classification };
+  });
+}
+
+function canReadReferenceContents(req: Request): boolean {
+  if (isSuperAdminRequest(req)) return true;
+  const perms = req._permissions;
+  return Boolean(perms?.has('skills:manage') || perms?.has('skills:approve-reference'));
+}
+
+router.post(
+  '/skills',
+  requirePermission('skills:manage'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const content = (req.body ?? {}).content;
+    const userId = getUserId(req);
+    if (!project || typeof content !== 'string' || !content.trim() || !userId) {
+      res.status(400).json({ error: 'project, content, and a signed-in user are required' });
+      return;
+    }
+    try {
+      const companions = readSkillCompanions((req.body ?? {}).companions);
+      const saved = await saveProjectPlaybookSkill({ project, content, createdBy: userId, companions });
+      res.status(201).json(saved);
+    } catch (error) {
+      if (error instanceof ProjectPlaybookSkillError || error instanceof PlaybookSkillFrontmatterError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+  },
+);
+
+router.get(
+  '/project-skills',
+  requireAnyPermission('skills:view', 'skills:manage', 'skills:approve-reference'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json({ skills: await listProjectSkillLibrary(project, canReadReferenceContents(req)) });
+  },
+);
+
+router.post(
+  '/project-skills/files/:fileId/approve',
+  requireAnyPermission('skills:manage', 'skills:approve-reference'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const userId = getUserId(req);
+    if (!project || !userId) {
+      res.status(400).json({ error: 'project and a signed-in user are required' });
+      return;
+    }
+    try {
+      await approveProjectSkillReferenceFile({
+        project,
+        fileId: req.params.fileId,
+        approverId: userId,
+      });
+      res.status(204).end();
+    } catch (error) {
+      if (error instanceof ProjectPlaybookSkillError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   },
 );
 
@@ -1215,6 +1346,73 @@ router.post(
  * to the run's initiator, enforced in the adapter, so a separate permission would have nobody
  * different to grant it to.
  */
+router.post(
+  '/runs/:runId/steps/:stepRunId/interactive-turn',
+  requirePermission('playbooks:run'),
+  async (req: Request, res: Response): Promise<void> => {
+    const userId = getUserId(req);
+    const message = (req.body ?? {}).message;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (typeof message !== 'string') {
+      res.status(400).json({ error: 'message is required' });
+      return;
+    }
+    try {
+      await sendInteractiveTurn({
+        runId: req.params.runId,
+        stepRunId: req.params.stepRunId,
+        userId,
+        message,
+      });
+      res.status(202).json({ ok: true });
+    } catch (error) {
+      if (error instanceof InteractiveAgentStepError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+  },
+);
+
+router.post(
+  '/runs/:runId/steps/:stepRunId/interactive-decision',
+  requirePermission('playbooks:run'),
+  async (req: Request, res: Response): Promise<void> => {
+    const userId = getUserId(req);
+    const decision = (req.body ?? {}).decision;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (decision !== 'approved' && decision !== 'rejected') {
+      res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
+      return;
+    }
+    try {
+      const result = await decideInteractiveProposal({
+        runId: req.params.runId,
+        stepRunId: req.params.stepRunId,
+        userId,
+        decision,
+      });
+      if (result.outcome === 'recorded' && result.stepId && decision === 'approved') {
+        await advanceRun(req.params.runId, result.stepId);
+      }
+      res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof InteractiveAgentStepError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+  },
+);
+
 router.post(
   '/runs/:runId/steps/:stepRunId/decision',
   async (req: Request, res: Response): Promise<void> => {

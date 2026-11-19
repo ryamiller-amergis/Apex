@@ -80,6 +80,8 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `quick-links:manage` | quick-links | admin |
 | `quick-links:personal` | quick-links | admin, member |
 | `skills:manage` | skills | admin |
+| `skills:view` | skills | admin, member |
+| `skills:approve-reference` | skills | admin |
 | `wiki:write` | wiki | admin, member |
 | `work-board:view` | work-board | admin, member, viewer |
 | `work-board:manage` | work-board | admin, member |

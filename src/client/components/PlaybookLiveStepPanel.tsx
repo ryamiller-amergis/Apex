@@ -9,7 +9,12 @@ import type {
   PlaybookStepRun,
   PlaybookSuspensionDetail,
 } from '../../shared/types/playbook';
-import { usePlaybookGateDecision, usePlaybookStepActivity } from '../hooks/usePlaybookRuns';
+import {
+  useInteractiveAgentDecision,
+  useInteractiveAgentTurn,
+  usePlaybookGateDecision,
+  usePlaybookStepActivity,
+} from '../hooks/usePlaybookRuns';
 import { stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import {
@@ -64,6 +69,19 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
     && suspension?.stepId === step.stepId
     && suspension.reason === 'approval_gate';
   const decision = usePlaybookGateDecision(project, runId, step.id);
+  const chatting = step.stepType === 'interactive-agent' && step.status === 'suspended';
+  const [chatMessage, setChatMessage] = useState('');
+  const interactiveTurn = useInteractiveAgentTurn(project, runId, step.id);
+  const interactiveDecision = useInteractiveAgentDecision(project, runId, step.id);
+  const draft = chatting && step.outputInline && typeof step.outputInline === 'object'
+    ? step.outputInline
+    : null;
+  const proposalText = typeof draft?.proposalText === 'string' ? draft.proposalText : '';
+  const proposalOk = draft?.proposalOk === true;
+  const proposalReason = typeof draft?.proposalReason === 'string' ? draft.proposalReason : '';
+  const lastTurnError = typeof draft?.lastTurnError === 'string' ? draft.lastTurnError : '';
+  const rejectedRevisions = typeof draft?.rejectedRevisions === 'number' ? draft.rejectedRevisions : 0;
+  const chatClosed = rejectedRevisions >= 1;
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -150,6 +168,70 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
               </button>
             ))}
           </div>
+          {chatting ? (
+            <div className={styles.decision} {...{ 'data-testid': 'playbook-interactive-chat' }}>
+              <p className={styles.decisionLead}>
+                Chat with the agent, then approve a result that passes its checks.
+              </p>
+              {proposalText ? <pre className={styles.decisionReport}>{proposalText}</pre> : (
+                <p className={styles.decisionMissing}>No proposal yet. Send a message to start.</p>
+              )}
+              {proposalReason ? <p className={styles.decisionError} role="alert">{proposalReason}</p> : null}
+              {lastTurnError ? <p className={styles.decisionError} role="alert">{lastTurnError}</p> : null}
+              {chatClosed ? (
+                <p className={styles.decisionMissing}>New messages are closed. Approve the proposal or cancel the run.</p>
+              ) : (
+                <label className={styles.decisionLead}>
+                  Message
+                  <textarea
+                    value={chatMessage}
+                    onChange={(event) => setChatMessage(event.target.value)}
+                    aria-label="Message to the agent"
+                    {...{ 'data-testid': 'playbook-interactive-message' }}
+                  />
+                </label>
+              )}
+              <div className={styles.decisionActions}>
+                {chatClosed ? null : (
+                  <button
+                    type="button"
+                    className={styles.approve}
+                    disabled={interactiveTurn.isPending || !chatMessage.trim() || Boolean(step.agentRunId)}
+                    onClick={() => {
+                      interactiveTurn.mutate(chatMessage, { onSuccess: () => setChatMessage('') });
+                    }}
+                    {...{ 'data-testid': 'playbook-interactive-send' }}
+                  >
+                    {interactiveTurn.isPending || step.agentRunId ? 'Working…' : 'Send'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={styles.approve}
+                  disabled={interactiveDecision.isPending || !proposalOk}
+                  onClick={() => interactiveDecision.mutate('approved')}
+                  {...{ 'data-testid': 'playbook-interactive-approve' }}
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  className={styles.reject}
+                  disabled={interactiveDecision.isPending || chatClosed || !proposalText}
+                  onClick={() => interactiveDecision.mutate('rejected')}
+                  {...{ 'data-testid': 'playbook-interactive-reject' }}
+                >
+                  Reject proposal
+                </button>
+              </div>
+              {interactiveTurn.isError ? (
+                <p className={styles.decisionError} role="alert">{interactiveTurn.error.message}</p>
+              ) : null}
+              {interactiveDecision.isError ? (
+                <p className={styles.decisionError} role="alert">{interactiveDecision.error.message}</p>
+              ) : null}
+            </div>
+          ) : null}
           {deciding ? (
             <div className={styles.decision} {...{ 'data-testid': 'playbook-live-step-decision' }}>
               <p className={styles.decisionLead}>
