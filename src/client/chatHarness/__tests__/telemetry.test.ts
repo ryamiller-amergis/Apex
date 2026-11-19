@@ -10,7 +10,7 @@ import {
   FIXTURE_CMD_ID_2,
   FIXTURE_RUN_ID,
   FIXTURE_THREAD_ID,
-} from './fixtures';
+} from '../testFixtures';
 
 jest.mock('../../services/telemetry', () => ({
   trackEvent: jest.fn(),

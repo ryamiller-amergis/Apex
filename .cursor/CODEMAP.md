@@ -44,6 +44,7 @@ Jest + Testing Library, Playwright E2E, Terraform on Azure.
   `src/server/mcp/calendarAssistant/`, `src/server/mcp/mcpServers/`, `src/server/mcp/board/`.
 - `src/server/utils/` (`src/server/utils/dataDir.ts` = persistent data root), `src/server/skills/`, `src/server/assets/`, `src/server/types/`.
 - `src/server/playbookTemplates/`: shipped Playbook templates (`src/server/playbookTemplates/catalog.json`, `src/server/playbookTemplates/interview.json`, `src/server/playbookTemplates/design-doc-validation.json`, `src/server/playbookTemplates/build-from-prompt.json`).
+- `src/server/fixtures/`: server-only test fixtures (`src/server/fixtures/chatHarness/recordedStreams.ts`).
 - `src/server/__tests__/`: all server unit tests, one flat folder.
 
 ## src/client (React)

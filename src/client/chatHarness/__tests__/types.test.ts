@@ -8,7 +8,7 @@ import {
   FIXTURE_CMD_ID_1,
   makeRunningTurnFrames,
   makeSnapshot,
-} from './fixtures';
+} from '../testFixtures';
 
 describe('S1 chatHarness types and receipt formatter', () => {
   it('supports all 12 governed harness areas (excluding ui-lab)', () => {

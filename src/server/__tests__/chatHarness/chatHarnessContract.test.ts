@@ -187,7 +187,7 @@ import {
   RECORDED_HARNESS_STREAMS,
   REPEAT_CONTEXT_PATTERNS,
   type RecordedAreaHarnessFixture,
-} from '../fixtures/chatHarness/recordedStreams';
+} from '../../fixtures/chatHarness/recordedStreams';
 
 const TEST_SESSION_SECRET =
   'contract-suite-session-secret-with-adequate-entropy-32bytes';

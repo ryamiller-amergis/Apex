@@ -14,7 +14,7 @@ import {
   makeReceipt,
   makeSnapshot,
   makeThreadState,
-} from './fixtures';
+} from '../testFixtures';
 
 describe('S3 chatHarness store and eventReducer', () => {
   describe('VT-01 / PBI-011 AC-0: immediate work box feedback and live activity log', () => {

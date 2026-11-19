@@ -9,7 +9,7 @@ import {
   makeReceipt,
   makeSnapshot,
   makeThreadState,
-} from '../../chatHarness/__tests__/fixtures';
+} from '../../chatHarness/testFixtures';
 import type { HarnessThreadSnapshot } from '../../../shared/types/chatHarness';
 
 class FakeWebSocket {

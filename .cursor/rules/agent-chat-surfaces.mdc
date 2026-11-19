@@ -61,7 +61,7 @@ inside area components:
 - **Live agent work**: every governed area must render `liveWorkBox` (`AgentLiveWorkBox`) from
   `AgentHarnessPanel` while a turn is running or retrying — do **not** add bespoke typing-dot
   spinners or a standalone `<AgentRetryBanner>` alongside it.
-- **Reconnect / retry clearing**: `eventReducer.ts` and `useChatStream.ts` clear `isRetrying` and
+- **Reconnect / retry clearing**: the harness event reducer (`src/client/chatHarness/reducers/eventReducer.ts`) clears `isRetrying` and
   `retryReason` on any active progress event (`phase`, `thinking`, `tool_call`, `tool_status`,
   `token`, `message`, `done`). Do not keep a separate client-side reconnecting flag.
 - **Completed thought process**: render `AgentThoughtProcess` above completed agent replies when

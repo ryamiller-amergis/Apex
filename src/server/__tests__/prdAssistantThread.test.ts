@@ -276,7 +276,10 @@ describe('POST /api/interviews/prds/:prdId/assistant-thread — new thread creat
     expect(mockCreateThread).toHaveBeenCalledWith(
       'user-test',
       expect.any(Object),
-      { skipAutoKickoff: true },
+      expect.objectContaining({
+        skipAutoKickoff: true,
+        harness: { area: 'prd-assistant', version: 1 },
+      }),
     );
     expect(mockSendMessage).not.toHaveBeenCalled();
   });

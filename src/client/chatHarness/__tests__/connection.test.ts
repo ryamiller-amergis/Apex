@@ -21,7 +21,7 @@ import {
   makeReceipt,
   makeSnapshot,
   makeThreadState,
-} from './fixtures';
+} from '../testFixtures';
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;

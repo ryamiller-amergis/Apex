@@ -5,8 +5,8 @@ import type {
   HarnessReceipt,
   HarnessThreadSnapshot,
   HarnessThreadState,
-} from '../types';
-import type { ChatMessage } from '../../../shared/types/chat';
+} from './types';
+import type { ChatMessage } from '../../shared/types/chat';
 
 export const FIXTURE_THREAD_ID = '10000000-0000-4000-8000-000000000101';
 export const FIXTURE_RUN_ID = 'run-fixture-001';

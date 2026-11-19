@@ -16,17 +16,17 @@
 import type {
   HarnessAreaId,
   HarnessContextRef,
-} from '../../../../shared/types/chatHarness';
-import { BRAINSTORM_UPDATE_ARTIFACT_TOOL } from '../../../../shared/types/brainstormArtifact';
-import type { WorkerCursorExecutionRun } from '../../../services/aiRunsWorker/cursorExecution';
+} from '../../../shared/types/chatHarness';
+import { BRAINSTORM_UPDATE_ARTIFACT_TOOL } from '../../../shared/types/brainstormArtifact';
+import type { WorkerCursorExecutionRun } from '../../services/aiRunsWorker/cursorExecution';
 import type {
   CursorStreamEvent,
   CursorTokenUsage,
-} from '../../../services/cursorExecutionCore';
+} from '../../services/cursorExecutionCore';
 import type {
   RecreationMessage,
   RecreationSummaryInput,
-} from '../../../services/chatHarness/chatHarnessRecreation';
+} from '../../services/chatHarness/chatHarnessRecreation';
 
 export const REPEAT_CONTEXT_PATTERNS: ReadonlyArray<RegExp> = [
   /could you repeat/i,
