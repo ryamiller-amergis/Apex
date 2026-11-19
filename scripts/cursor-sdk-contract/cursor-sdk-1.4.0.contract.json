@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "@cursor/sdk",
+    "version": "1.4.0"
+  },
+  "runtime": {
+    "Agent": {
+      "exported": true,
+      "staticMembers": [
+        "archive",
+        "cancelRun",
+        "create",
+        "delete",
+        "get",
+        "getRun",
+        "getUsage",
+        "list",
+        "listRuns",
+        "messages",
+        "prompt",
+        "resume",
+        "unarchive"
+      ]
+    }
+  },
+  "contracts": {
+    "Agent": {
+      "runtimeExports": [
+        "Agent"
+      ],
+      "sourceFiles": [
+        "dist/esm/options.d.ts",
+        "dist/esm/stubs.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "Agent",
+          "kind": "class",
+          "sourceFile": "dist/esm/stubs.d.ts",
+          "text": "export declare class Agent {\n    private constructor();\n    /**\n     * Create an agent instance.\n     */\n    static create(options: AgentOptions): Promise<SDKAgent>;\n    /**\n     * Resume an existing agent by ID.\n     */\n    static resume(agentId: string, options?: Partial<AgentOptions>): Promise<SDKAgent>;\n    /**\n     * Convenience API to create an agent, run one prompt, and close.\n     */\n    static prompt(message: string, options?: AgentOptions): Promise<RunResult>;\n    static list(options?: ListAgentsOptions): Promise<ListResult<SDKAgentInfo>>;\n    static listRuns(agentId: string, options?: ListRunsOptions): Promise<ListResult<Run>>;\n    static getRun(runId: string, options?: GetRunOptions): Promise<Run>;\n    static cancelRun(runId: string, options?: GetRunOptions): Promise<void>;\n    /**\n     * Fetch a single agent's metadata by ID. Cloud-only — local agent lookup\n     * is a post-launch followup.\n     */\n    static get(agentId: string, options?: GetAgentOptions): Promise<SDKAgentInfo>;\n    /**\n     * Archive an agent. Cloud-only.\n     */\n    static archive(agentId: string, options?: AgentOperationOptions): Promise<void>;\n    /**\n     * Unarchive a previously archived agent. Cloud-only.\n     */\n    static unarchive(agentId: string, options?: AgentOperationOptions): Promise<void>;\n    /**\n     * Delete an agent. Cloud-only and irreversible.\n     */\n    static delete(agentId: string, options?: AgentOperationOptions): Promise<void>;\n    /**\n     * Fetch billed token usage and dollar cost for an agent. Cloud agents return\n     * a per-run breakdown. Local agents return a per-turn breakdown whose\n     * entries are keyed by usage UUID.\n     */\n    static getUsage(agentId: string, options?: GetUsageOptions & CursorRequestOptions): Promise<AgentUsage>;\n    static readonly messages: {\n        list(agentId: string, options?: GetAgentMessagesOptions): Promise<AgentMessage[]>;\n    };\n}"
+        },
+        {
+          "name": "AgentOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface AgentOptions {\n    /**\n     * Model selection (`{ id, params? }`). Required for local agents; optional\n     * for cloud (the server resolves the caller's configured default when\n     * omitted). Use `Cursor.models.list()` to discover valid selections.\n     */\n    model?: ModelSelection;\n    apiKey?: string;\n    /**\n     * Team to attribute this agent's requests to. Sent as `x-cursor-team-id`\n     * on local Connect calls (the run and the dashboard client that loads team\n     * settings) and on cloud HTTP calls. Pass the same positive integer the\n     * CLI stores as `authInfo.activeTeamId` when the login belongs to more\n     * than one team.\n     *\n     * Omitted, zero, negative, fractional, and non-safe-integer values leave\n     * the header off, and the backend keeps the account's ambient team.\n     * Single-team logins can omit it.\n     *\n     * Not persisted and not read from the CLI config. Pass it again on\n     * `Agent.resume` and on later account calls so those requests stay on the\n     * same team.\n     */\n    teamId?: number;\n    /**\n     * Restricts the built-in tools available to the model:\n     *\n     * - `undefined` (default) — the standard toolset for the selected model.\n     * - `[]` — no built-in tools; the model can only respond with text.\n     * - Non-empty — only the listed tools are offered to the model.\n     *\n     * Tool names use the SDK's public tool vocabulary — the same names carried\n     * by `tool_call` stream events (`\"shell\"`, `\"read\"`, `\"edit\"`, `\"grep\"`,\n     * `\"glob\"`, `\"ls\"`, `\"task\"`, `\"mcp\"`, ...). The vocabulary is derived from\n     * the agent proto, so tools added to the platform are addressable without\n     * an SDK update; raw proto tool names such as `\"web_search_tool_call\"` are\n     * also accepted. Unknown names throw a `ConfigurationError` at\n     * `Agent.create` / `Agent.resume` listing the valid names.\n     *\n     * Notes:\n     * - `\"shell\"` and `\"mcp\"` are capability groups: `\"shell\"` also grants\n     *   shell stdin writes, and `\"mcp\"` grants the whole MCP tool family\n     *   (including {@link LocalAgentOptions.customTools}); omitting `\"mcp\"`\n     *   disables MCP entirely.\n     * - `\"task\"` gates subagents. Subagents launched through it keep their own\n     *   curated toolsets; the restriction applies to the main agent loop.\n     * - Not persisted on the agent: pass `tools` again on `Agent.resume` to\n     *   keep the restriction for follow-up runs.\n     *\n     * Local agents only for now; combining `tools` with `cloud` throws a\n     * `ConfigurationError`.\n     *\n     * See {@link ToolName} for the accepted names.\n     */\n    tools?: ToolName[];\n    /**\n     * Removes the listed built-in tools from the model's toolset. The\n     * complement of {@link AgentOptions.tools}: instead of naming what stays,\n     * name what goes, and everything else in the default toolset remains\n     * available — including tools added to the platform after this SDK was\n     * released.\n     *\n     * Accepts the same vocabulary as `tools` (public names, capability groups,\n     * raw proto names); unknown names throw a `ConfigurationError` at\n     * `Agent.create` / `Agent.resume`. Capability groups expand the same way:\n     * `\"shell\"` also removes shell stdin writes, and `\"mcp\"` removes the whole\n     * MCP tool family (including {@link LocalAgentOptions.customTools}).\n     *\n     * Notes:\n     * - Combines with `tools` as deny-wins: a tool must be listed in `tools`\n     *   (when set) and not listed in `disallowedTools` to be offered.\n     * - Like `tools`, the exclusion applies to the main agent loop: subagents\n     *   launched through `\"task\"` keep their own curated toolsets. Disallow\n     *   `\"task\"` to prevent subagents entirely.\n     * - Not persisted on the agent: pass `disallowedTools` again on\n     *   `Agent.resume` to keep the exclusion for follow-up runs.\n     *\n     * Local agents only for now; combining `disallowedTools` with `cloud`\n     * throws a `ConfigurationError`.\n     */\n    disallowedTools?: ToolName[];\n    /**\n     * Replaces the system prompt for the main agent loop. When set, the model\n     * receives this text as its entire system prompt instead of Cursor's\n     * built-in harness prompt: the coding-assistant identity, tool-use protocol\n     * and communication guidance are all gone, and the caller is responsible\n     * for restating whatever the agent still needs. Tool JSON schemas and\n     * ambient context (rules, skills, `<user_info>`) are unaffected. Subagents\n     * launched through `\"task\"` keep their own prompts.\n     *\n     * Server-side access is enabled per account. Without it, the first\n     * `send` fails with `InvalidArgument`: \"Custom system prompt is not\n     * enabled for this account. Contact Cursor support to request access.\"\n     *\n     * Notes:\n     * - Must be non-empty; whitespace-only text throws a `ConfigurationError`\n     *   at `Agent.create` / `Agent.resume`.\n     * - Not persisted on the agent: pass `systemPrompt` again on\n     *   `Agent.resume` to keep it for follow-up runs.\n     *\n     * Local agents only for now; combining `systemPrompt` with `cloud` throws a\n     * `ConfigurationError`.\n     */\n    systemPrompt?: string;\n    /**\n     * Optional human-readable name for the agent, surfaced as the `title` in\n     * `Agent.list()` / `Agent.get()`. Cloud agents auto-generate a name from\n     * the first prompt when this is omitted; local agents fall back to a\n     * generic default.\n     */\n    name?: string;\n    local?: LocalAgentOptions;\n    cloud?: CloudAgentOptions;\n    mcpServers?: Record<string, McpServerConfig>;\n    agents?: Record<string, AgentDefinition>;\n    agentId?: string;\n    idempotencyKey?: string;\n    /** Initial conversation mode for this agent. */\n    mode?: AgentModeOption;\n}"
+        }
+      ]
+    },
+    "LocalAgent": {
+      "runtimeExports": [],
+      "sourceFiles": [
+        "dist/esm/options.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "LocalAgentOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface LocalAgentOptions {\n    /**\n     * Primary working directory for this local agent (default shell cwd and\n     * local agent-store scoping).\n     */\n    cwd?: string;\n    /**\n     * Additional / multi-root workspace folders. Merged with {@link cwd} (cwd\n     * first, duplicates dropped) so project rules, skills, and request-context\n     * workspace metadata load from every unique path. {@link cwd} remains the\n     * primary working directory for the default shell and agent-store scoping.\n     */\n    dirs?: string[];\n    /**\n     * Enable Cursor's Auto-review for local tool calls. When this is true,\n     * local runs select the classifier-backed Auto mode whenever the connected\n     * backend has the Auto-review classifier feature enabled.\n     */\n    autoReview?: boolean;\n    /**\n     * Custom {@link LocalAgentStore} for this call. When omitted, uses\n     * `Cursor.configure({ local: { store } })` if set; otherwise the default\n     * SQLite backend when `sqlite3` is installed (`@cursor/sdk/sqlite`), or\n     * {@link JsonlLocalAgentStore} when running without native SQLite.\n     * Agent rows hold a slim checkpoint ref (`latestCheckpoint.rootBlobId`);\n     * blob bytes live on `store.checkpoints`.\n     */\n    store?: LocalAgentStore;\n    /**\n     * Ambient Cursor settings layers to load from the local filesystem.\n     * Local agents only. On cloud, `project` / `team` / `plugins` are\n     * always on and `user` / `mdm` / `local` have no VM equivalent, so\n     * this field is gated to the local shape.\n     */\n    settingSources?: SettingSource[];\n    sandboxOptions?: SandboxOptions;\n    /**\n     * In-process callback tools for this agent, exposed as the\n     * `custom-user-tools` MCP server (`GetMcpTools` / `CallMcpTool`). Applied on\n     * every `send` unless overridden by {@link LocalSendOptions.customTools}.\n     * Local agents only; not supported on cloud agents.\n     *\n     * Because these tools execute host-provided callbacks in the host process,\n     * they never require interactive approval — they run even on sandboxed or\n     * `autoReview` runs where MCP server tool calls would otherwise fail closed.\n     */\n    customTools?: Record<string, SDKCustomTool>;\n    /**\n     * Enable transport and stall auto-retry for local agent runs. Defaults to\n     * true for headless embedders; set false to surface transport errors on the\n     * first failure (legacy SDK behavior).\n     */\n    enableAgentRetries?: boolean;\n    /**\n     * Loopback URLs of MCP bridges the host process serves to this agent, such\n     * as a host that relays its team's MCP servers. When the team's settings\n     * come back with its Cloud Agent Allowlist applied, the backend checks every\n     * server a bridge relays against that list, so the local run's admin MCP\n     * server, network and tool policy does not hold back these exact URLs; any\n     * query string is ignored. Otherwise they are checked like any other\n     * server. An entry that is not an `http:` URL on `127.0.0.1`, `localhost`\n     * or `[::1]` is ignored with a warning.\n     *\n     * @internal For Agent SDK hosts; may change without notice.\n     */\n    hostMcpBridgeUrls?: string[];\n    /**\n     * Opt-in inherit for `Task` child sessions. Unset keeps today's child\n     * behavior: host workspace path, host executors, and no tool-allowlist\n     * headers. When set, children (including nested `Task` grandchildren) reuse\n     * these executor overrides and the reported workspace path, and receive the\n     * same allowed-tools / exclude-tools headers as the parent run.\n     */\n    subagentInherit?: LocalSubagentInherit;\n    /**\n     * Executor overrides for the agent's own session, or a factory that returns\n     * them. A factory runs once per run. Unset keeps the host executors. `Task`\n     * children do not inherit these; they take only what\n     * {@link LocalAgentOptions.subagentInherit} sets. Applied on every `send`\n     * unless overridden by {@link LocalSendOptions.resourceProviderOptions}.\n     * Local agents only; not supported on cloud agents.\n     */\n    resourceProviderOptions?: LocalSubagentResourceProviderOptions;\n    /**\n     * Workspace path the agent's own model is told to use (for example `/`).\n     * Unset keeps the host cwd. Transcript files stay on the host directory.\n     * `Task` children do not inherit it. Applied on every `send` unless\n     * overridden by {@link LocalSendOptions.reportedWorkspacePath}. Local agents\n     * only; not supported on cloud agents.\n     *\n     * With {@link fs}, this is the workspace inside the tree (default `/`), and\n     * `Task` children share it. Relative tool paths resolve against it, LS,\n     * Grep, and Glob search it when a call names no path, and project rules\n     * load from its `AGENTS.md` and `.cursor/rules/` when `settingSources`\n     * includes `\"project\"`. It must be an absolute posix path outside `/tmp`.\n     * A per-send `fs` does not reset it: the send's tree uses this value unless\n     * the send also sets {@link LocalSendOptions.reportedWorkspacePath}.\n     */\n    reportedWorkspacePath?: string;\n    /**\n     * The tree the agent's native file tools run on instead of the host disk,\n     * or a factory called once per run that returns it. Read, Write,\n     * StrReplace, the other edit tools, LS, Grep, Glob, Delete, and Task run on\n     * it. Tools that would touch the host are not registered: Shell and its\n     * stdin writes, ReadLints, SemanticSearch, applyAgentDiff, recordScreen,\n     * and computerUse. Naming one of them in `tools` is a `ConfigurationError`.\n     * No hooks run, whatever `settingSources` loads, no skills are\n     * discovered, and host git status never reaches the model. Applied on every `send` unless overridden by\n     * {@link LocalSendOptions.fs}.\n     *\n     * The workspace inside the tree is `/`, or the folder\n     * {@link reportedWorkspacePath} names (for example `/repo`). Project rules\n     * load from that folder's `AGENTS.md` and `.cursor/rules/` only when\n     * `settingSources` includes `\"project\"`.\n     *\n     * Each run mounts a new, empty in-memory `/tmp` over the tree, shadowing\n     * any `/tmp` in it. WebFetch, WebSearch, and MCP output that spills to a\n     * file, and GenerateImage assets, land there, and it is dropped when the\n     * run ends. `Task` children, and their own children, share the run's tree,\n     * workspace, and `/tmp`, the same way children without `fs` share the host\n     * folder: the parent sees a child's writes and deletes as soon as they\n     * happen. To keep a run's writes off the tree you pass in, return\n     * `childOverlayFs(tree)` from a factory.\n     *\n     * Local agents only. Combining it with `cloud`, {@link subagentInherit}, or\n     * {@link resourceProviderOptions} is a `ConfigurationError`. An agent\n     * created with `fs` needs `fs` again on resume.\n     */\n    fs?: FileSystem | FileSystemFactory;\n}"
+        },
+        {
+          "name": "LocalSendOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface LocalSendOptions {\n    /**\n     * Expire the currently active persisted run, if any, before starting this\n     * message as a new follow-up run. Recovery path for local agents left wedged\n     * after a crashed CLI process.\n     */\n    force?: boolean;\n    /**\n     * Custom tools for this send only. When set, replaces\n     * {@link LocalAgentOptions.customTools} for that run.\n     */\n    customTools?: Record<string, SDKCustomTool>;\n    /**\n     * Replaces {@link LocalAgentOptions.subagentInherit} for this send only.\n     */\n    subagentInherit?: LocalSubagentInherit;\n    /**\n     * Replaces {@link LocalAgentOptions.resourceProviderOptions} for this send\n     * only.\n     */\n    resourceProviderOptions?: LocalSubagentResourceProviderOptions;\n    /**\n     * Replaces {@link LocalAgentOptions.reportedWorkspacePath} for this send\n     * only, including the workspace inside a `fs` tree.\n     */\n    reportedWorkspacePath?: string;\n    /**\n     * Replaces {@link LocalAgentOptions.fs} for this send only. The workspace\n     * inside it is still the agent's `reportedWorkspacePath` unless this send\n     * sets its own.\n     */\n    fs?: FileSystem | FileSystemFactory;\n}"
+        }
+      ]
+    },
+    "sandbox": {
+      "runtimeExports": [],
+      "sourceFiles": [
+        "dist/esm/options.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "SandboxOptions",
+          "kind": "interface",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export interface SandboxOptions {\n    enabled: boolean;\n}"
+        },
+        {
+          "name": "LocalAgentOptions.sandboxOptions",
+          "kind": "property",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "sandboxOptions?: SandboxOptions;"
+        }
+      ]
+    },
+    "trustedSettings": {
+      "runtimeExports": [],
+      "sourceFiles": [
+        "dist/esm/options.d.ts"
+      ],
+      "declarations": [
+        {
+          "name": "SettingSource",
+          "kind": "type",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "export type SettingSource = \"project\" | \"user\" | \"team\" | \"mdm\" | \"plugins\" | \"all\";"
+        },
+        {
+          "name": "LocalAgentOptions.settingSources",
+          "kind": "property",
+          "sourceFile": "dist/esm/options.d.ts",
+          "text": "settingSources?: SettingSource[];"
+        }
+      ]
+    }
+  }
+}

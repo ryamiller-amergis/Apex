@@ -2212,4 +2212,224 @@ describe('interactiveSessionActor durable turns (Task 4 remediation)', () => {
     expect(messageIdx).toBeGreaterThan(tokenIdx);
     expect(terminalIdx).toBeGreaterThan(messageIdx);
   });
+
+  it('auto-recreates with Reconnecting when a warm cached Agent produces zero events within warmFirstEventProbeMs', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const live: AgentRunEventEnvelope[] = [];
+    const cancelHungWarmRun = jest.fn(async () => {});
+    const disposeWarmHandle = jest.fn(async () => {});
+
+    const hungZeroEventRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      stream: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => new Promise<never>(() => {}),
+        }),
+      }),
+      wait: () => new Promise<never>(() => {}),
+      cancel: cancelHungWarmRun,
+    };
+
+    let warmSendCount = 0;
+    const warmBase = makeAgentHandle({
+      tokens: ['Q1 ready'],
+      agentId: 'agent-warm-wedged',
+    });
+    const warmHandle: InteractiveCursorAgentHandle = {
+      ...warmBase,
+      dispose: disposeWarmHandle,
+      send: jest.fn(async (prompt, opts) => {
+        warmSendCount += 1;
+        if (warmSendCount === 1) {
+          return warmBase.send(prompt, opts);
+        }
+        return hungZeroEventRun;
+      }),
+    };
+
+    const recreatedPrompts: string[] = [];
+    const freshBase = makeAgentHandle({
+      tokens: ['Q2 recovered cleanly'],
+      agentId: 'agent-recreated-fresh',
+    });
+    const freshHandle: InteractiveCursorAgentHandle = {
+      ...freshBase,
+      send: jest.fn(async (prompt, opts) => {
+        recreatedPrompts.push(prompt);
+        return freshBase.send(prompt, opts);
+      }),
+    };
+
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: { ...warmHandle, workspaceRef: checkout.workspacePath },
+      }))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: { ...freshHandle, workspaceRef: checkout.workspacePath },
+      }));
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      warmFirstEventProbeMs: 40,
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => ({
+        container: 'artifacts',
+        key: 'manifest.json',
+      }),
+      publishLive: async (_t, env) => {
+        live.push(env);
+      },
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+    });
+
+    // Turn 1 populates the warm cache.
+    const turn1 = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        runId: 'run-q1',
+        attemptId: '20000000-0000-4000-8000-000000000021',
+        dispatchMessageId: 'dispatch-q1',
+      }),
+    });
+    expect(turn1).toEqual({
+      status: 'completed',
+      cursorAgentId: 'agent-warm-wedged',
+    });
+
+    posted.length = 0;
+    live.length = 0;
+
+    // Turn 2 hits the warm handle, stalls with zero events, and auto-recreates in-turn.
+    const turn2 = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        runId: 'run-q2',
+        attemptId: '20000000-0000-4000-8000-000000000022',
+        dispatchMessageId: 'dispatch-q2',
+        cursorAgentId: 'agent-warm-wedged',
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 5_000,
+          toolCallMs: 60_000,
+        },
+      }),
+    });
+
+    expect(turn2).toEqual({
+      status: 'completed',
+      cursorAgentId: 'agent-recreated-fresh',
+    });
+    expect(cancelHungWarmRun).toHaveBeenCalled();
+    expect(disposeWarmHandle).toHaveBeenCalled();
+    expect(acquireDurableAgent).toHaveBeenCalledTimes(2);
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+    expect(recreatedPrompts).toEqual(['Hello (recreated)']);
+    expect(live.map((e) => e.event)).toContainEqual({
+      type: 'retrying',
+      attempt: 1,
+      maxAttempts: 1,
+      reason: 'reconnecting',
+    });
+    expect(posted.find((b) => b.kind === 'terminal')).toMatchObject({
+      status: 'completed',
+      cursorAgentId: 'agent-recreated-fresh',
+      stageTimings: expect.objectContaining({ agentMode: 'recreated' }),
+    });
+  }, 15_000);
+
+  it('auto-recreates with Reconnecting when a resumed Agent produces zero events within warmFirstEventProbeMs', async () => {
+    const live: AgentRunEventEnvelope[] = [];
+    const cancelHungResumedRun = jest.fn(async () => {});
+
+    const hungZeroEventRun: WorkerCursorExecutionRun = {
+      supports: (capability: string) =>
+        capability === 'stream' || capability === 'cancel',
+      stream: () => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => new Promise<never>(() => {}),
+        }),
+      }),
+      wait: () => new Promise<never>(() => {}),
+      cancel: cancelHungResumedRun,
+    };
+
+    const acquireDurableAgent = jest
+      .fn()
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'resumed' as const,
+        handle: {
+          ...makeAgentHandle({
+            agentId: 'agent-resumed-wedged',
+            workspaceRef: checkout.workspacePath,
+          }),
+          send: async () => hungZeroEventRun,
+        },
+      }))
+      .mockImplementationOnce(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeAgentHandle({
+          tokens: ['Recovered from wedged resume'],
+          agentId: 'agent-recreated-after-resume',
+          workspaceRef: checkout.workspacePath,
+        }),
+      }));
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent,
+      warmFirstEventProbeMs: 40,
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => ({
+        container: 'artifacts',
+        key: 'manifest.json',
+      }),
+      publishLive: async (_t, env) => {
+        live.push(env);
+      },
+      postIngest: async () => ({ ok: true, cancelRequested: false }),
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap({
+        runId: 'run-resumed-stall',
+        cursorAgentId: 'agent-resumed-wedged',
+        effectiveDeadlines: {
+          repositoryPreparationMs: null,
+          firstEventMs: 5_000,
+          toolCallMs: 60_000,
+        },
+      }),
+    });
+
+    expect(outcome).toEqual({
+      status: 'completed',
+      cursorAgentId: 'agent-recreated-after-resume',
+    });
+    expect(cancelHungResumedRun).toHaveBeenCalled();
+    expect(acquireDurableAgent.mock.calls[0][2]).toEqual({
+      resumeAgentId: 'agent-resumed-wedged',
+    });
+    expect(acquireDurableAgent.mock.calls[1][2]).toEqual({ resumeAgentId: null });
+    expect(live.map((e) => e.event)).toContainEqual({
+      type: 'retrying',
+      attempt: 1,
+      maxAttempts: 1,
+      reason: 'reconnecting',
+    });
+  }, 15_000);
 });

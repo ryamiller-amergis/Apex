@@ -88,7 +88,7 @@ describe('TBI-008 DoD-2 / VT-09 worker-tier telemetry vocabulary', () => {
 });
 
 describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
-  it('allowlists exactly the six approved structured property keys', () => {
+  it('allowlists exactly the seven approved structured property keys (including area)', () => {
     expect([...SAFE_PROPERTY_KEYS]).toEqual([
       'runId',
       'dispatchMessageId',
@@ -96,6 +96,7 @@ describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
       'lane',
       'terminalReason',
       'stage',
+      'area',
     ]);
   });
 

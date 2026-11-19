@@ -50,7 +50,11 @@ detect load_test_runner \
 detect ai_runs_worker \
   runners/ai-runs/ \
   scripts/ci/publish-ai-runs-runner.sh \
-  src/server/services/aiRunsWorker/
+  src/server/ \
+  src/shared/ \
+  package.json \
+  package-lock.json \
+  tsconfig.server.json
 
 detect ai_runs_interactive \
   runners/ai-runs-interactive/ \

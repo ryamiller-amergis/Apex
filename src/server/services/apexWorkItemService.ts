@@ -1,4 +1,5 @@
 ﻿import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { and, asc, desc, eq, inArray, ne, not, isNull, max, sql } from 'drizzle-orm';
@@ -1227,15 +1228,22 @@ export async function generateDraftsFromFeatureRequest(
 
   const prompt = buildGenerateDraftPrompt(fr, dto.grain);
 
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'apex-work-item-draft-'));
+  let agent: { [Symbol.asyncDispose](): Promise<void> } | undefined;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { CursorSDK } = require('@cursor/sdk') as { CursorSDK: any };
-    const sdk = new CursorSDK();
-    const response = await sdk.completion({
-      model: 'claude-sonnet-4-5',
-      messages: [{ role: 'user', content: prompt }],
+    const apiKey = process.env.CURSOR_API_KEY?.trim();
+    if (!apiKey) throw new Error('CURSOR_API_KEY is not set');
+    const { Agent } = await import('@cursor/sdk');
+    const created = await Agent.create({
+      apiKey,
+      model: { id: 'claude-sonnet-4-5' },
+      local: { cwd: workspace, settingSources: [] },
+      mcpServers: {},
+      tools: [],
     });
-    const text: string = response?.choices?.[0]?.message?.content ?? response?.content ?? '';
+    agent = created;
+    const result = await (await created.send(prompt)).wait();
+    const text = result.result ?? '';
     const parsed = JSON.parse(text.trim()) as Array<{
       title: string;
       outcome: string;
@@ -1250,6 +1258,8 @@ export async function generateDraftsFromFeatureRequest(
       acceptanceCriteria: (d.acceptanceCriteria ?? []).map((text) => ({ text, done: false })),
     }));
   } catch {
+    // CursorSDK was removed in @cursor/sdk 1.4.0. Agent.create is the replacement.
+    // Any failure, including a missing API key, still returns a local draft.
     const given = fr.request?.trim() || fr.title;
     const benefit = fr.advantage?.trim() || 'I can complete this work efficiently';
     return [
@@ -1272,6 +1282,9 @@ export async function generateDraftsFromFeatureRequest(
         ],
       },
     ];
+  } finally {
+    await agent?.[Symbol.asyncDispose]().catch(() => {});
+    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 }
 

@@ -42,6 +42,7 @@ import {
   mcpServerTurnRequiresToolUse,
 } from '../../../shared/types/mcpServers';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
+import { resolveChatAreaId } from '../../../shared/types/chatHarness';
 import type { InteractiveStageName } from '../../../shared/types/workerTierOperations';
 import {
   createCursorTurnEndMonitor,
@@ -50,6 +51,7 @@ import {
   CursorStreamClosedBeforeTurnEndError,
   executeCursorExecutionCore,
   sanitizeCursorTerminalDetail,
+  tokenFieldsForTerminalIngest,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
@@ -95,6 +97,13 @@ export const INTERACTIVE_AGENT_CACHE_MAX = 32;
  */
 export const INTERACTIVE_AGENT_DISPOSE_WAIT_MS = 5_000;
 
+/**
+ * Probe window for a warm or resumed Agent to emit its first SDK delta/event.
+ * If zero events arrive within this window, the wedged session is cancelled,
+ * evicted, and transparently recreated inside the same turn ("Reconnecting…").
+ */
+export const INTERACTIVE_WARM_FIRST_EVENT_PROBE_MS = 12_000;
+
 /** Home-facing live phase detail before checkout / SDK work. */
 export const INTERACTIVE_STARTING_DETAIL = 'Starting agent…';
 /** Shown while a grounded turn downloads the project code. */
@@ -139,6 +148,13 @@ class InteractiveCancellationObservedError extends Error {
   constructor() {
     super('Interactive turn cancellation requested');
     this.name = 'InteractiveCancellationObservedError';
+  }
+}
+
+class WarmAgentFirstEventStalledError extends Error {
+  constructor() {
+    super('Warm or resumed Cursor agent produced no first event within probe window');
+    this.name = 'WarmAgentFirstEventStalledError';
   }
 }
 
@@ -314,6 +330,8 @@ export interface InteractiveActorDependencies {
   agentCacheIdleMs?: number;
   /** Max cached Agents in this process (default 32). */
   agentCacheMax?: number;
+  /** Probe window in ms before a silent warm/resumed Agent is recreated in-turn (default 12s). */
+  warmFirstEventProbeMs?: number;
 }
 
 export interface InteractiveSessionActor {
@@ -429,6 +447,8 @@ export function createInteractiveSessionActor(
     dependencies.agentCacheIdleMs ?? INTERACTIVE_AGENT_CACHE_IDLE_MS;
   const agentCacheMax =
     dependencies.agentCacheMax ?? INTERACTIVE_AGENT_CACHE_MAX;
+  const warmFirstEventProbeMs =
+    dependencies.warmFirstEventProbeMs ?? INTERACTIVE_WARM_FIRST_EVENT_PROBE_MS;
 
   // Warm session cache keyed by threadId — single activation reuses the
   // grounded checkout and live Cursor Agent across turns.
@@ -546,11 +566,13 @@ export function createInteractiveSessionActor(
     request: InteractiveTurnRequest,
   ): Promise<InteractiveTurnOutcome> => {
     const { runId, threadId, projectId, dispatchMessageId, snapshot } = request;
+    const resolvedArea = resolveChatAreaId(snapshot.workflowClass);
     const telemetryContext = {
       runId,
       dispatchMessageId,
       project: projectId,
       lane: INTERACTIVE_LANE,
+      ...(resolvedArea ? { area: resolvedArea } : {}),
     };
 
     let fenceConflict: AiRunFenceConflictError | undefined;
@@ -714,6 +736,7 @@ export function createInteractiveSessionActor(
       const sendStartedAt = now();
       const turnEndMonitor = createCursorTurnEndMonitor();
       activeRun = await agentHandle.send(snapshot.prompt, {
+        requestId: snapshot.requestId ?? runId,
         onDelta: (update) => turnEndMonitor.observe(update),
       });
       emitStage(telemetryContext, 'send', sendStartedAt);
@@ -794,6 +817,8 @@ export function createInteractiveSessionActor(
         status: 'completed',
         artifactsFlushed: true,
         cursorAgentId,
+        durationMs: Math.max(0, now() - turnStartedAt),
+        ...tokenFieldsForTerminalIngest(result.usage),
       });
       // Live terminal so the socket clears the spinner immediately; the durable
       // `done` (agent_run_events) covers reconnect replay, and the client's
@@ -973,6 +998,7 @@ export function createInteractiveSessionActor(
     let silenceTimedOut = false;
     let firstEventSeen = false;
     let firstEventTimer: ReturnType<typeof setTimeout> | undefined;
+    let warmProbeTimer: ReturnType<typeof setTimeout> | undefined;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
     let workspaceMs: number | undefined;
     let agentAcquireMs: number | undefined;
@@ -1002,6 +1028,10 @@ export function createInteractiveSessionActor(
       if (firstEventTimer !== undefined) {
         clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
+      }
+      if (warmProbeTimer !== undefined) {
+        clearTimeout(warmProbeTimer);
+        warmProbeTimer = undefined;
       }
       if (silenceTimer !== undefined) {
         clearTimeout(silenceTimer);
@@ -1042,6 +1072,8 @@ export function createInteractiveSessionActor(
         firstEventAt = now();
         if (firstEventTimer !== undefined) clearTimeout(firstEventTimer);
         firstEventTimer = undefined;
+        if (warmProbeTimer !== undefined) clearTimeout(warmProbeTimer);
+        warmProbeTimer = undefined;
       }
       armSilenceTimer();
     };
@@ -1223,18 +1255,40 @@ export function createInteractiveSessionActor(
         throw Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' });
       }
 
-      // The first-event budget covers starting or resuming the Agent as well as
-      // its first reply.
-      firstEventTimer = setTimeout(() => {
-        if (!firstEventSeen) {
+      const armHardFirstEventTimer = (): void => {
+        if (firstEventTimer !== undefined) {
+          clearTimeout(firstEventTimer);
+          firstEventTimer = undefined;
+        }
+        if (firstEventSeen) return;
+        const budgetMs = Math.min(
+          effectiveDeadlines.firstEventMs,
+          absoluteMs - now(),
+        );
+        if (!(budgetMs > 0)) {
           failureCategory = 'hard_timeout';
           firstEventTimedOut = true;
           absoluteAbort.abort(
             Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
           );
           void stopRun();
+          return;
         }
-      }, firstEventMs);
+        firstEventTimer = setTimeout(() => {
+          if (!firstEventSeen) {
+            failureCategory = 'hard_timeout';
+            firstEventTimedOut = true;
+            absoluteAbort.abort(
+              Object.assign(new Error('hard_timeout'), { code: 'hard_timeout' }),
+            );
+            void stopRun();
+          }
+        }, budgetMs);
+      };
+
+      // The first-event budget covers starting or resuming the Agent as well as
+      // its first reply.
+      armHardFirstEventTimer();
 
       const cached = agentCache.get(threadId);
       const currentSourcesSignature = brainstormSourceIdsSignature(bootstrap);
@@ -1308,11 +1362,13 @@ export function createInteractiveSessionActor(
           agentHandle = acquired.handle;
           acquisitionMode = acquired.mode;
           agentAcquireMs = now() - acquireStartedAt;
+          const durableArea = resolveChatAreaId(specification.workflowClass);
           logInteractiveAgentStep('InteractiveAgentAcquired', {
             runId,
             threadId,
             mode: acquired.mode,
             durationMs: now() - acquireStartedAt,
+            ...(durableArea ? { area: durableArea } : {}),
           });
         } catch (error) {
           if (absoluteAbort.signal.aborted) {
@@ -1447,37 +1503,133 @@ export function createInteractiveSessionActor(
 
       try {
         let turnEndMonitor = createCursorTurnEndMonitor();
-        const sendTurn = (handle: InteractiveCursorAgentHandle) =>
+        const sendTurn = (
+          handle: InteractiveCursorAgentHandle,
+          signal: AbortSignal = absoluteAbort.signal,
+        ) =>
           untilAborted(
             handle.send(prompt, {
               mcpServers,
+              requestId: bootstrap.requestId ?? bootstrap.runId,
               onDelta: (update) => {
                 observeEvent();
                 turnEndMonitor.observe(update);
               },
             }),
-            absoluteAbort.signal,
+            signal,
           );
-        sendStartedAt = now();
-        try {
-          activeRunRef = await sendTurn(agentHandle);
-        } catch (error) {
-          // No run exists yet, so nothing was shown and no tool ran.
-          if (
-            !isRetryableCursorConnectionError(error) ||
-            firstEventSeen ||
-            absoluteAbort.signal.aborted ||
-            cancellationRequested ||
-            fenceConflict
-          ) {
-            throw error;
+
+        const executeActiveRun = (
+          signal: AbortSignal = absoluteAbort.signal,
+        ) =>
+          untilAborted(
+            executeCursorExecutionCore({
+              snapshot: {
+                prompt,
+                model: specification.model,
+                effort: specification.effort ?? undefined,
+                workspaceRef: checkout.workspacePath,
+                workflowClass: 'agent_home_chat',
+                skillPath: specification.skill?.path ?? '',
+                projectId: specification.projectId,
+                threadId: specification.threadId,
+              },
+              run: activeRunRef!,
+              context: { runId, sourceInstance },
+              sink: {
+                publish: async (event: SseEvent, envelope: AgentRunEventEnvelope) => {
+                  if (fenceConflict) throw new AiRunFenceConflictError();
+                  if (cancellationRequested) {
+                    throw new InteractiveCancellationObservedError();
+                  }
+                  if (signal.aborted) {
+                    throw signal.reason instanceof Error
+                      ? signal.reason
+                      : Object.assign(new Error('hard_timeout'), {
+                          code: 'hard_timeout',
+                        });
+                  }
+                  if (absoluteAbort.signal.aborted) {
+                    throw absoluteAbort.signal.reason instanceof Error
+                      ? absoluteAbort.signal.reason
+                      : Object.assign(new Error('hard_timeout'), {
+                          code: 'hard_timeout',
+                        });
+                  }
+                  // Synthetic Still working heartbeats ride the live bus only and
+                  // never refresh silence/progress timers or bloat replay pages.
+                  if (envelope.ephemeral) {
+                    await publishLiveEnvelope(event);
+                    return;
+                  }
+                  observeEvent();
+                  if (event.type === 'tool_call') {
+                    if (mcpServerChat) mcpToolUsedThisAttempt = true;
+                    armToolTimer(event.toolName);
+                  } else if (event.type === 'tool_status') {
+                    if (mcpServerChat) mcpToolUsedThisAttempt = true;
+                    if (event.status === 'running') {
+                      armToolTimer(event.toolName);
+                    } else {
+                      clearToolTimer();
+                    }
+                  }
+                  if (event.type === 'token') {
+                    if (mcpToolRequired && !mcpToolUsedThisAttempt) return;
+                    firstTokenAt ??= now();
+                    await publishLiveTokenBatches(
+                      liveBatcher.push(event.text, now()),
+                    );
+                  } else {
+                    await publishLiveEnvelope(event);
+                    await post({
+                      dispatchMessageId,
+                      attemptId,
+                      kind: 'progress',
+                      phase: 'implementation',
+                      status: 'running',
+                      event,
+                    });
+                  }
+                },
+              },
+              hooks: {
+                beforeStreamEvent: () => {
+                  if (fenceConflict) throw new AiRunFenceConflictError();
+                  if (cancellationRequested) {
+                    throw new InteractiveCancellationObservedError();
+                  }
+                  if (signal.aborted) {
+                    throw signal.reason instanceof Error
+                      ? signal.reason
+                      : new WarmAgentFirstEventStalledError();
+                  }
+                },
+              },
+              nextSequence: () => 1,
+              turnEnd: turnEndMonitor.completion,
+              failIfStreamEndsBeforeTurnEnd: true,
+            }),
+            signal,
+          );
+
+        const recreateAfterUnresponsiveAgent = async (
+          dropped: InteractiveCursorAgentHandle,
+          code: unknown,
+          waitedMs?: number,
+        ): Promise<void> => {
+          if (warmProbeTimer !== undefined) {
+            clearTimeout(warmProbeTimer);
+            warmProbeTimer = undefined;
           }
-          const dropped = agentHandle;
+          clearToolTimer();
+          activeRunRef = undefined;
           logInteractiveAgentStep('InteractiveAgentReconnecting', {
             runId,
             threadId,
             mode: agentMode,
-            code: (error as { code?: unknown }).code ?? null,
+            code,
+            ...(waitedMs !== undefined ? { waitedMs } : {}),
           });
           await publishLiveEnvelope({
             type: 'retrying',
@@ -1494,89 +1646,135 @@ export function createInteractiveSessionActor(
             agentCache.delete(threadId);
           }
           await disposeAgentHandle(threadId, dropped);
+          armHardFirstEventTimer();
+          const reacquireStartedAt = now();
           const reacquired = await untilAborted(
             startAcquisition(null),
             absoluteAbort.signal,
           );
           agentHandle = reacquired.handle;
           agentMode = 'recreated';
+          agentAcquireMs = now() - reacquireStartedAt;
+          const durableArea = resolveChatAreaId(specification.workflowClass);
+          logInteractiveAgentStep('InteractiveAgentAcquired', {
+            runId,
+            threadId,
+            mode: 'recreated',
+            durationMs: agentAcquireMs,
+            ...(durableArea ? { area: durableArea } : {}),
+          });
           prompt = specification.recreationPrompt;
           if (agentHandle.agentId) {
             agentIdByThread.set(threadId, agentHandle.agentId);
           }
-          activeRunRef = await sendTurn(agentHandle);
-        }
+          turnEndMonitor = createCursorTurnEndMonitor();
+          sendStartedAt = now();
+        };
 
-        const executeActiveRun = () => untilAborted(executeCursorExecutionCore({
-          snapshot: {
-            prompt,
-            model: specification.model,
-            effort: specification.effort ?? undefined,
-            workspaceRef: checkout.workspacePath,
-            workflowClass: 'agent_home_chat',
-            skillPath: specification.skill?.path ?? '',
-            projectId: specification.projectId,
-            threadId: specification.threadId,
-          },
-          run: activeRunRef!,
-          context: { runId, sourceInstance },
-          sink: {
-            publish: async (event: SseEvent) => {
-              if (fenceConflict) throw new AiRunFenceConflictError();
-              if (cancellationRequested) {
-                throw new InteractiveCancellationObservedError();
-              }
-              if (absoluteAbort.signal.aborted) {
-                throw absoluteAbort.signal.reason instanceof Error
-                  ? absoluteAbort.signal.reason
-                  : Object.assign(new Error('hard_timeout'), {
-                      code: 'hard_timeout',
-                    });
-              }
-              observeEvent();
-              if (event.type === 'tool_call') {
-                if (mcpServerChat) mcpToolUsedThisAttempt = true;
-                armToolTimer(event.toolName);
-              } else if (event.type === 'tool_status') {
-                if (mcpServerChat) mcpToolUsedThisAttempt = true;
-                if (event.status === 'running') {
-                  armToolTimer(event.toolName);
-                } else {
-                  clearToolTimer();
-                }
-              }
-              if (event.type === 'token') {
-                if (mcpToolRequired && !mcpToolUsedThisAttempt) return;
-                firstTokenAt ??= now();
-                await publishLiveTokenBatches(
-                  liveBatcher.push(event.text, now()),
-                );
-              } else {
-                await publishLiveEnvelope(event);
-                await post({
-                  dispatchMessageId,
-                  attemptId,
-                  kind: 'progress',
-                  phase: 'implementation',
-                  status: 'running',
-                  event,
-                });
-              }
-            },
-          },
-          hooks: {
-            beforeStreamEvent: () => {
-              if (fenceConflict) throw new AiRunFenceConflictError();
-              if (cancellationRequested) {
-                throw new InteractiveCancellationObservedError();
-              }
-            },
-          },
-          nextSequence: () => 1,
-          turnEnd: turnEndMonitor.completion,
-          failIfStreamEndsBeforeTurnEnd: true,
-        }), absoluteAbort.signal);
-        let result = await executeActiveRun();
+        const probeMs = Math.min(
+          warmFirstEventProbeMs,
+          effectiveDeadlines.firstEventMs,
+        );
+        const canProbeWarmAgent =
+          (agentMode === 'warm' || agentMode === 'resumed') &&
+          probeMs > 0 &&
+          absoluteMs - now() > probeMs;
+
+        let result: CursorExecutionResult;
+        if (canProbeWarmAgent) {
+          // Pause the hard turn-ending timer during the probe; if the warm
+          // agent produces an event, observeEvent() arms silenceTimer, and if
+          // it stalls with zero events we recreate with a fresh hard budget.
+          if (firstEventTimer !== undefined) {
+            clearTimeout(firstEventTimer);
+            firstEventTimer = undefined;
+          }
+          const probeAbort = new AbortController();
+          const forwardAbsoluteAbort = () =>
+            probeAbort.abort(absoluteAbort.signal.reason);
+          if (absoluteAbort.signal.aborted) {
+            probeAbort.abort(absoluteAbort.signal.reason);
+          } else {
+            absoluteAbort.signal.addEventListener('abort', forwardAbsoluteAbort, {
+              once: true,
+            });
+          }
+          warmProbeTimer = setTimeout(() => {
+            warmProbeTimer = undefined;
+            if (
+              firstEventSeen ||
+              cancellationRequested ||
+              fenceConflict ||
+              absoluteAbort.signal.aborted
+            ) {
+              return;
+            }
+            probeAbort.abort(new WarmAgentFirstEventStalledError());
+            void stopRun();
+          }, probeMs);
+
+          sendStartedAt = now();
+          try {
+            activeRunRef = await sendTurn(agentHandle, probeAbort.signal);
+            result = await executeActiveRun(probeAbort.signal);
+          } catch (error) {
+            const warmProbeStalled =
+              error instanceof WarmAgentFirstEventStalledError ||
+              (probeAbort.signal.aborted &&
+                probeAbort.signal.reason instanceof WarmAgentFirstEventStalledError);
+            const retryableSendDrop =
+              !warmProbeStalled && isRetryableCursorConnectionError(error);
+            if (
+              (!warmProbeStalled && !retryableSendDrop) ||
+              firstEventSeen ||
+              absoluteAbort.signal.aborted ||
+              cancellationRequested ||
+              fenceConflict
+            ) {
+              throw error;
+            }
+            await recreateAfterUnresponsiveAgent(
+              agentHandle,
+              warmProbeStalled
+                ? 'warm_first_event_timeout'
+                : ((error as { code?: unknown }).code ?? null),
+              warmProbeStalled ? probeMs : undefined,
+            );
+            activeRunRef = await sendTurn(agentHandle, absoluteAbort.signal);
+            result = await executeActiveRun(absoluteAbort.signal);
+          } finally {
+            if (warmProbeTimer !== undefined) {
+              clearTimeout(warmProbeTimer);
+              warmProbeTimer = undefined;
+            }
+            absoluteAbort.signal.removeEventListener(
+              'abort',
+              forwardAbsoluteAbort,
+            );
+          }
+        } else {
+          sendStartedAt = now();
+          try {
+            activeRunRef = await sendTurn(agentHandle);
+          } catch (error) {
+            // No run exists yet, so nothing was shown and no tool ran.
+            if (
+              !isRetryableCursorConnectionError(error) ||
+              firstEventSeen ||
+              absoluteAbort.signal.aborted ||
+              cancellationRequested ||
+              fenceConflict
+            ) {
+              throw error;
+            }
+            await recreateAfterUnresponsiveAgent(
+              agentHandle,
+              (error as { code?: unknown }).code ?? null,
+            );
+            activeRunRef = await sendTurn(agentHandle);
+          }
+          result = await executeActiveRun();
+        }
 
         if (mcpToolRequired && !mcpToolUsedThisAttempt) {
           await publishLiveEnvelope({
@@ -1704,6 +1902,10 @@ export function createInteractiveSessionActor(
             ? { event: { type: 'message', message: finalMessage } }
             : {}),
           stageTimings: stageTimings(),
+          ...(sendStartedAt !== undefined
+            ? { durationMs: Math.max(0, now() - sendStartedAt) }
+            : {}),
+          ...tokenFieldsForTerminalIngest(result.usage),
         });
         await publishLiveEnvelope({ type: 'done', runId });
 

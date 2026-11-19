@@ -15,7 +15,6 @@ jest.mock('../services/nativeReadToolAdapter', () => ({
 
 import {
   acquireInteractiveCursorAgent,
-  createInteractiveCursorExecution,
 } from '../services/interactiveActorHost/interactiveCursorExecution';
 import { createLocalCursorExecution } from '../services/aiRunsWorker/cursorExecution';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
@@ -40,9 +39,8 @@ describe('interactive Cursor execution repository tools', () => {
     const checkout = {} as RepoReader;
 
     try {
-      const execution = await createInteractiveCursorExecution(
+      const acquired = await acquireInteractiveCursorAgent(
         {
-          prompt: 'Run the pre-loaded interview skill.',
           model: 'composer-2.5',
           effort: 'high',
           workspaceRef: '/shared/grounding/checkout',
@@ -51,6 +49,7 @@ describe('interactive Cursor execution repository tools', () => {
         checkout,
         { mcpServers },
       );
+      await acquired.handle.send('Run the pre-loaded interview skill.');
 
       expect(mockCreateNativeReadTools).toHaveBeenCalledWith(checkout);
       expect(mockCreateAgent).toHaveBeenCalledWith(
@@ -65,8 +64,8 @@ describe('interactive Cursor execution repository tools', () => {
         }),
       );
       expect(mockCreateAgent.mock.calls[0][0].disallowedTools).toBeUndefined();
-      expect(execution.agentId).toBe('agent-1');
-      expect(execution.mode).toBe('recreated');
+      expect(acquired.handle.agentId).toBe('agent-1');
+      expect(acquired.mode).toBe('recreated');
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();
@@ -244,11 +243,26 @@ describe('interactive Cursor execution repository tools', () => {
       await acquired.handle.send('turn-1');
       await acquired.handle.send('turn-2');
       expect(send).toHaveBeenCalledTimes(2);
-      expect(send).toHaveBeenNthCalledWith(1, 'turn-1');
-      expect(send).toHaveBeenNthCalledWith(2, 'turn-2');
+      expect(send).toHaveBeenNthCalledWith(
+        1,
+        'turn-1',
+        expect.objectContaining({ idempotencyKey: '/warm' }),
+      );
+      expect(send).toHaveBeenNthCalledWith(
+        2,
+        'turn-2',
+        expect.objectContaining({ idempotencyKey: '/warm' }),
+      );
       const nextTurnServers = { 'ado-skills': { url: 'https://apex.example/tools?token=turn-3' } };
       await acquired.handle.send('turn-3', { mcpServers: nextTurnServers });
-      expect(send).toHaveBeenNthCalledWith(3, 'turn-3', { mcpServers: nextTurnServers });
+      expect(send).toHaveBeenNthCalledWith(
+        3,
+        'turn-3',
+        expect.objectContaining({
+          idempotencyKey: '/warm',
+          mcpServers: nextTurnServers,
+        }),
+      );
       await acquired.handle.dispose();
       expect(dispose).toHaveBeenCalled();
     } finally {
@@ -294,7 +308,10 @@ describe('interactive Cursor execution repository tools', () => {
         acquired.mode === 'recreated' ? spec.recreationPrompt : spec.currentPrompt,
       );
       expect(create).toHaveBeenCalledTimes(1);
-      expect(send).toHaveBeenCalledWith(spec.recreationPrompt);
+      expect(send).toHaveBeenCalledWith(
+        spec.recreationPrompt,
+        expect.objectContaining({ idempotencyKey: '/warm' }),
+      );
     } finally {
       delete process.env.CURSOR_API_KEY;
       jest.clearAllMocks();

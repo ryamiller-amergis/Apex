@@ -27,6 +27,13 @@ describe('AI orchestrator image deployment', () => {
     );
   });
 
+  it('rebuilds the AI-runs worker image for shared server, SDK adapter, and package lockfile changes', () => {
+    const workerBlock = detector.match(/detect ai_runs_worker[\s\S]*?(?=\ndetect |\n#|$)/)?.[0] ?? '';
+    expect(workerBlock).toMatch(
+      /detect ai_runs_worker[\s\S]*runners\/ai-runs\/[\s\S]*scripts\/ci\/publish-ai-runs-runner\.sh[\s\S]*src\/server\/[\s\S]*src\/shared\/[\s\S]*package\.json[\s\S]*package-lock\.json[\s\S]*tsconfig\.server\.json/,
+    );
+  });
+
   it.each([
     ['ai_runs_documents_v2', 'ai-runs-documents-v2'],
     ['ai_runs_visual', 'ai-runs-visual'],

@@ -41,6 +41,7 @@ import {
   type TerminalGroundingDeactivator,
 } from './agentRunTerminalEffects';
 import { workerTierTelemetry } from './workerTierTelemetry';
+import { deriveWorkerCursorExecutionFields } from './cursorExecutionSpecification';
 
 const QUEUED_PROGRESS_LABEL = 'Queued — waiting for available worker';
 
@@ -422,8 +423,44 @@ export async function enqueue(input: EnqueueAgentRunInput): Promise<{ runId: str
       : {}),
     workflowClass: input.snapshot.workflowClass,
     skillPath: input.snapshot.skillPath,
+    ...(input.snapshot.effort !== undefined
+      ? { effort: input.snapshot.effort }
+      : {}),
+    ...(input.snapshot.skillContent !== undefined
+      ? { skillContent: input.snapshot.skillContent }
+      : {}),
+    ...(input.snapshot.skillSha256 !== undefined
+      ? { skillSha256: input.snapshot.skillSha256 }
+      : {}),
+    ...(input.snapshot.playbookAgentPolicy !== undefined
+      ? { playbookAgentPolicy: input.snapshot.playbookAgentPolicy }
+      : {}),
     projectId: input.snapshot.projectId,
     threadId: input.snapshot.threadId,
+    ...(lane === 'cloud-agent'
+      ? {}
+      : (() => {
+          const derived = deriveWorkerCursorExecutionFields(input.snapshot);
+          return {
+            requestId: input.snapshot.requestId ?? runId,
+            toolAllowlist:
+              input.snapshot.toolAllowlist !== undefined
+                ? input.snapshot.toolAllowlist
+                : derived.toolAllowlist,
+            disallowedTools:
+              input.snapshot.disallowedTools !== undefined
+                ? [...input.snapshot.disallowedTools]
+                : [...derived.disallowedTools],
+            settingSources:
+              input.snapshot.settingSources !== undefined
+                ? [...input.snapshot.settingSources]
+                : [...derived.settingSources],
+            sandbox:
+              input.snapshot.sandbox !== undefined
+                ? { ...input.snapshot.sandbox }
+                : { ...derived.sandbox },
+          };
+        })()),
   };
 
   const executor = input.executor ?? db;

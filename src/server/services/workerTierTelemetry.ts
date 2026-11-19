@@ -32,6 +32,7 @@ export const SAFE_PROPERTY_KEYS: ReadonlySet<WorkerTierSafePropertyKey> =
     'lane',
     'terminalReason',
     'stage',
+    'area',
   ]);
 
 const MAX_PROPERTY_LENGTH = 256;
