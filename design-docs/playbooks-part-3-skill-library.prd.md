@@ -31,7 +31,7 @@ Foundation skills stay files in `foundation-skills/foundation/`. Every project c
 - Output kinds are a fixed set. Each kind's result includes the fields an agent task already returns, plus the kind's own fields. Publish rejects a binding to a field the kind does not return.
 - The interactive step is a new registered step type. Each turn is an agent run on that step's thread and is checked against the policy frozen at publish. The chat is shown in the run's suspension panel.
 - A project setting stores the reader identity used by skills that need a read-only cloud shell. The run specification carries that identity. The worker has no fallback identity.
-- New permissions cover viewing skills, authoring project skills, and approving reference files. The existing author permission is reused. A project cannot edit a foundation skill, and cannot publish a project skill that reuses a foundation skill name.
+- New permissions cover viewing skills and authoring project skills. The existing author permission is reused. A project cannot edit a foundation skill, and cannot publish a project skill that reuses a foundation skill name. A companion file is saved with the skill. It does not wait for a second person.
 
 ## Testing Decisions
 
@@ -42,7 +42,7 @@ Foundation skills stay files in `foundation-skills/foundation/`. Every project c
   - Incident move — the three old incident paths on a MaxView Playbook resolve to the MaxView project skill.
   - Skill control — base skills and this project's skills are separate groups, and search filters both.
   - Interactive step — a proposal is hidden until it is valid, and a cancelled run leaves no result.
-  - Library permissions — reference-file contents are hidden from view-only users, and an author cannot approve their own version.
+  - Library permissions — someone who can open the library can read the skill and its companion files.
 - **Prior art:** Playbook publish guards and the existing agent-run policy checks. Interview suspension, deadline, and cancel behavior. Permission checks on project-scoped admin pages.
 
 ## Target Surface
@@ -57,17 +57,15 @@ Foundation skills stay files in `foundation-skills/foundation/`. Every project c
 | Action | Required group(s) / role(s) | Data scope |
 |--------|---------------------------|-----------|
 | See skill names, types, and kinds in the Playbook builder | Playbook author | Project-scoped |
-| Open the Skill Library and read instruction files | Skill viewer | Project-scoped |
+| Open the Skill Library and read skills and companion files | Skill viewer | Project-scoped |
 | Create a project skill and edit its drafts | Skill author (existing manage permission) | Project-scoped |
-| Read or approve reference-file contents | Skill author, or reference approver | Project-scoped |
-| Approve a reference file when the project has no second approver | Platform Admin | Global |
 
 ---
 
 ## Security and Data Sensitivity
 
 - **Sensitive fields:** Reference files may hold subscription and workspace identifiers. They must not hold secrets. Reader identity client IDs are configuration, not skill text.
-- **Handling requirements:** Reference-file contents are excluded from view-only library responses. Run output is not filtered. Approving a reference file is recorded with the approver, and the author of that version cannot be the approver.
+- **Handling requirements:** Companion files are readable by anyone who can open the library. Run output is not filtered. Reference files must not hold secrets.
 - **Data scope enforcement:** Project skills and their companion files belong to one project. Foundation skills are readable by every project that can use Playbooks. A run reads another project's skill only when that skill was moved for that project, as with the MaxView incident skill.
 
 ---
@@ -75,8 +73,8 @@ Foundation skills stay files in `foundation-skills/foundation/`. Every project c
 ## Non-Functional Requirements
 
 - **Response time:** Saving a skill draft and opening the library complete within 2 seconds at P95. Generating a draft may take longer and shows progress.
-- **Concurrency:** Two approvers cannot approve the same draft version. The incident move runs once.
-- **Data volume:** A project skill file or companion file over 200,000 bytes is rejected on save or approval. The skill control stays usable when a project has dozens of skills besides the foundation list: the panel scrolls and search narrows both groups.
+- **Concurrency:** The incident move runs once.
+- **Data volume:** A project skill file or companion file over 200,000 bytes is rejected on save. The skill control stays usable when a project has dozens of skills besides the foundation list: the panel scrolls and search narrows both groups.
 
 ---
 

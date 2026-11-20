@@ -108,7 +108,9 @@ async function routeTurnThroughV2(input: {
     prepareWorker: async () => ({
       ...(await prepareBackgroundWorkflowTurn(input.threadId, input.prompt)),
       model: input.model,
+      skillPath: input.policy.skill.path,
       skillContent: input.skillContent,
+      skillSha256: input.policy.skill.sha256,
       skillCompanions: input.skillCompanions,
       playbookAgentPolicy: input.policy,
     }),

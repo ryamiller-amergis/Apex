@@ -1,13 +1,10 @@
 export type ProjectSkillOutputKind = 'report@1' | 'scorecard@1' | 'decision@1' | 'document@1';
 export type ProjectSkillType = 'autonomous' | 'interactive';
-export type ProjectSkillLibraryFilter = 'all' | 'pending-reference';
-
 export interface ProjectSkillLibraryFile {
   id: string;
   fileName: string;
   classification: 'instruction' | 'reference';
-  approvalStatus: 'pending' | 'approved';
-  content?: string;
+  content: string;
 }
 
 export interface ProjectSkillLibraryVersion {
@@ -78,21 +75,11 @@ export function buildProjectSkillMarkdown(input: {
   return { name, content };
 }
 
-export function skillHasPendingReference(skill: ProjectSkillLibraryItem): boolean {
-  return skill.versions.some((version) =>
-    version.files.some((file) => file.classification === 'reference' && file.approvalStatus === 'pending'),
-  );
-}
-
 export function filterProjectSkills(
   skills: ProjectSkillLibraryItem[],
-  filter: ProjectSkillLibraryFilter,
   search: string,
 ): ProjectSkillLibraryItem[] {
   const query = search.trim().toLowerCase();
-  return skills.filter((skill) => {
-    if (filter === 'pending-reference' && !skillHasPendingReference(skill)) return false;
-    if (!query) return true;
-    return `${skill.name} ${skill.description}`.toLowerCase().includes(query);
-  });
+  if (!query) return skills;
+  return skills.filter((skill) => `${skill.name} ${skill.description}`.toLowerCase().includes(query));
 }

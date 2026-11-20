@@ -3784,7 +3784,6 @@ export const projectPlaybookSkillFiles = pgTable('project_playbook_skill_files',
   fileName: text('file_name').notNull(),
   content: text('content').notNull(),
   classification: text('classification').$type<'instruction' | 'reference'>().notNull(),
-  approvalStatus: text('approval_status').$type<'pending' | 'approved'>().notNull().default('pending'),
 }, (t) => ({
   versionFileUq: unique('uq_project_playbook_skill_files_name').on(t.versionId, t.fileName),
 }));

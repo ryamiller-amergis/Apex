@@ -2,11 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppShell } from '../hooks/useAppShell';
 import {
-  useApproveReferenceFile,
   useProjectSkillLibrary,
   useSaveProjectSkill,
 } from '../hooks/useProjectSkillLibrary';
-import { DataGridFilterPills, DataGridToolbar } from './DataGridToolbar';
+import { DataGridToolbar } from './DataGridToolbar';
 import gridStyles from './DataGrid.module.css';
 import styles from './ProjectSkillLibraryPage.module.css';
 import {
@@ -15,25 +14,16 @@ import {
   companionFileName,
   filterProjectSkills,
   skillNameFromTitle,
-  type ProjectSkillLibraryFilter,
   type ProjectSkillOutputKind,
   type ProjectSkillType,
 } from '../utils/projectSkillLibrary';
 
-const FILTER_OPTIONS = [
-  { label: 'All', value: 'all' },
-  { label: 'Needs approval', value: 'pending-reference' },
-] as const;
-
 const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => {
   const { can } = useAppShell();
-  const canView = can('skills:view') || can('skills:manage') || can('skills:approve-reference');
+  const canView = can('skills:view') || can('skills:manage');
   const canManage = can('skills:manage');
-  const canApprove = can('skills:manage') || can('skills:approve-reference');
   const library = useProjectSkillLibrary(project);
   const saveSkill = useSaveProjectSkill(project);
-  const approveFile = useApproveReferenceFile(project);
-  const [filter, setFilter] = useState<ProjectSkillLibraryFilter>('all');
   const [search, setSearch] = useState('');
   const [writing, setWriting] = useState(false);
   const [openSkillId, setOpenSkillId] = useState<string | null>(null);
@@ -48,8 +38,8 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
 
   const skills = library.data?.skills ?? [];
   const visible = useMemo(
-    () => filterProjectSkills(skills, filter, search),
-    [skills, filter, search],
+    () => filterProjectSkills(skills, search),
+    [skills, search],
   );
   const openSkill = skills.find((skill) => skill.id === openSkillId) ?? null;
   const slug = skillNameFromTitle(title);
@@ -204,15 +194,7 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
         onSearchChange={setSearch}
         searchPlaceholder="Search skills"
         searchTestId="skill-library-search"
-      >
-        <DataGridFilterPills
-          options={FILTER_OPTIONS}
-          value={filter}
-          onChange={setFilter}
-          testIdPrefix="skill-library-filter"
-          aria-label="Skill library filters"
-        />
-      </DataGridToolbar>
+      />
 
       {library.isLoading ? <p className={gridStyles.loading}>Loading skills…</p> : null}
       {library.isError ? (
@@ -280,24 +262,7 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
                 <div key={file.id} className={styles.file}>
                   <span>{file.fileName}</span>
                   <span>{file.classification}</span>
-                  <span>{file.approvalStatus}</span>
-                  {canApprove && file.classification === 'reference' && file.approvalStatus === 'pending' ? (
-                    <button
-                      type="button"
-                      className={gridStyles.button}
-                      disabled={approveFile.isPending}
-                      onClick={() => approveFile.mutate(file.id)}
-                      data-testid={`skill-library-approve-${file.id}`}
-                    >
-                      Approve
-                    </button>
-                  ) : null}
-                  {file.content ? <pre className={styles.fileBody}>{file.content}</pre> : null}
-                  {approveFile.isError && approveFile.variables === file.id ? (
-                    <p className={gridStyles.error}>
-                      {approveFile.error instanceof Error ? approveFile.error.message : 'Approval failed.'}
-                    </p>
-                  ) : null}
+                  <pre className={styles.fileBody}>{file.content}</pre>
                 </div>
               ))}
             </article>

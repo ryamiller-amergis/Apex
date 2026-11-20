@@ -8,7 +8,7 @@
     {
       "name": "Platform Admin",
       "type": "Admin",
-      "description": "Can approve a reference file when a project has no second approver."
+      "description": "Can open any project's skill library."
     },
     {
       "name": "Developer",
@@ -29,13 +29,8 @@
     },
     {
       "id": "BR-003",
-      "rule": "Instruction files are part of the published bundle hash. Reference files are read at their latest approved version when a run starts, once for that run.",
-      "appliesTo": "Approve a reference file"
-    },
-    {
-      "id": "BR-004",
-      "rule": "The author of a reference-file version cannot approve it.",
-      "appliesTo": "Approve a reference file"
+      "rule": "Instruction files are part of the published bundle hash. Reference files are read at the latest saved version when a run starts, once for that run.",
+      "appliesTo": "Create a project skill"
     },
     {
       "id": "BR-005",
@@ -200,7 +195,7 @@
           "id": "FEAT-002",
           "title": "Project skill library",
           "priority": "Must Have",
-          "description": "Project Admins create project skills and approve reference files. A project cannot edit a foundation skill. A Playbook author can see both groups in the builder.",
+          "description": "Project Admins create project skills, including companion files, with no separate approval. A project cannot edit a foundation skill. A Playbook author can see both groups in the builder.",
           "affectedPersonas": ["Project Admin", "Platform Admin"],
           "outOfScope": [
             "AI-assisted editing",
@@ -213,11 +208,11 @@
             {
               "type": "TBI",
               "id": "TBI-003",
-              "title": "Enforce library permissions and reference-file rules",
+              "title": "Enforce library permissions and companion-file rules",
               "priority": "Must Have",
               "dependsOn": [],
               "parallelGroup": null,
-              "description": "Add the view and reference-approval permissions, and start checking the existing manage permission. Review who already holds that permission, globally and per project. A project role overrides a global role. The library menu appears only where Playbooks are enabled. Reference-file contents require author or approver permission. Generate and save reject capabilities, a reference-file key, invalid YAML, an unknown kind, and invalid decision labels. Names are unique in the project and cannot match a foundation skill name. A project skill whose file name matches a foundation skill is rejected. A project cannot edit a foundation skill.",
+              "description": "Add the view permission, and start checking the existing manage permission. Review who already holds that permission, globally and per project. A project role overrides a global role. The library menu appears only where Playbooks are enabled. Anyone who can open the library can read companion files. Generate and save reject capabilities, invalid YAML, an unknown kind, and invalid decision labels. Names are unique in the project and cannot match a foundation skill name. A project skill whose file name matches a foundation skill is rejected. A project cannot edit a foundation skill.",
               "technicalDependencies": [
                 "FEAT-001 skill version store",
                 "The existing role and menu-visibility checks",
@@ -225,12 +220,11 @@
               ],
               "nonFunctionalRequirements": [
                 "A library list returns within 2 seconds at P95",
-                "Reference-file contents are omitted from view-only responses"
+                "A library list returns companion file contents with the skill"
               ],
               "definitionOfDone": [
-                "A view-only user can read instruction files and reference-file names, and cannot read reference-file contents.",
-                "The author of a reference-file version cannot approve it, and a Platform Admin cannot approve their own edit.",
-                "The library warns when fewer than two people in the project can approve.",
+                "A view-only user can read the skill and its companion files.",
+                "Saving a companion file does not create a pending approval.",
                 "A generated draft is not saved until the author saves it, and the author is recorded.",
                 "A Playbook author without the skill-view permission still sees names, types, and kinds in the builder picker."
               ]
@@ -238,24 +232,23 @@
             {
               "type": "PBI",
               "id": "PBI-002",
-              "title": "Create a project skill and approve its reference files",
+              "title": "Create a project skill and its companion files",
               "priority": "Must Have",
               "dependsOn": ["TBI-003"],
               "parallelGroup": null,
               "userStory": {
                 "persona": "Project Admin",
-                "iWant": "create a project skill from a short description and approve reference files separately from the skill text",
+                "iWant": "create a project skill from a short description and attach companion files with it",
                 "soThat": "my project can keep a skill that other projects do not see"
               },
               "businessRules": [
-                "BR-003: Instruction files stay pinned. Reference files apply at the next run after approval.",
-                "BR-004: The author cannot approve their own reference-file version.",
+                "BR-003: Instruction files stay pinned. Reference files apply at the next run from the latest saved version.",
                 "BR-005: A new project skill cannot declare capabilities."
               ],
               "nonFunctionalRequirements": {
                 "performance": "Generate shows progress and the author can keep editing the draft while it runs.",
-                "accessibility": "The skill form fields and the approve action have visible labels and keyboard access.",
-                "security": "Reference files are marked as data in the prompt and must not hold secrets. The approver confirms that."
+                "accessibility": "The skill form fields have visible labels and keyboard access.",
+                "security": "Reference files are marked as data in the prompt and must not hold secrets."
               },
               "outOfScope": [
                 "Letting a project skill grant itself a cloud shell",
@@ -273,14 +266,14 @@
                   "then": "the save is refused and the reason is shown"
                 },
                 {
-                  "given": "a required reference file has no approved version",
-                  "when": "a Project Admin publishes a Playbook that uses the project skill",
-                  "then": "publish is refused"
+                  "given": "a Project Admin saves a skill with a reference file",
+                  "when": "they open that skill",
+                  "then": "the reference file is saved with the skill and can be read without a second person"
                 },
                 {
-                  "given": "an approved reference file is updated and approved by someone other than the author",
+                  "given": "a reference file is updated",
                   "when": "a new run starts",
-                  "then": "the run uses the new approved version and records it, and the published Playbook is not republished"
+                  "then": "the run uses the latest saved reference file, and the published Playbook is not republished"
                 }
               ]
             }

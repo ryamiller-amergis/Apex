@@ -39,7 +39,6 @@ import {
 } from '../services/cloudAgentDeliverySettings';
 import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
 import {
-  approveProjectSkillReferenceFile,
   ensureMaxviewIncidentProjectSkill,
   listProjectPlaybookSkillOptions,
   listProjectSkillLibrary,
@@ -113,7 +112,6 @@ import {
   cancelPlaybookRun,
   retryPlaybookStep,
 } from '../services/playbookRunActionService';
-import { isFeatureEnabled } from '../services/featureFlagService';
 import {
   PlaybookGateEmptyPoolError,
   PlaybookGateForbiddenError,
@@ -755,12 +753,6 @@ function readSkillCompanions(value: unknown): SkillBundleCompanion[] | undefined
   });
 }
 
-function canReadReferenceContents(req: Request): boolean {
-  if (isSuperAdminRequest(req)) return true;
-  const perms = req._permissions;
-  return Boolean(perms?.has('skills:manage') || perms?.has('skills:approve-reference'));
-}
-
 router.post(
   '/skills',
   requirePermission('skills:manage'),
@@ -788,41 +780,14 @@ router.post(
 
 router.get(
   '/project-skills',
-  requireAnyPermission('skills:view', 'skills:manage', 'skills:approve-reference'),
+  requireAnyPermission('skills:view', 'skills:manage'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req);
     if (!project) {
       res.status(400).json({ error: 'project is required' });
       return;
     }
-    res.json({ skills: await listProjectSkillLibrary(project, canReadReferenceContents(req)) });
-  },
-);
-
-router.post(
-  '/project-skills/files/:fileId/approve',
-  requireAnyPermission('skills:manage', 'skills:approve-reference'),
-  async (req: Request, res: Response): Promise<void> => {
-    const project = resolveRequestProject(req);
-    const userId = getUserId(req);
-    if (!project || !userId) {
-      res.status(400).json({ error: 'project and a signed-in user are required' });
-      return;
-    }
-    try {
-      await approveProjectSkillReferenceFile({
-        project,
-        fileId: req.params.fileId,
-        approverId: userId,
-      });
-      res.status(204).end();
-    } catch (error) {
-      if (error instanceof ProjectPlaybookSkillError) {
-        res.status(400).json({ error: error.message });
-        return;
-      }
-      throw error;
-    }
+    res.json({ skills: await listProjectSkillLibrary(project) });
   },
 );
 

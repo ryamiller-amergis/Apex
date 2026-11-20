@@ -51,16 +51,3 @@ export function useSaveProjectSkill(project: string) {
     },
   });
 }
-
-export function useApproveReferenceFile(project: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (fileId: string) =>
-      apiRequest(`/api/playbooks/project-skills/files/${encodeURIComponent(fileId)}/approve?${projectQuery(project)}`, {
-        method: 'POST',
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['project-skill-library', project] });
-    },
-  });
-}

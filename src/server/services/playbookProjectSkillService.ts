@@ -100,8 +100,6 @@ export async function saveProjectPlaybookSkill(input: {
   status?: 'draft' | 'published';
   /** The incident move is the one skill allowed to declare a capability. */
   allowCapabilities?: boolean;
-  /** The incident import records its catalog as already approved. A person saving a skill does not. */
-  approveReferences?: boolean;
 }): Promise<{ skillId: string; versionId: string; path: string }> {
   const frontmatter = parsePlaybookSkillFrontmatter(input.content);
   if (frontmatter.declaresCapabilities && !input.allowCapabilities) {
@@ -174,9 +172,6 @@ export async function saveProjectPlaybookSkill(input: {
       fileName: companion.path,
       content: companion.content,
       classification: companion.classification,
-      approvalStatus: companion.classification === 'reference' && !input.approveReferences
-        ? 'pending' as const
-        : 'approved' as const,
     })));
   }
   return { skillId, versionId, path: projectSkillPath(versionId) };
@@ -251,7 +246,6 @@ export async function ensureMaxviewIncidentProjectSkill(project: string, created
     companions: source.companions,
     status: 'published',
     allowCapabilities: true,
-    approveReferences: true,
   });
 }
 
@@ -259,8 +253,7 @@ export interface ProjectSkillLibraryFile {
   id: string;
   fileName: string;
   classification: 'instruction' | 'reference';
-  approvalStatus: 'pending' | 'approved';
-  content?: string;
+  content: string;
 }
 
 export interface ProjectSkillLibraryVersion {
@@ -281,10 +274,7 @@ export interface ProjectSkillLibraryItem {
   versions: ProjectSkillLibraryVersion[];
 }
 
-export async function listProjectSkillLibrary(
-  project: string,
-  includeReferenceContents: boolean,
-): Promise<ProjectSkillLibraryItem[]> {
+export async function listProjectSkillLibrary(project: string): Promise<ProjectSkillLibraryItem[]> {
   const skills = await db.query.projectPlaybookSkills.findMany({
     where: eq(projectPlaybookSkills.project, project),
     with: {
@@ -321,37 +311,10 @@ export async function listProjectSkillLibrary(
             id: file.id,
             fileName: file.fileName,
             classification: file.classification,
-            approvalStatus: file.approvalStatus,
-            ...(file.classification === 'instruction' || includeReferenceContents
-              ? { content: file.content }
-              : {}),
+            content: file.content,
           })),
         })),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-export async function approveProjectSkillReferenceFile(input: {
-  project: string;
-  fileId: string;
-  approverId: string;
-}): Promise<void> {
-  const file = await db.query.projectPlaybookSkillFiles.findFirst({
-    where: eq(projectPlaybookSkillFiles.id, input.fileId),
-    with: { version: { with: { skill: true } } },
-  });
-  if (!file || file.version.skill.project !== input.project) {
-    throw new ProjectPlaybookSkillError('That reference file is not in this project.');
-  }
-  if (file.classification !== 'reference') {
-    throw new ProjectPlaybookSkillError('Only a reference file needs approval.');
-  }
-  if (file.approvalStatus === 'approved') return;
-  if (file.version.createdBy === input.approverId) {
-    throw new ProjectPlaybookSkillError('The author of a reference file cannot approve it.');
-  }
-  await db.update(projectPlaybookSkillFiles)
-    .set({ approvalStatus: 'approved' })
-    .where(eq(projectPlaybookSkillFiles.id, file.id));
 }

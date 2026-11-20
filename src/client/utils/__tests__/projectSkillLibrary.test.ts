@@ -6,7 +6,7 @@ import {
   type ProjectSkillLibraryItem,
 } from '../projectSkillLibrary';
 
-function skill(name: string, pending: boolean): ProjectSkillLibraryItem {
+function skill(name: string): ProjectSkillLibraryItem {
   return {
     id: name,
     name,
@@ -20,14 +20,7 @@ function skill(name: string, pending: boolean): ProjectSkillLibraryItem {
         outputKind: 'document@1',
         createdBy: 'author',
         createdAt: '2026-11-18T00:00:00.000Z',
-        files: pending
-          ? [{
-              id: `${name}-file`,
-              fileName: 'NOTES.md',
-              classification: 'reference',
-              approvalStatus: 'pending',
-            }]
-          : [],
+        files: [],
       },
     ],
   };
@@ -56,10 +49,10 @@ describe('project skill library helpers', () => {
     expect(companionFileName('../secret.md')).toBeNull();
   });
 
-  it('filters by search and pending reference files', () => {
-    const skills = [skill('alpha', false), skill('beta', true)];
-    expect(filterProjectSkills(skills, 'all', 'alp').map((item) => item.name)).toEqual(['alpha']);
-    expect(filterProjectSkills(skills, 'pending-reference', '').map((item) => item.name)).toEqual(['beta']);
-    expect(filterProjectSkills(skills, 'pending-reference', 'nope')).toEqual([]);
+  it('filters by search', () => {
+    const skills = [skill('alpha'), skill('beta')];
+    expect(filterProjectSkills(skills, 'alp').map((item) => item.name)).toEqual(['alpha']);
+    expect(filterProjectSkills(skills, 'nope')).toEqual([]);
+    expect(filterProjectSkills(skills, '').map((item) => item.name)).toEqual(['alpha', 'beta']);
   });
 });
