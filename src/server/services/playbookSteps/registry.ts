@@ -196,7 +196,8 @@ const INTERACTIVE_AGENT_INPUT_SCHEMA = z.object({
   prompt: z.string().min(1),
   model: z.string().optional(),
   mcpProfile: z.literal('repository-read-only'),
-  assigneeUserId: z.string().min(1),
+  assigneeUserId: z.string().min(1).optional(),
+  assigneeEmail: z.string().email().optional(),
   deadlineMs: z
     .number()
     .refine(
@@ -213,6 +214,14 @@ const INTERACTIVE_AGENT_INPUT_SCHEMA = z.object({
     .max(PLAYBOOK_MAX_OUTCOMES)
     .refine((values) => new Set(values).size === values.length, 'outcomes must be different')
     .optional(),
+}).superRefine((value, ctx) => {
+  if (!value.assigneeUserId && !value.assigneeEmail) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Choose an assignee.',
+      path: ['assigneeEmail'],
+    });
+  }
 });
 
 const INTERACTIVE_AGENT_OUTPUT_SCHEMA = z.object({

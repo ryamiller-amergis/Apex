@@ -115,7 +115,7 @@ interface AdoTeamsResponse {
 }
 
 interface AdoMembersResponse {
-  value: Array<{ identity: { uniqueName: string } }>;
+  value: Array<{ identity: { uniqueName: string; displayName?: string; isContainer?: boolean } }>;
 }
 
 async function fetchAllProjectTeams(): Promise<ProjectTeams[]> {
@@ -215,6 +215,49 @@ export async function getUserProjects(email: string): Promise<UserProjectInfo[]>
   });
 }
 
+export interface AdoProjectMember {
+  displayName: string;
+  email: string;
+}
+
+const projectMembersCache = new Map<string, CacheEntry<AdoProjectMember[]>>();
+
+/** People on any team of one ADO project, by email. Cached per project for 15 minutes. */
+export async function listProjectMembers(projectName: string): Promise<AdoProjectMember[]> {
+  const cacheKey = projectName.toLowerCase();
+  const now = Date.now();
+  const cached = projectMembersCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.data;
+
+  const project = (await fetchAllProjectTeams()).find(
+    (candidate) => candidate.projectName.toLowerCase() === cacheKey,
+  );
+  if (!project) return [];
+  const { orgUrl, pat } = getAdoConfig();
+  const byEmail = new Map<string, AdoProjectMember>();
+  for (const team of project.teams) {
+    try {
+      const membersResp = await adoGet<AdoMembersResponse>(
+        `${orgUrl}/_apis/projects/${encodeURIComponent(project.projectName)}/teams/${encodeURIComponent(team.id)}/members?api-version=7.1`,
+        pat,
+      );
+      for (const { identity } of membersResp.value) {
+        const email = identity.uniqueName?.trim();
+        if (identity.isContainer || !email || !email.includes('@')) continue;
+        const key = email.toLowerCase();
+        if (!byEmail.has(key)) {
+          byEmail.set(key, { email, displayName: identity.displayName?.trim() || email });
+        }
+      }
+    } catch (err) {
+      console.warn(`[adoMembership] Failed to fetch members for ${project.projectName}/${team.name}:`, err);
+    }
+  }
+  const members = [...byEmail.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
+  projectMembersCache.set(cacheKey, { data: members, expiresAt: now + USER_CACHE_TTL_MS });
+  return members;
+}
+
 /** Evict a single user from the membership cache (e.g. after override change). */
 export function invalidateUserProjectsCache(email: string): void {
   userProjectsCache.delete(email.toLowerCase());
@@ -224,4 +267,5 @@ export function invalidateUserProjectsCache(email: string): void {
 export function invalidateAllCaches(): void {
   projectTeamsCache = null;
   userProjectsCache.clear();
+  projectMembersCache.clear();
 }

@@ -23,6 +23,7 @@ import {
   resolvePlaybookAgentRunPolicy,
 } from '../playbookExecutionCapabilityService';
 import { PlaybookMcpCapabilityError, resolvePlaybookMcpCapability } from '../playbookMcpCapabilityService';
+import { apexUserIdForEmail } from '../playbookAssigneeService';
 import { loadStoredProjectSkill, projectSkillVersionIdFromPath } from '../playbookProjectSkillService';
 import { getSkillConfig } from '../projectSettingsService';
 import { getUserPermissions } from '../rbacService';
@@ -65,7 +66,8 @@ interface InteractiveConfig {
   prompt: string;
   model?: string;
   mcpProfile: 'repository-read-only';
-  assigneeUserId: string;
+  assigneeUserId?: string;
+  assigneeEmail?: string;
   deadlineMs?: number;
   outcomes?: string[];
 }
@@ -82,6 +84,19 @@ async function assigneeCanRun(userId: string, project: string): Promise<boolean>
   if (await isSuperAdminUserId(userId)) return true;
   const permissions = await getUserPermissions(userId, project);
   return permissions.has('playbooks:run');
+}
+
+/** The Apex account the step is assigned to. An email assignee must have signed in to Apex. */
+async function resolveAssigneeUserId(config: InteractiveConfig): Promise<string> {
+  if (config.assigneeUserId) return config.assigneeUserId;
+  const email = config.assigneeEmail ?? '';
+  const userId = email ? await apexUserIdForEmail(email) : null;
+  if (!userId) {
+    throw new InteractiveAgentStepError(
+      `${email || 'The assignee'} has not signed in to Apex yet. They need to sign in once before this step can start.`,
+    );
+  }
+  return userId;
 }
 
 async function isV2TransportEnabled(userId: string, project: string): Promise<boolean> {
@@ -138,9 +153,10 @@ export async function executeInteractiveAgentStep(
   if (capability.mode !== 'read') {
     throw new PlaybookMcpCapabilityError(context.stepId, config.mcpProfile, capability.mode);
   }
-  if (!(await assigneeCanRun(config.assigneeUserId, context.project))) {
+  const assigneeUserId = await resolveAssigneeUserId(config);
+  if (!(await assigneeCanRun(assigneeUserId, context.project))) {
     throw new InteractiveAgentStepError(
-      `Assignee ${config.assigneeUserId} cannot run Playbooks in ${context.project}.`,
+      `${config.assigneeEmail ?? `Assignee ${assigneeUserId}`} cannot run Playbooks in ${context.project}.`,
     );
   }
 
@@ -189,7 +205,7 @@ export async function executeInteractiveAgentStep(
   const expiresAt = deadlineFromNow(deadlineMs);
   const model = config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
   const thread = await createThread(
-    config.assigneeUserId,
+    assigneeUserId,
     {
       project: context.project,
       repo: skillConfig?.skillRepo ?? context.project,
@@ -210,7 +226,7 @@ export async function executeInteractiveAgentStep(
   });
   const draft: InteractiveStepDraft = {
     threadId: thread.id,
-    assigneeUserId: config.assigneeUserId,
+    assigneeUserId,
     turnCount: 0,
     rejectedRevisions: 0,
     proposalText: null,
@@ -227,7 +243,7 @@ export async function executeInteractiveAgentStep(
 
   const node = context.graph?.nodes.find((candidate) => candidate.id === context.stepId);
   await createNotification(
-    config.assigneeUserId,
+    assigneeUserId,
     {
       type: 'user-action',
       title: `Chat needed: ${node?.title?.trim() || 'An interactive agent task'}`,
@@ -325,9 +341,7 @@ export async function sendInteractiveTurn(input: {
       ? { bundle: { skillVersionId: versionId, companions: stored.companions } }
       : {}),
   });
-  const prompt = mode === 'forced-proposal'
-    ? `${message}\n\nThe conversation has reached its turn limit. Reply with your final proposal now.`
-    : promptWithOutcomes(message, config.outcomes);
+  const prompt = promptWithOutcomes(message, config.outcomes);
   const model = config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
   const threadId = row.resumeToken || draft.threadId;
 

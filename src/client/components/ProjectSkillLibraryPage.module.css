@@ -1,92 +1,382 @@
-.backLink {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
+  margin-bottom: -0.5rem;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--text-muted);
   text-decoration: none;
 }
 
-.backLink:hover {
-  color: var(--accent-color);
+.crumb:hover {
+  color: var(--text-primary);
 }
 
-.form {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-secondary);
+.pulse {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.formRow {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+/* ── Cards ──────────────────────────────────────────────────── */
+
+.cardButton {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.field {
+.cardSkeleton {
+  height: 180px;
+}
+
+.typeTag {
+  --type-tint: var(--accent-color);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--type-tint);
+  background: color-mix(in srgb, var(--type-tint) 12%, transparent);
+}
+
+.typeTag[data-type='interactive'] {
+  --type-tint: var(--warning-color);
+}
+
+/* ── Dialogs ────────────────────────────────────────────────── */
+
+.wideDialog {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 2rem);
+}
+
+.dialogHint {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.dialogBody {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 0.8125rem;
+  gap: 1rem;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0.15rem 0 0;
+  overflow-y: auto;
+}
+
+.typeChoices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.typeChoices legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
-.field input,
-.field select,
-.field textarea {
-  padding: 8px 10px;
+.typeChoice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.field textarea {
-  min-height: 140px;
+.typeChoice:hover {
+  border-color: var(--border-color-light);
+}
+
+.typeChoice[data-active='true'] {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-tertiary));
+  color: var(--accent-color);
+}
+
+.typeChoice span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.typeChoice strong {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.typeChoice small {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.typeChoice:focus-visible,
+.fileRemove:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+/* ── Draft with AI ──────────────────────────────────────────── */
+
+.aiPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-color) 6%, var(--bg-secondary));
+}
+
+.aiTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--accent-color);
+}
+
+.aiHint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.aiPanel textarea {
+  padding: 0.55rem 0.65rem;
+  border-radius: 9px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
   resize: vertical;
 }
 
-.slug {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.75rem;
+.aiPanel textarea:focus {
+  outline: none;
+  border-color: var(--accent-color);
 }
 
-.formActions {
+.aiActions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.detail {
+.aiStatus {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.draftReady {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 9px;
+  background: var(--bg-tertiary);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+}
+
+.dialogBody .instructions {
+  min-height: 220px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+/* ── Reference files ────────────────────────────────────────── */
+
+.filesField {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 0.5rem;
+}
+
+.filesHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.filesLabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.filesLabel em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.filesHint {
+  margin: 0.2rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.fileList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fileChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.3rem 0.35rem 0.3rem 0.6rem;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.fileName {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.fileSize {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fileRemove {
+  display: grid;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.fileRemove:hover {
   background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* ── Versions ───────────────────────────────────────────────── */
+
+.versionList {
+  list-style: none;
 }
 
 .version {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0.5rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
 }
 
-.file {
+.versionHead {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 0.6rem;
+}
+
+.versionMeta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.versionDetails summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 .fileBody {
-  width: 100%;
-  margin: 0;
-  padding: 10px;
-  border-radius: 8px;
-  background: var(--bg-primary);
+  max-height: 320px;
+  margin: 0.45rem 0 0;
+  padding: 0.7rem 0.8rem;
+  overflow: auto;
+  border-radius: 9px;
+  background: var(--bg-tertiary);
   white-space: pre-wrap;
-  font-size: 0.8125rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 860px) and (min-width: 641px) {
+  .pulse > div:nth-child(3) {
+    border-top: none;
+    border-left: 1px solid var(--border-color);
+  }
+}
+
+@media (max-width: 640px) {
+  .pulse > div + div {
+    border-left: none;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .typeChoices,
+  .pulse {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .filesHeader {
+    flex-direction: column;
+  }
 }

@@ -1,4 +1,3 @@
-export type ProjectSkillOutputKind = 'report@1' | 'scorecard@1' | 'decision@1' | 'document@1';
 export type ProjectSkillType = 'autonomous' | 'interactive';
 export interface ProjectSkillLibraryFile {
   id: string;
@@ -13,6 +12,7 @@ export interface ProjectSkillLibraryVersion {
   status: 'draft' | 'published';
   skillType: string | null;
   outputKind: string | null;
+  content: string;
   createdBy: string;
   createdAt: string;
   files: ProjectSkillLibraryFile[];
@@ -25,12 +25,11 @@ export interface ProjectSkillLibraryItem {
   versions: ProjectSkillLibraryVersion[];
 }
 
-export const OUTPUT_KIND_OPTIONS: { label: string; value: ProjectSkillOutputKind }[] = [
-  { label: 'Document', value: 'document@1' },
-  { label: 'Report', value: 'report@1' },
-  { label: 'Scorecard', value: 'scorecard@1' },
-  { label: 'Decision', value: 'decision@1' },
-];
+/** The server stores at most this many bytes per skill file. Keep in step with MAX_COMPANION_BYTES. */
+export const MAX_SKILL_FILE_BYTES = 1_000_000;
+
+/** Word and PDF files are converted to text on the server; anything else must already be text. */
+export const MAX_CONVERTED_FILE_BYTES = 5_000_000;
 
 export function skillNameFromTitle(title: string): string {
   return title
@@ -41,21 +40,45 @@ export function skillNameFromTitle(title: string): string {
     .slice(0, 80);
 }
 
-export function companionFileName(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const withExt = /\.md$/i.test(trimmed) ? trimmed : `${trimmed}.md`;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/.test(withExt) || withExt.toUpperCase() === 'SKILL.MD') {
+/**
+ * A stored name for a picked file: unsupported characters become dashes. Returns null when no
+ * usable name is left, when there is no extension, or when the name is SKILL.md.
+ */
+export function skillFileName(raw: string): string | null {
+  const base = raw.trim().split(/[\\/]/).pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const extension = base.slice(dot + 1).replace(/[^A-Za-z0-9]/g, '');
+  const stem = base
+    .slice(0, dot)
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .slice(0, 81);
+  if (!stem || !extension || extension.length > 16) return null;
+  const name = `${stem}.${extension}`;
+  if (name.toUpperCase() === 'SKILL.MD') return null;
+  return name;
+}
+
+export function isConvertedFileName(name: string): boolean {
+  return /\.(docx|pdf)$/i.test(name);
+}
+
+/** The text of a picked file, or null when the bytes are not UTF-8 text. */
+export function decodeSkillFileText(bytes: ArrayBuffer): string | null {
+  const view = new Uint8Array(bytes);
+  if (view.includes(0)) return null;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(view).replace(/^\uFEFF/, '');
+  } catch {
     return null;
   }
-  return withExt;
 }
 
 export function buildProjectSkillMarkdown(input: {
   title: string;
   description: string;
   skillType: ProjectSkillType;
-  outputKind: ProjectSkillOutputKind;
   body: string;
 }): { name: string; content: string } {
   const name = skillNameFromTitle(input.title);
@@ -66,13 +89,17 @@ export function buildProjectSkillMarkdown(input: {
     'metadata:',
     '  apex:',
     `    skill-type: ${input.skillType}`,
-    `    output-kind: ${input.outputKind}`,
     '---',
     '',
     input.body.trim(),
     '',
   ].join('\n');
   return { name, content };
+}
+
+/** The instructions of a saved SKILL.md, without its frontmatter. */
+export function skillInstructions(content: string): string {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
 }
 
 export function filterProjectSkills(

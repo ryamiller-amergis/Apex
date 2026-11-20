@@ -1,5 +1,4 @@
 import {
-  INTERACTIVE_TURN_LIMIT,
   checkInteractiveProposal,
   draftAfterTurn,
   interactiveProposalMode,
@@ -64,10 +63,8 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
     expect(checkInteractiveProposal({ text: 'Done.', kind: null, outcomes, outcome: 'merge' }).ok).toBe(false);
   });
 
-  it('chats until the turn limit, then forces one proposal', () => {
-    expect(interactiveProposalMode({ turnCount: 0, rejectedRevisions: 0 })).toBe('chat');
-    expect(interactiveProposalMode({ turnCount: INTERACTIVE_TURN_LIMIT - 1, rejectedRevisions: 0 })).toBe('chat');
-    expect(interactiveProposalMode({ turnCount: INTERACTIVE_TURN_LIMIT, rejectedRevisions: 0 })).toBe('forced-proposal');
+  it('keeps chatting until a revision is rejected', () => {
+    expect(interactiveProposalMode({ rejectedRevisions: 0 })).toBe('chat');
   });
 
   it('keeps a failed turn off the turn count and stores the reason', () => {
@@ -84,7 +81,6 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
   });
 
   it('allows only approve or cancel after one rejected revision', () => {
-    expect(interactiveProposalMode({ turnCount: 2, rejectedRevisions: 1 })).toBe('approve-or-cancel');
-    expect(interactiveProposalMode({ turnCount: INTERACTIVE_TURN_LIMIT, rejectedRevisions: 1 })).toBe('approve-or-cancel');
+    expect(interactiveProposalMode({ rejectedRevisions: 1 })).toBe('approve-or-cancel');
   });
 });

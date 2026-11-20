@@ -51,3 +51,28 @@ export function useSaveProjectSkill(project: string) {
     },
   });
 }
+
+export function useGenerateProjectSkillDraft(project: string) {
+  return useMutation({
+    mutationFn: (input: { title: string; skillType: 'autonomous' | 'interactive'; request: string }) =>
+      apiRequest<{ description: string; instructions: string }>(
+        `/api/playbooks/project-skills/draft?${projectQuery(project)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        },
+      ),
+  });
+}
+
+export async function extractSkillFileText(
+  project: string,
+  input: { fileName: string; base64: string },
+): Promise<{ fileName: string; content: string }> {
+  return apiRequest(`/api/playbooks/project-skills/extract-text?${projectQuery(project)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}

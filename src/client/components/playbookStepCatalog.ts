@@ -84,7 +84,7 @@ const KNOWN_STEPS: Record<string, Omit<PlaybookStepMeta, 'stepType'>> = {
   'interactive-agent': {
     title: 'Interactive agent',
     description: 'Chat with an agent in the run, then approve its result.',
-    group: 'People',
+    group: 'AI',
     icon: MessagesSquare,
   },
   'cloud-agent': {

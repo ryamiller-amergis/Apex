@@ -60,13 +60,10 @@ export function draftAfterTurn(input: {
   };
 }
 
-/** Chat turns before the agent is forced to propose a result. */
-export const INTERACTIVE_TURN_LIMIT = 10;
-
 /** Rejected revisions before the assignee can only approve or cancel. */
 export const INTERACTIVE_REJECTED_REVISION_LIMIT = 1;
 
-export type InteractiveProposalMode = 'chat' | 'forced-proposal' | 'approve-or-cancel';
+export type InteractiveProposalMode = 'chat' | 'approve-or-cancel';
 
 export type InteractiveProposalCheck = { ok: true } | { ok: false; reason: string };
 
@@ -82,14 +79,12 @@ function lastJsonBlock(text: string): string | null {
  * What the assignee may do next.
  *
  * After a rejected revision the chat closes: the assignee can only approve the proposal or cancel
- * the run. Before that, reaching the turn limit forces one proposal from the agent.
+ * the run. Turns are not capped; the step deadline ends an abandoned chat.
  */
 export function interactiveProposalMode(input: {
-  turnCount: number;
   rejectedRevisions: number;
 }): InteractiveProposalMode {
   if (input.rejectedRevisions >= INTERACTIVE_REJECTED_REVISION_LIMIT) return 'approve-or-cancel';
-  if (input.turnCount >= INTERACTIVE_TURN_LIMIT) return 'forced-proposal';
   return 'chat';
 }
 

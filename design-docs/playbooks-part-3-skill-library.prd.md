@@ -27,6 +27,8 @@ Foundation skills stay files in `foundation-skills/foundation/`. Every project c
 - The one move is the MaxView incident skill. Its current bytes are saved as MaxView's project skill, then it is no longer offered as a base skill. A published Playbook that still names one of the old incident paths resolves to that MaxView skill. No other existing skill file is copied.
 - The run worker checks the hash it is given. It does not decide which file is reference data. The application resolves a project skill's reference files once per run and records the version it used.
 - Frontmatter is parsed as YAML. Skill type and output kind live under metadata. The existing capability list stays where published files already have it. Type and kind are copied to columns so the picker can filter. The file bytes remain the source of truth.
+- A companion file can be any text file. Word and PDF files are converted to text when attached and stored under their name with `.txt` added.
+- The output kind is optional. The skill library form does not ask for one, because the skill's own instructions say what it returns. A skill that declares a kind still has its result checked against it.
 - The skill control groups Base skills and This project. Search matches the name and the description in both groups. The closed control shows the skill name and its group. The panel scrolls. A foundation skill has no edit action there.
 - Output kinds are a fixed set. Each kind's result includes the fields an agent task already returns, plus the kind's own fields. Publish rejects a binding to a field the kind does not return.
 - The interactive step is a new registered step type. Each turn is an agent run on that step's thread and is checked against the policy frozen at publish. The chat is shown in the run's suspension panel.
@@ -74,7 +76,7 @@ Foundation skills stay files in `foundation-skills/foundation/`. Every project c
 
 - **Response time:** Saving a skill draft and opening the library complete within 2 seconds at P95. Generating a draft may take longer and shows progress.
 - **Concurrency:** The incident move runs once.
-- **Data volume:** A project skill file or companion file over 200,000 bytes is rejected on save. The skill control stays usable when a project has dozens of skills besides the foundation list: the panel scrolls and search narrows both groups.
+- **Data volume:** A project skill file over 200,000 bytes is rejected on save. A companion file over 1 MB is rejected on save. The skill control stays usable when a project has dozens of skills besides the foundation list: the panel scrolls and search narrows both groups.
 
 ---
 

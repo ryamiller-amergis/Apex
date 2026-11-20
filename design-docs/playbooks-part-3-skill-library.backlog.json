@@ -258,7 +258,7 @@
                 {
                   "given": "a Project Admin enters a title, a type, and what the skill should do",
                   "when": "they generate a draft, edit it, and save",
-                  "then": "the saved skill has a registered kind, no capabilities, and records them as the author"
+                  "then": "the saved skill has a type, no capabilities, and records them as the author"
                 },
                 {
                   "given": "a generated draft is valid and the Project Admin adds a capability by hand",
@@ -314,7 +314,7 @@
               "definitionOfDone": [
                 "A read-only interactive step needs no approval gate. A write profile is refused.",
                 "A proposal that fails either schema is retried out of view at most twice, then the assignee is told and can keep chatting.",
-                "Reaching the turn limit forces one proposal. After one rejected revision, the assignee can only approve or cancel.",
+                "Chat turns are not capped; the deadline ends an abandoned chat. After one rejected revision, the assignee can only approve or cancel.",
                 "When the deadline passes, the step expires and the run ends with no partial result.",
                 "The assignee is notified in the app and in Teams, and the notification opens the run."
               ]

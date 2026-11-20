@@ -108,6 +108,7 @@
     "node-pg-migrate": "^8.0.4",
     "passport": "^0.7.0",
     "passport-azure-ad": "^4.3.5",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "react-error-boundary": "^6.1.1",
     "react-hook-form": "^7.71.1",

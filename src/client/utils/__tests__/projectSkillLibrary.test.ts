@@ -1,7 +1,9 @@
 import {
   buildProjectSkillMarkdown,
-  companionFileName,
+  decodeSkillFileText,
   filterProjectSkills,
+  skillFileName,
+  skillInstructions,
   skillNameFromTitle,
   type ProjectSkillLibraryItem,
 } from '../projectSkillLibrary';
@@ -17,7 +19,8 @@ function skill(name: string): ProjectSkillLibraryItem {
         versionNumber: 1,
         status: 'published',
         skillType: 'autonomous',
-        outputKind: 'document@1',
+        outputKind: null,
+        content: '---\nname: x\n---\nBody',
         createdBy: 'author',
         createdAt: '2026-11-18T00:00:00.000Z',
         files: [],
@@ -27,26 +30,35 @@ function skill(name: string): ProjectSkillLibraryItem {
 }
 
 describe('project skill library helpers', () => {
-  it('turns a title into a skill name and markdown', () => {
+  it('turns a title into a skill name and markdown with no output kind', () => {
     expect(skillNameFromTitle(' Incident Notes! ')).toBe('incident-notes');
     const built = buildProjectSkillMarkdown({
       title: 'Incident Notes',
       description: 'Look up an outage',
       skillType: 'autonomous',
-      outputKind: 'report@1',
       body: 'Read the catalog.',
     });
     expect(built.name).toBe('incident-notes');
     expect(built.content).toContain('name: incident-notes');
     expect(built.content).toContain('skill-type: autonomous');
-    expect(built.content).toContain('output-kind: report@1');
+    expect(built.content).not.toContain('output-kind');
     expect(built.content).toContain('Read the catalog.');
+    expect(skillInstructions(built.content)).toBe('Read the catalog.');
   });
 
-  it('accepts a companion markdown name and refuses SKILL.md', () => {
-    expect(companionFileName('notes')).toBe('notes.md');
-    expect(companionFileName('SKILL.md')).toBeNull();
-    expect(companionFileName('../secret.md')).toBeNull();
+  it('keeps the extension of a picked file and cleans the rest of the name', () => {
+    expect(skillFileName('notes.md')).toBe('notes.md');
+    expect(skillFileName('Run book (v2).txt')).toBe('Run-book-v2-.txt');
+    expect(skillFileName('C:\\docs\\catalog.json')).toBe('catalog.json');
+    expect(skillFileName('.env')).toBeNull();
+    expect(skillFileName('README')).toBeNull();
+    expect(skillFileName('skill.md')).toBeNull();
+  });
+
+  it('decodes UTF-8 text and refuses binary bytes', () => {
+    expect(decodeSkillFileText(new TextEncoder().encode('\uFEFFhello').buffer)).toBe('hello');
+    expect(decodeSkillFileText(new Uint8Array([0x25, 0x50, 0x00, 0x01]).buffer)).toBeNull();
+    expect(decodeSkillFileText(new Uint8Array([0xff, 0xfe, 0xfd]).buffer)).toBeNull();
   });
 
   it('filters by search', () => {

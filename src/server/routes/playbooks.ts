@@ -38,6 +38,7 @@ import {
   cloudAgentPlaybookSetupGap,
 } from '../services/cloudAgentDeliverySettings';
 import { listPlaybookSkillOptions } from '../services/playbookSkillCatalogService';
+import { listPlaybookAssignees } from '../services/playbookAssigneeService';
 import {
   ensureMaxviewIncidentProjectSkill,
   listProjectPlaybookSkillOptions,
@@ -46,6 +47,11 @@ import {
   saveProjectPlaybookSkill,
 } from '../services/playbookProjectSkillService';
 import { PlaybookSkillFrontmatterError } from '../services/playbookSkillFrontmatter';
+import {
+  extractSkillFileText,
+  generateProjectSkillDraft,
+  ProjectSkillDraftError,
+} from '../services/playbookSkillDraftService';
 import type { SkillBundleCompanion } from '../services/playbookSkillBundle';
 import { saveRequestAdoRefreshToken } from '../services/adoStoredUserToken';
 import { getPlaybookStepActivity } from '../services/playbookStepActivityService';
@@ -733,6 +739,24 @@ router.get(
   },
 );
 
+router.get(
+  '/assignees',
+  requirePermission('playbooks:author'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    try {
+      res.json({ assignees: await listPlaybookAssignees(project) });
+    } catch (error) {
+      console.error('[playbooks] assignee list failed:', error);
+      res.status(502).json({ error: 'Azure DevOps team members could not be loaded.' });
+    }
+  },
+);
+
 function readSkillCompanions(value: unknown): SkillBundleCompanion[] | undefined {
   if (value == null) return undefined;
   if (!Array.isArray(value)) {
@@ -788,6 +812,59 @@ router.get(
       return;
     }
     res.json({ skills: await listProjectSkillLibrary(project) });
+  },
+);
+
+router.post(
+  '/project-skills/draft',
+  requirePermission('skills:manage'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const userId = getUserId(req);
+    const { title, skillType, request } = (req.body ?? {}) as Record<string, unknown>;
+    if (!project || !userId) {
+      res.status(400).json({ error: 'project and a signed-in user are required' });
+      return;
+    }
+    if (typeof title !== 'string' || typeof request !== 'string') {
+      res.status(400).json({ error: 'title and request are required' });
+      return;
+    }
+    if (skillType !== 'autonomous' && skillType !== 'interactive') {
+      res.status(400).json({ error: 'skillType must be autonomous or interactive' });
+      return;
+    }
+    try {
+      res.json(await generateProjectSkillDraft({ project, userId, title, skillType, request }));
+    } catch (error) {
+      if (error instanceof ProjectSkillDraftError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      console.error('[playbooks] skill draft failed:', error);
+      res.status(502).json({ error: 'The AI draft could not be generated. Try again.' });
+    }
+  },
+);
+
+router.post(
+  '/project-skills/extract-text',
+  requirePermission('skills:manage'),
+  async (req: Request, res: Response): Promise<void> => {
+    const { fileName, base64 } = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof fileName !== 'string' || typeof base64 !== 'string' || !fileName.trim()) {
+      res.status(400).json({ error: 'fileName and base64 are required' });
+      return;
+    }
+    try {
+      res.json(await extractSkillFileText({ fileName: fileName.trim(), base64 }));
+    } catch (error) {
+      if (error instanceof ProjectSkillDraftError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   },
 );
 

@@ -16,6 +16,8 @@ const PROJECT_SKILL_PATH =
   /^project-skills\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/SKILL\.md$/i;
 
 const MAX_SKILL_BYTES = 200_000;
+/** Attached reference and instruction files. Matches the database check on project_playbook_skill_files. */
+export const MAX_COMPANION_BYTES = 1_000_000;
 
 export function projectSkillVersionIdFromPath(skillPath: string): string | null {
   const match = skillPath.replace(/\\/g, '/').match(PROJECT_SKILL_PATH);
@@ -108,25 +110,23 @@ export async function saveProjectPlaybookSkill(input: {
   if (Buffer.byteLength(input.content, 'utf8') > MAX_SKILL_BYTES) {
     throw new ProjectPlaybookSkillError('The skill is over 200,000 bytes.');
   }
-  if (!input.allowCapabilities) {
-    if (!frontmatter.skillType) {
-      throw new ProjectPlaybookSkillError('The skill needs a type: autonomous or interactive.');
-    }
-    if (!frontmatter.outputKind) {
-      throw new ProjectPlaybookSkillError('The skill needs an output kind.');
-    }
+  if (!input.allowCapabilities && !frontmatter.skillType) {
+    throw new ProjectPlaybookSkillError('The skill needs a type: autonomous or interactive.');
   }
   const companions = input.companions ?? [];
-  const companionName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/;
+  const companionName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.[A-Za-z0-9]{1,16}$/;
   for (const companion of companions) {
-    if (!companionName.test(companion.path) || companion.path === 'SKILL.md') {
+    if (!companionName.test(companion.path) || companion.path.toUpperCase() === 'SKILL.MD') {
       throw new ProjectPlaybookSkillError(`"${companion.path}" is not a valid companion file name.`);
     }
     if (companion.classification !== 'instruction' && companion.classification !== 'reference') {
       throw new ProjectPlaybookSkillError(`"${companion.path}" must be an instruction or a reference.`);
     }
-    if (Buffer.byteLength(companion.content, 'utf8') > MAX_SKILL_BYTES) {
-      throw new ProjectPlaybookSkillError(`"${companion.path}" is over 200,000 bytes.`);
+    if (companion.content.includes('\u0000')) {
+      throw new ProjectPlaybookSkillError(`"${companion.path}" is not a text file.`);
+    }
+    if (Buffer.byteLength(companion.content, 'utf8') > MAX_COMPANION_BYTES) {
+      throw new ProjectPlaybookSkillError(`"${companion.path}" is over 1 MB.`);
     }
   }
   const existing = await db.query.projectPlaybookSkills.findFirst({
@@ -262,6 +262,7 @@ export interface ProjectSkillLibraryVersion {
   status: 'draft' | 'published';
   skillType: string | null;
   outputKind: string | null;
+  content: string;
   createdBy: string;
   createdAt: string;
   files: ProjectSkillLibraryFile[];
@@ -305,6 +306,7 @@ export async function listProjectSkillLibrary(project: string): Promise<ProjectS
           status: version.status,
           skillType: version.skillType,
           outputKind: version.outputKind,
+          content: version.content,
           createdBy: version.createdBy,
           createdAt: version.createdAt,
           files: version.files.map((file) => ({

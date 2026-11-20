@@ -222,7 +222,7 @@ function isSkillProvider(value: unknown): value is SkillProvider {
   return value === 'ado' || value === 'github';
 }
 
-const SKILL_COMPANION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.md$/;
+const SKILL_COMPANION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.[A-Za-z0-9]{1,16}$/;
 
 function isSkillCompanionList(value: unknown): boolean {
   if (!Array.isArray(value)) return false;
