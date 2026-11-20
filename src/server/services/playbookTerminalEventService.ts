@@ -22,6 +22,7 @@ import { subscribeAllRunEvents } from './pgNotifyService';
 import { advanceRun } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { parseStepOutput } from './playbookSteps/descriptorValidation';
+import { recordInteractiveTurnFinished } from './playbookSteps/interactiveAgentAdapter';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type {
   AgentRunEventEnvelope,
@@ -98,6 +99,19 @@ export async function handleTerminalAgentRunEvent(
     .limit(1);
 
   if (!step) return { handled: 'not-correlated' };
+
+  if (step.stepType === 'interactive-agent') {
+    // A finished turn stays on the step. Advancing here would complete the Playbook early.
+    await recordInteractiveTurnFinished({
+      stepRunId: step.id,
+      agentRunId: event.runId,
+      threadId: event.threadId,
+      failedReason: event.status === 'completed'
+        ? undefined
+        : `Agent run ${event.runId} ended as ${event.status}.`,
+    });
+    return { handled: 'already-moved', stepRunId: step.id };
+  }
 
   if (event.status === 'completed' && step.stepType === 'cloud-agent') {
     const run = await db.query.agentRuns.findFirst({

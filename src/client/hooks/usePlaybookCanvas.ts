@@ -67,6 +67,22 @@ export function usePlaybookSkills(project: string | undefined) {
   });
 }
 
+export interface PlaybookAssigneeOption {
+  email: string;
+  displayName: string;
+  apexUserId: string | null;
+  canRunPlaybooks: boolean;
+}
+
+export function usePlaybookAssignees(project: string | undefined, enabled = true) {
+  return useQuery<{ assignees: PlaybookAssigneeOption[] }>({
+    queryKey: ['playbook-assignees', project],
+    queryFn: () => apiRequest(`/api/playbooks/assignees?project=${encodeURIComponent(project!)}`),
+    enabled: Boolean(project) && enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function usePlaybookVersionLayout(
   project: string | undefined,
   definitionId: string | null,
