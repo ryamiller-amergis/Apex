@@ -227,7 +227,10 @@ describe('VT-32 / TBI-008 DoD-0 / PBI-010 AC-0: resolveAreaProfile for all 12 ar
 
 describe('VT-33 / TBI-008 DoD-2 / PBI-010 AC-2: missing skill or model throws instead of using a default', () => {
   const skillRequiredAreas = HARNESS_AREA_IDS.filter(
-    (area) => area !== 'agent-home',
+    (area) => getAreaProfile(area).requiresSkill,
+  );
+  const skillOptionalAreas = HARNESS_AREA_IDS.filter(
+    (area) => !getAreaProfile(area).requiresSkill,
   );
 
   it.each(skillRequiredAreas)(
@@ -255,6 +258,29 @@ describe('VT-33 / TBI-008 DoD-2 / PBI-010 AC-2: missing skill or model throws in
         name: 'HarnessProfileError',
         code: 'missing-skill',
       });
+    },
+  );
+
+  it.each(skillOptionalAreas)(
+    'resolves %s with skill=null when project and app default have no skill configured',
+    async (area) => {
+      const config = buildCompleteProjectSkillConfig({
+        prdAssistantSkillPath: null,
+        designDocAssistantSkillPath: null,
+        calendarAssistantSkillPath: null,
+        testCaseSkillPath: null,
+        quickSkillPills: [],
+      });
+      const deps: AreaProfileResolverDeps = {
+        resolveSkillConfig: jest.fn().mockResolvedValue(config),
+        getAppDefaultModel: jest.fn().mockResolvedValue(null),
+        getAppDefaultSkill: jest.fn().mockResolvedValue(null),
+        getEnv: () => undefined,
+      };
+
+      const resolved = await resolveAreaProfile(area, 'Apex', deps);
+      expect(resolved.skill).toBeNull();
+      expect(resolved.model).toBeTruthy();
     },
   );
 

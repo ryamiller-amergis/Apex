@@ -53,6 +53,7 @@ import {
   eventForRunEnvelope as defaultEventForRunEnvelope,
 } from '../routes/chat';
 import { isFeatureEnabled } from './featureFlagService';
+import { HarnessProfileError } from './chatHarness/areaProfiles';
 import { HarnessCommandError } from './chatHarness/chatHarnessCommandHandler';
 import { loadHarnessThreadState } from './chatHarness/chatHarnessStateFrame';
 
@@ -465,7 +466,7 @@ export async function attachInteractiveThreadStream(
           await emitStateFrame();
         } catch (err) {
           if (detached) return;
-          if (err instanceof HarnessCommandError) {
+          if (err instanceof HarnessCommandError || err instanceof HarnessProfileError) {
             sendError(err.code, commandBody.commandId);
           } else {
             sendError('command-failed', commandBody.commandId);
@@ -500,8 +501,15 @@ export async function attachInteractiveThreadStream(
   // Emit one initial `state` frame right after snapshot, before replaying events.
   await emitStateFrame();
 
+  // Only replay historical durable run events when the thread has an active
+  // running turn (or when no snapshot could be loaded). On an idle/settled
+  // thread, the snapshot above already delivered every persisted message, the
+  // terminal status, and the state frame; replaying old `agent_run_events` on
+  // reconnect (especially if `lastEventId` came from an ephemeral Redis frame
+  // absent from Postgres) would replay prior turns' thinking/phase events and
+  // resurrect the UI into a phantom running state.
   const shouldReplayEvents =
-    Boolean(options.lastEventId) || !snapshot || snapshot.status === 'running';
+    !snapshot || snapshot.status === 'running';
   if (shouldReplayEvents) {
     const coldStart =
       !options.lastEventId && snapshot?.status === 'running'

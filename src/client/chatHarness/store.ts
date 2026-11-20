@@ -25,6 +25,7 @@ import {
   createEventReducerMeta,
   deriveSummaryNotice,
   reduceHarnessEvent,
+  rememberCompletedRunId,
   sortChatMessagesByTs,
   type EventReducerMeta,
 } from './reducers/eventReducer';
@@ -322,8 +323,21 @@ export function createChatHarnessStore(
       },
     );
 
-    if (transitionedToTerminal) {
+    const hasPendingTurnCommand = nextPending.some(
+      (item) =>
+        item.kind === 'send' ||
+        item.kind === 'retry' ||
+        item.kind === 'summarize',
+    );
+    const shouldClearStaleLive = !isRunning;
+
+    if (shouldClearStaleLive) {
+      if (transitionedToTerminal) {
+        rememberCompletedRunId(meta, state.activeRunId);
+      }
       clearTurnBufferMeta(meta);
+    }
+    if (transitionedToTerminal) {
       const remainingIds = new Set(nextPending.map((item) => item.commandId));
       for (const item of state.pendingCommands) {
         if (!remainingIds.has(item.commandId)) {
@@ -352,27 +366,27 @@ export function createChatHarnessStore(
       optimisticMessages: nextOptimistic,
       pendingCommands: nextPending,
       stopping: isRunning ? state.stopping : false,
-      ...(transitionedToTerminal
+      ...(shouldClearStaleLive
         ? {
             streamingText: '',
             thinkingText: '',
             toolProgress: [],
             activity: [],
-            progressLabel: null,
+            progressLabel: hasPendingTurnCommand ? state.progressLabel : null,
             progressPhase: null,
             isRetrying: false,
             retryReason: null,
             groundingPreparation: null,
-            terminalRevision: state.terminalRevision + 1,
+            ...(transitionedToTerminal
+              ? { terminalRevision: state.terminalRevision + 1 }
+              : {}),
           }
-        : isRunning
-          ? {
-              progressLabel: phaseProgressLabel(
-                snapshot.state.phase,
-                state.progressLabel,
-              ),
-            }
-          : {}),
+        : {
+            progressLabel: phaseProgressLabel(
+              snapshot.state.phase,
+              state.progressLabel,
+            ),
+          }),
     });
   }
 
@@ -405,8 +419,21 @@ export function createChatHarnessStore(
       },
     );
 
-    if (transitionedToTerminal) {
+    const hasPendingTurnCommand = nextPending.some(
+      (item) =>
+        item.kind === 'send' ||
+        item.kind === 'retry' ||
+        item.kind === 'summarize',
+    );
+    const shouldClearStaleLive = !isRunning;
+
+    if (shouldClearStaleLive) {
+      if (transitionedToTerminal) {
+        rememberCompletedRunId(meta, state.activeRunId);
+      }
       clearTurnBufferMeta(meta);
+    }
+    if (transitionedToTerminal) {
       const remainingIds = new Set(nextPending.map((item) => item.commandId));
       for (const item of state.pendingCommands) {
         if (!remainingIds.has(item.commandId)) {
@@ -417,9 +444,9 @@ export function createChatHarnessStore(
 
     const nextProgressLabel = isRunning
       ? phaseProgressLabel(serverState.phase, state.progressLabel)
-      : transitionedToTerminal
-        ? null
-        : state.progressLabel;
+      : hasPendingTurnCommand
+        ? state.progressLabel
+        : null;
 
     setState({
       ...state,
@@ -437,7 +464,7 @@ export function createChatHarnessStore(
         state.summaryNotice,
       ),
       progressLabel: nextProgressLabel,
-      ...(transitionedToTerminal
+      ...(shouldClearStaleLive
         ? {
             streamingText: '',
             thinkingText: '',
@@ -447,13 +474,17 @@ export function createChatHarnessStore(
             isRetrying: false,
             retryReason: null,
             groundingPreparation: null,
-            lastReceipt:
-              state.lastReceipt &&
-              state.lastReceipt.kind === 'steer' &&
-              state.lastReceipt.status === 'accepted'
-                ? null
-                : state.lastReceipt,
-            terminalRevision: state.terminalRevision + 1,
+            ...(transitionedToTerminal
+              ? {
+                  lastReceipt:
+                    state.lastReceipt &&
+                    state.lastReceipt.kind === 'steer' &&
+                    state.lastReceipt.status === 'accepted'
+                      ? null
+                      : state.lastReceipt,
+                  terminalRevision: state.terminalRevision + 1,
+                }
+              : {}),
           }
         : {}),
     });

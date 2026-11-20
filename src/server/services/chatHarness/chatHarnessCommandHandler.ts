@@ -1177,13 +1177,30 @@ export function createChatHarnessCommandHandler(
         emitTelemetry(area, receipt, input.transport, startedAtMs);
         return receipt;
       } catch (err) {
-        // TBI-009 NFR: errors log commandId only (never user text or payload)
+        // Never leave a failed command stuck in 'accepted' in chat_harness_commands.
+        await repository
+          .updateReceipt(input.threadId, body.commandId, {
+            status: 'rejected',
+            reason: 'Did not reach the agent',
+            expectedStatus: 'accepted',
+          })
+          .catch(() => undefined);
+        const errorCode =
+          err &&
+          typeof err === 'object' &&
+          'code' in err &&
+          typeof (err as { code?: unknown }).code === 'string'
+            ? (err as { code: string }).code
+            : undefined;
+        // TBI-009 NFR: errors log commandId/area/errorType/errorCode only (never user text or payload)
         console.error(
           JSON.stringify({
             event: 'ChatHarnessCommandError',
+            area,
             commandId: body.commandId,
             kind: body.kind,
             errorType: err instanceof Error ? err.name : 'UnknownError',
+            ...(errorCode ? { errorCode } : {}),
           }),
         );
         throw err;

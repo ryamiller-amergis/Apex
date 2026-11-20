@@ -12,6 +12,7 @@ import {
   type ChatHarnessConnectionHandlers,
   type ChatHarnessConnectionOptions,
 } from '../connection';
+import { createChatRuntime } from '../index';
 import {
   FIXTURE_CMD_ID_1,
   FIXTURE_CMD_ID_2,
@@ -775,6 +776,47 @@ describe('S2 chatHarness connection module', () => {
       }
 
       rig.connection.close();
+    });
+  });
+
+  describe('createChatRuntime error frame handling', () => {
+    it('fails the in-flight send and clears Sending… when the gateway returns an error frame', async () => {
+      const sockets: FakeWebSocket[] = [];
+      const fetchMock = jest.fn<Promise<Response>, [RequestInfo | URL, RequestInit?]>(
+        async () => jsonResponse(makeSnapshot(), 200),
+      );
+      const runtime = createChatRuntime(FIXTURE_THREAD_ID, {
+        area: 'prd-assistant',
+        webSocketFactory: (url) => {
+          const sock = new FakeWebSocket(url);
+          sockets.push(sock);
+          return sock as unknown as WebSocket;
+        },
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      });
+
+      runtime.start();
+      sockets[0].simulateOpen();
+      await flushMicrotasks();
+
+      await runtime.send(FIXTURE_CMD_ID_1, 'is this a good prd?');
+      expect(runtime.getState().progressLabel).toBe('Sending…');
+      expect(runtime.getState().pendingCommands).toHaveLength(1);
+
+      sockets[0].simulateMessage({
+        type: 'error',
+        code: 'command-failed',
+        commandId: FIXTURE_CMD_ID_1,
+      });
+
+      const after = runtime.getState();
+      expect(after.progressLabel).toBeNull();
+      expect(after.pendingCommands).toHaveLength(0);
+      expect(after.lastFailure?.commandId).toBe(FIXTURE_CMD_ID_1);
+      expect(after.lastFailure?.reason).toBe('Did not reach the agent. Please try again.');
+      expect(after.optimisticMessages[0]?.failed).toBe(true);
+
+      runtime.dispose();
     });
   });
 });

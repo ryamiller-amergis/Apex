@@ -1546,7 +1546,9 @@ export function createInteractiveSessionActor(
         status: 'running',
         detail,
       };
+      const eventId = randomUUID();
       await publishLive(threadId, createCursorRunEventEnvelope({
+        eventId,
         threadId,
         runId,
         sourceInstance,
@@ -1561,6 +1563,7 @@ export function createInteractiveSessionActor(
         phase,
         status: 'running',
         detail,
+        eventId,
         event,
       }).catch(() => {});
     };
@@ -2332,13 +2335,15 @@ export function createInteractiveSessionActor(
                       await flushHeldSummarySteers();
                     }
                   } else {
-                    await publishLiveEnvelope(event);
+                    const eventId = randomUUID();
+                    await publishLiveEnvelope(event, eventId);
                     await post({
                       dispatchMessageId,
                       attemptId,
                       kind: 'progress',
                       phase: 'implementation',
                       status: 'running',
+                      eventId,
                       event,
                     });
                   }
@@ -2630,11 +2635,16 @@ export function createInteractiveSessionActor(
               }
             : null;
         if (finalMessage) {
-          await publishLiveEnvelope({ type: 'message', message: finalMessage });
+          const messageEventId = randomUUID();
+          await publishLiveEnvelope(
+            { type: 'message', message: finalMessage },
+            messageEventId,
+          );
           await post({
             dispatchMessageId,
             attemptId,
             kind: 'progress',
+            eventId: messageEventId,
             event: { type: 'message', message: finalMessage },
           });
         }

@@ -52,6 +52,7 @@ const RESTARTING_LABEL = 'Restarting your answer…';
 export const DURABLE_SSE_EVENT_TYPES = new Set<SseEvent['type']>([
   'phase',
   'health',
+  'thinking',
   'tool_call',
   'tool_status',
   'status',
@@ -59,6 +60,18 @@ export const DURABLE_SSE_EVENT_TYPES = new Set<SseEvent['type']>([
   'retrying',
   'error',
   'done',
+]);
+
+export const MAX_COMPLETED_RUN_IDS = 256;
+
+const IN_FLIGHT_PROGRESS_EVENT_TYPES = new Set<SseEvent['type']>([
+  'token',
+  'thinking',
+  'tool_call',
+  'tool_status',
+  'phase',
+  'retrying',
+  'health',
 ]);
 
 const RUN_PHASES = new Set<AgentRunPhase>([
@@ -169,6 +182,8 @@ export interface EventReducerMeta {
   pendingOffsetTokens: Map<number, { text: string; key: string }>;
   seenEventIds: Set<string>;
   seenEventIdOrder: string[];
+  completedRunIds: Set<string>;
+  completedRunIdOrder: string[];
   failedRunId: string | null;
   eventDrivenTermination: boolean;
   thinkingItemSeq: number;
@@ -184,12 +199,29 @@ export function createEventReducerMeta(): EventReducerMeta {
     pendingOffsetTokens: new Map(),
     seenEventIds: new Set(),
     seenEventIdOrder: [],
+    completedRunIds: new Set(),
+    completedRunIdOrder: [],
     failedRunId: null,
     eventDrivenTermination: false,
     thinkingItemSeq: 0,
     groupItemSeq: 0,
     itemGroupIds: new Map(),
   };
+}
+
+export function rememberCompletedRunId(
+  meta: EventReducerMeta,
+  runId: string | null | undefined,
+): void {
+  if (!runId) return;
+  const trimmed = runId.trim();
+  if (!trimmed || meta.completedRunIds.has(trimmed)) return;
+  meta.completedRunIds.add(trimmed);
+  meta.completedRunIdOrder.push(trimmed);
+  if (meta.completedRunIdOrder.length > MAX_COMPLETED_RUN_IDS) {
+    const evicted = meta.completedRunIdOrder.shift();
+    if (evicted) meta.completedRunIds.delete(evicted);
+  }
 }
 
 export function clearTurnBufferMeta(meta: EventReducerMeta): void {
@@ -530,6 +562,7 @@ function buildFailedEnding(
   detail: string | undefined,
   now: number,
 ): RuntimeState {
+  rememberCompletedRunId(meta, runId ?? state.activeRunId);
   const cleared = clearTurnProgressFields(state, meta);
   const friendlyReason = friendlyChatErrorMessage(detail);
   const alreadyRecorded = Boolean(runId && meta.failedRunId === runId);
@@ -579,6 +612,20 @@ export function reduceHarnessEvent(
   now = Date.now(),
 ): EventReduceResult {
   if (DURABLE_SSE_EVENT_TYPES.has(event.type) && !rememberEventId(meta, eventId)) {
+    return { state: prevState, changed: false };
+  }
+
+  // Late or replayed progress frames from a run that already settled must never
+  // resurrect an idle thread back into a phantom running state.
+  const eventRunId =
+    typeof event.runId === 'string' && event.runId.trim()
+      ? event.runId.trim()
+      : null;
+  if (
+    eventRunId &&
+    meta.completedRunIds.has(eventRunId) &&
+    IN_FLIGHT_PROGRESS_EVENT_TYPES.has(event.type)
+  ) {
     return { state: prevState, changed: false };
   }
 
@@ -946,6 +993,9 @@ export function reduceHarnessEvent(
         event.status === 'closed';
       const transitionedFromRunning =
         isTerminalStatus && state.status === 'running';
+      if (isTerminalStatus) {
+        rememberCompletedRunId(meta, state.activeRunId);
+      }
       const cleared = isTerminalStatus
         ? clearTurnProgressFields(state, meta)
         : {};
@@ -1113,6 +1163,8 @@ export function reduceHarnessEvent(
         };
         return { state, changed: true };
       }
+
+      rememberCompletedRunId(meta, doneRunId ?? state.activeRunId);
 
       if (event.semanticStatus === 'failed') {
         state = buildFailedEnding(

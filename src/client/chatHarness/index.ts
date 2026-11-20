@@ -198,6 +198,21 @@ const IDLE_RUNTIME_STATE: RuntimeState = Object.freeze({
 
 const NOOP_UNSUBSCRIBE = (): void => {};
 
+function formatErrorFrameReason(code: string): string {
+  switch (code) {
+    case 'missing-skill':
+      return 'No skill is configured for this assistant in project settings.';
+    case 'missing-model':
+      return 'No AI model is configured for this project.';
+    case 'invalid-command':
+      return 'Could not send that request. Please try again.';
+    case 'thread-not-found':
+      return 'This conversation could not be found. Reload the page and try again.';
+    default:
+      return 'Did not reach the agent. Please try again.';
+  }
+}
+
 export function createChatRuntime(
   threadId: string,
   deps: CreateChatRuntimeDeps = {},
@@ -393,6 +408,35 @@ export function createChatRuntime(
         if (disposed) return;
         store.applyStateFrame(threadState);
         connection.setActiveTurn(threadState.threadStatus === 'running');
+      },
+
+      onErrorFrame(frame) {
+        if (disposed) return;
+        const message = formatErrorFrameReason(frame.code);
+        const commandId = frame.commandId;
+        if (!commandId) return;
+
+        const originalBody = inFlightCommands.get(commandId);
+        inFlightCommands.delete(commandId);
+        retriedOverHttp.delete(commandId);
+        if (originalBody) {
+          store.markCommandFailed(
+            originalBody.commandId,
+            originalBody.kind,
+            message,
+            originalBody.kind === 'retry' ? originalBody.runId : undefined,
+          );
+          connection.setActiveTurn(store.getState().status === 'running');
+          return;
+        }
+
+        const pending = store
+          .getState()
+          .pendingCommands.find((item) => item.commandId === commandId);
+        if (pending) {
+          store.markCommandFailed(pending.commandId, pending.kind, message);
+          connection.setActiveTurn(store.getState().status === 'running');
+        }
       },
 
       onSignedOut() {

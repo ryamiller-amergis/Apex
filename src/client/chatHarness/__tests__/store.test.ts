@@ -1053,5 +1053,96 @@ describe('S3 chatHarness store and eventReducer', () => {
       store.applyEvent({ type: 'done', runId: FIXTURE_RUN_ID }, 'ev-steer-done');
       expect(store.getState().lastReceipt?.status).toBe('queued');
     });
+
+    it('ignores late or replayed thinking/phase/token events from an already completed run', () => {
+      const store = createChatHarnessStore(FIXTURE_THREAD_ID);
+      const reply = makeMessage({
+        id: 'agent-reply-1',
+        role: 'agent',
+        text: 'Completed answer',
+        ts: '2026-11-19T23:00:30.000Z',
+      });
+
+      store.applyStateFrame(
+        makeThreadState({
+          threadStatus: 'running',
+          activeRunId: FIXTURE_RUN_ID,
+          phase: 'running',
+        }),
+      );
+      store.applyEvent(
+        {
+          type: 'thinking',
+          text: 'Inspecting Contact home page widgets',
+          seq: 1,
+          runId: FIXTURE_RUN_ID,
+        },
+        'ev-think-1',
+      );
+      store.applyEvent({ type: 'message', message: reply }, 'ev-msg-1');
+      store.applyEvent({ type: 'done', runId: FIXTURE_RUN_ID }, 'ev-done-1');
+
+      expect(store.getState().status).toBe('idle');
+      expect(store.getState().thinkingText).toBe('');
+      expect(store.getState().activity).toEqual([]);
+
+      // Simulate reconnect replaying thinking/phase/token from the already-completed run
+      // even with different eventIds (e.g., durable Postgres vs ephemeral Redis ids).
+      store.applyEvent(
+        {
+          type: 'phase',
+          phase: 'queued',
+          status: 'running',
+          detail: 'Queued',
+          runId: FIXTURE_RUN_ID,
+        },
+        'ev-replayed-queued',
+      );
+      store.applyEvent(
+        {
+          type: 'thinking',
+          text: 'Inspecting Contact home page widgets',
+          seq: 1,
+          runId: FIXTURE_RUN_ID,
+        },
+        'ev-replayed-think-pg',
+      );
+      store.applyEvent(
+        {
+          type: 'token',
+          text: 'Stale chunk',
+          runId: FIXTURE_RUN_ID,
+        },
+        'ev-replayed-token',
+      );
+
+      const afterReplay = store.getState();
+      expect(afterReplay.status).toBe('idle');
+      expect(afterReplay.activeRunId).toBeNull();
+      expect(afterReplay.thinkingText).toBe('');
+      expect(afterReplay.streamingText).toBe('');
+      expect(afterReplay.activity).toEqual([]);
+      expect(afterReplay.progressLabel).toBeNull();
+      expect(afterReplay.progressPhase).toBeNull();
+    });
+
+    it('dedupes thinking events by eventId across turn buffer resets', () => {
+      const store = createChatHarnessStore(FIXTURE_THREAD_ID);
+      store.applyEvent(
+        { type: 'thinking', text: 'First thought', seq: 1 },
+        'ev-think-dedupe-1',
+      );
+      store.applyEvent({ type: 'done' }, 'ev-done-dedupe-1');
+      expect(store.getState().status).toBe('idle');
+
+      // Same eventId replayed after done cleared lastThinkingSeq must be dropped
+      store.applyEvent(
+        { type: 'thinking', text: 'First thought', seq: 1 },
+        'ev-think-dedupe-1',
+      );
+      expect(store.getState().status).toBe('idle');
+      expect(store.getState().thinkingText).toBe('');
+      expect(store.getState().activity).toEqual([]);
+    });
   });
 });

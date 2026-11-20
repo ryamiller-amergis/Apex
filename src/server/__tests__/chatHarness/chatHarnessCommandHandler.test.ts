@@ -1437,4 +1437,25 @@ describe('W3-A / S6 — chatHarnessCommandHandler & supporting modules', () => {
     handler.dispose();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it('marks the command rejected instead of leaving it accepted when post-insert execution throws', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { handler, mem, admitMock } = makeHandlerHarness();
+    admitMock.mockRejectedValueOnce(new Error('admission exploded'));
+
+    await expect(
+      handler.handle({
+        userId: 'user-1',
+        threadId: THREAD_ID,
+        body: { commandId: CMD_1, kind: 'send', text: 'hello' },
+        transport: 'socket',
+      }),
+    ).rejects.toThrow('admission exploded');
+
+    const stored = await mem.repo.findByCommandId(THREAD_ID, CMD_1);
+    expect(stored?.status).toBe('rejected');
+    expect(stored?.reason).toBe('Did not reach the agent');
+    errorSpy.mockRestore();
+    handler.dispose();
+  });
 });
