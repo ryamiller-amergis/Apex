@@ -333,12 +333,12 @@ export const QaLabAssistantPanel: React.FC<QaLabAssistantPanelProps> = ({
             ) : undefined,
           }}
           composer={{
-            disabled: composerBusy,
+            disabled: isSending || isCreating || !threadId,
             allowEmptySend: true,
             placeholder: isCreating
               ? 'Starting assistant…'
               : isRunning
-                ? 'Agent is thinking…'
+                ? 'Send a follow-up while the agent works…'
                 : config.placeholder,
             textareaRef,
             attachments,

@@ -1359,7 +1359,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
             }}
             composer={{
               placeholder: isRunning
-                ? 'Agent is thinking…'
+                ? 'Send a follow-up while the agent works…'
                 : launchedFromHome
                   ? 'Message agent · Enter to send'
                   : 'Message agent · type / to invoke a skill…',

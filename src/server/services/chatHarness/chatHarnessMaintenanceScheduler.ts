@@ -257,6 +257,7 @@ export async function runChatHarnessMaintenanceTick(
           const area = inferHarnessAreaFromThread(thread);
           const resolved = await resolveProfile(area, thread.kickoff.project, {
             settingsId: thread.kickoff.skillSettingsId ?? undefined,
+            skillPath: thread.kickoff.skillPath ?? null,
           });
           const admitted = await admitTurn({
             turnId: row.commandId,

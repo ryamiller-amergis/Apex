@@ -129,7 +129,9 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
             onSend={(text) => sendMessage(text)}
             onRetry={retryFailedRun ?? undefined}
             composer={{
-              placeholder: 'Ask a question...',
+              placeholder: session.isRunning
+                ? 'Send a follow-up while the agent works…'
+                : 'Ask a question...',
               rows: 1,
               autoFocus: true,
               disabled: isPreparing,

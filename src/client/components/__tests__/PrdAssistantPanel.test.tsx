@@ -384,7 +384,7 @@ describe('AgentHarnessPanel cutover & proposal slot', () => {
     expect(screen.getByTestId('prd-assistant-composer')).toBeInTheDocument();
     expect(screen.getByTestId('prd-assistant-message-input')).toBeInTheDocument();
     expect(screen.getByTestId('prd-assistant-send-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('prd-assistant-composer-summarize')).toBeInTheDocument();
+    expect(screen.queryByTestId('prd-assistant-composer-summarize')).not.toBeInTheDocument();
   });
 
   it('shows harness live work box, Stop, and Steer controls while running', () => {

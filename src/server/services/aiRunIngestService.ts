@@ -27,6 +27,7 @@ import {
   nextRunEventSequence,
   notifyRunEvent,
 } from './pgNotifyService';
+import { notifyOutbox } from './aiRunV2/outboxRepository';
 import type {
   AgentRunEventEnvelope,
   AgentRunEventStatus,
@@ -76,6 +77,7 @@ import { deriveInteractiveCursorExecutionFields } from './cursorExecutionSpecifi
 import {
   isHarnessRecreateReason,
   resolveChatAreaId,
+  type HarnessPendingControl,
   type HarnessReceiptReason,
 } from '../../shared/types/chatHarness';
 import {
@@ -83,11 +85,15 @@ import {
   type HarnessSummaryRecord,
   type SaveSummaryInput,
 } from './chatHarness/chatHarnessSummaryStore';
+import { chatHarnessCommandRepository } from './chatHarness/chatHarnessCommandRepository';
 import {
+  InteractiveArtifactApplyError,
   createBlobInteractiveArtifactReader,
   interactiveTranscript,
   readInteractiveArtifacts,
+  verifyInlineInteractiveArtifacts,
   writeInteractiveArtifacts,
+  type VerifiedInteractiveArtifact,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
 import { updateThreadKickoffTranscript } from './chatAgentService';
@@ -285,6 +291,7 @@ export class AiRunIngestError extends Error {
 export interface AiRunIngestResult {
   cancelRequested: boolean;
   run: AgentRunLifecycleRow;
+  pendingControl?: ReadonlyArray<HarnessPendingControl>;
 }
 
 export type CompletedArtifactConsumer = (
@@ -337,6 +344,11 @@ export interface AiRunIngestDependencies {
     reason: HarnessReceiptReason | null;
     updatedAt: string;
   }) => Promise<void>;
+  /** Slow-path pending steer/cancel commands for an active interactive run. */
+  listPendingControlForRun?: (
+    threadId: string,
+    runId: string,
+  ) => Promise<HarnessPendingControl[]>;
 }
 
 async function defaultUpdateCommandReceipt(input: {
@@ -630,6 +642,20 @@ function validateBody(body: AiRunIngestBody): void {
         'Invalid failureCategory',
         'AI_RUN_VALIDATION',
       );
+    }
+    if (body.inlineArtifacts !== undefined) {
+      if (!Array.isArray(body.inlineArtifacts)) {
+        throw new AiRunIngestError(
+          'inlineArtifacts must be an array',
+          'AI_RUN_VALIDATION',
+        );
+      }
+      if (process.env.NODE_ENV === 'production' && body.inlineArtifacts.length > 0) {
+        throw new AiRunIngestError(
+          'inlineArtifacts is not permitted in production',
+          'AI_RUN_VALIDATION',
+        );
+      }
     }
     for (const field of [
       'durationMs',
@@ -1120,6 +1146,40 @@ async function updateWorkerClocks(
   return updated[0];
 }
 
+async function applyVerifiedInteractiveArtifacts(input: {
+  threadId: string;
+  runId: string;
+  files: readonly VerifiedInteractiveArtifact[];
+}): Promise<void> {
+  const [thread] = await db
+    .select({ workspaceDir: chatThreads.workspaceDir, kickoff: chatThreads.kickoff })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, input.threadId))
+    .limit(1);
+  if (!thread) {
+    throw new AiRunIngestError('Completed terminal ingest has no thread', 'AI_RUN_ILLEGAL_TRANSITION');
+  }
+  await saveThreadOutputs(
+    input.threadId,
+    input.runId,
+    input.files.map((file) => ({ path: file.path, content: file.body.toString('utf8') })),
+  );
+  const workspaceRoot = thread.workspaceDir?.trim();
+  if (workspaceRoot && (await keepsThreadFolder(thread.kickoff.project))) {
+    await writeInteractiveArtifacts(workspaceRoot, input.files);
+  }
+  // Document runs build their inputs from the saved thread, so the transcript
+  // the agent wrote must land there as well.
+  const transcript = interactiveTranscript(input.files);
+  if (transcript !== null) {
+    await updateThreadKickoffTranscript(input.threadId, transcript).catch((error: unknown) => {
+      console.warn(
+        `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
+}
+
 /**
  * Download + checksum-verify actor artifacts onto the thread workspace.
  * Returns the parsed manifest (for identity) so the transactional terminal
@@ -1143,14 +1203,6 @@ async function verifyAndApplyActorArtifactManifest(input: {
       'AI_RUN_VALIDATION',
     );
   }
-  const [thread] = await db
-    .select({ workspaceDir: chatThreads.workspaceDir, kickoff: chatThreads.kickoff })
-    .from(chatThreads)
-    .where(eq(chatThreads.id, input.threadId))
-    .limit(1);
-  if (!thread) {
-    throw new AiRunIngestError('Completed terminal ingest has no thread', 'AI_RUN_ILLEGAL_TRANSITION');
-  }
   const files = await readInteractiveArtifacts({
     manifest: parsed,
     expected: {
@@ -1164,25 +1216,11 @@ async function verifyAndApplyActorArtifactManifest(input: {
         .downloadToBuffer(),
     ),
   });
-  await saveThreadOutputs(
-    input.threadId,
-    input.runId,
-    files.map((file) => ({ path: file.path, content: file.body.toString('utf8') })),
-  );
-  const workspaceRoot = thread.workspaceDir?.trim();
-  if (workspaceRoot && (await keepsThreadFolder(thread.kickoff.project))) {
-    await writeInteractiveArtifacts(workspaceRoot, files);
-  }
-  // Document runs build their inputs from the saved thread, so the transcript
-  // the agent wrote must land there as well.
-  const transcript = interactiveTranscript(files);
-  if (transcript !== null) {
-    await updateThreadKickoffTranscript(input.threadId, transcript).catch((error: unknown) => {
-      console.warn(
-        `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-  }
+  await applyVerifiedInteractiveArtifacts({
+    threadId: input.threadId,
+    runId: input.runId,
+    files,
+  });
 }
 
 /**
@@ -1222,6 +1260,25 @@ async function terminalizeDaprActorV2(input: {
       attemptId,
       attemptNumber,
       manifestRef: body.artifactManifestRef,
+    });
+  } else if (
+    status === 'completed' &&
+    body.inlineArtifacts &&
+    body.inlineArtifacts.length > 0
+  ) {
+    let files: VerifiedInteractiveArtifact[];
+    try {
+      files = verifyInlineInteractiveArtifacts(body.inlineArtifacts);
+    } catch (error) {
+      if (error instanceof InteractiveArtifactApplyError) {
+        throw new AiRunIngestError(error.message, 'AI_RUN_VALIDATION');
+      }
+      throw error;
+    }
+    await applyVerifiedInteractiveArtifacts({
+      threadId: existing.threadId,
+      runId,
+      files,
     });
   }
 
@@ -1438,6 +1495,59 @@ async function terminalizeDaprActorV2(input: {
 
   if (status === 'failed' || status === 'cancelled') {
     await reflectFailedGeneration(existing.threadId, dependencies);
+  }
+
+  if (
+    existing.lane === INTERACTIVE_LANE
+    && typeof (db as { execute?: unknown }).execute === 'function'
+  ) {
+    await notifyOutbox(db, {
+      outboxId: 'interactive-slot-release',
+      runId,
+    }).catch(() => undefined);
+
+    // Reconcile any mid-turn steer commands still in `accepted` for this now-
+    // terminal run so they never sit stuck as "Steer received".
+    try {
+      const pending = await (
+        dependencies.listPendingControlForRun ??
+        ((tId: string, rId: string) =>
+          chatHarnessCommandRepository.listPendingControlForRun(tId, rId))
+      )(existing.threadId, runId);
+      const unackedSteers = pending.filter((item) => item.kind === 'steer');
+      if (unackedSteers.length > 0) {
+        if (status === 'completed') {
+          const { chatHarnessCommandHandler } = await import(
+            './chatHarness/chatHarnessCommandHandler'
+          );
+          for (const steer of unackedSteers) {
+            await chatHarnessCommandHandler
+              .handleControlAck({
+                threadId: existing.threadId,
+                runId,
+                commandId: steer.commandId,
+                kind: 'steer',
+                disposition: 'turn-ended',
+                timestamp: nowIso,
+              })
+              .catch(() => undefined);
+          }
+        } else {
+          for (const steer of unackedSteers) {
+            await chatHarnessCommandRepository
+              .updateReceipt(existing.threadId, steer.commandId, {
+                status: 'rejected',
+                reason: 'Did not reach the agent',
+                runId,
+                expectedStatus: 'accepted',
+              })
+              .catch(() => undefined);
+          }
+        }
+      }
+    } catch {
+      // Best-effort post-terminal reconciliation; maintenance scheduler backstops.
+    }
   }
 
   const snapshot = existing.executionSnapshot;
@@ -1832,7 +1942,26 @@ export async function ingest(
     }
 
     const run = mapRow(updated);
-    return { run, cancelRequested: run.cancelRequested };
+    let pendingControl: HarnessPendingControl[] | undefined;
+    if (existing.lane === INTERACTIVE_LANE) {
+      try {
+        const listPending =
+          dependencies.listPendingControlForRun ??
+          ((tId: string, rId: string) =>
+            chatHarnessCommandRepository.listPendingControlForRun(tId, rId));
+        const items = await listPending(existing.threadId, runId);
+        if (items.length > 0) {
+          pendingControl = items;
+        }
+      } catch {
+        // Best-effort slow-path control delivery; Redis fast path still operates.
+      }
+    }
+    return {
+      run,
+      cancelRequested: run.cancelRequested,
+      ...(pendingControl ? { pendingControl } : {}),
+    };
   }
 
   if (body.kind === 'summary') {

@@ -147,7 +147,7 @@ describe('AgentHarnessPanel — VT-04 read-only enforcement (PBI-011 AC-3, PBI-0
 
     expect(screen.getByTestId('prd-assistant-message-input')).toBeDisabled();
     expect(screen.getByTestId('prd-assistant-composer-steer')).toBeDisabled();
-    expect(screen.getByTestId('prd-assistant-composer-summarize')).toBeDisabled();
+    expect(screen.queryByTestId('prd-assistant-composer-summarize')).not.toBeInTheDocument();
     expect(screen.getByTestId('prd-assistant-stop-btn')).toBeDisabled();
     expect(screen.getByTestId('prd-assistant-readonly-notice')).toHaveTextContent(
       'You have read-only access to this thread.',
@@ -162,7 +162,7 @@ describe('AgentHarnessPanel — VT-04 read-only enforcement (PBI-011 AC-3, PBI-0
     );
 
     expect(screen.getByTestId('prd-assistant-send-btn')).toBeDisabled();
-    expect(screen.getByTestId('prd-assistant-composer-summarize')).toBeDisabled();
+    expect(screen.queryByTestId('prd-assistant-composer-summarize')).not.toBeInTheDocument();
     expect(screen.getByTestId('prd-assistant-readonly-notice')).toBeInTheDocument();
   });
 });
@@ -339,7 +339,6 @@ describe('AgentHarnessPanel — VT-43 all 12 harness areas preserve existing dat
         'chat-agent-composer',
         'chat-agent-message-input',
         'chat-agent-send-btn',
-        'chat-agent-composer-summarize',
       ],
       expectedRunningTestIds: [
         'chat-agent-streaming',
@@ -358,7 +357,6 @@ describe('AgentHarnessPanel — VT-43 all 12 harness areas preserve existing dat
         'interview-composer',
         'interview-message-input',
         'interview-send-btn',
-        'interview-composer-summarize',
       ],
       expectedRunningTestIds: [
         'interview-streaming',
@@ -377,7 +375,6 @@ describe('AgentHarnessPanel — VT-43 all 12 harness areas preserve existing dat
         'adr-composer',
         'adr-message-input',
         'adr-send-btn',
-        'adr-composer-summarize',
       ],
       expectedRunningTestIds: [
         'adr-streaming',
@@ -396,7 +393,6 @@ describe('AgentHarnessPanel — VT-43 all 12 harness areas preserve existing dat
         'prd-assistant-composer',
         'prd-assistant-message-input',
         'prd-assistant-send-btn',
-        'prd-assistant-composer-summarize',
       ],
       expectedRunningTestIds: [
         'prd-assistant-streaming',
@@ -415,7 +411,6 @@ describe('AgentHarnessPanel — VT-43 all 12 harness areas preserve existing dat
         'design-doc-assistant-composer',
         'design-doc-assistant-message-input',
         'design-doc-assistant-send-btn',
-        'design-doc-assistant-composer-summarize',
       ],
       expectedRunningTestIds: [
         'design-doc-assistant-streaming',

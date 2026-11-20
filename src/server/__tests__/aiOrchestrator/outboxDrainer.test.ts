@@ -2256,4 +2256,72 @@ describe('outboxDrainer', () => {
       'interactive_cap',
     );
   });
+
+  it('schedules a 5s wake-up drain when an interactive turn is deferred instead of waiting for the 30s safety sweep', async () => {
+    jest.useFakeTimers();
+    try {
+      const deferredRow = interactiveRow(
+        'deferred-interactive-wake',
+        'agentic',
+        '2026-09-23T15:10:00.000Z',
+        {
+          userId: 'user-wake-1',
+          userSlotQueuedUntil: '2026-09-23T15:05:00.000Z',
+        },
+      );
+      const claimInteractiveCandidates = jest
+        .fn()
+        .mockResolvedValueOnce([deferredRow])
+        .mockResolvedValueOnce([deferredRow])
+        .mockResolvedValue([]);
+      const releaseClaim = jest.fn().mockResolvedValue(true);
+      const dispatch = jest.fn().mockResolvedValue(undefined);
+      let userBusy = true;
+      const base = emptyUtilization();
+
+      const drainer = createOutboxDrainer({
+        executor: { execute: async () => [] },
+        publisher: { publish: jest.fn() },
+        interactiveDispatchClient: { dispatch },
+        attempts: {
+          readInteractiveDispatchState: jest.fn().mockResolvedValue('queued'),
+          markInteractiveDispatched: jest.fn().mockResolvedValue('dispatched'),
+          failExpiredInteractiveDispatch: async () => terminalizedResult(),
+          failInvalidInteractiveDispatch: async () => terminalizedResult(),
+        },
+        getUtilization: async () => ({
+          ...base,
+          interactiveUserInFlight: userBusy
+            ? { 'user-wake-1': { total: 1, agentic: 1 } }
+            : ({} as Record<string, { total: number; agentic: number }>),
+        }),
+        getUncertainWorkerCount: async () => 0,
+        clock: {
+          now: () => new Date('2026-09-23T15:00:00.000Z'),
+          sleep: async () => undefined,
+        },
+        safetySweepMs: 60_000,
+        enableNotify: false,
+        acquireOutboxLease: async (work) => work(lease()),
+        outbox: fakeOutbox({
+          claimInteractiveCandidates,
+          releaseClaim,
+        }),
+      });
+
+      await drainer.start();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(releaseClaim).toHaveBeenCalledTimes(1);
+      expect(dispatch).not.toHaveBeenCalled();
+
+      // Free the user slot and advance 5 seconds (well before the 60s safety sweep).
+      userBusy = false;
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      await drainer.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

@@ -325,7 +325,7 @@ export const AgentHarnessPanel: React.FC<AgentHarnessPanelProps> = ({
     steerPending,
   ]);
 
-  const showSummarize = composer?.showSummarize !== false && isSummarizeSupported;
+  const showSummarize = composer?.showSummarize === true && isSummarizeSupported;
   const summarizeDisabled =
     !canWrite ||
     Boolean(composer?.disabled) ||

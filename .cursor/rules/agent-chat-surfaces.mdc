@@ -33,6 +33,14 @@ preparation state, and streaming flags stay consistent across every surface.
   `phaseEvents`, `runHealth`, `progressLabel`, `connectionState`, `pendingCommands`,
   `lastReceipt`, `activity`, `summaryNotice`.
 
+## Three user-facing archetypes (one chat UX inside)
+
+Keep surfaces distinct by **workspace and permissions**, never by forked chat mechanics. Every surface fits one of three archetypes, all rendered inside `AgentHarnessPanel` with the exact same composer, streaming, steer, stop, and proposal UX:
+
+1. **Open Chat / Workspace** (*Agent Home, Brainstorm*) — free-form exploration with optional artifact canvas and promote/handoff tools.
+2. **Guided Workflows** (*Interviews, ADR Interviews, Standup, Build Intake*) — workflow header/progress bar, structured Q&A option cards, and a clear finish line.
+3. **Contextual Side-Panel Copilots** (*PRD, Design Doc, Calendar, QA Lab, CAB Release, Ask Apex*) — docked beside an existing record, automatically grounded in that record, with propose-and-apply write tools.
+
 ## `AgentHarnessPanel` and its five area slots
 
 Render governed chat areas inside `AgentHarnessPanel`
@@ -61,6 +69,9 @@ inside area components:
 - **Live agent work**: every governed area must render `liveWorkBox` (`AgentLiveWorkBox`) from
   `AgentHarnessPanel` while a turn is running or retrying — do **not** add bespoke typing-dot
   spinners or a standalone `<AgentRetryBanner>` alongside it.
+- **Single run-status text component**: render phase/waiting labels through `AgentRunStatusText`
+  (`src/client/components/agentChat/AgentRunStatusText.tsx`) and `friendlyChatProgressLabel` — never
+  hardcode raw infrastructure strings like `"Queued"` or `"Dispatched"` in area components.
 - **Reconnect / retry clearing**: the harness event reducer (`src/client/chatHarness/reducers/eventReducer.ts`) clears `isRetrying` and
   `retryReason` on any active progress event (`phase`, `thinking`, `tool_call`, `tool_status`,
   `token`, `message`, `done`). Do not keep a separate client-side reconnecting flag.
@@ -70,18 +81,24 @@ inside area components:
 - **Single failure surface**: render one failure/retry control per failed turn — never stack a
   legacy `Error:` system-message retry bar above `AgentHarnessPanel`'s `messageFailure` card.
 
-## Steer and Summarize
+## Composer, Steer, and Summarize
 
-Governed surfaces expose `steer` and `summarize` directly from `useAgentChatSession`:
+Governed surfaces keep one consistent composer experience and expose `steer` and `summarize` directly from `useAgentChatSession`:
 
+- **Keep the composer unlocked while running** on every governed surface (`do not` pass `isRunning`
+  into `composer.disabled`). While running, `AgentComposer` shows the standard send icon for
+  mid-turn follow-ups (`steer`) beside the Stop button, with placeholder `"Send a follow-up while the agent works…"`.
 - Call `steer(text)` to send mid-turn guidance while a run is active, and display command status
   from `lastReceipt`.
-- Call `summarize()` to compact the thread on demand, and display progress or completion from
-  `summaryNotice`.
+- `Summarize` is opt-in (`composer.showSummarize === true`) and hidden by default. When opted in,
+  call `summarize()` and display status from `summaryNotice`.
 - The server owns the 5-steer cap and the summary lifecycle. Do not count steers or track summary
   state independently in client components.
 - Read-only users (`canWrite: false`) cannot send, steer, summarize, cancel, or rate. Disable or
   hide those controls when `canWrite` is `false`.
+- **No new bespoke transport endpoints**: `sendEndpoint`, `cancelEndpoint`, and `retryEndpoint`
+  overrides exist only for legacy migrations (e.g. Brainstorm). New areas must use the shared
+  harness command channel paired with server `areaHooks` (`src/server/services/chatHarness/areaHooks.ts`).
 
 ## Sanctioned exception to the TanStack Query rule
 

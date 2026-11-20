@@ -71,6 +71,16 @@ export type AiRunSummaryIngest = AiRunIngestBase & {
 };
 
 /**
+ * Inline artifact fallback payload used only in non-production environments
+ * when Azure Blob (`AI_PLATFORM_V2_BLOB_ACCOUNT_NAME`) is unconfigured.
+ */
+export type InlineInteractiveArtifact = Readonly<{
+  path: string;
+  contentBase64: string;
+  sha256: string;
+}>;
+
+/**
  * S6 owns enforcing artifact durability before unchanged completion. S3/S4
  * establish and safely parse the flag without claiming that final ordering.
  */
@@ -95,6 +105,11 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
    * terminal success for dapr-actor-v2.
    */
   artifactManifestRef?: import('./aiRunV2').AiRunBlobRef | null;
+  /**
+   * Non-production local fallback when Azure Blob artifact storage is not
+   * configured. Verified by checksum and allowed path before persisting.
+   */
+  inlineArtifacts?: ReadonlyArray<InlineInteractiveArtifact>;
   /**
    * V2 attempt failure category (hard_timeout / tool_timeout / …). Applied on
    * failed dapr-actor-v2 terminals.

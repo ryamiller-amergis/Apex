@@ -1734,7 +1734,7 @@ export function createDurableInteractiveTurnService(
         deps.builtInSkillRoots,
       );
       if (registration === 'unknown') throw unavailableSkill();
-      if (isStdioMcp(thread.kickoff.mcpPill)) {
+      if (isStdioMcp(thread.kickoff.mcpPill) && !thread.kickoff.webResearchEnabled) {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED',
           422,

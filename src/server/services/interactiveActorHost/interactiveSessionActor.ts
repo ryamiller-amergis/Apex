@@ -28,6 +28,7 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
+  InlineInteractiveArtifact,
   InteractiveTurnStageTimings,
 } from '../../../shared/types/aiRunIngest';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
@@ -320,7 +321,7 @@ export interface InteractiveActorDependencies {
     bootstrap: InteractiveActorBootstrap,
     workspacePath: string,
     signal: AbortSignal,
-  ): Promise<AiRunBlobRef | undefined>;
+  ): Promise<AttemptArtifactsUploadResult>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -354,6 +355,30 @@ export interface InteractiveActorDependencies {
   agentStoreSync?: AgentStoreSync;
   /** Optional host revision identifier used to attribute deploy-driven recreations. */
   hostRevision?: string | (() => string | null);
+}
+
+export type AttemptArtifactsUploadResult =
+  | AiRunBlobRef
+  | Readonly<{
+      manifestRef?: AiRunBlobRef;
+      inlineArtifacts?: ReadonlyArray<InlineInteractiveArtifact>;
+    }>
+  | undefined;
+
+function unpackAttemptArtifactsResult(result: AttemptArtifactsUploadResult): {
+  artifactManifestRef?: AiRunBlobRef;
+  inlineArtifacts?: ReadonlyArray<InlineInteractiveArtifact>;
+} {
+  if (!result) return {};
+  if ('container' in result && 'key' in result) {
+    return { artifactManifestRef: result };
+  }
+  return {
+    ...(result.manifestRef ? { artifactManifestRef: result.manifestRef } : {}),
+    ...(result.inlineArtifacts && result.inlineArtifacts.length > 0
+      ? { inlineArtifacts: result.inlineArtifacts }
+      : {}),
+  };
 }
 
 export interface InteractiveSteerInput {
@@ -458,6 +483,26 @@ function isSuccessfulWait(result: CursorExecutionResult): boolean {
   if (result.completedOnTurnEnd) return true;
   const status = result.waitResult.status.trim().toLowerCase();
   return status === 'finished' || status === 'completed' || status === 'success';
+}
+
+function firstNonEmptySummaryText(
+  ...candidates: Array<string | null | undefined>
+): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function extractDeltaSummaryText(update: unknown): string | undefined {
+  if (!update || typeof update !== 'object') return undefined;
+  const record = update as { type?: unknown; summary?: unknown };
+  if (record.type === 'summary' && typeof record.summary === 'string') {
+    return firstNonEmptySummaryText(record.summary);
+  }
+  return undefined;
 }
 
 /**
@@ -1262,6 +1307,7 @@ export function createInteractiveSessionActor(
         return existing;
       }
       if (turnEnded || cancellationRequested || fenceConflict) {
+        await publishControlAck(commandId, 'steer', 'turn-ended');
         return 'turn-ended';
       }
       if (phase === 'summarizing') {
@@ -1291,6 +1337,7 @@ export function createInteractiveSessionActor(
         await publishControlAck(commandId, 'steer', 'steered');
         return 'steered';
       }
+      await publishControlAck(commandId, 'steer', 'turn-ended');
       return 'turn-ended';
     };
 
@@ -1302,6 +1349,7 @@ export function createInteractiveSessionActor(
         return 'cancelled';
       }
       if (turnEnded) {
+        await publishControlAck(commandId, 'cancel', 'turn-ended');
         return 'turn-ended';
       }
       appliedControlDispositions.set(commandId, 'cancelled');
@@ -1829,10 +1877,13 @@ export function createInteractiveSessionActor(
         }
         phase = 'summarizing';
         sendStartedAt = now();
-        let summaryOutcome: {
+        type SummaryOutcome = {
           status: 'completed' | 'fallback' | 'error';
           text?: string;
-        } | null = null;
+        };
+        const summaryState: { outcome: SummaryOutcome | null } = {
+          outcome: null,
+        };
         let summaryErrorPosted = false;
 
         try {
@@ -1884,17 +1935,20 @@ export function createInteractiveSessionActor(
                     observeEvent();
                     if (event.type === 'summary') {
                       if (event.status === 'error') {
-                        summaryOutcome = { status: 'error' };
+                        summaryState.outcome = { status: 'error' };
                       } else if (
                         event.status === 'completed' ||
                         event.status === 'fallback'
                       ) {
-                        summaryOutcome = {
+                        summaryState.outcome = {
                           status: event.status,
-                          text: summaryOutcome?.text,
+                          text: firstNonEmptySummaryText(
+                            summaryState.outcome?.text,
+                          ),
                         };
+                      } else {
+                        await publishLiveEnvelope(event);
                       }
-                      await publishLiveEnvelope(event);
                     } else {
                       await publishLiveEnvelope(event);
                     }
@@ -1908,9 +1962,12 @@ export function createInteractiveSessionActor(
                     }
                   },
                   onSummaryCompleted: ({ text, fallback }) => {
-                    summaryOutcome = {
+                    summaryState.outcome = {
                       status: fallback ? 'fallback' : 'completed',
-                      text,
+                      text: firstNonEmptySummaryText(
+                        text,
+                        summaryState.outcome?.text,
+                      ),
                     };
                   },
                 },
@@ -1919,21 +1976,38 @@ export function createInteractiveSessionActor(
               }),
               absoluteAbort.signal,
             );
-            if (!summaryOutcome) {
-              if (isSuccessfulWait(summaryResult)) {
-                summaryOutcome = {
+            const waitSummaryText = firstNonEmptySummaryText(
+              summaryResult.waitResult.result,
+              summaryResult.text,
+            );
+            const currentOutcome = summaryState.outcome;
+            if (!currentOutcome) {
+              if (isSuccessfulWait(summaryResult) && waitSummaryText) {
+                summaryState.outcome = {
                   status: 'completed',
-                  text:
-                    summaryResult.text ||
-                    summaryResult.waitResult.result ||
-                    '',
+                  text: waitSummaryText,
                 };
               } else {
-                summaryOutcome = { status: 'error' };
+                summaryState.outcome = { status: 'error' };
               }
+            } else if (
+              currentOutcome.status === 'completed' ||
+              currentOutcome.status === 'fallback'
+            ) {
+              const mergedText = firstNonEmptySummaryText(
+                currentOutcome.text,
+                waitSummaryText,
+              );
+              summaryState.outcome =
+                isSuccessfulWait(summaryResult) && mergedText
+                  ? { status: currentOutcome.status, text: mergedText }
+                  : { status: 'error' };
             }
           } else if (typeof rawSummaryRun === 'string') {
-            summaryOutcome = { status: 'completed', text: rawSummaryRun };
+            const text = firstNonEmptySummaryText(rawSummaryRun);
+            summaryState.outcome = text
+              ? { status: 'completed', text }
+              : { status: 'error' };
           } else if (rawSummaryRun && typeof rawSummaryRun === 'object') {
             const obj = rawSummaryRun as {
               status?: string;
@@ -1947,15 +2021,13 @@ export function createInteractiveSessionActor(
                 : obj.fallback || obj.status === 'fallback'
                   ? 'fallback'
                   : 'completed';
-            const text =
-              typeof obj.summary === 'string'
-                ? obj.summary
-                : typeof obj.text === 'string'
-                  ? obj.text
-                  : undefined;
-            summaryOutcome = { status, text };
+            const text = firstNonEmptySummaryText(obj.summary, obj.text);
+            summaryState.outcome =
+              status === 'error' || !text
+                ? { status: 'error' }
+                : { status, text };
           } else {
-            summaryOutcome = { status: 'error' };
+            summaryState.outcome = { status: 'error' };
           }
         } catch (summaryErr) {
           if (
@@ -1966,7 +2038,7 @@ export function createInteractiveSessionActor(
           ) {
             throw summaryErr;
           }
-          summaryOutcome = { status: 'error' };
+          summaryState.outcome = { status: 'error' };
           summaryErrorPosted = true;
           await publishLiveEnvelope({ type: 'summary', status: 'error' });
           await post({
@@ -1983,7 +2055,13 @@ export function createInteractiveSessionActor(
           clearToolTimer();
         }
 
-        const resolvedSummary = summaryOutcome ?? { status: 'error' as const };
+        const resolvedSummary =
+          summaryState.outcome &&
+          (summaryState.outcome.status === 'completed' ||
+            summaryState.outcome.status === 'fallback') &&
+          !firstNonEmptySummaryText(summaryState.outcome.text)
+            ? { status: 'error' as const }
+            : (summaryState.outcome ?? { status: 'error' as const });
         if (resolvedSummary.status === 'error') {
           if (!summaryErrorPosted) {
             await publishLiveEnvelope({ type: 'summary', status: 'error' });
@@ -2027,12 +2105,14 @@ export function createInteractiveSessionActor(
           commandId: specification.turnId,
         });
 
-        let summaryManifestRef: AiRunBlobRef | undefined;
+        let summaryArtifacts: ReturnType<typeof unpackAttemptArtifactsResult> = {};
         if (dependencies.uploadAttemptArtifacts) {
-          summaryManifestRef = await dependencies.uploadAttemptArtifacts(
-            bootstrap,
-            checkout.workspacePath,
-            absoluteAbort.signal,
+          summaryArtifacts = unpackAttemptArtifactsResult(
+            await dependencies.uploadAttemptArtifacts(
+              bootstrap,
+              checkout.workspacePath,
+              absoluteAbort.signal,
+            ),
           );
         }
 
@@ -2046,7 +2126,10 @@ export function createInteractiveSessionActor(
           kind: 'terminal',
           status: 'completed',
           artifactsFlushed: true,
-          artifactManifestRef: summaryManifestRef,
+          artifactManifestRef: summaryArtifacts.artifactManifestRef,
+          ...(summaryArtifacts.inlineArtifacts
+            ? { inlineArtifacts: summaryArtifacts.inlineArtifacts }
+            : {}),
           cursorAgentId: agentHandle.agentId ?? null,
           ...(recreateReason ? { recreateReason } : {}),
           stageTimings: stageTimings(),
@@ -2141,16 +2224,22 @@ export function createInteractiveSessionActor(
         phase = 'running';
 
         let turnEndMonitor = createCursorTurnEndMonitor();
+        let latestAutoSummaryText: string | undefined;
         const sendTurn = async (
           handle: InteractiveCursorAgentHandle,
           signal: AbortSignal = absoluteAbort.signal,
         ): Promise<WorkerCursorExecutionRun> => {
+          latestAutoSummaryText = undefined;
           const startedRun = await untilAborted(
             handle.send(prompt, {
               mcpServers,
               requestId: bootstrap.requestId ?? bootstrap.runId,
               onDelta: (update) => {
                 observeEvent();
+                const deltaSummary = extractDeltaSummaryText(update);
+                if (deltaSummary) {
+                  latestAutoSummaryText = deltaSummary;
+                }
                 turnEndMonitor.observe(update);
               },
             }),
@@ -2268,15 +2357,30 @@ export function createInteractiveSessionActor(
                   }
                 },
                 onSummaryCompleted: async ({ text, fallback }) => {
-                  await post({
-                    dispatchMessageId,
-                    attemptId,
-                    kind: 'summary',
-                    status: fallback ? 'fallback' : 'completed',
+                  const summaryText = firstNonEmptySummaryText(
                     text,
-                  });
-                  phase = 'running';
-                  await flushHeldSummarySteers();
+                    latestAutoSummaryText,
+                  );
+                  latestAutoSummaryText = undefined;
+                  try {
+                    // `@cursor/sdk` v1.4.0 emits auto-summary status events without
+                    // exposing the summary text on `send()`. Skip persistence when
+                    // text is absent rather than failing the live turn with 422.
+                    if (summaryText) {
+                      await post({
+                        dispatchMessageId,
+                        attemptId,
+                        kind: 'summary',
+                        status: fallback ? 'fallback' : 'completed',
+                        text: summaryText,
+                      });
+                    }
+                  } finally {
+                    phase = 'running';
+                    if (!fenceConflict && !cancellationRequested) {
+                      await flushHeldSummarySteers();
+                    }
+                  }
                 },
               },
               nextSequence: () => 1,
@@ -2535,13 +2639,15 @@ export function createInteractiveSessionActor(
           });
         }
 
-        let artifactManifestRef: AiRunBlobRef | undefined;
+        let uploadedArtifacts: ReturnType<typeof unpackAttemptArtifactsResult> = {};
         let artifactsFlushed = false;
         if (dependencies.uploadAttemptArtifacts) {
-          artifactManifestRef = await dependencies.uploadAttemptArtifacts(
-            bootstrap,
-            checkout.workspacePath,
-            absoluteAbort.signal,
+          uploadedArtifacts = unpackAttemptArtifactsResult(
+            await dependencies.uploadAttemptArtifacts(
+              bootstrap,
+              checkout.workspacePath,
+              absoluteAbort.signal,
+            ),
           );
           artifactsFlushed = true;
         }
@@ -2579,7 +2685,10 @@ export function createInteractiveSessionActor(
           kind: 'terminal',
           status: 'completed',
           artifactsFlushed: true,
-          artifactManifestRef,
+          artifactManifestRef: uploadedArtifacts.artifactManifestRef,
+          ...(uploadedArtifacts.inlineArtifacts
+            ? { inlineArtifacts: uploadedArtifacts.inlineArtifacts }
+            : {}),
           cursorAgentId: reusableAgentId,
           ...(recreateReason ? { recreateReason } : {}),
           ...(finalMessage

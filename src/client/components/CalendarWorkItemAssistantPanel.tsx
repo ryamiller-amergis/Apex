@@ -532,9 +532,11 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 ) : undefined,
               }}
               composer={{
-                disabled: isRunning || isSending || !threadId,
+                disabled: isSending || !threadId,
                 allowEmptySend: true,
-                placeholder: 'Message the assistant… (Enter to send)',
+                placeholder: isRunning
+                  ? 'Send a follow-up while the agent works…'
+                  : 'Message the assistant… (Enter to send)',
                 textareaRef,
                 attachments,
                 attachmentError,

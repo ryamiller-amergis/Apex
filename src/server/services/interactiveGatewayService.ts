@@ -162,6 +162,11 @@ export interface InteractiveGatewayDependencies {
     callback: (receipt: HarnessReceipt) => void
   ) => () => void;
   /**
+   * Subscribe to Redis control-ack updates for this thread so multi-instance
+   * App Service sockets also process actor steer/cancel dispositions.
+   */
+  subscribeControlAcks?: (threadId: string) => () => void;
+  /**
    * Handle an inbound validated harness command frame from the socket.
    */
   onCommand?: (command: HarnessCommandBody) => Promise<HarnessReceipt>;
@@ -412,6 +417,9 @@ export async function attachInteractiveThreadStream(
         }
       })
     : () => {};
+  const unsubscribeControlAcks = dependencies.subscribeControlAcks
+    ? dependencies.subscribeControlAcks(threadId)
+    : () => {};
 
   const detach = (): void => {
     if (detached) return;
@@ -420,6 +428,7 @@ export async function attachInteractiveThreadStream(
     unsubscribeDurable();
     unsubscribeLive();
     unsubscribeCommands();
+    unsubscribeControlAcks();
   };
   socket.onClose(detach);
 

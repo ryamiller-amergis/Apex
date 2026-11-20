@@ -2,8 +2,8 @@ import React from 'react';
 import type { AgentRunPhase } from '../../../shared/types/chat';
 import type { AgentActivityItem } from '../../chatHarness/types';
 import type { ToolProgress } from '../../hooks/useChatStream';
-import { ChatRunProgressLabel } from '../ChatRunProgressLabel';
 import { AgentActivityLog } from './AgentActivityLog';
+import { AgentRunStatusText } from './AgentRunStatusText';
 import styles from './agentChat.module.css';
 
 export interface AgentLiveWorkBoxTestIds {
@@ -65,17 +65,12 @@ export const AgentLiveWorkBox: React.FC<AgentLiveWorkBoxProps> = ({
           aria-hidden="true"
           {...{ 'data-testid': busyTestId }}
         />
-        {progressPhase === 'queued' ? (
-          <span {...{ 'data-testid': 'agent-run-status-queued' }}>Queued</span>
-        ) : progressPhase === 'dispatched' ? (
-          <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>Dispatched</span>
-        ) : (
-          <ChatRunProgressLabel
-            fallbackLabel={effectiveFallback}
-            progressPhase={progressPhase}
-            toolProgress={toolProgress}
-          />
-        )}
+        <AgentRunStatusText
+          progressPhase={progressPhase}
+          progressLabel={progressLabel}
+          fallbackLabel={effectiveFallback}
+          toolProgress={toolProgress}
+        />
       </p>
       {activity.length > 0 ? (
         <AgentActivityLog

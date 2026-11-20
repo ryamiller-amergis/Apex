@@ -29,6 +29,7 @@ import {
   chatHarnessCommandHandler,
   inferHarnessAreaFromThread,
 } from './chatHarness/chatHarnessCommandHandler';
+import { chatHarnessControlBus } from './chatHarness/chatHarnessControlBus';
 
 const GATEWAY_PATH = /^\/api\/interactive\/threads\/([^/]+)\/stream$/;
 
@@ -134,6 +135,14 @@ export function mountInteractiveGateway(
           };
 
           const gatewayDeps = createInteractiveGatewayDependencies({
+            subscribeControlAcks: (tid) =>
+              chatHarnessControlBus.subscribeAck(tid, (ack) => {
+                if (typeof chatHarnessCommandHandler.handleControlAck === 'function') {
+                  void chatHarnessCommandHandler
+                    .handleControlAck(ack)
+                    .catch(() => {});
+                }
+              }),
             onCommand: async (body) => {
               const requestAdoToken = await getAdoTokenForUser(
                 req as unknown as Request,

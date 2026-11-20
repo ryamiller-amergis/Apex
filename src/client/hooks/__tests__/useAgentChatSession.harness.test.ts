@@ -908,5 +908,138 @@ describe('S5 useAgentChatSession harness delegation', () => {
 
       unmount();
     });
+
+    it('uses custom HTTP send/cancel/retry endpoints (Brainstorm) while keeping harness WS streaming and steer', async () => {
+      const rig = createRuntimeTestRig(
+        makeSnapshot({
+          state: makeThreadState({
+            harnessArea: 'brainstorm',
+            threadStatus: 'idle',
+            activeRunId: null,
+            phase: 'idle',
+          }),
+        }),
+      );
+      const baseFetch = rig.runtimeDeps.fetchImpl!;
+      const httpFetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith('/api/brainstorm/')) {
+          return {
+            ok: true,
+            status: 202,
+            json: async () => ({ status: 'dispatched' }),
+          } as Response;
+        }
+        return baseFetch(input, init);
+      }) as unknown as typeof fetch;
+
+      const sendEndpoint = '/api/brainstorm/Apex/sessions/s-1/messages';
+      const cancelEndpoint = '/api/brainstorm/Apex/sessions/s-1/cancel';
+      const retryEndpoint = (runId: string) =>
+        `/api/brainstorm/Apex/sessions/s-1/runs/${runId}/retry`;
+
+      const { result, unmount } = renderHook(() =>
+        useAgentChatSession(FIXTURE_THREAD_ID, {
+          harnessArea: 'brainstorm',
+          sendEndpoint,
+          cancelEndpoint,
+          retryEndpoint,
+          runtimeDeps: {
+            ...rig.runtimeDeps,
+            fetchImpl: httpFetch,
+          },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.snapshotLoaded).toBe(true);
+      });
+
+      act(() => {
+        rig.sockets[0].simulateOpen();
+      });
+
+      let sent = false;
+      await act(async () => {
+        sent = await result.current.send('Explore a new architecture', {
+          mode: 'explore',
+        });
+      });
+      expect(sent).toBe(true);
+      expect(httpFetch).toHaveBeenCalledWith(
+        sendEndpoint,
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(rig.sockets[0].sent).toEqual([]);
+
+      // While running on WS, steer still uses the harness WS command channel
+      act(() => {
+        rig.sockets[0].simulateMessage({
+          type: 'state',
+          state: makeThreadState({
+            harnessArea: 'brainstorm',
+            threadStatus: 'running',
+            activeRunId: FIXTURE_RUN_ID,
+            phase: 'running',
+          }),
+        });
+      });
+
+      let steerPromise: Promise<boolean>;
+      act(() => {
+        steerPromise = result.current.steer('Focus on mobile first');
+      });
+      expect(rig.sockets[0].sent).toHaveLength(1);
+      const steerFrame = JSON.parse(rig.sockets[0].sent[0]) as {
+        kind: string;
+        commandId: string;
+        text: string;
+      };
+      expect(steerFrame).toMatchObject({
+        kind: 'steer',
+        text: 'Focus on mobile first',
+      });
+      act(() => {
+        rig.sockets[0].simulateMessage({
+          type: 'receipt',
+          receipt: {
+            commandId: steerFrame.commandId,
+            kind: 'steer',
+            status: 'accepted',
+            runId: FIXTURE_RUN_ID,
+            updatedAt: '2026-11-19T00:05:00.000Z',
+          },
+        });
+      });
+      await expect(steerPromise!).resolves.toBe(true);
+
+      // Cancel and retry honor the Brainstorm HTTP endpoints
+      await act(async () => {
+        await result.current.cancel();
+      });
+      expect(httpFetch).toHaveBeenCalledWith(
+        cancelEndpoint,
+        expect.objectContaining({ method: 'POST' }),
+      );
+
+      act(() => {
+        rig.sockets[0].simulateMessage({
+          type: 'event',
+          id: 'done-bs-1',
+          data: { type: 'done', runId: FIXTURE_RUN_ID },
+        });
+      });
+      expect(result.current.isAwaitingAgentResponse).toBe(false);
+
+      await act(async () => {
+        await result.current.retryFailedRun(FIXTURE_RUN_ID);
+      });
+      expect(httpFetch).toHaveBeenCalledWith(
+        retryEndpoint(FIXTURE_RUN_ID),
+        expect.objectContaining({ method: 'POST' }),
+      );
+
+      unmount();
+    });
   });
 });

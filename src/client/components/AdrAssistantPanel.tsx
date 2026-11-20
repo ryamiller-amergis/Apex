@@ -256,9 +256,11 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
             </div>
           )}
           composer={{
-            disabled: !threadId || isCreating || isRunning || isSending,
+            disabled: !threadId || isCreating || isSending,
             allowEmptySend: true,
-            placeholder: isRunning ? 'Assistant is investigating…' : 'Ask about refinements or trade-offs…',
+            placeholder: isRunning
+              ? 'Send a follow-up while the agent works…'
+              : 'Ask about refinements or trade-offs…',
             textareaRef,
             attachments,
             attachmentError,

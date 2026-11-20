@@ -434,7 +434,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
   const textareaRef = externalTextareaRef ?? internalTextareaRef;
   const isSteerActive = Boolean(isRunning && steer?.enabled && !readOnly);
   const busy = isBusy ?? (disabled || (isRunning && !isSteerActive) || isSending || readOnly);
-  const canType = !disabled && !readOnly && !isSending;
+  const canType = !disabled && !readOnly && !isSending && (!isRunning || isSteerActive);
   const derivedCanSend = !disabled && !readOnly && !isRunning && !isSending
     && (value.trim().length > 0 || (allowEmptySend && attachments.length > 0));
   const canSend = readOnly ? false : (canSendOverride ?? derivedCanSend);
@@ -473,7 +473,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
 
   const resolvedPlaceholder = placeholder
     ?? (isRunning
-      ? (isSteerActive ? 'Steer the agent… (Enter to steer)' : 'Agent is thinking…')
+      ? (isSteerActive ? 'Send a follow-up while the agent works…' : 'Agent is thinking…')
       : 'Type a message… (Enter to send)');
 
   const showModel = typeof model === 'string' && typeof onModelChange === 'function';
@@ -654,15 +654,15 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
               <>
                 {showSteer && steer && (
                   <button
-                    className={styles.steerBtn}
+                    className={styles.sendBtn}
                     onClick={steer.onSteer}
                     type="button"
-                    aria-label="Steer"
-                    title="Steer the active reply"
+                    aria-label="Send follow-up"
+                    title="Send follow-up"
                     disabled={Boolean(readOnly || disabled || !value.trim() || steer.pending)}
                     {...(steerTestId ? { 'data-testid': steerTestId } : {})}
                   >
-                    {steer.pending ? 'Steering…' : 'Steer'}
+                    {steer.pending ? '…' : <PaperPlaneIcon />}
                   </button>
                 )}
                 {onCancel && (

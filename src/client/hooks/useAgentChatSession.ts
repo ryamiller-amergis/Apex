@@ -303,6 +303,9 @@ export function useAgentChatSession(
     : null;
   const isHarnessCommandMode =
     useHarnessRuntime && effectiveHarnessArea !== null;
+  const useHarnessSend = isHarnessCommandMode && !sendEndpoint;
+  const useHarnessCancel = isHarnessCommandMode && !cancelEndpoint;
+  const useHarnessRetry = isHarnessCommandMode && !retryEndpoint;
   const isForbiddenSnapshot =
     useHarnessRuntime &&
     (runtimeState.snapshotStatusCode === 403 ||
@@ -466,7 +469,7 @@ export function useAgentChatSession(
     : isCancelling;
 
   const hasPendingHarnessSend =
-    isHarnessCommandMode &&
+    useHarnessSend &&
     !runtimeState.stopping &&
     runtimeState.pendingCommands.some(
       (cmd) =>
@@ -475,7 +478,7 @@ export function useAgentChatSession(
           runtimeState.status === 'running' ||
           Boolean(runtimeState.activeRunId)),
     );
-  const effectiveIsAwaitingAgentResponse = isHarnessCommandMode
+  const effectiveIsAwaitingAgentResponse = useHarnessSend
     ? hasPendingHarnessSend
     : isAwaitingAgentResponse;
 
@@ -531,6 +534,10 @@ export function useAgentChatSession(
   useEffect(() => {
     if (!isAwaitingAgentResponse) return;
 
+    if (status === 'running') {
+      pendingObservedRunningRef.current = true;
+    }
+
     if (status !== 'closed' && statusAtAwaitStartRef.current === 'closed') {
       statusAtAwaitStartRef.current = status;
     }
@@ -545,6 +552,7 @@ export function useAgentChatSession(
       receivedAgentOutcome ||
       lastVisibleRole === 'agent' ||
       status === 'error' ||
+      (pendingObservedRunningRef.current && status !== 'running') ||
       (status === 'closed' && statusAtAwaitStartRef.current !== 'closed')
     ) {
       clearAwaitingAgentResponse();
@@ -555,6 +563,19 @@ export function useAgentChatSession(
     lastVisibleRole,
     messages,
     status,
+  ]);
+
+  useEffect(() => {
+    if (!useHarnessRuntime || !isAwaitingAgentResponse) return;
+    if (runtimeState.terminalRevision > 0 && status !== 'running') {
+      clearAwaitingAgentResponse();
+    }
+  }, [
+    clearAwaitingAgentResponse,
+    isAwaitingAgentResponse,
+    runtimeState.terminalRevision,
+    status,
+    useHarnessRuntime,
   ]);
 
   // Reset local turn state when switching threads.
@@ -735,7 +756,7 @@ export function useAgentChatSession(
       if (!effectiveCanWrite || !threadId) return false;
       if (!text && !opts.attachments?.length) return false;
 
-      if (isHarnessCommandMode) {
+      if (useHarnessSend) {
         if (!runtime) return false;
         if (beforeSend) {
           const result = await beforeSend(text);
@@ -913,7 +934,7 @@ export function useAgentChatSession(
     [
       effectiveCanWrite,
       threadId,
-      isHarnessCommandMode,
+      useHarnessSend,
       runtime,
       httpFetchImpl,
       isInteractionBusy,
@@ -986,7 +1007,7 @@ export function useAgentChatSession(
   const retryFailedRun = useCallback(async (runIdOverride?: string) => {
     if (!effectiveCanWrite || !threadId) return;
 
-    if (isHarnessCommandMode) {
+    if (useHarnessRetry) {
       if (!runtime) return;
       const runId =
         runIdOverride ??
@@ -1086,7 +1107,7 @@ export function useAgentChatSession(
   }, [
     effectiveCanWrite,
     threadId,
-    isHarnessCommandMode,
+    useHarnessRetry,
     runtime,
     runtimeState.retryableRunId,
     runtimeState.lastFailure?.runId,
@@ -1105,7 +1126,7 @@ export function useAgentChatSession(
   const cancel = useCallback(async () => {
     if (!threadId) return;
 
-    if (isHarnessCommandMode) {
+    if (useHarnessCancel) {
       if (!effectiveCanWrite || !runtime) return;
       setSendError(null);
       await runtime.cancel(createTurnId());
@@ -1176,7 +1197,7 @@ export function useAgentChatSession(
     area,
     projectId,
     threadId,
-    isHarnessCommandMode,
+    useHarnessCancel,
     useHarnessRuntime,
     effectiveCanWrite,
     runtime,

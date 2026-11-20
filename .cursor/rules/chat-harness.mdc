@@ -6,18 +6,28 @@ alwaysApply: false
 
 # Chat Harness
 
-Every interactive chat area in Apex runs on the shared chat harness. Do not build a separate chat transport, agent loop, custom retry/reconnect channel, or direct SDK integration for any area.
+Every interactive chat area in Apex runs on the shared chat harness. Do not build a separate chat transport, agent loop, custom retry/reconnect channel, bespoke `/messages` / `/cancel` / `/retry` HTTP endpoints, or direct SDK integration for any area.
+
+## Core architecture: unified engine + contextual capabilities
+
+Standardize 100% of chat mechanics (transport, streaming, live work, mid-turn steer, stop/retry, reconnect, write proposals) and keep areas separated by **workspace, permissions, and declarative plugins**:
+
+1. **Context providers** (`AreaProfile.contextKinds` + `areaHooks.beforeSend` / `beforeRetry`): supply the open record (PRD, Design Doc, Brainstorm artifact, sprint, interview brief) automatically so users never re-explain where they are.
+2. **Tools & write confirmations** (`AreaProfile.customTools` + `writeConfirmation` + `customToolRegistry.ts`): express cross-surface capabilities (propose doc edit, update artifact, stage ADO item, promote/handoff to Interview or PRD) as reusable tools any profile can opt into under RBAC.
+3. **Server lifecycle hooks** (`src/server/services/chatHarness/areaHooks.ts`): register domain-specific `beforeSend`, `afterSendAccepted`, `beforeRetry`, `afterRetryAccepted`, and `afterCancelAccepted` hooks on the shared command handler instead of bypassing `chatHarnessCommandHandler` with custom HTTP routes.
 
 ## Required for every new or updated chat area
 
 1. **Declare an area profile** in `src/server/services/chatHarness/areaProfiles.ts` and register its id in `src/shared/types/chatHarness.ts`. A profile states the area's existing workflow class, existing RBAC permission, project settings lane, allowed context kinds, tools, write confirmation rules, safety rules, recreation cap, and rating storage.
-2. **Route every Cursor SDK call through the adapter** at `src/server/services/cursorSdkAdapter/`. If you import `@cursor/sdk` directly in new chat code, remove that import and go through `src/server/services/cursorSdkAdapter/` instead.
-3. **Render inside the shared harness panel** (`AgentHarnessPanel`), built on the common `useAgentChatSession` contract (`.cursor/rules/agent-chat-surfaces.mdc`).
-4. **Keep policy out of the adapter and workers.** Follow `.cursor/rules/v2-worker-no-policy.mdc`: App Service resolves the model, effort, skill, tools, and safety settings into the execution specification. Neither `src/server/services/cursorSdkAdapter/` nor any V2 worker holds a default model or policy.
-5. **Preserve the single bidirectional WebSocket + control-bus contract.** User commands (`send`, `steer`, `summarize`, `cancel`, `retry`) enter through `interactiveGatewayService` → `chatHarnessCommandHandler` (with HTTP command fallback), propagate steer/cancel via `interactiveControlBus`, and return durable receipts.
-6. **Emit a running `phase` event immediately after in-turn agent recreation.** Whenever `recreateAfterUnresponsiveAgent()` (or an equivalent retry path) acquires a fresh agent after publishing `type: 'retrying'`, publish `{ type: 'phase', phase: 'analysis', status: 'running', detail: 'Thinking…' }` so clients leave the reconnecting state immediately instead of waiting for the first answer token.
-7. **Keep write confirmations explicit.** Every `writes: true` custom tool stages a proposal only and never mutates domain state directly; apply/reject always goes through an explicit user-triggered REST confirmation endpoint.
-8. **Add no new Skill file** under `.cursor/skills/` for chat-harness plumbing.
+2. **Use `areaHooks.ts` for area-specific turn logic** (`registerAreaHooks(area, { beforeSend, afterSendAccepted, beforeRetry, afterRetryAccepted, afterCancelAccepted })`). Do not add bespoke `/messages`, `/cancel`, or `/retry` endpoints that bypass `chatHarnessCommandHandler`.
+3. **Route every Cursor SDK call through the adapter** at `src/server/services/cursorSdkAdapter/`. If you import `@cursor/sdk` directly in new chat code, remove that import and go through `src/server/services/cursorSdkAdapter/` instead.
+4. **Render inside the shared harness panel** (`AgentHarnessPanel`), built on the common `useAgentChatSession` contract (`.cursor/rules/agent-chat-surfaces.mdc`).
+5. **Keep policy out of the adapter and workers.** Follow `.cursor/rules/v2-worker-no-policy.mdc`: App Service resolves the model, effort, skill, tools, and safety settings into the execution specification. Neither `src/server/services/cursorSdkAdapter/` nor any V2 worker holds a default model or policy.
+6. **Preserve the single bidirectional WebSocket + control-bus contract.** User commands (`send`, `steer`, `summarize`, `cancel`, `retry`) enter through `interactiveGatewayService` → `chatHarnessCommandHandler` (with HTTP command fallback), propagate steer/cancel via `interactiveControlBus`, and return durable receipts.
+7. **Emit a running `phase` event immediately after in-turn agent recreation.** Whenever `recreateAfterUnresponsiveAgent()` (or an equivalent retry path) acquires a fresh agent after publishing `type: 'retrying'`, publish `{ type: 'phase', phase: 'analysis', status: 'running', detail: 'Thinking…' }` so clients leave the reconnecting state immediately instead of waiting for the first answer token.
+8. **Keep write confirmations explicit.** Every `writes: true` custom tool stages a proposal only and never mutates domain state directly; apply/reject always goes through an explicit user-triggered REST confirmation endpoint.
+9. **Never surface raw queue/worker terms to users.** Keep machine-readable progress labels in DB/events for the reaper, and route all UI display text through `friendlyChatProgressLabel` / `AgentRunStatusText` (`Starting…`, `Thinking…`, or `Waiting for your other chat to finish` — never `Queued` or `Dispatched`).
+10. **Add no new Skill file** under `.cursor/skills/` for chat-harness plumbing.
 
 ## `@cursor/sdk` import boundary
 

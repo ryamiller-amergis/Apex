@@ -628,6 +628,259 @@ describe('interactiveSessionActor control channel, steer inbox, summarize, and s
     ).toBe(true);
   });
 
+  it('uses run.wait().result for explicit summarize when SDK stream summary events carry no text', async () => {
+    const posted: AiRunIngestBody[] = [];
+
+    // Matches real `@cursor/sdk` v1.4.0 behavior: `SDKSummaryMessage` on
+    // `stream()` has only `{ type, status, fallback? }`, while `wait()` carries
+    // the summary text in `result`.
+    const sdkStyleSummaryRun: WorkerCursorExecutionRun = {
+      supports: (cap) => cap === 'stream' || cap === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'summary', status: 'running' };
+        yield { type: 'summary', status: 'completed' };
+      },
+      wait: async () => ({
+        status: 'finished',
+        result: 'Key decisions and next steps from the conversation.',
+      }),
+      cancel: async () => {},
+    };
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent: jest.fn(async (_b, checkout) => ({
+        mode: 'resumed' as const,
+        handle: makeControllableAgent({
+          workspaceRef: checkout.workspacePath,
+          summarize: async () => sdkStyleSummaryRun,
+        }),
+      })),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => undefined,
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      agentStoreSync: {
+        restoreAgentStore: async () => 'local-present',
+        backupAgentStore: async () => 0,
+      },
+    });
+
+    const bootstrap = makeDurableBootstrap({
+      cursorAgentId: 'agent-1',
+      specification: {
+        ...makeDurableBootstrap().specification,
+        harness: {
+          area: 'agent-home',
+          version: 1,
+          operation: 'summarize',
+          toolAllowlist: [],
+          customTools: [],
+          writeConfirmation: [],
+        },
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap,
+    });
+
+    expect(outcome.status).toBe('completed');
+    const summaryPosts = posted.filter(
+      (b): b is Extract<AiRunIngestBody, { kind: 'summary' }> => b.kind === 'summary',
+    );
+    expect(summaryPosts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'running' }),
+        expect.objectContaining({
+          status: 'completed',
+          text: 'Key decisions and next steps from the conversation.',
+        }),
+      ]),
+    );
+    expect(
+      posted.some((b) => b.kind === 'terminal' && b.status === 'completed'),
+    ).toBe(true);
+  });
+
+  it('reports summary error cleanly when explicit summarize finishes with empty text', async () => {
+    const posted: AiRunIngestBody[] = [];
+
+    const emptySummaryRun: WorkerCursorExecutionRun = {
+      supports: (cap) => cap === 'stream' || cap === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'summary', status: 'running' };
+        yield { type: 'summary', status: 'completed' };
+      },
+      wait: async () => ({ status: 'finished', result: '   ' }),
+      cancel: async () => {},
+    };
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent: jest.fn(async (_b, checkout) => ({
+        mode: 'resumed' as const,
+        handle: makeControllableAgent({
+          workspaceRef: checkout.workspacePath,
+          summarize: async () => emptySummaryRun,
+        }),
+      })),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => undefined,
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      agentStoreSync: {
+        restoreAgentStore: async () => 'local-present',
+        backupAgentStore: async () => 0,
+      },
+    });
+
+    const bootstrap = makeDurableBootstrap({
+      cursorAgentId: 'agent-1',
+      specification: {
+        ...makeDurableBootstrap().specification,
+        harness: {
+          area: 'agent-home',
+          version: 1,
+          operation: 'summarize',
+          toolAllowlist: [],
+          customTools: [],
+          writeConfirmation: [],
+        },
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap,
+    });
+
+    expect(outcome.status).toBe('failed');
+    expect(
+      posted.some(
+        (b) =>
+          b.kind === 'summary' &&
+          (b.status === 'completed' || b.status === 'fallback'),
+      ),
+    ).toBe(false);
+    expect(
+      posted.some((b) => b.kind === 'summary' && b.status === 'error'),
+    ).toBe(true);
+    expect(
+      posted.some((b) => b.kind === 'terminal' && b.status === 'failed'),
+    ).toBe(true);
+  });
+
+  it('keeps normal send turns healthy when SDK auto-summary emits completed without text', async () => {
+    const summaryGate = deferred<void>();
+    const summaryStarted = deferred<void>();
+    const sdkSteers: string[] = [];
+    const posted: AiRunIngestBody[] = [];
+
+    const runWithAutoSummary: WorkerCursorExecutionRun = {
+      supports: (cap) => cap === 'stream' || cap === 'cancel',
+      async *stream(): AsyncIterable<CursorStreamEvent> {
+        yield { type: 'summary', status: 'running' };
+        await summaryGate.promise;
+        yield { type: 'summary', status: 'completed' };
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'Answer after compaction.' }] },
+        };
+        yield { type: 'apex_turn_end' };
+      },
+      wait: async () => ({
+        status: 'finished',
+        result: 'Answer after compaction.',
+      }),
+      cancel: async () => {},
+    };
+
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent: jest.fn(async (_b, checkout) => ({
+        mode: 'resumed' as const,
+        handle: {
+          agentId: 'agent-1',
+          model: 'auto',
+          workspaceRef: checkout.workspacePath,
+          send: async () => runWithAutoSummary,
+          steer: async (text: string) => {
+            sdkSteers.push(text);
+            return { accepted: true };
+          },
+          cancel: async () => {},
+          dispose: async () => {},
+        },
+      })),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => undefined,
+      postIngest: async (_p, _r, body) => {
+        if (body.kind === 'summary' && body.status === 'running') {
+          summaryStarted.resolve();
+        }
+        if (
+          body.kind === 'summary' &&
+          (body.status === 'completed' || body.status === 'fallback') &&
+          (!body.text || body.text.trim().length === 0)
+        ) {
+          throw new Error('422 AI_RUN_VALIDATION: empty summary text');
+        }
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      agentStoreSync: {
+        restoreAgentStore: async () => 'local-present',
+        backupAgentStore: async () => 0,
+      },
+    });
+
+    const bootstrap = makeDurableBootstrap({ cursorAgentId: 'agent-1' });
+    const turnPromise = actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap,
+    });
+    await summaryStarted.promise;
+
+    const disposition = await actor.steer({
+      threadId: THREAD_ID,
+      runId: bootstrap.runId,
+      commandId: CMD_ID_1,
+      text: 'Check edge cases too',
+    });
+    expect(disposition).toBe('held');
+
+    summaryGate.resolve();
+    const outcome = await turnPromise;
+
+    expect(outcome.status).toBe('completed');
+    expect(sdkSteers).toEqual(['Check edge cases too']);
+    expect(
+      posted.some(
+        (b) =>
+          b.kind === 'summary' &&
+          (b.status === 'completed' || b.status === 'fallback'),
+      ),
+    ).toBe(false);
+    expect(
+      posted.some((b) => b.kind === 'terminal' && b.status === 'completed'),
+    ).toBe(true);
+  });
+
   it('VT-06 / BR-004: merges steer arriving during starting/resuming into prompt before SDK send', async () => {
     const acquireStarted = deferred<void>();
     const acquireGate = deferred<void>();
@@ -1138,6 +1391,57 @@ describe('interactiveSessionActor control channel, steer inbox, summarize, and s
       threadId: THREAD_ID,
       runId: 'run-1',
       commandId: CMD_ID_2,
+    });
+  });
+
+  it('forwards inlineArtifacts on terminal ingest when uploadAttemptArtifacts returns inline fallback files', async () => {
+    const posted: AiRunIngestBody[] = [];
+    const inlineFiles = [
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        contentBase64: Buffer.from('# Transcript').toString('base64'),
+        sha256: 'abc123',
+      },
+    ];
+    const actor = createInteractiveSessionActor({
+      openWarmCheckout: jest.fn(),
+      acquireAgent: jest.fn(),
+      acquireDurableAgent: jest.fn(async (_b, checkout) => ({
+        mode: 'recreated' as const,
+        handle: makeControllableAgent({
+          workspaceRef: checkout.workspacePath,
+          waitGate: Promise.resolve(),
+        }),
+      })),
+      materializeWorkspace: async (_b, destination) => ({
+        workspacePath: destination,
+      }),
+      uploadAttemptArtifacts: async () => ({
+        inlineArtifacts: inlineFiles,
+      }),
+      postIngest: async (_p, _r, body) => {
+        posted.push(body);
+        return { ok: true, cancelRequested: false };
+      },
+      durableHeartbeatMs: 60_000,
+      agentStoreSync: {
+        restoreAgentStore: async () => 'missing',
+        backupAgentStore: async () => 0,
+      },
+    });
+
+    const outcome = await actor.handleDurableTurn({
+      threadId: THREAD_ID,
+      bootstrap: makeDurableBootstrap(),
+    });
+
+    expect(outcome.status).toBe('completed');
+    const terminal = posted.find((b) => b.kind === 'terminal');
+    expect(terminal).toMatchObject({
+      kind: 'terminal',
+      status: 'completed',
+      artifactsFlushed: true,
+      inlineArtifacts: inlineFiles,
     });
   });
 });

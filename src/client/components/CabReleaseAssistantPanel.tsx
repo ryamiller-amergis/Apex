@@ -334,12 +334,12 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
             proposal: proposalContent,
           }}
           composer={{
-            disabled: composerDisabled,
+            disabled: session.isSending || isCreating || !threadId,
             allowEmptySend: true,
             placeholder: isCreating || skillConfigPending
               ? 'Starting cab-release…'
               : session.isRunning
-                ? 'Agent is working…'
+                ? 'Send a follow-up while the agent works…'
                 : 'Reply to cab-release… (Enter to send)',
             textareaRef,
             attachments,

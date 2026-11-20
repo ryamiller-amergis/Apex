@@ -38,7 +38,7 @@ export const ChatRunProgressLabel: React.FC<ChatRunProgressLabelProps> = ({
   }, []);
 
   if (waiting) {
-    return <>{fallbackLabel}</>;
+    return <>{friendlyChatProgressLabel(fallbackLabel, progressPhase)}</>;
   }
 
   const running = [...toolProgress].reverse().find((tool) => tool.status === 'running');

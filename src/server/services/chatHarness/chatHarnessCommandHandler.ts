@@ -71,6 +71,10 @@ import {
   inferHarnessArea,
   stampThreadHarnessIfMissing as defaultStampThreadHarnessIfMissing,
 } from './inferHarnessArea';
+import {
+  getAreaHooks as defaultGetAreaHooks,
+  type ChatHarnessAreaHooks,
+} from './areaHooks';
 
 export { inferHarnessArea as inferHarnessAreaFromThread };
 
@@ -142,12 +146,17 @@ export interface ChatHarnessCommandHandlerDeps {
   cancelRun?: (threadId: string) => Promise<void>;
   controlBus?: {
     publishControl: (message: HarnessControlMessage) => Promise<void>;
+    subscribeAck?: (
+      threadId: string,
+      cb: (ack: HarnessControlAck) => void,
+    ) => () => void;
   };
   stampThreadHarness?: (
     threadId: string,
     area: HarnessAreaId,
     version: number,
   ) => Promise<boolean>;
+  getAreaHooks?: (area: HarnessAreaId) => ChatHarnessAreaHooks | undefined;
   trackEvent?: (
     name: string,
     props?: Record<string, string>,
@@ -303,6 +312,7 @@ export function createChatHarnessCommandHandler(
   const controlBus = deps.controlBus ?? chatHarnessControlBus;
   const stampThreadHarness =
     deps.stampThreadHarness ?? defaultStampThreadHarnessIfMissing;
+  const resolveAreaHooks = deps.getAreaHooks ?? defaultGetAreaHooks;
   const track = deps.trackEvent ?? defaultTrackEvent;
   const cancelConfirmTimeoutMs =
     deps.cancelConfirmTimeoutMs ?? DEFAULT_CANCEL_CONFIRM_TIMEOUT_MS;
@@ -310,6 +320,52 @@ export function createChatHarnessCommandHandler(
 
   const cancelTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const inFlightCommands = new Map<string, Promise<HarnessReceipt>>();
+  const ackSubscriptions = new Map<
+    string,
+    { unsubscribe: () => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  const ACK_SUBSCRIPTION_IDLE_MS = 10 * 60 * 1_000;
+
+  let handleControlAckRef: ((ack: HarnessControlAck) => Promise<void>) | null =
+    null;
+
+  const ensureAckSubscription = (threadId: string): void => {
+    if (!controlBus.subscribeAck) return;
+    const existing = ackSubscriptions.get(threadId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      const timer = setTimeout(() => {
+        const entry = ackSubscriptions.get(threadId);
+        if (!entry) return;
+        ackSubscriptions.delete(threadId);
+        entry.unsubscribe();
+      }, ACK_SUBSCRIPTION_IDLE_MS);
+      timer.unref?.();
+      existing.timer = timer;
+      return;
+    }
+    const unsubscribe = controlBus.subscribeAck(threadId, (ack) => {
+      if (!handleControlAckRef) return;
+      void handleControlAckRef(ack).catch((err: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: 'ChatHarnessControlAckError',
+            commandId: ack.commandId,
+            kind: ack.kind,
+            errorType: err instanceof Error ? err.name : 'UnknownError',
+          }),
+        );
+      });
+    });
+    const timer = setTimeout(() => {
+      const entry = ackSubscriptions.get(threadId);
+      if (!entry) return;
+      ackSubscriptions.delete(threadId);
+      entry.unsubscribe();
+    }, ACK_SUBSCRIPTION_IDLE_MS);
+    timer.unref?.();
+    ackSubscriptions.set(threadId, { unsubscribe, timer });
+  };
 
   const timerKey = (threadId: string, commandId: string): string =>
     `${threadId}:${commandId}`;
@@ -378,8 +434,47 @@ export function createChatHarnessCommandHandler(
     const resolved = await resolveProfile(
       input.area,
       input.thread.kickoff.project,
-      { settingsId: input.thread.kickoff.skillSettingsId ?? undefined },
+      {
+        settingsId: input.thread.kickoff.skillSettingsId ?? undefined,
+        skillPath: input.thread.kickoff.skillPath ?? null,
+      },
     );
+    const areaHooks = resolveAreaHooks(input.area);
+    const beforeResult = areaHooks?.beforeSend
+      ? await areaHooks.beforeSend({
+          area: input.area,
+          threadId: input.threadId,
+          userId: input.userId,
+          commandId: input.commandId,
+          text: input.text,
+          attachments: [],
+          thread: input.thread,
+          resolvedProfile: resolved,
+          fromSteerFollowUp: true,
+        })
+      : undefined;
+
+    if (beforeResult && 'rejectReason' in beforeResult && beforeResult.rejectReason) {
+      const rejected = await repository.updateReceipt(
+        input.threadId,
+        input.commandId,
+        {
+          status: 'rejected',
+          reason: beforeResult.rejectReason,
+          ...(input.expectedStatus
+            ? { expectedStatus: input.expectedStatus }
+            : {}),
+        },
+      );
+      if (rejected) return rowToHarnessReceipt(rejected);
+      return {
+        commandId: input.commandId,
+        kind: 'steer',
+        status: 'rejected',
+        reason: beforeResult.rejectReason,
+        updatedAt: now().toISOString(),
+      };
+    }
 
     try {
       const admitted = await admitTurn({
@@ -387,12 +482,47 @@ export function createChatHarnessCommandHandler(
         threadId: input.threadId,
         userId: input.userId,
         workflowClass: resolved.workflowClass,
-        text: input.text,
-        modelOverride: resolved.model,
+        text: beforeResult?.text ?? input.text,
+        modelOverride: beforeResult?.modelOverride ?? resolved.model,
         effort: resolved.effort,
+        ...(beforeResult?.hidden !== undefined ? { hidden: beforeResult.hidden } : {}),
+        ...(beforeResult?.internalContext !== undefined
+          ? { internalContext: beforeResult.internalContext }
+          : {}),
+        ...(beforeResult?.brainstorm !== undefined
+          ? { brainstorm: beforeResult.brainstorm }
+          : {}),
+        ...(beforeResult?.areaKeyContext !== undefined
+          ? { areaKeyContext: beforeResult.areaKeyContext }
+          : {}),
         ...(input.toolGrantInput ? { toolGrant: input.toolGrantInput } : {}),
         harness: toFrozenHarnessSpec(resolved),
       });
+
+      if (areaHooks?.afterSendAccepted) {
+        try {
+          await areaHooks.afterSendAccepted({
+            area: input.area,
+            threadId: input.threadId,
+            userId: input.userId,
+            commandId: input.commandId,
+            runId: admitted.runId,
+            thread: input.thread,
+            admitted,
+            fromSteerFollowUp: true,
+          });
+        } catch (hookErr) {
+          console.error(
+            JSON.stringify({
+              event: 'ChatHarnessAreaHookError',
+              hook: 'afterSendAccepted',
+              area: input.area,
+              commandId: input.commandId,
+              errorType: hookErr instanceof Error ? hookErr.name : 'UnknownError',
+            }),
+          );
+        }
+      }
 
       const updated = await repository.updateReceipt(
         input.threadId,
@@ -416,6 +546,13 @@ export function createChatHarnessCommandHandler(
         updatedAt: now().toISOString(),
       };
     } catch (err) {
+      if (beforeResult && !('rejectReason' in beforeResult) && beforeResult.onAdmissionFailed) {
+        try {
+          await beforeResult.onAdmissionFailed(err);
+        } catch {
+          // Best-effort rollback only; surface the original admission error.
+        }
+      }
       if (
         err instanceof DurableInteractiveTurnError &&
         err.code === 'TURN_ID_CONFLICT'
@@ -441,7 +578,7 @@ export function createChatHarnessCommandHandler(
     }
   };
 
-  return {
+  const handler: ChatHarnessCommandHandler = {
     async handle(input: HandleHarnessCommandInput): Promise<HarnessReceipt> {
       const startedAtMs = now().getTime();
 
@@ -571,23 +708,92 @@ export function createChatHarnessCommandHandler(
               thread.kickoff.project,
               {
                 settingsId: thread.kickoff.skillSettingsId ?? undefined,
-                skillPath: body.skill?.path ?? null,
+                skillPath: body.skill?.path ?? thread.kickoff.skillPath ?? null,
               },
             );
+            const areaHooks = resolveAreaHooks(area);
+            const beforeResult = areaHooks?.beforeSend
+              ? await areaHooks.beforeSend({
+                  area,
+                  threadId: input.threadId,
+                  userId: input.userId,
+                  commandId: body.commandId,
+                  text: body.text,
+                  model: body.model,
+                  attachments: validatedAttachments,
+                  skill: body.skill,
+                  thread,
+                  resolvedProfile: resolved,
+                })
+              : undefined;
+
+            if (beforeResult && 'rejectReason' in beforeResult && beforeResult.rejectReason) {
+              const rejected = await repository.updateReceipt(
+                input.threadId,
+                body.commandId,
+                {
+                  status: 'rejected',
+                  reason: beforeResult.rejectReason,
+                },
+              );
+              return rejected
+                ? rowToHarnessReceipt(rejected)
+                : {
+                    commandId: body.commandId,
+                    kind: 'send',
+                    status: 'rejected',
+                    reason: beforeResult.rejectReason,
+                    updatedAt: now().toISOString(),
+                  };
+            }
+
             try {
               const admitted = await admitTurn({
                 turnId: body.commandId,
                 threadId: input.threadId,
                 userId: input.userId,
                 workflowClass: resolved.workflowClass,
-                text: body.text,
-                modelOverride: body.model ?? resolved.model,
+                text: beforeResult?.text ?? body.text,
+                modelOverride: beforeResult?.modelOverride ?? body.model ?? resolved.model,
                 effort: resolved.effort,
                 attachments: validatedAttachments,
                 turnSkill: body.skill,
+                ...(beforeResult?.hidden !== undefined ? { hidden: beforeResult.hidden } : {}),
+                ...(beforeResult?.internalContext !== undefined
+                  ? { internalContext: beforeResult.internalContext }
+                  : {}),
+                ...(beforeResult?.brainstorm !== undefined
+                  ? { brainstorm: beforeResult.brainstorm }
+                  : {}),
+                ...(beforeResult?.areaKeyContext !== undefined
+                  ? { areaKeyContext: beforeResult.areaKeyContext }
+                  : {}),
                 ...(toolGrantInput ? { toolGrant: toolGrantInput } : {}),
                 harness: toFrozenHarnessSpec(resolved),
               });
+              if (areaHooks?.afterSendAccepted) {
+                try {
+                  await areaHooks.afterSendAccepted({
+                    area,
+                    threadId: input.threadId,
+                    userId: input.userId,
+                    commandId: body.commandId,
+                    runId: admitted.runId,
+                    thread,
+                    admitted,
+                  });
+                } catch (hookErr) {
+                  console.error(
+                    JSON.stringify({
+                      event: 'ChatHarnessAreaHookError',
+                      hook: 'afterSendAccepted',
+                      area,
+                      commandId: body.commandId,
+                      errorType: hookErr instanceof Error ? hookErr.name : 'UnknownError',
+                    }),
+                  );
+                }
+              }
               const updated = await repository.updateReceipt(
                 input.threadId,
                 body.commandId,
@@ -606,6 +812,13 @@ export function createChatHarnessCommandHandler(
                     updatedAt: now().toISOString(),
                   };
             } catch (err) {
+              if (beforeResult && !('rejectReason' in beforeResult) && beforeResult.onAdmissionFailed) {
+                try {
+                  await beforeResult.onAdmissionFailed(err);
+                } catch {
+                  // Best-effort rollback only; surface the original admission error.
+                }
+              }
               if (
                 err instanceof DurableInteractiveTurnError &&
                 err.code === 'TURN_ID_CONFLICT'
@@ -699,6 +912,7 @@ export function createChatHarnessCommandHandler(
                 runId: runState.activeRunId,
               },
             );
+            ensureAckSubscription(input.threadId);
             await controlBus.publishControl({
               kind: 'steer',
               threadId: input.threadId,
@@ -744,7 +958,10 @@ export function createChatHarnessCommandHandler(
             const resolved = await resolveProfile(
               area,
               thread.kickoff.project,
-              { settingsId: thread.kickoff.skillSettingsId ?? undefined },
+              {
+                settingsId: thread.kickoff.skillSettingsId ?? undefined,
+                skillPath: thread.kickoff.skillPath ?? null,
+              },
             );
             const admitted = await admitTurn({
               turnId: body.commandId,
@@ -801,6 +1018,29 @@ export function createChatHarnessCommandHandler(
             }
 
             await cancelRun(input.threadId);
+            const cancelHooks = resolveAreaHooks(area);
+            if (cancelHooks?.afterCancelAccepted) {
+              try {
+                await cancelHooks.afterCancelAccepted({
+                  area,
+                  threadId: input.threadId,
+                  userId: input.userId,
+                  commandId: body.commandId,
+                  activeRunId: runState.activeRunId,
+                  thread,
+                });
+              } catch (hookErr) {
+                console.error(
+                  JSON.stringify({
+                    event: 'ChatHarnessAreaHookError',
+                    hook: 'afterCancelAccepted',
+                    area,
+                    commandId: body.commandId,
+                    errorType: hookErr instanceof Error ? hookErr.name : 'UnknownError',
+                  }),
+                );
+              }
+            }
             const attached = await repository.updateReceipt(
               input.threadId,
               body.commandId,
@@ -810,6 +1050,7 @@ export function createChatHarnessCommandHandler(
               },
             );
             if (runState.activeRunId) {
+              ensureAckSubscription(input.threadId);
               await controlBus.publishControl({
                 kind: 'cancel',
                 threadId: input.threadId,
@@ -831,12 +1072,83 @@ export function createChatHarnessCommandHandler(
           }
 
           case 'retry': {
-            const retried = await retryTurn({
-              threadId: input.threadId,
-              runId: body.runId,
-              userId: input.userId,
-              ...(toolGrantInput ? { toolGrant: toolGrantInput } : {}),
-            });
+            const retryHooks = resolveAreaHooks(area);
+            const beforeRetry = retryHooks?.beforeRetry
+              ? await retryHooks.beforeRetry({
+                  area,
+                  threadId: input.threadId,
+                  userId: input.userId,
+                  commandId: body.commandId,
+                  targetRunId: body.runId,
+                  thread,
+                })
+              : undefined;
+
+            if (beforeRetry && 'rejectReason' in beforeRetry && beforeRetry.rejectReason) {
+              const rejected = await repository.updateReceipt(
+                input.threadId,
+                body.commandId,
+                {
+                  status: 'rejected',
+                  reason: beforeRetry.rejectReason,
+                },
+              );
+              return rejected
+                ? rowToHarnessReceipt(rejected)
+                : {
+                    commandId: body.commandId,
+                    kind: 'retry',
+                    status: 'rejected',
+                    reason: beforeRetry.rejectReason,
+                    updatedAt: now().toISOString(),
+                  };
+            }
+
+            let retried: InteractiveTurnAcceptedResponse;
+            try {
+              retried = await retryTurn({
+                threadId: input.threadId,
+                runId: body.runId,
+                userId: input.userId,
+                ...(beforeRetry?.refreshedBrainstormArtifact
+                  ? { refreshedBrainstormArtifact: beforeRetry.refreshedBrainstormArtifact }
+                  : {}),
+                ...(toolGrantInput ? { toolGrant: toolGrantInput } : {}),
+              });
+            } catch (err) {
+              if (beforeRetry && !('rejectReason' in beforeRetry) && beforeRetry.onRetryFailed) {
+                try {
+                  await beforeRetry.onRetryFailed(err);
+                } catch {
+                  // Best-effort rollback only; surface the original retry error.
+                }
+              }
+              throw err;
+            }
+            if (retryHooks?.afterRetryAccepted) {
+              try {
+                await retryHooks.afterRetryAccepted({
+                  area,
+                  threadId: input.threadId,
+                  userId: input.userId,
+                  commandId: body.commandId,
+                  targetRunId: body.runId,
+                  runId: retried.runId,
+                  thread,
+                  retried,
+                });
+              } catch (hookErr) {
+                console.error(
+                  JSON.stringify({
+                    event: 'ChatHarnessAreaHookError',
+                    hook: 'afterRetryAccepted',
+                    area,
+                    commandId: body.commandId,
+                    errorType: hookErr instanceof Error ? hookErr.name : 'UnknownError',
+                  }),
+                );
+              }
+            }
             const updated = await repository.updateReceipt(
               input.threadId,
               body.commandId,
@@ -960,8 +1272,15 @@ export function createChatHarnessCommandHandler(
         clearTimeout(timer);
       }
       cancelTimers.clear();
+      for (const entry of ackSubscriptions.values()) {
+        clearTimeout(entry.timer);
+        entry.unsubscribe();
+      }
+      ackSubscriptions.clear();
     },
   };
+  handleControlAckRef = handler.handleControlAck;
+  return handler;
 }
 
 export const chatHarnessCommandHandler: ChatHarnessCommandHandler =

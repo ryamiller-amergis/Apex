@@ -328,7 +328,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
               placeholder: isCreating
                 ? 'Starting assistant…'
                 : isRunning
-                  ? 'Steer the agent… (Enter to steer)'
+                  ? 'Send a follow-up while the agent works…'
                   : 'Ask about this PRD… (Enter to send)',
               textareaRef,
               attachments,

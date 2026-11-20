@@ -33,6 +33,10 @@ export {
   type AgentLiveWorkBoxTestIds,
 } from './AgentLiveWorkBox';
 export {
+  AgentRunStatusText,
+  type AgentRunStatusTextProps,
+} from './AgentRunStatusText';
+export {
   AgentThoughtProcess,
   type AgentThoughtProcessProps,
   type AgentThoughtProcessTestIds,

@@ -736,7 +736,11 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
         )}
         {showStandaloneActivity && (
           <article className={`${styles.message} ${styles.collaborator}`} aria-label="Collaborator">
-            <BrainstormAgentWork chat={chat} restoringSources={restoring} />
+            <BrainstormAgentWork
+              chat={chat}
+              text={chat.streamingText}
+              restoringSources={restoring}
+            />
           </article>
         )}
       </>
@@ -801,9 +805,11 @@ export const BrainstormChatPanel: React.FC<BrainstormChatPanelProps> = ({ projec
           maxHeight: 160,
           autoFocus: canMutate,
           placeholder:
-            composerMode === BRAINSTORM_EXPLORE_MODE
-              ? 'Explore an idea, ask a question, or paste a screenshot…'
-              : `Describe what to draft or update in your ${BRAINSTORM_ARTIFACT_TYPE_LABELS[composerMode].toLowerCase()}, or switch back to Explore…`,
+            busy
+              ? 'Send a follow-up while the agent works…'
+              : composerMode === BRAINSTORM_EXPLORE_MODE
+                ? 'Explore an idea, ask a question, or paste a screenshot…'
+                : `Describe what to draft or update in your ${BRAINSTORM_ARTIFACT_TYPE_LABELS[composerMode].toLowerCase()}, or switch back to Explore…`,
           before: chat.sendError ? (
             <p className={styles.sendError} role="alert">
               {chat.sendError}

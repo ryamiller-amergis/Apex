@@ -150,11 +150,11 @@ function mergePendingCommands(
   const existingById = new Map(current.map((item) => [item.commandId, item]));
   const filteredServer = serverPending.filter((item) => {
     if (settledCommandIds.has(item.commandId)) return false;
-    // A thread with no active run cannot still have an in-flight accepted send/retry.
+    // A thread with no active run cannot still have an in-flight accepted turn command.
     if (
       !options.hasActiveRun &&
       item.status === 'accepted' &&
-      (item.kind === 'send' || item.kind === 'retry')
+      (item.kind === 'send' || item.kind === 'retry' || item.kind === 'summarize')
     ) {
       return false;
     }
@@ -176,7 +176,7 @@ function mergePendingCommands(
     if (options.dropLocalCancel && item.kind === 'cancel') continue;
     if (
       options.dropLocalTurnCommands &&
-      (item.kind === 'send' || item.kind === 'retry')
+      (item.kind === 'send' || item.kind === 'retry' || item.kind === 'summarize')
     ) {
       continue;
     }
@@ -447,6 +447,12 @@ export function createChatHarnessStore(
             isRetrying: false,
             retryReason: null,
             groundingPreparation: null,
+            lastReceipt:
+              state.lastReceipt &&
+              state.lastReceipt.kind === 'steer' &&
+              state.lastReceipt.status === 'accepted'
+                ? null
+                : state.lastReceipt,
             terminalRevision: state.terminalRevision + 1,
           }
         : {}),
@@ -575,6 +581,12 @@ export function createChatHarnessStore(
       }
     } else if (receipt.kind === 'cancel' && receipt.status === 'rejected') {
       nextStopping = false;
+    } else if (
+      receipt.kind === 'summarize' &&
+      receipt.status === 'accepted' &&
+      receipt.runId
+    ) {
+      nextActiveRunId = receipt.runId;
     } else if (receipt.kind === 'summarize' && receipt.status === 'rejected') {
       if (state.summaryNotice?.status === 'running') {
         nextSummaryNotice = {

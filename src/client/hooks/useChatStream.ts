@@ -720,7 +720,7 @@ export function useChatStream(
               : prev
           );
           setProgressLabel((prev) =>
-            !prev || prev === 'Queued' || prev === 'Dispatched'
+            !prev || prev === 'Queued' || prev === 'Dispatched' || prev === 'Starting…'
               ? progressLabelForPhase('analysis', thinkingEvent.text)
               : prev
           );

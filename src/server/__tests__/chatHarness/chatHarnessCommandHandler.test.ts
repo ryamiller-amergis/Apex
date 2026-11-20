@@ -247,6 +247,10 @@ function makeHandlerHarness(overrides: {
     | { ok: false; reason: 'Sign in again to continue' };
   cancelConfirmTimeoutMs?: number;
   onReceiptChanged?: (threadId: string, receipt: HarnessReceipt) => void;
+  subscribeAck?: (
+    threadId: string,
+    cb: (ack: HarnessControlAck) => void,
+  ) => () => void;
 } = {}) {
   let currentThread = overrides.thread === undefined ? makeThread() : overrides.thread;
   let currentAccess: 'owner' | 'read' = overrides.threadAccess ?? 'owner';
@@ -322,6 +326,7 @@ function makeHandlerHarness(overrides: {
     cancelRun: cancelRunMock,
     controlBus: {
       publishControl: publishControlMock,
+      ...(overrides.subscribeAck ? { subscribeAck: overrides.subscribeAck } : {}),
     },
     trackEvent: trackEventMock,
     cancelConfirmTimeoutMs: overrides.cancelConfirmTimeoutMs ?? 2_000,
@@ -1389,5 +1394,47 @@ describe('W3-A / S6 — chatHarnessCommandHandler & supporting modules', () => {
     expect(typeof repo.countActiveSteersForRun).toBe('function');
     expect(typeof repo.listPendingCommands).toBe('function');
     expect(typeof repo.listPendingControlForRun).toBe('function');
+  });
+
+  it('auto-subscribes to controlBus.subscribeAck on steer publish and transitions receipt to applied', async () => {
+    const ackListeners = new Map<string, (ack: HarnessControlAck) => void>();
+    const unsubscribe = jest.fn();
+    const { handler, mem } = makeHandlerHarness({
+      runState: {
+        activeRunId: ACTIVE_RUN_ID,
+        hasQueuedTurn: false,
+        activeRunStatus: 'running',
+      },
+      subscribeAck: (threadId, cb) => {
+        ackListeners.set(threadId, cb);
+        return unsubscribe;
+      },
+    });
+
+    const receipt = await handler.handle({
+      userId: 'user-1',
+      threadId: THREAD_ID,
+      body: { commandId: CMD_1, kind: 'steer', text: 'Focus on the checklist' },
+      transport: 'socket',
+    });
+
+    expect(receipt.status).toBe('accepted');
+    expect(ackListeners.has(THREAD_ID)).toBe(true);
+
+    ackListeners.get(THREAD_ID)!({
+      threadId: THREAD_ID,
+      runId: ACTIVE_RUN_ID,
+      commandId: CMD_1,
+      kind: 'steer',
+      disposition: 'steered',
+      timestamp: '2026-11-19T00:01:00.000Z',
+    });
+
+    await new Promise((r) => setImmediate(r));
+    const updated = await mem.repo.findByCommandId(THREAD_ID, CMD_1);
+    expect(updated?.status).toBe('applied');
+
+    handler.dispose();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

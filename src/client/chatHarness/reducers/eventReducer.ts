@@ -505,9 +505,22 @@ function clearSettledTurnPendingCommands(
   pendingCommands: RuntimeState['pendingCommands'],
 ): RuntimeState['pendingCommands'] {
   const next = pendingCommands.filter(
-    (item) => item.kind !== 'send' && item.kind !== 'retry' && item.kind !== 'cancel',
+    (item) =>
+      item.kind !== 'send' &&
+      item.kind !== 'retry' &&
+      item.kind !== 'summarize' &&
+      item.kind !== 'cancel',
   );
   return next.length === pendingCommands.length ? pendingCommands : next;
+}
+
+function clearStaleAcceptedSteerReceipt(
+  lastReceipt: RuntimeState['lastReceipt'],
+): RuntimeState['lastReceipt'] {
+  if (lastReceipt && lastReceipt.kind === 'steer' && lastReceipt.status === 'accepted') {
+    return null;
+  }
+  return lastReceipt;
 }
 
 function buildFailedEnding(
@@ -541,6 +554,7 @@ function buildFailedEnding(
     activeRunId: null,
     stopping: false,
     pendingCommands: clearSettledTurnPendingCommands(state.pendingCommands),
+    lastReceipt: clearStaleAcceptedSteerReceipt(state.lastReceipt),
     retryableRunId: runId,
     messages: nextMessages,
     lastFailure: {
@@ -821,6 +835,7 @@ export function reduceHarnessEvent(
         !state.progressLabel ||
         state.progressLabel === 'Queued' ||
         state.progressLabel === 'Dispatched' ||
+        state.progressLabel === 'Starting…' ||
         state.progressLabel === 'Sending…'
           ? progressLabelForPhase('analysis', thinkingEvent.text)
           : state.progressLabel;
@@ -1117,6 +1132,7 @@ export function reduceHarnessEvent(
           activeRunId: null,
           stopping: false,
           pendingCommands: clearSettledTurnPendingCommands(state.pendingCommands),
+          lastReceipt: clearStaleAcceptedSteerReceipt(state.lastReceipt),
           terminalRevision: state.terminalRevision + 1,
         };
       }

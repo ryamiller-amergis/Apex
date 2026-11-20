@@ -33,7 +33,7 @@ import {
 } from '../hooks/useAdrs';
 import { DEFAULT_MODEL_ID } from '../config/models';
 import { InterviewAgentMessage } from './InterviewChatView';
-import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
+import { AgentHarnessPanel, AgentRunStatusText, AgentThoughtProcess } from './agentChat';
 import type { HarnessTranscriptItem } from '../chatHarness/types';
 import { AdrAssistantPanel } from './AdrAssistantPanel';
 import { ProposedAdrChangesReview } from './ProposedAdrChangesReview';
@@ -1190,16 +1190,12 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
                       aria-live="polite"
                       {...{ 'data-testid': 'agent-run-status-label' }}
                     >
-                      {progressPhase === 'queued' ? (
-                        <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                          Queued
-                        </span>
-                      ) : progressPhase === 'dispatched' ? (
-                        <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                          Dispatched
-                        </span>
-                      ) : progressLabel ? (
-                        friendlyChatProgressLabel(progressLabel, progressPhase)
+                      {progressPhase === 'queued' || progressPhase === 'dispatched' || progressLabel ? (
+                        <AgentRunStatusText
+                          progressPhase={progressPhase}
+                          progressLabel={progressLabel}
+                          showElapsedAndSteps={false}
+                        />
                       ) : isChatThreadError ? (
                         'The ADR service is reconnecting after a temporary interruption…'
                       ) : isChatThreadLoading ? (
@@ -1225,11 +1221,11 @@ const ExistingAdrView: React.FC<{ id: string }> = ({ id }) => {
           )}
           composer={{
             hideComposer: chatLocked,
-            disabled: composerBusy || resumeGate.composerBlocked,
+            disabled: (!kickoffFailed && (session.isSending || session.isPreparing)) || resumeGate.composerBlocked,
             placeholder: showPreparationState
               ? 'Preparing the workspace…'
               : isAgentProcessing
-                ? 'Architect is thinking…'
+                ? (session.isSteerSupported ? 'Send a follow-up while the agent works…' : 'Architect is thinking…')
                 : 'Continue the ADR interview… (Enter to send)',
             allowEmptySend: true,
             attachments,

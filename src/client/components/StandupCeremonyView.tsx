@@ -453,9 +453,11 @@ export const StandupCeremonyView: React.FC = () => {
             )}
             composer={{
               hideComposer: isSubmitted,
-              disabled: isRunning,
+              disabled: chatSession.isSending,
               allowEmptySend: true,
-              placeholder: 'Type your response… (Enter to send, Shift+Enter for new line)',
+              placeholder: isRunning
+                ? 'Send a follow-up while the agent works…'
+                : 'Type your response… (Enter to send, Shift+Enter for new line)',
               rows: 2,
               attachments,
               attachmentError,

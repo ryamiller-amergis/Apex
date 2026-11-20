@@ -558,11 +558,11 @@ describe('useChatStream', () => {
       }),
     ]);
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe('Queued');
+    expect(result.current.progressLabel).toBe('Starting…');
     expect(result.current.status).toBe('running');
   });
 
-  it('PBI-006 AC-0 / VT-02 maps dispatched to Dispatched before later running and terminal behavior', () => {
+  it('PBI-006 AC-0 / VT-02 maps dispatched to Starting… before later running and terminal behavior', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
@@ -588,7 +588,7 @@ describe('useChatStream', () => {
     });
 
     expect(result.current.progressPhase).toBe('dispatched');
-    expect(result.current.progressLabel).toBe('Dispatched');
+    expect(result.current.progressLabel).toBe('Starting…');
     expect(result.current.status).toBe('running');
 
     act(() => {

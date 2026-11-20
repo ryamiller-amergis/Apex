@@ -680,7 +680,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
             placeholder: isCreating
               ? 'Starting assistant…'
               : isRunning
-                ? 'Steer the agent… (Enter to steer)'
+                ? 'Send a follow-up while the agent works…'
                 : 'Ask about this design doc… (Enter to send)',
             readOnlyNotice: 'Assistant is read-only — you can view the conversation but cannot send messages.',
             textareaRef,

@@ -695,6 +695,20 @@ describe('S3 chatHarness store and eventReducer', () => {
         status: 'fallback',
         isFallback: true,
       });
+
+      // Accepted summarize command tracks activeRunId and clears on terminal done
+      store.recordPendingCommand('cmd-sum-1', 'summarize');
+      store.applyReceipt({
+        commandId: 'cmd-sum-1',
+        kind: 'summarize',
+        status: 'accepted',
+        runId: FIXTURE_RUN_ID,
+        updatedAt: '2026-11-19T00:02:00.000Z',
+      });
+      expect(store.getState().activeRunId).toBe(FIXTURE_RUN_ID);
+      store.applyEvent({ type: 'done', runId: FIXTURE_RUN_ID }, 'sum-done-1');
+      expect(store.getState().activeRunId).toBeNull();
+      expect(store.getState().pendingCommands).toEqual([]);
     });
 
     it('normalizes phase detail (whitespace collapse + 500 char cap) and handles done/error/grounding/health', () => {
@@ -992,6 +1006,52 @@ describe('S3 chatHarness store and eventReducer', () => {
       expect(store.getState().status).toBe('error');
       expect(store.getState().activeRunId).toBeNull();
       expect(store.getState().pendingCommands).toEqual([]);
+    });
+
+    it('clears stale accepted Steer received receipt when the turn fails or finishes', () => {
+      const store = createChatHarnessStore(FIXTURE_THREAD_ID);
+      store.applyStateFrame(
+        makeThreadState({
+          threadStatus: 'running',
+          activeRunId: FIXTURE_RUN_ID,
+          phase: 'running',
+        }),
+      );
+      store.applyReceipt(
+        makeReceipt({
+          commandId: FIXTURE_CMD_ID_1,
+          kind: 'steer',
+          status: 'accepted',
+          runId: FIXTURE_RUN_ID,
+        }),
+      );
+      expect(store.getState().lastReceipt?.text).toBe('Steer received');
+
+      store.applyEvent(
+        { type: 'error', error: 'Turn failed', runId: FIXTURE_RUN_ID },
+        'ev-steer-fail',
+      );
+      expect(store.getState().lastReceipt).toBeNull();
+
+      // Queued follow-up steer receipt is preserved across turn completion
+      store.applyStateFrame(
+        makeThreadState({
+          threadStatus: 'running',
+          activeRunId: FIXTURE_RUN_ID,
+          phase: 'running',
+        }),
+      );
+      store.applyReceipt(
+        makeReceipt({
+          commandId: FIXTURE_CMD_ID_2,
+          kind: 'steer',
+          status: 'queued',
+          reason: 'Queued as follow-up',
+          runId: FIXTURE_RUN_ID,
+        }),
+      );
+      store.applyEvent({ type: 'done', runId: FIXTURE_RUN_ID }, 'ev-steer-done');
+      expect(store.getState().lastReceipt?.status).toBe('queued');
     });
   });
 });
