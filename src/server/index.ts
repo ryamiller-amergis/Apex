@@ -15,6 +15,7 @@ import azureCostRoutes from './routes/azureCost';
 import skillsRoutes from './routes/skills';
 import wikiRoutes from './routes/wiki';
 import chatRoutes from './routes/chat';
+import chatHarnessRoutes from './routes/chatHarness';
 import workitemsFromPrdRoutes from './routes/workitemsFromPrd';
 import interviewRoutes from './routes/interviews';
 import adrRoutes from './routes/adr';
@@ -96,10 +97,8 @@ import buildsRoutes from './routes/builds';
 import { startBuildQueueScheduler, stopBuildQueueScheduler } from './services/buildQueueScheduler';
 import { startBuildReconciliation, stopBuildReconciliation } from './services/buildReconciliationScheduler';
 import { createSessionOptions, createSessionStore } from './sessionStore';
-import {
-  isInteractiveGatewayEnabled,
-  mountInteractiveGateway,
-} from './services/interactiveGatewayHost';
+import { mountInteractiveGateway } from './services/interactiveGatewayHost';
+import { chatHarnessMaintenanceScheduler } from './services/chatHarness/chatHarnessMaintenanceScheduler';
 import uiLabRoutes from './routes/uiLab';
 import aiCostRoutes from './routes/aiCost';
 import e2eSetupRoutes from './routes/e2eSetup';
@@ -272,6 +271,7 @@ app.use('/api/ai-cost', ensureAuthenticated, aiCostRoutes);
 app.use('/api/skills', ensureAuthenticated, skillsRoutes);
 app.use('/api/wiki', ensureAuthenticated, wikiRoutes);
 app.use('/api/chat', ensureAuthenticated, chatRoutes);
+app.use('/api/harness', ensureAuthenticated, chatHarnessRoutes);
 app.use('/api/interviews', ensureAuthenticated, interviewRoutes);
 app.use('/api/adr', ensureAuthenticated, adrRoutes);
 app.use('/api/brainstorm', ensureAuthenticated, brainstormRoutes);
@@ -399,25 +399,23 @@ const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
-  // FEAT-007: interactive WebSocket agent gateway (Dapr actor tier). Off by
-  // default; when enabled it authenticates upgrades with the same session +
-  // passport chain and streams the thread's durable run events.
-  if (isInteractiveGatewayEnabled()) {
-    mountInteractiveGateway(server, {
-      sessionMiddleware,
-      passportInitialize: passportInitializeMiddleware,
-      passportSession: passportSessionMiddleware,
-    });
-    // FEAT-007: subscribe the gateway to the Redis live bus (ephemeral actor→
-    // client fan-out). No-op when REDIS_* is unset — replay + poll cover it.
-    initInteractiveLiveBus().catch((err) =>
-      console.error('[startup] initInteractiveLiveBus failed:', err.message),
-    );
-    server.once('close', () => {
-      void shutdownInteractiveLiveBus();
-    });
-    console.log('[FEAT-007] Interactive WebSocket gateway mounted');
-  }
+  // FEAT-007 / FEAT-002 (TBI-010): interactive WebSocket agent gateway is
+  // always mounted and authenticates upgrades with the same session + passport
+  // chain plus thread read-access checks.
+  mountInteractiveGateway(server, {
+    sessionMiddleware,
+    passportInitialize: passportInitializeMiddleware,
+    passportSession: passportSessionMiddleware,
+  });
+  // Subscribe the gateway to the Redis live bus (ephemeral actor→client
+  // fan-out). No-op when REDIS_* is unset — replay + poll cover it.
+  initInteractiveLiveBus().catch((err) =>
+    console.error('[startup] initInteractiveLiveBus failed:', err.message),
+  );
+  server.once('close', () => {
+    void shutdownInteractiveLiveBus();
+  });
+  console.log('[FEAT-007] Interactive WebSocket gateway mounted');
 
   if (isE2EMode) {
     // E2E mode: skip all background services so tests run against a clean,
@@ -513,6 +511,9 @@ const server = app.listen(PORT, () => {
   server.once('close', stopBuildReconciliation);
   startPlaybookStepOutputCleanup();
   server.once('close', stopPlaybookStepOutputCleanup);
+  chatHarnessMaintenanceScheduler.start();
+  server.once('close', () => chatHarnessMaintenanceScheduler.stop());
+  console.log('Chat harness maintenance scheduler started');
   startLoadTestRunReaper();
 
   // Graceful shutdown: drain connections on SIGTERM/SIGINT before exiting.

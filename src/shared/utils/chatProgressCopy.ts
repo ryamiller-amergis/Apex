@@ -10,10 +10,10 @@ const REPO_READ_RUNNING: Record<RepoReadTool, string> = {
 };
 
 const RAW_TO_FRIENDLY: Record<string, string> = {
-  'Queued — waiting for available worker': 'Queued',
-  Queued: 'Queued',
-  'Starting…': 'Dispatched',
-  Dispatched: 'Dispatched',
+  'Queued — waiting for available worker': 'Starting…',
+  Queued: 'Starting…',
+  'Starting…': 'Starting…',
+  Dispatched: 'Starting…',
   'Preparing project repository…': 'Loading…',
   'Preparing the latest repository requirements…': 'Pinning…',
   'Refreshing the repository mirror…': 'Loading…',
@@ -43,9 +43,8 @@ function matchRepoReadTool(label: string): RepoReadTool | null {
 function copyForPhase(phase: AgentRunPhase): string {
   switch (phase) {
     case 'queued':
-      return 'Queued';
     case 'dispatched':
-      return 'Dispatched';
+      return 'Starting…';
     case 'setup':
     case 'dependencies':
       return 'Loading…';
@@ -71,8 +70,8 @@ function copyForPhase(phase: AgentRunPhase): string {
 /**
  * User-facing loading copy for the bare-mirror / repo-read / actor path.
  * Stored progress labels stay machine-readable for the reaper; this is display only.
- * Durable interactive turns show exactly "Queued" (or the waiting-for-your-other-chat
- * label) then "Dispatched" — never a numeric position or wait estimate.
+ * Durable interactive turns show "Starting…" (or the waiting-for-your-other-chat
+ * label) — never raw infrastructure terms ("Queued", "Dispatched") or queue numbers.
  */
 export function friendlyChatProgressLabel(
   raw?: string | null,
@@ -82,9 +81,9 @@ export function friendlyChatProgressLabel(
   if (phase === 'queued') {
     return text === INTERACTIVE_USER_SLOT_WAIT_LABEL
       ? INTERACTIVE_USER_SLOT_WAIT_LABEL
-      : 'Queued';
+      : 'Starting…';
   }
-  if (phase === 'dispatched') return 'Dispatched';
+  if (phase === 'dispatched') return 'Starting…';
   if (text && ALREADY_FRIENDLY.has(text)) return text;
 
   const tool = text ? matchRepoReadTool(text) : null;

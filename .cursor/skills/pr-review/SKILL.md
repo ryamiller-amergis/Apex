@@ -113,7 +113,7 @@ Flag any that apply and are missing. These are the same rules an implementer is 
 - **Project skill settings** (`.cursor/rules/project-skill-settings.mdc`): a new workflow's skill, model, and effort go in `project_skill_workflow_settings`, not new columns on `project_skill_settings`.
 - **V2 worker** (`.cursor/rules/v2-worker-no-policy.mdc`): a worker holds no default; the App Service resolves every value.
 - **UI** (`.cursor/rules/ui-design-standards.mdc`): tokens from `App.css`, no hardcoded colors, CSS modules for new components, `--on-accent` on accent fills. Tabular admin views follow `.cursor/skills/data-grid-ui/SKILL.md`.
-- **Agent chat** (`.cursor/rules/agent-chat-surfaces.mdc`): a chat or agent thread uses `useAgentChatSession`. Do not hand-roll `fetch` plus `EventSource`.
+- **Agent chat & Chat Harness** (`.cursor/rules/agent-chat-surfaces.mdc`, `.cursor/rules/chat-harness.mdc`): every chat surface uses `useAgentChatSession` + `AgentHarnessPanel` + `AgentRunStatusText` (no raw `Queued`/`Dispatched` copy, no locked composer during running turns, no hand-rolled `fetch` + `EventSource`). Server area logic declares an `AreaProfile` and uses `areaHooks.ts` instead of bespoke `/messages`, `/cancel`, or `/retry` routes; all `writes: true` tools stage proposals for explicit user confirmation.
 - **Terraform** (`.cursor/rules/terraform-infra.mdc`): `infra/` follows `.cursor/skills/terraform-infra/SKILL.md`.
 - **Azure async** (`.cursor/rules/azure-async-infra.mdc`): shared storage account, container isolation, no new Service Bus unless an accepted ADR requires it. Follow `.cursor/skills/azure-async-infra/SKILL.md`.
 - **Codemap** (`.cursor/rules/codemap-sync.mdc`): moved or deleted paths update `.cursor/CODEMAP.md`.

@@ -22,6 +22,7 @@ import {
 } from './adoTestCaseSuiteService';
 import { AzureDevOpsService } from './azureDevOps';
 import { createThread, getThread, updateThreadKickoffContext } from './chatAgentService';
+import { getAreaProfile } from './chatHarness/areaProfiles';
 import { resolveSkillConfig } from './projectSettingsService';
 import {
   addCaseComment,
@@ -82,6 +83,7 @@ export async function openQaLabAssistantThread(input: {
     return { threadId: existing.id };
   }
 
+  const qaLabProfile = getAreaProfile('qa-lab');
   const thread = await createThread(
     input.userId,
     {
@@ -93,7 +95,10 @@ export async function openQaLabAssistantThread(input: {
       model: skillConfig?.testCaseModel ?? await getDefaultModel(),
       qaLabSuiteId: suite.id,
     },
-    { skipAutoKickoff: true },
+    {
+      skipAutoKickoff: true,
+      harness: { area: qaLabProfile.area, version: qaLabProfile.version },
+    },
   );
   if (!thread.workspaceDir) throw new Error('Ask Apex thread has no workspace');
   await writeContext(suite.project, thread.workspaceDir, thread.id, render(thread.id));

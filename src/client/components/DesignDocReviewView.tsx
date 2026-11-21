@@ -42,7 +42,14 @@ import {
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
-import { AgentComposer, AgentPanelShell, AssistantConversation } from './agentChat';
+import {
+  AgentHarnessPanel,
+  AgentMessage,
+  AgentPanelShell,
+  AgentThoughtProcess,
+  AssistantConversation,
+} from './agentChat';
+import chatStyles from './agentChat/agentChat.module.css';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { ApproverSelectModal } from './ApproverSelectModal';
 import { ReviewReasonModal } from './ReviewReasonModal';
@@ -282,6 +289,7 @@ const ContentPane: React.FC<ContentPaneProps> = ({
           value={editValue}
           onChange={(e) => onEditChange(e.target.value)}
           placeholder={placeholder}
+          {...{ 'data-testid': 'dd-section-edit-textarea' }}
         />
         <div className={styles.editActions}>
           <button
@@ -289,6 +297,7 @@ const ContentPane: React.FC<ContentPaneProps> = ({
             onClick={onSave}
             disabled={!isDirty || isSaving}
             type="button"
+            {...{ 'data-testid': 'dd-section-save-btn' }}
           >
             {isSaving ? 'Saving…' : 'Save'}
           </button>
@@ -296,6 +305,7 @@ const ContentPane: React.FC<ContentPaneProps> = ({
             className={styles.btnSecondary}
             onClick={onDiscard}
             type="button"
+            {...{ 'data-testid': 'dd-section-discard-btn' }}
           >
             Discard
           </button>
@@ -341,6 +351,8 @@ interface DesignDocAssistantPanelProps {
   docAssistantThreadId?: string | null;
   canCreateThread: boolean;
   readOnly: boolean;
+  /** Optional fix/proposal review controls rendered in the AgentHarnessPanel proposal slot (BR-001). */
+  proposal?: React.ReactNode;
 }
 
 const MIN_PANEL_WIDTH = 280;
@@ -361,6 +373,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   docAssistantThreadId,
   canCreateThread,
   readOnly,
+  proposal,
 }) => {
   const [threadId, setThreadId] = useState<string | null>(() => {
     if (discussContext) return null;
@@ -380,7 +393,11 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
-  const session = useAgentChatSession(threadId, { locked: readOnly });
+  const session = useAgentChatSession(threadId, {
+    locked: readOnly,
+    harnessArea: 'design-doc-assistant',
+    area: 'design-doc-assistant',
+  });
   const {
     attachments,
     attachmentError,
@@ -393,7 +410,6 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     streamingText,
     isRunning,
     isSending,
-    showTypingIndicator,
     progressLabel,
     progressPhase,
     toolProgress,
@@ -529,21 +545,44 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     event.currentTarget.value = '';
   }, [addFiles]);
 
-  const handleSend = useCallback(async () => {
-    if (readOnly) return;
-    const text = input.trim();
+  const handleSend = useCallback(async (textFromHarness: string) => {
+    if (readOnly) return false;
+    const text = textFromHarness.trim();
     const outgoing = [...attachments];
-    if (!text && outgoing.length === 0) return;
+    if (!text && outgoing.length === 0) return false;
     const message = text || 'Please use the attached files as additional context.';
-    setInput('');
     const sent = await session.send(
       message,
       outgoing.length > 0 ? { attachments: outgoing } : undefined,
     );
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, clearAttachments, input, readOnly, session]);
+    return sent;
+  }, [attachments, clearAttachments, readOnly, session]);
 
-  const visibleMessages = messages.filter((m) => m.role !== 'tool' && m.toolName !== '_reasoning' && m.toolName !== '_thinking');
+  const rawMessages = session.visibleMessages ?? messages;
+  const visibleMessages = useMemo(
+    () =>
+      rawMessages.filter(
+        (m) =>
+          m.role !== 'tool' &&
+          !m.hidden &&
+          m.toolName !== '_reasoning' &&
+          m.toolName !== '_thinking',
+      ),
+    [rawMessages],
+  );
+
+  const harnessSession = useMemo(
+    () => ({
+      ...session,
+      visibleMessages,
+      snapshotLoaded:
+        !threadId || Boolean(createError) || threadId === createdThreadId
+          ? true
+          : session.snapshotLoaded,
+    }),
+    [session, visibleMessages, threadId, createError, createdThreadId],
+  );
 
   return (
     <>
@@ -624,65 +663,142 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
             </svg>
           </button>
         ) : undefined}
-        composer={!readOnly ? (
-          <AgentComposer
-            className={styles.composerEmbed}
-            value={input}
-            onChange={setInput}
-            onSend={() => void handleSend()}
-            onCancel={isRunning ? () => void session.cancel() : undefined}
-            disabled={isRunning || isSending || isCreating || !threadId}
-            isRunning={isRunning}
-            isSending={isSending}
-            allowEmptySend
-            placeholder={
-              isCreating ? 'Starting assistant…' :
-              isRunning ? 'Agent is thinking…' :
-              'Ask about this design doc… (Enter to send)'
-            }
-            testIdPrefix="design-doc-assistant"
-            {...{ 'data-testid': 'design-doc-assistant-composer' }}
-            textareaRef={textareaRef}
-            attachments={attachments}
-            attachmentError={attachmentError}
-            onRemoveAttachment={removeAttachment}
-            onAttachClick={() => fileInputRef.current?.click()}
-            onPasteFiles={(files) => { void addFiles(files); }}
-            fileInput={(
+      >
+        <AgentHarnessPanel
+          area="design-doc-assistant"
+          session={harnessSession}
+          locked={readOnly}
+          testIdPrefix="design-doc-assistant"
+          draft={input}
+          onDraftChange={setInput}
+          onSend={handleSend}
+          slots={proposal ? { proposal } : undefined}
+          fallbackProgressLabel="Starting agent…"
+          composer={{
+            allowEmptySend: true,
+            disabled: isCreating || !threadId,
+            placeholder: isCreating
+              ? 'Starting assistant…'
+              : isRunning
+                ? 'Send a follow-up while the agent works…'
+                : 'Ask about this design doc… (Enter to send)',
+            readOnlyNotice: 'Assistant is read-only — you can view the conversation but cannot send messages.',
+            textareaRef,
+            attachments,
+            attachmentError,
+            onRemoveAttachment: removeAttachment,
+            onAttachClick: () => fileInputRef.current?.click(),
+            onPasteFiles: (files) => { void addFiles(files); },
+            fileInput: (
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
                 hidden
                 onChange={(event) => { void handleAttachmentChange(event); }}
-                disabled={isRunning || isSending || isCreating || !threadId}
+                disabled={isRunning || isSending || isCreating || !threadId || readOnly}
                 {...{ 'data-testid': 'design-doc-assistant-file-input' }}
               />
-            )}
-          />
-        ) : (
-          <div className={styles.qaMessageBubbleSystem} style={{ margin: '0 12px 12px' }}>
-            Assistant is read-only — you can view the conversation but cannot send messages.
-          </div>
-        )}
-      >
-      <AssistantConversation
-        messages={visibleMessages}
-        streamingText={streamingText}
-        isWorking={showTypingIndicator}
-        isStarting={isCreating}
-        startError={createError}
-        progressLabel={progressLabel}
-        progressPhase={progressPhase}
-        toolProgress={toolProgress}
-        welcome={!readOnly && !discussContext && threadId && threadId === createdThreadId ? {
-          title: 'Ask about this design doc',
-          description: 'Apex can answer questions, check the design against the PRD, and edit the Design, Tech Spec, or Assumptions sections.',
-          suggestions: DESIGN_DOC_ASSISTANT_SUGGESTIONS,
-          onSuggestion: fillComposer,
-        } : undefined}
-        testIdPrefix="design-doc-assistant"
-      />
+            ),
+          }}
+          renderTranscript={({ items, isWorking, liveWorkBox, streamingPreview, messageFailure }) => {
+            const showAssistantChrome =
+              isCreating ||
+              Boolean(createError) ||
+              (items.length === 0 && !isWorking && !streamingText && !messageFailure);
+
+            if (showAssistantChrome) {
+              return (
+                <AssistantConversation
+                  messages={[]}
+                  streamingText=""
+                  isWorking={false}
+                  isStarting={isCreating}
+                  startError={createError}
+                  progressLabel={progressLabel}
+                  progressPhase={progressPhase}
+                  toolProgress={toolProgress}
+                  welcome={
+                    !readOnly && !discussContext && threadId && threadId === createdThreadId
+                      ? {
+                          title: 'Ask about this design doc',
+                          description:
+                            'Apex can answer questions, check the design against the PRD, and edit the Design, Tech Spec, or Assumptions sections.',
+                          suggestions: DESIGN_DOC_ASSISTANT_SUGGESTIONS,
+                          onSuggestion: fillComposer,
+                        }
+                      : undefined
+                  }
+                  testIdPrefix="design-doc-assistant"
+                />
+              );
+            }
+
+            return (
+              <div
+                className={chatStyles.conversation}
+                {...{ 'data-testid': 'design-doc-assistant-conversation' }}
+              >
+                {items.map((item) => {
+                  if (item.role === 'user') {
+                    return (
+                      <div key={item.id} data-message-id={item.id} className={chatStyles.userBubble}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
+                        {item.failed ? (
+                          <span
+                            className={chatStyles.messageFailureBadge}
+                            {...{ 'data-testid': `design-doc-assistant-message-failed-${item.id}` }}
+                          >
+                            Failed
+                          </span>
+                        ) : null}
+                      </div>
+                    );
+                  }
+                  if (item.role === 'system') {
+                    return (
+                      <div key={item.id} data-message-id={item.id} className={chatStyles.systemBubble}>
+                        {item.text}
+                      </div>
+                    );
+                  }
+                  if (item.role === 'agent') {
+                    return (
+                      <div key={item.id} data-message-id={item.id}>
+                        {item.activity?.length || item.activityUnavailable ? (
+                          <AgentThoughtProcess
+                            items={item.activity}
+                            isUnavailable={item.activityUnavailable}
+                            testIdPrefix="design-doc-assistant"
+                            testIds={{
+                              drawer: 'design-doc-assistant-thought-process',
+                              toggle: 'design-doc-assistant-thought-process-toggle',
+                              thinking: `design-doc-assistant-saved-thinking-${item.id}`,
+                              steps: `design-doc-assistant-saved-steps-${item.id}`,
+                              toolGroup: `design-doc-assistant-saved-tool-group-${item.id}`,
+                            }}
+                          />
+                        ) : null}
+                        <AgentMessage
+                          text={item.text}
+                          ts={item.ts}
+                          messageId={item.id}
+                          locked
+                          className={chatStyles.assistantReply}
+                        />
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
+                {liveWorkBox}
+                {streamingPreview}
+                {messageFailure}
+              </div>
+            );
+          }}
+          {...{ 'data-testid': 'design-doc-assistant-harness-panel' }}
+        />
       </AgentPanelShell>
     </div>
     </>
@@ -740,6 +856,7 @@ const CommentsSidePanel: React.FC<CommentsSidePanelProps> = ({
         type="button"
         aria-expanded={true}
         aria-label="Collapse comments panel"
+        {...{ 'data-testid': 'dd-comments-collapse-btn' }}
       >
         <svg className={styles.commentsPanelChevron} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M4 6l4 4 4-4" />
@@ -884,6 +1001,7 @@ const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
         type="button"
         aria-expanded={true}
         aria-label="Collapse validation panel"
+        {...{ 'data-testid': 'dd-validation-collapse-btn' }}
       >
         <svg className={styles.valPanelChevron} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M4 6l4 4 4-4" />
@@ -971,6 +1089,7 @@ const ValidationSidePanel: React.FC<ValidationSidePanelProps> = ({
                 onClick={() => setReportExpanded((v) => !v)}
                 type="button"
                 aria-expanded={reportExpanded}
+                {...{ 'data-testid': 'dd-validation-report-toggle-btn' }}
               >
                 <svg
                   viewBox="0 0 16 16"
@@ -2310,6 +2429,7 @@ export const DesignDocReviewView: React.FC = () => {
             disabled={!hasAnyContent}
             type="button"
             title="Download design doc, tech spec, and assumptions"
+            {...{ 'data-testid': 'dd-download-btn' }}
           >
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M8 2v8M5 7l3 3 3-3" />
@@ -2324,6 +2444,7 @@ export const DesignDocReviewView: React.FC = () => {
               onClick={() => setAssistantOpen((v) => !v)}
               type="button"
               title="Apex Assistant"
+              {...{ 'data-testid': 'dd-ask-apex-btn' }}
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M14 10.667A2.667 2.667 0 0 1 11.333 13.333H4.667L2 16V4.667A2.667 2.667 0 0 1 4.667 2h6.666A2.667 2.667 0 0 1 14 4.667z" />
@@ -2339,6 +2460,7 @@ export const DesignDocReviewView: React.FC = () => {
               disabled={cancelValidation.isPending}
               type="button"
               title="Stop validation and return to draft"
+              {...{ 'data-testid': 'dd-cancel-validation-btn' }}
             >
               {cancelValidation.isPending ? 'Cancelling…' : 'Cancel Validation'}
             </button>
@@ -2476,6 +2598,7 @@ export const DesignDocReviewView: React.FC = () => {
                 aria-haspopup="menu"
                 aria-expanded={actionMenuOpen}
                 aria-label="More actions"
+                {...{ 'data-testid': 'dd-more-actions-btn' }}
               >
                 More
                 <svg
@@ -2523,6 +2646,7 @@ export const DesignDocReviewView: React.FC = () => {
                           ? 'Re-run the validation agent with the latest content'
                           : 'Run the validation agent against this design doc'
                       }
+                      {...{ 'data-testid': 'dd-menu-run-validation-btn' }}
                     >
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -2550,6 +2674,7 @@ export const DesignDocReviewView: React.FC = () => {
                       disabled={withdrawDoc.isPending}
                       type="button"
                       role="menuitem"
+                      {...{ 'data-testid': 'dd-menu-withdraw-btn' }}
                     >
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -2575,6 +2700,7 @@ export const DesignDocReviewView: React.FC = () => {
                           ? `Approvers: ${approverDisplayNames.join(', ')}`
                           : 'Assign approvers'
                       }
+                      {...{ 'data-testid': 'dd-menu-approvers-btn' }}
                     >
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -2601,6 +2727,7 @@ export const DesignDocReviewView: React.FC = () => {
                       disabled={deleteDoc.isPending}
                       type="button"
                       role="menuitem"
+                      {...{ 'data-testid': 'dd-menu-delete-btn' }}
                     >
                       <span className={styles.actionMenuIcon}>
                         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -2626,6 +2753,7 @@ export const DesignDocReviewView: React.FC = () => {
           subtitle={apexFixRunningBanner.subtitle}
           hint={apexFixRunningBanner.hint}
           onCancel={apexFixRunningBanner.showCancel ? handleFixCancel : undefined}
+          {...{ 'data-testid': 'dd-apex-fix-running-banner' }}
         />
       )}
 
@@ -2661,6 +2789,7 @@ export const DesignDocReviewView: React.FC = () => {
                 onClick={() => id && retryGenerate.mutate(id)}
                 disabled={retryGenerate.isPending}
                 type="button"
+                {...{ 'data-testid': 'dd-retry-generation-btn' }}
               >
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M2.5 8a5.5 5.5 0 0 1 9.6-3.7" />
@@ -2680,7 +2809,7 @@ export const DesignDocReviewView: React.FC = () => {
         <>
           <div className={styles.tabs}>
             {(['design', 'tech-spec', 'assumptions'] as TabId[]).map((t) => (
-              <button key={t} className={`${styles.tab} ${t === 'design' ? styles.active : ''}`} disabled type="button">
+              <button key={t} className={`${styles.tab} ${t === 'design' ? styles.active : ''}`} disabled type="button" {...{ 'data-testid': `dd-generating-tab-${t}` }}>
                 {tabLabel[t]}
               </button>
             ))}
@@ -2755,6 +2884,7 @@ export const DesignDocReviewView: React.FC = () => {
                     onClick={() => void handleStartFixWithAI()}
                     disabled={isFixWithApexBusy}
                     type="button"
+                    {...{ 'data-testid': 'dd-fix-with-apex-btn' }}
                   >
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M8 2l1.09 3.26L12.36 6l-3.27 1.09L8 10.36 6.91 7.09 3.64 6l3.27-1.09z" />
@@ -2766,6 +2896,7 @@ export const DesignDocReviewView: React.FC = () => {
                     className={styles.failureBannerBtnSecondary}
                     onClick={expandValidationPanel}
                     type="button"
+                    {...{ 'data-testid': 'dd-review-report-btn' }}
                   >
                     Review Report
                   </button>
@@ -2774,6 +2905,7 @@ export const DesignDocReviewView: React.FC = () => {
                       className={styles.failureBannerBtnSecondary}
                       onClick={() => setShowOverrideModal(true)}
                       type="button"
+                      {...{ 'data-testid': 'dd-override-validation-btn' }}
                     >
                       Proceed anyway
                     </button>
@@ -2802,6 +2934,7 @@ export const DesignDocReviewView: React.FC = () => {
               onRevertAll={() => void handleFixRevertAll()}
               onCancel={handleFixCancel}
               onRetry={() => void handleStartFixWithAI()}
+              {...{ 'data-testid': 'dd-fix-validation-panel' }}
             />
           )}
 
@@ -2830,6 +2963,7 @@ export const DesignDocReviewView: React.FC = () => {
                       title={outlineCollapsed ? 'Expand outline' : 'Collapse outline'}
                       aria-label={outlineCollapsed ? 'Expand outline' : 'Collapse outline'}
                       type="button"
+                      {...{ 'data-testid': 'dd-outline-toggle-btn' }}
                     >
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         {outlineCollapsed ? <path d="M6 4l4 4-4 4" /> : <path d="M10 4L6 8l4 4" />}
@@ -2848,6 +2982,7 @@ export const DesignDocReviewView: React.FC = () => {
                             onClick={() => handleOutlineClick(item.id)}
                             title={item.text}
                             type="button"
+                            {...{ 'data-testid': `dd-outline-item-${idx}` }}
                           >
                             {item.text}
                           </button>
@@ -2890,6 +3025,7 @@ export const DesignDocReviewView: React.FC = () => {
                             selectTab(t);
                           }}
                           type="button"
+                          {...{ 'data-testid': `dd-tab-${t}` }}
                         >
                           {tabLabel[t]}
                           {editingTab === t && <span className={styles.editingIndicator}> ✎</span>}
@@ -2901,6 +3037,7 @@ export const DesignDocReviewView: React.FC = () => {
                             title={splitTab === t ? 'Close split view' : 'Open side by side'}
                             aria-label={splitTab === t ? 'Close split view' : 'Open side by side'}
                             type="button"
+                            {...{ 'data-testid': `dd-tab-split-${t}` }}
                           >
                             <SplitIcon />
                           </button>
@@ -2911,6 +3048,7 @@ export const DesignDocReviewView: React.FC = () => {
                           title={pinnedTab === t ? 'Unpin from side panel' : 'Pin to side panel'}
                           aria-label={pinnedTab === t ? 'Unpin from side panel' : 'Pin to side panel'}
                           type="button"
+                          {...{ 'data-testid': `dd-tab-pin-${t}` }}
                         >
                           <PinIcon />
                         </button>
@@ -2942,6 +3080,7 @@ export const DesignDocReviewView: React.FC = () => {
                         className={styles.tabEditBtn}
                         onClick={() => handleEditToggle(activeTab as Exclude<TabId, 'validation'>)}
                         type="button"
+                        {...{ 'data-testid': 'dd-edit-toggle-btn' }}
                       >
                         {editingTab === activeTab ? 'Cancel Edit' : 'Edit'}
                       </button>
@@ -3065,6 +3204,7 @@ export const DesignDocReviewView: React.FC = () => {
                               type="button"
                               title="Close split view"
                               aria-label="Close split view"
+                              {...{ 'data-testid': 'dd-split-close-btn' }}
                             >
                               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                                 <path d="M1 1l12 12M13 1L1 13" />
@@ -3095,6 +3235,7 @@ export const DesignDocReviewView: React.FC = () => {
                       <CommentsSidePanel
                         openCount={reviewComments.filter((c) => c.status === 'open').length}
                         onCollapse={() => setCommentsPanelCollapsed(true)}
+                        {...{ 'data-testid': 'dd-comments-side-panel' }}
                       >
                         <ReviewCommentSidebar
                           embedded
@@ -3125,6 +3266,7 @@ export const DesignDocReviewView: React.FC = () => {
                         isValidating={doc.status === 'validating'}
                         onCollapse={() => setValidationPanelCollapsed(true)}
                         markdownComponents={markdownComponents}
+                        {...{ 'data-testid': 'dd-validation-side-panel' }}
                       />
                     }
                   />
@@ -3147,6 +3289,7 @@ export const DesignDocReviewView: React.FC = () => {
                         title="Unpin"
                         aria-label="Unpin"
                         type="button"
+                        {...{ 'data-testid': 'dd-pinned-close-btn' }}
                       >
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                           <path d="M1 1l12 12M13 1L1 13" />
@@ -3172,6 +3315,38 @@ export const DesignDocReviewView: React.FC = () => {
           docAssistantThreadId={doc.docAssistantThreadId}
           canCreateThread={canWriteAssistant}
           readOnly={!canWriteAssistant}
+          proposal={
+            showFixReviewPanel ? (
+              <div {...{ 'data-testid': 'design-doc-assistant-proposal-review' }}>
+                <div>Proposed validation fixes are ready. Confirm before applying changes.</div>
+                <div className={styles.editActions}>
+                  <button
+                    type="button"
+                    className={styles.btnPrimary}
+                    disabled={!canWriteAssistant || acceptFixValidation.isPending || revertSection.isPending}
+                    onClick={() => void handleFixApplyAndRevalidate()}
+                    {...{ 'data-testid': 'design-doc-assistant-proposal-accept-btn' }}
+                  >
+                    {acceptFixValidation.isPending ? 'Applying…' : 'Accept & Re-validate'}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    disabled={!canWriteAssistant || acceptFixValidation.isPending || revertSection.isPending}
+                    onClick={() => void handleFixRevertAll()}
+                    {...{ 'data-testid': 'design-doc-assistant-proposal-reject-btn' }}
+                  >
+                    {revertSection.isPending ? 'Reverting…' : 'Revert all'}
+                  </button>
+                </div>
+              </div>
+            ) : designDocHasProposedChanges(doc) ? (
+              <div {...{ 'data-testid': 'design-doc-assistant-proposal-review' }}>
+                Proposed design doc edits are ready for your review. Accept or reject them in the document review banner — edits are never applied automatically.
+              </div>
+            ) : undefined
+          }
+          {...{ 'data-testid': 'design-doc-assistant-panel-host' }}
         />
       )}
 
@@ -3187,6 +3362,7 @@ export const DesignDocReviewView: React.FC = () => {
             });
           }}
           onCancel={() => setShowDeleteModal(false)}
+          {...{ 'data-testid': 'dd-delete-modal' }}
         />
       )}
 
@@ -3198,11 +3374,18 @@ export const DesignDocReviewView: React.FC = () => {
           isPending={overrideDesignDocValidation.isPending}
           onConfirm={(reason) => void handleOverrideValidation(reason)}
           onCancel={() => setShowOverrideModal(false)}
+          {...{ 'data-testid': 'dd-override-modal' }}
         />
       )}
 
       {pendingSelector && (
-        <div className={styles.commentModal} onClick={(e) => { if (e.target === e.currentTarget) setPendingSelector(null); }} role="dialog" aria-modal="true">
+        <div
+          className={styles.commentModal}
+          onClick={(e) => { if (e.target === e.currentTarget) setPendingSelector(null); }}
+          role="dialog"
+          aria-modal="true"
+          {...{ 'data-testid': 'dd-add-comment-modal' }}
+        >
           <div className={styles.commentModalCard}>
             <h3 className={styles.commentModalTitle}>Add Comment</h3>
             <blockquote className={styles.commentModalQuote}>{pendingSelector.selector.exact}</blockquote>
@@ -3213,12 +3396,14 @@ export const DesignDocReviewView: React.FC = () => {
               placeholder="Write your comment…"
               rows={3}
               autoFocus
+              {...{ 'data-testid': 'dd-add-comment-input' }}
             />
             <div className={styles.commentModalActions}>
               <button
                 className={styles.btnSecondary}
                 onClick={() => setPendingSelector(null)}
                 type="button"
+                {...{ 'data-testid': 'dd-add-comment-cancel-btn' }}
               >
                 Cancel
               </button>
@@ -3227,6 +3412,7 @@ export const DesignDocReviewView: React.FC = () => {
                 onClick={() => void handleSubmitComment()}
                 disabled={!newCommentBody.trim() || createComment.isPending}
                 type="button"
+                {...{ 'data-testid': 'dd-add-comment-submit-btn' }}
               >
                 {createComment.isPending ? 'Posting…' : 'Post Comment'}
               </button>
@@ -3243,6 +3429,7 @@ export const DesignDocReviewView: React.FC = () => {
           onConfirm={(selections) => void handleApproverConfirm(selections)}
           onCancel={() => setShowApproverModal(false)}
           isSubmitting={submitDoc.isPending}
+          {...{ 'data-testid': 'dd-approver-select-modal' }}
         />
       )}
 
@@ -3257,6 +3444,7 @@ export const DesignDocReviewView: React.FC = () => {
           onConfirm={(selections) => void handleReassignConfirm(selections)}
           onCancel={() => setShowReassignModal(false)}
           isSubmitting={reassignApprovers.isPending}
+          {...{ 'data-testid': 'dd-reassign-approver-modal' }}
         />
       )}
 

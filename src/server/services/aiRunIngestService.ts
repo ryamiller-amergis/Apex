@@ -6,9 +6,16 @@
  * established PostgreSQL event spine; terminal writes delegate to lifecycle.
  */
 import { randomUUID } from 'crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, aiRunAttempts, chatThreads, chatMessages } from '../db/schema';
+import {
+  agentRuns,
+  aiRunAttempts,
+  aiTurnStageTimings,
+  chatThreadCommands,
+  chatThreads,
+  chatMessages,
+} from '../db/schema';
 import {
   markTerminal,
   transition,
@@ -20,6 +27,7 @@ import {
   nextRunEventSequence,
   notifyRunEvent,
 } from './pgNotifyService';
+import { notifyOutbox } from './aiRunV2/outboxRepository';
 import type {
   AgentRunEventEnvelope,
   AgentRunEventStatus,
@@ -40,6 +48,8 @@ import {
   type AiRunBootstrapResult,
   type AiRunIngestErrorCode,
   type AiRunProgressIngest,
+  type AiRunSummaryIngest,
+  type AiRunSummaryIngestStatus,
   type AiRunTerminalIngest,
   type InteractiveActorBootstrap,
 } from '../../shared/types/aiRunIngest';
@@ -64,12 +74,26 @@ import type { InteractiveTerminalInput } from './brainstormTurnLedger';
 import { clampInteractiveDeadlinePolicy } from './interactiveDeadlinePolicy';
 import { issueInteractiveToolProxyToken } from './interactiveToolProxyToken';
 import { deriveInteractiveCursorExecutionFields } from './cursorExecutionSpecification';
-import { resolveChatAreaId } from '../../shared/types/chatHarness';
 import {
+  isHarnessRecreateReason,
+  resolveChatAreaId,
+  type HarnessPendingControl,
+  type HarnessReceiptReason,
+} from '../../shared/types/chatHarness';
+import {
+  chatHarnessSummaryStore,
+  type HarnessSummaryRecord,
+  type SaveSummaryInput,
+} from './chatHarness/chatHarnessSummaryStore';
+import { chatHarnessCommandRepository } from './chatHarness/chatHarnessCommandRepository';
+import {
+  InteractiveArtifactApplyError,
   createBlobInteractiveArtifactReader,
   interactiveTranscript,
   readInteractiveArtifacts,
+  verifyInlineInteractiveArtifacts,
   writeInteractiveArtifacts,
+  type VerifiedInteractiveArtifact,
 } from './interactiveArtifactApplier';
 import { resolveArtifactContainerClient } from './aiRunV2/artifactContainer';
 import { updateThreadKickoffTranscript } from './chatAgentService';
@@ -104,6 +128,12 @@ const EVENT_STATUSES: ReadonlySet<string> = new Set([
   'failed',
   'cancelled',
 ]);
+const SUMMARY_STATUSES: ReadonlySet<AiRunSummaryIngestStatus> = new Set([
+  'running',
+  'completed',
+  'error',
+  'fallback',
+]);
 
 function isDurableInteractiveSnapshot(
   snapshot: AgentRunExecutionSnapshot,
@@ -126,6 +156,13 @@ function elapsedSince(startIso: string | null, endMs: number): number | undefine
   if (!startIso) return undefined;
   const startMs = Date.parse(startIso);
   return Number.isFinite(startMs) ? Math.max(0, endMs - startMs) : undefined;
+}
+
+const MAX_PG_INT32 = 2_147_483_647;
+
+function toPgDurationInt(value: number | undefined): number | null {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return null;
+  return Math.min(Math.round(value), MAX_PG_INT32);
 }
 
 /** Malformed timings are dropped: telemetry must not reject a terminal. */
@@ -158,15 +195,23 @@ function trackInteractiveTurnStages(
   const specification =
     snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot : null;
   const agentMode = timings.agentMode;
-  const area = resolveChatAreaId(specification?.workflowClass ?? null);
+  const acquisitionMode =
+    agentMode === 'warm' || agentMode === 'resumed' || agentMode === 'recreated'
+      ? agentMode
+      : undefined;
+  const rawRecreateReason = body.recreateReason ?? timings.recreateReason;
+  const recreateReason = isHarnessRecreateReason(rawRecreateReason)
+    ? rawRecreateReason
+    : undefined;
+  const area =
+    specification?.harness?.area ??
+    resolveChatAreaId(specification?.workflowClass ?? null);
   trackEvent(
     'InteractiveTurnStages',
     {
       status: body.status,
-      agentMode:
-        agentMode === 'warm' || agentMode === 'resumed' || agentMode === 'recreated'
-          ? agentMode
-          : 'unknown',
+      agentMode: acquisitionMode ?? 'unknown',
+      ...(recreateReason ? { recreateReason } : {}),
       workflowClass: specification?.workflowClass ?? 'unknown',
       ...(area ? { area } : {}),
       interviewPhase: specification?.guidedInterview?.phase ?? 'none',
@@ -174,6 +219,63 @@ function trackInteractiveTurnStages(
     },
     measurements,
   );
+  // Best-effort durable telemetry row for Platform Admin AI Experience.
+  // Never blocks or fails terminal ingest.
+  const stageStatus =
+    body.status === 'completed' || body.status === 'failed' || body.status === 'cancelled'
+      ? body.status
+      : null;
+  if (stageStatus) {
+    try {
+      const insertChain = db.insert(aiTurnStageTimings);
+      const valuesChain = insertChain?.values?.({
+        runId: existing.id,
+        threadId: existing.threadId,
+        projectId: existing.projectId ?? null,
+        area: area ?? null,
+        workflowClass: specification?.workflowClass ?? null,
+        status: stageStatus,
+        agentMode: acquisitionMode ?? 'unknown',
+        recreateReason: recreateReason ?? null,
+        grounded: Boolean(specification?.grounding),
+        workspaceMs: toPgDurationInt(measurements.workspaceMs),
+        agentAcquireMs: toPgDurationInt(measurements.agentAcquireMs),
+        firstEventMs: toPgDurationInt(measurements.firstEventMs),
+        firstTokenMs: toPgDurationInt(measurements.firstTokenMs),
+        workerTurnMs: toPgDurationInt(measurements.workerTurnMs),
+        admittedToTerminalMs: toPgDurationInt(measurements.admittedToTerminalMs),
+        dispatchedToTerminalMs: toPgDurationInt(measurements.dispatchedToTerminalMs),
+        recordedAt: nowIso,
+      });
+      const pending = valuesChain?.onConflictDoNothing?.();
+      if (pending && typeof (pending as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(pending).catch((err) => {
+          console.error('[aiRunIngestService] Failed to persist turn stage timings:', err);
+        });
+      }
+    } catch {
+      // Best-effort telemetry: ignore persistence failures so terminal ingest always succeeds.
+    }
+  }
+  const turnDurationMs =
+    measurements.workerTurnMs ??
+    body.durationMs ??
+    admittedToTerminalMs ??
+    0;
+  emitWorkerTelemetry(() => {
+    workerTierTelemetry.interactiveTurn?.(
+      {
+        runId: existing.id,
+        dispatchMessageId: body.dispatchMessageId,
+        project: existing.projectId ?? undefined,
+        lane: existing.lane ?? INTERACTIVE_LANE,
+        ...(area ? { area } : {}),
+        ...(acquisitionMode ? { acquisitionMode } : {}),
+        ...(recreateReason ? { recreateReason } : {}),
+      },
+      turnDurationMs,
+    );
+  });
 }
 
 export class AiRunIngestError extends Error {
@@ -189,6 +291,7 @@ export class AiRunIngestError extends Error {
 export interface AiRunIngestResult {
   cancelRequested: boolean;
   run: AgentRunLifecycleRow;
+  pendingControl?: ReadonlyArray<HarnessPendingControl>;
 }
 
 export type CompletedArtifactConsumer = (
@@ -225,6 +328,55 @@ export interface AiRunIngestDependencies {
   onModelBlocked?: () => void;
   /** Called after an interactive V2 terminal commits. Errors are logged, never thrown. */
   onInteractiveTerminal?: (input: InteractiveTerminalInput) => Promise<void>;
+  /** Summary persistence seam for `summary` ingest (defaults to chatHarnessSummaryStore). */
+  summaryStore?: {
+    saveSummary: (input: SaveSummaryInput) => Promise<HarnessSummaryRecord>;
+    countVisibleMessagesBefore: (
+      threadId: string,
+      beforeMessageId?: string | null,
+    ) => Promise<number>;
+  };
+  /** Updates matching `chat_thread_commands` row when a `summary` ingest carries `commandId`. */
+  updateCommandReceipt?: (input: {
+    threadId: string;
+    commandId: string;
+    status: 'applied' | 'rejected';
+    reason: HarnessReceiptReason | null;
+    updatedAt: string;
+  }) => Promise<void>;
+  /** Slow-path pending steer/cancel commands for an active interactive run. */
+  listPendingControlForRun?: (
+    threadId: string,
+    runId: string,
+  ) => Promise<HarnessPendingControl[]>;
+}
+
+async function defaultUpdateCommandReceipt(input: {
+  threadId: string;
+  commandId: string;
+  status: 'applied' | 'rejected';
+  reason: HarnessReceiptReason | null;
+  updatedAt: string;
+}): Promise<void> {
+  try {
+    await db
+      .update(chatThreadCommands)
+      .set({
+        status: input.status,
+        reason: input.reason,
+        updatedAt: input.updatedAt,
+      })
+      .where(
+        and(
+          eq(chatThreadCommands.threadId, input.threadId),
+          eq(chatThreadCommands.commandId, input.commandId),
+        ),
+      );
+  } catch (err) {
+    console.warn(
+      `[aiRunIngest] Command receipt update failed (commandId=${input.commandId}): ${err instanceof Error ? err.message : 'Unexpected error'}`,
+    );
+  }
 }
 
 async function defaultOnInteractiveTerminal(input: InteractiveTerminalInput): Promise<void> {
@@ -398,6 +550,37 @@ function validateBody(body: AiRunIngestBody): void {
     }
   }
 
+  if (body.kind === 'summary') {
+    if (!SUMMARY_STATUSES.has(body.status)) {
+      throw new AiRunIngestError('Invalid summary status', 'AI_RUN_VALIDATION');
+    }
+    if (
+      (body.status === 'completed' || body.status === 'fallback') &&
+      (typeof body.text !== 'string' || body.text.trim().length === 0)
+    ) {
+      throw new AiRunIngestError(
+        'Completed or fallback summary requires non-empty text',
+        'AI_RUN_VALIDATION',
+      );
+    }
+    if (
+      body.coversThroughOrdinal !== undefined &&
+      (!Number.isSafeInteger(body.coversThroughOrdinal) ||
+        body.coversThroughOrdinal < 0)
+    ) {
+      throw new AiRunIngestError(
+        'coversThroughOrdinal must be a non-negative integer',
+        'AI_RUN_VALIDATION',
+      );
+    }
+    if (body.commandId !== undefined && !isCanonicalUuid(body.commandId)) {
+      throw new AiRunIngestError(
+        'summary commandId must be a canonical UUID',
+        'AI_RUN_VALIDATION',
+      );
+    }
+  }
+
   if (body.kind === 'terminal') {
     if (!isAiRunTerminalIngestStatus(body.status)) {
       throw new AiRunIngestError(
@@ -434,6 +617,24 @@ function validateBody(body: AiRunIngestBody): void {
       );
     }
     if (
+      body.clearCursorAgentId !== undefined
+      && typeof body.clearCursorAgentId !== 'boolean'
+    ) {
+      throw new AiRunIngestError(
+        'clearCursorAgentId must be a boolean',
+        'AI_RUN_VALIDATION',
+      );
+    }
+    if (
+      body.recreateReason !== undefined
+      && !isHarnessRecreateReason(body.recreateReason)
+    ) {
+      throw new AiRunIngestError(
+        'Invalid recreateReason',
+        'AI_RUN_VALIDATION',
+      );
+    }
+    if (
       body.failureCategory !== undefined
       && !isAiRunV2FailureCategory(body.failureCategory)
     ) {
@@ -441,6 +642,20 @@ function validateBody(body: AiRunIngestBody): void {
         'Invalid failureCategory',
         'AI_RUN_VALIDATION',
       );
+    }
+    if (body.inlineArtifacts !== undefined) {
+      if (!Array.isArray(body.inlineArtifacts)) {
+        throw new AiRunIngestError(
+          'inlineArtifacts must be an array',
+          'AI_RUN_VALIDATION',
+        );
+      }
+      if (process.env.NODE_ENV === 'production' && body.inlineArtifacts.length > 0) {
+        throw new AiRunIngestError(
+          'inlineArtifacts is not permitted in production',
+          'AI_RUN_VALIDATION',
+        );
+      }
     }
     for (const field of [
       'durationMs',
@@ -931,6 +1146,40 @@ async function updateWorkerClocks(
   return updated[0];
 }
 
+async function applyVerifiedInteractiveArtifacts(input: {
+  threadId: string;
+  runId: string;
+  files: readonly VerifiedInteractiveArtifact[];
+}): Promise<void> {
+  const [thread] = await db
+    .select({ workspaceDir: chatThreads.workspaceDir, kickoff: chatThreads.kickoff })
+    .from(chatThreads)
+    .where(eq(chatThreads.id, input.threadId))
+    .limit(1);
+  if (!thread) {
+    throw new AiRunIngestError('Completed terminal ingest has no thread', 'AI_RUN_ILLEGAL_TRANSITION');
+  }
+  await saveThreadOutputs(
+    input.threadId,
+    input.runId,
+    input.files.map((file) => ({ path: file.path, content: file.body.toString('utf8') })),
+  );
+  const workspaceRoot = thread.workspaceDir?.trim();
+  if (workspaceRoot && (await keepsThreadFolder(thread.kickoff.project))) {
+    await writeInteractiveArtifacts(workspaceRoot, input.files);
+  }
+  // Document runs build their inputs from the saved thread, so the transcript
+  // the agent wrote must land there as well.
+  const transcript = interactiveTranscript(input.files);
+  if (transcript !== null) {
+    await updateThreadKickoffTranscript(input.threadId, transcript).catch((error: unknown) => {
+      console.warn(
+        `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
+}
+
 /**
  * Download + checksum-verify actor artifacts onto the thread workspace.
  * Returns the parsed manifest (for identity) so the transactional terminal
@@ -954,14 +1203,6 @@ async function verifyAndApplyActorArtifactManifest(input: {
       'AI_RUN_VALIDATION',
     );
   }
-  const [thread] = await db
-    .select({ workspaceDir: chatThreads.workspaceDir, kickoff: chatThreads.kickoff })
-    .from(chatThreads)
-    .where(eq(chatThreads.id, input.threadId))
-    .limit(1);
-  if (!thread) {
-    throw new AiRunIngestError('Completed terminal ingest has no thread', 'AI_RUN_ILLEGAL_TRANSITION');
-  }
   const files = await readInteractiveArtifacts({
     manifest: parsed,
     expected: {
@@ -975,25 +1216,11 @@ async function verifyAndApplyActorArtifactManifest(input: {
         .downloadToBuffer(),
     ),
   });
-  await saveThreadOutputs(
-    input.threadId,
-    input.runId,
-    files.map((file) => ({ path: file.path, content: file.body.toString('utf8') })),
-  );
-  const workspaceRoot = thread.workspaceDir?.trim();
-  if (workspaceRoot && (await keepsThreadFolder(thread.kickoff.project))) {
-    await writeInteractiveArtifacts(workspaceRoot, files);
-  }
-  // Document runs build their inputs from the saved thread, so the transcript
-  // the agent wrote must land there as well.
-  const transcript = interactiveTranscript(files);
-  if (transcript !== null) {
-    await updateThreadKickoffTranscript(input.threadId, transcript).catch((error: unknown) => {
-      console.warn(
-        `[aiRunIngest] Transcript save failed (threadId=${input.threadId}): ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-  }
+  await applyVerifiedInteractiveArtifacts({
+    threadId: input.threadId,
+    runId: input.runId,
+    files,
+  });
 }
 
 /**
@@ -1034,6 +1261,25 @@ async function terminalizeDaprActorV2(input: {
       attemptNumber,
       manifestRef: body.artifactManifestRef,
     });
+  } else if (
+    status === 'completed' &&
+    body.inlineArtifacts &&
+    body.inlineArtifacts.length > 0
+  ) {
+    let files: VerifiedInteractiveArtifact[];
+    try {
+      files = verifyInlineInteractiveArtifacts(body.inlineArtifacts);
+    } catch (error) {
+      if (error instanceof InteractiveArtifactApplyError) {
+        throw new AiRunIngestError(error.message, 'AI_RUN_VALIDATION');
+      }
+      throw error;
+    }
+    await applyVerifiedInteractiveArtifacts({
+      threadId: existing.threadId,
+      runId,
+      files,
+    });
   }
 
   const terminalEvents =
@@ -1048,8 +1294,12 @@ async function terminalizeDaprActorV2(input: {
     existing.lane === INTERACTIVE_LANE && body.event?.type === 'message'
       ? body.event.message
       : null;
-  const cursorAgentId =
-    status === 'completed' && existing.lane === INTERACTIVE_LANE
+  const shouldClearCursorAgentId =
+    existing.lane === INTERACTIVE_LANE &&
+    (body.clearCursorAgentId === true || status === 'cancelled');
+  const cursorAgentId = shouldClearCursorAgentId
+    ? null
+    : status === 'completed' && existing.lane === INTERACTIVE_LANE
       ? sanitizeCursorAgentId(body.cursorAgentId)
       : undefined;
 
@@ -1176,6 +1426,43 @@ async function terminalizeDaprActorV2(input: {
         .where(eq(chatThreads.id, existing.threadId));
     }
 
+    // 5.5. Settle harness commands owned by this run so state frames and
+    // reload snapshots never keep a finished send/retry (or queued follow-up
+    // steer) stuck as pending.
+    if (existing.lane === INTERACTIVE_LANE) {
+      const commandConditions = [
+        and(
+          inArray(chatThreadCommands.kind, ['send', 'retry']),
+          eq(chatThreadCommands.status, 'accepted'),
+        ),
+        and(
+          eq(chatThreadCommands.kind, 'steer'),
+          eq(chatThreadCommands.status, 'queued'),
+        ),
+        ...(status === 'cancelled'
+          ? [
+              and(
+                inArray(chatThreadCommands.kind, ['cancel', 'summarize']),
+                eq(chatThreadCommands.status, 'accepted'),
+              ),
+            ]
+          : []),
+      ];
+      await tx
+        .update(chatThreadCommands)
+        .set({
+          status: 'applied',
+          updatedAt: nowIso,
+        })
+        .where(
+          and(
+            eq(chatThreadCommands.threadId, existing.threadId),
+            eq(chatThreadCommands.runId, runId),
+            or(...commandConditions),
+          ),
+        );
+    }
+
     // 6. Persist error/done (and completed) terminal events.
     for (const envelope of terminalEvents) {
       await tx.execute(sql`
@@ -1208,6 +1495,59 @@ async function terminalizeDaprActorV2(input: {
 
   if (status === 'failed' || status === 'cancelled') {
     await reflectFailedGeneration(existing.threadId, dependencies);
+  }
+
+  if (
+    existing.lane === INTERACTIVE_LANE
+    && typeof (db as { execute?: unknown }).execute === 'function'
+  ) {
+    await notifyOutbox(db, {
+      outboxId: 'interactive-slot-release',
+      runId,
+    }).catch(() => undefined);
+
+    // Reconcile any mid-turn steer commands still in `accepted` for this now-
+    // terminal run so they never sit stuck as "Steer received".
+    try {
+      const pending = await (
+        dependencies.listPendingControlForRun ??
+        ((tId: string, rId: string) =>
+          chatHarnessCommandRepository.listPendingControlForRun(tId, rId))
+      )(existing.threadId, runId);
+      const unackedSteers = pending.filter((item) => item.kind === 'steer');
+      if (unackedSteers.length > 0) {
+        if (status === 'completed') {
+          const { chatHarnessCommandHandler } = await import(
+            './chatHarness/chatHarnessCommandHandler'
+          );
+          for (const steer of unackedSteers) {
+            await chatHarnessCommandHandler
+              .handleControlAck({
+                threadId: existing.threadId,
+                runId,
+                commandId: steer.commandId,
+                kind: 'steer',
+                disposition: 'turn-ended',
+                timestamp: nowIso,
+              })
+              .catch(() => undefined);
+          }
+        } else {
+          for (const steer of unackedSteers) {
+            await chatHarnessCommandRepository
+              .updateReceipt(existing.threadId, steer.commandId, {
+                status: 'rejected',
+                reason: 'Did not reach the agent',
+                runId,
+                expectedStatus: 'accepted',
+              })
+              .catch(() => undefined);
+          }
+        }
+      }
+    } catch {
+      // Best-effort post-terminal reconciliation; maintenance scheduler backstops.
+    }
   }
 
   const snapshot = existing.executionSnapshot;
@@ -1282,6 +1622,179 @@ async function loadAttemptNumber(attemptId: string): Promise<number> {
     );
   }
   return attempt.attemptNumber;
+}
+
+/**
+ * Fenced handler for `summary` ingest events (`running | completed | fallback | error`).
+ * Never writes summary text into `agent_run_events`, logs, or telemetry (BR-007).
+ */
+async function handleSummaryIngest(input: {
+  projectId: string;
+  runId: string;
+  existing: typeof agentRuns.$inferSelect;
+  body: AiRunSummaryIngest;
+  nowIso: string;
+  dependencies: AiRunIngestDependencies;
+}): Promise<AiRunIngestResult> {
+  const { projectId, runId, existing, body, nowIso, dependencies } = input;
+  if (existing.status === 'cancelled') {
+    return { run: mapRow(existing), cancelRequested: true };
+  }
+  if (isAgentRunTerminalStatus(existing.status) || existing.status === 'queued') {
+    throw new AiRunIngestError(
+      `Cannot apply summary to ${existing.status} run`,
+      'AI_RUN_ILLEGAL_TRANSITION',
+    );
+  }
+  if (existing.status === 'dispatched') {
+    assertLifecycleSuccess(await transition(runId, 'running', {
+      expectedFrom: 'dispatched',
+      dispatchMessageId: body.dispatchMessageId,
+    }));
+  }
+
+  const updated = await updateWorkerClocks(
+    projectId,
+    runId,
+    body.dispatchMessageId,
+    {
+      heartbeatAt: nowIso,
+      progressAt: nowIso,
+      progressLabel: body.status === 'running' ? 'Summarizing conversation…' : null,
+      progressPhase: body.status === 'running' ? 'analysis' : 'completion',
+    },
+  );
+
+  const snapshot = existing.executionSnapshot;
+  const interactiveSpec =
+    snapshot && isDurableInteractiveSnapshot(snapshot) ? snapshot : null;
+  const isSummarizeOperation =
+    interactiveSpec?.harness?.operation === 'summarize';
+  const source: 'auto' | 'user' = isSummarizeOperation ? 'user' : 'auto';
+  const area =
+    interactiveSpec?.harness?.area ??
+    resolveChatAreaId(interactiveSpec?.workflowClass ?? null) ??
+    'unknown';
+  const summaryStore = dependencies.summaryStore ?? chatHarnessSummaryStore;
+  const updateReceipt =
+    dependencies.updateCommandReceipt ?? defaultUpdateCommandReceipt;
+
+  if (body.status === 'completed' || body.status === 'fallback') {
+    const coversThroughOrdinal =
+      body.coversThroughOrdinal !== undefined
+        ? body.coversThroughOrdinal
+        : await summaryStore.countVisibleMessagesBefore(
+            existing.threadId,
+            isSummarizeOperation
+              ? null
+              : (interactiveSpec?.currentMessage.id ?? null),
+          );
+    const isFallback = body.status === 'fallback';
+    await summaryStore.saveSummary({
+      threadId: existing.threadId,
+      runId: existing.id,
+      summaryText: body.text!,
+      source,
+      isFallback,
+      coversThroughOrdinal,
+    });
+
+    const envelope: AgentRunEventEnvelope = {
+      eventId: randomUUID(),
+      threadId: existing.threadId,
+      runId: existing.id,
+      sourceInstance: AI_RUN_INGEST_SOURCE_INSTANCE,
+      sequence: nextRunEventSequence(existing.id),
+      timestamp: nowIso,
+      type: 'summary',
+      phase: 'completion',
+      status: 'completed',
+      detail: undefined,
+      event: {
+        type: 'summary',
+        status: body.status,
+        runId: existing.id,
+        eventTimestamp: nowIso,
+      },
+    };
+    await notifyRunEvent(envelope, { persist: true });
+
+    emitWorkerTelemetry(() => {
+      trackEvent(
+        'chat.harness.summary',
+        {
+          area,
+          source,
+          fallback: String(isFallback),
+          runId: existing.id,
+        },
+        { coversThroughOrdinal },
+      );
+    });
+
+    if (body.commandId) {
+      await updateReceipt({
+        threadId: existing.threadId,
+        commandId: body.commandId,
+        status: 'applied',
+        reason: null,
+        updatedAt: nowIso,
+      });
+    }
+  } else if (body.status === 'running') {
+    const envelope: AgentRunEventEnvelope = {
+      eventId: randomUUID(),
+      threadId: existing.threadId,
+      runId: existing.id,
+      sourceInstance: AI_RUN_INGEST_SOURCE_INSTANCE,
+      sequence: nextRunEventSequence(existing.id),
+      timestamp: nowIso,
+      type: 'summary',
+      phase: 'analysis',
+      status: 'running',
+      detail: 'Summarizing conversation…',
+      event: {
+        type: 'summary',
+        status: 'running',
+        runId: existing.id,
+        eventTimestamp: nowIso,
+      },
+    };
+    await notifyRunEvent(envelope, { persist: true });
+  } else {
+    const envelope: AgentRunEventEnvelope = {
+      eventId: randomUUID(),
+      threadId: existing.threadId,
+      runId: existing.id,
+      sourceInstance: AI_RUN_INGEST_SOURCE_INSTANCE,
+      sequence: nextRunEventSequence(existing.id),
+      timestamp: nowIso,
+      type: 'summary',
+      phase: 'completion',
+      status: 'failed',
+      detail: undefined,
+      event: {
+        type: 'summary',
+        status: 'error',
+        runId: existing.id,
+        eventTimestamp: nowIso,
+      },
+    };
+    await notifyRunEvent(envelope, { persist: true });
+
+    if (body.commandId) {
+      await updateReceipt({
+        threadId: existing.threadId,
+        commandId: body.commandId,
+        status: 'rejected',
+        reason: 'Could not summarize this conversation',
+        updatedAt: nowIso,
+      });
+    }
+  }
+
+  const run = mapRow(updated);
+  return { run, cancelRequested: run.cancelRequested };
 }
 
 export async function ingest(
@@ -1429,7 +1942,37 @@ export async function ingest(
     }
 
     const run = mapRow(updated);
-    return { run, cancelRequested: run.cancelRequested };
+    let pendingControl: HarnessPendingControl[] | undefined;
+    if (existing.lane === INTERACTIVE_LANE) {
+      try {
+        const listPending =
+          dependencies.listPendingControlForRun ??
+          ((tId: string, rId: string) =>
+            chatHarnessCommandRepository.listPendingControlForRun(tId, rId));
+        const items = await listPending(existing.threadId, runId);
+        if (items.length > 0) {
+          pendingControl = items;
+        }
+      } catch {
+        // Best-effort slow-path control delivery; Redis fast path still operates.
+      }
+    }
+    return {
+      run,
+      cancelRequested: run.cancelRequested,
+      ...(pendingControl ? { pendingControl } : {}),
+    };
+  }
+
+  if (body.kind === 'summary') {
+    return handleSummaryIngest({
+      projectId,
+      runId,
+      existing,
+      body,
+      nowIso,
+      dependencies,
+    });
   }
 
   if (body.kind === 'cancel_ack') {
@@ -1463,6 +2006,10 @@ export async function ingest(
         ),
       )
       .returning();
+    if (existing.lane === INTERACTIVE_LANE) {
+      const { setCursorAgentId } = await import('./chatThreadRepository');
+      await setCursorAgentId(existing.threadId, null).catch(() => {});
+    }
     const run = updated[0] ? mapRow(updated[0]) : terminal;
     await reflectFailedGeneration(existing.threadId, dependencies);
     return { run, cancelRequested: true };
@@ -1529,13 +2076,25 @@ export async function ingest(
 
     // Persist Cursor agent id for interactive restart recovery (best effort).
     if (existing.lane === INTERACTIVE_LANE) {
-      const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
-      if (cursorAgentId !== undefined) {
+      if (body.clearCursorAgentId === true) {
         const { setCursorAgentId } = await import('./chatThreadRepository');
-        await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
+        await setCursorAgentId(existing.threadId, null).catch(() => {});
+      } else {
+        const cursorAgentId = sanitizeCursorAgentId(body.cursorAgentId);
+        if (cursorAgentId !== undefined) {
+          const { setCursorAgentId } = await import('./chatThreadRepository');
+          await setCursorAgentId(existing.threadId, cursorAgentId).catch(() => {});
+        }
       }
     }
   } else {
+    if (
+      existing.lane === INTERACTIVE_LANE &&
+      (body.clearCursorAgentId === true || body.status === 'cancelled')
+    ) {
+      const { setCursorAgentId } = await import('./chatThreadRepository');
+      await setCursorAgentId(existing.threadId, null).catch(() => {});
+    }
     await reflectFailedGeneration(existing.threadId, dependencies);
   }
 

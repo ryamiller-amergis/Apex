@@ -180,4 +180,17 @@ describe('modelsService', () => {
     expect(mockAgentCreate.mock.calls.length).toBeGreaterThan(probedOnce);
     expect(ids(await fetchAvailableModels())).toContain('grok-4.7');
   });
+
+  it('aborts the probe round immediately on a Cursor rate limit error', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockAgentCreate.mockRejectedValue(
+      new Error('RateLimitError (rate_limit_exceeded): You have exceeded the rate limit of 30 requests per minute for the get_models endpoint'),
+    );
+
+    await fetchAvailableModels();
+    await modelProbeInFlightForTests();
+
+    expect(mockAgentCreate).toHaveBeenCalledTimes(1);
+    expect(ids(await fetchAvailableModels())).toContain('grok-4.7');
+  });
 });

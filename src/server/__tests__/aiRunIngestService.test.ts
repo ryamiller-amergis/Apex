@@ -1162,6 +1162,9 @@ describe('dapr-actor-v2 bootstrap + terminal remediation', () => {
     expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(mockMarkTerminal).not.toHaveBeenCalled();
     expect(result.run.status).toBe('failed');
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'applied' }),
+    );
     expect(mockTrackEvent).toHaveBeenCalledWith(
       'InteractiveTurnStages',
       expect.objectContaining({ status: 'failed', agentMode: 'resumed' }),
@@ -1202,5 +1205,110 @@ describe('dapr-actor-v2 bootstrap + terminal remediation', () => {
 
     expect(mockTransaction).not.toHaveBeenCalled();
     expect(mockMarkTerminal).not.toHaveBeenCalled();
+  });
+
+  it('persists sanitized interactive turn stage timings to ai_turn_stage_timings on terminal', async () => {
+    const mockOnConflict = jest.fn().mockResolvedValue(undefined);
+    const mockValues = jest.fn().mockReturnValue({ onConflictDoNothing: mockOnConflict });
+    mockInsert.mockReturnValue({ values: mockValues });
+
+    mockFindFirst.mockResolvedValue(
+      baseRow({
+        transportVersion: 'dapr-actor-v2',
+        lane: 'ai-runs-interactive',
+        status: 'running',
+        dispatchMessageId: 'dispatch-current',
+        executionSnapshot: {
+          kind: 'interactive-turn',
+          workflowClass: 'brainstorm',
+          projectId: 'project-1',
+          threadId: 'thread-1',
+          model: 'claude-sonnet-4-6',
+          prompt: 'hi',
+          harness: { area: 'brainstorm' },
+        },
+      }),
+    );
+    const attemptRow = {
+      id: 'attempt-1',
+      runId: 'run-1',
+      attemptNumber: 1,
+      status: 'running',
+      dispatchMessageId: 'dispatch-current',
+    };
+    let selectCall = 0;
+    mockSelect.mockImplementation(() => {
+      selectCall += 1;
+      const limit = jest.fn().mockImplementation(async () => {
+        if (selectCall <= 2) {
+          return [{ ...attemptRow }];
+        }
+        return [{ dispatchMessageId: 'dispatch-current', status: 'running' }];
+      });
+      const where = jest.fn().mockReturnValue({ limit });
+      const from = jest.fn().mockReturnValue({ where, limit });
+      return { from };
+    });
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: () => Promise.resolve([{ dispatchMessageId: 'dispatch-current', status: 'running' }]),
+            }),
+          }),
+        }),
+        update: () => ({
+          set: () => ({
+            where: () => ({
+              returning: () =>
+                Promise.resolve([
+                  baseRow({
+                    transportVersion: 'dapr-actor-v2',
+                    lane: 'ai-runs-interactive',
+                    status: 'completed',
+                  }),
+                ]),
+            }),
+          }),
+        }),
+        insert: () => ({ values: () => ({ onConflictDoNothing: () => Promise.resolve() }) }),
+        execute: () => Promise.resolve(),
+      };
+      return fn(tx);
+    });
+
+    await ingest('project-1', 'run-1', {
+      dispatchMessageId: 'dispatch-current',
+      attemptId: 'attempt-1',
+      kind: 'terminal',
+      status: 'completed',
+      artifactsFlushed: true,
+      stageTimings: {
+        workspaceMs: 145.6,
+        agentAcquireMs: 220,
+        firstEventMs: 510,
+        firstTokenMs: 1240.4,
+        workerTurnMs: 18400,
+        agentMode: 'warm',
+      },
+    });
+
+    expect(mockValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        threadId: 'thread-1',
+        projectId: 'project-1',
+        area: 'brainstorm',
+        status: 'completed',
+        agentMode: 'warm',
+        workspaceMs: 146,
+        agentAcquireMs: 220,
+        firstEventMs: 510,
+        firstTokenMs: 1240,
+        workerTurnMs: 18400,
+      }),
+    );
+    expect(mockOnConflict).toHaveBeenCalledTimes(1);
   });
 });

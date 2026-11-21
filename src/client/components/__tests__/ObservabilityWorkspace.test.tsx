@@ -16,6 +16,14 @@ jest.mock('../../hooks/useObservabilityQueries', () => ({
   useObservabilityPoDigest: (...args: unknown[]) => mockUseObservabilityPoDigest(...args),
   useGenerateObservabilityPoDigest: (...args: unknown[]) =>
     mockUseGenerateObservabilityPoDigest(...args),
+  useObservabilityAiExperience: () => ({
+    data: undefined,
+    isLoading: true,
+    isFetching: true,
+    isError: false,
+    error: null,
+    refetch: jest.fn(),
+  }),
 }));
 
 jest.mock('../../hooks/useProjectSkillConfig', () => ({
@@ -359,5 +367,25 @@ describe('ObservabilityWorkspace (Product Owner Digest)', () => {
     expect(
       within(card).getByTestId('observability-suggestion-consolidate-cloud-cost'),
     ).toHaveTextContent('Module: Cloud Cost');
+  });
+
+  it('switches between Product Owner Digest and AI Experience sub-tabs', async () => {
+    const user = userEvent.setup();
+    render(<ObservabilityWorkspace project="Apex" />);
+
+    expect(screen.getByTestId('observability-subtab-po-digest')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByTestId('observability-workspace')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('observability-subtab-ai-experience'));
+
+    expect(screen.getByTestId('observability-subtab-ai-experience')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByTestId('observability-ai-experience-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('ai-experience-dashboard')).toBeInTheDocument();
   });
 });

@@ -258,6 +258,38 @@ jobs:
           name: quick-dev-build-${{ github.run_id }}
           path: dist/
 
+      # Login before migrations so the runner can open a temporary firewall
+      # rule. Dev Postgres only allows Azure services (0.0.0.0), so a
+      # GitHub-hosted runner times out without this rule.
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_DEPLOY_CREDENTIALS || secrets.AZURE_CREDENTIALS }}
+
+      - name: Allow GitHub runner to reach dev Postgres
+        id: pg_firewall
+        if: needs.resolve.outputs.run_migrations == 'true'
+        run: |
+          set -euo pipefail
+          IP=$(curl -fsS https://api.ipify.org)
+          RULE="temp-gh-${GITHUB_RUN_ID}"
+          echo "rule=${RULE}" >> "$GITHUB_OUTPUT"
+          echo "Opening firewall rule ${RULE} for ${IP} on psql-scrum-eus2"
+          az postgres flexible-server firewall-rule delete \
+            --resource-group rg-scrum-dev \
+            --server-name psql-scrum-eus2 \
+            --name "$RULE" \
+            --yes \
+            -o none || true
+          az postgres flexible-server firewall-rule create \
+            --resource-group rg-scrum-dev \
+            --server-name psql-scrum-eus2 \
+            --name "$RULE" \
+            --start-ip-address "$IP" \
+            --end-ip-address "$IP" \
+            -o none
+          sleep 15
+
       - name: Detect migration changes
         id: migration_changes
         if: needs.resolve.outputs.run_migrations == 'true'
@@ -271,6 +303,16 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run migrate:up
+
+      - name: Remove GitHub runner Postgres firewall rule
+        if: always() && steps.pg_firewall.outputs.rule != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group rg-scrum-dev \
+            --server-name psql-scrum-eus2 \
+            --name "${{ steps.pg_firewall.outputs.rule }}" \
+            --yes \
+            -o none
 
       - name: Create deployment package
         run: |
@@ -289,20 +331,18 @@ jobs:
           mkdir -p deploy/foundation-skills deploy/dist/foundation-skills
           cp -r foundation-skills/foundation deploy/foundation-skills/foundation
           cp -r foundation-skills/foundation deploy/dist/foundation-skills/foundation
+          # Brainstorm falls back to this bundled skill when the Project Settings
+          # repository has no copy of it.
+          mkdir -p deploy/.cursor/skills
+          cp -r .cursor/skills/brainstorm deploy/.cursor/skills/brainstorm
           mv node_modules deploy/
           (cd deploy && zip -r ../deploy.zip .)
 
       - name: Verify packaged native dependencies
         run: node -e "require('./deploy/node_modules/sqlite3'); console.log('sqlite3 binding loaded')"
 
-      # AZURE_DEPLOY_CREDENTIALS (apex-dev-sp) deploys and runs Terraform.
       # AZURE_CREDENTIALS (MaxView) is the dev app's sign-in registration, and
       # is shared with another project; it stays only for the app settings below.
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_DEPLOY_CREDENTIALS || secrets.AZURE_CREDENTIALS }}
-
       - name: Extract Azure credentials
         run: |
           echo "AZURE_TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_ENV

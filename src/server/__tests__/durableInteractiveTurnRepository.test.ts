@@ -1103,6 +1103,36 @@ describe('durable interactive turn service', () => {
     expect(repository.admit).not.toHaveBeenCalled();
   });
 
+  it('ignores an optional interview web-research stdio MCP instead of rejecting the interview', async () => {
+    const thread = authoritativeThread({
+      kickoff: {
+        project: 'project-1',
+        repo: 'repo-1',
+        webResearchEnabled: true,
+        mcpPill: {
+          label: 'Web Search',
+          mcpServerName: 'web-search',
+          transport: 'stdio',
+          command: 'npx',
+        },
+      },
+    });
+    const { service, admitted } = durableServiceHarness({
+      thread,
+    });
+
+    await service.admit({
+      threadId: THREAD_ID,
+      userId: USER_ID,
+      workflowClass: 'interview',
+      turnId: TURN_ID,
+      text: 'Kick off the feature interview',
+    });
+
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0].specification.mcpServers).toEqual([]);
+  });
+
   it('admits a skill stored repository-root relative with a leading slash', async () => {
     const { service, admitted } = durableServiceHarness({
       thread: authoritativeThread({

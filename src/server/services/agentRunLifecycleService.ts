@@ -34,6 +34,7 @@ import {
   runAdmissionCycle,
   type AdmissionReason,
 } from './admissionGovernorService';
+import { notifyOutbox } from './aiRunV2/outboxRepository';
 import {
   applyTerminalRunEffects,
   bestEffortDeactivateGrounding,
@@ -981,6 +982,15 @@ export async function markTerminal(
       projectId: latest.projectId,
       lane: latest.lane,
     });
+  } else if (
+    latest.lane === 'ai-runs-interactive'
+    && (fromStatus === 'dispatched' || fromStatus === 'running')
+    && typeof (db as { execute?: unknown }).execute === 'function'
+  ) {
+    await notifyOutbox(db, {
+      outboxId: 'interactive-slot-release',
+      runId,
+    }).catch(() => undefined);
   }
   return { ok: true, run: captured ?? latest };
 }

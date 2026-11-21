@@ -30,9 +30,9 @@ describe('friendlyChatProgressLabel', () => {
   it('maps actor and mirror stage labels', () => {
     expect(
       friendlyChatProgressLabel('Queued — waiting for available worker', 'queued')
-    ).toBe('Queued');
+    ).toBe('Starting…');
     expect(friendlyChatProgressLabel('Starting…', 'dispatched')).toBe(
-      'Dispatched'
+      'Starting…'
     );
     expect(
       friendlyChatProgressLabel('Waiting for your other chat to finish', 'queued')

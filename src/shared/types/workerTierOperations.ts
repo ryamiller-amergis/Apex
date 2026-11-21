@@ -53,7 +53,9 @@ export type WorkerTierSafePropertyKey =
   | 'lane'
   | 'terminalReason'
   | 'stage'
-  | 'area';
+  | 'area'
+  | 'acquisitionMode'
+  | 'recreateReason';
 
 export interface WorkerTierTelemetryEventProperties {
   runId?: string;
@@ -65,6 +67,10 @@ export interface WorkerTierTelemetryEventProperties {
   stage?: InteractiveStageName;
   /** Canonical chat area id (e.g. `agent-home`, `brainstorm`). */
   area?: string;
+  /** Interactive agent acquisition mode (e.g. `warm`, `resumed`, `recreated`). */
+  acquisitionMode?: string;
+  /** Reason a recreated interactive turn could not resume its prior agent. */
+  recreateReason?: string;
 }
 
 /**

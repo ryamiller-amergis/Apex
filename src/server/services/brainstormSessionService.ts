@@ -48,10 +48,12 @@ async function defaultGetDefaultModel(): Promise<string> {
 
 async function defaultCreateThread(userId: string, project: string, model: string): Promise<{ id: string }> {
   const { createThread } = await import('./chatAgentService');
+  const { getAreaProfile } = await import('./chatHarness/areaProfiles');
   const { resolveSkillConfig } = await import('./projectSettingsService');
   const skillConfig = await resolveSkillConfig({ project });
   const repo = skillConfig?.skillRepo?.trim() ?? '';
   const branch = skillConfig?.skillBranch?.trim() || 'main';
+  const brainstormProfile = getAreaProfile('brainstorm');
   // Same coordinates an interview uses: the Project Settings repository, branch,
   // and provider. The skill file in that repository is the Brainstorm skill.
   return createThread(userId, {
@@ -66,7 +68,10 @@ async function defaultCreateThread(userId: string, project: string, model: strin
     skillSettingsId: skillConfig?.id,
     agentModule: 'brainstorm',
     model,
-  }, { skipAutoKickoff: true });
+  }, {
+    skipAutoKickoff: true,
+    harness: { area: brainstormProfile.area, version: brainstormProfile.version },
+  });
 }
 
 async function defaultDeleteThread(threadId: string): Promise<void> {

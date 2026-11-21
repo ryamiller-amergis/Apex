@@ -922,7 +922,412 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .runSpinner {
+  .runSpinner,
+  .activitySpinner {
     animation: none;
   }
+}
+
+/* ─── Live work box, activity log & tool groups ──────────────────────────── */
+
+.liveWorkBox {
+  margin: 0 0 10px;
+}
+
+.activityHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.activitySpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.activityScroller {
+  position: relative;
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.thinking {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.activitySummaryNote {
+  margin: 0 0 6px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.stepRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.stepBullet {
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.stepItem {
+  line-height: 1.4;
+}
+
+.stepStatus {
+  color: var(--text-muted);
+}
+
+.stepStatusError {
+  color: var(--error-color);
+  font-weight: 600;
+}
+
+.stepLabel {
+  color: var(--text-secondary);
+}
+
+.stepTarget {
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+}
+
+.srOnlySteps {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.toolGroup {
+  margin: 0 0 6px;
+}
+
+.toolGroupHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.toolGroupList {
+  margin: 4px 0 0 18px;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 2px solid var(--border-color-light);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolGroupItem {
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+/* ─── Collapsible thought process drawer ─────────────────────────────────── */
+
+.traceDrawer {
+  margin: 0 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.traceSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.traceSummary::-webkit-details-marker {
+  display: none;
+}
+
+.traceSummary:hover {
+  color: var(--text-primary);
+}
+
+.traceChevron {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.traceDrawer .activityScroller {
+  border: 0;
+  border-top: 1px solid var(--border-color);
+  border-radius: 0 0 8px 8px;
+}
+
+.traceNotice {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+/* ─── Summary notice ─────────────────────────────────────────────────────── */
+
+.summaryNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  transition: all 0.2s ease;
+}
+
+.summaryNoticeRunning {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.summaryNoticeWarning {
+  border-color: color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--warning-color) var(--status-mix, 14%), var(--bg-secondary));
+  color: var(--warning-text);
+}
+
+.summaryNoticeError {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--error-color) var(--status-mix, 14%), var(--bg-secondary));
+  color: var(--error-color);
+}
+
+/* ─── Connection banner ──────────────────────────────────────────────────── */
+
+.connectionBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  transition: all 0.2s ease;
+}
+
+.connectionBannerReconnecting {
+  justify-content: flex-start;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.connectionBannerRestored {
+  justify-content: flex-start;
+  border-color: color-mix(in srgb, var(--success-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--success-color) var(--status-mix, 14%), var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.connectionBannerUnavailable {
+  justify-content: flex-start;
+  border-color: color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--warning-color) var(--status-mix, 14%), var(--bg-secondary));
+  color: var(--warning-text);
+}
+
+.connectionBannerSignedOut {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--error-color) var(--status-mix, 14%), var(--bg-secondary));
+  color: var(--error-color);
+}
+
+.connectionSignInBtn {
+  padding: 4px 12px;
+  border: 1px solid var(--accent-color);
+  border-radius: 6px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.connectionSignInBtn:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* ─── Message failure row ────────────────────────────────────────────────── */
+
+.messageFailure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.messageFailureBadge {
+  padding: 2px 8px;
+  border: 1px solid var(--error-color);
+  border-radius: 999px;
+  color: var(--error-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.messageFailureReason {
+  flex: 1 1 auto;
+}
+
+.messageFailureRetry {
+  padding: 4px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.messageFailureRetry:hover:not(:disabled),
+.messageFailureRetry:focus-visible {
+  border-color: var(--accent-color);
+}
+
+.messageFailureRetry:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ─── Composer harness extensions (Steer, Summarize, Receipt, Read-only) ─── */
+
+.steerBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent-color);
+  color: var(--on-accent);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.steerBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.steerBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.summarizeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.summarizeBtn:hover:not(:disabled) {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.summarizeBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.receiptBanner {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color-light);
+}
+
+.receiptBannerWarning {
+  color: var(--warning-text);
+  border-color: color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--warning-color) var(--status-mix, 14%), var(--bg-secondary));
+}
+
+.receiptBannerError {
+  color: var(--error-color);
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--error-color) var(--status-mix, 14%), var(--bg-secondary));
+}
+
+.readOnlyNotice {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  padding: 2px 2px 0;
 }

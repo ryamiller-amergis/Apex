@@ -23,6 +23,7 @@ import {
 } from '../services/adrService';
 import { routeAdrGenerationKickoff } from '../services/adrGenerationService';
 import { createThread, getThread, getThreadAsync, updateThreadKickoffContext } from '../services/chatAgentService';
+import { getAreaProfile } from '../services/chatHarness/areaProfiles';
 import { writeThreadFolderFile } from '../services/threadFolder';
 import { resolveSkillConfig } from '../services/projectSettingsService';
 import { getDefaultModel } from '../services/appSettingsService';
@@ -546,6 +547,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
       settingsId: adr.skillSettingsId ?? undefined,
     });
     const model = skillConfig?.adrModel ?? adr.model ?? await getDefaultModel();
+    const adrProfile = getAreaProfile('adr');
     const thread = await createThread(userId, {
       project: adr.project,
       agentModule: 'adr',
@@ -560,6 +562,7 @@ router.post('/:id/assistant-thread', requirePermission('adr:view'), requirePermi
       skillSettingsId: skillConfig?.id ?? adr.skillSettingsId ?? undefined,
     }, {
       kickoffMessage: 'Introduce yourself briefly as the ADR Apex Assistant and explain that you can investigate repository evidence, discuss refinements and trade-offs, and stage edits for explicit apply or reject review.',
+      harness: { area: adrProfile.area, version: adrProfile.version },
     });
 
     const context = buildContext(thread.id);

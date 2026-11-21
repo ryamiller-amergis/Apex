@@ -125,6 +125,9 @@ router.post(
         ok: true,
         cancelRequested: result.cancelRequested,
         run: result.run,
+        ...(result.pendingControl && result.pendingControl.length > 0
+          ? { pendingControl: result.pendingControl }
+          : {}),
       });
     } catch (error) {
       if (!handleServiceError(error, res)) next(error);

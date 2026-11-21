@@ -85,6 +85,14 @@ import { McpServerError } from '../services/mcpServerErrors';
 import { assertCallerCanUseMcpServer } from '../services/mcpServerReadService';
 import { getMenuConfig } from '../services/menuSettingsService';
 import { getUserPermissions } from '../services/rbacService';
+import type { HarnessAreaId } from '../../shared/types/chatHarness';
+import { getAreaProfile } from '../services/chatHarness/areaProfiles';
+import {
+  HarnessProfileError,
+  resolveAreaProfile,
+  validateHarnessContext,
+} from '../services/chatHarness/areaProfileResolver';
+import { inferHarnessAreaFromKickoff } from '../services/chatHarness/inferHarnessArea';
 
 const router = Router();
 
@@ -490,6 +498,34 @@ router.post('/threads', async (req: Request, res: Response) => {
       }
     }
 
+    let explicitHarness = false;
+    let stampedHarness: { area: HarnessAreaId; version: number } | undefined;
+    if (body.harnessArea !== undefined && body.harnessArea !== null && body.harnessArea !== '') {
+      explicitHarness = true;
+      const profile = getAreaProfile(String(body.harnessArea));
+      validateHarnessContext(profile, body.harnessContext);
+      if (!isSuperAdminRequest(req)) {
+        const permissions = await getUserPermissions(userId, clientKickoff.project);
+        if (!permissions.has(profile.permission)) {
+          return res.status(403).json({
+            error: 'Forbidden',
+            missing: [profile.permission],
+          });
+        }
+      }
+      await resolveAreaProfile(
+        profile.area,
+        clientKickoff.project,
+        { resolveSkillConfig: async () => skillConfig },
+        {
+          settingsId: clientKickoff.skillSettingsId ?? undefined,
+          context: body.harnessContext ?? undefined,
+          skillPath: clientKickoff.skillPath ?? undefined,
+        },
+      );
+      stampedHarness = { area: profile.area, version: profile.version };
+    }
+
     // Consumers treat a missing provider as Azure DevOps, which loses grounding
     // for GitHub repositories. Azure DevOps repository names cannot contain '/'.
     const skillProvider =
@@ -501,11 +537,38 @@ router.post('/threads', async (req: Request, res: Response) => {
       ...(skillProvider ? { skillProvider } : {}),
       ...(agentModule ? { agentModule } : {}),
     };
+    // Cut over interactive chat threads created via POST /threads to stamp
+    // harness area & version (TBI-014 DoD-0). Non-harness modes (My Work
+    // development sessions and Standup Facilitator) remain unstamped.
+    if (
+      !stampedHarness &&
+      kickoff.mode !== 'development' &&
+      kickoff.mode !== 'standup-facilitator'
+    ) {
+      const inferredArea = inferHarnessAreaFromKickoff(kickoff);
+      const inferredProfile = getAreaProfile(inferredArea);
+      stampedHarness = {
+        area: inferredProfile.area,
+        version: inferredProfile.version,
+      };
+    }
     const thread = await createThread(userId, kickoff, {
       skipAutoKickoff: Boolean(body.skipAutoKickoff),
+      ...(stampedHarness ? { harness: stampedHarness } : {}),
     });
-    res.status(201).json({ threadId: thread.id });
+    res.status(201).json({
+      threadId: thread.id,
+      ...(explicitHarness && stampedHarness
+        ? {
+            harnessArea: thread.harnessArea ?? stampedHarness.area,
+            harnessVersion: thread.harnessVersion ?? stampedHarness.version,
+          }
+        : {}),
+    });
   } catch (err: unknown) {
+    if (err instanceof HarnessProfileError) {
+      return res.status(422).json({ error: err.message, code: err.code });
+    }
     if (err instanceof McpServerError) {
       return res.status(err.status).json({ error: err.message, code: err.code });
     }

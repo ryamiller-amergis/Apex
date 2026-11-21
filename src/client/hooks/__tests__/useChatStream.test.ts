@@ -558,11 +558,11 @@ describe('useChatStream', () => {
       }),
     ]);
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe('Queued');
+    expect(result.current.progressLabel).toBe('Starting…');
     expect(result.current.status).toBe('running');
   });
 
-  it('PBI-006 AC-0 / VT-02 maps dispatched to Dispatched before later running and terminal behavior', () => {
+  it('PBI-006 AC-0 / VT-02 maps dispatched to Starting… before later running and terminal behavior', () => {
     const { result } = renderHook(() => useChatStream('t1'));
 
     act(() => {
@@ -588,7 +588,7 @@ describe('useChatStream', () => {
     });
 
     expect(result.current.progressPhase).toBe('dispatched');
-    expect(result.current.progressLabel).toBe('Dispatched');
+    expect(result.current.progressLabel).toBe('Starting…');
     expect(result.current.status).toBe('running');
 
     act(() => {
@@ -1060,6 +1060,31 @@ describe('useChatStream', () => {
 
     act(() => {
       lastES!.emit('message', { type: 'token', text: 'Hello' });
+    });
+    expect(result.current.isRetrying).toBe(false);
+    expect(result.current.retryReason).toBeNull();
+  });
+
+  it.each([
+    ['phase', { type: 'phase', phase: 'analysis', status: 'running', detail: 'Thinking…' }],
+    ['thinking', { type: 'thinking', text: 'Inspecting files', seq: 1 }],
+    ['tool_call', { type: 'tool_call', toolName: 'read', args: {} }],
+    ['tool_status', { type: 'tool_status', callId: 'c-1', toolName: 'read', status: 'running' }],
+  ])('clears isRetrying when a %s event arrives after reconnecting', (_label, nextEvent) => {
+    const { result } = renderHook(() => useChatStream('t1'));
+    act(() => {
+      lastES!.emit('message', {
+        type: 'retrying',
+        attempt: 1,
+        maxAttempts: 1,
+        reason: 'reconnecting',
+      });
+    });
+    expect(result.current.isRetrying).toBe(true);
+    expect(result.current.retryReason).toBe('Reconnecting to the agent…');
+
+    act(() => {
+      lastES!.emit('message', nextEvent);
     });
     expect(result.current.isRetrying).toBe(false);
     expect(result.current.retryReason).toBeNull();

@@ -74,9 +74,9 @@ describe('AssistantConversation', () => {
     expect(screen.getByTestId('prd-assistant-progress')).toHaveTextContent('Planning…');
   });
 
-  it('shows Queued while the turn waits for a worker', () => {
+  it('shows Starting… while the turn waits for a worker', () => {
     renderConversation({ isWorking: true, progressPhase: 'queued' });
-    expect(screen.getByTestId('prd-assistant-progress')).toHaveTextContent('Queued');
+    expect(screen.getByTestId('prd-assistant-progress')).toHaveTextContent('Starting…');
   });
 
   it('renders agent choice lists without submit buttons', () => {

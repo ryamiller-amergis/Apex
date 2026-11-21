@@ -61,9 +61,10 @@ jest.mock('../../hooks/useInterviews', () => ({
   useRetryGenerateDesignDoc: jest.fn(() => ({ mutate: jest.fn(), isPending: false })),
 }));
 
-const mockUseChatStream = jest.fn();
-jest.mock('../../hooks/useChatStream', () => ({
-  useChatStream: (...args: unknown[]) => mockUseChatStream(...args),
+const mockUseChatRuntime = jest.fn();
+jest.mock('../../chatHarness', () => ({
+  ...jest.requireActual('../../chatHarness'),
+  useChatRuntime: (...args: unknown[]) => mockUseChatRuntime(...args),
 }));
 
 jest.mock('react-markdown', () => ({
@@ -73,6 +74,7 @@ jest.mock('react-markdown', () => ({
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('mermaid', () => ({ initialize: jest.fn(), run: jest.fn() }));
 jest.mock('../ConfirmDeleteModal', () => ({ ConfirmDeleteModal: () => null }));
+jest.mock('../ProposedDesignDocChangesReview', () => ({ ProposedDesignDocChangesReview: () => null }));
 jest.mock('../AnnotationLayer', () => ({
   AnnotationLayer: ({ children }: { children: ReactNode }) => <>{children}</>,
   unwrapCommentMarks: jest.fn(),
@@ -107,14 +109,64 @@ const mockDoc = {
   updatedAt: '2026-01-02T00:00:00Z',
 };
 
-const idleStreamState = {
-  messages: [],
-  streamingText: '',
-  status: 'idle' as const,
+const idleRuntimeState = {
+  threadId: 'thread-assistant-1',
+  harnessArea: 'design-doc-assistant' as const,
+  snapshotLoaded: true,
+  snapshotError: null,
+  snapshotStatusCode: null,
+  canWrite: true,
+  connectionState: 'open' as const,
   isConnected: true,
+  hasConnectionError: false,
+  lastEventId: null,
+  status: 'idle' as 'idle' | 'running' | 'error' | 'closed',
+  activeRunId: null as string | null,
+  phase: 'idle' as 'idle' | 'starting' | 'resuming' | 'recreating' | 'running' | 'summarizing',
+  latestSummary: null,
+  summaryNotice: null,
+  messages: [],
+  optimisticMessages: [],
+  streamingText: '',
+  thinkingText: '',
+  toolProgress: [],
+  activity: [],
+  phaseEvents: [],
+  runHealth: null,
+  progressLabel: null,
+  progressPhase: null,
+  lastProgressAt: null,
   prdReady: false,
   backlogReady: false,
+  isRetrying: false,
+  retryReason: null,
+  retryableRunId: null,
+  groundingPreparation: null,
+  pendingCommands: [],
+  lastReceipt: null,
+  stopping: false,
+  lastFailure: null,
+  terminalRevision: 0,
 };
+
+function makeRuntimeReturn(overrides: Partial<typeof idleRuntimeState> = {}) {
+  const state = { ...idleRuntimeState, ...overrides };
+  return {
+    runtime: {
+      getDisplayedMessages: () => state.messages,
+      getState: () => state,
+      send: jest.fn().mockResolvedValue(null),
+      steer: jest.fn().mockResolvedValue(null),
+      summarize: jest.fn().mockResolvedValue(null),
+      cancel: jest.fn().mockResolvedValue(null),
+      retry: jest.fn().mockResolvedValue(null),
+      clearReceipt: jest.fn(),
+      clearFailure: jest.fn(),
+      refreshSnapshot: jest.fn().mockResolvedValue(null),
+    },
+    state,
+  };
+}
 
 function createWrapper(queryClient: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -136,7 +188,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   localStorage.setItem(THREAD_LS_KEY, 'thread-assistant-1');
   mockUseDesignDoc.mockReturnValue({ data: mockDoc, isLoading: false, isError: false });
-  mockUseChatStream.mockReturnValue(idleStreamState);
+  mockUseChatRuntime.mockReturnValue(makeRuntimeReturn());
 });
 
 afterEach(() => {
@@ -257,7 +309,7 @@ describe('React Query invalidation when agent run completes', () => {
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
     // Start with the panel open and the agent running
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'running' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
 
     const { rerender } = render(<DesignDocReviewView />, { wrapper: createWrapper(queryClient) });
 
@@ -270,7 +322,7 @@ describe('React Query invalidation when agent run completes', () => {
     expect(screen.getByText('Apex Assistant')).toBeInTheDocument();
 
     // Simulate the run completing (running → idle)
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'idle' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'idle' }));
 
     act(() => {
       rerender(<DesignDocReviewView />);
@@ -287,7 +339,7 @@ describe('React Query invalidation when agent run completes', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
-    mockUseChatStream.mockReturnValue(idleStreamState);
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn());
 
     const { rerender } = render(<DesignDocReviewView />, { wrapper: createWrapper(queryClient) });
 
@@ -308,23 +360,68 @@ describe('React Query invalidation when agent run completes', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'running' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
 
     const { rerender } = render(<DesignDocReviewView />, { wrapper: createWrapper(queryClient) });
     act(() => { fireEvent.click(screen.getByRole('button', { name: /Ask Apex/i })); });
 
     // First run completes
-    mockUseChatStream.mockReturnValue(idleStreamState);
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'idle' }));
     act(() => { rerender(<DesignDocReviewView />); });
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(1));
 
     // Second run starts and completes
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'running' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
     act(() => { rerender(<DesignDocReviewView />); });
-    mockUseChatStream.mockReturnValue(idleStreamState);
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'idle' }));
     act(() => { rerender(<DesignDocReviewView />); });
 
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(2));
+  });
+});
+
+// ── 3b. Harness cutover & proposal slot (S8e / VT-31 / BR-001) ────────────────
+
+describe('AgentHarnessPanel cutover & proposal slot', () => {
+  it('renders AgentHarnessPanel with design-doc-assistant area and harness controls', () => {
+    renderView();
+    fireEvent.click(screen.getByRole('button', { name: /Ask Apex/i }));
+
+    const harness = screen.getByTestId('design-doc-assistant-harness-panel');
+    expect(harness).toHaveAttribute('data-harness-area', 'design-doc-assistant');
+    expect(screen.getByTestId('design-doc-assistant-transcript')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-composer')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-message-input')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-send-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('design-doc-assistant-composer-summarize')).not.toBeInTheDocument();
+  });
+
+  it('shows harness live work box, Stop, and Steer controls while running', () => {
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
+    renderView();
+    fireEvent.click(screen.getByRole('button', { name: /Ask Apex/i }));
+
+    expect(screen.getByTestId('design-doc-assistant-streaming')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-agent-progress')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-agent-busy')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-stop-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-composer-steer')).toBeInTheDocument();
+  });
+
+  it('surfaces pending proposed design doc edits in slots.proposal without auto-applying (BR-001)', () => {
+    mockUseDesignDoc.mockReturnValue({
+      data: {
+        ...mockDoc,
+        proposedDesignContent: '# Design\nProposed revision.',
+      },
+      isLoading: false,
+      isError: false,
+    });
+    renderView();
+    fireEvent.click(screen.getByRole('button', { name: /Ask Apex/i }));
+
+    expect(screen.getByTestId('design-doc-assistant-slot-proposal')).toBeInTheDocument();
+    expect(screen.getByTestId('design-doc-assistant-proposal-review')).toBeInTheDocument();
   });
 });
 

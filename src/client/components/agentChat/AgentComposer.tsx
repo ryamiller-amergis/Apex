@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { applyPastedFiles } from '../../hooks/clipboardFiles';
 import { formatAttachmentSize } from '../../hooks/useChatAttachments';
+import type { HarnessReceiptView } from '../../chatHarness/types';
 import styles from './agentChat.module.css';
 
 export interface AgentComposerAttachment {
@@ -24,13 +25,24 @@ export interface AgentComposerSpeechProps {
   onToggle: () => void;
 }
 
+export interface AgentComposerSteerProps {
+  enabled: boolean;
+  pending?: boolean;
+  onSteer: () => void;
+}
+
 export interface AgentComposerTestIds {
   input?: string;
   send?: string;
   stop?: string;
   attach?: string;
+  attachments?: string;
   microphone?: string;
   model?: string;
+  steer?: string;
+  summarize?: string;
+  receipt?: string;
+  readOnlyNotice?: string;
 }
 
 export interface AgentComposerProps {
@@ -71,6 +83,18 @@ export interface AgentComposerProps {
   models?: AgentComposerModelOption[];
   modelsLoading?: boolean;
   onModelChange?: (modelId: string) => void;
+  /** Mid-turn steer action shown beside Stop while running. */
+  steer?: AgentComposerSteerProps;
+  /** Summarize conversation action. */
+  onSummarize?: () => void;
+  /** Disables the Summarize action (e.g. while a summary is already running). */
+  summarizeDisabled?: boolean;
+  /** Latest command receipt shown in a polite live region. */
+  receipt?: HarnessReceiptView | null;
+  /** Disables all composer actions and displays a read-only notice. */
+  readOnly?: boolean;
+  /** Custom read-only notice copy when readOnly is true. */
+  readOnlyNotice?: string;
   /** Extra controls rendered before the send/stop button (e.g. standup submit). */
   trailingActions?: React.ReactNode;
   /** When not running, replaces the default send button (e.g. interview context confirm). */
@@ -389,6 +413,12 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
   models,
   modelsLoading = false,
   onModelChange,
+  steer,
+  onSummarize,
+  summarizeDisabled = false,
+  receipt = null,
+  readOnly = false,
+  readOnlyNotice,
   trailingActions,
   sendButton,
   before,
@@ -402,11 +432,15 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
 }) => {
   const internalTextareaRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = externalTextareaRef ?? internalTextareaRef;
-  const busy = isBusy ?? (disabled || isRunning || isSending);
-  const canType = !disabled && !isSending;
-  const derivedCanSend = !disabled && !isRunning && !isSending
+  const isSteerActive = Boolean(isRunning && steer?.enabled && !readOnly);
+  const busy = isBusy ?? (disabled || (isRunning && !isSteerActive) || isSending || readOnly);
+  const canType = !disabled && !readOnly && !isSending && (!isRunning || isSteerActive);
+  const derivedCanSend = !disabled && !readOnly && !isRunning && !isSending
     && (value.trim().length > 0 || (allowEmptySend && attachments.length > 0));
-  const canSend = canSendOverride ?? derivedCanSend;
+  const canSend = readOnly ? false : (canSendOverride ?? derivedCanSend);
+  const canSteer = Boolean(
+    isRunning && steer?.enabled && !readOnly && !disabled && !steer.pending && value.trim().length > 0,
+  );
 
   const resolveTestId = (key: keyof AgentComposerTestIds, suffix: string, fallback?: string): string | undefined =>
     testIds?.[key] ?? testId(testIdPrefix, suffix) ?? fallback;
@@ -423,9 +457,13 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
     if (event.defaultPrevented) return;
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      if (canSend) onSend();
+      if (canSteer && steer) {
+        steer.onSteer();
+      } else if (canSend) {
+        onSend();
+      }
     }
-  }, [canSend, onKeyDown, onSend]);
+  }, [canSend, canSteer, onKeyDown, onSend, steer]);
 
   const handlePaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     onPaste?.(event);
@@ -434,17 +472,27 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
   }, [onPaste, onPasteFiles]);
 
   const resolvedPlaceholder = placeholder
-    ?? (isRunning ? 'Agent is thinking…' : 'Type a message… (Enter to send)');
+    ?? (isRunning
+      ? (isSteerActive ? 'Send a follow-up while the agent works…' : 'Agent is thinking…')
+      : 'Type a message… (Enter to send)');
 
   const showModel = typeof model === 'string' && typeof onModelChange === 'function';
   const showAttach = typeof onAttachClick === 'function';
   const showSpeech = Boolean(speech);
+  const showSummarize = typeof onSummarize === 'function';
+  const showSteer = Boolean(isRunning && steer?.enabled);
   const inputTestId = resolveTestId('input', 'message-input', 'agent-composer-input');
   const attachTestId = resolveTestId('attach', 'attach');
+  const attachmentsTestId = resolveTestId('attachments', 'attachments', 'agent-composer-attachments');
   const micTestId = resolveTestId('microphone', 'microphone');
   const modelTestId = resolveTestId('model', 'model');
   const stopTestId = resolveTestId('stop', 'stop-btn', 'agent-composer-stop-btn');
   const sendTestId = resolveTestId('send', 'send-btn', 'agent-composer-send-btn');
+  const steerTestId = resolveTestId('steer', 'composer-steer', 'agent-composer-steer');
+  const summarizeTestId = resolveTestId('summarize', 'composer-summarize', 'agent-composer-summarize');
+  const receiptTestId = resolveTestId('receipt', 'composer-receipt', 'agent-composer-receipt');
+  const readOnlyNoticeTestId = resolveTestId('readOnlyNotice', 'readonly-notice', 'agent-composer-readonly-notice');
+  const controlDisabled = busy || isRunning || shellDisabled || readOnly;
 
   const rootTestId = dataTestId
     ?? testId(testIdPrefix, 'composer')
@@ -482,7 +530,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
         />
 
         {attachments.length > 0 && (
-          <div className={styles.attachmentList} {...{ 'data-testid': testId(testIdPrefix, 'attachments') ?? 'agent-composer-attachments' }}>
+          <div className={styles.attachmentList} {...{ 'data-testid': attachmentsTestId }}>
             {attachments.map((attachment) => {
               const isImage = Boolean(
                 attachment.type?.startsWith('image/') && attachment.content && attachment.encoding === 'base64',
@@ -503,7 +551,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
                       type="button"
                       className={styles.attachmentRemove}
                       onClick={() => onRemoveAttachment(attachment.id)}
-                      disabled={busy || shellDisabled}
+                      disabled={controlDisabled}
                       aria-label={`Remove ${attachment.name}`}
                       {...(testId(testIdPrefix, `attachment-remove-${attachment.id}`)
                         ? { 'data-testid': testId(testIdPrefix, `attachment-remove-${attachment.id}`) }
@@ -521,6 +569,21 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
         {attachmentError && <div className={styles.attachmentError} role="alert">{attachmentError}</div>}
         {speech?.speechError && <div className={styles.speechError} role="alert">{speech.speechError}</div>}
 
+        {receipt && receipt.text && (
+          <div
+            className={[
+              styles.receiptBanner,
+              receipt.tone === 'error' ? styles.receiptBannerError : '',
+              receipt.tone === 'warning' ? styles.receiptBannerWarning : '',
+            ].filter(Boolean).join(' ')}
+            role="status"
+            aria-live="polite"
+            {...(receiptTestId ? { 'data-testid': receiptTestId } : {})}
+          >
+            {receipt.text}
+          </div>
+        )}
+
         <div className={`${styles.inputActions} ${(modeBadge || showModel) ? styles.inputActionsSplit : ''}`}>
           {(modeBadge || showModel) && (
             <div className={styles.inputActionsLeft}>
@@ -531,7 +594,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
                   model={model}
                   models={models}
                   modelsLoading={modelsLoading}
-                  disabled={busy || shellDisabled}
+                  disabled={controlDisabled}
                   modelTestId={modelTestId}
                   testIdPrefix={testIdPrefix}
                   onModelChange={onModelChange}
@@ -550,7 +613,7 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
                 title={speech.isSpeechSupported
                   ? (speech.isListening ? 'Stop listening' : 'Talk to transcribe into chat')
                   : 'Speech recognition not supported in this browser'}
-                disabled={!speech.isSpeechSupported || busy || shellDisabled}
+                disabled={!speech.isSpeechSupported || controlDisabled}
                 {...(micTestId ? { 'data-testid': micTestId } : {})}
               >
                 <MicIcon />
@@ -564,34 +627,65 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
                 type="button"
                 aria-label="Attach files"
                 title="Attach files or paste a screenshot (Ctrl+V)"
-                disabled={busy || shellDisabled}
+                disabled={controlDisabled}
                 {...(attachTestId ? { 'data-testid': attachTestId } : {})}
               >
                 <AttachIcon />
               </button>
             )}
 
+            {showSummarize && onSummarize && (
+              <button
+                className={styles.summarizeBtn}
+                onClick={onSummarize}
+                type="button"
+                aria-label="Summarize conversation"
+                title="Summarize conversation"
+                disabled={Boolean(readOnly || disabled || summarizeDisabled)}
+                {...(summarizeTestId ? { 'data-testid': summarizeTestId } : {})}
+              >
+                Summarize
+              </button>
+            )}
+
             {trailingActions}
 
-            {isRunning && onCancel ? (
-              <button
-                className={`${styles.sendBtn} ${styles.stopBtn} ${isCancelling ? styles.stopBtnStopping : ''}`}
-                onClick={onCancel}
-                type="button"
-                aria-label={isCancelling ? 'Stopping agent' : 'Stop'}
-                title="Stop"
-                disabled={isCancelling}
-                {...(stopTestId ? { 'data-testid': stopTestId } : {})}
-              >
-                {isCancelling ? (
-                  <span className={styles.stopSpinner} aria-hidden="true" />
-                ) : (
-                  <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <rect x="4" y="4" width="12" height="12" rx="2" />
-                  </svg>
+            {isRunning && (onCancel || showSteer) ? (
+              <>
+                {showSteer && steer && (
+                  <button
+                    className={styles.sendBtn}
+                    onClick={steer.onSteer}
+                    type="button"
+                    aria-label="Send follow-up"
+                    title="Send follow-up"
+                    disabled={Boolean(readOnly || disabled || !value.trim() || steer.pending)}
+                    {...(steerTestId ? { 'data-testid': steerTestId } : {})}
+                  >
+                    {steer.pending ? '…' : <PaperPlaneIcon />}
+                  </button>
                 )}
-                <span>{isCancelling ? 'Stopping…' : 'Stop'}</span>
-              </button>
+                {onCancel && (
+                  <button
+                    className={`${styles.sendBtn} ${styles.stopBtn} ${isCancelling ? styles.stopBtnStopping : ''}`}
+                    onClick={onCancel}
+                    type="button"
+                    aria-label={isCancelling ? 'Stopping agent' : 'Stop'}
+                    title="Stop"
+                    disabled={Boolean(isCancelling || readOnly)}
+                    {...(stopTestId ? { 'data-testid': stopTestId } : {})}
+                  >
+                    {isCancelling ? (
+                      <span className={styles.stopSpinner} aria-hidden="true" />
+                    ) : (
+                      <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <rect x="4" y="4" width="12" height="12" rx="2" />
+                      </svg>
+                    )}
+                    <span>{isCancelling ? 'Stopping…' : 'Stop'}</span>
+                  </button>
+                )}
+              </>
             ) : (
               sendButton ?? (
                 <button
@@ -609,6 +703,16 @@ export const AgentComposer: React.FC<AgentComposerProps> = ({
             )}
           </div>
         </div>
+
+        {readOnly && (
+          <div
+            className={styles.readOnlyNotice}
+            role="status"
+            {...(readOnlyNoticeTestId ? { 'data-testid': readOnlyNoticeTestId } : {})}
+          >
+            {readOnlyNotice ?? 'You have read-only access to this thread.'}
+          </div>
+        )}
 
         {speech?.isListening && (
           <div className={styles.speechStatus}>Listening… your speech is being transcribed.</div>

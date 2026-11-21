@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { eq, and, desc, inArray } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/drizzle';
@@ -15,6 +17,15 @@ import { createThread } from './chatAgentService';
 import { deleteThread } from './chatThreadRepository';
 import { createNotification } from './notificationService';
 import { sendTeamsNotification } from './teamsBotService';
+import { getAreaProfile } from './chatHarness/areaProfiles';
+import {
+  createCursorSdkAdapter,
+  type AdapterSpecification,
+  type CursorSdkAdapter,
+} from './cursorSdkAdapter';
+import { resolveSkillConfig } from './projectSettingsService';
+import { getDefaultModel } from './appSettingsService';
+import { resolveDataRoot } from '../utils/dataDir';
 import type { ChatThreadKickoff } from '../../shared/types/chat';
 
 // The standup skill path lives on project_skill_workflow_settings. The parent
@@ -202,7 +213,10 @@ export async function generateDailySessions(): Promise<number> {
 
       // createThread auto-sends a hidden "Begin." kickoff, so the agent greets
       // the member with the standup questions as soon as they open the thread.
-      const thread = await createThread(member.userId, kickoff);
+      const standupProfile = getAreaProfile('standup-participant');
+      const thread = await createThread(member.userId, kickoff, {
+        harness: { area: standupProfile.area, version: standupProfile.version },
+      });
 
       await db.insert(standupParticipants).values({
         id: participantId,
@@ -314,7 +328,10 @@ export async function triggerSessionForConfig(
       skillSettingsId: config.skillSettingsId,
     };
 
-    const thread = await createThread(member.userId, kickoff);
+    const standupProfile = getAreaProfile('standup-participant');
+    const thread = await createThread(member.userId, kickoff, {
+      harness: { area: standupProfile.area, version: standupProfile.version },
+    });
 
     await db.insert(standupParticipants).values({
       id: participantId,
@@ -487,7 +504,64 @@ export async function submitParticipant(participantId: string): Promise<void> {
 
 // ── Facilitator ───────────────────────────────────────────────────────────────
 
-export async function runFacilitator(sessionId: string): Promise<void> {
+const FACILITATOR_DISALLOWED_TOOLS = [
+  'Shell',
+  'Read',
+  'Grep',
+  'Glob',
+  'LS',
+  'SemanticSearch',
+] as const;
+
+let sharedFacilitatorAdapter: CursorSdkAdapter | null = null;
+
+function getSharedFacilitatorAdapter(): CursorSdkAdapter {
+  sharedFacilitatorAdapter ??= createCursorSdkAdapter({ cacheMax: 4 });
+  return sharedFacilitatorAdapter;
+}
+
+export interface RunFacilitatorDeps {
+  adapter?: CursorSdkAdapter;
+  resolveSkillConfig?: typeof resolveSkillConfig;
+  getDefaultModel?: typeof getDefaultModel;
+  workspaceDir?: string;
+  adoSkillsUrl?: string;
+}
+
+function buildFacilitatorPrompt(sessionId: string): string {
+  return [
+    '# Standup Ceremony — Facilitator',
+    "You are the standup facilitator. Your job is to read all participants' updates for today's session, identify cross-cutting themes, risks, and follow-ups, and produce a session summary.",
+    '',
+    '# Session context',
+    `  sessionId: "${sessionId}"`,
+    '',
+    '# Available MCP tools',
+    "- `get_standup_session` — read all participants' structured updates and transcripts",
+    '- `create_standup_followup` — create a follow-up item for involved participants',
+    '- `complete_standup_session` — finalize the session (persist summary, create follow-up threads, notify members)',
+    '- `query_work_items` — check ADO work item details if needed',
+    '- `query_board_items` / `list_board_releases` — Work Board alternatives when the project uses the board',
+    '',
+    '# Procedure',
+    "1. Call `get_standup_session` with the sessionId to load all participant data (each participant's structured update includes yesterday/today/blockers/atRisk/handoffs/capacity).",
+    '2. Analyze updates for cross-cutting patterns (shared blockers, production support/incidents, collaboration & handoffs, unowned/ambiguous items, at-risk release items, process requests, capacity/availability).',
+    '3. For each cross-cutting concern, call `create_standup_followup` with the relevant participant user IDs (use the userId values from get_standup_session) and any related work item IDs.',
+    '4. Compose a markdown summary covering team progress highlights, production support/incidents, release readiness, active blockers, handoffs, capacity/availability, and follow-ups created.',
+    '5. Call `complete_standup_session` exactly once with the sessionId and your markdown summary. This MUST be your final action — it closes out the session and notifies members.',
+    '',
+    'Also output the final summary as your last message.',
+  ].join('\n');
+}
+
+/**
+ * Run the Standup Facilitator as a background agent directly through
+ * `CursorSdkAdapter` — no area profile, no chat thread, and no chat UI (TBI-014 DoD-1).
+ */
+export async function runFacilitator(
+  sessionId: string,
+  deps?: RunFacilitatorDeps,
+): Promise<void> {
   const session = await db.query.standupSessions.findFirst({
     where: eq(standupSessions.id, sessionId),
     with: { config: true },
@@ -500,27 +574,64 @@ export async function runFacilitator(sessionId: string): Promise<void> {
     .set({ status: 'facilitating' })
     .where(eq(standupSessions.id, sessionId));
 
-  const kickoff: ChatThreadKickoff = {
+  const loadSkillConfig = deps?.resolveSkillConfig ?? resolveSkillConfig;
+  const loadDefaultModel = deps?.getDefaultModel ?? getDefaultModel;
+  const skillConfig = await loadSkillConfig({
     project: session.config.project,
-    agentModule: 'standup',
-    repo: '',
-    mode: 'standup-facilitator',
-    standupSessionId: sessionId,
-    skillSettingsId: session.config.skillSettingsId,
+    settingsId: session.config.skillSettingsId ?? undefined,
+  });
+  const modelId = (
+    skillConfig?.standupModel?.trim() ||
+    skillConfig?.defaultModel?.trim() ||
+    (await loadDefaultModel())?.trim() ||
+    ''
+  );
+  if (!modelId) {
+    throw new Error(
+      `No model is configured for Standup Facilitator in project "${session.config.project}"`,
+    );
+  }
+
+  const workspaceRef =
+    deps?.workspaceDir ??
+    path.join(resolveDataRoot(), 'standup-facilitator', sessionId);
+  if (!deps?.workspaceDir) {
+    fs.mkdirSync(workspaceRef, { recursive: true });
+  }
+
+  const adoSkillsUrl =
+    deps?.adoSkillsUrl ??
+    `http://localhost:${process.env.PORT ?? 3001}/mcp/ado-skills?enableRepoBrowse=false`;
+
+  const requestId = uuidv4();
+  const spec: AdapterSpecification = {
+    sessionKey: `standup-facilitator:${sessionId}`,
+    compatibilityKey: `standup-facilitator:${session.config.project}:${modelId}`,
+    model: { id: modelId },
+    workspaceRef,
+    skillContent: null,
+    toolAllowlist: [],
+    disallowedTools: [...FACILITATOR_DISALLOWED_TOOLS],
+    settingSources: [],
+    sandbox: { enabled: true },
+    mcpServers: {
+      'ado-skills': { url: adoSkillsUrl },
+    },
+    priorAgentBinding: null,
+    requestId,
   };
 
-  // Use a system user ID for the facilitator thread. createThread auto-sends a
-  // hidden "Begin." kickoff, so the facilitator agent starts analyzing the
-  // session immediately: it reads all updates via get_standup_session, records
-  // cross-cutting follow-ups via create_standup_followup, and finally calls
-  // complete_standup_session, which transitions the session to completed,
-  // persists the summary, spins up joint follow-up threads, and notifies members.
-  const facilitatorThread = await createThread('system-standup-facilitator', kickoff);
-
-  await db
-    .update(standupSessions)
-    .set({ facilitatorThreadId: facilitatorThread.id })
-    .where(eq(standupSessions.id, sessionId));
+  const adapter = deps?.adapter ?? getSharedFacilitatorAdapter();
+  const agent = await adapter.acquire(spec);
+  try {
+    const run = await agent.send(buildFacilitatorPrompt(sessionId), {
+      requestId,
+    });
+    await run.wait();
+  } finally {
+    await agent.dispose().catch(() => {});
+    await adapter.release(spec.sessionKey).catch(() => {});
+  }
 }
 
 /**
@@ -562,7 +673,10 @@ export async function completeSession(sessionId: string, summaryMarkdown?: strin
         mode: 'standup-followup',
         standupSessionId: sessionId,
       };
-      const thread = await createThread(owner, kickoff);
+      const standupProfile = getAreaProfile('standup-participant');
+      const thread = await createThread(owner, kickoff, {
+        harness: { area: standupProfile.area, version: standupProfile.version },
+      });
       followupThreadId = thread.id;
       await db
         .update(standupFollowups)

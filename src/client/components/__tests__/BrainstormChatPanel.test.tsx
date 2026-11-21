@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { BrainstormChatPanel, retryableBrainstormMessage } from '../BrainstormChatPanel';
 import { useBrainstormChat } from '../../hooks/useBrainstormChat';
-import { useBrainstormMessages } from '../../hooks/useBrainstormSessions';
+import { brainstormKeys, useBrainstormMessages } from '../../hooks/useBrainstormSessions';
 import type { BrainstormMessageDto, BrainstormSessionDetail } from '../../../shared/types/brainstorm';
 
 jest.mock('react-markdown', () => ({
@@ -11,7 +12,13 @@ jest.mock('react-markdown', () => ({
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('../../hooks/useBrainstormChat', () => ({ useBrainstormChat: jest.fn() }));
-jest.mock('../../hooks/useBrainstormSessions', () => ({ useBrainstormMessages: jest.fn() }));
+jest.mock('../../hooks/useBrainstormSessions', () => {
+  const actual = jest.requireActual('../../hooks/useBrainstormSessions');
+  return {
+    ...actual,
+    useBrainstormMessages: jest.fn(),
+  };
+});
 jest.mock('../../hooks/useBrainstormSources', () => ({
   useBrainstormSources: () => ({ data: [] }),
   useBrainstormCitations: () => ({ data: [] }),
@@ -439,5 +446,106 @@ describe('retryableBrainstormMessage', () => {
   it('returns a stopped collaborator reply that still has a run id', () => {
     const cancelled = msg({ id: 'a-stop', status: 'cancelled', runId: 'run-stop' });
     expect(retryableBrainstormMessage([cancelled])).toBe(cancelled);
+  });
+});
+
+describe('BrainstormChatPanel — VT-38 / TBI-017 DoD-1 event-driven invalidation', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('does not poll on a 1.5 s interval while streaming and invalidates messages and session once when terminalRevision advances', () => {
+    jest.useFakeTimers();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+    const refetch = jest.fn().mockResolvedValue(undefined);
+
+    const streamingRows = [
+      msg({ id: 'u-1', role: 'user', content: 'Draft an ADR' }),
+      msg({ id: 'a-1', role: 'assistant', status: 'streaming', runId: 'run-1', content: '' }),
+    ];
+
+    chatHook.mockReturnValue(chat({
+      status: 'running',
+      isRunning: true,
+      terminalRevision: 0,
+    }));
+    messagesHook.mockReturnValue(messages(streamingRows, refetch));
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <BrainstormChatPanel project="Apex" session={session} />
+      </QueryClientProvider>,
+    );
+
+    const harnessPanel = screen.getByTestId('brainstorm-harness-panel');
+    expect(harnessPanel).toHaveAttribute('data-harness-area', 'brainstorm');
+
+    // Advance 15 seconds (10x the removed 1.5 s polling interval) while streaming
+    act(() => {
+      jest.advanceTimersByTime(15_000);
+    });
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(refetch).not.toHaveBeenCalled();
+
+    // Terminal event increments terminalRevision -> invalidate messages + session exactly once
+    chatHook.mockReturnValue(chat({
+      status: 'idle',
+      isRunning: false,
+      terminalRevision: 1,
+    }));
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <BrainstormChatPanel project="Apex" session={session} />
+      </QueryClientProvider>,
+    );
+
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: brainstormKeys.messages('Apex', session.id),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: brainstormKeys.session('Apex', session.id),
+    });
+
+    // No further invalidations on subsequent timers or stable rerenders
+    act(() => {
+      jest.advanceTimersByTime(15_000);
+    });
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <BrainstormChatPanel project="Apex" session={session} />
+      </QueryClientProvider>,
+    );
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it('refetches once on status transition from running to terminal when terminalRevision is omitted and no QueryClient is provided', () => {
+    jest.useFakeTimers();
+    const refetch = jest.fn().mockResolvedValue(undefined);
+    const streamingRows = [
+      msg({ id: 'u-1', role: 'user', content: 'Explore options' }),
+      msg({ id: 'a-1', role: 'assistant', status: 'streaming', runId: 'run-2', content: '' }),
+    ];
+
+    chatHook.mockReturnValue(chat({ status: 'running', isRunning: true }));
+    messagesHook.mockReturnValue(messages(streamingRows, refetch));
+
+    const { rerender } = render(<BrainstormChatPanel project="Apex" session={session} />);
+
+    act(() => {
+      jest.advanceTimersByTime(10_000);
+    });
+    expect(refetch).not.toHaveBeenCalled();
+
+    chatHook.mockReturnValue(chat({ status: 'idle', isRunning: false }));
+    rerender(<BrainstormChatPanel project="Apex" session={session} />);
+    expect(refetch).toHaveBeenCalledTimes(1);
+
+    rerender(<BrainstormChatPanel project="Apex" session={session} />);
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

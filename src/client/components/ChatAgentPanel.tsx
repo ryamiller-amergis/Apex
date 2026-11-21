@@ -18,9 +18,15 @@ import type {
 } from '../../shared/types/chat';
 import type { QuickMcpPill, QuickSkillPill } from '../../shared/types/projectSettings';
 import { PRDPreviewDrawer } from './PRDPreviewDrawer';
-import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { ThreadHistorySidebar } from './ThreadHistorySidebar';
-import { AgentComposer, AgentPanelShell, AgentRetryBanner } from './agentChat';
+import {
+  AgentComposer,
+  AgentHarnessPanel,
+  AgentPanelShell,
+  AgentReplyRating,
+  AgentThoughtProcess,
+} from './agentChat';
+import type { HarnessTranscriptItem } from '../chatHarness/types';
 import { BrandLogo } from './BrandLogo';
 import { BuildAgentHomePill } from './BuildAgentHomePill';
 import { parseAgentMessage } from '../utils/parseAgentMessage';
@@ -31,7 +37,6 @@ import { useAppShell } from '../hooks/useAppShell';
 import { useWorkflowEvaluationAccess } from '../hooks/useWorkflowEvaluationAccess';
 import { usePutWorkflowMessageFeedback, useWorkflowMessageFeedback } from '../hooks/useWorkflowMessageFeedback';
 import type { ChatMessageRating as ReplyRating } from '../../shared/types/workflowMessageFeedback';
-import { ChatMessageRating } from './ChatMessageRating';
 import { usePutSkillRating, useSkillRatings } from '../hooks/useSkillRatings';
 import type { SkillRatingSurface } from '../../shared/types/skillRating';
 import { RUN_STALLED_NOTICE, useRunStalled } from '../hooks/useRunStalled';
@@ -413,8 +418,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     surface: 'chat',
     subjectId: thread?.id ?? '',
   });
-  const replyRatingByMessage = new Map(
-    (replyRatings.data?.entries ?? []).map((entry) => [entry.messageId, entry]),
+  const replyRatingByMessage = useMemo(
+    () => new Map(
+      (replyRatings.data?.entries ?? []).map((entry) => [entry.messageId, entry]),
+    ),
+    [replyRatings.data?.entries],
   );
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -438,6 +446,9 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   const speech = useSpeechInput(useCallback((text: string) => setInput(text), []));
 
   const session = useAgentChatSession(sessionThreadId, {
+    area: 'agent-home',
+    harnessArea: 'agent-home',
+    projectId: selectedProject ?? thread?.kickoff.project ?? null,
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
     initialActiveRunId: thread?.activeRunId,
@@ -455,17 +466,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
     prdReady,
     isRunning,
     isSending,
-    isCancelling,
     isAwaitingAgentResponse,
-    isInteractionBusy,
     status,
-    progressLabel,
-    progressPhase,
-    toolProgress,
     showTypingIndicator,
     sendError,
     isRetrying,
-    retryReason,
     lastProgressAt,
   } = session;
   const isStalled = useRunStalled(isRunning && !isRetrying, lastProgressAt);
@@ -738,6 +743,11 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
 
   // A selected thread can legitimately hold nothing to show: the kickoff prompt
   // is hidden, and a run that never produced a reply persists no agent message.
+  const lastVisibleMessage = visibleMessages[visibleMessages.length - 1];
+  const hasTrailingSystemError =
+    lastVisibleMessage?.role === 'system' &&
+    lastVisibleMessage.text.startsWith('Error:');
+
   const hasEmptyTranscript =
     visibleMessages.length === 0
     && !pendingOutgoing
@@ -866,6 +876,96 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
   };
 
   const showStartupTyping = isStartingConversation;
+
+  const effectiveConnectionState = session.connectionState ?? (
+    isConnected
+      ? 'open'
+      : hasConnectionError
+        ? 'unavailable'
+        : 'connecting'
+  );
+
+  const harnessSession = useMemo(
+    () => ({
+      ...session,
+      visibleMessages: session.visibleMessages ?? visibleMessages,
+      streamingText: isStatusOnlyStream(streamingText) ? '' : streamingText,
+      connectionState: effectiveConnectionState,
+      isRunning: canStop,
+      isAwaitingAgentResponse: Boolean(
+        session.isAwaitingAgentResponse || showStartupTyping || showTypingIndicator,
+      ),
+      isSteerSupported: Boolean(session.isSteerSupported && isRunning),
+      snapshotLoaded: (isLoadingConversation || showStartupTyping)
+        ? true
+        : (session.snapshotLoaded ?? true),
+    }),
+    [
+      session,
+      visibleMessages,
+      streamingText,
+      effectiveConnectionState,
+      canStop,
+      isRunning,
+      isLoadingConversation,
+      showStartupTyping,
+      showTypingIndicator,
+    ],
+  );
+
+  const renderMessageActions = useCallback(
+    (item: HarnessTranscriptItem) => {
+      if (canRateReplies) {
+        return (
+          <AgentReplyRating
+            messageId={item.id}
+            rating={(replyRatingByMessage.get(item.id)?.rating as ReplyRating | undefined) ?? null}
+            comment={replyRatingByMessage.get(item.id)?.comment ?? null}
+            pending={putReplyRating.isPending && putReplyRating.variables?.messageId === item.id}
+            error={putReplyRating.isError && putReplyRating.variables?.messageId === item.id
+              ? putReplyRating.error.message
+              : null}
+            canWrite={session.canWrite ?? true}
+            hasAccess={canRateReplies}
+            onSave={(rating, comment) => putReplyRating.mutateAsync({ messageId: item.id, rating, comment })}
+          />
+        );
+      }
+      if (canRateAssistant) {
+        return (
+          <AgentReplyRating
+            messageId={item.id}
+            rating={assistantRatings.get(item.id)?.rating ?? null}
+            comment={assistantRatings.get(item.id)?.comment ?? null}
+            pending={putAssistantRating.isPending && putAssistantRating.variables?.subjectId === item.id}
+            error={putAssistantRating.isError && putAssistantRating.variables?.subjectId === item.id
+              ? putAssistantRating.error.message
+              : null}
+            canWrite={session.canWrite ?? true}
+            hasAccess={canRateAssistant}
+            onSave={(rating, comment) => putAssistantRating.mutateAsync({
+              subjectType: 'assistant_reply',
+              subjectId: item.id,
+              threadId: thread?.id ?? null,
+              rating,
+              comment,
+            })}
+          />
+        );
+      }
+      return null;
+    },
+    [
+      canRateReplies,
+      replyRatingByMessage,
+      putReplyRating,
+      session.canWrite,
+      canRateAssistant,
+      assistantRatings,
+      putAssistantRating,
+      thread?.id,
+    ],
+  );
 
   if (!isOpen) return null;
 
@@ -1043,6 +1143,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                       className={styles.fileInput}
                       onChange={handleAttachmentChange}
                       disabled={isStartingNewChat || homeComposeBlocked || !canStartNewChat}
+                      {...{ 'data-testid': 'chat-agent-file-input' }}
                     />
                   )}
                   placeholder={
@@ -1191,6 +1292,7 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
                     className={styles.fileInput}
                     onChange={handleAttachmentChange}
                     disabled={isStartingNewChat || homeComposeBlocked || !canStartNewChat}
+                    {...{ 'data-testid': 'chat-agent-file-input' }}
                   />
                 )}
                 placeholder={
@@ -1214,347 +1316,269 @@ export const ChatAgentPanel: React.FC<ChatAgentPanelProps> = ({
         </>
       ) : (
         <>
-          {hasConnectionError && (
-            <div
-              className={styles.connectionError}
-              role="status"
-              {...{ 'data-testid': 'chat-agent-connection-banner' }}
-            >
-              Live connection interrupted. Your conversation is still here; reconnecting…
-            </div>
-          )}
-          <div className={styles.messages}>
-            {isLoadingConversation && (
-              <div
-                className={styles.transcriptEmpty}
-                role="status"
-                {...{ 'data-testid': 'chat-agent-history-loading' }}
-              >
-                <p className={styles.transcriptEmptyHint}>
-                  Loading conversation…
-                </p>
-              </div>
-            )}
-            {hasEmptyTranscript && (
-              <div
-                className={styles.transcriptEmpty}
-                {...{ 'data-testid': 'chat-agent-empty-transcript' }}
-              >
-                <h3 className={styles.transcriptEmptyTitle}>No messages in this conversation</h3>
-                {thread?.lastError ? (
-                  <p className={styles.transcriptEmptyError} role="status">
-                    The last agent run did not finish: {thread.lastError}
-                  </p>
-                ) : null}
-                <p className={styles.transcriptEmptyHint}>
-                  Send a message to start it.
-                </p>
-              </div>
-            )}
-            {pendingOutgoing
-              && !visibleMessages.some((message) => message.role === 'user' && message.text === pendingOutgoing) && (
-              <UserBubble
-                msg={{
-                  id: 'pending-outgoing',
-                  role: 'user',
-                  text: pendingOutgoing,
-                  ts: new Date().toISOString(),
-                }}
-              />
-            )}
-            {visibleMessages.map((msg, idx) => {
-              const highlighted = highlightedMessageId === msg.id;
-              if (msg.role === 'tool') return <ToolCallBubble key={msg.id} msg={msg} highlighted={highlighted} />;
-              if (msg.role === 'user') return <UserBubble key={msg.id} msg={msg} highlighted={highlighted} />;
-              if (msg.role === 'system') {
-                const isError = msg.text.startsWith('Error:');
-                const lastUserText = isError
-                  ? visibleMessages.slice(0, idx).reverse().find((m) => m.role === 'user')?.text ?? null
-                  : null;
-                if (isError && lastUserText) {
-                  return (
-                    <div
-                      key={msg.id}
-                      data-message-id={msg.id}
-                      {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
-                      className={`${styles.systemErrorMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
-                    >
-                      <span
-                        className={styles.systemErrorText}
-                        role="alert"
-                        {...{ 'data-testid': 'chat-run-terminal' }}
-                      >
-                        {msg.text}
-                      </span>
-                      <button
-                        className={styles.retryBtn}
-                        onClick={() => {
-                          void session.retryFailedRun();
-                        }}
-                        disabled={isRunning || !session.retryableRunId}
-                        type="button"
-                        {...{ 'data-testid': 'chat-agent-message-retry-btn' }}
-                      >
-                        ↺ Try again
-                      </button>
-                    </div>
-                  );
-                }
-                return (
-                  <div
-                    key={msg.id}
-                    data-message-id={msg.id}
-                    {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
-                    className={`${styles.systemMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
-                  >
-                    {isError ? (
-                      <span role="alert" {...{ 'data-testid': 'chat-run-terminal' }}>
-                        {msg.text}
-                      </span>
-                    ) : msg.text}
-                  </div>
-                );
-              }
-              return (
-                <AgentMessage
-                  key={msg.id}
-                  msg={msg}
-                  onSend={doSend}
-                  isRunning={isRunning}
-                  highlighted={highlighted}
-                  footer={canRateReplies ? (
-                    <ChatMessageRating
-                      messageId={msg.id}
-                      rating={(replyRatingByMessage.get(msg.id)?.rating as ReplyRating | undefined) ?? null}
-                      comment={replyRatingByMessage.get(msg.id)?.comment ?? null}
-                      pending={putReplyRating.isPending && putReplyRating.variables?.messageId === msg.id}
-                      error={putReplyRating.isError && putReplyRating.variables?.messageId === msg.id
-                        ? putReplyRating.error.message
-                        : null}
-                      onSave={(rating, comment) => putReplyRating.mutateAsync({ messageId: msg.id, rating, comment })}
-                    />
-                  ) : canRateAssistant ? (
-                    <ChatMessageRating
-                      messageId={msg.id}
-                      rating={assistantRatings.get(msg.id)?.rating ?? null}
-                      comment={assistantRatings.get(msg.id)?.comment ?? null}
-                      pending={putAssistantRating.isPending && putAssistantRating.variables?.subjectId === msg.id}
-                      error={putAssistantRating.isError && putAssistantRating.variables?.subjectId === msg.id
-                        ? putAssistantRating.error.message
-                        : null}
-                      onSave={(rating, comment) => putAssistantRating.mutateAsync({
-                        subjectType: 'assistant_reply',
-                        subjectId: msg.id,
-                        threadId: thread?.id ?? null,
-                        rating,
-                        comment,
-                      })}
-                    />
-                  ) : undefined}
-                />
-              );
-            })}
-
-            {/* Loading spinner — shown while waiting for first tokens */}
-            {(showTypingIndicator || showStartupTyping) && (
-              <div
-                className={styles.message}
-                role="status"
-                aria-live="polite"
-                aria-label={
-                  progressPhase === 'queued'
-                    ? 'Queued'
-                    : progressPhase === 'dispatched'
-                      ? 'Dispatched'
-                      : progressLabel ?? 'Agent is processing'
-                }
-                {...{ 'data-testid': 'chat-run-spinner' }}
-              >
-                <div className={styles.agentHeader}>
-                  <span className={styles.agentAvatar}>AI</span>
-                  <span className={styles.agentLabel}>Agent</span>
-                </div>
-                <div className={styles.agentBubble}>
-                  <div className={styles.typingIndicator}>
-                    <span className={styles.typingDot} />
-                    <span className={styles.typingDot} />
-                    <span className={styles.typingDot} />
-                  </div>
-                  {(progressLabel || progressPhase || showStartupTyping) && (
-                    <p
-                      className={styles.progressLabel}
-                      {...{ 'data-testid': 'chat-agent-progress-label' }}
-                    >
-                      {progressPhase === 'queued' ? (
-                        <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                          Queued
-                        </span>
-                      ) : progressPhase === 'dispatched' ? (
-                        <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                          Dispatched
-                        </span>
-                      ) : (
-                        <ChatRunProgressLabel
-                          fallbackLabel={progressLabel ?? 'Starting skill…'}
-                          progressPhase={progressPhase}
-                          toolProgress={toolProgress}
-                        />
-                      )}
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Streaming in-progress text */}
-            {streamingText && (
-              <div className={styles.message}>
-                <div className={styles.agentHeader}>
-                  <span className={styles.agentAvatar}>AI</span>
-                  <span className={styles.agentLabel}>Agent</span>
-                </div>
-                <div className={styles.agentBubble}>
-                  {(toolProgress.length > 0 || isStatusOnlyStream(streamingText)) && (
-                    <p className={styles.progressLabel} {...{ 'data-testid': 'chat-agent-progress-label' }}>
-                      <ChatRunProgressLabel
-                        fallbackLabel={progressLabel ?? 'Working…'}
-                        progressPhase={progressPhase}
-                        toolProgress={toolProgress}
-                      />
-                    </p>
-                  )}
-                  {!isStatusOnlyStream(streamingText) && (
-                    <div className={`${styles.markdownBody} ${styles.streamingBody}`}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <AgentRetryBanner
-              isRetrying={isRetrying}
-              retryReason={retryReason}
-              data-testid="chat-run-restarting"
-            />
-            {isStalled && (
-              <p
-                className={styles.stallNotice}
-                role="status"
-                aria-live="polite"
-                {...{ 'data-testid': 'chat-run-stalled' }}
-              >
-                {RUN_STALLED_NOTICE}
-              </p>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {hasPrd && (
-            <div className={styles.prdBanner}>
-              <span className={styles.prdBannerText}>📄 PRD is ready for review</span>
-              <div className={styles.prdActions}>
-                <button
-                  className={styles.btnSecondary}
-                  onClick={() => setShowPrdPreview(true)}
-                  type="button"
-                  {...{ 'data-testid': 'chat-agent-prd-preview-btn' }}
-                >
-                  Preview
-                </button>
-              </div>
-            </div>
-          )}
-
-          {(sendError ?? newChatError) && (
-            <p className={styles.emptyError} role="alert">
-              {sendError ?? newChatError}
-            </p>
-          )}
-
-          <AgentComposer
-            className={`${styles.composerEmbed} ${launchedFromHome ? styles.homeConversationComposer : ''}`.trim()}
-            shellClassName={launchedFromHome ? styles.compactComposerShell : undefined}
-            value={input}
-            onChange={(val) => {
+          <AgentHarnessPanel
+            area="agent-home"
+            session={harnessSession}
+            testIdPrefix="chat-agent"
+            testIds={{
+              busy: 'chat-run-spinner',
+              progressLabel: 'chat-agent-progress-label',
+            }}
+            draft={input}
+            onDraftChange={(val) => {
               setInput(val);
               const isSlash = slashSkillsEnabled && /^\//.test(val);
               setSkillPickerOpen(isSlash);
               if (isSlash) setSkillPickerIdx(0);
             }}
-            onSend={() => void doSend(input, attachments)}
-            onCancel={() => void session.cancel()}
-            isRunning={canStop}
-            isCancelling={isCancelling}
-            isBusy={isInteractionBusy}
-            placeholder={
-              isRunning
-                ? 'Agent is thinking…'
+            onSend={(text) => doSend(text, attachments)}
+            onCancel={() => session.cancel()}
+            onRetry={() => session.retryFailedRun()}
+            slots={{
+              messageActions: (canRateReplies || canRateAssistant) ? renderMessageActions : undefined,
+              proposal: hasPrd ? (
+                <div className={styles.prdBanner}>
+                  <span className={styles.prdBannerText}>📄 PRD is ready for review</span>
+                  <div className={styles.prdActions}>
+                    <button
+                      className={styles.btnSecondary}
+                      onClick={() => setShowPrdPreview(true)}
+                      type="button"
+                      {...{ 'data-testid': 'chat-agent-prd-preview-btn' }}
+                    >
+                      Preview
+                    </button>
+                  </div>
+                </div>
+              ) : undefined,
+              composerAccessory: (sendError ?? newChatError) ? (
+                <p className={styles.emptyError} role="alert">
+                  {sendError ?? newChatError}
+                </p>
+              ) : undefined,
+            }}
+            composer={{
+              placeholder: isRunning
+                ? 'Send a follow-up while the agent works…'
                 : launchedFromHome
                   ? 'Message agent · Enter to send'
-                  : 'Message agent · type / to invoke a skill…'
-            }
-            testIdPrefix="chat-agent"
-            {...{ 'data-testid': 'chat-agent-composer' }}
-            allowEmptySend
-            attachments={attachments}
-            attachmentError={attachmentError}
-            onRemoveAttachment={removeAttachment}
-            onAttachClick={openFilePicker}
-            onPasteFiles={(files) => { void addFiles(files); }}
-            speech={{
-              isListening: speech.isListening,
-              isSpeechSupported: speech.isSpeechSupported,
-              speechError: speech.speechError,
-              onToggle: () => speech.toggle(input),
-            }}
-            model={selectedModel}
-            models={availableModels}
-            modelsLoading={modelsLoading}
-            onModelChange={setSelectedModel}
-            onKeyDown={handleKeyDown}
-            textareaRef={textareaRef}
-            fileInput={(
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className={styles.fileInput}
-                onChange={handleAttachmentChange}
-                disabled={isRunning}
-              />
-            )}
-            before={skillPickerOpen ? (
-              <div className={styles.skillPicker} ref={skillPickerRef}>
-                <div className={styles.skillPickerHeader}>
-                  {filteredSkills.length === 0
-                    ? 'No skills match — keep typing'
-                    : `${filteredSkills.length} skill${filteredSkills.length !== 1 ? 's' : ''} · ↑↓ navigate · Enter select · Esc dismiss`}
+                  : 'Message agent · type / to invoke a skill…',
+              allowEmptySend: true,
+              attachments,
+              attachmentError,
+              onRemoveAttachment: removeAttachment,
+              onAttachClick: openFilePicker,
+              onPasteFiles: (files) => { void addFiles(files); },
+              speech: {
+                isListening: speech.isListening,
+                isSpeechSupported: speech.isSpeechSupported,
+                speechError: speech.speechError,
+                onToggle: () => speech.toggle(input),
+              },
+              model: selectedModel,
+              models: availableModels,
+              modelsLoading,
+              onModelChange: setSelectedModel,
+              onKeyDown: handleKeyDown,
+              textareaRef,
+              fileInput: (
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className={styles.fileInput}
+                  onChange={handleAttachmentChange}
+                  disabled={isRunning}
+                  {...{ 'data-testid': 'chat-agent-file-input' }}
+                />
+              ),
+              before: skillPickerOpen ? (
+                <div className={styles.skillPicker} ref={skillPickerRef}>
+                  <div className={styles.skillPickerHeader}>
+                    {filteredSkills.length === 0
+                      ? 'No skills match — keep typing'
+                      : `${filteredSkills.length} skill${filteredSkills.length !== 1 ? 's' : ''} · ↑↓ navigate · Enter select · Esc dismiss`}
+                  </div>
+                  {filteredSkills.map((skill, idx) => (
+                    <button
+                      key={skill.id}
+                      data-picker-active={idx === skillPickerIdx ? 'true' : undefined}
+                      className={`${styles.skillPickerItem} ${idx === skillPickerIdx ? styles.skillPickerItemActive : ''}`}
+                      onMouseDown={(e) => { e.preventDefault(); selectSkill(skill); }}
+                      onMouseEnter={() => setSkillPickerIdx(idx)}
+                      type="button"
+                      {...{ 'data-testid': `chat-agent-skill-picker-item-${testIdSegment(skill.path)}` }}
+                    >
+                      <span className={styles.skillPickerName}>{skill.name}</span>
+                      {skill.description && (
+                        <span className={styles.skillPickerDesc}>{skill.description}</span>
+                      )}
+                    </button>
+                  ))}
                 </div>
-                {filteredSkills.map((skill, idx) => (
-                  <button
-                    key={skill.id}
-                    data-picker-active={idx === skillPickerIdx ? 'true' : undefined}
-                    className={`${styles.skillPickerItem} ${idx === skillPickerIdx ? styles.skillPickerItemActive : ''}`}
-                    onMouseDown={(e) => { e.preventDefault(); selectSkill(skill); }}
-                    onMouseEnter={() => setSkillPickerIdx(idx)}
-                    type="button"
+              ) : undefined,
+              after: !launchedFromHome ? (
+                <div className={styles.inputHint}>
+                  <span className={styles.modelBadge}>{modelBadge(selectedModel)}</span>
+                  Enter to send · Shift+Enter for newline · <kbd className={styles.kbdHint}>/</kbd> invoke skill
+                </div>
+              ) : undefined,
+            }}
+            renderTranscript={({ liveWorkBox, messageFailure }) => (
+              <div className={styles.messages}>
+                {isLoadingConversation && (
+                  <div
+                    className={styles.transcriptEmpty}
+                    role="status"
+                    {...{ 'data-testid': 'chat-agent-history-loading' }}
                   >
-                    <span className={styles.skillPickerName}>{skill.name}</span>
-                    {skill.description && (
-                      <span className={styles.skillPickerDesc}>{skill.description}</span>
-                    )}
-                  </button>
-                ))}
+                    <p className={styles.transcriptEmptyHint}>
+                      Loading conversation…
+                    </p>
+                  </div>
+                )}
+                {hasEmptyTranscript && (
+                  <div
+                    className={styles.transcriptEmpty}
+                    {...{ 'data-testid': 'chat-agent-empty-transcript' }}
+                  >
+                    <h3 className={styles.transcriptEmptyTitle}>No messages in this conversation</h3>
+                    {thread?.lastError ? (
+                      <p className={styles.transcriptEmptyError} role="status">
+                        The last agent run did not finish: {thread.lastError}
+                      </p>
+                    ) : null}
+                    <p className={styles.transcriptEmptyHint}>
+                      Send a message to start it.
+                    </p>
+                  </div>
+                )}
+                {pendingOutgoing
+                  && !visibleMessages.some((message) => message.role === 'user' && message.text === pendingOutgoing) && (
+                  <UserBubble
+                    msg={{
+                      id: 'pending-outgoing',
+                      role: 'user',
+                      text: pendingOutgoing,
+                      ts: new Date().toISOString(),
+                    }}
+                  />
+                )}
+                {visibleMessages.map((msg, idx) => {
+                  const highlighted = highlightedMessageId === msg.id;
+                  if (msg.role === 'tool') return <ToolCallBubble key={msg.id} msg={msg} highlighted={highlighted} />;
+                  if (msg.role === 'user') return <UserBubble key={msg.id} msg={msg} highlighted={highlighted} />;
+                  if (msg.role === 'system') {
+                    const isError = msg.text.startsWith('Error:');
+                    const lastUserText = isError
+                      ? visibleMessages.slice(0, idx).reverse().find((m) => m.role === 'user')?.text ?? null
+                      : null;
+                    if (isError && lastUserText) {
+                      return (
+                        <div
+                          key={msg.id}
+                          data-message-id={msg.id}
+                          {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+                          className={`${styles.systemErrorMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+                        >
+                          <span
+                            className={styles.systemErrorText}
+                            role="alert"
+                            {...{ 'data-testid': 'chat-run-terminal' }}
+                          >
+                            {msg.text}
+                          </span>
+                          <button
+                            className={styles.retryBtn}
+                            onClick={() => {
+                              void session.retryFailedRun();
+                            }}
+                            disabled={isRunning || !session.retryableRunId}
+                            type="button"
+                            {...{ 'data-testid': 'chat-agent-message-retry-btn' }}
+                          >
+                            ↺ Try again
+                          </button>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div
+                        key={msg.id}
+                        data-message-id={msg.id}
+                        {...(highlighted ? { 'data-testid': 'chat-message-highlighted' } : {})}
+                        className={`${styles.systemMsg} ${highlighted ? styles.messageHighlighted : ''}`.trim()}
+                      >
+                        {isError ? (
+                          <span role="alert" {...{ 'data-testid': 'chat-run-terminal' }}>
+                            {msg.text}
+                          </span>
+                        ) : msg.text}
+                      </div>
+                    );
+                  }
+                  const harnessItem = msg as HarnessTranscriptItem;
+                  return (
+                    <React.Fragment key={msg.id}>
+                      {harnessItem.activity?.length || harnessItem.activityUnavailable ? (
+                        <AgentThoughtProcess
+                          items={harnessItem.activity}
+                          isUnavailable={harnessItem.activityUnavailable}
+                          testIdPrefix="chat-agent"
+                          testIds={{
+                            drawer: 'chat-agent-thought-process',
+                            toggle: 'chat-agent-thought-process-toggle',
+                            thinking: `chat-agent-saved-thinking-${msg.id}`,
+                            steps: `chat-agent-saved-steps-${msg.id}`,
+                            toolGroup: `chat-agent-saved-tool-group-${msg.id}`,
+                          }}
+                        />
+                      ) : null}
+                      <AgentMessage
+                        msg={msg}
+                        onSend={doSend}
+                        isRunning={isRunning}
+                        highlighted={highlighted}
+                        footer={renderMessageActions(harnessItem)}
+                      />
+                    </React.Fragment>
+                  );
+                })}
+
+                {/* Unified harness live work box (progress header, spinner, thinking & tool steps) */}
+                {liveWorkBox}
+
+                {/* Streaming in-progress text */}
+                {streamingText && !isStatusOnlyStream(streamingText) && (
+                  <div className={styles.message}>
+                    <div className={styles.agentHeader}>
+                      <span className={styles.agentAvatar}>AI</span>
+                      <span className={styles.agentLabel}>Agent</span>
+                    </div>
+                    <div className={styles.agentBubble}>
+                      <div className={`${styles.markdownBody} ${styles.streamingBody}`}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {session.lastFailure && !hasTrailingSystemError ? messageFailure : null}
+                {isStalled && (
+                  <p
+                    className={styles.stallNotice}
+                    role="status"
+                    aria-live="polite"
+                    {...{ 'data-testid': 'chat-run-stalled' }}
+                  >
+                    {RUN_STALLED_NOTICE}
+                  </p>
+                )}
+
+                <div ref={messagesEndRef} />
               </div>
-            ) : undefined}
-            after={!launchedFromHome ? (
-              <div className={styles.inputHint}>
-                <span className={styles.modelBadge}>{modelBadge(selectedModel)}</span>
-                Enter to send · Shift+Enter for newline · <kbd className={styles.kbdHint}>/</kbd> invoke skill
-              </div>
-            ) : undefined}
+            )}
+            {...{ 'data-testid': 'chat-agent-harness-panel' }}
           />
 
           {showPrdPreview && thread && (

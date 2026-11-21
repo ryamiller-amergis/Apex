@@ -15,6 +15,7 @@ import type {
   DurableInteractiveTurnSpecification,
   FrozenBrainstormTurn,
   FrozenGuidedInterview,
+  FrozenHarnessSpec,
   FrozenInteractiveMcpDescriptor,
   FrozenInteractiveToolGrant,
   InteractiveCapability,
@@ -91,6 +92,20 @@ import {
 import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
+import {
+  buildRecreationPrompt,
+  type RecreationSummaryInput,
+} from './chatHarness/chatHarnessRecreation';
+import { getLatestNonFallbackSummary } from './chatHarness/chatHarnessSummaryStore';
+import { getAreaProfile } from './chatHarness/areaProfiles';
+import {
+  inferHarnessArea,
+  stampThreadHarnessIfMissing,
+} from './chatHarness/inferHarnessArea';
+import {
+  isHarnessAreaId,
+  type HarnessAreaId,
+} from '../../shared/types/chatHarness';
 
 const PLAYBOOK_INTERVIEW_STEP_FLAG = 'playbook-interview-step';
 const BACKGROUND_GROUNDING_FLAG = 'interview-background-grounding';
@@ -191,6 +206,12 @@ export type AdmitDurableInteractiveTurnInput = Readonly<{
   internalContext?: string;
   /** Required for, and only for, workflow class `brainstorm`. */
   brainstorm?: FrozenBrainstormTurn;
+  /** Non-message turn operation (e.g. 'summarize' admits a run without a user chat_messages row). */
+  operation?: 'summarize';
+  /** Shared chat harness specification block resolved on App Service. */
+  harness?: FrozenHarnessSpec;
+  /** Optional area key context (e.g. PRD, brainstorm artifact, interview brief) for bounded recreation handoff. */
+  areaKeyContext?: string | null;
 }>;
 
 export type RetryDurableInteractiveTurnInput = Readonly<{
@@ -294,6 +315,16 @@ type ServiceDependencies = Readonly<{
   loadLinkedContext: (
     input: Readonly<{ threadId: string; userId: string }>,
   ) => Promise<string | null>;
+  /** Latest non-fallback conversation summary for bounded recreation handoff. */
+  loadLatestFullSummary: (
+    threadId: string,
+  ) => Promise<RecreationSummaryInput | null>;
+  /** Additive idempotent in-place stamp for pre-release unstamped threads (BR-012). */
+  stampThreadHarness: (
+    threadId: string,
+    area: HarnessAreaId,
+    version: number,
+  ) => Promise<boolean>;
   trackEvent: typeof trackEvent;
   now: () => Date;
 }>;
@@ -765,10 +796,10 @@ function isStdioMcp(pill: QuickMcpPill | undefined): boolean {
   return pill?.transport === 'stdio';
 }
 
-function visibleTranscript(
+function allVisibleMessages(
   thread: ChatThread,
-): DurableInteractiveTurnSpecification['transcript'] {
-  const visible = thread.messages
+): Array<DurableInteractiveTurnSpecification['transcript'][number]> {
+  return thread.messages
     .filter(
       (message) =>
         (message.role === 'user' || message.role === 'agent') &&
@@ -782,6 +813,12 @@ function visibleTranscript(
       text: message.text,
       timestamp: message.ts,
     }));
+}
+
+function visibleTranscript(
+  thread: ChatThread,
+): DurableInteractiveTurnSpecification['transcript'] {
+  const visible = allVisibleMessages(thread);
   let retainedChars = visible.reduce(
     (total, message) => total + message.text.length,
     0,
@@ -909,38 +946,39 @@ function currentPrompt(
 
 function recreationPrompt(input: {
   thread: ChatThread;
-  transcript: DurableInteractiveTurnSpecification['transcript'];
+  messages: ReadonlyArray<DurableInteractiveTurnSpecification['transcript'][number]>;
   currentPrompt: string;
   repositoryContextPack: string | null;
+  latestFullSummary: RecreationSummaryInput | null;
+  areaKeyContext?: string | null;
 }): string {
-  const transcript = input.transcript.flatMap((entry, index) => [
-    `--- message ${index + 1} | role=${entry.role} | timestamp=${entry.timestamp} ---`,
-    entry.text,
-    '',
-  ]);
-  return [
+  const header = [
     '# Apex interactive turn',
     `Project: ${input.thread.kickoff.project}`,
     `Repository: ${input.thread.kickoff.repo}`,
-    ...(input.thread.kickoff.freeformContext
-      ? ['', '# Thread context', input.thread.kickoff.freeformContext]
-      : []),
-    ...(input.thread.kickoff.transcript
-      ? [
-          '',
-          '# Kickoff transcript',
-          KICKOFF_TRANSCRIPT_NOTE,
-          '',
-          input.thread.kickoff.transcript,
-        ]
-      : []),
-    ...(input.repositoryContextPack ? ['', input.repositoryContextPack] : []),
-    '',
-    '# Durable visible conversation',
-    ...transcript,
-    '# Current turn',
-    input.currentPrompt,
   ].join('\n');
+
+  const kickoffParts: string[] = [];
+  if (input.thread.kickoff.freeformContext) {
+    kickoffParts.push(`# Thread context\n${input.thread.kickoff.freeformContext}`);
+  }
+  if (input.thread.kickoff.transcript) {
+    kickoffParts.push(
+      `# Kickoff transcript\n${KICKOFF_TRANSCRIPT_NOTE}\n\n${input.thread.kickoff.transcript}`,
+    );
+  }
+  if (input.repositoryContextPack) {
+    kickoffParts.push(input.repositoryContextPack);
+  }
+
+  return buildRecreationPrompt({
+    header,
+    kickoffContext: kickoffParts.length > 0 ? kickoffParts.join('\n\n') : undefined,
+    areaKeyContext: input.areaKeyContext ?? null,
+    latestFullSummary: input.latestFullSummary,
+    messages: input.messages,
+    currentTurnBlock: input.currentPrompt,
+  });
 }
 
 type RepositoryContextDocuments = Readonly<{
@@ -1072,6 +1110,7 @@ function requestHash(input: {
   model: string;
   skill: DurableInteractiveTurnSpecification['skill'];
   attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'];
+  operation?: 'summarize';
 }): string {
   const canonical = {
     text: normalizeHashText(input.text),
@@ -1088,6 +1127,7 @@ function requestHash(input: {
       attachmentId: attachment.attachmentId,
       sha256: attachment.sha256,
     })),
+    ...(input.operation ? { operation: input.operation } : {}),
   };
   return createHash('sha256')
     .update(JSON.stringify(canonical), 'utf8')
@@ -1520,8 +1560,52 @@ function defaultDependencies(): ServiceDependencies {
     loadInterviewContext: defaultLoadInterviewContext,
     loadReferenceSources: defaultLoadReferenceSources,
     loadLinkedContext: defaultLoadLinkedContext,
+    loadLatestFullSummary: async (threadId) => {
+      try {
+        return await getLatestNonFallbackSummary(threadId);
+      } catch {
+        return null;
+      }
+    },
+    stampThreadHarness: stampThreadHarnessIfMissing,
     trackEvent,
     now: () => new Date(),
+  };
+}
+
+function frozenHarnessFromProfile(
+  area: HarnessAreaId,
+  version: number | null | undefined,
+  operation?: 'summarize',
+): FrozenHarnessSpec {
+  const profile = getAreaProfile(area);
+  return {
+    area: profile.area,
+    version:
+      typeof version === 'number' && Number.isSafeInteger(version) && version > 0
+        ? version
+        : profile.version,
+    ...(operation ? { operation } : {}),
+    toolAllowlist: [...profile.toolAllowlist],
+    customTools: profile.customTools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      writes: tool.writes,
+      proxyTarget: tool.proxyTarget,
+    })),
+    writeConfirmation: profile.writeConfirmation.map(
+      ({ tool, writes, mode }) => ({
+        tool,
+        writes,
+        mode,
+      }),
+    ),
+    safety: {
+      repositoryCode: profile.safety.repositoryCode,
+      shell: profile.safety.shell,
+      settingSources: [],
+    },
   };
 }
 
@@ -1609,6 +1693,9 @@ export function createDurableInteractiveTurnService(
               .loadLinkedContext({ threadId: thread.id, userId: thread.userId })
               .catch(() => null)
           : Promise.resolve(null);
+      const latestFullSummaryLookup = deps
+        .loadLatestFullSummary(thread.id)
+        .catch(() => null);
       // @feature-flag:interview-background-grounding start winner=enabled
       const backgroundGroundingLookup = guidedInterviewLookup.then(
         (guided) =>
@@ -1647,7 +1734,7 @@ export function createDurableInteractiveTurnService(
         deps.builtInSkillRoots,
       );
       if (registration === 'unknown') throw unavailableSkill();
-      if (isStdioMcp(thread.kickoff.mcpPill)) {
+      if (isStdioMcp(thread.kickoff.mcpPill) && !thread.kickoff.webResearchEnabled) {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED',
           422,
@@ -1878,9 +1965,44 @@ export function createDurableInteractiveTurnService(
             expiresAt,
           })
         : null;
+      const allMessages = allVisibleMessages(thread);
       const transcript = visibleTranscript(thread);
-      const messageText =
-        input.text.trim() || 'Uploaded files for context.';
+      const latestFullSummary = await latestFullSummaryLookup;
+      const isSummarizeOperation =
+        input.operation === 'summarize' ||
+        input.harness?.operation === 'summarize';
+      const resolvedHarnessOperation: 'summarize' | undefined =
+        isSummarizeOperation ? 'summarize' : undefined;
+      const frozenHarness: FrozenHarnessSpec | undefined = input.harness
+        ? {
+            ...input.harness,
+            ...(resolvedHarnessOperation
+              ? { operation: resolvedHarnessOperation }
+              : {}),
+          }
+        : isHarnessAreaId(thread.harnessArea)
+          ? frozenHarnessFromProfile(
+              thread.harnessArea,
+              thread.harnessVersion,
+              resolvedHarnessOperation,
+            )
+          : resolvedHarnessOperation
+            ? frozenHarnessFromProfile(
+                inferHarnessArea(thread),
+                null,
+                resolvedHarnessOperation,
+              )
+            : undefined;
+      if (!isHarnessAreaId(thread.harnessArea) && frozenHarness) {
+        await deps.stampThreadHarness(
+          thread.id,
+          frozenHarness.area,
+          frozenHarness.version,
+        );
+      }
+      const messageText = isSummarizeOperation
+        ? ''
+        : input.text.trim() || 'Uploaded files for context.';
       const resolvedSessionInstructions = sessionInstructions(
         thread,
         input.workflowClass,
@@ -1937,8 +2059,8 @@ export function createDurableInteractiveTurnService(
         currentMessage: {
           id: input.turnId,
           text: messageText,
-          hidden: Boolean(input.hidden),
-          attachments: immutableAttachments,
+          hidden: isSummarizeOperation ? true : Boolean(input.hidden),
+          attachments: isSummarizeOperation ? [] : immutableAttachments,
         },
         transcript,
         grounding,
@@ -1960,14 +2082,17 @@ export function createDurableInteractiveTurnService(
         currentPrompt: preparedCurrentPrompt,
         recreationPrompt: recreationPrompt({
           thread,
-          transcript,
+          messages: allMessages,
           currentPrompt: firstTurnPrompt,
           repositoryContextPack,
+          latestFullSummary,
+          areaKeyContext: input.areaKeyContext ?? null,
         }),
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
         ...(input.brainstorm ? { brainstorm: input.brainstorm } : {}),
         ...(referenceSources ? { referenceSources } : {}),
+        ...(frozenHarness ? { harness: frozenHarness } : {}),
       };
       const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({
@@ -1976,16 +2101,18 @@ export function createDurableInteractiveTurnService(
           text: input.text,
           model,
           skill: frozenSkill,
-          attachments: immutableAttachments,
+          attachments: isSummarizeOperation ? [] : immutableAttachments,
+          ...(isSummarizeOperation ? { operation: 'summarize' as const } : {}),
         }),
         threadId: input.threadId,
         userId: input.userId,
         projectId: thread.kickoff.project,
         interactiveClass: classification.interactiveClass,
         messageText,
-        hidden: Boolean(input.hidden),
-        attachments: immutableAttachments,
+        hidden: isSummarizeOperation ? true : Boolean(input.hidden),
+        attachments: isSummarizeOperation ? [] : immutableAttachments,
         specification,
+        ...(isSummarizeOperation ? { skipMessageInsert: true } : {}),
       });
       const admittedAt = deps.now().getTime();
       deps.trackEvent(

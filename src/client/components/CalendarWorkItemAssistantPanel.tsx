@@ -1,7 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   useWorkItemHierarchy,
   useCreateSession,
@@ -11,7 +9,8 @@ import {
 } from '../hooks/useCalendarWorkItemAssistant';
 import { CalendarWorkItemChangesReview } from './CalendarWorkItemChangesReview';
 import { useChatAttachments } from '../hooks/useChatAttachments';
-import { AgentComposer, AgentPanelShell } from './agentChat';
+import { AgentHarnessPanel, AgentPanelShell } from './agentChat';
+import type { HarnessTranscriptItem } from '../chatHarness/types';
 import type { WorkItemHierarchyNode } from '../../shared/types/calendarWorkItemAssistant';
 import styles from './CalendarWorkItemAssistantPanel.module.css';
 
@@ -65,7 +64,6 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
   const [showReview, setShowReview] = useState(false);
   const [showCurrentContent, setShowCurrentContent] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -99,7 +97,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     removeAttachment,
     clearAttachments,
   } = useChatAttachments();
-  const isRunning = chat.status === 'running';
+  const isRunning = chat.isRunning ?? chat.status === 'running';
 
   // Refresh session query when a run completes (proposal may have appeared)
   const wasRunningRef = useRef(false);
@@ -110,17 +108,12 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     wasRunningRef.current = isRunning;
   }, [isRunning, sessionId, qc]);
 
-  // Auto-open review when a pending proposal arrives
+  // Auto-open review when a pending proposal arrives (opens review dialog only; never auto-applies writes)
   useEffect(() => {
     if (latestProposal?.status === 'pending') {
       setShowReview(true);
     }
   }, [latestProposal?.status]);
-
-  // Scroll to latest message
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chat.messages.length, chat.streamingText]);
 
   // Resize textarea
   useEffect(() => {
@@ -187,20 +180,20 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     event.currentTarget.value = '';
   }, [addFiles]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (text: string) => {
+    const trimmed = text.trim();
     const outgoing = [...attachments];
-    if ((!text && outgoing.length === 0) || isRunning || isSending || !threadId) return;
-    const message = text || 'Please use the attached files as additional context.';
-    setInput('');
+    if ((!trimmed && outgoing.length === 0) || isRunning || isSending || !threadId) return false;
+    const message = trimmed || 'Please use the attached files as additional context.';
     setIsSending(true);
     try {
       const sent = await chat.sendMessage(message, outgoing);
       if (sent && outgoing.length > 0) clearAttachments();
+      return sent;
     } finally {
       setIsSending(false);
     }
-  }, [attachments, chat, clearAttachments, input, isRunning, isSending, threadId]);
+  }, [attachments, chat, clearAttachments, isRunning, isSending, threadId]);
 
   const handleNewConversation = useCallback(async () => {
     setShowNewConvConfirm(false);
@@ -220,12 +213,12 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     }
   }, [project, areaPath, anchorWorkItemId, selectedArray, createSession]);
 
-  const rawMessages = chat.messages.filter(
+  const rawMessages = (chat.visibleMessages ?? chat.messages ?? []).filter(
     m => m.role !== 'tool' && !m.hidden && m.toolName !== '_reasoning',
   );
 
   // Merge consecutive agent messages so fragments don't render as separate pills
-  const visibleMessages = rawMessages.reduce<Array<{ id: string; role: string; text: string }>>((acc, msg) => {
+  const visibleMessages = rawMessages.reduce<HarnessTranscriptItem[]>((acc, msg) => {
     if (msg.role === 'agent' && acc.length > 0 && acc[acc.length - 1].role === 'agent') {
       const last = acc[acc.length - 1];
       return [...acc.slice(0, -1), { ...last, text: last.text + '\n\n' + msg.text }];
@@ -233,16 +226,14 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     return [...acc, msg];
   }, []);
 
-  // Tools currently running (for the status pill)
-  const runningTools = chat.toolProgress.filter(t => t.status === 'running');
-  const latestTool = runningTools[0] ?? chat.toolProgress[chat.toolProgress.length - 1];
-  const isWaitingForFirstToken = isRunning && !chat.streamingText && !latestTool;
-  const isUsingTool = isRunning && !!latestTool && latestTool.status === 'running';
-
-  // Dedup: don't show streaming text if the last message already contains it
-  const lastAgentMsg = [...visibleMessages].reverse().find(m => m.role === 'agent');
-  const showStreamingText = !!chat.streamingText &&
-    !(lastAgentMsg?.text.includes(chat.streamingText.slice(0, 40)));
+  const harnessSession = useMemo(
+    () => ({
+      ...chat,
+      isRunning,
+      isSending: Boolean(chat.isSending) || isSending,
+    }),
+    [chat, isRunning, isSending],
+  );
 
   if (!open) return null;
 
@@ -427,188 +418,143 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
 
         {step === 'chat' && (
           <div className={styles.chatPane}>
-            <div className={styles.scopeSummary}>
-              Scope: #{anchorWorkItemId} {anchorTitle}
-              {selected.size > 1 && <> +{selected.size - 1} more</>}
-              <button
-                type="button"
-                className={styles.btnLinkSmall}
-                onClick={() => setShowNewConvConfirm(true)}
-                title="Change scope (starts new session)"
-                {...{ 'data-testid': 'calendar-assistant-change-scope' }}
-              >
-                change
-              </button>
-            </div>
-
-            {/* Current content accordion */}
-            {sessionData?.session.contextSnapshot && sessionData.session.contextSnapshot.length > 0 && (
-              <div className={styles.currentContent}>
-                <button
-                  type="button"
-                  className={styles.currentContentToggle}
-                  onClick={() => setShowCurrentContent(v => !v)}
-                  aria-expanded={showCurrentContent}
-                  {...{ 'data-testid': 'calendar-assistant-current-content-toggle' }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"
-                    style={{ transform: showCurrentContent ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s', flexShrink: 0 }}
-                  >
-                    <path d="M2 4l4 4 4-4" />
-                  </svg>
-                  Current content
-                  <span className={styles.currentContentCount}>
-                    {sessionData.session.contextSnapshot.length} item{sessionData.session.contextSnapshot.length !== 1 ? 's' : ''}
-                  </span>
-                </button>
-
-                {showCurrentContent && (
-                  <div className={styles.currentContentBody}>
-                    {sessionData.session.contextSnapshot.map(node => {
-                      const desc = stripHtml(node.description);
-                      const ac = stripHtml(node.acceptanceCriteria);
-                      const hasContent = desc || ac;
-                      return (
-                        <div key={node.id} className={styles.contentItem}>
-                          <div className={styles.contentItemHeader}>
-                            <span className={styles.contentItemType}>{node.workItemType}</span>
-                            <span className={styles.contentItemId}>#{node.id}</span>
-                            <span className={styles.contentItemTitle}>{node.title}</span>
-                          </div>
-                          {!hasContent && (
-                            <p className={styles.contentEmpty}>No description or criteria yet.</p>
-                          )}
-                          {desc && (
-                            <div className={styles.contentField}>
-                              <div className={styles.contentFieldLabel}>Description</div>
-                              <pre className={styles.contentFieldText}>{desc}</pre>
-                            </div>
-                          )}
-                          {ac && node.supportedFields.includes('acceptanceCriteria') && (
-                            <div className={styles.contentField}>
-                              <div className={styles.contentFieldLabel}>Acceptance Criteria</div>
-                              <pre className={styles.contentFieldText}>{ac}</pre>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className={styles.messages} aria-live="polite" aria-label="Conversation">
-              <div className={styles.messageList}>
-                {visibleMessages.length === 0 && !isRunning && (
-                  <div className={styles.emptyChat}>
-                    <p>
-                      Ask the assistant to review and improve Description or Acceptance Criteria
-                      for the selected work items.
-                    </p>
-                    <p className={styles.emptyChatHint}>
-                      Example: "Improve the acceptance criteria for the PBIs to use Given/When/Then format."
-                    </p>
-                  </div>
-                )}
-
-                {visibleMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`${styles.message} ${msg.role === 'user' ? styles.messageUser : styles.messageAgent}`}
-                  >
-                    <div className={styles.messageBubble}>
-                      {msg.role === 'agent' ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
-                      ) : (
-                        msg.text
-                      )}
-                    </div>
-                  </div>
-                ))}
-
-                {/* Streaming text (deduped against last message) */}
-                {showStreamingText && (
-                  <div className={`${styles.message} ${styles.messageAgent}`}>
-                    <div className={`${styles.messageBubble} ${styles.messageBubbleStreaming}`}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{chat.streamingText}</ReactMarkdown>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tool activity pill */}
-                {isUsingTool && (
-                  <div className={styles.toolPill} aria-live="polite">
-                    <span className={styles.toolSpinner} aria-hidden="true" />
-                    <span className={styles.toolName}>
-                      {latestTool.toolName.replace(/_/g, ' ')}
-                    </span>
-                    <span className={styles.toolDots}>
-                      <span /><span /><span />
-                    </span>
-                  </div>
-                )}
-
-                {/* Waiting for first token — pure thinking indicator */}
-                {isWaitingForFirstToken && (
-                  <div className={styles.thinkingRow} aria-label="Thinking">
-                    <span className={styles.thinkingDot} />
-                    <span className={styles.thinkingDot} />
-                    <span className={styles.thinkingDot} />
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
-
-            {latestProposal?.status === 'pending' && (
-              <div className={styles.proposalBanner} role="status">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" />
-                </svg>
-                Changes proposed — review before applying
-                <button
-                  type="button"
-                  className={styles.btnReview}
-                  onClick={() => setShowReview(true)}
-                  {...{ 'data-testid': 'calendar-assistant-review-banner-btn' }}
-                >
-                  Review
-                </button>
-              </div>
-            )}
-
-            <AgentComposer
-              className={styles.composerEmbed}
-              value={input}
-              onChange={setInput}
-              onSend={() => void handleSend()}
-              onCancel={isRunning ? () => void chat.cancelRun() : undefined}
-              disabled={isRunning || isSending}
-              isRunning={isRunning}
-              isSending={isSending}
-              allowEmptySend
-              placeholder="Message the assistant… (Enter to send)"
+            <AgentHarnessPanel
+              area="calendar-work-item"
+              session={harnessSession}
               testIdPrefix="calendar-assistant"
-              {...{ 'data-testid': 'calendar-assistant-composer' }}
-              textareaRef={textareaRef}
-              attachments={attachments}
-              attachmentError={attachmentError}
-              onRemoveAttachment={removeAttachment}
-              onAttachClick={() => fileInputRef.current?.click()}
-              onPasteFiles={(files) => { void addFiles(files); }}
-              fileInput={(
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={(event) => { void handleAttachmentChange(event); }}
-                  disabled={isRunning || isSending}
-                  {...{ 'data-testid': 'calendar-assistant-file-input' }}
-                />
+              {...{ 'data-testid': 'calendar-assistant-harness-panel' }}
+              items={visibleMessages}
+              draft={input}
+              onDraftChange={setInput}
+              onSend={handleSend}
+              onCancel={isRunning ? () => void chat.cancelRun() : undefined}
+              emptyState={(
+                <div className={styles.emptyChat}>
+                  <p>
+                    Ask the assistant to review and improve Description or Acceptance Criteria
+                    for the selected work items.
+                  </p>
+                  <p className={styles.emptyChatHint}>
+                    Example: "Improve the acceptance criteria for the PBIs to use Given/When/Then format."
+                  </p>
+                </div>
               )}
+              slots={{
+                header: (
+                  <>
+                    <div className={styles.scopeSummary}>
+                      Scope: #{anchorWorkItemId} {anchorTitle}
+                      {selected.size > 1 && <> +{selected.size - 1} more</>}
+                      <button
+                        type="button"
+                        className={styles.btnLinkSmall}
+                        onClick={() => setShowNewConvConfirm(true)}
+                        title="Change scope (starts new session)"
+                        {...{ 'data-testid': 'calendar-assistant-change-scope' }}
+                      >
+                        change
+                      </button>
+                    </div>
+
+                    {/* Current content accordion */}
+                    {sessionData?.session.contextSnapshot && sessionData.session.contextSnapshot.length > 0 && (
+                      <div className={styles.currentContent}>
+                        <button
+                          type="button"
+                          className={styles.currentContentToggle}
+                          onClick={() => setShowCurrentContent(v => !v)}
+                          aria-expanded={showCurrentContent}
+                          {...{ 'data-testid': 'calendar-assistant-current-content-toggle' }}
+                        >
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"
+                            style={{ transform: showCurrentContent ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s', flexShrink: 0 }}
+                          >
+                            <path d="M2 4l4 4 4-4" />
+                          </svg>
+                          Current content
+                          <span className={styles.currentContentCount}>
+                            {sessionData.session.contextSnapshot.length} item{sessionData.session.contextSnapshot.length !== 1 ? 's' : ''}
+                          </span>
+                        </button>
+
+                        {showCurrentContent && (
+                          <div className={styles.currentContentBody}>
+                            {sessionData.session.contextSnapshot.map(node => {
+                              const desc = stripHtml(node.description);
+                              const ac = stripHtml(node.acceptanceCriteria);
+                              const hasContent = desc || ac;
+                              return (
+                                <div key={node.id} className={styles.contentItem}>
+                                  <div className={styles.contentItemHeader}>
+                                    <span className={styles.contentItemType}>{node.workItemType}</span>
+                                    <span className={styles.contentItemId}>#{node.id}</span>
+                                    <span className={styles.contentItemTitle}>{node.title}</span>
+                                  </div>
+                                  {!hasContent && (
+                                    <p className={styles.contentEmpty}>No description or criteria yet.</p>
+                                  )}
+                                  {desc && (
+                                    <div className={styles.contentField}>
+                                      <div className={styles.contentFieldLabel}>Description</div>
+                                      <pre className={styles.contentFieldText}>{desc}</pre>
+                                    </div>
+                                  )}
+                                  {ac && node.supportedFields.includes('acceptanceCriteria') && (
+                                    <div className={styles.contentField}>
+                                      <div className={styles.contentFieldLabel}>Acceptance Criteria</div>
+                                      <pre className={styles.contentFieldText}>{ac}</pre>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ),
+                proposal: latestProposal?.status === 'pending' ? (
+                  <div className={styles.proposalBanner} role="status" {...{ 'data-testid': 'calendar-assistant-proposal-banner' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" />
+                    </svg>
+                    Changes proposed — review before applying
+                    <button
+                      type="button"
+                      className={styles.btnReview}
+                      onClick={() => setShowReview(true)}
+                      {...{ 'data-testid': 'calendar-assistant-review-banner-btn' }}
+                    >
+                      Review
+                    </button>
+                  </div>
+                ) : undefined,
+              }}
+              composer={{
+                disabled: isSending || !threadId,
+                allowEmptySend: true,
+                placeholder: isRunning
+                  ? 'Send a follow-up while the agent works…'
+                  : 'Message the assistant… (Enter to send)',
+                textareaRef,
+                attachments,
+                attachmentError,
+                onRemoveAttachment: removeAttachment,
+                onAttachClick: () => fileInputRef.current?.click(),
+                onPasteFiles: (files) => { void addFiles(files); },
+                fileInput: (
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(event) => { void handleAttachmentChange(event); }}
+                    disabled={isRunning || isSending}
+                    {...{ 'data-testid': 'calendar-assistant-file-input' }}
+                  />
+                ),
+              }}
             />
           </div>
         )}

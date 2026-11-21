@@ -1,0 +1,54 @@
+---
+description: Chat harness architecture guardrails (FEAT-001/002/003) — area profiles, SDK adapter boundary, WS command bus, reconnect lifecycle, and explicit write confirmations
+globs: src/server/services/chatHarness/**/*.ts,src/server/routes/chatHarness.ts,src/server/routes/chat.ts,src/server/routes/interviews.ts,src/server/routes/adr.ts,src/server/routes/brainstorm*.ts,src/server/services/interactiveActorHost/**/*.ts,src/server/services/interactive*.ts,src/server/services/durableInteractiveTurn*.ts,src/server/services/chat*.ts,src/server/services/cursorSdkAdapter/**/*.ts,src/shared/types/chatHarness.ts,src/shared/types/chat.ts
+alwaysApply: false
+---
+
+# Chat Harness
+
+Every interactive chat area in Apex runs on the shared chat harness. Do not build a separate chat transport, agent loop, custom retry/reconnect channel, bespoke `/messages` / `/cancel` / `/retry` HTTP endpoints, or direct SDK integration for any area.
+
+## Core architecture: unified engine + contextual capabilities
+
+Standardize 100% of chat mechanics (transport, streaming, live work, mid-turn steer, stop/retry, reconnect, write proposals) and keep areas separated by **workspace, permissions, and declarative plugins**:
+
+1. **Context providers** (`AreaProfile.contextKinds` + `areaHooks.beforeSend` / `beforeRetry`): supply the open record (PRD, Design Doc, Brainstorm artifact, sprint, interview brief) automatically so users never re-explain where they are.
+2. **Tools & write confirmations** (`AreaProfile.customTools` + `writeConfirmation` + `customToolRegistry.ts`): express cross-surface capabilities (propose doc edit, update artifact, stage ADO item, promote/handoff to Interview or PRD) as reusable tools any profile can opt into under RBAC.
+3. **Server lifecycle hooks** (`src/server/services/chatHarness/areaHooks.ts`): register domain-specific `beforeSend`, `afterSendAccepted`, `beforeRetry`, `afterRetryAccepted`, and `afterCancelAccepted` hooks on the shared command handler instead of bypassing `chatHarnessCommandHandler` with custom HTTP routes.
+
+## Required for every new or updated chat area
+
+1. **Declare an area profile** in `src/server/services/chatHarness/areaProfiles.ts` and register its id in `src/shared/types/chatHarness.ts`. A profile states the area's existing workflow class, existing RBAC permission, project settings lane, allowed context kinds, tools, write confirmation rules, safety rules, recreation cap, and rating storage.
+2. **Use `areaHooks.ts` for area-specific turn logic** (`registerAreaHooks(area, { beforeSend, afterSendAccepted, beforeRetry, afterRetryAccepted, afterCancelAccepted })`). Do not add bespoke `/messages`, `/cancel`, or `/retry` endpoints that bypass `chatHarnessCommandHandler`.
+3. **Route every Cursor SDK call through the adapter** at `src/server/services/cursorSdkAdapter/`. If you import `@cursor/sdk` directly in new chat code, remove that import and go through `src/server/services/cursorSdkAdapter/` instead.
+4. **Render inside the shared harness panel** (`AgentHarnessPanel`), built on the common `useAgentChatSession` contract (`.cursor/rules/agent-chat-surfaces.mdc`).
+5. **Keep policy out of the adapter and workers.** Follow `.cursor/rules/v2-worker-no-policy.mdc`: App Service resolves the model, effort, skill, tools, and safety settings into the execution specification. Neither `src/server/services/cursorSdkAdapter/` nor any V2 worker holds a default model or policy.
+6. **Preserve the single bidirectional WebSocket + control-bus contract.** User commands (`send`, `steer`, `summarize`, `cancel`, `retry`) enter through `interactiveGatewayService` → `chatHarnessCommandHandler` (with HTTP command fallback), propagate steer/cancel via `interactiveControlBus`, and return durable receipts.
+7. **Emit a running `phase` event immediately after in-turn agent recreation.** Whenever `recreateAfterUnresponsiveAgent()` (or an equivalent retry path) acquires a fresh agent after publishing `type: 'retrying'`, publish `{ type: 'phase', phase: 'analysis', status: 'running', detail: 'Thinking…' }` so clients leave the reconnecting state immediately instead of waiting for the first answer token.
+8. **Keep write confirmations explicit.** Every `writes: true` custom tool stages a proposal only and never mutates domain state directly; apply/reject always goes through an explicit user-triggered REST confirmation endpoint.
+9. **Never surface raw queue/worker terms to users.** Keep machine-readable progress labels in DB/events for the reaper, and route all UI display text through `friendlyChatProgressLabel` / `AgentRunStatusText` (`Starting…`, `Thinking…`, or `Waiting for your other chat to finish` — never `Queued` or `Dispatched`).
+10. **Add no new Skill file** under `.cursor/skills/` for chat-harness plumbing.
+
+## `@cursor/sdk` import boundary
+
+- Zero files under V2 host folders (`src/server/services/interactiveActorHost/`, `src/server/services/aiRunsV2Worker/`, `src/server/services/aiRunsWorker/`, `src/server/services/aiRunV2/`) may import `@cursor/sdk` directly (value or type).
+- Zero files under `src/server/services/chatHarness/` or any new chat area may import `@cursor/sdk` directly.
+- All chat and V2-host SDK calls go through `src/server/services/cursorSdkAdapter/`.
+
+## Allowed non-chat App Service exceptions
+
+Only these non-chat App Service files may import `@cursor/sdk` directly:
+
+- `src/server/services/modelsService.ts` — lists and probes available Cursor models.
+- `src/server/services/cursorCloudAgentClient.ts` — launches and monitors My Work remote cloud-agent runs.
+- `src/server/services/releaseChangelogService.ts` — generates one-shot release changelogs.
+- `src/server/services/apexWorkItemService.ts` — generates one-shot work item drafts.
+- `src/server/services/walkthroughAiDraftService.ts` — generates one-shot walkthrough JSON drafts.
+- `src/server/services/groundingImpactEvaluatorService.ts` — runs one-shot grounding file relevance checks.
+
+## Temporary legacy chat files (removed in FEAT-003)
+
+These pre-cutover chat files keep direct `@cursor/sdk` imports only until FEAT-003 removes the old in-process chat path. Do not add new chat areas or new SDK imports here:
+
+- `src/server/services/chatAgentService.ts`
+- `src/server/services/askApexService.ts`

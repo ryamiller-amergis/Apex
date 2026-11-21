@@ -110,11 +110,22 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
   const enableNotify = deps.enableNotify ?? true;
   const config = deps.config ?? DEFAULT_PROVIDER_CAPACITY;
 
+  let started = false;
   let stopRequested = false;
   let wakeQueued = false;
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
+  let deferredWakeTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe: (() => void) | null = null;
   let drainChain: Promise<void> = Promise.resolve();
+
+  function scheduleDeferredWake(delayMs: number): void {
+    if (!started || stopRequested || deferredWakeTimer) return;
+    deferredWakeTimer = setTimeout(() => {
+      deferredWakeTimer = null;
+      scheduleDrain();
+    }, delayMs);
+    deferredWakeTimer.unref?.();
+  }
 
   const acquireLease =
     deps.acquireOutboxLease ??
@@ -867,13 +878,16 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
     const deferredUntil = new Date(
       clock.now().getTime() + 5_000,
     ).toISOString();
-    for (const active of selectedById.values()) {
-      await outbox.releaseClaim(
-        active.candidate.outbox.id,
-        holderId,
-        deferredUntil,
-        deferralReason,
-      );
+    if (selectedById.size > 0) {
+      for (const active of selectedById.values()) {
+        await outbox.releaseClaim(
+          active.candidate.outbox.id,
+          holderId,
+          deferredUntil,
+          deferralReason,
+        );
+      }
+      scheduleDeferredWake(5_000);
     }
     return { published, discarded };
   }
@@ -1008,6 +1022,7 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
   return {
     drainOnce,
     async start(): Promise<void> {
+      started = true;
       stopRequested = false;
       if (enableNotify) {
         await initAiRunOutboxNotify();
@@ -1018,10 +1033,15 @@ export function createOutboxDrainer(deps: OutboxDrainerDeps): OutboxDrainer {
       scheduleDrain();
     },
     async stop(): Promise<void> {
+      started = false;
       stopRequested = true;
       if (sweepTimer) {
         clearInterval(sweepTimer);
         sweepTimer = null;
+      }
+      if (deferredWakeTimer) {
+        clearTimeout(deferredWakeTimer);
+        deferredWakeTimer = null;
       }
       if (unsubscribe) {
         unsubscribe();

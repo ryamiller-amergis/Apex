@@ -1,3 +1,8 @@
+import type {
+  AgentActivityItem,
+  HarnessAreaId,
+  HarnessContextRef,
+} from './chatHarness';
 import type { EffortLevel } from './effort';
 
 export type ChatMessageRole = 'user' | 'agent' | 'tool' | 'system';
@@ -38,6 +43,10 @@ export interface ChatMessage {
   attachments?: ChatAttachmentMeta[];
   /** When true, this message is an internal prompt and should not be shown in the UI */
   hidden?: boolean;
+  /** Client command id that produced this message, used to match optimistic echoes */
+  commandId?: string;
+  /** Persisted thinking/tool activity items for an agent reply */
+  activity?: AgentActivityItem[];
 }
 
 export interface ChatAttachment {
@@ -183,6 +192,10 @@ export interface ChatThread {
   flaggedAt?: string;
   /** Computed at request time: true when a durable PRD output file exists for this thread */
   prdReady?: boolean;
+  /** Shared chat harness area id stamped on the thread, if any */
+  harnessArea?: HarnessAreaId | null;
+  /** Shared chat harness profile version stamped on the thread, if any */
+  harnessVersion?: number | null;
   createdAt: string;
   lastActivityAt: string;
 }
@@ -451,6 +464,10 @@ export interface ChatThreadSummary {
   messagePreview?: string;
   flagged: boolean;
   flaggedAt?: string;
+  /** Shared chat harness area id stamped on the thread, if any */
+  harnessArea?: HarnessAreaId | null;
+  /** Shared chat harness profile version stamped on the thread, if any */
+  harnessVersion?: number | null;
   createdAt: string;
   lastActivityAt: string;
 }
@@ -499,6 +516,10 @@ export interface StartChatRequest {
    * transcript shows the request before the agent reply.
    */
   skipAutoKickoff?: boolean;
+  /** Optional shared chat harness area to validate and stamp on the created thread. */
+  harnessArea?: HarnessAreaId | string;
+  /** Optional typed context reference validated against the area profile. */
+  harnessContext?: HarnessContextRef;
 }
 
 export interface StartChatResponse {
