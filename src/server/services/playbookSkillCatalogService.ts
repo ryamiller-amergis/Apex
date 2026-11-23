@@ -12,6 +12,8 @@ import {
 } from './playbookExecutionCapabilityService';
 
 const SKILLS_DIR = path.join('foundation-skills', 'foundation');
+/** Moved into a project library. Still on disk so already published Playbooks can read it. */
+const HIDDEN_FROM_BASE = new Set(['maxview-incident-investigation']);
 const CACHE_TTL_MS = 60 * 1000;
 
 /** Where a deployed or local process may find `foundation-skills/foundation`. */
@@ -66,6 +68,7 @@ export function describePlaybookSkill(relativePath: string, content: string): Pl
     description: frontmatterValue(frontmatter, 'description'),
     capabilities,
     runnable: unavailableReason === undefined,
+    group: 'base',
     ...(unavailableReason ? { unavailableReason } : {}),
   };
 }
@@ -77,7 +80,7 @@ export async function listPlaybookSkillOptions(): Promise<PlaybookSkillOption[]>
   let entries: string[] = [];
   try {
     entries = (await fs.readdir(root, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && !HIDDEN_FROM_BASE.has(entry.name))
       .map((entry) => entry.name);
   } catch {
     return [];
