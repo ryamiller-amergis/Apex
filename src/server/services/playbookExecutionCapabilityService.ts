@@ -13,6 +13,8 @@ import {
   resolvePlaybookMcpCapability,
 } from './playbookMcpCapabilityService';
 import { bundleHashV1, type SkillBundleCompanion } from './playbookSkillBundle';
+import type { AgentTaskMode } from '../../shared/utils/playbookAgentTask';
+import { agentTaskModeOfSkill } from './playbookAgentTaskMode';
 import {
   loadStoredProjectSkill,
   projectSkillVersionIdFromPath,
@@ -248,11 +250,11 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
   repository?: string;
   provider?: SkillProvider;
   enforce: boolean;
-}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
-  const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = [];
+}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy; mode: AgentTaskMode }>> {
+  const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy; mode: AgentTaskMode }> = [];
   for (const node of input.graph.nodes) {
     // Cloud-agent steps count toward the agent cap, but they do not load a repository Skill.
-    if (node.stepType !== 'cursor-agent' && node.stepType !== 'interactive-agent') continue;
+    if (node.stepType !== 'cursor-agent') continue;
     const skillPath = playbookSkillPath(
       typeof node.config?.skillPath === 'string' ? node.config.skillPath : undefined,
     );
@@ -261,6 +263,7 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
     const skillContent = stored?.content ?? await loadPlaybookSkillContent(skillPath);
     policies.push({
       nodeId: node.id,
+      mode: agentTaskModeOfSkill(skillContent),
       policy: resolvePlaybookAgentRunPolicy({
         nodeId: node.id,
         skillPath,

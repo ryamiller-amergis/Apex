@@ -272,7 +272,6 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
   const navigate = useNavigate();
   const { can } = useAppShell();
   const canAuthor = can('playbooks:author');
-  const canViewSkills = can('skills:view') || can('skills:manage');
   const definitions = usePlaybookDefinitions(project);
   const runs = usePlaybookRuns(project);
   const [search, setSearch] = useState('');
@@ -334,15 +333,6 @@ export const PlaybooksManagePage: React.FC<PlaybooksManagePageProps> = ({ projec
           >
             <ListChecks size={15} aria-hidden /> All runs
           </Link>
-          {canViewSkills ? (
-            <Link
-              to="/playbooks/skills"
-              className={styles.secondaryButton}
-              {...{ 'data-testid': 'playbooks-skill-library' }}
-            >
-              Skill library
-            </Link>
-          ) : null}
           {newButton}
         </div>
       </header>

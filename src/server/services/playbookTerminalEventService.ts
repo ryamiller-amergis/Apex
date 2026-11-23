@@ -22,7 +22,8 @@ import { subscribeAllRunEvents } from './pgNotifyService';
 import { advanceRun } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
 import { parseStepOutput } from './playbookSteps/descriptorValidation';
-import { recordInteractiveTurnFinished } from './playbookSteps/interactiveAgentAdapter';
+import { recordInteractiveTurnFinished } from './playbookSteps/agentTaskChat';
+import { isInteractiveAgentTaskRow } from './playbookSteps/registry';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type {
   AgentRunEventEnvelope,
@@ -93,6 +94,7 @@ export async function handleTerminalAgentRunEvent(
       stepId: playbookStepRuns.stepId,
       stepType: playbookStepRuns.stepType,
       status: playbookStepRuns.status,
+      outputInline: playbookStepRuns.outputInline,
     })
     .from(playbookStepRuns)
     .where(eq(playbookStepRuns.agentRunId, event.runId))
@@ -100,7 +102,8 @@ export async function handleTerminalAgentRunEvent(
 
   if (!step) return { handled: 'not-correlated' };
 
-  if (step.stepType === 'interactive-agent') {
+  // An Agent task is one step type. Only the draft on its row says it is a chat with an assignee.
+  if (isInteractiveAgentTaskRow(step.stepType, step.outputInline)) {
     // A finished turn stays on the step. Advancing here would complete the Playbook early.
     await recordInteractiveTurnFinished({
       stepRunId: step.id,

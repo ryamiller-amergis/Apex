@@ -31,6 +31,7 @@ import { cloudAgentPlaybookSetupGap } from './cloudAgentDeliverySettings';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
+import { assertAgentTasksFitTheirSkills } from './playbookAgentTaskMode';
 import { getSkillConfig } from './projectSettingsService';
 import { copyLayoutToPublishedVersion } from './playbookVersionLayoutService';
 import type {
@@ -174,12 +175,19 @@ async function assertPlaybookCapabilitiesForPublish(input: {
       // A policy can still be frozen without optional repository grounding.
     }
   }
-  return resolvePlaybookGraphAgentPolicies({
+  const policies = await resolvePlaybookGraphAgentPolicies({
     graph: input.graph,
     enforce: true,
     repository,
     provider,
   });
+  // The pinned Skill decides whether the Agent task chats or runs on its own. Its assignee and
+  // deadline have to fit that mode before the version freezes.
+  assertAgentTasksFitTheirSkills(
+    input.graph,
+    policies.map(({ nodeId, mode }) => ({ nodeId, mode })),
+  );
+  return policies;
 }
 
 /** Content may only be edited while a version is still a draft. */

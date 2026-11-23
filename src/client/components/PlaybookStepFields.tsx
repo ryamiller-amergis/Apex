@@ -282,11 +282,19 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   const skills = usePlaybookSkills(project);
   const models = useAvailableModels();
   const skillPath = typeof config.skillPath === 'string' ? config.skillPath.replace(/^[/\\]+/, '') : undefined;
+  // The Skill decides how this task runs. An interactive Skill chats with an assignee and waits
+  // for approval; any other Skill, or none, runs on its own.
+  const interactive = (skills.data?.skills ?? []).some(
+    (skill) => skill.path.replace(/^[/\\]+/, '') === skillPath && skill.skillType === 'interactive',
+  );
   const skillOptions: PlaybookPickerOption[] = (skills.data?.skills ?? []).map((skill) => ({
     value: skill.path,
     label: skillTitle(skill.name),
     description: skill.description,
-    badges: skill.capabilities ?? [],
+    badges: [
+      ...(skill.skillType === 'interactive' ? ['Interactive'] : []),
+      ...(skill.capabilities ?? []),
+    ],
     disabled: !skill.runnable,
     ...(skill.group ? { group: skill.group } : {}),
     ...(skill.unavailableReason ? { disabledReason: skill.unavailableReason } : {}),
@@ -299,7 +307,14 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
   return (
     <>
-      <Field label="Skill" htmlFor={`${node.id}-skill`} hint="Optional. A procedure the agent follows on top of your prompt." {...{ 'data-testid': `playbook-field-${node.id}-skill` }}>
+      <Field
+        label="Skill"
+        htmlFor={`${node.id}-skill`}
+        hint={interactive
+          ? 'This Skill is interactive. The assignee chats with the agent and approves its result.'
+          : 'Optional. A procedure the agent follows on top of your prompt. An interactive Skill makes this task a chat with a person.'}
+        {...{ 'data-testid': `playbook-field-${node.id}-skill` }}
+      >
         <PlaybookOptionPicker
           id={`${node.id}-skill`}
           value={skillPath}
@@ -378,7 +393,7 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           {...{ 'data-testid': "playbook-inspector-field-mcpProfile" }}
         />
       </Field>
-      {node.stepType === 'interactive-agent' ? (
+      {interactive ? (
         <Field
           label="Assignee"
           htmlFor={`${node.id}-assignee`}
@@ -389,7 +404,14 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           <AssigneePicker {...props} />
         </Field>
       ) : null}
-      <Field label="Deadline" htmlFor={`${node.id}-deadline`} hint="Blank uses the step's default." {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}>
+      <Field
+        label="Deadline"
+        htmlFor={`${node.id}-deadline`}
+        hint={interactive
+          ? 'Blank waits 7 days. From 1 hour to 14 days.'
+          : 'Blank uses 60 minutes. A deadline can only be shorter.'}
+        {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}
+      >
         <DeadlineField
           id={`${node.id}-deadline`}
           value={config.deadlineMs}
@@ -1308,10 +1330,6 @@ export const STEP_FIELD_RENDERERS: Record<string, {
   Component: React.FC<PlaybookStepFieldsProps>;
 }> = {
   'cursor-agent': {
-    handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes'],
-    Component: CursorAgentFields,
-  },
-  'interactive-agent': {
     handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes', 'assigneeUserId', 'assigneeEmail'],
     Component: CursorAgentFields,
   },

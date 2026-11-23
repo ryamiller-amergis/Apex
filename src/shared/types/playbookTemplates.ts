@@ -23,12 +23,21 @@ export interface PlaybookTemplateCatalogEntry {
   graphFile: string;
   requiredFlags: string[];
   requiredPermissions: string[];
-  installPolicy: 'one-per-project';
+  /** Shipped templates install once per project. A shared template installs as many times as wanted. */
+  installPolicy: 'one-per-project' | 'multiple';
   runInputSchema?: Record<string, unknown>;
   estimatedCostBand?: PlaybookTemplateCostBand;
 }
 
+export type PlaybookTemplateSource = 'shipped' | 'shared';
+
 export interface PlaybookTemplateSummary extends PlaybookTemplateCatalogEntry {
+  /** Absent on older responses; treat as shipped. */
+  source?: PlaybookTemplateSource;
+  /** Shared templates: who shared it and when. A snapshot, so later edits to the original never reach it. */
+  sharedByName?: string | null;
+  sharedAt?: string;
+  sourceProject?: string;
   installState: PlaybookTemplateInstallState;
   installedDefinitionId: string | null;
   installedTemplateVersion: number | null;
@@ -37,4 +46,21 @@ export interface PlaybookTemplateSummary extends PlaybookTemplateCatalogEntry {
 
 export interface PlaybookTemplateDetail extends PlaybookTemplateSummary {
   graph: PlaybookGraph;
+}
+
+/** Request body for sharing a published Playbook as a template. Both fields default to the Playbook's own. */
+export interface SharePlaybookAsTemplateRequest {
+  name?: string;
+  summary?: string;
+}
+
+export interface SharePlaybookAsTemplateResponse {
+  template: PlaybookTemplateSummary;
+  /** Project-specific settings that were removed from the copy, one line each. */
+  notes: string[];
+}
+
+export interface InstallPlaybookTemplateRequest {
+  /** Shared templates only. Defaults to the template name; a number is added if the name is taken. */
+  name?: string;
 }

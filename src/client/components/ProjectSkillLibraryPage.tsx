@@ -3,9 +3,7 @@
  * with Apex and are only picked in the builder, so they are not listed here.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  ArrowLeft,
   BookOpen,
   Bot,
   FileText,
@@ -670,10 +668,6 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
 
   return (
     <div className={pageStyles.page} data-testid="project-skill-library">
-      <Link to="/playbooks" className={styles.crumb} data-testid="skill-library-back">
-        <ArrowLeft size={14} aria-hidden /> Playbooks
-      </Link>
-
       <header className={pageStyles.hero}>
         <div className={pageStyles.heroText}>
           <h1 className={pageStyles.title}>Skill library</h1>

@@ -28,6 +28,13 @@ import {
   type ShippedPlaybookTemplate,
 } from './playbookTemplateCatalogService';
 import { isFeatureEnabled } from './featureFlagService';
+import {
+  getSharedTemplateDetail,
+  installSharedTemplate,
+  isSharedTemplateKey,
+  listSharedTemplates,
+  requiredFlagsForSharedTemplate,
+} from './playbookSharedTemplateService';
 
 export const CORE_INTERVIEW_TEMPLATE_KEY = 'core-interview';
 
@@ -104,9 +111,11 @@ export async function assertTemplatePrerequisites(input: {
   userId: string | undefined;
   project: string;
 }): Promise<void> {
-  const template = loadShippedTemplate(input.templateKey);
+  const requiredFlags = isSharedTemplateKey(input.templateKey)
+    ? await requiredFlagsForSharedTemplate(input.templateKey)
+    : loadShippedTemplate(input.templateKey).requiredFlags;
   const missing: string[] = [];
-  for (const flag of template.requiredFlags) {
+  for (const flag of requiredFlags) {
     const enabled = await isFeatureEnabled(flag, { userId: input.userId ?? '', project: input.project });
     if (!enabled) missing.push(flag);
   }
@@ -149,7 +158,7 @@ export async function listPlaybookTemplates(project: string): Promise<PlaybookTe
 
   recordPlaybookTemplateEvent('browse', { project, count: catalog.length });
 
-  return catalog.map((entry) => {
+  const shipped = catalog.map((entry) => {
     const row = byKey.get(entry.templateKey);
     const state = installStateFor({
       installedVersion: row?.templateVersion ?? null,
@@ -165,6 +174,7 @@ export async function listPlaybookTemplates(project: string): Promise<PlaybookTe
       });
     }
     return {
+      source: 'shipped' as const,
       templateKey: entry.templateKey,
       templateVersion: entry.templateVersion,
       displayName: entry.displayName,
@@ -182,12 +192,14 @@ export async function listPlaybookTemplates(project: string): Promise<PlaybookTe
       stepSummary: entry.graph.nodes.map((node) => node.stepType),
     };
   });
+  return [...shipped, ...(await listSharedTemplates())];
 }
 
 export async function getPlaybookTemplateDetail(
   project: string,
   templateKey: string,
 ): Promise<PlaybookTemplateDetail> {
+  if (isSharedTemplateKey(templateKey)) return getSharedTemplateDetail(templateKey);
   const summaries = await listPlaybookTemplates(project);
   const summary = summaries.find((entry) => entry.templateKey === templateKey);
   if (!summary) throw new PlaybookTemplateNotFoundError(templateKey);
@@ -230,7 +242,18 @@ export async function installPlaybookTemplate(input: {
   project: string;
   templateKey: string;
   createdByUserId: string;
+  /** Shared templates only. */
+  name?: string;
 }): Promise<{ created: boolean; detail: PlaybookDefinitionDetail }> {
+  if (isSharedTemplateKey(input.templateKey)) {
+    const detail = await installSharedTemplate({
+      project: input.project,
+      templateKey: input.templateKey,
+      createdByUserId: input.createdByUserId,
+      name: input.name,
+    });
+    return { created: true, detail };
+  }
   const template = loadShippedTemplate(input.templateKey);
   const existing = await findInstalledTemplate(input.project, template.templateKey);
   if (existing) {

@@ -10,7 +10,7 @@ import {
   projectPlaybookSkills,
 } from '../db/schema';
 import { bundleHashV1, type SkillBundleCompanion } from './playbookSkillBundle';
-import { parsePlaybookSkillFrontmatter } from './playbookSkillFrontmatter';
+import { declaredSkillType, parsePlaybookSkillFrontmatter } from './playbookSkillFrontmatter';
 
 const PROJECT_SKILL_PATH =
   /^project-skills\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/SKILL\.md$/i;
@@ -81,6 +81,7 @@ export async function listProjectPlaybookSkillOptions(project: string): Promise<
       capabilities: null,
       runnable: true,
       group: 'project',
+      skillType: declaredSkillType(version.content),
     });
   }
   options.sort((a, b) => a.name.localeCompare(b.name));

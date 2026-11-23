@@ -3730,6 +3730,34 @@ export const playbookDefinitionVersions = pgTable('playbook_definition_versions'
   ),
 }));
 
+/**
+ * A Playbook graph a platform admin shared so other projects can install it. A detached snapshot:
+ * the source columns are informational and have no foreign key.
+ */
+export const playbookSharedTemplates = pgTable('playbook_shared_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  summary: text('summary').notNull().default(''),
+  category: text('category').notNull().default('shared'),
+  graph: jsonb('graph').$type<PlaybookGraph>().notNull(),
+  sourceProject: text('source_project').notNull(),
+  sourceDefinitionId: uuid('source_definition_id'),
+  sourceVersionNumber: integer('source_version_number'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  nameUq: uniqueIndex('uq_playbook_shared_templates_name')
+    .on(sql`lower(btrim(${t.name}))`)
+    .where(sql`${t.archivedAt} IS NULL`),
+  createdIdx: index('idx_playbook_shared_templates_created').on(t.createdAt),
+  nameNotBlank: check(
+    'playbook_shared_templates_name_not_blank',
+    sql`length(btrim(${t.name})) > 0`,
+  ),
+}));
+
 export const playbookVersionLayouts = pgTable('playbook_version_layouts', {
   id: uuid('id').primaryKey().defaultRandom(),
   versionId: uuid('version_id')

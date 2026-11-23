@@ -1,5 +1,5 @@
 /**
- * Rules for an `interactive-agent` step's proposal (FEAT-003, BR-006).
+ * Rules for the proposal of an Agent task whose Skill is interactive (FEAT-003, BR-006).
  *
  * A proposal is the agent's latest answer on the step's thread. The assignee may approve it only
  * when it passes the loose result check and the skill's output kind check. Both are pure functions
@@ -10,8 +10,9 @@
  * - `scorecard@1` and `decision@1`: non-empty text whose last fenced ```json block parses to an object.
  * A skill with no kind keeps only the loose check.
  */
+import { isInteractiveTaskDraft } from '../../../shared/utils/playbookAgentTask';
 
-/** What a suspended interactive step remembers between turns. */
+/** What a suspended interactive Agent task remembers between turns. */
 export interface InteractiveStepDraft {
   threadId: string;
   assigneeUserId: string;
@@ -27,9 +28,7 @@ export interface InteractiveStepDraft {
 }
 
 export function isInteractiveStepDraft(value: unknown): value is InteractiveStepDraft {
-  if (!value || typeof value !== 'object') return false;
-  const draft = value as Partial<InteractiveStepDraft>;
-  return typeof draft.threadId === 'string' && typeof draft.assigneeUserId === 'string';
+  return isInteractiveTaskDraft(value);
 }
 
 /** A finished turn updates the draft and leaves the step suspended. A failed turn does not count. */

@@ -9,7 +9,7 @@
  * `requirePermission` resolves the project from `req.body.project`, so the guard is scoped to the
  * project the caller names rather than to the platform.
  */
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, RequestHandler, Response } from 'express';
 import { requireAnyPermission, requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { forwardAsyncErrors } from '../utils/forwardAsyncErrors';
@@ -95,10 +95,10 @@ import {
   UnknownPlaybookStepTypeError,
 } from '../services/playbookSteps/registry';
 import {
+  AgentTaskChatError,
   decideInteractiveProposal,
-  InteractiveAgentStepError,
   sendInteractiveTurn,
-} from '../services/playbookSteps/interactiveAgentAdapter';
+} from '../services/playbookSteps/agentTaskChat';
 import { advanceRun } from '../services/playbookAdvanceService';
 import {
   ApprovalMissingDeadlineError,
@@ -142,6 +142,13 @@ import {
   installPlaybookTemplate,
   listPlaybookTemplates,
 } from '../services/playbookTemplateService';
+import {
+  PlaybookSharedTemplateInvalidError,
+  PlaybookSharedTemplateNameTakenError,
+  PlaybookSharedTemplateNotFoundError,
+  archiveSharedTemplate,
+  sharePlaybookAsTemplate,
+} from '../services/playbookSharedTemplateService';
 import {
   getPlaybookStepOutput,
   PlaybookStepOutputNotFoundError,
@@ -234,6 +241,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
   if (
     error instanceof PlaybookInterviewProfilePublishError
     || error instanceof PlaybookTemplateInvalidError
+    || error instanceof PlaybookSharedTemplateInvalidError
     || error instanceof PlaybookTemplateVersionError
     || error instanceof PlaybookTemplateConfirmationRequiredError
   ) {
@@ -250,7 +258,8 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookLifecycleDefinitionNotFoundError ||
     error instanceof PlaybookDraftNotFoundError ||
     error instanceof PlaybookVersionNotFoundError ||
-    error instanceof PlaybookTemplateNotFoundError
+    error instanceof PlaybookTemplateNotFoundError ||
+    error instanceof PlaybookSharedTemplateNotFoundError
   ) {
     res.status(404).json({ error: error.message });
     return true;
@@ -261,6 +270,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
     error instanceof PlaybookTemplateAlreadyPublishedError ||
+    error instanceof PlaybookSharedTemplateNameTakenError ||
     error instanceof PlaybookDefinitionBusyError ||
     isUniqueViolation(error)
   ) {
@@ -399,8 +409,76 @@ router.post(
         project,
         templateKey: req.params.templateKey,
         createdByUserId: actorUserId,
+        name: typeof (req.body as { name?: unknown } | undefined)?.name === 'string'
+          ? (req.body as { name: string }).name
+          : undefined,
       });
       res.status(installed.created ? 201 : 200).json(installed.detail);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
+/** Platform admins are super admins. A shared template reaches every project, so only they may change one. */
+const requirePlatformAdmin: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  if (!isSuperAdminRequest(req)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  next();
+};
+// Sharing is a platform decision: a template reaches every project, so only a platform admin
+// (super admin) may publish or remove one. Installing stays a project author action above.
+router.post(
+  '/definitions/:definitionId/share-as-template',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const body = (req.body ?? {}) as { name?: unknown; summary?: unknown };
+    if (
+      (body.name !== undefined && typeof body.name !== 'string')
+      || (body.summary !== undefined && typeof body.summary !== 'string')
+    ) {
+      res.status(400).json({ error: 'name and summary must be strings' });
+      return;
+    }
+    try {
+      const shared = await sharePlaybookAsTemplate({
+        project,
+        definitionId: req.params.definitionId,
+        actorUserId,
+        name: body.name as string | undefined,
+        summary: body.summary as string | undefined,
+      });
+      res.status(201).json(shared);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
+router.delete(
+  '/templates/:templateKey',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    try {
+      await archiveSharedTemplate(req.params.templateKey, actorUserId);
+      res.status(204).end();
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
@@ -1436,7 +1514,7 @@ router.post(
       });
       res.status(202).json({ ok: true });
     } catch (error) {
-      if (error instanceof InteractiveAgentStepError) {
+      if (error instanceof AgentTaskChatError) {
         res.status(400).json({ error: error.message });
         return;
       }
@@ -1471,7 +1549,7 @@ router.post(
       }
       res.status(200).json(result);
     } catch (error) {
-      if (error instanceof InteractiveAgentStepError) {
+      if (error instanceof AgentTaskChatError) {
         res.status(400).json({ error: error.message });
         return;
       }

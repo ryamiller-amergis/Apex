@@ -55,14 +55,14 @@ export function resolvePlaybookMcpCapability(profile: unknown): PlaybookMcpCapab
 export function isReadOnlyCursorAgentNode(
   node: PlaybookGraph['nodes'][number],
 ): boolean {
-  return (node.stepType === 'cursor-agent' || node.stepType === 'interactive-agent')
+  return node.stepType === 'cursor-agent'
     && resolvePlaybookMcpCapability(node.config?.mcpProfile).mode === 'read';
 }
 
-/** Publish-time project-wide rule for every cursor-agent and interactive-agent node. */
+/** Publish-time project-wide rule for every cursor-agent node, interactive or not. */
 export function assertCursorAgentsUseReadOnlyMcp(graph: PlaybookGraph): void {
   for (const node of graph.nodes) {
-    if (node.stepType !== 'cursor-agent' && node.stepType !== 'interactive-agent') continue;
+    if (node.stepType !== 'cursor-agent') continue;
     const profile = typeof node.config?.mcpProfile === 'string'
       ? node.config.mcpProfile
       : undefined;

@@ -3,6 +3,8 @@ import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
 import type {
   PlaybookTemplateDetail,
   PlaybookTemplateSummary,
+  SharePlaybookAsTemplateRequest,
+  SharePlaybookAsTemplateResponse,
 } from '../../shared/types/playbookTemplates';
 import { PlaybookApiError, playbookDefinitionKeys } from './usePlaybookDefinitions';
 
@@ -15,6 +17,7 @@ async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
       response.status,
     );
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -83,6 +86,40 @@ export function useApplyPlaybookTemplate(project: string, definitionId: string) 
         queryKey: playbookDefinitionKeys.detail(project, definitionId),
       });
       void queryClient.invalidateQueries({ queryKey: ['playbook-template', project] });
+    },
+  });
+}
+
+/** Platform admins only. Copies the Playbook's latest published version into the shared gallery. */
+export function useSharePlaybookAsTemplate(project: string, definitionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SharePlaybookAsTemplateRequest) =>
+      apiRequest<SharePlaybookAsTemplateResponse>(
+        `/api/playbooks/definitions/${encodeURIComponent(definitionId)}/share-as-template`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project, ...input }),
+        },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['playbook-templates'] });
+    },
+  });
+}
+
+/** Platform admins only. Removes a shared template from the gallery; installed copies stay. */
+export function useRemoveSharedPlaybookTemplate(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (templateKey: string) =>
+      apiRequest<void>(
+        `/api/playbooks/templates/${encodeURIComponent(templateKey)}?project=${encodeURIComponent(project)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['playbook-templates'] });
     },
   });
 }

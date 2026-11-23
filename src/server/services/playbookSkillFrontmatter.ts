@@ -66,3 +66,12 @@ export function parsePlaybookSkillFrontmatter(content: string): PlaybookSkillFro
     declaresCapabilities: Object.prototype.hasOwnProperty.call(record, 'playbook-capabilities'),
   };
 }
+
+/** The skill type a Skill declares, or null when it declares none or its frontmatter cannot be read. */
+export function declaredSkillType(content: string): 'autonomous' | 'interactive' | null {
+  try {
+    return parsePlaybookSkillFrontmatter(content).skillType;
+  } catch {
+    return null;
+  }
+}

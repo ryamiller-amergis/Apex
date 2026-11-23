@@ -52,6 +52,8 @@ interface AppSidebarProps {
   onNavigateLoadTests?: () => void;
   onNavigateDiagrams?: () => void;
   onNavigatePlaybooks?: () => void;
+  /** The Skill Library follows the Playbooks menu setting and needs `skills:view` or `skills:manage`. */
+  onNavigateSkillLibrary?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   onNavigateBuilds?: () => void;
   /** `build-from-prompt` evaluated for this user and project. */
@@ -194,6 +196,14 @@ const IconPlaybooks: React.FC = () => (
   </svg>
 );
 
+const IconSkillLibrary: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 4.5A1.5 1.5 0 015.5 3H16v12.5H5.5A1.5 1.5 0 004 17z" />
+    <path d="M4 17a1.5 1.5 0 001.5 1.5H16v-3" />
+    <path d="M8 7h5M8 10h3" />
+  </svg>
+);
+
 const IconReportIssue: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="10" cy="10" r="7" />
@@ -276,6 +286,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onNavigateLoadTests,
   onNavigateDiagrams,
   onNavigatePlaybooks,
+  onNavigateSkillLibrary,
   onNavigateBuilds,
   buildsEnabled = false,
   onNavigateBrainstorm,
@@ -330,6 +341,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'QA Lab', view: 'qa-lab', icon: <IconQaLab />, permission: 'planning:qa', onNavigate: onNavigateQaLab ?? (() => {}), testId: 'nav-qa-lab' },
         { label: 'Load Tests', view: 'load-tests', icon: <IconLoadTests />, permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}), testId: 'nav-load-tests' },
         { label: 'Playbooks', view: 'playbooks', icon: <IconPlaybooks />, permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
+        { label: 'Skill Library', view: 'skill-library', icon: <IconSkillLibrary />, permission: 'skills:view', onNavigate: onNavigateSkillLibrary ?? (() => {}) },
         { label: 'MCP Servers', view: 'mcp-servers', icon: <IconMcpServers />, permission: 'mcp-servers:view', onNavigate: onNavigateMcpServers ?? (() => {}) },
         { label: 'Apex Backlog', view: 'feature-requests', icon: <IconFeatureRequests />, permission: 'feature-requests:view', onNavigate: onNavigateFeatureRequests ?? (() => {}) },
         { label: 'Work Board', view: 'work-board', icon: <IconWorkBoard />, permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
@@ -369,6 +381,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     }
     if (item.view === 'playbooks') {
       return menuEnabledViews.includes('playbooks') && can('playbooks:view');
+    }
+    if (item.view === 'skill-library') {
+      return menuEnabledViews.includes('playbooks') && (can('skills:view') || can('skills:manage'));
     }
     if (item.view === 'mcp-servers') {
       if (!mcpServersEnabled) return false;

@@ -20,6 +20,7 @@
  */
 import { z } from 'zod';
 import { PLAYBOOK_CONNECTOR_IDS } from '../../../shared/types/playbookConnectors';
+import { isInteractiveTaskDraft } from '../../../shared/utils/playbookAgentTask';
 import {
   PLAYBOOK_MAX_OUTCOMES,
   PLAYBOOK_OUTCOME_PATTERN,
@@ -92,8 +93,14 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
   mcpProfile: z.enum(['repository-read-only']).optional().describe(
     'Read-only repository and network access; no external writes or deployment.'
   ),
-  deadlineMs: z.number().positive().max(CURSOR_AGENT_DEADLINE_MS).optional(),
+  // The outer bound is the longest an interactive task may wait. An autonomous task is held to
+  // CURSOR_AGENT_DEADLINE_MS by `resolveDeadlineMs` and by the publish check, which both know the
+  // Skill; the schema alone does not.
+  deadlineMs: z.number().positive().max(INTERVIEW_MAX_DEADLINE_MS).optional(),
   threadId: z.string().min(1).optional(),
+  // Used only when the Skill is interactive. Publish refuses an interactive task without one.
+  assigneeUserId: z.string().min(1).optional(),
+  assigneeEmail: z.string().email().optional(),
   outcomes: z
     .array(z.string().regex(PLAYBOOK_OUTCOME_PATTERN))
     .min(2)
@@ -104,7 +111,10 @@ const CURSOR_AGENT_INPUT_SCHEMA = z.object({
 });
 
 const CURSOR_AGENT_OUTPUT_SCHEMA = z.object({
-  agentRunId: z.string(),
+  // An interactive task has one agent run per chat turn, so it has no single run id to report.
+  agentRunId: z.string().optional(),
+  /** Who approved the result. Set only by an interactive task. */
+  approvedBy: z.string().optional(),
   completedAt: READABLE_TIMESTAMP,
   threadId: z.string().optional(),
   scorecard: z.unknown().optional(),
@@ -189,47 +199,6 @@ const BRANCH_INPUT_SCHEMA = z.object({
 const BRANCH_OUTPUT_SCHEMA = z.object({
   matched: z.boolean(),
   continuation: z.string().min(1),
-});
-
-const INTERACTIVE_AGENT_INPUT_SCHEMA = z.object({
-  skillPath: z.string().min(1).optional(),
-  prompt: z.string().min(1),
-  model: z.string().optional(),
-  mcpProfile: z.literal('repository-read-only'),
-  assigneeUserId: z.string().min(1).optional(),
-  assigneeEmail: z.string().email().optional(),
-  deadlineMs: z
-    .number()
-    .refine(
-      (value) =>
-        Number.isFinite(value) &&
-        value >= INTERVIEW_MIN_DEADLINE_MS &&
-        value <= INTERVIEW_MAX_DEADLINE_MS,
-      'must be from 1 hour through 14 days',
-    )
-    .optional(),
-  outcomes: z
-    .array(z.string().regex(PLAYBOOK_OUTCOME_PATTERN))
-    .min(2)
-    .max(PLAYBOOK_MAX_OUTCOMES)
-    .refine((values) => new Set(values).size === values.length, 'outcomes must be different')
-    .optional(),
-}).superRefine((value, ctx) => {
-  if (!value.assigneeUserId && !value.assigneeEmail) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Choose an assignee.',
-      path: ['assigneeEmail'],
-    });
-  }
-});
-
-const INTERACTIVE_AGENT_OUTPUT_SCHEMA = z.object({
-  threadId: z.string().min(1),
-  approvedBy: z.string().min(1),
-  completedAt: READABLE_TIMESTAMP,
-  output: z.string().min(1),
-  outcome: z.string().optional(),
 });
 
 const INTERVIEW_INPUT_SCHEMA = z.object({
@@ -542,20 +511,6 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     outputSchema: LOOP_OUTPUT_SCHEMA,
   },
   {
-    stepType: 'interactive-agent',
-    schemaVersion: 1,
-    canSuspend: true,
-    defaultDeadlineMs: INTERVIEW_DEADLINE_MS,
-    deadlineOverridable: true,
-    suspendReason: 'interactive_agent',
-    isAgentStep: true,
-    // Read-only profiles are exempt from the approval-gate rule, the same way a cursor-agent is.
-    sideEffect: 'leaves-apex',
-    requiredPermissions: ['playbooks:run'],
-    inputSchema: INTERACTIVE_AGENT_INPUT_SCHEMA,
-    outputSchema: INTERACTIVE_AGENT_OUTPUT_SCHEMA,
-  },
-  {
     stepType: 'build',
     schemaVersion: 1,
     canSuspend: true,
@@ -759,7 +714,11 @@ export function getStepTypeDescriptor(stepType: string): PlaybookStepTypeDescrip
  * different number than the definition states is how a gate that was meant to expire in an hour
  * sits open for two days.
  */
-export function resolveDeadlineMs(stepType: string, overrideMs?: number): number {
+export function resolveDeadlineMs(
+  stepType: string,
+  overrideMs?: number,
+  options: { interactive?: boolean } = {},
+): number {
   const descriptor = getStepTypeDescriptor(stepType);
 
   if (!descriptor.canSuspend) {
@@ -768,7 +727,11 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
     );
   }
 
-  if (overrideMs === undefined) return descriptor.defaultDeadlineMs;
+  // An Agent task whose Skill is interactive waits for a person, like an interview does.
+  const waitsForPerson = stepType === 'interview' || (stepType === 'cursor-agent' && options.interactive === true);
+  const defaultMs = waitsForPerson ? INTERVIEW_DEADLINE_MS : descriptor.defaultDeadlineMs;
+
+  if (overrideMs === undefined) return defaultMs;
 
   if (!descriptor.deadlineOverridable) {
     throw new PlaybookStepTypeError(
@@ -783,16 +746,15 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
     );
   }
 
-  if ((stepType === 'cursor-agent' || stepType === 'cloud-agent') && overrideMs > descriptor.defaultDeadlineMs) {
+  if (!waitsForPerson && (stepType === 'cursor-agent' || stepType === 'cloud-agent') && overrideMs > descriptor.defaultDeadlineMs) {
     throw new PlaybookStepTypeError(
-      `Deadline override for step type "${stepType}" may shorten the derived default but not exceed it.`
+      stepType === 'cursor-agent'
+        ? 'An autonomous Agent task may shorten its 60-minute limit but not exceed it. Use an interactive Skill for a longer wait.'
+        : `Deadline override for step type "${stepType}" may shorten the derived default but not exceed it.`
     );
   }
 
-  if (
-    (stepType === 'interview' || stepType === 'interactive-agent') &&
-    (overrideMs < INTERVIEW_MIN_DEADLINE_MS || overrideMs > INTERVIEW_MAX_DEADLINE_MS)
-  ) {
+  if (waitsForPerson && (overrideMs < INTERVIEW_MIN_DEADLINE_MS || overrideMs > INTERVIEW_MAX_DEADLINE_MS)) {
     throw new PlaybookStepTypeError(
       `Deadline override for step type "${stepType}" must be from 1 hour through 14 days.`
     );
@@ -812,6 +774,23 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
 export function suspendReasonForStepType(stepType: string): PlaybookSuspendReason {
   const descriptor = stepTypeRegistry.get(stepType);
   return descriptor?.canSuspend ? descriptor.suspendReason : 'agent_run';
+}
+
+/**
+ * Like `suspendReasonForStepType`, but reads the parked row. An Agent task is one step type that
+ * waits on a machine or, for an interactive Skill, on a person; only the row's draft tells which.
+ */
+export function suspendReasonForStep(
+  stepType: string,
+  outputInline: unknown,
+): PlaybookSuspendReason {
+  if (isInteractiveAgentTaskRow(stepType, outputInline)) return 'interactive_agent';
+  return suspendReasonForStepType(stepType);
+}
+
+/** True for an Agent task row that is a chat with an assignee rather than an autonomous run. */
+export function isInteractiveAgentTaskRow(stepType: string, outputInline: unknown): boolean {
+  return stepType === 'cursor-agent' && isInteractiveTaskDraft(outputInline);
 }
 
 /**
@@ -899,7 +878,6 @@ export function validateStepTypeRegistry(
     'foreach',
     'until',
     'build',
-    'interactive-agent',
   ];
   const missing = expected.filter((stepType) => !registry.has(stepType));
 

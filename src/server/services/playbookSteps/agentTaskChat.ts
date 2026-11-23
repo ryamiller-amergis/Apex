@@ -1,9 +1,14 @@
 /**
- * The `interactive-agent` step type.
+ * The interactive side of the `cursor-agent` step (the Agent task).
  *
- * The step opens one thread, parks, and stays parked while the assignee chats. Each turn is its
- * own agent run on that thread. A finished turn updates the proposal and does not resume the
- * Playbook. The step completes only when the assignee approves a proposal that passes both checks.
+ * An Agent task whose Skill declares `skill-type: interactive` does not run on its own. The step
+ * opens one thread, parks, and stays parked while the assignee chats. Each turn is its own agent
+ * run on that thread. A finished turn updates the proposal and does not resume the Playbook. The
+ * step completes only when the assignee approves a proposal that passes both checks.
+ *
+ * `executeCursorAgentStep` decides the mode from the pinned Skill and calls `startAgentTaskChat`.
+ * Every later call here finds its step by the draft kept on the row, so an autonomous task that
+ * shares the step type is never touched.
  */
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -16,19 +21,19 @@ import { cancelRun, closeThread, createThread, getThread, prepareBackgroundWorkf
 import { isFeatureEnabled } from '../featureFlagService';
 import { createNotification } from '../notificationService';
 import {
-  PlaybookExecutionCapabilityError,
   loadPlaybookSkillCompanions,
   loadPlaybookSkillContent,
   playbookSkillPath,
   resolvePlaybookAgentRunPolicy,
 } from '../playbookExecutionCapabilityService';
-import { PlaybookMcpCapabilityError, resolvePlaybookMcpCapability } from '../playbookMcpCapabilityService';
+import { agentTaskOutputKind } from '../playbookAgentTaskMode';
 import { apexUserIdForEmail } from '../playbookAssigneeService';
 import { loadStoredProjectSkill, projectSkillVersionIdFromPath } from '../playbookProjectSkillService';
 import { getSkillConfig } from '../projectSettingsService';
 import { getUserPermissions } from '../rbacService';
 import { isSuperAdminUserId } from '../../utils/superAdminUser';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
+import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
 import { extractOutcome, promptWithOutcomes } from './agentOutcome';
 import { parseStepInput, parseStepOutput } from './descriptorValidation';
@@ -39,8 +44,7 @@ import {
   isInteractiveStepDraft,
   type InteractiveStepDraft,
 } from './interactiveProposal';
-import { parsePlaybookSkillFrontmatter } from '../playbookSkillFrontmatter';
-import { assertSkillAllowed, resolveDeadlineMs } from './registry';
+import { resolveDeadlineMs } from './registry';
 import {
   deadlineFromNow,
   failStepRun,
@@ -50,26 +54,15 @@ import {
   type PlaybookStepOutcome,
 } from './stepRuns';
 
-const STEP_TYPE = 'interactive-agent';
+const STEP_TYPE = 'cursor-agent';
 const V2_TRANSPORT_FLAG = 'ai-runs-v2-transport';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export class InteractiveAgentStepError extends Error {
+export class AgentTaskChatError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'InteractiveAgentStepError';
+    this.name = 'AgentTaskChatError';
   }
-}
-
-interface InteractiveConfig {
-  skillPath?: string;
-  prompt: string;
-  model?: string;
-  mcpProfile: 'repository-read-only';
-  assigneeUserId?: string;
-  assigneeEmail?: string;
-  deadlineMs?: number;
-  outcomes?: string[];
 }
 
 function nowIso(): string {
@@ -87,13 +80,18 @@ async function assigneeCanRun(userId: string, project: string): Promise<boolean>
 }
 
 /** The Apex account the step is assigned to. An email assignee must have signed in to Apex. */
-async function resolveAssigneeUserId(config: InteractiveConfig): Promise<string> {
+async function resolveAssigneeUserId(config: CursorAgentStepConfig): Promise<string> {
   if (config.assigneeUserId) return config.assigneeUserId;
-  const email = config.assigneeEmail ?? '';
-  const userId = email ? await apexUserIdForEmail(email) : null;
+  const email = config.assigneeEmail?.trim() ?? '';
+  if (!email) {
+    throw new AgentTaskChatError(
+      'This Agent task uses an interactive Skill, so it needs an assignee to chat with the agent.',
+    );
+  }
+  const userId = await apexUserIdForEmail(email);
   if (!userId) {
-    throw new InteractiveAgentStepError(
-      `${email || 'The assignee'} has not signed in to Apex yet. They need to sign in once before this step can start.`,
+    throw new AgentTaskChatError(
+      `${email} has not signed in to Apex yet. They need to sign in once before this step can start.`,
     );
   }
   return userId;
@@ -144,64 +142,27 @@ async function lastReply(threadId: string): Promise<{ text: string; outcome?: st
   return extractOutcome(reply.text);
 }
 
-export async function executeInteractiveAgentStep(
-  context: PlaybookStepExecutionContext,
-): Promise<PlaybookStepOutcome> {
-  const config = parseStepInput<InteractiveConfig>(STEP_TYPE, context.config);
-  if (config.skillPath) assertSkillAllowed(STEP_TYPE, config.skillPath);
-  const capability = resolvePlaybookMcpCapability(config.mcpProfile);
-  if (capability.mode !== 'read') {
-    throw new PlaybookMcpCapabilityError(context.stepId, config.mcpProfile, capability.mode);
-  }
+/**
+ * Opens the chat for an Agent task whose Skill is interactive. The caller has already validated
+ * the Skill, resolved the policy and compared it with the one frozen at publish.
+ */
+export async function startAgentTaskChat(input: {
+  context: PlaybookStepExecutionContext;
+  config: CursorAgentStepConfig;
+  skillContent: string;
+  skillConfig: Awaited<ReturnType<typeof getSkillConfig>>;
+  /** The step prompt, with any work item section the caller added. */
+  prompt: string;
+}): Promise<PlaybookStepOutcome> {
+  const { context, config, skillConfig } = input;
   const assigneeUserId = await resolveAssigneeUserId(config);
   if (!(await assigneeCanRun(assigneeUserId, context.project))) {
-    throw new InteractiveAgentStepError(
+    throw new AgentTaskChatError(
       `${config.assigneeEmail ?? `Assignee ${assigneeUserId}`} cannot run Playbooks in ${context.project}.`,
     );
   }
 
-  const skillPath = playbookSkillPath(config.skillPath);
-  const skillConfig = await getSkillConfig(context.project);
-  const versionId = projectSkillVersionIdFromPath(skillPath);
-  const stored = versionId ? await loadStoredProjectSkill(versionId) : null;
-  const skillContent = stored?.content ?? await loadPlaybookSkillContent(skillPath);
-  const resolvedPolicy = resolvePlaybookAgentRunPolicy({
-    nodeId: context.stepId,
-    skillPath,
-    skillContent,
-    mcpProfile: config.mcpProfile,
-    repository: skillConfig?.skillRepo ?? context.project,
-    provider: skillConfig?.skillProvider,
-    enforce: true,
-    ...(stored && versionId
-      ? { bundle: { skillVersionId: versionId, companions: stored.companions } }
-      : {}),
-  });
-  const frozenPolicy = context.graph?.nodes.find((node) => node.id === context.stepId)?.agentPolicy;
-  if (
-    frozenPolicy
-    && (
-      frozenPolicy.skill.path !== resolvedPolicy.skill.path
-      || frozenPolicy.skill.sha256 !== resolvedPolicy.skill.sha256
-      || (
-        (frozenPolicy.bundleSha256 ?? resolvedPolicy.bundleSha256) !== undefined
-        && frozenPolicy.bundleSha256 !== resolvedPolicy.bundleSha256
-      )
-    )
-  ) {
-    throw new PlaybookExecutionCapabilityError(
-      `The published capability policy for step "${context.stepId}" no longer matches its Skill.`,
-    );
-  }
-
-  let kind: string | null = null;
-  try {
-    kind = parsePlaybookSkillFrontmatter(skillContent).outputKind;
-  } catch {
-    kind = null;
-  }
-
-  const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs);
+  const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs, { interactive: true });
   const expiresAt = deadlineFromNow(deadlineMs);
   const model = config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
   const thread = await createThread(
@@ -212,7 +173,7 @@ export async function executeInteractiveAgentStep(
       branch: skillConfig?.skillBranch ?? 'main',
       skillProvider: skillConfig?.skillProvider,
       skillPath: config.skillPath,
-      freeformContext: config.prompt,
+      freeformContext: input.prompt,
       model,
       playbookMcpProfile: config.mcpProfile,
     },
@@ -233,7 +194,7 @@ export async function executeInteractiveAgentStep(
     proposalOutcome: null,
     proposalOk: false,
     proposalReason: null,
-    kind,
+    kind: agentTaskOutputKind(input.skillContent),
     outcomes: config.outcomes ?? [],
     lastTurnError: null,
   };
@@ -246,7 +207,7 @@ export async function executeInteractiveAgentStep(
     assigneeUserId,
     {
       type: 'user-action',
-      title: `Chat needed: ${node?.title?.trim() || 'An interactive agent task'}`,
+      title: `Chat needed: ${node?.title?.trim() || 'An interactive Agent task'}`,
       body: 'A Playbook run is waiting for you to chat with an agent and approve its result.',
       link: `/playbooks/runs/${context.runId}`,
     },
@@ -281,7 +242,7 @@ async function loadOpenStep(stepRunId: string, runId: string) {
 
 function draftOf(output: unknown): InteractiveStepDraft {
   if (!isInteractiveStepDraft(output)) {
-    throw new InteractiveAgentStepError('This interactive step has no chat to continue.');
+    throw new AgentTaskChatError('This Agent task has no chat to continue.');
   }
   return output;
 }
@@ -293,14 +254,14 @@ export async function sendInteractiveTurn(input: {
   message: string;
 }): Promise<void> {
   const message = input.message.trim();
-  if (!message) throw new InteractiveAgentStepError('A chat message is required.');
+  if (!message) throw new AgentTaskChatError('A chat message is required.');
   const row = await loadOpenStep(input.stepRunId, input.runId);
   if (!row || row.stepType !== STEP_TYPE || row.status !== 'suspended') {
-    throw new InteractiveAgentStepError('This step is not waiting for a chat turn.');
+    throw new AgentTaskChatError('This step is not waiting for a chat turn.');
   }
   const draft = draftOf(row.outputInline);
   if (draft.assigneeUserId !== input.userId) {
-    throw new InteractiveAgentStepError('Only the assignee can chat on this step.');
+    throw new AgentTaskChatError('Only the assignee can chat on this step.');
   }
   if (!(await assigneeCanRun(input.userId, row.project))) {
     await failStepRun({
@@ -310,17 +271,17 @@ export async function sendInteractiveTurn(input: {
     await db.update(playbookRuns)
       .set({ status: 'failed', completedAt: nowIso(), updatedAt: nowIso() })
       .where(and(eq(playbookRuns.id, row.runId), eq(playbookRuns.status, 'suspended')));
-    throw new InteractiveAgentStepError('The assignee can no longer run Playbooks in this project.');
+    throw new AgentTaskChatError('The assignee can no longer run Playbooks in this project.');
   }
   const mode = interactiveProposalMode(draft);
   if (mode === 'approve-or-cancel') {
-    throw new InteractiveAgentStepError('This step is closed to new messages. Approve the proposal or cancel the run.');
+    throw new AgentTaskChatError('This step is closed to new messages. Approve the proposal or cancel the run.');
   }
   if (row.agentRunId) {
-    throw new InteractiveAgentStepError('A turn is already running.');
+    throw new AgentTaskChatError('A turn is already running.');
   }
 
-  const config = parseStepInput<InteractiveConfig>(STEP_TYPE, (row.inputInline ?? {}) as Record<string, unknown>);
+  const config = parseStepInput<CursorAgentStepConfig>(STEP_TYPE, (row.inputInline ?? {}) as Record<string, unknown>);
   const skillPath = playbookSkillPath(config.skillPath);
   const skillConfig = await getSkillConfig(row.project);
   const versionId = projectSkillVersionIdFromPath(skillPath);
@@ -357,7 +318,7 @@ export async function sendInteractiveTurn(input: {
       skillCompanions,
       policy,
     });
-    if (!agentRunId) throw new InteractiveAgentStepError('The agent runtime could not start this turn.');
+    if (!agentRunId) throw new AgentTaskChatError('The agent runtime could not start this turn.');
   } else {
     const snapshot: ExecutionSnapshot = {
       prompt,
@@ -389,7 +350,7 @@ export async function sendInteractiveTurn(input: {
     ))
     .returning({ id: playbookStepRuns.id });
   if (claimed.length === 0) {
-    throw new InteractiveAgentStepError('A turn is already running.');
+    throw new AgentTaskChatError('A turn is already running.');
   }
 }
 
@@ -440,19 +401,19 @@ export async function decideInteractiveProposal(input: {
 }): Promise<{ outcome: 'recorded' | 'already-decided'; stepId?: string }> {
   const row = await loadOpenStep(input.stepRunId, input.runId);
   if (!row || row.stepType !== STEP_TYPE) {
-    throw new InteractiveAgentStepError('That step is not an interactive agent task.');
+    throw new AgentTaskChatError('That step is not an interactive Agent task.');
   }
   if (row.status !== 'suspended') return { outcome: 'already-decided' };
   const draft = draftOf(row.outputInline);
   if (draft.assigneeUserId !== input.userId) {
-    throw new InteractiveAgentStepError('Only the assignee can decide this proposal.');
+    throw new AgentTaskChatError('Only the assignee can decide this proposal.');
   }
   if (!(await assigneeCanRun(input.userId, row.project))) {
     await failStepRun({
       stepRunId: row.id,
       reason: 'The assignee can no longer run Playbooks in this project.',
     });
-    throw new InteractiveAgentStepError('The assignee can no longer run Playbooks in this project.');
+    throw new AgentTaskChatError('The assignee can no longer run Playbooks in this project.');
   }
   if (input.decision === 'rejected') {
     const next: InteractiveStepDraft = {
@@ -470,7 +431,7 @@ export async function decideInteractiveProposal(input: {
     outcomes: draft.outcomes,
     kind: draft.kind,
   });
-  if (!check.ok) throw new InteractiveAgentStepError(check.reason);
+  if (!check.ok) throw new AgentTaskChatError(check.reason);
   const output = parseStepOutput(STEP_TYPE, {
     threadId: draft.threadId,
     approvedBy: input.userId,
@@ -484,12 +445,18 @@ export async function decideInteractiveProposal(input: {
     : { outcome: 'already-decided' };
 }
 
+/**
+ * Closes the chat threads of a cancelled run. An autonomous Agent task keeps no draft, so it is
+ * skipped here; its agent run is cancelled by the cancel path as before.
+ */
 export async function closeInteractiveThreads(steps: ReadonlyArray<{
   stepType: string;
   resumeToken: string | null;
+  outputInline?: unknown;
 }>): Promise<void> {
   for (const step of steps) {
     if (step.stepType !== STEP_TYPE || !step.resumeToken) continue;
+    if (!isInteractiveStepDraft(step.outputInline)) continue;
     await cancelRun(step.resumeToken).catch((error: unknown) => {
       console.warn(`[playbook] interactive turn cancel failed for ${step.resumeToken}:`, error);
     });
@@ -525,7 +492,7 @@ export async function warnInteractiveExpiring(now: Date): Promise<void> {
       row.outputInline.assigneeUserId,
       {
         type: 'user-action',
-        title: 'An interactive agent task expires within a day',
+        title: 'An interactive Agent task expires within a day',
         body: 'Approve a result or cancel the run before the deadline.',
         link: `/playbooks/runs/${row.runId}`,
       },

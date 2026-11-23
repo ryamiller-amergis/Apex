@@ -4,7 +4,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, PenLine, Play, Trash2 } from 'lucide-react';
+import { ArrowLeft, LayoutTemplate, PenLine, Play, Trash2 } from 'lucide-react';
 import type { PlaybookDefinitionDetail } from '../../shared/types/playbook';
 import { playbookAuthorGraphsMatch } from '../../shared/utils/playbookGraph';
 import { useAppShell } from '../hooks/useAppShell';
@@ -13,6 +13,7 @@ import { useProfileCard } from '../hooks/useProfile';
 import { usePlaybookVersionGraph } from '../hooks/usePlaybookCanvas';
 import { usePlaybookRuns, useStartPlaybookRun } from '../hooks/usePlaybookRuns';
 import { PlaybookRunList } from './PlaybookRunList';
+import { PlaybookShareTemplatePanel } from './PlaybookShareTemplatePanel';
 import { nodeSubtitle, orderedSteps, stepMeta } from './playbookStepCatalog';
 import {
   computeRunStats,
@@ -156,7 +157,7 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   definitionId,
 }) => {
   const navigate = useNavigate();
-  const { can } = useAppShell();
+  const { can, isSuperAdmin } = useAppShell();
   const canAuthor = can('playbooks:author');
   const canRun = can('playbooks:run');
   const detail = usePlaybookDefinition(project, definitionId);
@@ -168,6 +169,7 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
   const [runError, setRunError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [sharingTemplate, setSharingTemplate] = useState(false);
 
   const definitionRuns = useMemo(
     () => (runs.data?.runs ?? []).filter((run) => run.definitionId === definitionId),
@@ -293,6 +295,16 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
                   <Trash2 size={15} aria-hidden /> Delete
                 </button>
               ) : null}
+              {isSuperAdmin && publishedVersionId ? (
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  onClick={() => setSharingTemplate(true)}
+                  {...{ 'data-testid': 'playbook-dashboard-share-template' }}
+                >
+                  <LayoutTemplate size={15} aria-hidden /> Share as template
+                </button>
+              ) : null}
               <Link
                 to={`/playbooks/definitions/${definitionId}`}
                 className={styles.secondaryButton}
@@ -320,6 +332,17 @@ export const PlaybookDashboardPage: React.FC<PlaybookDashboardPageProps> = ({
         <p className={styles.errorBanner} role="status">
           Delete {data.definition.name}? Its draft, published versions, and finished runs are removed. This cannot be undone.
         </p>
+      ) : null}
+      {sharingTemplate && isSuperAdmin ? (
+        // data-testid-exempt — PlaybookShareTemplatePanel owns its playbook-share-template root id
+        <PlaybookShareTemplatePanel
+          project={project}
+          definitionId={definitionId}
+          defaultName={data.definition.name}
+          defaultSummary={data.definition.description ?? ''}
+          versionNumber={currentVersion?.versionNumber ?? null}
+          onClose={() => setSharingTemplate(false)}
+        />
       ) : null}
       {runError ? <p className={styles.errorBanner} role="alert">{runError}</p> : null}
       {deleteError ? <p className={styles.errorBanner} role="alert">{deleteError}</p> : null}

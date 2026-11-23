@@ -42,6 +42,11 @@ jest.mock('../services/playbookAdvanceService', () => ({
   advanceRun: (...a: unknown[]) => advanceRun(...a),
 }));
 
+const recordInteractiveTurnFinished = jest.fn();
+jest.mock('../services/playbookSteps/agentTaskChat', () => ({
+  recordInteractiveTurnFinished: (...a: unknown[]) => recordInteractiveTurnFinished(...a),
+}));
+
 jest.mock('../services/chatAgentService', () => ({
   getThread: jest.fn().mockResolvedValue(null),
   hydrateThread: jest.fn().mockResolvedValue(true),
@@ -346,5 +351,72 @@ describe('TBI-032 VT-24 — cursor-agent terminal output validation', () => {
     );
     expect(resumeStepRun).not.toHaveBeenCalled();
     expect(advanceRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('Agent task with an interactive Skill — a finished chat turn does not resume the step', () => {
+  const draft = {
+    threadId: 'thread-1',
+    assigneeUserId: 'assignee-1',
+    turnCount: 0,
+    rejectedRevisions: 0,
+    proposalText: null,
+    proposalOutcome: null,
+    proposalOk: false,
+    proposalReason: null,
+    kind: null,
+    outcomes: [],
+    lastTurnError: null,
+  };
+
+  function chatStepIs(outputInline: unknown): void {
+    selectWhere.mockResolvedValue([
+      { id: STEP_RUN_ID, runId: RUN_ID, stepId: STEP_ID, stepType: 'cursor-agent', status: 'suspended', outputInline },
+    ]);
+    recordInteractiveTurnFinished.mockResolvedValue(true);
+  }
+
+  it('records the turn and leaves the run where it is when the turn completed', async () => {
+    chatStepIs(draft);
+
+    await expect(handleTerminalAgentRunEvent(event('completed'))).resolves.toEqual({
+      handled: 'already-moved',
+      stepRunId: STEP_RUN_ID,
+    });
+
+    expect(recordInteractiveTurnFinished).toHaveBeenCalledWith({
+      stepRunId: STEP_RUN_ID,
+      agentRunId: AGENT_RUN_ID,
+      threadId: 'thread-1',
+      failedReason: undefined,
+    });
+    expect(resumeStepRun).not.toHaveBeenCalled();
+    expect(failStepRun).not.toHaveBeenCalled();
+    expect(advanceRun).not.toHaveBeenCalled();
+  });
+
+  it('records a failed turn on the draft instead of failing the step', async () => {
+    chatStepIs(draft);
+
+    await handleTerminalAgentRunEvent(event('failed'));
+
+    expect(recordInteractiveTurnFinished).toHaveBeenCalledWith(
+      expect.objectContaining({ failedReason: expect.stringContaining('failed') }),
+    );
+    expect(failStepRun).not.toHaveBeenCalled();
+    expect(resumeStepRun).not.toHaveBeenCalled();
+  });
+
+  it('still resumes an autonomous Agent task, whose row carries no chat draft', async () => {
+    chatStepIs(null);
+
+    await expect(handleTerminalAgentRunEvent(event('completed'))).resolves.toEqual({
+      handled: 'resumed',
+      stepRunId: STEP_RUN_ID,
+    });
+
+    expect(recordInteractiveTurnFinished).not.toHaveBeenCalled();
+    expect(resumeStepRun).toHaveBeenCalledTimes(1);
+    expect(advanceRun).toHaveBeenCalledWith(RUN_ID, STEP_ID);
   });
 });

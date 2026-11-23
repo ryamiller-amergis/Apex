@@ -16,7 +16,7 @@
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { playbookRuns } from '../db/schema';
-import { suspendReasonForStepType } from './playbookSteps/registry';
+import { suspendReasonForStep } from './playbookSteps/registry';
 import { listPendingGateRows } from './playbookGateService';
 import type {
   PlaybookGraph,
@@ -92,7 +92,7 @@ function suspensionOf(steps: PlaybookStepRun[]): PlaybookSuspensionDetail | null
     stepId: parked.stepId,
     // Asked of the registry rather than decided here: whether a wait ends with a person or a
     // machine is a property the step type declares, and duplicating it would let the two drift.
-    reason: suspendReasonForStepType(parked.stepType),
+    reason: suspendReasonForStep(parked.stepType, parked.outputInline),
     deadline: parked.expiresAt,
     actionId: parked.stepType === 'interview' ? parked.resumeToken : null,
   };

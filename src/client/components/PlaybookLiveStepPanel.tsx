@@ -15,6 +15,7 @@ import {
   usePlaybookGateDecision,
   usePlaybookStepActivity,
 } from '../hooks/usePlaybookRuns';
+import { isInteractiveTaskDraft } from '../../shared/utils/playbookAgentTask';
 import { stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import {
@@ -69,7 +70,8 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
     && suspension?.stepId === step.stepId
     && suspension.reason === 'approval_gate';
   const decision = usePlaybookGateDecision(project, runId, step.id);
-  const chatting = step.stepType === 'interactive-agent' && step.status === 'suspended';
+  // An Agent task is one step type; the chat draft on its row marks one that runs an interactive Skill.
+  const chatting = isAgent && isInteractiveTaskDraft(step.outputInline) && step.status === 'suspended';
   const [chatMessage, setChatMessage] = useState('');
   const interactiveTurn = useInteractiveAgentTurn(project, runId, step.id);
   const interactiveDecision = useInteractiveAgentDecision(project, runId, step.id);

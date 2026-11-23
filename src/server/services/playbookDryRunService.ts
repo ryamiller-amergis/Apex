@@ -15,6 +15,7 @@ import {
 } from './playbookSteps/registry';
 import { getDefinitionDetail } from './playbookDefinitionService';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
+import { assertAgentTasksFitTheirSkills } from './playbookAgentTaskMode';
 import { getSkillConfig } from './projectSettingsService';
 
 function buildManifest(graph: PlaybookGraph): string[] {
@@ -55,6 +56,10 @@ export async function dryRunPlaybookDraft(input: {
       provider: settings?.skillProvider,
       enforce: false,
     });
+    assertAgentTasksFitTheirSkills(
+      graph,
+      policies.map(({ nodeId, mode }) => ({ nodeId, mode })),
+    );
     capabilityManifest = policies.map(({ nodeId, policy }) => ({
       nodeId,
       skillPath: policy.skill.path,

@@ -10,6 +10,7 @@ import {
   parsePlaybookSkillCapabilities,
   PlaybookExecutionCapabilityError,
 } from './playbookExecutionCapabilityService';
+import { declaredSkillType } from './playbookSkillFrontmatter';
 
 const SKILLS_DIR = path.join('foundation-skills', 'foundation');
 /** Moved into a project library. Still on disk so already published Playbooks can read it. */
@@ -69,6 +70,7 @@ export function describePlaybookSkill(relativePath: string, content: string): Pl
     capabilities,
     runnable: unavailableReason === undefined,
     group: 'base',
+    skillType: declaredSkillType(content),
     ...(unavailableReason ? { unavailableReason } : {}),
   };
 }

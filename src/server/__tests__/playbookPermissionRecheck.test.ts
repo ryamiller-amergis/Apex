@@ -23,7 +23,6 @@ const executeJoin = jest.fn();
 const executeForeach = jest.fn();
 const executeUntil = jest.fn();
 const executeConnector = jest.fn();
-const executeInteractiveAgent = jest.fn();
 const isFeatureEnabled = jest.fn();
 
 jest.mock('../services/rbacService', () => ({
@@ -40,10 +39,6 @@ jest.mock('../services/playbookSteps/approvalGateAdapter', () => ({
 
 jest.mock('../services/playbookSteps/cursorAgentAdapter', () => ({
   executeCursorAgentStep: (...args: unknown[]) => executeCursorAgent(...args),
-}));
-
-jest.mock('../services/playbookSteps/interactiveAgentAdapter', () => ({
-  executeInteractiveAgentStep: (...args: unknown[]) => executeInteractiveAgent(...args),
 }));
 
 jest.mock('../services/playbookSteps/ingestArtifactAdapter', () => ({
@@ -100,11 +95,6 @@ function context(stepType: string): PlaybookStepExecutionContext {
   const configs: Record<string, Record<string, unknown>> = {
     notify: { title: 'Ready' },
     'approval-gate': {},
-    'interactive-agent': {
-      prompt: 'Review the draft',
-      mcpProfile: 'repository-read-only',
-      assigneeUserId: 'assignee-1',
-    },
     'cursor-agent': {
       skillPath: '.cursor/skills/app-knowledge/SKILL.md',
       prompt: 'Summarise the docs',
