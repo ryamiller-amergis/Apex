@@ -30,6 +30,8 @@ export interface OpenCloudAgentPullRequestInput extends CloudAgentPullRequestTex
   adoUserToken: string | null;
   /** Open with the service PAT in production too when adoUserToken is null. */
   allowServiceAccount?: boolean;
+  /** Azure DevOps team or group names added as required reviewers. */
+  requiredReviewers?: string[] | null;
 }
 
 /** Thrown when a production run must wait for the starter's Azure DevOps token. */
@@ -97,6 +99,12 @@ export async function openCloudAgentPullRequest(
         project: input.project,
         prUrl: existing,
       });
+      await applyProjectPullRequestSettings(ado, {
+        repo: input.repo,
+        project: input.project,
+        prUrl: existing,
+        requiredReviewers: input.requiredReviewers,
+      });
       return existing;
     }
     const prUrl = await ado.createPullRequest({
@@ -126,6 +134,12 @@ export async function openCloudAgentPullRequest(
       repo: input.repo,
       project: input.project,
       prUrl,
+    });
+    await applyProjectPullRequestSettings(ado, {
+      repo: input.repo,
+      project: input.project,
+      prUrl,
+      requiredReviewers: input.requiredReviewers,
     });
     return prUrl;
   });

@@ -22,6 +22,8 @@ const ado = {
   createPullRequest: jest.fn(),
   updatePullRequest: jest.fn(),
   addPullRequestLabel: jest.fn(),
+  addRequiredPullRequestReviewers: jest.fn(),
+  setPullRequestTargetBranch: jest.fn(),
 };
 
 const PR_URL = 'https://dev.azure.com/org/MaxView/_git/MaxView/pullrequest/9';
@@ -126,6 +128,8 @@ describe('openCloudAgentPullRequest', () => {
     ado.createPullRequest.mockResolvedValue(PR_URL);
     ado.updatePullRequest.mockResolvedValue(undefined);
     ado.addPullRequestLabel.mockResolvedValue(undefined);
+    ado.addRequiredPullRequestReviewers.mockResolvedValue(undefined);
+    ado.setPullRequestTargetBranch.mockResolvedValue(undefined);
   });
 
   it('creates the pull request without marking it as a draft', async () => {
@@ -151,6 +155,20 @@ describe('openCloudAgentPullRequest', () => {
       project: 'MaxView',
       pullRequestId: 9,
       name: CLOUD_AGENT_PULL_REQUEST_LABEL,
+    });
+  });
+
+  it('adds the project required reviewers on a new pull request', async () => {
+    await openCloudAgentPullRequest({
+      ...input,
+      requiredReviewers: ['Release Approvers', '  '],
+    });
+
+    expect(ado.addRequiredPullRequestReviewers).toHaveBeenCalledWith({
+      repo: 'MaxView',
+      project: 'MaxView',
+      pullRequestId: 9,
+      names: ['Release Approvers'],
     });
   });
 

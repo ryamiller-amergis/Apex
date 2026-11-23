@@ -166,6 +166,28 @@ describe('cursorCloudAgentClient', () => {
       expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
         cloud: expect.objectContaining({ autoCreatePR: false }),
       }));
+      expect(mockCreate.mock.calls[0][0].cloud.openAsCursorGithubApp).toBeUndefined();
+
+      mockCreate.mockClear();
+      await launchCloudAgent({
+        project: 'Apex',
+        prompt: 'Implement the work item',
+        model: 'composer-2.5',
+        skillProvider: 'github',
+        skillRepo: 'amergis/Apex',
+        skillBranch: 'main',
+        workItemTitle: 'Document Management',
+      });
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
+        cloud: expect.objectContaining({
+          autoCreatePR: true,
+          openAsCursorGithubApp: true,
+          repos: [{
+            url: 'https://github.com/amergis/Apex',
+            startingRef: 'main',
+          }],
+        }),
+      }));
     } finally {
       if (previous === undefined) delete process.env.CURSOR_USER_LEVEL_API_KEY;
       else process.env.CURSOR_USER_LEVEL_API_KEY = previous;

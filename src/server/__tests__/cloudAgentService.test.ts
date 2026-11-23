@@ -59,6 +59,12 @@ jest.mock('../services/featureFlagService', () => ({
 jest.mock('../services/projectSettingsService', () => ({
   getSkillConfig: jest.fn().mockResolvedValue(null),
 }));
+jest.mock('../services/cloudAgentDeliverySettings', () => ({
+  getCloudAgentDelivery: jest.fn().mockResolvedValue({
+    targetBranch: null,
+    requiredReviewers: [],
+  }),
+}));
 jest.mock('../services/localDevContextService', () => ({
   buildLocalDevContext: (...args: unknown[]) => mockBuildLocalDevContext(...args),
 }));
@@ -98,6 +104,7 @@ import {
 import type { RunCheckResult } from '../../shared/types/agentRunLifecycle';
 import { shouldClaimAllChecksPassed } from '../../shared/utils/runCheckResults';
 import { getSkillConfig } from '../services/projectSettingsService';
+import { getCloudAgentDelivery } from '../services/cloudAgentDeliverySettings';
 
 const eligibleItem = {
   workItemType: 'Feature',
@@ -429,6 +436,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
     mockUpdateWhere.mockResolvedValueOnce([{ id: 'run-resume' }]);
     mockAgentRunFindFirst.mockResolvedValueOnce(undefined);
 
+    const buildPrompt = jest.fn().mockResolvedValue('base execution prompt');
     const result = await startCloudAgentRun({
       userId: USER_ID,
       project: 'MaxView',
@@ -442,7 +450,7 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
         skillBranch: 'main',
         developmentSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
       }),
-      buildPrompt: jest.fn().mockResolvedValue('base execution prompt'),
+      buildPrompt,
     }));
 
     expect(result).toEqual({ sessionId: SESSION_ID, runId: 'run-resume' });
@@ -462,8 +470,13 @@ describe('startCloudAgentRun Resume prompt (TBI-007 DoD-1)', () => {
           skillName: 'dev-orchestrator',
           branchName: 'feat/42-wi-42',
           customPrompt: 'Keep the public API stable.',
+          pullRequestAuthorId: USER_ID,
+          delivery: 'implementation',
         }),
       }),
+    }));
+    expect(buildPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      apexOpensPullRequest: true,
     }));
     expect(txSet).toHaveBeenCalledWith(expect.objectContaining({
       currentRunId: 'run-resume',
@@ -2173,9 +2186,72 @@ describe('reconcileRunningCloudAgentRuns', () => {
       }));
       expect(mockCreateNotification).toHaveBeenCalledWith(
         'author-oid',
-        expect.objectContaining({ type: 'system' }),
-        { dedupeKey: `playbook-pr-author-fallback:${RUN_ID}` },
+        {
+          type: 'system',
+          title: 'Sign in to Apex to own your Playbook pull requests',
+          body: 'A Playbook pull request was opened by the Apex service account because your Azure DevOps sign-in has expired. Open Apex to renew it.',
+          link: '/playbooks',
+        },
+        { dedupeKey: `pr-author-fallback:${RUN_ID}` },
       );
+    });
+
+    it('names My Work in the sign-in notice when that feature started the run', async () => {
+      mockLiveRows([liveExecution({
+        executionSnapshot: {
+          provider: 'ado',
+          repository: 'MaxView',
+          cloudAgent: {
+            workItemId: 42,
+            branchName: 'feat/42-add-search',
+            baseBranch: 'main',
+            pullRequestAuthorId: 'author-oid',
+            delivery: 'implementation',
+          },
+        },
+      })]);
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun: jest.fn().mockResolvedValue(observation({
+          status: 'finished',
+          branchName: 'feat/42-add-search',
+        })),
+        openCloudAgentPullRequest: jest.fn().mockResolvedValue(PR_URL),
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue(null),
+      }));
+
+      expect(mockCreateNotification).toHaveBeenCalledWith(
+        'author-oid',
+        expect.objectContaining({
+          title: 'Sign in to Apex to own your My Work pull requests',
+          link: '/my-work',
+        }),
+        { dedupeKey: `pr-author-fallback:${RUN_ID}` },
+      );
+    });
+
+    it('adds the project required reviewers when Apex opens the pull request', async () => {
+      mockLiveRows([playbookExecution()]);
+      (getSkillConfig as jest.Mock).mockResolvedValueOnce({ id: 'settings-1' });
+      (getCloudAgentDelivery as jest.Mock).mockResolvedValueOnce({
+        targetBranch: 'develop',
+        requiredReviewers: ['Release Approvers'],
+      });
+      const openCloudAgentPullRequest = jest.fn().mockResolvedValue(PR_URL);
+
+      await reconcileRunningCloudAgentRuns(makeDeps({
+        getCloudAgentRun: jest.fn().mockResolvedValue(observation({
+          status: 'finished',
+          branchName: 'feat/42-add-search',
+        })),
+        openCloudAgentPullRequest,
+        getStoredAdoTokenForUser: jest.fn().mockResolvedValue('author-token'),
+      }));
+
+      expect(openCloudAgentPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+        targetBranch: 'develop',
+        adoUserToken: 'author-token',
+        requiredReviewers: ['Release Approvers'],
+      }));
     });
 
     it('keeps waiting when the pull request could not be opened', async () => {

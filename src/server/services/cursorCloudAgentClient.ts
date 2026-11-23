@@ -275,6 +275,12 @@ export async function launchCloudAgent(
     cloud: {
       repos: [{ url: repoUrl, startingRef: target.startingRef }],
       autoCreatePR: target.autoCreatePR,
+      // User keys open the pull request as the key owner. On GitHub, the
+      // Cursor GitHub App is the shared identity. Azure DevOps has no
+      // equivalent, so those pull requests are opened later as the Apex user.
+      ...(input.skillProvider === 'github' && target.autoCreatePR
+        ? { openAsCursorGithubApp: true }
+        : {}),
     },
   });
   try {

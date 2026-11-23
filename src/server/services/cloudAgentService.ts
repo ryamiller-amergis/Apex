@@ -377,10 +377,26 @@ async function pullRequestForRun(
 }
 
 /**
- * Playbook runs turn Cursor's autoCreatePR off. Once the agent has pushed its
- * branch, Apex opens the pull request with the Playbook author's saved Azure
- * DevOps token so the author is its creator. When that token no longer redeems,
- * the service account opens it and the author is told to sign in again.
+ * Names the notice when the saved Azure DevOps token cannot open the pull
+ * request. My Work runs set delivery. Playbook runs leave it unset.
+ */
+function pullRequestAuthorFallbackNotice(
+  delivery: 'implementation' | 'guided' | undefined,
+): { title: string; body: string; link: string } {
+  const feature = delivery === 'implementation' || delivery === 'guided' ? 'My Work' : 'Playbook';
+  return {
+    title: `Sign in to Apex to own your ${feature} pull requests`,
+    body: `A ${feature} pull request was opened by the Apex service account because your Azure DevOps sign-in has expired. Open Apex to renew it.`,
+    link: feature === 'My Work' ? '/my-work' : '/playbooks',
+  };
+}
+
+/**
+ * Azure DevOps runs turn Cursor's autoCreatePR off. Once the agent has pushed
+ * its branch, Apex opens the pull request with that user's saved Azure DevOps
+ * token so they are its creator. When that token is missing or no longer
+ * redeems, the service account opens it and the user is told to sign in again.
+ * The run is not failed.
  */
 async function openPullRequestAsPlaybookAuthor(
   run: { id: string; projectId: string; executionSnapshot: AgentRunExecutionSnapshot | null | undefined },
@@ -441,16 +457,14 @@ async function openPullRequestAsPlaybookAuthor(
   }
   const adoUserToken = await (deps.getStoredAdoTokenForUser ?? getStoredAdoTokenForUser)(authorId);
   if (!adoUserToken) {
-    console.warn('[cloud-agent] Playbook author token did not redeem; the service account opens the pull request', JSON.stringify({
+    console.warn('[cloud-agent] pull request author token did not redeem; the service account opens the pull request', JSON.stringify({
       runId: run.id,
       authorId,
     }));
     await createNotification(authorId, {
       type: 'system',
-      title: 'Sign in to Apex to own your Playbook pull requests',
-      body: 'A Playbook pull request was opened by the Apex service account because your Azure DevOps sign-in has expired. Open Apex to renew it.',
-      link: '/playbooks',
-    }, { dedupeKey: `playbook-pr-author-fallback:${run.id}` }).catch(() => undefined);
+      ...pullRequestAuthorFallbackNotice(cloud.delivery),
+    }, { dedupeKey: `pr-author-fallback:${run.id}` }).catch(() => undefined);
   }
   try {
     return await deps.openCloudAgentPullRequest({
@@ -465,6 +479,7 @@ async function openPullRequestAsPlaybookAuthor(
       summary: observed.resultText ?? observed.summary ?? null,
       adoUserToken,
       allowServiceAccount: true,
+      requiredReviewers: delivery.requiredReviewers,
     });
   } catch (err) {
     // Returning null lets the pull-request wait run out instead of retrying forever.
@@ -1544,6 +1559,14 @@ async function persistQueuedRun(
   const branchName = input.item.workItemType?.trim()
     ? cloudAgentBranchName(input.workItemId, workItemTitle, input.item.workItemType)
     : implementationBranchName(input.workItemId, workItemTitle);
+  // GitHub pull requests are opened by the Cursor GitHub App. Azure DevOps
+  // pull requests are opened here as the logged-in user, or as the Playbook
+  // author when that caller already named one.
+  const skillProvider = (skillConfig.skillProvider ?? 'ado') as SkillProvider;
+  const pullRequestAuthorId = skillProvider === 'github'
+    ? undefined
+    : (input.pullRequestAuthorId ?? input.userId);
+  const myWorkOpensPullRequest = Boolean(pullRequestAuthorId) && !input.pullRequestAuthorId;
   const basePrompt = await deps.buildPrompt({
     project: input.project,
     workItemId: input.workItemId,
@@ -1556,7 +1579,7 @@ async function persistQueuedRun(
     targetBranch,
     createdByName: facts.name,
     createdByEmail: facts.email,
-    ...(input.pullRequestAuthorId ? { apexOpensPullRequest: true } : {}),
+    ...(pullRequestAuthorId ? { apexOpensPullRequest: true } : {}),
   });
   const configuredDevelopment = resolveDevelopmentSettings(skillConfig);
   const development = launchSettings
@@ -1635,7 +1658,7 @@ async function persistQueuedRun(
           skillPath,
           projectId: input.project,
           threadId: sessionId,
-          provider: (skillConfig.skillProvider ?? 'ado') as SkillProvider,
+          provider: skillProvider,
           repository: skillConfig.skillRepo,
           cloudAgent: {
             workItemId: input.workItemId,
@@ -1649,7 +1672,8 @@ async function persistQueuedRun(
             ...(skillName ? { skillName } : {}),
             ...(customPrompt ? { customPrompt } : {}),
             ...(input.adoUserToken ? { userTokenInstance: cloudAgentInstanceId() } : {}),
-            ...(input.pullRequestAuthorId ? { pullRequestAuthorId: input.pullRequestAuthorId } : {}),
+            ...(myWorkOpensPullRequest ? { delivery: 'implementation' as const } : {}),
+            ...(pullRequestAuthorId ? { pullRequestAuthorId } : {}),
           },
         },
       });
@@ -1787,7 +1811,13 @@ async function launchClaimedCloudAgentRun(
   }
 
   const adoUserToken = takeCloudAgentUserToken(runId);
-  if (!adoUserToken && !unattended) {
+  const provider = (snapshot.provider ?? 'ado') as SkillProvider;
+  // GitHub cannot be opened with an Azure DevOps token. Cursor opens that
+  // pull request as the Cursor GitHub App. An Azure DevOps run that names an
+  // author leaves autoCreatePR off so Apex can open the pull request as that user.
+  const apexOpensPullRequest = provider !== 'github' && Boolean(cloud.pullRequestAuthorId);
+  const cursorOpensPullRequest = !apexOpensPullRequest && (!unattended || cloud.opensPullRequest === true);
+  if (!adoUserToken && !unattended && apexOpensPullRequest) {
     console.warn('[cloud-agent] queued run has no developer token; the pull request will be opened by the service account', JSON.stringify({
       runId,
     }));
@@ -1799,7 +1829,7 @@ async function launchClaimedCloudAgentRun(
       project: snapshot.projectId,
       prompt: snapshot.prompt,
       model: snapshot.model,
-      skillProvider: (snapshot.provider ?? 'ado') as SkillProvider,
+      skillProvider: provider,
       skillRepo: snapshot.repository,
       skillBranch: cloud.baseBranch,
       workItemId: cloud.workItemId,
@@ -1808,7 +1838,7 @@ async function launchClaimedCloudAgentRun(
       initiatorEmail: cloud.initiatorEmail,
       skillName: cloud.skillName,
       adoUserToken,
-      autoCreatePr: !cloud.pullRequestAuthorId && (!unattended || cloud.opensPullRequest === true),
+      autoCreatePr: cursorOpensPullRequest,
       images: (cloud.images ?? []).flatMap((image) => (
         image.data && image.mimeType
           ? [{ data: image.data, mimeType: image.mimeType }]
