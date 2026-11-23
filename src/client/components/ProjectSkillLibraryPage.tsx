@@ -23,6 +23,7 @@ import {
   useGenerateProjectSkillDraft,
   useProjectSkillLibrary,
   useSaveProjectSkill,
+  useSkillDraftModels,
 } from '../hooks/useProjectSkillLibrary';
 import { DataGridFilterPills, DataGridToolbar } from './DataGridToolbar';
 import { absoluteTime, relativeTime } from './playbookStatusFormat';
@@ -152,6 +153,8 @@ const SkillEditor: React.FC<{
   const [skillType, setSkillType] = useState<ProjectSkillType>(seed.skillType);
   const [instructions, setInstructions] = useState(seed.instructions);
   const [request, setRequest] = useState('');
+  const [draftModelId, setDraftModelId] = useState('');
+  const draftModels = useSkillDraftModels(project);
   const [pendingDraft, setPendingDraft] = useState<{ description: string; instructions: string } | null>(null);
   const [files, setFiles] = useState<AttachedFile[]>(seed.files);
   const [fileErrors, setFileErrors] = useState<string[]>([]);
@@ -177,7 +180,12 @@ const SkillEditor: React.FC<{
       return;
     }
     try {
-      const draft = await generate.mutateAsync({ title, skillType, request });
+      const draft = await generate.mutateAsync({
+        title,
+        skillType,
+        request,
+        ...(draftModelId ? { modelId: draftModelId } : {}),
+      });
       if (!description.trim() && !instructions.trim()) {
         setDescription(draft.description);
         setInstructions(draft.instructions);
@@ -309,7 +317,7 @@ const SkillEditor: React.FC<{
               for you to edit. Nothing is saved until you save.
             </p>
             <textarea
-              rows={3}
+              rows={2}
               value={request}
               onChange={(event) => setRequest(event.target.value)}
               placeholder="e.g. Read the merged pull requests since the last release and write customer-facing release notes."
@@ -317,6 +325,20 @@ const SkillEditor: React.FC<{
               data-testid="skill-library-ai-request"
             />
             <div className={styles.aiActions}>
+              <select
+                className={styles.modelSelect}
+                value={draftModelId}
+                onChange={(event) => setDraftModelId(event.target.value)}
+                disabled={generate.isPending}
+                aria-label="Model for the draft"
+                title="Model that writes the draft"
+                data-testid="skill-library-ai-model"
+              >
+                <option value="">Default model</option>
+                {(draftModels.data ?? []).map((model) => (
+                  <option key={model.id} value={model.id}>{model.label}</option>
+                ))}
+              </select>
               <button
                 type="button"
                 className={pageStyles.secondaryButton}

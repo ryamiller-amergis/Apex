@@ -52,9 +52,33 @@ export function useSaveProjectSkill(project: string) {
   });
 }
 
+export interface SkillDraftModel {
+  id: string;
+  label: string;
+}
+
+export function useSkillDraftModels(project: string) {
+  return useQuery({
+    queryKey: ['project-skill-draft-models', project],
+    queryFn: async () => {
+      const data = await apiRequest<{ models: SkillDraftModel[] }>(
+        `/api/playbooks/project-skills/draft-models?${projectQuery(project)}`,
+      );
+      return data.models;
+    },
+    enabled: Boolean(project),
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
 export function useGenerateProjectSkillDraft(project: string) {
   return useMutation({
-    mutationFn: (input: { title: string; skillType: 'autonomous' | 'interactive'; request: string }) =>
+    mutationFn: (input: {
+      title: string;
+      skillType: 'autonomous' | 'interactive';
+      request: string;
+      modelId?: string;
+    }) =>
       apiRequest<{ description: string; instructions: string }>(
         `/api/playbooks/project-skills/draft?${projectQuery(project)}`,
         {

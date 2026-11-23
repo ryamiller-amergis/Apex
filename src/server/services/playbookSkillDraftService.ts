@@ -1,6 +1,6 @@
 import * as mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
-import { invokeBedrockText } from './bedrockService';
+import { invokeBedrockText, listAvailableBedrockModels } from './bedrockService';
 
 const MAX_REQUEST_LENGTH = 4_000;
 const MAX_DESCRIPTION_LENGTH = 300;
@@ -70,6 +70,11 @@ function stripFrontmatter(body: string): string {
   return body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
 }
 
+/** The Bedrock models an author can pick for a draft. The service default is used when none is picked. */
+export async function listSkillDraftModels(): Promise<{ id: string; label: string }[]> {
+  return (await listAvailableBedrockModels()).map((model) => ({ id: model.id, label: model.label }));
+}
+
 /** A draft for the author to edit. Nothing is saved here. */
 export async function generateProjectSkillDraft(input: {
   project: string;
@@ -77,6 +82,8 @@ export async function generateProjectSkillDraft(input: {
   title: string;
   skillType: 'autonomous' | 'interactive';
   request: string;
+  /** A Bedrock model id from listSkillDraftModels(). Blank uses the service default. */
+  modelId?: string;
 }): Promise<ProjectSkillDraft> {
   const title = input.title.trim();
   const request = input.request.trim();
@@ -84,6 +91,10 @@ export async function generateProjectSkillDraft(input: {
   if (!request) throw new ProjectSkillDraftError('Say what the skill should do.');
   if (request.length > MAX_REQUEST_LENGTH) {
     throw new ProjectSkillDraftError(`Keep the request under ${MAX_REQUEST_LENGTH} characters.`);
+  }
+  const modelId = input.modelId?.trim() || undefined;
+  if (modelId && !(await listSkillDraftModels()).some((model) => model.id === modelId)) {
+    throw new ProjectSkillDraftError('That model is not available for drafts. Pick another and try again.');
   }
 
   const reply = await invokeBedrockText(
@@ -94,7 +105,7 @@ export async function generateProjectSkillDraft(input: {
       entityType: 'playbook-skill-draft',
       userId: input.userId,
     },
-    { maxTokens: 8192 },
+    { maxTokens: 8192, modelId },
   );
   const parsed = extractJson(reply);
   const description = typeof parsed.description === 'string' ? parsed.description.trim() : '';

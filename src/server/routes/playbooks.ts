@@ -50,6 +50,7 @@ import { PlaybookSkillFrontmatterError } from '../services/playbookSkillFrontmat
 import {
   extractSkillFileText,
   generateProjectSkillDraft,
+  listSkillDraftModels,
   ProjectSkillDraftError,
 } from '../services/playbookSkillDraftService';
 import type { SkillBundleCompanion } from '../services/playbookSkillBundle';
@@ -815,13 +816,26 @@ router.get(
   },
 );
 
+router.get(
+  '/project-skills/draft-models',
+  requirePermission('skills:manage'),
+  async (_req: Request, res: Response): Promise<void> => {
+    try {
+      res.json({ models: await listSkillDraftModels() });
+    } catch (error) {
+      console.error('[playbooks] skill draft model list failed:', error);
+      res.status(502).json({ error: 'The model list could not be loaded.' });
+    }
+  },
+);
+
 router.post(
   '/project-skills/draft',
   requirePermission('skills:manage'),
   async (req: Request, res: Response): Promise<void> => {
     const project = resolveRequestProject(req);
     const userId = getUserId(req);
-    const { title, skillType, request } = (req.body ?? {}) as Record<string, unknown>;
+    const { title, skillType, request, modelId } = (req.body ?? {}) as Record<string, unknown>;
     if (!project || !userId) {
       res.status(400).json({ error: 'project and a signed-in user are required' });
       return;
@@ -834,8 +848,19 @@ router.post(
       res.status(400).json({ error: 'skillType must be autonomous or interactive' });
       return;
     }
+    if (modelId !== undefined && typeof modelId !== 'string') {
+      res.status(400).json({ error: 'modelId must be a string' });
+      return;
+    }
     try {
-      res.json(await generateProjectSkillDraft({ project, userId, title, skillType, request }));
+      res.json(await generateProjectSkillDraft({
+        project,
+        userId,
+        title,
+        skillType,
+        request,
+        ...(typeof modelId === 'string' ? { modelId } : {}),
+      }));
     } catch (error) {
       if (error instanceof ProjectSkillDraftError) {
         res.status(400).json({ error: error.message });

@@ -1,6 +1,8 @@
 const invokeBedrockText = jest.fn();
+const listBedrockModels = jest.fn();
 jest.mock('../services/bedrockService', () => ({
   invokeBedrockText: (...args: unknown[]) => invokeBedrockText(...args),
+  listAvailableBedrockModels: (...args: unknown[]) => listBedrockModels(...args),
 }));
 
 // pdfjs loads its worker with a dynamic import, which Jest refuses without --experimental-vm-modules.
@@ -18,7 +20,41 @@ import {
 } from '../services/playbookSkillDraftService';
 
 describe('project skill drafts', () => {
-  beforeEach(() => invokeBedrockText.mockReset());
+  beforeEach(() => {
+    invokeBedrockText.mockReset();
+    listBedrockModels.mockReset();
+    listBedrockModels.mockResolvedValue([{ id: 'us.anthropic.claude-sonnet-4-6', label: 'Claude Sonnet 4.6' }]);
+  });
+
+  it('sends the picked model to Bedrock and leaves it unset for the default', async () => {
+    invokeBedrockText.mockResolvedValue('{"description":"d","instructions":"i"}');
+    await generateProjectSkillDraft({
+      project: 'Apex', userId: 'u', title: 'T', skillType: 'autonomous', request: 'Do it',
+      modelId: 'us.anthropic.claude-sonnet-4-6',
+    });
+    expect(invokeBedrockText).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ modelId: 'us.anthropic.claude-sonnet-4-6' }),
+    );
+
+    await generateProjectSkillDraft({
+      project: 'Apex', userId: 'u', title: 'T', skillType: 'autonomous', request: 'Do it',
+    });
+    expect(invokeBedrockText).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ modelId: undefined }),
+    );
+  });
+
+  it('refuses a model that is not on the draft list', async () => {
+    await expect(generateProjectSkillDraft({
+      project: 'Apex', userId: 'u', title: 'T', skillType: 'autonomous', request: 'Do it',
+      modelId: 'made-up-model',
+    })).rejects.toThrow('not available for drafts');
+    expect(invokeBedrockText).not.toHaveBeenCalled();
+  });
 
   it('returns the description and instructions without frontmatter', async () => {
     invokeBedrockText.mockResolvedValue(
