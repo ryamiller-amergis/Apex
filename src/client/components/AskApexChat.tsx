@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAskApex } from '../hooks/useAskApex';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import type { AskApexMessage } from '../hooks/useAskApex';
 import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
 import styles from './AskApexChat.module.css';
@@ -17,6 +18,7 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const modelPicker = useHarnessModelPicker();
   const {
     threadId,
     session,
@@ -50,8 +52,8 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
     const text = inputText.trim();
     if (!text || status === 'streaming' || status === 'preparing') return;
     setInputText('');
-    sendMessage(text);
-  }, [inputText, status, sendMessage]);
+    sendMessage(text, { model: modelPicker.model });
+  }, [inputText, status, modelPicker.model, sendMessage]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -126,9 +128,10 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
             }}
             draft={inputText}
             onDraftChange={setInputText}
-            onSend={(text) => sendMessage(text)}
+            onSend={(text) => sendMessage(text, { model: modelPicker.model })}
             onRetry={retryFailedRun ?? undefined}
             composer={{
+              ...modelPicker,
               placeholder: session.isRunning
                 ? 'Send a follow-up while the agent works…'
                 : 'Ask a question...',

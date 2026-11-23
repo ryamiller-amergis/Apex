@@ -162,10 +162,14 @@ export function useAskApex() {
   }, [connectSse]);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { model?: string }) => {
       if (!sessionId || !text.trim()) return;
       if (threadId) {
-        await chat.send(text.trim());
+        if (options?.model) {
+          await chat.send(text.trim(), { model: options.model });
+        } else {
+          await chat.send(text.trim());
+        }
         return;
       }
       setStatus('streaming');

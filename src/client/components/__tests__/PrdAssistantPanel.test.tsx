@@ -30,6 +30,16 @@ jest.mock('react-markdown', () => ({
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 
+// The model dropdown fetches the model list; these tests count thread-route fetches only.
+jest.mock('../../hooks/useHarnessModelPicker', () => ({
+  useHarnessModelPicker: () => ({
+    model: 'composer-2.5',
+    models: [],
+    modelsLoading: false,
+    onModelChange: () => undefined,
+  }),
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const idleRuntimeState = {

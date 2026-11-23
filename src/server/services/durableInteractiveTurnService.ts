@@ -10,6 +10,7 @@ import type { EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
+import { BRAINSTORM_COLLABORATOR_INSTRUCTIONS } from './brainstormCollaboratorInstructions';
 import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import type {
   DurableInteractiveTurnSpecification,
@@ -175,6 +176,7 @@ function sessionInstructions(
   return [
     ...INTERACTIVE_QUESTION_UI_LINES,
     ...(workflowClass === 'home-chat' ? HOME_CHAT_TURN_CONTRACT_LINES : []),
+    ...(workflowClass === 'brainstorm' ? [BRAINSTORM_COLLABORATOR_INSTRUCTIONS, ''] : []),
     ...(documentGuidance.length > 0 ? [...documentGuidance, ''] : []),
   ];
 }
@@ -669,6 +671,9 @@ function selectedSkill(
   thread: ChatThread,
   turnSkill: ChatTurnSkill | undefined,
 ): ChatTurnSkill | null {
+  // Brainstorm instructions come from code (see sessionInstructions). A Brainstorm
+  // thread created before that change may still store an old skill path; ignore it.
+  if (thread.kickoff.agentModule === 'brainstorm') return null;
   const selectedPath = turnSkill?.path ?? thread.kickoff.skillPath;
   if (!selectedPath?.trim()) return null;
   // Skill paths are stored repository-root relative with a leading slash
@@ -760,6 +765,9 @@ function capabilityMetadata(
   maxviewEnabled: boolean,
 ): InteractiveClassificationInput['capabilityMetadata'] {
   const capabilities: InteractiveCapability[] = ['plain-chat'];
+  // Brainstorm turns call the artifact tool and source tools. Without a skill,
+  // this keeps them in the agentic class they had when the skill was attached.
+  if (thread.kickoff.agentModule === 'brainstorm') capabilities.push('tool-heavy');
   if (attachmentCount > 0) capabilities.push('attachments');
   if (
     thread.kickoff.mcpPill ||
@@ -1151,9 +1159,7 @@ async function defaultLoadSkill(
   if (hasSeparateSkillRepo(input.thread)) {
     pinnedReader = branchTipReader(input.thread);
   } else if (!input.grounding) {
-    // Brainstorm keeps its source checkouts separate from this turn, and still
-    // reads its skill from the Project Settings repository and branch.
-    if (!input.readBranchTip && input.thread.kickoff.agentModule !== 'brainstorm') {
+    if (!input.readBranchTip) {
       warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
       throw unavailableSkill();
     }

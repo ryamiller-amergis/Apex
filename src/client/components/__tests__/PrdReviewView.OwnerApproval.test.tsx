@@ -88,6 +88,10 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
   useProjectSkillConfig: (...args: unknown[]) => mockUseProjectSkillConfig(...args),
 }));
 
+jest.mock('../../hooks/useHarnessModelPicker', () => ({
+  useHarnessModelPicker: () => ({ model: 'test-model', models: [], modelsLoading: false, onModelChange: jest.fn() }),
+}));
+
 jest.mock('../../hooks/useReviewComments', () => ({
   useReviewComments: jest.fn(() => ({ data: [] })),
   useUnresolvedCommentCount: jest.fn(() => ({ data: { count: 0 } })),

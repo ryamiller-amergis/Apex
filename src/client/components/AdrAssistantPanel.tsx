@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { InterviewAgentMessage } from './InterviewChatView';
 import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
 import type { HarnessTranscriptItem } from '../chatHarness/types';
@@ -43,6 +44,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
     area: 'adr',
     harnessArea: 'adr',
   });
+  const modelPicker = useHarnessModelPicker();
   const {
     attachments,
     attachmentError,
@@ -125,8 +127,8 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const sendText = useCallback(async (messageText: string) => {
     const text = messageText.trim();
     if (!text) return;
-    await session.send(text);
-  }, [session]);
+    await session.send(text, { model: modelPicker.model });
+  }, [modelPicker.model, session]);
 
   const send = useCallback(async (messageInput?: string) => {
     const text = (messageInput ?? input).trim();
@@ -134,12 +136,12 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
     if (!text && outgoing.length === 0) return;
     const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    const sent = await session.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const sent = await session.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, clearAttachments, input, session]);
+  }, [attachments, clearAttachments, input, modelPicker.model, session]);
 
   if (!open) return null;
   const visibleMessages = messages.filter((message) =>
@@ -256,6 +258,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
             </div>
           )}
           composer={{
+            ...modelPicker,
             disabled: !threadId || isCreating || isSending,
             allowEmptySend: true,
             placeholder: isRunning

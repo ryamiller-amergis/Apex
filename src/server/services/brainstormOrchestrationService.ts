@@ -3,7 +3,6 @@ import { db } from '../db/drizzle';
 import { appUsers, userProfiles } from '../db/schema';
 import {
   BRAINSTORM_BIO_MAX_LENGTH,
-  BRAINSTORM_SKILL_PATH,
   type BrainstormTurnAcceptedResponse,
 } from '../../shared/types/brainstorm';
 import type {
@@ -202,8 +201,8 @@ async function defaultIsV2TransportEnabled(userId: string, project: string): Pro
   return isFeatureEnabled('ai-runs-v2-transport', { userId, project, caller: 'brainstorm' }).catch(() => false);
 }
 
-/** Points an existing session at the Project Settings repository before the turn reads the skill. */
-async function stampBrainstormSkillKickoff(threadId: string): Promise<void> {
+/** Points an existing session at the current Project Settings repository before the turn runs. */
+async function stampBrainstormRepositoryKickoff(threadId: string): Promise<void> {
   const { getThread, updateThreadKickoff } = await import('./chatAgentService');
   const { resolveSkillConfig } = await import('./projectSettingsService');
   const thread = await getThread(threadId);
@@ -221,15 +220,13 @@ async function stampBrainstormSkillKickoff(threadId: string): Promise<void> {
     ...(skillProvider ? { skillProvider } : {}),
     ...(repo ? { skillRepo: repo } : {}),
     skillBranch: branch,
-    skillPath: BRAINSTORM_SKILL_PATH,
-    skillPathIsAppDefault: true,
     ...(skillConfig?.id ? { skillSettingsId: thread.kickoff.skillSettingsId ?? skillConfig.id } : {}),
   });
 }
 
 async function defaultSendTurn(input: SendBrainstormTurnInput): Promise<InteractiveTurnAcceptedResponse> {
   const { sendMessage } = await import('./chatAgentService');
-  await stampBrainstormSkillKickoff(input.threadId);
+  await stampBrainstormRepositoryKickoff(input.threadId);
   const submission = await sendMessage(
     input.threadId,
     input.text,

@@ -9,6 +9,7 @@ import {
 } from '../hooks/useCalendarWorkItemAssistant';
 import { CalendarWorkItemChangesReview } from './CalendarWorkItemChangesReview';
 import { useChatAttachments } from '../hooks/useChatAttachments';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { AgentHarnessPanel, AgentPanelShell } from './agentChat';
 import type { HarnessTranscriptItem } from '../chatHarness/types';
 import type { WorkItemHierarchyNode } from '../../shared/types/calendarWorkItemAssistant';
@@ -90,6 +91,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
   const latestProposal = sessionData?.latestProposal ?? null;
 
   const chat = useCalendarAssistantChat(threadId);
+  const modelPicker = useHarnessModelPicker();
   const {
     attachments,
     attachmentError,
@@ -187,13 +189,13 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
     const message = trimmed || 'Please use the attached files as additional context.';
     setIsSending(true);
     try {
-      const sent = await chat.sendMessage(message, outgoing);
+      const sent = await chat.sendMessage(message, { attachments: outgoing, model: modelPicker.model });
       if (sent && outgoing.length > 0) clearAttachments();
       return sent;
     } finally {
       setIsSending(false);
     }
-  }, [attachments, chat, clearAttachments, isRunning, isSending, threadId]);
+  }, [attachments, chat, clearAttachments, isRunning, isSending, modelPicker.model, threadId]);
 
   const handleNewConversation = useCallback(async () => {
     setShowNewConvConfirm(false);
@@ -532,6 +534,7 @@ export const CalendarWorkItemAssistantPanel: React.FC<Props> = ({
                 ) : undefined,
               }}
               composer={{
+                ...modelPicker,
                 disabled: isSending || !threadId,
                 allowEmptySend: true,
                 placeholder: isRunning

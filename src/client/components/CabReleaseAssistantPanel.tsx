@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AgentHarnessPanel, AgentPanelShell } from './agentChat';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useStartChat } from '../hooks/useChatThreads';
 import { useProjectSkillConfig } from '../hooks/useProjectSkillConfig';
@@ -66,6 +67,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     harnessArea: 'cab-release',
     area: 'cab-release',
   });
+  const modelPicker = useHarnessModelPicker();
   const {
     attachments,
     attachmentError,
@@ -197,13 +199,13 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     const outgoing = [...attachments];
     if (!trimmed && outgoing.length === 0) return false;
     const message = trimmed || 'Please use the attached files as additional context.';
-    const sent = await session.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const sent = await session.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
     return sent;
-  }, [attachments, clearAttachments, session]);
+  }, [attachments, clearAttachments, modelPicker.model, session]);
 
   const handleConfirmProdPromotion = useCallback(() => {
     if (!threadId || session.isRunning || session.isSending) return;
@@ -212,8 +214,9 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
     setShowProdConfirm(false);
     void session.send(
       `Confirmed: proceed with Production SNOW CAB request (definition 595 / mv-application-prod-snow.yml) for ${targetVersion}.`,
+      { model: modelPicker.model },
     );
-  }, [session, targetVersion, threadId]);
+  }, [modelPicker.model, session, targetVersion, threadId]);
 
   const composerDisabled = session.isRunning || session.isSending || isCreating || !threadId;
 
@@ -334,6 +337,7 @@ export const CabReleaseAssistantPanel: React.FC<CabReleaseAssistantPanelProps> =
             proposal: proposalContent,
           }}
           composer={{
+            ...modelPicker,
             disabled: session.isSending || isCreating || !threadId,
             allowEmptySend: true,
             placeholder: isCreating || skillConfigPending

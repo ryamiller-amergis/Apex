@@ -26,6 +26,8 @@ jest.mock('../../hooks/useProjectSkillConfig', () => ({
     isError: false,
     error: null,
   }),
+  useAvailableModels: () => ({ data: [], isLoading: false }),
+  useGlobalDefaultModel: () => ({ data: undefined }),
 }));
 
 jest.mock('../../hooks/useAgentChatSession', () => ({

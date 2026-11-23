@@ -1220,7 +1220,7 @@ export const RECORDED_HARNESS_STREAMS: Readonly<
   brainstorm: {
     area: 'brainstorm',
     context: { kind: 'brainstorm-session', id: 'bs-701' },
-    skillPath: '.cursor/skills/brainstorm/SKILL.md',
+    skillPath: null,
     model: 'claude-sonnet-4-6',
     areaKeyContext: 'Brainstorm session bs-701: Offline-resilient composer UX',
     normalTurn: {

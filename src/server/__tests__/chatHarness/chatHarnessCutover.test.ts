@@ -141,7 +141,6 @@ const LEGACY_KICKOFF_BY_AREA: Record<HarnessAreaId, ChatThreadKickoff> = {
     repo: 'AI-Pilot',
     branch: 'main',
     agentModule: 'brainstorm',
-    skillPath: '.cursor/skills/brainstorm/SKILL.md',
   },
   'cab-release': {
     project: 'Apex',

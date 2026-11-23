@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useChatThread } from '../hooks/useChatThreads';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useAppShell } from '../hooks/useAppShell';
 import { useSpeechInput } from '../hooks/useSpeechInput';
@@ -208,6 +209,7 @@ export const StandupCeremonyView: React.FC = () => {
     harnessArea: 'standup-participant',
     area: 'standup-participant',
   });
+  const modelPicker = useHarnessModelPicker();
   const {
     messages,
     streamingText,
@@ -263,13 +265,13 @@ export const StandupCeremonyView: React.FC = () => {
     if ((!trimmed && outgoing.length === 0) || !threadId) return false;
     if (speech.isListening) speech.stop();
     const message = trimmed || 'Please use the attached files as additional context.';
-    const sent = await chatSession.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const sent = await chatSession.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
     return sent;
-  }, [attachments, chatSession, clearAttachments, speech, threadId]);
+  }, [attachments, chatSession, clearAttachments, modelPicker.model, speech, threadId]);
 
   const handleSubmit = useCallback(async () => {
     if (!session) return;
@@ -452,6 +454,7 @@ export const StandupCeremonyView: React.FC = () => {
               </div>
             )}
             composer={{
+              ...modelPicker,
               hideComposer: isSubmitted,
               disabled: chatSession.isSending,
               allowEmptySend: true,

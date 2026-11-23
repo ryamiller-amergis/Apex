@@ -98,6 +98,39 @@ export const HARNESS_AREA_IDS = [
 
 export type HarnessAreaId = (typeof HARNESS_AREA_IDS)[number];
 
+/**
+ * Composer controls a harness area shows. The model dropdown is standard on every
+ * area: each area takes it from `useHarnessModelPicker` and spreads it into
+ * `AgentHarnessPanel`'s `composer` config. `modeOptions` and `linkedContext` are
+ * optional per-area controls. An area that sets one renders its own picker through
+ * `composer.modeBadge` or `slots.composerAccessory`.
+ */
+export type HarnessModeOptions = 'artifact-type' | null;
+export type HarnessLinkedContext = 'interview-references' | null;
+
+export interface HarnessComposerCapabilities {
+  readonly modelPicker: true;
+  readonly modeOptions: HarnessModeOptions;
+  readonly linkedContext: HarnessLinkedContext;
+}
+
+export const HARNESS_COMPOSER_CAPABILITIES: Readonly<
+  Record<HarnessAreaId, HarnessComposerCapabilities>
+> = {
+  'agent-home': { modelPicker: true, modeOptions: null, linkedContext: null },
+  interview: { modelPicker: true, modeOptions: null, linkedContext: 'interview-references' },
+  adr: { modelPicker: true, modeOptions: null, linkedContext: null },
+  'prd-assistant': { modelPicker: true, modeOptions: null, linkedContext: null },
+  'design-doc-assistant': { modelPicker: true, modeOptions: null, linkedContext: null },
+  'ask-apex': { modelPicker: true, modeOptions: null, linkedContext: null },
+  'calendar-work-item': { modelPicker: true, modeOptions: null, linkedContext: null },
+  'qa-lab': { modelPicker: true, modeOptions: null, linkedContext: null },
+  brainstorm: { modelPicker: true, modeOptions: 'artifact-type', linkedContext: null },
+  'cab-release': { modelPicker: true, modeOptions: null, linkedContext: null },
+  'build-intake': { modelPicker: true, modeOptions: null, linkedContext: null },
+  'standup-participant': { modelPicker: true, modeOptions: null, linkedContext: null },
+};
+
 export const HARNESS_COMMAND_KINDS = [
   'send',
   'steer',

@@ -567,7 +567,9 @@ const DEFAULT_AREA_PROFILES: ReadonlyArray<AreaProfile> = [
     workflowClass: 'brainstorm',
     permission: 'brainstorm:create',
     settingsLane: 'brainstorm',
-    requiresSkill: true,
+    // The collaborator's instructions ship in code (brainstormCollaboratorInstructions.ts).
+    // The project lane only supplies model and effort.
+    requiresSkill: false,
     contextKinds: ['brainstorm-session'],
     toolAllowlist: FULL_REPO_READ_TOOLS,
     disallowedTools: SHELL_ONLY_DISALLOWED_TOOLS,

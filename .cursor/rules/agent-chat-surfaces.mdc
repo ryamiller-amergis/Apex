@@ -49,8 +49,8 @@ area-specific UI through its five slots rather than duplicating the panel shell 
 
 - `header` — area title, status badges, or top-bar actions.
 - `sidePanel` — optional side drawer or inspector beside the conversation.
-- `composerAccessory` — controls near the composer (model picker, mode/skill selector, context
-  attachments).
+- `composerAccessory` — controls near the composer that are specific to the area (mode/skill
+  selector, linked-context chips). The model picker is **not** a slot; see "Model picker" below.
 - `messageActions` — per-message controls (ratings, copy, follow-up actions).
 - `proposal` — proposed edits or domain writes; writes wait for explicit user confirmation and are
   never auto-approved.
@@ -96,6 +96,24 @@ Governed surfaces keep one consistent composer experience and expose `steer` and
   state independently in client components.
 - Read-only users (`canWrite: false`) cannot send, steer, summarize, cancel, or rate. Disable or
   hide those controls when `canWrite` is `false`.
+
+## Model picker and composer capabilities
+
+Every governed surface shows the same model dropdown on the left of the composer. Do not build a
+per-area model picker.
+
+- Call `useHarnessModelPicker(threadModel?)` (`src/client/hooks/useHarnessModelPicker.ts`), spread
+  its result into the `composer` prop, and send `model: modelPicker.model` with each `send`. Pass
+  the thread's model when the thread already has one; otherwise the hook uses the admin default,
+  then `DEFAULT_MODEL_ID`.
+- Declare what the area's composer shows in `HARNESS_COMPOSER_CAPABILITIES`
+  (`src/shared/types/chatHarness.ts`): `modelPicker` is always `true`, `modeOptions` is the
+  per-area mode selector (`'artifact-type'` for Brainstorm, `null` otherwise), and `linkedContext`
+  is the per-area linked-context chips (`'interview-references'` for Interviews, `null` otherwise).
+- Area-specific mode and linked-context controls go in `composerAccessory`. Keep their options
+  in the area's config, not in the shared picker.
+- `src/server/__tests__/chatHarness/harnessComposerCapabilities.test.ts` fails when an area id is
+  missing from the map, so add the new area there too.
 - **No new bespoke transport endpoints**: `sendEndpoint`, `cancelEndpoint`, and `retryEndpoint`
   overrides exist only for legacy migrations (e.g. Brainstorm). New areas must use the shared
   harness command channel paired with server `areaHooks` (`src/server/services/chatHarness/areaHooks.ts`).
@@ -121,16 +139,20 @@ const session = useAgentChatSession(threadId, {
   enablePreparationState: true,
   beforeSend: async () => { /* confirm / sync token */ },
 });
+const modelPicker = useHarnessModelPicker(thread?.model);
 
 <AgentHarnessPanel
   session={session}
   testIdPrefix="my-area-chat"
+  composer={{ ...modelPicker }}
   slots={{
     header: <MyAreaHeader />,
-    composerAccessory: <MyModelPicker />,
+    composerAccessory: <MyModeSelector />,
     proposal: <MyConfirmationCard />,
   }}
 />;
+
+// Send with the picked model: session.send(text, { model: modelPicker.model })
 
 // ❌ BAD — new chat area skips the area profile, AgentHarnessPanel, and useAgentChatSession
 const socket = new WebSocket(`/api/custom-chat/${threadId}`);

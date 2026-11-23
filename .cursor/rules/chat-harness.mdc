@@ -27,7 +27,8 @@ Standardize 100% of chat mechanics (transport, streaming, live work, mid-turn st
 7. **Emit a running `phase` event immediately after in-turn agent recreation.** Whenever `recreateAfterUnresponsiveAgent()` (or an equivalent retry path) acquires a fresh agent after publishing `type: 'retrying'`, publish `{ type: 'phase', phase: 'analysis', status: 'running', detail: 'Thinking…' }` so clients leave the reconnecting state immediately instead of waiting for the first answer token.
 8. **Keep write confirmations explicit.** Every `writes: true` custom tool stages a proposal only and never mutates domain state directly; apply/reject always goes through an explicit user-triggered REST confirmation endpoint.
 9. **Never surface raw queue/worker terms to users.** Keep machine-readable progress labels in DB/events for the reaper, and route all UI display text through `friendlyChatProgressLabel` / `AgentRunStatusText` (`Starting…`, `Thinking…`, or `Waiting for your other chat to finish` — never `Queued` or `Dispatched`).
-10. **Add no new Skill file** under `.cursor/skills/` for chat-harness plumbing.
+10. **Add no new Skill file** under `.cursor/skills/` for chat-harness plumbing or for an area's built-in instructions. Ship those as a server constant (for example `src/server/services/brainstormCollaboratorInstructions.ts`) and add it through the durable turn service's `sessionInstructions` for that workflow class. Project-level skills stay where they are.
+11. **Declare the composer capabilities** for the area in `HARNESS_COMPOSER_CAPABILITIES` (`src/shared/types/chatHarness.ts`), and show the model dropdown through `useHarnessModelPicker` (`src/client/hooks/useHarnessModelPicker.ts`). Do not add a per-area model picker. See `.cursor/rules/agent-chat-surfaces.mdc` → "Model picker and composer capabilities".
 
 ## `@cursor/sdk` import boundary
 

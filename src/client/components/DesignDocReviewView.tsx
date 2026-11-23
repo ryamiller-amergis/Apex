@@ -41,6 +41,7 @@ import {
 } from '../hooks/useInterviews';
 import { ProposedDesignDocChangesReview } from './ProposedDesignDocChangesReview';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import {
   AgentHarnessPanel,
@@ -393,6 +394,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
   const skipAutoCreateRef = useRef(false);
   const qc = useQueryClient();
 
+  const modelPicker = useHarnessModelPicker();
   const session = useAgentChatSession(threadId, {
     locked: readOnly,
     harnessArea: 'design-doc-assistant',
@@ -551,13 +553,13 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
     const outgoing = [...attachments];
     if (!text && outgoing.length === 0) return false;
     const message = text || 'Please use the attached files as additional context.';
-    const sent = await session.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const sent = await session.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
     return sent;
-  }, [attachments, clearAttachments, readOnly, session]);
+  }, [attachments, clearAttachments, modelPicker.model, readOnly, session]);
 
   const rawMessages = session.visibleMessages ?? messages;
   const visibleMessages = useMemo(
@@ -675,6 +677,7 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
           slots={proposal ? { proposal } : undefined}
           fallbackProgressLabel="Starting agent…"
           composer={{
+            ...modelPicker,
             allowEmptySend: true,
             disabled: isCreating || !threadId,
             placeholder: isCreating

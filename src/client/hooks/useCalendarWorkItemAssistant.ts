@@ -170,9 +170,16 @@ export function useCalendarAssistantChat(threadId: string | null) {
     area: 'calendar-assistant',
   });
 
-  const sendMessage = useCallback(async (text: string, attachments?: ChatAttachment[]) => {
-    return session.send(text, attachments?.length ? { attachments } : undefined);
-  }, [session]);
+  const sendMessage = useCallback(
+    async (text: string, options?: { attachments?: ChatAttachment[]; model?: string }) => {
+      const attachments = options?.attachments;
+      return session.send(text, {
+        ...(options?.model ? { model: options.model } : {}),
+        ...(attachments?.length ? { attachments } : {}),
+      });
+    },
+    [session],
+  );
 
   const cancelRun = useCallback(async () => {
     await session.cancel();

@@ -3,7 +3,6 @@ import {
   isHarnessContextRef,
   type HarnessContextRef,
 } from '../../../shared/types/chatHarness';
-import { BRAINSTORM_SKILL_PATH } from '../../../shared/types/brainstorm';
 import { BUILD_INTAKE_OPTION_KEY } from '../../../shared/types/buildPreflight';
 import type {
   FrozenHarnessCustomTool,
@@ -153,15 +152,8 @@ function resolveProjectLaneSkillPath(
     case 'test_case':
       return nonEmptyTrimmed(config.testCaseSkillPath);
     case 'brainstorm':
-      return nonEmptyTrimmed(
-        findMatchingQuickPill(config, (p) => {
-          const normalized = p.replace(/\\/g, '/').toLowerCase();
-          return (
-            normalized === BRAINSTORM_SKILL_PATH.toLowerCase() ||
-            normalized.includes('/brainstorm/')
-          );
-        })?.skillPath,
-      );
+      // Brainstorm instructions ship in code; no project skill is read.
+      return null;
     case 'cab_release':
       return nonEmptyTrimmed(
         findMatchingQuickPill(config, (p) => isCabReleaseSkillPath(p))?.skillPath,
@@ -213,13 +205,8 @@ function resolveProjectLaneModel(
       return nonEmptyTrimmed(config.testCaseModel);
     case 'brainstorm':
       return nonEmptyTrimmed(
-        findMatchingQuickPill(config, (p) => {
-          const normalized = p.replace(/\\/g, '/').toLowerCase();
-          return (
-            normalized === BRAINSTORM_SKILL_PATH.toLowerCase() ||
-            normalized.includes('/brainstorm/')
-          );
-        })?.model,
+        findMatchingQuickPill(config, (p) => p.replace(/\\/g, '/').toLowerCase().includes('/brainstorm/'))
+          ?.model,
       );
     case 'cab_release':
       return nonEmptyTrimmed(
@@ -278,13 +265,8 @@ function resolveProjectLaneEffort(
       candidate = config.testCaseEffort;
       break;
     case 'brainstorm':
-      candidate = findMatchingQuickPill(config, (p) => {
-        const normalized = p.replace(/\\/g, '/').toLowerCase();
-        return (
-          normalized === BRAINSTORM_SKILL_PATH.toLowerCase() ||
-          normalized.includes('/brainstorm/')
-        );
-      })?.effort;
+      candidate = findMatchingQuickPill(config, (p) => p.replace(/\\/g, '/').toLowerCase().includes('/brainstorm/'))
+        ?.effort;
       break;
     case 'cab_release':
       candidate = findMatchingQuickPill(config, (p) =>
@@ -371,7 +353,7 @@ export async function resolveAreaProfile(
       path: explicitSkillPath,
       source: 'turn-override',
     };
-  } else {
+  } else if (profile.requiresSkill) {
     const projectSkillPath = resolveProjectLaneSkillPath(
       profile.settingsLane,
       skillConfig,

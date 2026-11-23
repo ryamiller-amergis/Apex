@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import {
   AgentHarnessPanel,
   AgentMessage,
@@ -67,6 +68,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     harnessArea: 'prd-assistant',
     area: 'prd-assistant',
   });
+  const modelPicker = useHarnessModelPicker();
   const {
     attachments,
     attachmentError,
@@ -171,13 +173,13 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
     const outgoing = [...attachments];
     if (!text && outgoing.length === 0) return false;
     const message = text || 'Please use the attached files as additional context.';
-    const sent = await session.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const sent = await session.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
     return sent;
-  }, [attachments, clearAttachments, session]);
+  }, [attachments, clearAttachments, modelPicker.model, session]);
 
   const rawMessages = session.visibleMessages ?? messages;
   const visibleMessages = useMemo(
@@ -323,6 +325,7 @@ export const PrdAssistantPanel: React.FC<PrdAssistantPanelProps> = ({
             slots={resolvedProposal ? { proposal: resolvedProposal } : undefined}
             fallbackProgressLabel="Starting agent…"
             composer={{
+              ...modelPicker,
               allowEmptySend: true,
               disabled: isCreating || !threadId,
               placeholder: isCreating
