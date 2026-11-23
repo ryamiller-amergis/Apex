@@ -6,6 +6,7 @@ import {
   extractAgentPullRequestDescription,
 } from './implementationDelivery';
 import { parsePullRequestNumber } from './workItemPrLinkService';
+import { debugTrace } from '../utils/motreollDebugTrace';
 
 /** Azure DevOps pull-request label applied to every Cloud Agent pull request. */
 export const CLOUD_AGENT_PULL_REQUEST_LABEL = 'apex-cloud-agent';
@@ -79,6 +80,14 @@ export async function openCloudAgentPullRequest(
       input.project,
       input.sourceBranch,
     );
+    debugTrace('cloud-agent.pr-create', {
+      workItemId: input.workItemId,
+      sourceBranch: input.sourceBranch,
+      targetBranch: input.targetBranch,
+      auth: input.adoUserToken ? 'developer-token' : 'service-account-ADO_PAT',
+      action: existing ? 'reuse-existing' : 'create-new',
+      existingPrUrl: existing ?? null,
+    });
     if (existing) {
       try {
         await alignExistingPullRequest(ado, {
@@ -116,6 +125,7 @@ export async function openCloudAgentPullRequest(
       description,
       workItemId: input.workItemId,
     });
+    debugTrace('cloud-agent.pr-create', { workItemId: input.workItemId, action: 'created', prUrl });
     try {
       await alignExistingPullRequest(ado, {
         repo: input.repo,

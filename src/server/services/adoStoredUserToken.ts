@@ -13,6 +13,7 @@ import {
   encryptMcpServerCredential,
 } from './mcpServerCredentialCrypto';
 import { getUserId } from '../utils/requestUser';
+import { debugTrace } from '../utils/motreollDebugTrace';
 
 /** Binds the ciphertext to its row, so a token copied to another user does not decrypt. */
 function binding(userId: string) {
@@ -36,10 +37,22 @@ export async function saveAdoRefreshToken(userId: string, refreshToken: string):
 /** Saves the signed-in user's refresh token. Logs and continues on failure. */
 export async function saveRequestAdoRefreshToken(req: Request): Promise<void> {
   const refreshToken: string | undefined = (req as { user?: { refreshToken?: string } }).user?.refreshToken;
-  if (!refreshToken) return;
+  debugTrace('ado-token.save', {
+    userId: getUserId(req),
+    hasRefreshToken: Boolean(refreshToken),
+    isDevMock: refreshToken === DEV_MOCK_REFRESH_TOKEN,
+  });
+  if (!refreshToken) {
+    console.warn('[ado-stored-token] the sign-in returned no refresh token, so no Azure DevOps token was saved', JSON.stringify({
+      userId: getUserId(req),
+    }));
+    return;
+  }
   try {
     await saveAdoRefreshToken(getUserId(req), refreshToken);
+    debugTrace('ado-token.save', { userId: getUserId(req), outcome: 'saved-or-skipped' });
   } catch (err) {
+    debugTrace('ado-token.save', { userId: getUserId(req), outcome: 'error', error: err instanceof Error ? err.message : String(err) });
     console.warn(
       '[ado-stored-token] could not save the Azure DevOps refresh token',
       err instanceof Error ? err.message : String(err),
@@ -82,14 +95,24 @@ export async function getStoredAdoTokenForUser(userId: string): Promise<string |
   const row = await db.query.userAdoCredentials.findFirst({
     where: eq(userAdoCredentials.userId, userId),
   });
-  if (!row) return null;
+  if (!row) {
+    debugTrace('ado-token.redeem', { userId, outcome: 'no-saved-row' });
+    return null;
+  }
   const client = getMsalClient();
-  if (!client) return null;
+  if (!client) {
+    debugTrace('ado-token.redeem', { userId, outcome: 'no-msal-client' });
+    return null;
+  }
 
   try {
     const refreshToken = decryptMcpServerCredential(row.encryptedRefreshToken, binding(userId));
     const result = await client.acquireTokenByRefreshToken({ refreshToken, scopes: [ADO_SCOPE] });
-    if (!result?.accessToken) return null;
+    if (!result?.accessToken) {
+      debugTrace('ado-token.redeem', { userId, outcome: 'no-access-token' });
+      return null;
+    }
+    debugTrace('ado-token.redeem', { userId, outcome: 'redeemed', savedAt: row.updatedAt });
     const rotated = cachedRefreshToken(client, result.account?.homeAccountId);
     if (rotated && rotated !== refreshToken) {
       await saveAdoRefreshToken(userId, rotated).catch((err) => {
@@ -101,6 +124,7 @@ export async function getStoredAdoTokenForUser(userId: string): Promise<string |
     }
     return result.accessToken;
   } catch (err) {
+    debugTrace('ado-token.redeem', { userId, outcome: 'redeem-failed', error: err instanceof Error ? err.message : String(err) });
     console.warn('[ado-stored-token] saved Azure DevOps token did not redeem', JSON.stringify({
       userId,
       error: err instanceof Error ? err.message : String(err),

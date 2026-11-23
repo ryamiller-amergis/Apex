@@ -11,6 +11,7 @@ import {
   DEV_ENV_ACCESS_DENIED_MESSAGE,
 } from '../../shared/types/devEnvAllowlist';
 import { isDevEnvironmentAllowed } from '../services/devEnvAllowlistService';
+import { saveRequestAdoRefreshToken } from '../services/adoStoredUserToken';
 import { isTestAccountEmail } from '../../shared/constants/testAccounts';
 
 const router = express.Router();
@@ -212,6 +213,8 @@ router.get(
           return res.redirect('/auth/login-failed');
         }
         console.log('User logged in successfully');
+        // Fire-and-forget: save the Azure DevOps refresh token so My Work and Playbook runs can open PRs as this user.
+        saveRequestAdoRefreshToken(req).catch(() => undefined);
         if (!userEmail) {
           console.warn('[auth] No email found in profile claims:', Object.keys(user.profile ?? {}));
         }
