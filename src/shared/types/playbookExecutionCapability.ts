@@ -23,6 +23,11 @@ export interface PlaybookAgentRunPolicy {
     path: string;
     sha256: string;
   };
+  /**
+   * Set when the skill is a project skill version. Instruction-file changes alter this hash.
+   * Foundation skills leave it unset and keep the single-file hash in `skill.sha256`.
+   */
+  bundleSha256?: string;
   repository?: {
     provider: 'github' | 'azure-devops';
     repository: string;
@@ -58,6 +63,8 @@ export function isPlaybookAgentRunPolicy(value: unknown): value is PlaybookAgent
     && typeof skill?.path === 'string'
     && typeof skill.sha256 === 'string'
     && /^[a-f0-9]{64}$/i.test(skill.sha256)
+    && (policy.bundleSha256 === undefined
+      || (typeof policy.bundleSha256 === 'string' && /^[a-f0-9]{64}$/i.test(policy.bundleSha256)))
     && Array.isArray(policy.mcpServers)
     && Boolean(localAgent)
     && (localAgent?.cwdMode === 'scratch' || localAgent?.cwdMode === 'repository')

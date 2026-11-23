@@ -5,6 +5,7 @@ import {
   playbookRuns,
   playbookStepRuns,
 } from '../db/schema';
+import { closeInteractiveThreads } from './playbookSteps/interactiveAgentAdapter';
 import { getUserPermissions } from './rbacService';
 import * as playbookEngine from './playbookEngine';
 import type {
@@ -41,6 +42,7 @@ interface ActionStep {
   stepId: string;
   stepType: string;
   status: string;
+  resumeToken: string | null;
 }
 
 interface ActionContext {
@@ -272,6 +274,7 @@ export function createPlaybookRunActionService(dependencies: ActionDependencies)
       if (!(await dependencies.cancelRows(context.runId))) {
         throw new PlaybookRunActionConflictError('The run changed before cancellation completed.');
       }
+      await closeInteractiveThreads(context.steps);
 
       console.info('playbook.run.cancelled', {
         project: context.project,

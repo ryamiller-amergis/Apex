@@ -131,6 +131,7 @@ describe('TBI-016 VT-02 — the three production step types', () => {
       'cursor-agent',
       'foreach',
       'ingest-artifact',
+      'interactive-agent',
       'interview',
       'join',
       'notify',

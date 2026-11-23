@@ -191,6 +191,47 @@ const BRANCH_OUTPUT_SCHEMA = z.object({
   continuation: z.string().min(1),
 });
 
+const INTERACTIVE_AGENT_INPUT_SCHEMA = z.object({
+  skillPath: z.string().min(1).optional(),
+  prompt: z.string().min(1),
+  model: z.string().optional(),
+  mcpProfile: z.literal('repository-read-only'),
+  assigneeUserId: z.string().min(1).optional(),
+  assigneeEmail: z.string().email().optional(),
+  deadlineMs: z
+    .number()
+    .refine(
+      (value) =>
+        Number.isFinite(value) &&
+        value >= INTERVIEW_MIN_DEADLINE_MS &&
+        value <= INTERVIEW_MAX_DEADLINE_MS,
+      'must be from 1 hour through 14 days',
+    )
+    .optional(),
+  outcomes: z
+    .array(z.string().regex(PLAYBOOK_OUTCOME_PATTERN))
+    .min(2)
+    .max(PLAYBOOK_MAX_OUTCOMES)
+    .refine((values) => new Set(values).size === values.length, 'outcomes must be different')
+    .optional(),
+}).superRefine((value, ctx) => {
+  if (!value.assigneeUserId && !value.assigneeEmail) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Choose an assignee.',
+      path: ['assigneeEmail'],
+    });
+  }
+});
+
+const INTERACTIVE_AGENT_OUTPUT_SCHEMA = z.object({
+  threadId: z.string().min(1),
+  approvedBy: z.string().min(1),
+  completedAt: READABLE_TIMESTAMP,
+  output: z.string().min(1),
+  outcome: z.string().optional(),
+});
+
 const INTERVIEW_INPUT_SCHEMA = z.object({
   mode: z.enum(['human_led', 'multi_agent_assisted']),
   profileKey: z.string().refine((value) => value.trim().length > 0, 'must be nonblank'),
@@ -501,6 +542,20 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     outputSchema: LOOP_OUTPUT_SCHEMA,
   },
   {
+    stepType: 'interactive-agent',
+    schemaVersion: 1,
+    canSuspend: true,
+    defaultDeadlineMs: INTERVIEW_DEADLINE_MS,
+    deadlineOverridable: true,
+    suspendReason: 'interactive_agent',
+    isAgentStep: true,
+    // Read-only profiles are exempt from the approval-gate rule, the same way a cursor-agent is.
+    sideEffect: 'leaves-apex',
+    requiredPermissions: ['playbooks:run'],
+    inputSchema: INTERACTIVE_AGENT_INPUT_SCHEMA,
+    outputSchema: INTERACTIVE_AGENT_OUTPUT_SCHEMA,
+  },
+  {
     stepType: 'build',
     schemaVersion: 1,
     canSuspend: true,
@@ -735,7 +790,7 @@ export function resolveDeadlineMs(stepType: string, overrideMs?: number): number
   }
 
   if (
-    stepType === 'interview' &&
+    (stepType === 'interview' || stepType === 'interactive-agent') &&
     (overrideMs < INTERVIEW_MIN_DEADLINE_MS || overrideMs > INTERVIEW_MAX_DEADLINE_MS)
   ) {
     throw new PlaybookStepTypeError(
@@ -844,6 +899,7 @@ export function validateStepTypeRegistry(
     'foreach',
     'until',
     'build',
+    'interactive-agent',
   ];
   const missing = expected.filter((stepType) => !registry.has(stepType));
 

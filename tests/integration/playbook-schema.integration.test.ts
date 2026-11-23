@@ -685,9 +685,14 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     const lastPlaybook = files.findLastIndex((file) =>
       file.startsWith('20260918') || file.startsWith('20260919') || file.startsWith('20260922')
     );
-    // Interview migrations landed after the Playbook window and reference those tables.
-    // Reverse them before the windowed rollback, or playbook_step_runs cannot be dropped.
+    // Later migrations sit outside the Playbook window. Reverse the ones whose tables or
+    // indexes are named playbook, or the rollback check still finds them. Interview files
+    // also have to go first, or playbook_step_runs cannot be dropped.
     for (const file of [
+      '20261120100000_widen-skill-file-names.sql',
+      '20261119130000_drop-skill-reference-approval.sql',
+      '20261118113000_skill-library-permissions.sql',
+      '20261118103000_project-playbook-skills.sql',
       '20261026180000_playbook-external-triggers.sql',
       '20261026170000_playbook-internal-triggers.sql',
       '20261023144000_c3d8_build-from-prompt-agent-runs.sql',

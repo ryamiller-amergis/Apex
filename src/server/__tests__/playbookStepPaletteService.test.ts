@@ -15,6 +15,7 @@ describe('listPlaybookStepPaletteItems', () => {
         'cursor-agent',
         'foreach',
         'ingest-artifact',
+        'interactive-agent',
         'interview',
         'join',
         'notify',

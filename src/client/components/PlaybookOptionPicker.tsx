@@ -14,6 +14,8 @@ export interface PlaybookPickerOption {
   badges?: readonly string[];
   disabled?: boolean;
   disabledReason?: string;
+  /** When set, a heading is shown before the first option in that group. */
+  group?: 'base' | 'project';
 }
 
 interface PlaybookOptionPickerProps {
@@ -148,8 +150,10 @@ export const PlaybookOptionPicker: React.FC<PlaybookOptionPickerProps> = ({
 
   const triggerLabel = selected?.label
     ?? (value ? value : emptyOption?.label ?? placeholder);
-  const triggerDescription = selected?.description
-    ?? (value && !selected ? 'Not in the current list' : !value ? emptyOption?.description : undefined);
+  const groupText = selected?.group === 'project' ? 'Project skill' : selected?.group === 'base' ? 'Base skill' : undefined;
+  const triggerDescription = [groupText, selected?.description ?? (value && !selected ? 'Not in the current list' : !value ? emptyOption?.description : undefined)]
+    .filter(Boolean)
+    .join(' · ') || undefined;
 
   return (
     <div
@@ -203,8 +207,11 @@ export const PlaybookOptionPicker: React.FC<PlaybookOptionPickerProps> = ({
             {!loading && filtered.length === 0 ? <li className={styles.empty}>Nothing matches.</li> : null}
             {filtered.map((option, index) => {
               const isSelected = option.empty ? !value : option.value === value;
+              const showGroup = Boolean(option.group) && option.group !== filtered[index - 1]?.group;
+              const groupLabel = option.group === 'project' ? 'This project' : option.group === 'base' ? 'Base skills' : '';
               return (
                 <li key={option.empty ? '__empty' : option.value} role="presentation">
+                  {showGroup ? <div className={styles.groupLabel} {...{ 'data-testid': `${testId}-group-${option.group}` }}>{groupLabel}</div> : null}
                   <button
                     type="button"
                     role="option"
