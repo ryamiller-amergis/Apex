@@ -24,7 +24,8 @@ export type BackgroundWorkflowClass =
   | 'evaluation-judge'
   | 'evaluation-promptfoo'
   | 'skill-learning'
-  | 'observability-po-digest';
+  | 'observability-po-digest'
+  | 'incident-triage';
 
 export type WorkflowRouteDecision =
   | { route: 'worker'; workspacePath: string; runId: string }

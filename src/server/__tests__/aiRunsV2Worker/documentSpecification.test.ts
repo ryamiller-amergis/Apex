@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  INCIDENT_TRIAGE_SCRATCH_PATHS,
   isAiRunV2DocumentSpecification,
   type AiRunV2DocumentSpecification,
 } from '../../../shared/types/aiRunV2DocumentSpec';
@@ -173,4 +174,66 @@ describe('V2 document execution specification', () => {
       ).toBe(false);
     },
   );
+});
+
+describe('V2 incident-triage execution specification', () => {
+  const closedSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: { summary: { type: 'string' } },
+  };
+
+  function incidentTriage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return specification({
+      workflowClass: 'incident-triage',
+      threadId: `incident-triage:Apex:${'a'.repeat(32)}`,
+      scratchInputs: [
+        { path: INCIDENT_TRIAGE_SCRATCH_PATHS.input, content: '# Incident' },
+        { path: INCIDENT_TRIAGE_SCRATCH_PATHS.outputSchema, content: '{}' },
+      ],
+      outputSchema: closedSchema,
+      repository: 'MaxView',
+      ...overrides,
+    });
+  }
+
+  it('accepts incident-triage with repository, groundedSha, provider and outputSchema', () => {
+    expect(isAiRunV2DocumentSpecification(incidentTriage())).toBe(true);
+  });
+
+  it.each(['repository', 'groundedSha', 'provider'])('refuses incident-triage without %s', (field) => {
+    expect(isAiRunV2DocumentSpecification(incidentTriage({ [field]: undefined }))).toBe(false);
+  });
+
+  it('refuses incident-triage without an outputSchema', () => {
+    expect(isAiRunV2DocumentSpecification(incidentTriage({ outputSchema: undefined }))).toBe(false);
+    expect(isAiRunV2DocumentSpecification(incidentTriage({
+      outputSchema: { type: 'object', properties: {} },
+    }))).toBe(false);
+  });
+
+  it('refuses incident-triage with evaluation', () => {
+    expect(isAiRunV2DocumentSpecification(incidentTriage({
+      evaluation: {
+        eventId: 'event-1',
+        jobId: 'job-1',
+        stageKey: 'stage',
+        rubricVersion: 1,
+        artifactHash: 'b'.repeat(64),
+      },
+    }))).toBe(false);
+  });
+
+  it('refuses incident-triage without both scratch inputs or with another scratch file', () => {
+    expect(isAiRunV2DocumentSpecification(incidentTriage({
+      scratchInputs: [{ path: INCIDENT_TRIAGE_SCRATCH_PATHS.input, content: '# Incident' }],
+    }))).toBe(false);
+    expect(isAiRunV2DocumentSpecification(incidentTriage({
+      scratchInputs: [
+        { path: INCIDENT_TRIAGE_SCRATCH_PATHS.input, content: '# Incident' },
+        { path: INCIDENT_TRIAGE_SCRATCH_PATHS.outputSchema, content: '{}' },
+        { path: '.ai-pilot/secret.env', content: 'TOKEN=secret' },
+      ],
+    }))).toBe(false);
+  });
 });

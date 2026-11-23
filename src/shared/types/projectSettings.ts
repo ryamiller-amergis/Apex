@@ -170,6 +170,8 @@ export interface ProjectEffortSettings {
   loadTestGenerationEffort?: EffortLevel | null;
   designModuleEffort?: EffortLevel | null;
   designModuleScopingEffort?: EffortLevel | null;
+  /** Reasoning effort override for ServiceNow incident triage runs. */
+  incidentTriageEffort?: EffortLevel | null;
   defaultEffort?: EffortLevel | null;
 }
 
@@ -306,6 +308,10 @@ export interface ProjectSkillConfig extends ProjectEffortSettings {
   releaseChangelogEffort?: EffortLevel | null;
   /** Optional AWS Bedrock model override for Release Management executive changelogs. */
   releaseChangelogBedrockModelId?: string | null;
+  /** Skill used to investigate ServiceNow incidents. Null uses the MaxView incident investigation skill. */
+  incidentTriageSkillPath?: string | null;
+  /** Cursor model override for ServiceNow incident triage runs. */
+  incidentTriageModel?: string | null;
   /** Admin-managed repository checkout status for this configuration. */
   repositoryCheckoutStatus?: RepositoryCheckoutStatus;
   repositoryCheckoutSha?: string | null;
@@ -402,6 +408,8 @@ export interface UpsertProjectSkillConfigRequest extends ProjectEffortSettings {
   releaseChangelogModel?: string | null;
   releaseChangelogEffort?: EffortLevel | null;
   releaseChangelogBedrockModelId?: string | null;
+  incidentTriageSkillPath?: string | null;
+  incidentTriageModel?: string | null;
   cursorApiKeyEnvRef?: string | null;
   cursorServiceAccountId?: string | null;
 }
@@ -502,6 +510,8 @@ export interface ProjectSkillConfigResponse extends ProjectEffortSettings {
   releaseChangelogModel?: string | null;
   releaseChangelogEffort?: EffortLevel | null;
   releaseChangelogBedrockModelId?: string | null;
+  incidentTriageSkillPath?: string | null;
+  incidentTriageModel?: string | null;
   repositoryCheckoutStatus?: RepositoryCheckoutStatus;
   repositoryCheckoutSha?: string | null;
   repositoryCheckoutError?: string | null;

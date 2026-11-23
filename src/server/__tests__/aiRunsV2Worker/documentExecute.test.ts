@@ -896,6 +896,104 @@ describe('V2 document execution', () => {
     ).rejects.toThrow();
   });
 
+  function incidentTriageSpecification(
+    overrides: Partial<AiRunV2DocumentSpecification> = {},
+  ): AiRunV2DocumentSpecification {
+    return specification({
+      workflowClass: 'incident-triage',
+      skillPath: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+      groundedSha: 'abc123',
+      repository: 'MaxView',
+      provider: 'ado',
+      scratchInputs: [
+        { path: '.ai-pilot/incident-triage/incident.md', content: '# Incident INC001' },
+        { path: '.ai-pilot/incident-triage/output-schema.json', content: '{"type":"object"}' },
+      ],
+      outputSchema: {
+        type: 'object',
+        required: ['summary'],
+        properties: { summary: { type: 'string' } },
+        additionalProperties: false,
+      },
+      ...overrides,
+    });
+  }
+
+  function incidentTriageExecution(resultContent: string | null, checkoutSeen?: jest.Mock) {
+    return jest.fn(async (snapshot, checkout) => {
+      checkoutSeen?.(checkout);
+      return {
+        run: {
+          supports: () => false,
+          async *stream() {
+            yield undefined as never;
+          },
+          async wait() {
+            await expect(
+              fs.readFile(
+                path.join(snapshot.workspaceRef, '.ai-pilot', 'incident-triage', 'incident.md'),
+                'utf8',
+              ),
+            ).resolves.toBe('# Incident INC001');
+            if (resultContent !== null) {
+              await fs.writeFile(
+                path.join(snapshot.workspaceRef, '.ai-pilot', 'output', 'incident-triage.json'),
+                resultContent,
+              );
+            }
+            return { status: 'finished' };
+          },
+        },
+        dispose: jest.fn().mockResolvedValue(undefined),
+      };
+    });
+  }
+
+  it('incident-triage opens the pinned repository and signs in to Azure', async () => {
+    const openRepository = jest.fn().mockResolvedValue(repoReader);
+    const signInAzure = jest.fn().mockResolvedValue(undefined);
+    const checkoutSeen = jest.fn();
+    const execute = createDocumentExecute({
+      openRepository,
+      signInAzure,
+      createExecution: incidentTriageExecution('{"summary":"Null reference"}', checkoutSeen),
+    });
+
+    await expect(
+      execute({
+        specification: incidentTriageSpecification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({
+      files: [expect.objectContaining({ path: 'output/incident-triage.json' })],
+    });
+    expect(openRepository).toHaveBeenCalledTimes(1);
+    expect(signInAzure).toHaveBeenCalledTimes(1);
+    expect(checkoutSeen).toHaveBeenCalledWith(repoReader);
+  });
+
+  it.each([
+    ['a result that does not match the schema', '{"summary":"x","extra":1}'],
+    ['no result file', null],
+  ])('rejects an incident-triage run with %s', async (_label, resultContent) => {
+    const execute = createDocumentExecute({
+      openRepository: jest.fn().mockResolvedValue(repoReader),
+      signInAzure: jest.fn().mockResolvedValue(undefined),
+      createExecution: incidentTriageExecution(resultContent),
+    });
+
+    await expect(
+      execute({
+        specification: incidentTriageSpecification(),
+        command: command(),
+        checkpoints: checkpoints(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+  });
+
   it.each([
     {
       workflowClass: 'prd' as const,

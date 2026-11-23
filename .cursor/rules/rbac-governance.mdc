@@ -52,6 +52,9 @@ For every UI feature being **added**, **modified**, or **removed**, work through
 | `chat:view` | chat | admin, member |
 | `chat:view_all` | chat | admin |
 | `home:view` | chat | admin, member, viewer |
+| `incident-triage:view` | incident-triage | admin, member |
+| `incident-triage:run` | incident-triage | admin |
+| `incident-triage:manage` | incident-triage | admin |
 | `mcp-servers:view` | mcp-servers | *(no default roles — assign explicitly)* |
 | `mcp-servers:manage` | mcp-servers | *(no default roles — assign explicitly)* |
 | `cost:view` | cost | admin, viewer |

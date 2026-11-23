@@ -55,6 +55,20 @@ describe('project skill workflow registry', () => {
     });
   });
 
+  it('registers incident triage with flat API fields and no column of its own', () => {
+    const workflow = PROJECT_SKILL_WORKFLOWS.find((entry) => entry.key === 'incident_triage');
+    expect(workflow).toMatchObject({
+      label: 'Incident triage',
+      defaultSkillPath: 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
+      legacy: {
+        skillPath: 'incidentTriageSkillPath',
+        model: 'incidentTriageModel',
+        effort: 'incidentTriageEffort',
+      },
+    });
+    expect(schemaWorkflowColumnNames()).not.toContain('incident_triage_skill_path');
+  });
+
   it('keeps the plan workflow names for the examples it lists', () => {
     const keys = PROJECT_SKILL_WORKFLOWS.map((workflow) => workflow.key);
     expect(keys).toEqual(

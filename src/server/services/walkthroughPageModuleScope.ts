@@ -287,6 +287,15 @@ const PAGE_MODULE_BY_MENU_KEY: Record<
       },
     ],
   },
+  'incident-triage': {
+    pageEntries: [
+      {
+        component: 'src/client/components/IncidentTriagePage.tsx',
+        routePattern: '/incident-triage',
+        suggestedRoute: '/incident-triage',
+      },
+    ],
+  },
 };
 
 const FIXED_PAGE_MODULES: readonly WalkthroughPageModuleContext[] = [

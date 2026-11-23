@@ -9,8 +9,8 @@ import {
 } from '../../shared/types/menuSettings';
 
 describe('menuSettings shared types', () => {
-  it('CONFIGURABLE_MENU_ITEMS has exactly 19 entries', () => {
-    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(20);
+  it('CONFIGURABLE_MENU_ITEMS has exactly 21 entries', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toHaveLength(21);
   });
 
   it('contains the expected keys in order', () => {
@@ -36,6 +36,7 @@ describe('menuSettings shared types', () => {
       'mcp-servers',
       'brainstorm',
       'prod-support',
+      'incident-triage',
     ]);
   });
 
@@ -62,6 +63,7 @@ describe('menuSettings shared types', () => {
       'MCP Servers',
       'Brainstorm',
       'Prod Support',
+      'Incident Triage',
     ]);
   });
 
@@ -83,7 +85,13 @@ describe('menuSettings shared types', () => {
     expect(ALL_MENU_VIEWS).toContain('mcp-servers');
     expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('mcp-servers');
     expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('diagrams');
-    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 3);
+    expect(DEFAULT_ENABLED_MENU_VIEWS).toHaveLength(ALL_MENU_VIEWS.length - 4);
+  });
+
+  it('incident-triage is configurable, labelled Incident Triage, and opt-in', () => {
+    expect(CONFIGURABLE_MENU_ITEMS).toContainEqual({ key: 'incident-triage', label: 'Incident Triage' });
+    expect(ALL_MENU_VIEWS).toContain('incident-triage');
+    expect(DEFAULT_ENABLED_MENU_VIEWS).not.toContain('incident-triage');
   });
 
   it('FEAT-002 VT-14: builds is configurable, labelled Builds, and opt-in', () => {

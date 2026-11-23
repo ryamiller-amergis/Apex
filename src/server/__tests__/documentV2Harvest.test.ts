@@ -606,6 +606,69 @@ describe('V2 document artifact harvest', () => {
     });
   });
 
+  it('routes incident-triage.json to the incident triage apply', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'incident-triage',
+      threadId: `incident-triage:Apex:${'a'.repeat(32)}`,
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt, {
+      'output/incident-triage.json': '{"summary":"Null reference"}',
+    });
+    const incidentTriage = {
+      applyCompleted: jest.fn(async (input: { parsed: unknown }) => {
+        expect(input.parsed).toEqual({ summary: 'Null reference' });
+      }),
+      applyFailed: jest.fn(),
+    };
+    const applyWorkspace = jest.fn();
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace,
+      applySmartTagging: jest.fn(),
+      skillReplays: { owns: () => false, applyCompleted: jest.fn(), applyFailed: jest.fn() },
+      incidentTriage,
+    });
+
+    expect(incidentTriage.applyCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'run-1' }),
+    );
+    expect(applyWorkspace).not.toHaveBeenCalled();
+    expect(finishedAttempts.completeHarvest).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('a failed incident-triage attempt calls applyIncidentTriageFailed', async () => {
+    const currentAttempt = attempt({
+      workflowClass: 'incident-triage',
+      threadId: `incident-triage:Apex:${'a'.repeat(32)}`,
+      status: 'failed',
+      manifestRef: null,
+      failureDetail: 'Model Blocked',
+    });
+    const { finishedAttempts, artifacts } = arrange(currentAttempt);
+    const incidentTriage = {
+      applyCompleted: jest.fn(),
+      applyFailed: jest.fn().mockResolvedValue(undefined),
+    };
+    const applyWorkspace = jest.fn();
+
+    await harvestFinishedV2Documents({
+      finishedAttempts,
+      artifacts,
+      applyWorkspace,
+      applySmartTagging: jest.fn(),
+      skillReplays: { owns: () => false, applyCompleted: jest.fn(), applyFailed: jest.fn() },
+      incidentTriage,
+    });
+
+    expect(incidentTriage.applyFailed).toHaveBeenCalledWith({
+      runId: 'run-1',
+      reason: expect.stringContaining('Model Blocked'),
+    });
+    expect(applyWorkspace).not.toHaveBeenCalled();
+  });
+
   it('records a failed Skill replay on the experiment', async () => {
     const currentAttempt = attempt({
       threadId: 'skill-replay:run-7:generate',

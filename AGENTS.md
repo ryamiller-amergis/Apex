@@ -42,6 +42,7 @@ Apex is an internal product-building and project-management platform. It central
 | Brainstorm | — | `.cursor/skills/brainstorm/SKILL.md` | `brainstormSessionService.ts`, `brainstormOrchestrationService.ts`, `brainstormTurnLedger.ts`, `brainstormAccessPolicy.ts`, `brainstormArtifactVersionStore.ts`, `brainstormArtifactMcp.ts`, `brainstormHandoffEngine.ts`, `brainstormRepositoryCatalog.ts` | `BrainstormHomeEntry.tsx`, `BrainstormSessionsPage.tsx`, `BrainstormWorkspace.tsx`, `BrainstormChatPanel.tsx`, `BrainstormArtifactPanel.tsx`, `BrainstormNextActionsPanel.tsx`, `BrainstormRepositoryAdmin.tsx` |
 | Playbook Orchestration | `design-docs/playbook-epic-1-phase-0.plan.md`, `design-docs/playbook-demo-runbook.md`, `design-docs/reusable-playbook-interview-step.md` | `.cursor/skills/interview-orchestrator/SKILL.md`, `.cursor/skills/interview-requirements-review/SKILL.md`, `.cursor/skills/interview-brief-draft/SKILL.md` | `playbookRunService.ts`, `playbookSteps/`, `playbookTerminalEventService.ts`, `playbookReconciliationService.ts` | `PlaybookStatusView.tsx`, `PlaybookRunList.tsx`, `PlaybookGateReviewPanel.tsx` |
 | Observability (Product Owner Digest) | — | `.cursor/skills/observability-po-digest/SKILL.md` | `observabilityPoDigestService.ts`, `observabilityPoDigestRuns.ts` (AI synthesis runs on the V2 document worker as `observability-po-digest` runs), `observabilityQueryService.ts` | `ObservabilityWorkspace.tsx`, `PlatformAdmin.tsx` |
+| ServiceNow Incident Triage (flag `servicenow-incident-triage`) | `design-docs/servicenow-incident-triage.md` | `foundation-skills/foundation/maxview-incident-investigation/SKILL.md` | `serviceNowClient.ts`, `incidentRedaction.ts`, `incidentTriageSweep.ts`, `incidentTriageRuns.ts` (AI work runs on the V2 document worker as `incident-triage` runs), `incidentTriageTeams.ts`, `incidentTriageStore.ts` | `IncidentTriagePage.tsx`, `IncidentTriageDetail.tsx`, `IncidentTriageSettings.tsx` |
 
 ## Key Terminology
 
@@ -74,6 +75,7 @@ Apex is an internal product-building and project-management platform. It central
 | **Playbook** | A saved, versioned sequence of typed steps that Apex runs on a project's behalf. A step is a `cursor-agent` turn, an `approval-gate` that waits for a person, a `notify`, a `branch`, or an `ingest-artifact`. Steps that leave Apex sit behind a gate, so nothing reaches an external agent unapproved |
 | **Playbook definition / version** | A Playbook is edited as a retained draft and published as an immutable version. A run pins the version it started on, so editing a Playbook never changes a run already in flight |
 | **Playbook run** | One execution of a published version. It suspends at an approval gate or while waiting on an agent run, and resumes when the gate is decided or the agent finishes — a restart mid-run does not lose it, because the state is in Apex's own tables rather than in memory |
+| **Incident Triage** | Apex reads MaxView ServiceNow incidents (read only), redacts personal data, has the AI classify and verify each one against MaxView code and telemetry, and posts a card to a Teams channel through a Workflows webhook |
 | **Planning tabs** | Roadmap and Releases only. Developer Stats, QA Metrics, and AI Analysis are not Planning tabs. `planning:qa` stays for QA Lab and test cases. Roadmap bars load feature children with one `POST /api/roadmap/epic-features` call, and release percentages are counted per epic from one shared link graph in `getReleaseEpics`. Do not fetch children once per epic when the tab opens |
 
 ## Directory Structure
@@ -131,6 +133,7 @@ src/
 | How should Blob / async workers be designed? | `.cursor/skills/azure-async-infra/SKILL.md`, `infra/shared-async.tf`, `.cursor/rules/azure-async-infra.mdc` |
 | How should Apex Terraform be written? | `.cursor/skills/terraform-infra/SKILL.md`, `.cursor/rules/terraform-infra.mdc`, `infra/README.md` |
 | Where do a V2 worker's settings come from? | `.cursor/rules/v2-worker-no-policy.mdc` — App Service resolves every value and the execution specification carries it; a worker holds no default |
+| How does Incident Triage work? | `design-docs/servicenow-incident-triage.md`, `incidentTriageSweep.ts`, `incidentTriageRuns.ts`, `/incident-triage` view |
 | What are the project settings? | `src/server/services/projectSettingsService.ts`, `src/client/components/AdminProjectSettings.tsx` |
 | How do I start a feature interview? | `.cursor/skills/grill-with-docs/SKILL.md` (feature building) or `.cursor/skills/grill-design/SKILL.md` (technical design) |
 | How do I generate a PRD from an interview? | `.cursor/skills/to-prd/SKILL.md` — reads `.ai-pilot/kickoff-transcript.md` |

@@ -62,6 +62,9 @@ interface AppSidebarProps {
   onNavigateReportIssue?: () => void;
   /** Prod Support stays hidden until the guided cloud-agent flags and the project menu are on. */
   reportIssueEnabled?: boolean;
+  onNavigateIncidentTriage?: () => void;
+  /** Incident Triage stays hidden until its flag and the project menu are both on. */
+  incidentTriageEnabled?: boolean;
   onNavigateMcpServers?: () => void;
   /** MCP Servers stays hidden until the project flag and menu are both on. */
   mcpServersEnabled?: boolean;
@@ -202,6 +205,14 @@ const IconReportIssue: React.FC = () => (
   </svg>
 );
 
+const IconIncidentTriage: React.FC = () => (
+  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 3L2.5 16.5h15L10 3z" />
+    <path d="M10 8v3.5" />
+    <path d="M10 14h.01" />
+  </svg>
+);
+
 const IconBrainstorm: React.FC = () => (
   <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 3a5 5 0 00-2 9.6V14h4v-1.4A5 5 0 0010 3z" />
@@ -282,6 +293,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   brainstormEnabled = false,
   onNavigateReportIssue,
   reportIssueEnabled = false,
+  onNavigateIncidentTriage,
+  incidentTriageEnabled = false,
   onNavigateMcpServers,
   mcpServersEnabled = false,
   onNavigateAdmin,
@@ -301,6 +314,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         { label: 'Design Module', view: 'design-module', icon: <IconDesignModule />, permission: 'design-module:view', onNavigate: onNavigateDesignModule ?? (() => {}) },
         { label: 'My Work', view: 'my-work', icon: <IconMyWork />, permission: 'dev-workbench:view', onNavigate: onNavigateMyWork ?? (() => {}) },
         { label: 'Prod Support', view: 'prod-support', icon: <IconReportIssue />, permission: 'chat:create', onNavigate: onNavigateReportIssue ?? (() => {}) },
+        { label: 'Incident Triage', view: 'incident-triage', icon: <IconIncidentTriage />, permission: 'incident-triage:view', onNavigate: onNavigateIncidentTriage ?? (() => {}) },
         { label: 'Builds', view: 'builds', icon: <IconBuilds />, permission: 'builds:view', onNavigate: onNavigateBuilds ?? (() => {}) },
         { label: 'Diagrams', view: 'diagrams', icon: <IconDiagrams />, permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}), testId: 'nav-diagrams' },
       ],
@@ -366,6 +380,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     if (item.view === 'prod-support') {
       if (!reportIssueEnabled || !menuEnabledViews.includes('prod-support')) return false;
       return isSuperAdmin || can('chat:create');
+    }
+    if (item.view === 'incident-triage') {
+      if (!incidentTriageEnabled || !menuEnabledViews.includes('incident-triage')) return false;
+      return isSuperAdmin || can('incident-triage:view');
     }
     if (item.view === 'playbooks') {
       return menuEnabledViews.includes('playbooks') && can('playbooks:view');

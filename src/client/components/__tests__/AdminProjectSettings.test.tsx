@@ -334,6 +334,67 @@ describe('AdminProjectSettings — effort overrides', () => {
     }));
     expect(body).not.toHaveProperty('workflowSettings');
   });
+
+  it('save payload includes incidentTriageSkillPath, incidentTriageModel and incidentTriageEffort', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(projectConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+    (useAllProjectSkillConfigs as jest.Mock).mockReturnValue({
+      data: [{
+        ...projectConfig,
+        incidentTriageSkillPath: 'skills/triage/SKILL.md',
+        incidentTriageModel: 'composer-2.5',
+        incidentTriageEffort: 'low',
+      }],
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.click(screen.getByText('Sidecar Skills'));
+
+    expect(screen.getByText('ServiceNow Incident Triage')).toBeInTheDocument();
+    expect(screen.getByTestId('ps-stage-effort-incidentTriageEffort')).toHaveValue('low');
+    fireEvent.change(screen.getByTestId('ps-stage-effort-incidentTriageEffort'), {
+      target: { value: 'high' },
+    });
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    const { body } = mutateAsync.mock.calls[0][0] as { body: Record<string, unknown> };
+    expect(body).toEqual(expect.objectContaining({
+      incidentTriageSkillPath: 'skills/triage/SKILL.md',
+      incidentTriageModel: 'composer-2.5',
+      incidentTriageEffort: 'high',
+    }));
+  });
+
+  it('save payload clears incident triage overrides to null when none are set', async () => {
+    const mutateAsync = jest.fn().mockResolvedValue(projectConfig);
+    (useUpsertProjectSkillConfig as jest.Mock).mockReturnValue({
+      mutate: jest.fn(),
+      mutateAsync,
+      isPending: false,
+      error: null,
+    });
+
+    render(<AdminProjectSettings selectedProject="Apex" />);
+    fireEvent.click(screen.getByTestId('ps-config-edit-settings-1'));
+    fireEvent.click(screen.getByTestId('ps-form-save'));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    const { body } = mutateAsync.mock.calls[0][0] as { body: Record<string, unknown> };
+    expect(body).toEqual(expect.objectContaining({
+      incidentTriageSkillPath: null,
+      incidentTriageModel: null,
+      incidentTriageEffort: null,
+    }));
+  });
 });
 
 describe('AdminProjectSettings — quick pill effort overrides', () => {

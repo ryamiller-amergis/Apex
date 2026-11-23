@@ -35,9 +35,15 @@ export const PROJECT_SKILL_WORKFLOW_FIELDS = [
 
 export interface ProjectSkillWorkflowDefinition {
   key: string;
+  label?: string;
+  /** The skill a project runs when it sets no `skillPath` override. */
+  defaultSkillPath?: string;
   /** Child-row field → the flat `ProjectSkillConfig` field it replaces. */
   legacy: Partial<Record<ProjectSkillWorkflowField, keyof ProjectSkillConfig>>;
 }
+
+export const INCIDENT_TRIAGE_DEFAULT_SKILL_PATH =
+  'foundation-skills/foundation/maxview-incident-investigation/SKILL.md';
 
 /**
  * Every AI workflow with per-project settings. `legacy` maps the existing
@@ -216,6 +222,16 @@ export const PROJECT_SKILL_WORKFLOWS = [
       model: 'releaseChangelogModel',
       effort: 'releaseChangelogEffort',
       bedrockModelId: 'releaseChangelogBedrockModelId',
+    },
+  },
+  {
+    key: 'incident_triage',
+    label: 'Incident triage',
+    defaultSkillPath: INCIDENT_TRIAGE_DEFAULT_SKILL_PATH,
+    legacy: {
+      skillPath: 'incidentTriageSkillPath',
+      model: 'incidentTriageModel',
+      effort: 'incidentTriageEffort',
     },
   },
 ] as const satisfies readonly ProjectSkillWorkflowDefinition[];

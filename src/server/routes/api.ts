@@ -4875,6 +4875,9 @@ router.get('/skill-config', async (req: Request, res: Response) => {
       releaseChangelogModel: config.releaseChangelogModel ?? null,
       releaseChangelogEffort: config.releaseChangelogEffort ?? null,
       releaseChangelogBedrockModelId: config.releaseChangelogBedrockModelId ?? null,
+      incidentTriageSkillPath: config.incidentTriageSkillPath ?? null,
+      incidentTriageModel: config.incidentTriageModel ?? null,
+      incidentTriageEffort: config.incidentTriageEffort ?? null,
       defaultEffort: config.defaultEffort ?? null,
     });
   } catch {

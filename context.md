@@ -231,6 +231,17 @@ Per-user settings accessible from the header user menu.
 - **Theme** — Light, Dark, or Amergis theme selection
 - **Notification preferences** — per-type notification and toast toggles
 
+### 20. Incident Triage
+
+Triage of MaxView ServiceNow incidents, behind the `servicenow-incident-triage` feature flag.
+
+- **Intake** — Apex reads incidents for the configured assignment groups from ServiceNow every 15 minutes and on demand; it never writes to ServiceNow
+- **Redaction** — personal data is removed before an incident is stored or sent to the AI
+- **AI analysis** — each meaningful change to an incident gets one analysis: a summary, a verdict (bug, config, data, infra, not a bug, or insufficient evidence), the affected MaxView area, a severity, and evidence from MaxView code and telemetry, plus a suggested fix for a bug
+- **Teams** — a card with no personal data posts to a Teams channel through a Workflows webhook on the first analysis and again when the verdict or severity changes
+- **Page** — `/incident-triage` lists incidents with their analysis, shows detail with a Re-analyze button, and holds the project settings
+- **Gated by** — `incident-triage:view` / `incident-triage:run` / `incident-triage:manage` permissions, the flag, and an opt-in menu item
+
 ## User Workflows
 
 ### How do I start a design interview?
@@ -371,6 +382,7 @@ Per-user settings accessible from the header user menu.
 | AI Cost Analytics | `/ai-cost` | `analytics:ai-cost:view` + menu enabled | AI usage and cost dashboards |
 | Design Module | `/design-module` | `design-module:view` + menu enabled | Repository module catalog and AI scoping |
 | Load Tests | `/load-tests` | `load-test:view` + menu enabled | k6 load test definitions and run history |
+| Incident Triage | `/incident-triage` | `incident-triage:view` + `servicenow-incident-triage` flag + menu enabled (opt-in; `run` starts a check or re-analysis, `manage` edits settings) | MaxView ServiceNow incidents with AI verdicts and Teams cards |
 | Profile | `/profile` | Authenticated user | Avatar, bio, theme, and notification preferences |
 | Admin | `/admin/*` | `admin:roles` | Roles, Users, Groups, Project Settings, Notifications, Load Test Targets |
 | Platform Admin | `/platform-admin` | Super admin only | Access & Users, Menu Visibility, Feature Flags, Walkthroughs, Walkthrough Reports |
@@ -389,6 +401,7 @@ Navigation is controlled by three layers:
 - **Project Settings** — per-project configuration for AI skills, models, approval mode, designated approvers
 - **Notifications** — admin notification management
 - **Load Test Targets** — configure the allowlisted hostnames/environments load tests may target
+- **Incident triage** — the Project Settings workflow sets the skill, model, and effort. The Incident Triage page settings (`incident-triage:manage`) turn triage on per project and set the ServiceNow assignment group sys_ids, the backfill days, and the Teams webhook. The ServiceNow connection reads `SERVICENOW_INSTANCE_URL`, `SERVICENOW_CLIENT_ID`, `SERVICENOW_CLIENT_SECRET`, `SERVICENOW_USERNAME`, and `SERVICENOW_PASSWORD` from configuration
 
 ### Platform Admin (`/platform-admin`, super admin only)
 - **Access & Users** — manage project access requests and pending email assignments
@@ -417,6 +430,7 @@ Navigation is controlled by three layers:
 | Standup Facilitation | Facilitator skill | Summarizes team updates and creates cross-cutting follow-ups |
 | Feature Request Analysis | Feature Request Analysis skill | Suggests priority, risk, and rationale for submitted requests |
 | PRD Assistant | (contextual) | Bulk-addresses reviewer feedback with proposed content changes |
+| Incident Triage | `maxview-incident-investigation` | Classifies each MaxView ServiceNow incident and verifies it against MaxView code and telemetry; runs on the V2 document worker |
 | Ask Apex | `/app-knowledge` | Product knowledge assistant that helps users understand and navigate Apex |
 
 Each AI capability can be configured per project with a specific skill path and model in Admin → Project Settings. The system supports Cursor SDK models and AWS Bedrock models.

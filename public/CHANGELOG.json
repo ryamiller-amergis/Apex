@@ -1,5 +1,24 @@
 [
   {
+    "version": "1.44.0",
+    "date": "2026-11-20",
+    "title": "MaxView Incident Triage",
+    "changes": [
+      {
+        "type": "feature",
+        "description": "Incident Triage reads MaxView ServiceNow incidents, removes personal data, and has the AI give each one a summary, a verdict, the affected area, and a severity, checked against MaxView code and telemetry. It is read only and off until your project turns it on"
+      },
+      {
+        "type": "feature",
+        "description": "Triage results post to a Teams channel as a card with links back to ServiceNow and Apex, on the first analysis and again when the verdict or severity changes"
+      },
+      {
+        "type": "feature",
+        "description": "The new Incident Triage page lists incidents with their analysis, shows the evidence and suggested fix, lets you re-analyze an incident or check ServiceNow now, and holds the project's assignment groups, backfill days, and Teams webhook"
+      }
+    ]
+  },
+  {
     "version": "1.43.0",
     "date": "2026-11-16",
     "title": "Planning Releases and Platforms",

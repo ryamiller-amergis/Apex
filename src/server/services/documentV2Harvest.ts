@@ -52,6 +52,11 @@ import {
   applyObservabilityPoDigestFailed,
 } from './observabilityPoDigestRuns';
 import {
+  applyIncidentTriageCompleted,
+  applyIncidentTriageFailed,
+} from './incidentTriageRuns';
+import {
+  INCIDENT_TRIAGE_RESULT_FILE,
   OBSERVABILITY_PO_DIGEST_RESULT_FILE,
   SKILL_LEARNING_RESULT_FILE,
 } from '../../shared/types/aiRunV2DocumentSpec';
@@ -98,6 +103,17 @@ const defaultObservabilityDigests: ObservabilityDigestHarvest = {
   applyFailed: applyObservabilityPoDigestFailed,
 };
 
+/** ServiceNow incident analyses; their result goes to `incident_triage_analyses`. */
+export type IncidentTriageHarvest = Readonly<{
+  applyCompleted: (input: { runId: string; parsed: unknown }) => Promise<void>;
+  applyFailed: (input: { runId: string; reason: string }) => Promise<void>;
+}>;
+
+const defaultIncidentTriage: IncidentTriageHarvest = {
+  applyCompleted: applyIncidentTriageCompleted,
+  applyFailed: applyIncidentTriageFailed,
+};
+
 export type DocumentV2HarvestDependencies = Readonly<{
   finishedAttempts?: FinishedAttemptReader;
   artifacts?: ArtifactReader;
@@ -114,6 +130,7 @@ export type DocumentV2HarvestDependencies = Readonly<{
   ) => Promise<void>;
   skillReplays?: SkillReplayHarvest;
   observabilityDigests?: ObservabilityDigestHarvest;
+  incidentTriage?: IncidentTriageHarvest;
   batchSize?: number;
   tempRoot?: string;
 }>;
@@ -185,6 +202,8 @@ function isExpectedArtifactPath(
       return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
     case 'observability-po-digest':
       return segments.length === 1 && name === OBSERVABILITY_PO_DIGEST_RESULT_FILE;
+    case 'incident-triage':
+      return segments.length === 1 && name === INCIDENT_TRIAGE_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -288,6 +307,7 @@ async function applyAttempt(
   evaluationJobs: NonNullable<DocumentV2HarvestDependencies['evaluationJobs']>,
   skillReplays: SkillReplayHarvest,
   observabilityDigests: ObservabilityDigestHarvest,
+  incidentTriage: IncidentTriageHarvest,
 ): Promise<void> {
   if (skillReplays.owns(attempt.threadId)) {
     await skillReplays.applyCompleted({
@@ -348,6 +368,17 @@ async function applyAttempt(
         outputDir: path.join(workspacePath, '.ai-pilot', 'output'),
       });
       return;
+    case 'incident-triage':
+      await incidentTriage.applyCompleted({
+        runId: attempt.runId,
+        parsed: JSON.parse(
+          await fs.readFile(
+            path.join(workspacePath, '.ai-pilot', 'output', INCIDENT_TRIAGE_RESULT_FILE),
+            'utf8',
+          ),
+        ),
+      });
+      return;
     default: {
       const unhandled: never = attempt.workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -397,6 +428,7 @@ export async function harvestFinishedV2Documents(
   const skillReplays = dependencies.skillReplays ?? defaultSkillReplays;
   const observabilityDigests =
     dependencies.observabilityDigests ?? defaultObservabilityDigests;
+  const incidentTriage = dependencies.incidentTriage ?? defaultIncidentTriage;
   const failWorkflow =
     dependencies.failWorkflow
     ?? (async (attempt, reason) => {
@@ -406,6 +438,10 @@ export async function harvestFinishedV2Documents(
       }
       if (attempt.workflowClass === 'observability-po-digest') {
         await observabilityDigests.applyFailed({ runId: attempt.runId, reason });
+        return;
+      }
+      if (attempt.workflowClass === 'incident-triage') {
+        await incidentTriage.applyFailed({ runId: attempt.runId, reason });
         return;
       }
       if (attempt.workflowClass === 'walkthrough-smart-tagging') {
@@ -477,6 +513,7 @@ export async function harvestFinishedV2Documents(
           evaluationJobs,
           skillReplays,
           observabilityDigests,
+          incidentTriage,
         );
       }
 

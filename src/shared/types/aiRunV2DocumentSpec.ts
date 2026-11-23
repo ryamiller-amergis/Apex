@@ -28,6 +28,7 @@ export const AI_RUN_V2_DOCUMENT_WORKFLOW_CLASSES = [
   'evaluation-promptfoo',
   'skill-learning',
   'observability-po-digest',
+  'incident-triage',
 ] as const satisfies readonly BackgroundWorkflowClass[];
 
 const JUDGE_SCRATCH_PATHS: readonly string[] = Object.values(WORKFLOW_EVALUATION_SCRATCH_PATHS);
@@ -50,6 +51,14 @@ const OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST: readonly string[] = Object.valu
   OBSERVABILITY_PO_DIGEST_SCRATCH_PATHS,
 );
 
+/** Inputs and the one result file of an `incident-triage` run. */
+export const INCIDENT_TRIAGE_SCRATCH_PATHS = {
+  input: '.ai-pilot/incident-triage/incident.md',
+  outputSchema: '.ai-pilot/incident-triage/output-schema.json',
+} as const;
+export const INCIDENT_TRIAGE_RESULT_FILE = 'incident-triage.json';
+const INCIDENT_TRIAGE_SCRATCH_PATH_LIST: readonly string[] = Object.values(INCIDENT_TRIAGE_SCRATCH_PATHS);
+
 /** Workflows whose single JSON result the worker checks against `outputSchema` before upload. */
 export function documentWorkflowResultFile(workflowClass: BackgroundWorkflowClass): string | null {
   switch (workflowClass) {
@@ -59,6 +68,8 @@ export function documentWorkflowResultFile(workflowClass: BackgroundWorkflowClas
       return SKILL_LEARNING_RESULT_FILE;
     case 'observability-po-digest':
       return OBSERVABILITY_PO_DIGEST_RESULT_FILE;
+    case 'incident-triage':
+      return INCIDENT_TRIAGE_RESULT_FILE;
     case 'prd':
     case 'adr':
     case 'design-doc':
@@ -104,7 +115,7 @@ export type AiRunV2DocumentSpecification = Readonly<{
   groundedSha?: string;
   repository?: string;
   provider?: SkillProvider;
-  /** Required for `evaluation-judge`, `skill-learning` and `observability-po-digest`; refused for every other workflow. */
+  /** Required for `evaluation-judge`, `skill-learning`, `observability-po-digest` and `incident-triage`; refused for every other workflow. */
   outputSchema?: Record<string, unknown>;
   /** Required for `evaluation-judge` and refused for every other workflow. */
   evaluation?: WorkflowEvaluationRunIdentity;
@@ -133,6 +144,7 @@ export function documentWorkflowRequiresRepository(
     case 'adr':
     case 'design-doc':
     case 'test-cases':
+    case 'incident-triage':
       return true;
     case 'validation':
     case 'walkthrough-smart-tagging':
@@ -187,6 +199,8 @@ export function isAllowedDocumentScratchInputPath(
       return SKILL_LEARNING_SCRATCH_PATH_LIST.includes(value);
     case 'observability-po-digest':
       return OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST.includes(value);
+    case 'incident-triage':
+      return INCIDENT_TRIAGE_SCRATCH_PATH_LIST.includes(value);
     case 'design-doc':
     case 'validation':
     case 'walkthrough-smart-tagging':
@@ -226,6 +240,8 @@ export function hasRequiredScratchInputs(
       return SKILL_LEARNING_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
     case 'observability-po-digest':
       return OBSERVABILITY_PO_DIGEST_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
+    case 'incident-triage':
+      return INCIDENT_TRIAGE_SCRATCH_PATH_LIST.every((value) => paths.includes(value));
     case 'evaluation-promptfoo':
       // Promptfoo has its own specification; the document guard never accepts it.
       return false;
@@ -366,6 +382,9 @@ export function isAiRunV2DocumentSpecification(
     for (const field of ['groundedSha', 'repository', 'provider'] as const) {
       if (candidate[field] !== undefined) return false;
     }
+  } else if (candidate.workflowClass === 'incident-triage') {
+    if (!isJudgeOutputSchema(candidate.outputSchema)) return false;
+    if (candidate.evaluation !== undefined) return false;
   } else if (candidate.outputSchema !== undefined || candidate.evaluation !== undefined) {
     return false;
   }

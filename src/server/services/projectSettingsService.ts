@@ -267,6 +267,8 @@ export interface UpsertSkillConfigOptions extends ProjectEffortSettings {
   releaseChangelogModel?: string | null;
   releaseChangelogEffort?: EffortLevel | null;
   releaseChangelogBedrockModelId?: string | null;
+  incidentTriageSkillPath?: string | null;
+  incidentTriageModel?: string | null;
   quickSkillPills?: QuickSkillPill[] | null;
   quickMcpPills?: QuickMcpPill[] | null;
   interviewSkillOptions?: InterviewSkillOption[] | null;
@@ -366,6 +368,8 @@ export async function upsertSkillConfig(
     releaseChangelogModel: opts.releaseChangelogModel ?? null,
     releaseChangelogEffort: opts.releaseChangelogEffort ?? null,
     releaseChangelogBedrockModelId: opts.releaseChangelogBedrockModelId ?? null,
+    incidentTriageSkillPath: opts.incidentTriageSkillPath ?? null,
+    incidentTriageModel: opts.incidentTriageModel ?? null,
     quickSkillPills: opts.quickSkillPills ?? null,
     quickMcpPills: opts.quickMcpPills ?? null,
     interviewSkillOptions: opts.interviewSkillOptions ?? null,
@@ -396,6 +400,7 @@ export async function upsertSkillConfig(
     loadTestGenerationEffort: opts.loadTestGenerationEffort ?? null,
     designModuleEffort: opts.designModuleEffort ?? null,
     designModuleScopingEffort: opts.designModuleScopingEffort ?? null,
+    incidentTriageEffort: opts.incidentTriageEffort ?? null,
     defaultEffort: opts.defaultEffort ?? null,
     approvalMode: approvalModeValue,
     updatedAt: now,

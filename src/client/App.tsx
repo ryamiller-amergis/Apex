@@ -35,7 +35,8 @@ import { FeatureFlagDemo } from './components/FeatureFlagDemo';
 import { useFeatureFlag, useFeatureFlags } from './hooks/useFeatureFlags';
 import { SKILL_LEARNING_FLAG } from '../shared/types/featureFlags';
 import { resolveAccessibleRoute } from './utils/accessibleRoute';
-import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
+import { BUILD_FROM_PROMPT_FLAG, CLOUD_AGENT_GUIDED_LAUNCH_FLAG, INCIDENT_TRIAGE_FLAG, MY_WORK_CLOUD_AGENT_FLAG } from '../shared/types/featureFlags';
+import { INCIDENT_TRIAGE_PERMISSIONS } from '../shared/types/incidentTriage';
 import { BRAINSTORM_FLAG, BRAINSTORM_VIEW } from '../shared/types/brainstorm';
 import { useDocumentDeepLinkProject } from './hooks/useDocumentDeepLinkProject';
 import { useProjects } from './hooks/useProjects';
@@ -140,6 +141,9 @@ const BrainstormWorkspace = lazy(() =>
 const ProdSupportPage = lazy(() =>
   import('./components/GuidedCloudJobs').then((m) => ({ default: m.GuidedCloudJobs })),
 );
+const IncidentTriagePage = lazy(() =>
+  import('./components/IncidentTriagePage').then((m) => ({ default: m.IncidentTriagePage })),
+);
 const CalendarWorkItemAssistantPanel = lazy(() => import('./components/CalendarWorkItemAssistantPanel').then(m => ({ default: m.CalendarWorkItemAssistantPanel })));
 
 const PLANNING_TABS: readonly PlanningTab[] = ['roadmap', 'releases'];
@@ -208,7 +212,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'incident-triage' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -266,6 +270,8 @@ function App() {
                     ? 'brainstorm'
                     : location.pathname === '/prod-support'
                     ? 'prod-support'
+                    : location.pathname === '/incident-triage'
+                    ? 'incident-triage'
                     : 'not-found';
 
   const planningTabSegment = location.pathname.startsWith('/planning')
@@ -458,6 +464,13 @@ function App() {
     permissionsLoaded &&
     effectiveEnabledViews.includes('brainstorm') &&
     (isSuperAdmin || can(BRAINSTORM_VIEW));
+  const incidentTriageFlagOn = !homeFlagsLoading && homeFlags[INCIDENT_TRIAGE_FLAG] === true;
+  const canAccessIncidentTriage =
+    incidentTriageFlagOn &&
+    menuConfigReady &&
+    permissionsLoaded &&
+    effectiveEnabledViews.includes('incident-triage') &&
+    (isSuperAdmin || can(INCIDENT_TRIAGE_PERMISSIONS.view));
   const brainstormSessionId = /^\/brainstorm\/([^/]+)\/?$/.exec(location.pathname)?.[1];
   const restrictedSkipRef = useRef(false);
 
@@ -1024,7 +1037,11 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue)) {
+  if (currentView === 'incident-triage' && (homeFlagsLoading || !menuConfigReady || !permissionsLoaded)) {
+    return <ViewSkeleton />;
+  }
+
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue) || (currentView === 'incident-triage' && !canAccessIncidentTriage)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1076,6 +1093,8 @@ function App() {
             brainstormEnabled={brainstormFlagOn}
             onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
             reportIssueEnabled={reportIssueEnabled}
+            onNavigateIncidentTriage={() => navigateAwayFromHome('/incident-triage')}
+            incidentTriageEnabled={incidentTriageFlagOn}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onNavigateAdmin={() => navigateAwayFromHome('/admin/roles')}
@@ -1140,6 +1159,8 @@ function App() {
             brainstormEnabled={brainstormFlagOn}
             onNavigateReportIssue={() => navigateAwayFromHome('/prod-support')}
             reportIssueEnabled={reportIssueEnabled}
+            onNavigateIncidentTriage={() => navigateAwayFromHome('/incident-triage')}
+            incidentTriageEnabled={incidentTriageFlagOn}
             onNavigateMcpServers={() => navigateAwayFromHome('/mcp-servers')}
             mcpServersEnabled={mcpServersEnabled}
             onOpenChangelog={() => setShowChangelog(true)}
@@ -1653,6 +1674,12 @@ function App() {
             <ErrorBoundary FallbackComponent={ViewErrorFallback}>
               <Suspense fallback={<ViewSkeleton />}>
                 <ProdSupportPage project={selectedProject} />
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'incident-triage' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <IncidentTriagePage project={selectedProject} can={can} isSuperAdmin={isSuperAdmin} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'brainstorm' ? (

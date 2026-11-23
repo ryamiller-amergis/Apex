@@ -3,6 +3,7 @@ export const SKILL_LEARNING_FLAG = 'skill-learning';
 export const MY_WORK_CLOUD_AGENT_FLAG = 'my-work-cloud-agent';
 export const CLOUD_AGENT_GUIDED_LAUNCH_FLAG = 'cloud-agent-guided-launch';
 export const BUILD_FROM_PROMPT_FLAG = 'build-from-prompt';
+export const INCIDENT_TRIAGE_FLAG = 'servicenow-incident-triage';
 
 export type FlagLifecycle = 'active' | 'stale' | 'archived';
 

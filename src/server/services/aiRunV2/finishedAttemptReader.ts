@@ -212,7 +212,8 @@ export function createFinishedAttemptReader(deps?: {
               'evaluation-promptfoo',
               'evaluation-judge',
               'skill-learning',
-              'observability-po-digest'
+              'observability-po-digest',
+              'incident-triage'
             )
             AND NOT EXISTS (
               SELECT 1
@@ -290,7 +291,8 @@ export function createFinishedAttemptReader(deps?: {
             'evaluation-promptfoo',
             'evaluation-judge',
             'skill-learning',
-            'observability-po-digest'
+            'observability-po-digest',
+            'incident-triage'
           )
           AND NOT EXISTS (
             SELECT 1

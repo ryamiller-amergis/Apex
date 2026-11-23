@@ -7,6 +7,7 @@ import {
   documentWorkflowRequiresRepository,
   documentWorkflowResultFile,
   isAiRunV2DocumentSpecification,
+  INCIDENT_TRIAGE_RESULT_FILE,
   OBSERVABILITY_PO_DIGEST_RESULT_FILE,
   SKILL_LEARNING_RESULT_FILE,
   type AiRunV2DocumentSpecification,
@@ -123,6 +124,8 @@ function isExpectedOutputPath(
       return segments.length === 1 && name === SKILL_LEARNING_RESULT_FILE;
     case 'observability-po-digest':
       return segments.length === 1 && name === OBSERVABILITY_PO_DIGEST_RESULT_FILE;
+    case 'incident-triage':
+      return segments.length === 1 && name === INCIDENT_TRIAGE_RESULT_FILE;
     default: {
       const unhandled: never = workflowClass;
       throw new Error(`Unsupported document workflow: ${String(unhandled)}`);
@@ -241,6 +244,11 @@ function assertExpectedOutputSet(
     case 'observability-po-digest':
       if (names.length !== 1 || names[0] !== OBSERVABILITY_PO_DIGEST_RESULT_FILE) {
         throw new Error(`Document workflow did not produce ${OBSERVABILITY_PO_DIGEST_RESULT_FILE}`);
+      }
+      return;
+    case 'incident-triage':
+      if (names.length !== 1 || names[0] !== INCIDENT_TRIAGE_RESULT_FILE) {
+        throw new Error(`Document workflow did not produce ${INCIDENT_TRIAGE_RESULT_FILE}`);
       }
       return;
     default: {

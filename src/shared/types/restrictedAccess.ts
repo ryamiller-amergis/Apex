@@ -40,6 +40,7 @@ export const MODULE_VIEW_PERMISSIONS: Record<MenuItemKey, string> = {
   'mcp-servers': 'mcp-servers:view',
   brainstorm: 'brainstorm:view',
   'prod-support': 'chat:create',
+  'incident-triage': 'incident-triage:view',
 };
 
 export interface RestrictedUserAccess {

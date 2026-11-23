@@ -23,6 +23,7 @@ function splitMigration() {
 const WORKFLOWS_ADDED_AFTER_EXPAND = new Set<string>([
   'evaluation_judge',
   'release_changelog',
+  'incident_triage',
 ]);
 
 const snake = (field: string) => field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);

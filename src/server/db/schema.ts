@@ -101,6 +101,11 @@ import type { MenuItemKey } from '../../shared/types/menuSettings';
 import type { ArtifactDoneEventType } from '../../shared/types/homeDashboard';
 import type { ProjectAccessRequestStatus } from '../../shared/types/platformAdmin';
 import type { FlagLifecycle, FlagRuleType, FlagAuditAction } from '../../shared/types/featureFlags';
+import type {
+  IncidentTriageAnalysisStatus,
+  IncidentTriageResult,
+  IncidentTriageTeamsStatus,
+} from '../../shared/types/incidentTriage';
 import type { WorkItemType } from '../../shared/types/featureRequest';
 import type { DesignModuleIconKey } from '../../shared/types/designModule';
 import type {
@@ -3590,6 +3595,95 @@ export const observabilityPoDigestRuns = pgTable('observability_po_digest_runs',
     'observability_po_digest_runs_slot_check',
     sql`${t.slot} IN ('morning_6am', 'evening_6pm', 'on_demand')`,
   ),
+}));
+
+export const incidentTriageSettings = pgTable('incident_triage_settings', {
+  project: text('project').primaryKey(),
+  enabled: boolean('enabled').notNull().default(false),
+  assignmentGroupIds: jsonb('assignment_group_ids').$type<string[]>().notNull().default([]),
+  backfillDays: integer('backfill_days').notNull().default(7),
+  watermark: timestamp('watermark', { withTimezone: true, mode: 'string' }),
+  lastSweepAt: timestamp('last_sweep_at', { withTimezone: true, mode: 'string' }),
+  lastSweepError: text('last_sweep_error'),
+  teamsWebhook: jsonb('teams_webhook').$type<Record<string, unknown>>(),
+  updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const incidentTriageIncidents = pgTable('incident_triage_incidents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  project: text('project').notNull(),
+  sysId: text('sys_id').notNull(),
+  number: text('number').notNull(),
+  shortDescription: text('short_description'),
+  description: text('description'),
+  closeNotes: text('close_notes'),
+  state: text('state'),
+  priority: text('priority'),
+  impact: text('impact'),
+  urgency: text('urgency'),
+  category: text('category'),
+  subcategory: text('subcategory'),
+  assignmentGroupName: text('assignment_group_name'),
+  closeCode: text('close_code'),
+  openedAt: timestamp('opened_at', { withTimezone: true, mode: 'string' }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+  sysUpdatedOn: timestamp('sys_updated_on', { withTimezone: true, mode: 'string' }),
+  contentHash: text('content_hash').notNull(),
+  firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  projectSysIdUq: unique('incident_triage_incidents_project_sys_id_key').on(t.project, t.sysId),
+  projectUpdatedIdx: index('idx_incident_triage_incidents_project_updated')
+    .on(t.project, t.sysUpdatedOn.desc()),
+}));
+
+export const incidentTriageAnalyses = pgTable('incident_triage_analyses', {
+  runId: uuid('run_id').primaryKey(),
+  incidentId: uuid('incident_id').notNull().references(() => incidentTriageIncidents.id, { onDelete: 'cascade' }),
+  contentHash: text('content_hash').notNull(),
+  sysUpdatedOn: timestamp('sys_updated_on', { withTimezone: true, mode: 'string' }),
+  status: text('status').$type<IncidentTriageAnalysisStatus>().notNull(),
+  requestedBy: text('requested_by'),
+  model: text('model'),
+  effort: text('effort').$type<EffortLevel>(),
+  repository: text('repository'),
+  groundedSha: text('grounded_sha'),
+  verdict: text('verdict'),
+  area: text('area'),
+  severity: text('severity'),
+  result: jsonb('result').$type<IncidentTriageResult>(),
+  failureDetail: text('failure_detail'),
+  teamsStatus: text('teams_status').$type<IncidentTriageTeamsStatus>().notNull().default('pending'),
+  teamsAttempts: integer('teams_attempts').notNull().default(0),
+  teamsPostedAt: timestamp('teams_posted_at', { withTimezone: true, mode: 'string' }),
+  admissionAttempts: integer('admission_attempts').notNull().default(0),
+  requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  scheduledUq: uniqueIndex('uq_incident_triage_analyses_scheduled')
+    .on(t.incidentId, t.contentHash)
+    .where(sql`${t.requestedBy} IS NULL`),
+  statusIdx: index('idx_incident_triage_analyses_status').on(t.status),
+  statusCheck: check(
+    'incident_triage_analyses_status_check',
+    sql`${t.status} IN ('pending', 'running', 'completed', 'failed')`,
+  ),
+  teamsStatusCheck: check(
+    'incident_triage_analyses_teams_status_check',
+    sql`${t.teamsStatus} IN ('pending', 'posted', 'failed', 'skipped')`,
+  ),
+}));
+
+export const incidentTriageIncidentsRelations = relations(incidentTriageIncidents, ({ many }) => ({
+  analyses: many(incidentTriageAnalyses),
+}));
+
+export const incidentTriageAnalysesRelations = relations(incidentTriageAnalyses, ({ one }) => ({
+  incident: one(incidentTriageIncidents, {
+    fields: [incidentTriageAnalyses.incidentId],
+    references: [incidentTriageIncidents.id],
+  }),
 }));
 
 export const traceEventsRelations = relations(traceEvents, ({ one }) => ({

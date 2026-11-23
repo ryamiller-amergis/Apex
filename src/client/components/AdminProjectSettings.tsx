@@ -11,6 +11,7 @@ import {
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
+import { INCIDENT_TRIAGE_DEFAULT_SKILL_PATH } from '../../shared/constants/projectSkillWorkflows';
 import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
 import { effortLabel } from '../../shared/utils/effort';
 import { sortByLabel } from '../utils/sortByLabel';
@@ -286,7 +287,8 @@ type SkillPathKey =
   | 'loadTestGenerationSkillPath'
   | 'designModuleSkillPath'
   | 'designModuleScopingSkillPath'
-  | 'releaseChangelogSkillPath';
+  | 'releaseChangelogSkillPath'
+  | 'incidentTriageSkillPath';
 
 type ModelKey =
   | 'interviewModel'
@@ -305,7 +307,8 @@ type ModelKey =
   | 'loadTestGenerationModel'
   | 'designModuleModel'
   | 'designModuleScopingModel'
-  | 'releaseChangelogModel';
+  | 'releaseChangelogModel'
+  | 'incidentTriageModel';
 
 type EffortKey =
   | 'interviewEffort'
@@ -323,7 +326,8 @@ type EffortKey =
   | 'loadTestGenerationEffort'
   | 'designModuleEffort'
   | 'designModuleScopingEffort'
-  | 'releaseChangelogEffort';
+  | 'releaseChangelogEffort'
+  | 'incidentTriageEffort';
 
 interface PipelineStageDef {
   id: string;
@@ -525,6 +529,15 @@ const SIDECAR_STAGES: PipelineStageDef[] = [
     emptyLabel: 'Default (.cursor/skills/release-changelog/SKILL.md)',
     modelKey: 'releaseChangelogModel',
     effortKey: 'releaseChangelogEffort',
+  },
+  {
+    id: 'incident-triage',
+    label: 'ServiceNow Incident Triage',
+    desc: 'Triages ServiceNow incidents against MaxView code and telemetry',
+    skillKey: 'incidentTriageSkillPath',
+    emptyLabel: `Default (${INCIDENT_TRIAGE_DEFAULT_SKILL_PATH})`,
+    modelKey: 'incidentTriageModel',
+    effortKey: 'incidentTriageEffort',
   },
 ];
 
@@ -1241,6 +1254,7 @@ interface EditState {
   designModuleSkillPath: string;
   designModuleScopingSkillPath: string;
   releaseChangelogSkillPath: string;
+  incidentTriageSkillPath: string;
   interviewModel: string;
   prdModel: string;
   adrModel: string;
@@ -1259,6 +1273,7 @@ interface EditState {
   designModuleModel: string;
   designModuleScopingModel: string;
   releaseChangelogModel: string;
+  incidentTriageModel: string;
   defaultModel: string;
   interviewEffort: EffortLevel | '';
   prdEffort: EffortLevel | '';
@@ -1280,6 +1295,7 @@ interface EditState {
   designModuleEffort: EffortLevel | '';
   designModuleScopingEffort: EffortLevel | '';
   releaseChangelogEffort: EffortLevel | '';
+  incidentTriageEffort: EffortLevel | '';
   defaultEffort: EffortLevel | '';
   prdReviewBedrockModelId: string;
   releaseChangelogBedrockModelId: string;
@@ -1323,13 +1339,13 @@ const emptyEdit = (): EditState => ({
   designDocAssistantSkillPath: '', designPrototypeSkillPath: '', testCaseSkillPath: '', designDocValidationSkillPath: '', prdValidationSkillPath: '',
   developmentSkillPath: '', standupSkillPath: '', featureRequestSkillPath: '',
   technicalSkillPath: '', issueSkillPath: '', loadTestGenerationSkillPath: '', designModuleSkillPath: '',
-  designModuleScopingSkillPath: '', releaseChangelogSkillPath: '',
+  designModuleScopingSkillPath: '', releaseChangelogSkillPath: '', incidentTriageSkillPath: '',
   interviewModel: '', prdModel: '', designDocModel: '',
   adrModel: '',
   designDocAssistantModel: '', designPrototypeModel: '', testCaseModel: '', designDocValidationModel: '', prdValidationModel: '',
   developmentModel: '', standupModel: '', featureRequestModel: '',
   technicalModel: '', issueModel: '', loadTestGenerationModel: '', designModuleModel: '',
-  designModuleScopingModel: '', releaseChangelogModel: '',
+  designModuleScopingModel: '', releaseChangelogModel: '', incidentTriageModel: '',
   defaultModel: '',
   interviewEffort: '', prdEffort: '', adrEffort: '', designDocEffort: '',
   designDocAssistantEffort: '', designPrototypeEffort: '', testCaseEffort: '',
@@ -1338,6 +1354,7 @@ const emptyEdit = (): EditState => ({
   technicalEffort: '', issueEffort: '', calendarAssistantEffort: '',
   loadTestGenerationEffort: '', designModuleEffort: '', designModuleScopingEffort: '',
   releaseChangelogEffort: '',
+  incidentTriageEffort: '',
   defaultEffort: '',
   prdReviewBedrockModelId: '',
   releaseChangelogBedrockModelId: '',
@@ -1909,6 +1926,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designModuleSkillPath: config.designModuleSkillPath ?? '',
       designModuleScopingSkillPath: config.designModuleScopingSkillPath ?? '',
       releaseChangelogSkillPath: config.releaseChangelogSkillPath ?? '',
+      incidentTriageSkillPath: config.incidentTriageSkillPath ?? '',
       interviewModel: config.interviewModel ?? '',
       prdModel: config.prdModel ?? '',
       adrModel: config.adrModel ?? '',
@@ -1927,6 +1945,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designModuleModel: config.designModuleModel ?? '',
       designModuleScopingModel: config.designModuleScopingModel ?? '',
       releaseChangelogModel: config.releaseChangelogModel ?? '',
+      incidentTriageModel: config.incidentTriageModel ?? '',
       defaultModel: config.defaultModel ?? '',
       interviewEffort: config.interviewEffort ?? '',
       prdEffort: config.prdEffort ?? '',
@@ -1948,6 +1967,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
       designModuleEffort: config.designModuleEffort ?? '',
       designModuleScopingEffort: config.designModuleScopingEffort ?? '',
       releaseChangelogEffort: config.releaseChangelogEffort ?? '',
+      incidentTriageEffort: config.incidentTriageEffort ?? '',
       defaultEffort: config.defaultEffort ?? '',
       prdReviewBedrockModelId: config.prdReviewBedrockModelId ?? '',
       releaseChangelogBedrockModelId: config.releaseChangelogBedrockModelId ?? '',
@@ -2043,6 +2063,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designModuleSkillPath: edit.designModuleSkillPath || null,
         designModuleScopingSkillPath: edit.designModuleScopingSkillPath || null,
         releaseChangelogSkillPath: edit.releaseChangelogSkillPath || null,
+        incidentTriageSkillPath: edit.incidentTriageSkillPath || null,
         interviewModel: edit.interviewModel || null,
         prdModel: edit.prdModel || null,
         adrModel: edit.adrModel || null,
@@ -2061,6 +2082,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designModuleModel: edit.designModuleModel || null,
         designModuleScopingModel: edit.designModuleScopingModel || null,
         releaseChangelogModel: edit.releaseChangelogModel || null,
+        incidentTriageModel: edit.incidentTriageModel || null,
         defaultModel: edit.defaultModel || null,
         interviewEffort: edit.interviewEffort || null,
         prdEffort: edit.prdEffort || null,
@@ -2082,6 +2104,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
         designModuleEffort: edit.designModuleEffort || null,
         designModuleScopingEffort: edit.designModuleScopingEffort || null,
         releaseChangelogEffort: edit.releaseChangelogEffort || null,
+        incidentTriageEffort: edit.incidentTriageEffort || null,
         defaultEffort: edit.defaultEffort || null,
         prdReviewBedrockModelId: edit.prdReviewBedrockModelId || null,
         releaseChangelogBedrockModelId: edit.releaseChangelogBedrockModelId || null,
