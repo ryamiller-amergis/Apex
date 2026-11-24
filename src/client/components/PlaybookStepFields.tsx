@@ -32,7 +32,11 @@ import {
   playbookConnector,
   playbookConnectorOperation,
 } from '../../shared/types/playbookConnectors';
-import { usePlaybookSkills } from '../hooks/usePlaybookCanvas';
+import {
+  usePlaybookAssignees,
+  usePlaybookSkills,
+  type PlaybookAssigneeOption,
+} from '../hooks/usePlaybookCanvas';
 import { useAvailableModels } from '../hooks/useProjectSkillConfig';
 import {
   comparableOutputFields,
@@ -221,6 +225,58 @@ function skillTitle(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+function assigneeBadge(person: PlaybookAssigneeOption): string {
+  if (!person.apexUserId) return 'Not in Apex yet';
+  return person.canRunPlaybooks ? 'Can run Playbooks' : 'No Playbook access';
+}
+
+const AssigneePicker: React.FC<PlaybookStepFieldsProps> = ({ project, node, config, disabled, setConfig }) => {
+  const assignees = usePlaybookAssignees(project);
+  const people = assignees.data?.assignees ?? [];
+  const email = typeof config.assigneeEmail === 'string' ? config.assigneeEmail : undefined;
+  const legacyId = typeof config.assigneeUserId === 'string' ? config.assigneeUserId : undefined;
+  const legacyMatch = legacyId ? people.find((person) => person.apexUserId === legacyId) : undefined;
+  const options: PlaybookPickerOption[] = people.map((person) => ({
+    value: person.email,
+    label: person.displayName,
+    description: person.email,
+    badges: [assigneeBadge(person)],
+  }));
+  if (email && !people.some((person) => person.email.toLowerCase() === email.toLowerCase())) {
+    options.unshift({ value: email, label: email, description: 'Not on a team in this Azure DevOps project' });
+  }
+  if (legacyId && !email && !legacyMatch) {
+    options.unshift({ value: legacyId, label: legacyId, description: 'Set by user ID. Pick a person to replace it.' });
+  }
+  const value = email ?? legacyMatch?.email ?? legacyId;
+  return (
+    <>
+      <PlaybookOptionPicker
+        id={`${node.id}-assignee`}
+        value={value}
+        options={options}
+        loading={assignees.isPending}
+        placeholder="Choose a person"
+        searchPlaceholder="Search people"
+        icon={<UserCheck size={14} />}
+        disabled={disabled}
+        onChange={(next) => {
+          const { assigneeUserId: _id, assigneeEmail: _email, ...rest } = config;
+          if (!next) setConfig(rest);
+          else if (next === legacyId && !legacyMatch) setConfig({ ...rest, assigneeUserId: next });
+          else setConfig({ ...rest, assigneeEmail: next });
+        }}
+        {...{ 'data-testid': 'playbook-inspector-field-assignee' }}
+      />
+      {assignees.isError ? (
+        <p className={styles.fieldHint} role="alert">
+          Azure DevOps team members could not be loaded. {assignees.error instanceof Error ? assignees.error.message : ''}
+        </p>
+      ) : null}
+    </>
+  );
+};
+
 const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   const { project, node, config, disabled, setField, bindings, referencesFor } = props;
   const skills = usePlaybookSkills(project);
@@ -232,6 +288,7 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
     description: skill.description,
     badges: skill.capabilities ?? [],
     disabled: !skill.runnable,
+    ...(skill.group ? { group: skill.group } : {}),
     ...(skill.unavailableReason ? { disabledReason: skill.unavailableReason } : {}),
   }));
   const modelOptions: PlaybookPickerOption[] = (models.data ?? []).map((model) => ({
@@ -321,6 +378,17 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           {...{ 'data-testid': "playbook-inspector-field-mcpProfile" }}
         />
       </Field>
+      {node.stepType === 'interactive-agent' ? (
+        <Field
+          label="Assignee"
+          htmlFor={`${node.id}-assignee`}
+          required
+          hint="The person who chats with the agent and approves its result. They need to sign in to Apex and be able to run Playbooks."
+          {...{ 'data-testid': `playbook-field-${node.id}-assignee` }}
+        >
+          <AssigneePicker {...props} />
+        </Field>
+      ) : null}
       <Field label="Deadline" htmlFor={`${node.id}-deadline`} hint="Blank uses the step's default." {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}>
         <DeadlineField
           id={`${node.id}-deadline`}
@@ -1241,6 +1309,10 @@ export const STEP_FIELD_RENDERERS: Record<string, {
 }> = {
   'cursor-agent': {
     handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes'],
+    Component: CursorAgentFields,
+  },
+  'interactive-agent': {
+    handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes', 'assigneeUserId', 'assigneeEmail'],
     Component: CursorAgentFields,
   },
   'approval-gate': {

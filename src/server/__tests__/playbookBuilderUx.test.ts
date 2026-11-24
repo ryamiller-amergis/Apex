@@ -77,13 +77,15 @@ describe('describePlaybookSkill', () => {
       description: 'Looks for problems.',
       capabilities: ['repository-read'],
       runnable: true,
+      group: 'base',
     });
   });
 
-  it('lists foundation skills, including the MaxView investigation Skill', async () => {
+  it('lists foundation skills and keeps the MaxView investigation Skill out of the base list', async () => {
     const skills = await listPlaybookSkillOptions();
     expect(skills.length).toBeGreaterThan(1);
-    expect(skills.map((skill) => skill.path)).toContain(
+    expect(skills.every((skill) => skill.group === 'base')).toBe(true);
+    expect(skills.map((skill) => skill.path)).not.toContain(
       'foundation-skills/foundation/maxview-incident-investigation/SKILL.md',
     );
     const moved = await loadPlaybookSkillContent(

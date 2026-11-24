@@ -61,6 +61,7 @@ export function suspendReasonLabel(reason: string): string {
   if (reason === 'agent_run') return 'Waiting for the agent to finish its turn';
   if (reason === 'interview') return 'Waiting for the interview brief to be approved';
   if (reason === 'build') return 'Waiting for the build to finish';
+  if (reason === 'interactive_agent') return 'Waiting for the assignee to approve the agent result';
   return reason;
 }
 

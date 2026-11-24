@@ -112,6 +112,36 @@ export function usePlaybookGate(
   });
 }
 
+export function useInteractiveAgentTurn(project: string, runId: string, stepRunId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, PlaybookRunApiError, string>({
+    mutationFn: (message) => apiFetch(
+      `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/interactive-turn?project=${encodeURIComponent(project)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      },
+    ),
+    onSuccess: () => invalidateRunQueries(queryClient, project, runId),
+  });
+}
+
+export function useInteractiveAgentDecision(project: string, runId: string, stepRunId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, PlaybookRunApiError, 'approved' | 'rejected'>({
+    mutationFn: (decision) => apiFetch(
+      `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/interactive-decision?project=${encodeURIComponent(project)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      },
+    ),
+    onSuccess: () => invalidateRunQueries(queryClient, project, runId),
+  });
+}
+
 export function usePlaybookGateDecision(project: string, runId: string, stepRunId: string) {
   const queryClient = useQueryClient();
   return useMutation<unknown, PlaybookRunApiError, {
