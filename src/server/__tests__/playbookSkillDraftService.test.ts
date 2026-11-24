@@ -86,6 +86,83 @@ describe('project skill drafts', () => {
   });
 });
 
+describe('reading the model reply', () => {
+  const base = { project: 'Apex', userId: 'u', title: 'T', skillType: 'interactive' as const, request: 'Do it' };
+
+  beforeEach(() => {
+    invokeBedrockText.mockReset();
+    listBedrockModels.mockReset();
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('reads the tagged shape the prompt asks for, keeping code fences and quotes in the body', async () => {
+    invokeBedrockText.mockResolvedValue([
+      '<description>Writes "customer" release notes.</description>',
+      '<instructions>',
+      '1. Read the PRs.',
+      '',
+      '```',
+      'Release 1.2 — "Highlights"',
+      '```',
+      '</instructions>',
+    ].join('\n'));
+    const draft = await generateProjectSkillDraft(base);
+    expect(draft.description).toBe('Writes "customer" release notes.');
+    expect(draft.instructions).toBe('1. Read the PRs.\n\n```\nRelease 1.2 — "Highlights"\n```');
+  });
+
+  it('ignores a code fence around the tagged reply and text before it', async () => {
+    invokeBedrockText.mockResolvedValue(
+      'Here you go:\n```xml\n<description>d</description>\n<instructions>\nStep one\n</instructions>\n```',
+    );
+    await expect(generateProjectSkillDraft(base)).resolves.toEqual({ description: 'd', instructions: 'Step one' });
+  });
+
+  it('accepts a tagged reply with no closing instructions tag', async () => {
+    invokeBedrockText.mockResolvedValue('<description>d</description>\n<instructions>\nStep one');
+    await expect(generateProjectSkillDraft(base)).resolves.toEqual({ description: 'd', instructions: 'Step one' });
+  });
+
+  it('still accepts JSON whose instructions hold a code fence', async () => {
+    invokeBedrockText.mockResolvedValue(
+      '```json\n{"description":"d","instructions":"1. Do it\\n```\\ncode\\n```\\n2. Done"}\n```',
+    );
+    const draft = await generateProjectSkillDraft(base);
+    expect(draft.description).toBe('d');
+    expect(draft.instructions).toBe('1. Do it\n```\ncode\n```\n2. Done');
+  });
+
+  it('accepts bare JSON with text around it', async () => {
+    invokeBedrockText.mockResolvedValue('Sure. {"description":"d","instructions":"i"} Hope that helps.');
+    await expect(generateProjectSkillDraft(base)).resolves.toEqual({ description: 'd', instructions: 'i' });
+  });
+
+  it('says the reply was unreadable when it has neither shape', async () => {
+    invokeBedrockText.mockResolvedValue('I cannot help with that.');
+    await expect(generateProjectSkillDraft(base)).rejects.toThrow('could not read');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('unreadable reply'));
+  });
+
+  it('names the missing part when the reply is half there', async () => {
+    invokeBedrockText.mockResolvedValue('<description>d</description><instructions>  </instructions>');
+    await expect(generateProjectSkillDraft(base)).rejects.toThrow('no instructions');
+    invokeBedrockText.mockResolvedValue('{"description":"","instructions":"i"}');
+    await expect(generateProjectSkillDraft(base)).rejects.toThrow('no description');
+  });
+
+  it('turns a truncated reply into advice the author can act on', async () => {
+    const truncated = Object.assign(new Error('Model response was truncated'), { name: 'BedrockModelTruncatedError' });
+    invokeBedrockText.mockRejectedValue(truncated);
+    await expect(generateProjectSkillDraft(base)).rejects.toThrow('cut off');
+  });
+
+  it('passes other model errors through', async () => {
+    invokeBedrockText.mockRejectedValue(new Error('throttled'));
+    await expect(generateProjectSkillDraft(base)).rejects.toThrow('throttled');
+  });
+});
 describe('skill file conversion', () => {
   it('reads the text of a PDF, closes the parser, and adds .txt to the name', async () => {
     pdfGetText.mockResolvedValue({ text: 'Restart the queue worker\n' });

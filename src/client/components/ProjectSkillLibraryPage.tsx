@@ -4,6 +4,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   Bot,
   FileText,
@@ -158,6 +159,8 @@ const SkillEditor: React.FC<{
   const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [readingFiles, setReadingFiles] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Shown inside the Draft with AI panel, next to the button that caused it. */
+  const [aiError, setAiError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const slug = skillNameFromTitle(title);
@@ -168,13 +171,13 @@ const SkillEditor: React.FC<{
   useEscape(onClose);
 
   async function onGenerate() {
-    setError(null);
+    setAiError(null);
     if (!slug) {
-      setError('Give the skill a title before generating a draft.');
+      setAiError('Give the skill a title before generating a draft.');
       return;
     }
     if (!request.trim()) {
-      setError('Say what the skill should do before generating a draft.');
+      setAiError('Say what the skill should do before generating a draft.');
       return;
     }
     try {
@@ -191,7 +194,7 @@ const SkillEditor: React.FC<{
         setPendingDraft(draft);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'The draft could not be generated.');
+      setAiError(err instanceof Error ? err.message : 'The draft could not be generated.');
     }
   }
 
@@ -354,6 +357,24 @@ const SkillEditor: React.FC<{
                 <span className={styles.aiStatus} role="status">You can keep editing while the draft runs.</span>
               ) : null}
             </div>
+            {aiError ? (
+              <div className={styles.aiError} role="alert" data-testid="skill-library-ai-error">
+                <AlertTriangle size={16} className={styles.aiErrorIcon} aria-hidden />
+                <div className={styles.aiErrorText}>
+                  <strong>Could not draft the skill</strong>
+                  <span>{aiError}</span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.aiErrorDismiss}
+                  onClick={() => setAiError(null)}
+                  aria-label="Dismiss the error"
+                  data-testid="skill-library-ai-error-dismiss"
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              </div>
+            ) : null}
             {pendingDraft ? (
               <div className={styles.draftReady} role="status" data-testid="skill-library-ai-ready">
                 <span>A draft is ready. It will replace the description and instructions below.</span>

@@ -33,8 +33,11 @@ function buildPrompt(input: {
     mode,
     'The agent can read the project repository. It cannot write files, call cloud tools, or reach the internet.',
     '',
-    'Return JSON only, with this exact shape:',
-    '{"description":"one sentence saying what the skill does and when to use it","instructions":"the skill body in Markdown"}',
+    'Reply in exactly this shape and write nothing before or after it:',
+    '<description>one sentence saying what the skill does and when to use it</description>',
+    '<instructions>',
+    'the skill body in Markdown, written as plain text with real line breaks',
+    '</instructions>',
     '',
     'Rules for the instructions:',
     '- Start with a short purpose, then numbered steps the agent follows, then what the final answer must contain.',
@@ -47,25 +50,53 @@ function buildPrompt(input: {
   ].join('\n');
 }
 
-function extractJson(text: string): Record<string, unknown> {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  const candidate = fenced?.[1] ?? text;
-  const first = candidate.indexOf('{');
-  const last = candidate.lastIndexOf('}');
-  if (first < 0 || last <= first) {
-    throw new ProjectSkillDraftError('The AI reply did not contain a draft. Try again.');
-  }
-  try {
-    const parsed = JSON.parse(candidate.slice(first, last + 1)) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
+const UNREADABLE_REPLY =
+  'The AI answered in a form Apex could not read. Try again, or pick a different model.';
+
+/** Parses an object from a reply that holds JSON, bare or inside a Markdown code fence. */
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  const candidates: string[] = [text.trim()];
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```\s*$/i.exec(text.trim());
+  if (fenced) candidates.push(fenced[1]);
+  const first = text.indexOf('{');
+  const last = text.lastIndexOf('}');
+  if (first >= 0 && last > first) candidates.push(text.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Try the next shape.
     }
-  } catch {
-    // Reported below.
   }
-  throw new ProjectSkillDraftError('The AI reply did not contain a draft. Try again.');
+  return null;
 }
 
+/**
+ * Reads the model's reply. The prompt asks for tagged text because Markdown inside a JSON string
+ * breaks easily: raw line breaks, unescaped quotes and code fences all defeat a JSON parse.
+ * A JSON reply is still accepted, since some models answer that way regardless.
+ */
+function parseDraftReply(text: string): { description: string; instructions: string } | null {
+  const description = /<description>([\s\S]*?)<\/description>/i.exec(text)?.[1];
+  const opened = /<instructions>/i.exec(text);
+  if (description !== undefined && opened) {
+    const rest = text.slice(opened.index + opened[0].length);
+    const closed = rest.search(/<\/instructions>\s*$/i);
+    return {
+      description: description.trim(),
+      instructions: (closed >= 0 ? rest.slice(0, closed) : rest.replace(/<\/instructions>[\s\S]*$/i, '')).trim(),
+    };
+  }
+  const parsed = parseJsonObject(text);
+  if (!parsed) return null;
+  return {
+    description: typeof parsed.description === 'string' ? parsed.description.trim() : '',
+    instructions: typeof parsed.instructions === 'string' ? parsed.instructions.trim() : '',
+  };
+}
 function stripFrontmatter(body: string): string {
   return body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
 }
@@ -97,23 +128,42 @@ export async function generateProjectSkillDraft(input: {
     throw new ProjectSkillDraftError('That model is not available for drafts. Pick another and try again.');
   }
 
-  const reply = await invokeBedrockText(
-    buildPrompt({ title, skillType: input.skillType, request }),
-    {
-      feature: 'other',
-      project: input.project,
-      entityType: 'playbook-skill-draft',
-      userId: input.userId,
-    },
-    { maxTokens: 8192, modelId },
-  );
-  const parsed = extractJson(reply);
-  const description = typeof parsed.description === 'string' ? parsed.description.trim() : '';
-  const instructions = typeof parsed.instructions === 'string' ? stripFrontmatter(parsed.instructions) : '';
-  if (!description || !instructions) {
-    throw new ProjectSkillDraftError('The AI reply did not contain a draft. Try again.');
+  let reply: string;
+  try {
+    reply = await invokeBedrockText(
+      buildPrompt({ title, skillType: input.skillType, request }),
+      {
+        feature: 'other',
+        project: input.project,
+        entityType: 'playbook-skill-draft',
+        userId: input.userId,
+      },
+      { maxTokens: 8192, modelId },
+    );
+  } catch (error) {
+    // Matched by name so this file does not need the Bedrock error class at import time.
+    if (error instanceof Error && error.name === 'BedrockModelTruncatedError') {
+      throw new ProjectSkillDraftError('The draft was cut off because it ran too long. Narrow the request and try again.');
+    }
+    throw error;
   }
-  if (Buffer.byteLength(instructions, 'utf8') > MAX_INSTRUCTIONS_BYTES) {
+  const parsed = parseDraftReply(reply);
+  if (!parsed) {
+    console.warn(
+      `[playbook-skill-draft] unreadable reply (${reply.length} chars): ${JSON.stringify(reply.slice(0, 200))}`,
+    );
+    throw new ProjectSkillDraftError(UNREADABLE_REPLY);
+  }
+  const description = parsed.description;
+  const instructions = stripFrontmatter(parsed.instructions);
+  if (!description || !instructions) {
+    console.warn(
+      `[playbook-skill-draft] reply missing ${description ? 'instructions' : 'description'} (${reply.length} chars)`,
+    );
+    throw new ProjectSkillDraftError(
+      `The AI reply had no ${description ? 'instructions' : 'description'}. Try again, or add more detail to the request.`,
+    );
+  }  if (Buffer.byteLength(instructions, 'utf8') > MAX_INSTRUCTIONS_BYTES) {
     throw new ProjectSkillDraftError('The draft came back too long. Narrow the request and try again.');
   }
   return {
