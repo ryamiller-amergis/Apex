@@ -27,7 +27,69 @@
 .panel[data-status='expired'] { --panel-tint: var(--error-color); }
 
 .panelExpanded {
-  height: min(72%, 40rem);
+  width: min(66rem, calc(100% - 28px));
+  height: min(82%, 48rem);
+}
+
+/* Fills the run graph frame, leaving a margin so the graph edge still shows. */
+.panelMaximized {
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  width: auto;
+  height: auto;
+  max-height: none;
+  transform: none;
+  animation: none;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.side {
+  flex: none;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.content[data-split='true'] {
+  flex-direction: row;
+  border-top: 1px solid var(--border-color);
+}
+
+.content[data-split='true'] .side {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 min(34rem, 44%);
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+}
+
+.content[data-split='true'] .decision {
+  flex: 1;
+  padding-bottom: 0.9rem;
+}
+
+.content[data-split='true'] .decisionReport {
+  flex: 1;
+  min-height: 8rem;
+  max-height: none;
+}
+
+.content[data-split='true'] .decision textarea {
+  min-height: 140px;
+  resize: vertical;
 }
 
 .decision {

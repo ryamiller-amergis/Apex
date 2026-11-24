@@ -30,6 +30,7 @@ import type { CloudAgentActivityKind } from '../../shared/types/devWorkbench';
 import { usePlaybookStepActivity, usePlaybookStepOutput } from '../hooks/usePlaybookRuns';
 import { useCloudAgentActivityStream } from '../hooks/useDevWorkbench';
 import { cloudAgentActivityLabel, cloudAgentPhaseIndex } from '../utils/cloudAgentActivityLog';
+import { isInteractiveTaskDraft } from '../../shared/utils/playbookAgentTask';
 import { absoluteTime, stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import { MarkdownWithMermaid } from './MarkdownWithMermaid';
@@ -183,12 +184,15 @@ export const LogConsole: React.FC<{
   showKindFilters?: boolean;
   /** Replaces the generic "Working" pulse when the stream knows the current step. */
   liveLabel?: string | null;
+  /** Shown instead of "Nothing was logged." when the log is empty and not live. */
+  emptyLabel?: string;
 }> = ({
   entries,
   live,
   startedAt,
   showKindFilters = true,
   liveLabel,
+  emptyLabel = 'Nothing was logged.',
 }) => {
   const ref = useRef<HTMLOListElement>(null);
   const [follow, setFollow] = useState(true);
@@ -252,7 +256,7 @@ export const LogConsole: React.FC<{
       >
         {shown.length === 0 ? (
           <li className={styles.consoleEmpty}>
-            {live ? 'Waiting for the first output…' : filter === 'all' ? 'Nothing was logged.' : 'No entries of this kind.'}
+            {live ? 'Waiting for the first output…' : filter === 'all' ? emptyLabel : 'No entries of this kind.'}
           </li>
         ) : null}
         {shown.map((entry) => {
@@ -341,6 +345,15 @@ export const StepLog: React.FC<{
     return lifecycleEntries(step, suspension);
   }, [activity.data?.entries, cloud.events, isAgent, isCloud, step, suspension]);
 
+  // An interactive Agent task parks between turns with no agent run. Nothing is queued: the next
+  // turn starts when the assignee sends a message.
+  const awaitingMessage = isAgent
+    && step.status === 'suspended'
+    && !step.agentRunId
+    && isInteractiveTaskDraft(step.outputInline);
+  const turnCount = awaitingMessage
+    ? Number((step.outputInline as { turnCount?: unknown }).turnCount) || 0
+    : 0;
   const agentRun = activity.data?.agentRun;
   const cloudLabel = isCloud && live
     ? (cloudAgentActivityLabel(cloud.events) ?? (cloud.error ? null : 'Connecting to the agent…'))
@@ -363,7 +376,14 @@ export const StepLog: React.FC<{
           </div>
         </div>
       ) : null}
-      {isAgent || isCloud ? (
+      {awaitingMessage ? (
+        <p className={styles.awaiting} {...{ 'data-testid': 'playbook-step-awaiting-message' }}>
+          <MessageSquare size={13} aria-hidden />
+          {turnCount === 0
+            ? 'Waiting for your message. The agent starts when you send one.'
+            : 'The agent finished its turn. Send another message, or approve the proposal.'}
+        </p>
+      ) : isAgent || isCloud ? (
         <ol className={styles.phases} aria-label="Progress">
           {AGENT_PHASES.map((item, index) => (
             <li
@@ -381,7 +401,7 @@ export const StepLog: React.FC<{
         <p className={styles.nowDoing} {...{ 'data-testid': 'playbook-cloud-agent-now' }}>
           <Loader2 size={13} aria-hidden className={styles.spin} /> {cloudLabel}
         </p>
-      ) : agentRun?.label && live ? (
+      ) : agentRun?.label && live && !awaitingMessage ? (
         <p className={styles.nowDoing}>
           <Loader2 size={13} aria-hidden className={styles.spin} /> {agentRun.label}
         </p>
@@ -390,10 +410,11 @@ export const StepLog: React.FC<{
       {cloud.error ? <p className={styles.error}>{cloud.error}</p> : null}
       <LogConsole
         entries={entries}
-        live={live}
+        live={live && !awaitingMessage}
         liveLabel={cloudLabel}
         startedAt={step.startedAt}
         showKindFilters={isAgent || isCloud}
+        emptyLabel={awaitingMessage ? 'Nothing yet. Agent replies and tool calls show here.' : undefined}
       />
     </div>
   );
