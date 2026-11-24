@@ -77,7 +77,6 @@ import {
 import { AzureDevOpsService } from './azureDevOps';
 import { getPullRequestStatus as getGithubPullRequestStatus } from './skillCatalogGitHub';
 import { retryWithBackoff } from '../utils/retry';
-import { debugTrace } from '../utils/motreollDebugTrace';
 import {
   computeLeftoverWorkSummary,
   formatLeftoverWorkForResumePrompt,
@@ -411,24 +410,8 @@ async function openPullRequestAsPlaybookAuthor(
   const cloud = snapshot?.cloudAgent;
   const authorId = cloud?.pullRequestAuthorId;
   const sourceBranch = observed.branchName?.trim() || cloud?.branchName?.trim() || null;
-  debugTrace('cloud-agent.pr-open.start', {
-    runId: run.id,
-    authorId: authorId ?? null,
-    sourceBranch,
-    observedBranch: observed.branchName ?? null,
-    snapshotBranch: cloud?.branchName ?? null,
-    workItemId: cloud?.workItemId ?? null,
-    repository: snapshot?.repository ?? null,
-    provider: snapshot?.provider ?? null,
-    delivery: cloud?.delivery ?? null,
-    noChanges: Boolean(observed.noChanges),
-  });
-  if (!authorId) {
-    debugTrace('cloud-agent.pr-open.skip', { runId: run.id, reason: 'no-pullRequestAuthorId' });
-    return null;
-  }
+  if (!authorId) return null;
   if (!sourceBranch || !cloud?.workItemId || !snapshot?.repository || snapshot.provider === 'github') {
-    debugTrace('cloud-agent.pr-open.skip', { runId: run.id, reason: 'missing-branch-workitem-repo-or-github' });
     console.warn('[cloud-agent] Playbook pull request was not opened', JSON.stringify({
       runId: run.id,
       noChanges: Boolean(observed.noChanges),
@@ -458,7 +441,6 @@ async function openPullRequestAsPlaybookAuthor(
       return null;
     });
     if (!ahead) {
-      debugTrace('cloud-agent.pr-open.skip', { runId: run.id, reason: 'branch-not-ahead', sourceBranch, targetBranch, ahead });
       console.warn('[cloud-agent] Playbook pull request was not opened', JSON.stringify({
         runId: run.id,
         noChanges: true,
@@ -477,14 +459,6 @@ async function openPullRequestAsPlaybookAuthor(
     }));
   }
   const adoUserToken = await (deps.getStoredAdoTokenForUser ?? getStoredAdoTokenForUser)(authorId);
-  debugTrace('cloud-agent.pr-open.identity', {
-    runId: run.id,
-    authorId,
-    opensAs: adoUserToken ? 'developer-token' : 'service-account-ADO_PAT',
-    targetBranch,
-    sourceBranch,
-    requiredReviewers: delivery.requiredReviewers ?? [],
-  });
   if (!adoUserToken) {
     console.warn('[cloud-agent] pull request author token did not redeem; the service account opens the pull request', JSON.stringify({
       runId: run.id,
@@ -510,10 +484,8 @@ async function openPullRequestAsPlaybookAuthor(
       allowServiceAccount: true,
       requiredReviewers: delivery.requiredReviewers,
     });
-    debugTrace('cloud-agent.pr-open.done', { runId: run.id, prUrl: openedPrUrl });
     return openedPrUrl;
   } catch (err) {
-    debugTrace('cloud-agent.pr-open.error', { runId: run.id, error: err instanceof Error ? err.message : String(err) });
     // Returning null lets the pull-request wait run out instead of retrying forever.
     console.warn('[cloud-agent] could not open the Playbook pull request', JSON.stringify({
       runId: run.id,
@@ -685,7 +657,9 @@ export async function buildCloudAgentPrompt(input: {
     project: input.project,
     skillPath: development.skillPath,
     skillConfig,
-    required: Boolean(development.configuredSkillPath),
+    // A skill picked at launch (chosenSkillPath) or set on the project must load.
+    // Only the unconfigured default may be absent from the skill repository.
+    required: Boolean(chosenSkillPath || configured.configuredSkillPath),
   });
   const workItemTitle = input.workItemTitle?.trim() || `wi-${input.workItemId}`;
   const branchName = input.branchName?.trim()
@@ -2159,14 +2133,6 @@ export async function reconcileRunningCloudAgentRuns(
           workItemId: snapshot?.cloudAgent?.workItemId ?? null,
           sourceBranch: metaBranchName(row.executionSnapshot) ?? observed.branchName ?? null,
         }, deps);
-        debugTrace('cloud-agent.pr-lookup', {
-          caller: 'reconcile',
-          runId: row.id,
-          observedStatus: observed.status,
-          observedBranch: observed.branchName ?? null,
-          noChanges: Boolean(observed.noChanges),
-          existingPrUrl: prUrl,
-        });
         if (!prUrl && mapObservedStatus(observed.status) === 'completed') {
           prUrl = await openPullRequestAsPlaybookAuthor({
             id: row.id,
@@ -2687,15 +2653,6 @@ export async function getCloudAgentRunStatus(
         workItemId: statusSnapshot?.cloudAgent?.workItemId ?? session.workItemId ?? null,
         sourceBranch: metaBranchName(run.executionSnapshot) ?? observed.branchName ?? null,
       }, deps);
-      debugTrace('cloud-agent.pr-lookup', {
-        caller: 'session-status',
-        runId: run.id,
-        sessionId: session.id,
-        observedStatus: observed.status,
-        observedBranch: observed.branchName ?? null,
-        noChanges: Boolean(observed.noChanges),
-        existingPrUrl: prUrl,
-      });
       if (!prUrl && mapObservedStatus(observed.status) === 'completed') {
         prUrl = await openPullRequestAsPlaybookAuthor({
           id: run.id,
