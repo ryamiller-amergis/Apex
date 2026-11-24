@@ -141,6 +141,15 @@
   color: var(--text-muted);
 }
 
+.groupLabel {
+  padding: 0.45rem 0.55rem 0.15rem;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .option {
   display: flex;
   align-items: flex-start;

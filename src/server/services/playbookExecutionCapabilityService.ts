@@ -12,6 +12,11 @@ import {
   PlaybookMcpCapabilityError,
   resolvePlaybookMcpCapability,
 } from './playbookMcpCapabilityService';
+import { bundleHashV1, type SkillBundleCompanion } from './playbookSkillBundle';
+import {
+  loadStoredProjectSkill,
+  projectSkillVersionIdFromPath,
+} from './playbookProjectSkillService';
 
 const RESOLVER_VERSION = 1;
 const CAPABILITY_LINE = /^playbook-capabilities:\s*\[([^\]]*)\]\s*$/m;
@@ -87,6 +92,16 @@ function playbookContentRoots(): string[] {
 }
 
 export async function loadPlaybookSkillContent(skillPath: string): Promise<string> {
+  const versionId = projectSkillVersionIdFromPath(skillPath);
+  if (versionId) {
+    const stored = await loadStoredProjectSkill(versionId);
+    if (!stored) {
+      throw new PlaybookExecutionCapabilityError(
+        `The project skill "${skillPath}" could not be read to resolve its capability policy.`,
+      );
+    }
+    return stored.content;
+  }
   if (isDefaultSkill(skillPath)) return PLAYBOOK_DEFAULT_SKILL_CONTENT;
   const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
   const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
@@ -116,6 +131,14 @@ const SKILL_COMPANION_MAX_BYTES = 200_000;
 export async function loadPlaybookSkillCompanions(
   skillPath: string,
 ): Promise<Array<{ path: string; content: string }>> {
+  const versionId = projectSkillVersionIdFromPath(skillPath);
+  if (versionId) {
+    const stored = await loadStoredProjectSkill(versionId);
+    return (stored?.companions ?? []).map((companion) => ({
+      path: companion.path,
+      content: companion.content,
+    }));
+  }
   if (isDefaultSkill(skillPath)) return [];
   const requested = skillPath.replace(/^[/\\]+/, '').replace(/\\/g, '/');
   const relativePath = MOVED_SKILL_PATHS[requested] ?? requested;
@@ -154,6 +177,7 @@ export interface ResolvePlaybookAgentRunPolicyInput {
   groundedSha?: string;
   enforce: boolean;
   resolvedAt?: string;
+  bundle?: { skillVersionId: string; companions: readonly SkillBundleCompanion[] };
 }
 
 export function resolvePlaybookAgentRunPolicy(
@@ -207,6 +231,15 @@ export function resolvePlaybookAgentRunPolicy(
     },
     enforcement: input.enforce ? 'enforce' : 'observe',
     resolvedAt: input.resolvedAt ?? new Date().toISOString(),
+    ...(input.bundle
+      ? {
+          bundleSha256: bundleHashV1({
+            skillVersionId: input.bundle.skillVersionId,
+            skillContent: input.skillContent,
+            companions: input.bundle.companions,
+          }),
+        }
+      : {}),
   };
 }
 
@@ -219,11 +252,13 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
   const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = [];
   for (const node of input.graph.nodes) {
     // Cloud-agent steps count toward the agent cap, but they do not load a repository Skill.
-    if (node.stepType !== 'cursor-agent') continue;
+    if (node.stepType !== 'cursor-agent' && node.stepType !== 'interactive-agent') continue;
     const skillPath = playbookSkillPath(
       typeof node.config?.skillPath === 'string' ? node.config.skillPath : undefined,
     );
-    const skillContent = await loadPlaybookSkillContent(skillPath);
+    const versionId = projectSkillVersionIdFromPath(skillPath);
+    const stored = versionId ? await loadStoredProjectSkill(versionId) : null;
+    const skillContent = stored?.content ?? await loadPlaybookSkillContent(skillPath);
     policies.push({
       nodeId: node.id,
       policy: resolvePlaybookAgentRunPolicy({
@@ -235,6 +270,9 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
         repository: input.repository,
         provider: input.provider,
         enforce: input.enforce,
+        ...(stored && versionId
+          ? { bundle: { skillVersionId: versionId, companions: stored.companions } }
+          : {}),
       }),
     });
   }

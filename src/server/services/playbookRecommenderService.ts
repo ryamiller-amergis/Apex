@@ -42,8 +42,8 @@ export interface PlaybookRecommendationGap {
 
 const READ_ONLY_PROFILE = 'repository-read-only';
 
-function agentSkill(goal: string): string {
-  if (/incident|outage|production|error|exception|self[- ]?heal/i.test(goal)) {
+function agentSkill(goal: string, project?: string): string {
+  if (/incident|outage|production|error|exception|self[- ]?heal/i.test(goal) && project && /maxview/i.test(project)) {
     return 'foundation-skills/foundation/maxview-incident-investigation/SKILL.md';
   }
   if (/design doc|design document|tech spec/i.test(goal)) {
@@ -54,14 +54,14 @@ function agentSkill(goal: string): string {
 
 const SUGGESTIONS: Array<{
   pattern: RegExp;
-  build: (goal: string) => PlaybookStepSuggestion;
+  build: (goal: string, project?: string) => PlaybookStepSuggestion;
 }> = [
   {
     pattern: /investigat|analy[sz]|research|scan|summari[sz]|audit|look into|check|find|review the code|triage/i,
-    build: (goal) => ({
+    build: (goal, project) => ({
       stepType: 'cursor-agent',
       title: 'Agent task',
-      config: { skillPath: agentSkill(goal), prompt: goal.trim(), mcpProfile: READ_ONLY_PROFILE },
+      config: { skillPath: agentSkill(goal, project), prompt: goal.trim(), mcpProfile: READ_ONLY_PROFILE },
       reason: 'A read-only agent investigates and writes a report later steps can use.',
     }),
   },
@@ -155,12 +155,13 @@ function leavesApex(suggestion: PlaybookStepSuggestion): boolean {
 
 export function recommendPlaybookSteps(
   goal: string,
+  project?: string,
 ): PlaybookRecommendationPlan | PlaybookRecommendationGap {
   const matched = SUGGESTIONS
     .map((candidate) => ({ candidate, index: goal.search(candidate.pattern) }))
     .filter((entry) => entry.index !== -1)
     .sort((a, b) => a.index - b.index)
-    .map((entry) => entry.candidate.build(goal));
+    .map((entry) => entry.candidate.build(goal, project));
   if (!matched.length) {
     return {
       kind: 'gap',

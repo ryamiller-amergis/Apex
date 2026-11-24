@@ -22,6 +22,7 @@ import { executeCloudAgentStep } from './cloudAgentAdapter';
 import { executeJoinStep } from './joinAdapter';
 import { executeForeachStep, executeUntilStep } from './loopAdapters';
 import { executeBuildStep } from './buildAdapter';
+import { executeInteractiveAgentStep } from './interactiveAgentAdapter';
 import { executeConnectorStep } from './connectorAdapter';
 import { getUserPermissions } from '../rbacService';
 import { isSuperAdminUserId } from '../../utils/superAdminUser';
@@ -50,6 +51,7 @@ const ADAPTERS: Readonly<Record<string, PlaybookStepAdapter>> = {
   foreach: executeForeachStep,
   until: executeUntilStep,
   build: executeBuildStep,
+  'interactive-agent': executeInteractiveAgentStep,
 };
 
 /** The step types that can actually be executed. Compared against the registry by a test. */

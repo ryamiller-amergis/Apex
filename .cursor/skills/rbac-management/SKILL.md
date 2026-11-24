@@ -37,6 +37,7 @@ This skill is loaded when the `rbac-governance` rule determines that an add, rem
 | `playbooks:author` | playbooks | Author, publish, and deprecate Playbook definitions. Same module gate as view. | | | |
 | `playbooks:admin` | playbooks | Administer Playbooks and cancel or retry any project run. Same module gate as view. | | | |
 | `skills:manage` | skills | Manage agent skills | ✓ | | |
+| `skills:view` | skills | Read project skills and their files | ✓ | ✓ | |
 | `wiki:write` | wiki | Create and edit wiki pages | ✓ | ✓ | |
 | `workitems:write` | workitems | Create and edit work items | ✓ | ✓ | |
 

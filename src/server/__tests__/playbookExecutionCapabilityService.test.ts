@@ -4,6 +4,8 @@ import {
   parsePlaybookSkillCapabilities,
   resolvePlaybookAgentRunPolicy,
 } from '../services/playbookExecutionCapabilityService';
+import { parsePlaybookSkillFrontmatter } from '../services/playbookSkillFrontmatter';
+import { bundleHashV1 } from '../services/playbookSkillBundle';
 
 const skill = `---
 name: test
@@ -111,5 +113,23 @@ describe('Playbook execution capability policy', () => {
     });
 
     expect(policy.capabilities).toEqual(['repository-read', 'network-read']);
+  });
+
+  it('pins a project skill with a bundle hash and leaves a foundation skill without one', () => {
+    const companions = [{ path: 'GUIDE.md', content: 'Read this.\n', classification: 'instruction' as const }];
+    const policy = resolvePlaybookAgentRunPolicy({
+      nodeId: 'draft',
+      skillPath: 'project-skills/00000000-0000-4000-8000-000000000001/SKILL.md',
+      skillContent: skill,
+      mcpProfile: 'repository-read-only',
+      enforce: true,
+      bundle: { skillVersionId: '00000000-0000-4000-8000-000000000001', companions },
+    });
+    expect(policy.bundleSha256).toBe(bundleHashV1({
+      skillVersionId: '00000000-0000-4000-8000-000000000001',
+      skillContent: skill,
+      companions,
+    }));
+    expect(parsePlaybookSkillFrontmatter('---\nname: local\ndescription: Mine\nmetadata:\n  apex:\n    output-kind: report@1\n---\n').outputKind).toBe('report@1');
   });
 });

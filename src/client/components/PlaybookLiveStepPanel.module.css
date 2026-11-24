@@ -53,6 +53,18 @@
   color: var(--error-color);
 }
 
+.decision textarea {
+  width: 100%;
+  min-height: 72px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
 .decisionReport {
   overflow: auto;
   max-height: 10rem;
