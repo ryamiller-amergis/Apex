@@ -320,6 +320,7 @@ export interface AiRunIngestDependencies {
     outputTokens: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
+    reportedCostUsd?: number;
     tokenSource?: RecordUsageInput['tokenSource'];
     durationMs: number;
     status: RecordUsageInput['status'];
@@ -457,6 +458,7 @@ async function persistBackgroundRunUsage(
       outputTokens,
       cacheReadTokens: body.cacheReadTokens,
       cacheWriteTokens: body.cacheWriteTokens,
+      ...(body.costUsd !== undefined ? { reportedCostUsd: body.costUsd } : {}),
       tokenSource: hasReportedTokens ? 'exact' : 'estimated',
       durationMs: body.durationMs ?? 0,
       status: usageStatus,
@@ -663,6 +665,7 @@ function validateBody(body: AiRunIngestBody): void {
       'outputTokens',
       'cacheReadTokens',
       'cacheWriteTokens',
+      'costUsd',
     ] as const) {
       const value = body[field];
       if (value === undefined) continue;
@@ -1564,6 +1567,7 @@ async function terminalizeDaprActorV2(input: {
       outputTokens: body.outputTokens,
       cacheReadTokens: body.cacheReadTokens,
       cacheWriteTokens: body.cacheWriteTokens,
+      ...(body.costUsd !== undefined ? { costUsd: body.costUsd } : {}),
       durationMs: body.durationMs,
     }).catch((err: unknown) => {
       console.error(
@@ -1595,6 +1599,7 @@ async function terminalizeDaprActorV2(input: {
       outputTokens: body.outputTokens ?? 0,
       cacheReadTokens: body.cacheReadTokens,
       cacheWriteTokens: body.cacheWriteTokens,
+      ...(body.costUsd !== undefined ? { reportedCostUsd: body.costUsd } : {}),
       tokenSource: 'exact',
       durationMs: body.durationMs ?? 0,
       status: usageStatus,

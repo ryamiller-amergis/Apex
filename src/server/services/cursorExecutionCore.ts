@@ -48,23 +48,86 @@ export interface CursorTokenUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Optional runtime-reported cost in USD for this execution. */
+  costUsd?: number;
+}
+
+/**
+ * Extracts cumulative cost in cents from an SDK `agent.getUsage()` / `readUsage()`
+ * payload (`{ cost?: { chargedCents?: number; rawCostCents?: number } }`).
+ * Prefers `chargedCents` when positive and falls back to `rawCostCents` so
+ * plan-included usage still reflects actual model cost.
+ */
+export function extractSdkCumulativeCostCents(usageResult: unknown): number | undefined {
+  if (!usageResult || typeof usageResult !== 'object') return undefined;
+  const raw = usageResult as Record<string, unknown>;
+  const cost = raw.cost;
+  if (!cost || typeof cost !== 'object') return undefined;
+  const costObj = cost as Record<string, unknown>;
+  const charged =
+    typeof costObj.chargedCents === 'number' && Number.isFinite(costObj.chargedCents) && costObj.chargedCents >= 0
+      ? costObj.chargedCents
+      : undefined;
+  const rawCents =
+    typeof costObj.rawCostCents === 'number' && Number.isFinite(costObj.rawCostCents) && costObj.rawCostCents >= 0
+      ? costObj.rawCostCents
+      : undefined;
+  if (charged !== undefined && charged > 0) return charged;
+  if (rawCents !== undefined && rawCents > 0) return rawCents;
+  return undefined;
+}
+
+/**
+ * Computes incremental turn cost in USD from a cumulative SDK `readUsage()`
+ * response and the previous cumulative cents recorded on a warm agent handle.
+ */
+export function computeTurnCostFromSdkUsage(
+  usageResult: unknown,
+  previousCumulativeCents?: number,
+): { costUsd?: number; cumulativeCostCents?: number } {
+  const cumulative = extractSdkCumulativeCostCents(usageResult);
+  if (cumulative === undefined) {
+    return previousCumulativeCents !== undefined
+      ? { cumulativeCostCents: previousCumulativeCents }
+      : {};
+  }
+  const baseline =
+    previousCumulativeCents !== undefined && cumulative >= previousCumulativeCents
+      ? previousCumulativeCents
+      : 0;
+  const deltaCents = Math.max(0, cumulative - baseline);
+  return {
+    ...(deltaCents > 0 ? { costUsd: deltaCents / 100 } : {}),
+    cumulativeCostCents: cumulative,
+  };
 }
 
 /** Fields a worker may attach to a terminal ingest when the runtime reported usage. */
 export function tokenFieldsForTerminalIngest(
   usage: CursorTokenUsage | undefined,
+  costUsdOverride?: number,
 ): {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  costUsd?: number;
 } {
-  if (!usage) return {};
+  const resolvedCost =
+    costUsdOverride !== undefined && Number.isFinite(costUsdOverride) && costUsdOverride > 0
+      ? costUsdOverride
+      : usage?.costUsd !== undefined && Number.isFinite(usage.costUsd) && usage.costUsd > 0
+        ? usage.costUsd
+        : undefined;
+  if (!usage) {
+    return resolvedCost !== undefined ? { costUsd: resolvedCost } : {};
+  }
   return {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     cacheReadTokens: usage.cacheReadTokens,
     cacheWriteTokens: usage.cacheWriteTokens,
+    ...(resolvedCost !== undefined ? { costUsd: resolvedCost } : {}),
   };
 }
 

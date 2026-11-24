@@ -9,15 +9,34 @@ import {
 } from '../../shared/utils/modelAvailability';
 import {
   effortParameterFor,
+  supportedEffortLevelsFor,
+  type CursorModelParam,
   type CursorModelParameterDefinition,
 } from './agentEffortResolver';
 
 export interface AvailableModel {
   id: string;
   displayName: string;
+  /** Effort levels accepted by this model per live `Cursor.models.list()` parameters. */
+  supportedEffortLevels?: EffortLevel[];
+  /** Raw parameter definitions from `Cursor.models.list()`. */
+  parameters?: CursorModelParameterDefinition[];
 }
 
-interface CatalogModel extends AvailableModel {
+export interface ResolvedCursorModelChoice {
+  model: string;
+  effort: EffortLevel | undefined;
+  /**
+   * Frozen Cursor SDK model parameters resolved from `Cursor.models.list()`.
+   * Present when the catalog was consulted (`[]` means the model accepts no
+   * effort parameter); omitted when the catalog was unavailable.
+   */
+  modelParams?: CursorModelParam[];
+}
+
+interface CatalogModel {
+  id: string;
+  displayName: string;
   parameters: CursorModelParameterDefinition[];
 }
 
@@ -80,7 +99,12 @@ export async function fetchAvailableModels(): Promise<AvailableModel[]> {
   scheduleModelProbe(catalog, PROBE_INTERVAL_MS);
   return catalog
     .filter((m) => !HIDDEN_MODEL_IDS.has(m.id) && !blockedModelIds.has(m.id))
-    .map(({ id, displayName }) => ({ id, displayName }));
+    .map(({ id, displayName, parameters }) => ({
+      id,
+      displayName,
+      supportedEffortLevels: supportedEffortLevelsFor(parameters),
+      parameters,
+    }));
 }
 
 /** The model's parameter definitions, or undefined when the catalog does not list it. */
@@ -91,22 +115,31 @@ export async function fetchModelParameters(
 }
 
 /**
- * The model and effort a run should send. A retired or blocked model falls
- * back as `resolveAvailableModelId` describes. Workers send the effort under
- * the `effort` parameter without reading the catalog, so it is dropped when
- * the resolved model takes effort under another name or not at all.
+ * The model, effort, and exact Cursor SDK parameter pair a run should send.
+ * A retired or blocked model falls back as `resolveAvailableModelId` describes.
+ * Parameter names (`effort`, `reasoning_effort`, `reasoning`) are resolved from
+ * the live `Cursor.models.list()` catalog so workers never guess.
  */
 export async function resolveCursorModelChoice(
   model: string,
   effort: EffortLevel | undefined,
-): Promise<{ model: string; effort: EffortLevel | undefined }> {
+): Promise<ResolvedCursorModelChoice> {
   const resolvedModel = resolveAvailableModelId(model, await fetchAvailableModels());
-  if (!effort) return { model: resolvedModel, effort };
+  if (!effort) return { model: resolvedModel, effort: undefined };
   const parameters = await fetchModelParameters(resolvedModel);
   if (!parameters) return { model: resolvedModel, effort };
+  const parameterId = effortParameterFor(parameters, effort);
+  if (!parameterId) {
+    return {
+      model: resolvedModel,
+      effort: undefined,
+      modelParams: [],
+    };
+  }
   return {
     model: resolvedModel,
-    effort: effortParameterFor(parameters, effort) === 'effort' ? effort : undefined,
+    effort,
+    modelParams: [{ id: parameterId, value: effort }],
   };
 }
 

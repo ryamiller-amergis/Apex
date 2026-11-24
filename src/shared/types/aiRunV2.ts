@@ -223,6 +223,7 @@ export type AiRunV2TerminalResult = AiRunV2EnvelopeBase &
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
+    costUsd?: number;
   }>;
 
 export type AiRunV2Result = AiRunV2TerminalResult;
@@ -470,6 +471,7 @@ export function isAiRunV2Result(value: unknown): value is AiRunV2Result {
     'outputTokens',
     'cacheReadTokens',
     'cacheWriteTokens',
+    'costUsd',
   ] as const) {
     if (
       candidate[field] !== undefined

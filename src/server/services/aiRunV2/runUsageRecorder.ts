@@ -11,6 +11,7 @@ function hasUsage(result: AiRunV2TerminalResult): boolean {
     || result.outputTokens !== undefined
     || result.cacheReadTokens !== undefined
     || result.cacheWriteTokens !== undefined
+    || result.costUsd !== undefined
   );
 }
 
@@ -63,6 +64,7 @@ export async function recordV2TerminalUsage(
       outputTokens: result.outputTokens ?? 0,
       cacheReadTokens: result.cacheReadTokens,
       cacheWriteTokens: result.cacheWriteTokens,
+      ...(result.costUsd !== undefined ? { reportedCostUsd: result.costUsd } : {}),
       tokenSource: hasReportedTokens ? 'exact' : 'estimated',
       durationMs: result.durationMs ?? 0,
       status:

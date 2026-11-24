@@ -1,5 +1,7 @@
 import {
+  isCursorModelParamList,
   isEffortLevel,
+  type CursorModelParam,
   type EffortLevel,
 } from './effort';
 import type { BackgroundWorkflowClass } from './backgroundWorkflow';
@@ -91,6 +93,8 @@ export type AiRunV2DocumentSpecification = Readonly<{
   prompt: string;
   model: string;
   effort: EffortLevel | null;
+  /** Resolved Cursor SDK model parameters frozen on App Service. */
+  modelParams?: ReadonlyArray<CursorModelParam>;
   skillPath: string;
   skillContent: string;
   skillSha256: string;
@@ -272,6 +276,9 @@ export function isAiRunV2DocumentSpecification(
   if (!isNonEmptyString(candidate.model)) return false;
   if (!Object.prototype.hasOwnProperty.call(candidate, 'effort')) return false;
   if (candidate.effort !== null && !isEffortLevel(candidate.effort)) return false;
+  if (candidate.modelParams !== undefined && !isCursorModelParamList(candidate.modelParams)) {
+    return false;
+  }
   if (!isNonEmptyString(candidate.skillPath)) return false;
   if (!isNonEmptyString(candidate.skillContent)) return false;
   if (

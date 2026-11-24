@@ -687,15 +687,16 @@ const NewInterviewCompose: React.FC = () => {
           });
         }
       }
-      const kickoffRes = await fetch(`/api/chat/threads/${threadResult.threadId}/messages`, {
+      const kickoffRes = await fetch(`/api/harness/threads/${threadResult.threadId}/commands`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          turnId: createChatTurnId(),
+          commandId: createChatTurnId(),
+          kind: 'send',
           text: text || 'Please use the attached files as context.',
-          attachments,
-          model,
+          ...(attachments.length > 0 ? { attachments } : {}),
+          ...(model ? { model } : {}),
         }),
       });
       if (!kickoffRes.ok) {
@@ -709,6 +710,20 @@ const NewInterviewCompose: React.FC = () => {
           /* keep default */
         }
         throw new Error(kickoffError);
+      }
+      try {
+        const receipt = (await kickoffRes.json()) as { status?: unknown; reason?: unknown };
+        if (receipt?.status === 'rejected') {
+          throw new Error(
+            typeof receipt.reason === 'string' && receipt.reason.trim()
+              ? receipt.reason.trim()
+              : 'Failed to send the initial interview message.',
+          );
+        }
+      } catch (parseErr: unknown) {
+        if (parseErr instanceof Error && parseErr.message && parseErr.name !== 'SyntaxError') {
+          throw parseErr;
+        }
       }
       clearAttachments();
       if (linkedContextInitialErrorText) {
@@ -1761,7 +1776,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
             <ArtifactUsageStrip
               endpoint={`/api/interviews/${interview.id}/usage`}
-              visible={interview.status === 'complete'}
+              visible={Boolean(interview.id)}
             />
             {!isBuildIntake && (interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.testCaseOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>

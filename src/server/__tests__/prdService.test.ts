@@ -790,6 +790,25 @@ describe('listPrds', () => {
 
     expect(result[0].validationScore).toBe(94);
   });
+
+  it('deduplicates resolveSkillConfig lookups across PRDs sharing the same project and settingsId', async () => {
+    const { resolveSkillConfig: resolveSkillConfigMock } = jest.requireMock(
+      '../services/projectSettingsService',
+    ) as { resolveSkillConfig: jest.Mock };
+    resolveSkillConfigMock.mockClear();
+    const sharedRows = [
+      { prd: makePrdRow({ id: 'prd-1', project: 'proj-alpha', skillSettingsId: 'cfg-1' }), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null },
+      { prd: makePrdRow({ id: 'prd-2', project: 'proj-alpha', skillSettingsId: 'cfg-1' }), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null },
+      { prd: makePrdRow({ id: 'prd-3', project: 'proj-alpha', skillSettingsId: 'cfg-1' }), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null },
+      { prd: makePrdRow({ id: 'prd-4', project: 'proj-beta', skillSettingsId: null }), reviewerDisplayName: null, authorDisplayName: null, prdOwnerId: null, prdOwnerDisplayName: null },
+    ];
+    mockDb.select.mockReturnValue(makeSelectChain(sharedRows, 'orderBy'));
+
+    const result = await listPrds();
+
+    expect(result).toHaveLength(4);
+    expect(resolveSkillConfigMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ── getPrd ─────────────────────────────────────────────────────────────────────

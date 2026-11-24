@@ -526,12 +526,13 @@ const DesignDocAssistantPanel: React.FC<DesignDocAssistantPanelProps> = ({
       'Please help me review whether these changes adequately address the gaps and discuss any concerns.',
     ].join('\n');
 
-    void fetch(`/api/chat/threads/${threadId}/messages`, {
+    void fetch(`/api/harness/threads/${threadId}/commands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
-        turnId: createChatTurnId(),
+        commandId: createChatTurnId(),
+        kind: 'send',
         text: contextMsg,
       }),
     });

@@ -8,7 +8,10 @@ import { getProjectReleasePlatformsState } from './releasePlatformService';
 import { resolveSkillConfig } from './projectSettingsService';
 import { getDefaultModel } from './appSettingsService';
 import { getSkillFile } from './skillCatalogFacade';
-import { requestModelAvailabilityProbe } from './modelsService';
+import {
+  requestModelAvailabilityProbe,
+  resolveCursorModelChoice,
+} from './modelsService';
 import { buildCursorModelSelection } from './agentEffortResolver';
 import { computeCost, recordAiUsage } from './aiUsageService';
 import { isCursorModelBlockedMessage } from '../../shared/utils/modelAvailability';
@@ -981,9 +984,12 @@ async function createIsolatedHeadlessCursorAgent(
   try {
     emptyDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'apex-rel-changelog-'));
     const { Agent } = await import('@cursor/sdk');
+    const modelChoice = await resolveCursorModelChoice(modelId, effort);
     const agent = await Agent.create({
       apiKey,
-      model: buildCursorModelSelection(modelId, effort),
+      model: buildCursorModelSelection(modelChoice.model, modelChoice.effort, {
+        modelParams: modelChoice.modelParams,
+      }),
       local: {
         cwd: emptyDir,
         settingSources: [],

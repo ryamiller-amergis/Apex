@@ -4,7 +4,10 @@ import { isPlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutio
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type { CursorExecutionRun } from '../cursorExecutionCore';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
-import { buildCursorModelSelection } from '../agentEffortResolver';
+import {
+  buildCursorModelSelection,
+  serializeModelParamsKey,
+} from '../agentEffortResolver';
 import {
   createCursorSdkAdapter,
   deriveWorkerCursorExecutionFields,
@@ -17,6 +20,7 @@ export type WorkerCursorExecutionRun = CursorExecutionRun & {
 
 export type WorkerCursorExecution = {
   run: WorkerCursorExecutionRun;
+  readUsage?(): Promise<unknown>;
   dispose(): Promise<void>;
 };
 
@@ -105,8 +109,10 @@ export async function createLocalCursorExecution(
   const acquired = await adapter.acquire(
     {
       sessionKey,
-      compatibilityKey: `${snapshot.model}|${snapshot.workspaceRef}|${snapshot.workflowClass}`,
-      model: buildCursorModelSelection(snapshot.model, snapshot.effort),
+      compatibilityKey: `${snapshot.model}|${serializeModelParamsKey(snapshot.effort, snapshot.modelParams)}|${snapshot.workspaceRef}|${snapshot.workflowClass}`,
+      model: buildCursorModelSelection(snapshot.model, snapshot.effort, {
+        modelParams: snapshot.modelParams,
+      }),
       workspaceRef: snapshot.workspaceRef,
       skillContent: snapshot.skillContent ?? null,
       toolAllowlist:
@@ -140,6 +146,7 @@ export async function createLocalCursorExecution(
     );
     return {
       run: run as unknown as WorkerCursorExecutionRun,
+      readUsage: () => acquired.readUsage(),
       dispose: () => acquired.dispose(),
     };
   } catch (error) {

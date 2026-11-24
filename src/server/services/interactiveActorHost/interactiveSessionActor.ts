@@ -52,6 +52,7 @@ import {
 } from '../../../shared/types/chatHarness';
 import type { InteractiveStageName } from '../../../shared/types/workerTierOperations';
 import {
+  computeTurnCostFromSdkUsage,
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
@@ -61,6 +62,7 @@ import {
   tokenFieldsForTerminalIngest,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
+import { serializeModelParamsKey } from '../agentEffortResolver';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
 import { AdapterResumeStalledError } from '../cursorSdkAdapter/types';
 import { normalizeGuidedInterviewResponse } from '../guidedInterviewState';
@@ -415,6 +417,10 @@ export interface InteractiveSessionActorController
 interface CachedAgentEntry {
   handle: InteractiveCursorAgentHandle;
   lastUsedAt: number;
+  /** Serialized effort / resolved Cursor SDK model parameters for cache compatibility. */
+  modelParamsKey?: string;
+  /** Cumulative cost in cents reported by `handle.readUsage()` after the previous turn. */
+  lastCumulativeCostCents?: number;
   /** Signature of mounted Brainstorm source IDs + SHAs when the Agent's customTools were built. */
   brainstormSourcesSignature?: string;
   /** Pinned grounding SHA materialized into the stable thread workspace. */
@@ -871,10 +877,18 @@ export function createInteractiveSessionActor(
       }
 
       const cached = agentCache.get(threadId);
+      const currentParamsKey = serializeModelParamsKey(
+        snapshot.effort,
+        snapshot.modelParams,
+      );
       const cacheCompatible =
         cached
         && cached.handle.model === snapshot.model
-        && cached.handle.workspaceRef === snapshot.workspaceRef;
+        && cached.handle.workspaceRef === snapshot.workspaceRef
+        && (cached.modelParamsKey ?? currentParamsKey) === currentParamsKey;
+      const previousCumulativeCostCents = cacheCompatible
+        ? cached?.lastCumulativeCostCents
+        : undefined;
 
       const agentStartedAt = now();
       if (cacheCompatible && cached) {
@@ -976,6 +990,11 @@ export function createInteractiveSessionActor(
       }
 
       const cursorAgentId = agentHandle.agentId ?? agentIdByThread.get(threadId) ?? null;
+      const sdkUsage = await agentHandle.readUsage?.().catch(() => undefined);
+      const { costUsd, cumulativeCostCents } = computeTurnCostFromSdkUsage(
+        sdkUsage,
+        previousCumulativeCostCents,
+      );
       await post({
         dispatchMessageId,
         kind: 'terminal',
@@ -983,7 +1002,7 @@ export function createInteractiveSessionActor(
         artifactsFlushed: true,
         cursorAgentId,
         durationMs: Math.max(0, now() - turnStartedAt),
-        ...tokenFieldsForTerminalIngest(result.usage),
+        ...tokenFieldsForTerminalIngest(result.usage, costUsd),
       });
       // Live terminal so the socket clears the spinner immediately; the durable
       // `done` (agent_run_events) covers reconnect replay, and the client's
@@ -991,7 +1010,14 @@ export function createInteractiveSessionActor(
       await publishLiveEvent({ type: 'done', runId });
 
       // Retain the live Agent for the next serialized turn on this thread.
-      agentCache.set(threadId, { handle: agentHandle, lastUsedAt: now() });
+      agentCache.set(threadId, {
+        handle: agentHandle,
+        lastUsedAt: now(),
+        modelParamsKey: currentParamsKey,
+        ...(cumulativeCostCents !== undefined
+          ? { lastCumulativeCostCents: cumulativeCostCents }
+          : {}),
+      });
       retainAgent = true;
       await evictOverflowAgents(threadId);
 
@@ -1679,14 +1705,22 @@ export function createInteractiveSessionActor(
 
       const cached = agentCache.get(threadId);
       const currentSourcesSignature = brainstormSourceIdsSignature(bootstrap);
+      const currentParamsKey = serializeModelParamsKey(
+        specification.effort,
+        specification.modelParams,
+      );
       const cacheCompatible =
         cached &&
         cached.handle.model === specification.model &&
         cached.handle.workspaceRef === checkout.workspacePath &&
+        (cached.modelParamsKey ?? currentParamsKey) === currentParamsKey &&
         (cached.groundingSha ?? null) === (specification.grounding?.sha ?? null) &&
         (cached.handle.interviewPhase ?? null) ===
           (specification.guidedInterview?.phase ?? null) &&
         (cached.brainstormSourcesSignature ?? '') === currentSourcesSignature;
+      const previousCumulativeCostCents = cacheCompatible
+        ? cached?.lastCumulativeCostCents
+        : undefined;
 
       const wasIdleEvicted = evictedThreads.delete(threadId);
       const previousWorkspacePath = lastWorkspacePathByThread.get(threadId);
@@ -1717,6 +1751,9 @@ export function createInteractiveSessionActor(
                   prompt: specification.currentPrompt,
                   model: specification.model,
                   effort: specification.effort ?? undefined,
+                  ...(specification.modelParams !== undefined
+                    ? { modelParams: specification.modelParams }
+                    : {}),
                   workspaceRef: checkout.workspacePath,
                   workflowClass: 'agent_home_chat',
                   skillPath: specification.skill?.path ?? '',
@@ -2689,6 +2726,11 @@ export function createInteractiveSessionActor(
             .catch(() => 0);
         }
 
+        const sdkUsage = await agentHandle.readUsage?.().catch(() => undefined);
+        const { costUsd, cumulativeCostCents } = computeTurnCostFromSdkUsage(
+          sdkUsage,
+          previousCumulativeCostCents,
+        );
         await post({
           dispatchMessageId,
           attemptId,
@@ -2708,7 +2750,7 @@ export function createInteractiveSessionActor(
           ...(sendStartedAt !== undefined
             ? { durationMs: Math.max(0, now() - sendStartedAt) }
             : {}),
-          ...tokenFieldsForTerminalIngest(result.usage),
+          ...tokenFieldsForTerminalIngest(result.usage, costUsd),
         });
         await publishLiveEnvelope({ type: 'done', runId });
 
@@ -2722,6 +2764,10 @@ export function createInteractiveSessionActor(
         agentCache.set(threadId, {
           handle: agentHandle,
           lastUsedAt: now(),
+          modelParamsKey: currentParamsKey,
+          ...(cumulativeCostCents !== undefined
+            ? { lastCumulativeCostCents: cumulativeCostCents }
+            : {}),
           brainstormSourcesSignature: currentSourcesSignature,
           groundingSha: specification.grounding?.sha ?? null,
           releaseWorkspace: checkout.dispose,

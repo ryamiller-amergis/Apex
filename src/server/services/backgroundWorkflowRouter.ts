@@ -709,6 +709,9 @@ export function createBackgroundWorkflowRouter(
           prompt: snapshot.prompt,
           model: snapshot.model,
           effort: snapshot.effort ?? null,
+          ...(snapshot.modelParams !== undefined
+            ? { modelParams: snapshot.modelParams }
+            : {}),
           skillPath: prepared.skillPath,
           skillContent: prepared.skillContent,
           skillSha256: prepared.skillSha256,
@@ -810,6 +813,9 @@ export function createBackgroundWorkflowRouter(
         prompt: prepared.prompt,
         model: modelChoice.model,
         effort: modelChoice.effort,
+        ...(modelChoice.modelParams !== undefined
+          ? { modelParams: modelChoice.modelParams }
+          : {}),
         workspaceRef,
         workflowClass: input.workflowClass,
         skillPath: prepared.skillPath,
@@ -881,6 +887,9 @@ export function createBackgroundWorkflowRouter(
         prompt: prepared.prompt,
         model: v2ModelChoice.model,
         effort: v2ModelChoice.effort,
+        ...(v2ModelChoice.modelParams !== undefined
+          ? { modelParams: v2ModelChoice.modelParams }
+          : {}),
         workspaceRef: prepared.threadWorkspacePath,
         groundedSha: prepared.targetGrounding.groundedSha,
         repository: prepared.targetGrounding.repository,
@@ -1039,6 +1048,9 @@ export function createBackgroundWorkflowRouter(
       prompt: prepared.prompt,
       model: modelChoice.model,
       effort: modelChoice.effort,
+      ...(modelChoice.modelParams !== undefined
+        ? { modelParams: modelChoice.modelParams }
+        : {}),
       workspaceRef,
       ...(checkoutRef ? { checkoutRef } : {}),
       ...(mirrorRef ? { mirrorRef } : {}),

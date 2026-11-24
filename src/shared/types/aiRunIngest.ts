@@ -124,6 +124,8 @@ export type AiRunTerminalIngest = AiRunIngestBase & {
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** Runtime-reported turn cost in USD (from SDK `agent.getUsage().cost`). */
+  costUsd?: number;
 };
 
 /**

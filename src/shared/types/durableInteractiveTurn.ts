@@ -7,7 +7,12 @@ import {
 import type { BrainstormTurnSources } from './brainstormSources';
 import type { BrainstormTurnIntent, FrozenBrainstormArtifact } from './brainstormArtifact';
 import { isHarnessAreaId, type HarnessAreaId } from './chatHarness';
-import { isEffortLevel, type EffortLevel } from './effort';
+import {
+  isCursorModelParamList,
+  isEffortLevel,
+  type CursorModelParam,
+  type EffortLevel,
+} from './effort';
 import {
   INTERACTIVE_WORKFLOW_CLASSES,
   type InteractiveWorkflowClass,
@@ -174,6 +179,8 @@ export type DurableInteractiveTurnSpecification = Readonly<{
   workflowClass: InteractiveWorkflowClass;
   model: string;
   effort: EffortLevel | null;
+  /** Resolved Cursor SDK model parameters frozen on App Service (e.g. `reasoning_effort` vs `effort`). */
+  modelParams?: ReadonlyArray<CursorModelParam>;
   skill: null | Readonly<{
     name: string;
     path: string;
@@ -621,7 +628,8 @@ export function isDurableInteractiveTurnSpecification(
     !isInteractiveClass(value.interactiveClass) ||
     !isWorkflowClass(value.workflowClass) ||
     !isNonEmptyString(value.model) ||
-    !(value.effort === null || isEffortLevel(value.effort))
+    !(value.effort === null || isEffortLevel(value.effort)) ||
+    (value.modelParams !== undefined && !isCursorModelParamList(value.modelParams))
   ) {
     return false;
   }

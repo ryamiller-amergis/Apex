@@ -6,10 +6,12 @@ import {
   computeCost,
   recordAiUsageAwaited,
   recordCursorChatUsage,
+  resetObservedCursorRateCacheForTests,
 } from '../services/aiUsageService';
 
 const insertValues = jest.fn().mockReturnValue({ catch: jest.fn() });
 const pricingLimit = jest.fn();
+const dbExecute = jest.fn();
 const interviewFindFirst = jest.fn();
 const prdFindFirst = jest.fn();
 const adrFindFirst = jest.fn();
@@ -24,6 +26,7 @@ jest.mock('../db/drizzle', () => ({
       orderBy: jest.fn().mockReturnThis(),
       limit: pricingLimit,
     })),
+    execute: (...args: unknown[]) => dbExecute(...args),
     query: {
       interviews: { findFirst: (...args: unknown[]) => interviewFindFirst(...args) },
       prds: { findFirst: (...args: unknown[]) => prdFindFirst(...args) },
@@ -287,8 +290,10 @@ describe('aiUsageService', () => {
       );
     });
 
-    it('keeps cost estimated when exact tokens have no catalog row', async () => {
+    it('keeps cost estimated when exact tokens have no catalog row and no observed billing events', async () => {
+      resetObservedCursorRateCacheForTests();
       pricingLimit.mockResolvedValue([]);
+      dbExecute.mockResolvedValue({ rows: [{ total_cents: '0', total_tokens: '0' }] });
 
       await recordCursorChatUsage({
         kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', project: 'Apex' },
@@ -305,6 +310,62 @@ describe('aiUsageService', () => {
         expect.objectContaining({
           tokenSource: 'exact',
           costUsd: '0.00000000',
+          costSource: 'estimated',
+        }),
+      );
+    });
+
+    it('uses live SDK reportedCostUsd directly without requiring a pricing table row', async () => {
+      resetObservedCursorRateCacheForTests();
+      pricingLimit.mockResolvedValue([]);
+
+      await recordCursorChatUsage({
+        kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', project: 'Apex' },
+        modelId: 'claude-sonnet-5-5',
+        threadId: 'thread-9',
+        inputTokens: 42_000,
+        outputTokens: 900,
+        reportedCostUsd: 0.1234,
+        tokenSource: 'exact',
+        durationMs: 4200,
+        status: 'success',
+      });
+
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tokenSource: 'exact',
+          costUsd: '0.12340000',
+          costSource: 'computed',
+        }),
+      );
+      expect(pricingLimit).not.toHaveBeenCalled();
+    });
+
+    it('derives estimated cost dynamically from observed cursor_usage_events when SDK cost and catalog are absent', async () => {
+      resetObservedCursorRateCacheForTests();
+      pricingLimit.mockResolvedValue([]);
+      // 200 cents ($2.00) over 1,000,000 tokens -> $0.000002 / token
+      dbExecute.mockResolvedValue({
+        rows: [{ total_cents: '200', total_tokens: '1000000' }],
+      });
+
+      await recordCursorChatUsage({
+        kickoff: { skillPath: '.cursor/skills/grill-with-docs/SKILL.md', project: 'Apex' },
+        modelId: 'claude-sonnet-5-5',
+        threadId: 'thread-9',
+        inputTokens: 40_000,
+        outputTokens: 10_000,
+        cacheReadTokens: 50_000,
+        tokenSource: 'exact',
+        durationMs: 4200,
+        status: 'success',
+      });
+
+      // 100,000 tokens * $0.000002 = $0.20
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tokenSource: 'exact',
+          costUsd: '0.20000000',
           costSource: 'estimated',
         }),
       );

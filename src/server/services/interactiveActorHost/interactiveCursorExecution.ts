@@ -4,13 +4,16 @@
  * Imports zero symbols from `@cursor/sdk` directly; all SDK creation, resume,
  * and execution go through `src/server/services/cursorSdkAdapter/`.
  */
-import type { EffortLevel } from '../../../shared/types/effort';
+import type { CursorModelParam, EffortLevel } from '../../../shared/types/effort';
 import type { InterviewRepositoryPhase } from '../../../shared/types/interview';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
 import { createNativeReadTools } from '../nativeReadToolAdapter';
 import { guidedInterviewRepositoryTools } from '../interviewGroundingPolicy';
-import { buildCursorModelSelection } from '../agentEffortResolver';
+import {
+  buildCursorModelSelection,
+  serializeModelParamsKey,
+} from '../agentEffortResolver';
 import {
   createCursorSdkAdapter,
   deriveInteractiveCursorExecutionFields,
@@ -22,6 +25,8 @@ import {
 export interface InteractiveCursorAgentHandle {
   agentId: string | null;
   model: string;
+  effort?: EffortLevel | null;
+  modelParams?: ReadonlyArray<CursorModelParam>;
   workspaceRef: string;
   /** Guided interview phase the agent's repository tools were built for. */
   interviewPhase?: InterviewRepositoryPhase | null;
@@ -52,6 +57,7 @@ export type InteractiveAgentAcquisition =
 export type InteractiveCursorAcquireInput = Readonly<{
   model: string;
   effort: EffortLevel | null;
+  modelParams?: ReadonlyArray<CursorModelParam>;
   workspaceRef: string;
   /** Null outside guided interviews; selects the phase's repository tools. */
   interviewPhase: InterviewRepositoryPhase | null;
@@ -101,16 +107,19 @@ export async function acquireInteractiveCursorAgent(
       : createNativeReadTools(checkout);
 
   const sessionKey = input.sessionKey?.trim() || input.workspaceRef || 'interactive';
+  const paramsKey = serializeModelParamsKey(input.effort, input.modelParams);
   const compatibilityKey =
     input.compatibilityKey?.trim()
-    || `${input.model}|${input.workspaceRef}|${input.interviewPhase ?? 'none'}`;
+    || `${input.model}|${paramsKey}|${input.workspaceRef}|${input.interviewPhase ?? 'none'}`;
   const requestId = input.requestId?.trim() || sessionKey;
 
   const acquired = await adapter.acquire(
     {
       sessionKey,
       compatibilityKey,
-      model: buildCursorModelSelection(input.model, input.effort ?? undefined),
+      model: buildCursorModelSelection(input.model, input.effort ?? undefined, {
+        modelParams: input.modelParams,
+      }),
       workspaceRef: input.workspaceRef,
       skillContent: null,
       toolAllowlist,
@@ -131,6 +140,8 @@ export async function acquireInteractiveCursorAgent(
   const handle: InteractiveCursorAgentHandle = {
     agentId: acquired.agentId,
     model: input.model,
+    effort: input.effort,
+    ...(input.modelParams !== undefined ? { modelParams: input.modelParams } : {}),
     workspaceRef: input.workspaceRef,
     interviewPhase: input.interviewPhase,
     send: async (prompt, sendOpts) =>

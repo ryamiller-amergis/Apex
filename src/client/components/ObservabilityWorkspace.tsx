@@ -23,7 +23,7 @@ import {
   type ObservabilityTrendWindow,
   type ObservabilityWindowComparisonMap,
 } from '../../shared/types/observability';
-import { effortLabel } from '../../shared/utils/effort';
+import { effortLabel, effortLevelsForModel } from '../../shared/utils/effort';
 import {
   buildFallbackPoDigestResponse,
   sanitizeObservabilityDigestForDisplay,
@@ -114,6 +114,21 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
     selectedEffort,
   );
   const generateMutation = useGenerateObservabilityPoDigest(resolvedProject);
+
+  const supportedEffortLevels = useMemo(
+    () => effortLevelsForModel(selectedModel, modelsQuery.data ?? []),
+    [selectedModel, modelsQuery.data],
+  );
+  const effortSelectUnsupported =
+    supportedEffortLevels !== null && supportedEffortLevels.length === 0;
+  const effortSelectOptions: ReadonlyArray<EffortLevel> =
+    supportedEffortLevels !== null
+      ? supportedEffortLevels.includes(selectedEffort)
+        ? supportedEffortLevels
+        : supportedEffortLevels.length > 0
+          ? [...supportedEffortLevels, selectedEffort]
+          : []
+      : EFFORT_LEVELS;
 
   const modelOptions = useMemo(() => {
     const merged = new Map<string, string>();
@@ -321,15 +336,22 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
               <select
                 id="observability-effort-select"
                 className={styles.filterInput}
-                value={selectedEffort}
-                onChange={(e) => setSelectedEffort(e.target.value as EffortLevel)}
+                value={effortSelectUnsupported ? '' : selectedEffort}
+                onChange={(e) => {
+                  if (e.target.value) setSelectedEffort(e.target.value as EffortLevel);
+                }}
+                disabled={effortSelectUnsupported}
                 {...{ 'data-testid': 'observability-effort-select' }}
               >
-                {EFFORT_LEVELS.map((level) => (
-                  <option key={level} value={level}>
-                    {effortLabel(level)}
-                  </option>
-                ))}
+                {effortSelectUnsupported ? (
+                  <option value="">Not supported by model</option>
+                ) : (
+                  effortSelectOptions.map((level) => (
+                    <option key={level} value={level}>
+                      {effortLabel(level)}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 

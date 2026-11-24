@@ -730,6 +730,9 @@ export async function main(): Promise<void> {
         {
           model: snapshot.model,
           effort: snapshot.effort ?? null,
+          ...(snapshot.modelParams !== undefined
+            ? { modelParams: snapshot.modelParams }
+            : {}),
           workspaceRef: snapshot.workspaceRef,
           interviewPhase: null,
           sessionKey: snapshot.threadId,
@@ -750,6 +753,9 @@ export async function main(): Promise<void> {
         {
           model: bootstrap.specification.model,
           effort: bootstrap.specification.effort,
+          ...(bootstrap.specification.modelParams !== undefined
+            ? { modelParams: bootstrap.specification.modelParams }
+            : {}),
           workspaceRef: checkout.workspacePath,
           interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
           sessionKey: bootstrap.specification.threadId,

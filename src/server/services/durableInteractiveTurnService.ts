@@ -48,6 +48,7 @@ import { readsThroughRepoReadService } from './repoRead/wholeProjectRepoRead';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
+import { resolveCursorModelChoice } from './modelsService';
 import { resolveSkillConfig } from './projectSettingsService';
 import {
   buildDocumentAssistantEditGuidance,
@@ -274,6 +275,7 @@ type ServiceDependencies = Readonly<{
     threadId: string,
   ) => Promise<ThreadAccessResult | null>;
   resolveSkillConfig: typeof resolveSkillConfig;
+  resolveModelChoice: typeof resolveCursorModelChoice;
   loadSkill: (
     input: LoadSkillInput,
   ) => Promise<{ path: string; content: string } | null>;
@@ -1551,6 +1553,7 @@ function defaultDependencies(): ServiceDependencies {
     attachmentStore: lazyDefaultAttachmentStore,
     resolveThreadAccess,
     resolveSkillConfig,
+    resolveModelChoice: resolveCursorModelChoice,
     loadSkill: defaultLoadSkill,
     builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,
@@ -1916,10 +1919,20 @@ export function createDurableInteractiveTurnService(
           })
         : null;
 
-      const model =
+      const requestedModel =
         input.modelOverride?.trim() ||
         thread.kickoff.model?.trim() ||
         DEFAULT_MODEL;
+      const requestedEffort =
+        input.effort === undefined
+          ? thread.kickoff.effort ?? undefined
+          : input.effort ?? undefined;
+      const modelChoice = await deps.resolveModelChoice(
+        requestedModel,
+        requestedEffort,
+      );
+      const model = modelChoice.model;
+      const resolvedEffort: EffortLevel | null = modelChoice.effort ?? null;
       const loadedSkill = skill
         ? await deps.loadSkill({
             thread,
@@ -2057,10 +2070,10 @@ export function createDurableInteractiveTurnService(
         interactiveClass: classification.interactiveClass,
         workflowClass: input.workflowClass,
         model,
-        effort:
-          input.effort === undefined
-            ? thread.kickoff.effort ?? null
-            : input.effort,
+        effort: resolvedEffort,
+        ...(modelChoice.modelParams !== undefined
+          ? { modelParams: modelChoice.modelParams }
+          : {}),
         skill: frozenSkill,
         currentMessage: {
           id: input.turnId,
